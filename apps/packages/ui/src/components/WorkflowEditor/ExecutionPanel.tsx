@@ -152,12 +152,12 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
                   {node.data.label}
                 </div>
                 {state.durationMs && (
-                  <div className="text-xs text-gray-400">
+                  <div className="text-xs text-text-subtle">
                     {(state.durationMs / 1000).toFixed(2)}s
                   </div>
                 )}
                 {state.error && (
-                  <div className="text-xs text-red-500 mt-1">
+                  <div className="text-xs text-danger mt-1">
                     {state.error}
                   </div>
                 )}
@@ -178,7 +178,7 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
           <div className="space-y-2">
             {validation.issues.map((issue) => (
               <div key={issue.id} className="flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                <AlertCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
                 <span>{issue.message}</span>
               </div>
             ))}
@@ -224,14 +224,14 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
   return (
     <div className={`flex flex-col h-full ${className}`}>
       {/* Header */}
-      <div className="p-3 border-b border-gray-200 dark:border-gray-700">
+      <div className="p-3 border-b border-border">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-text-muted flex items-center gap-2">
             <Play className="w-4 h-4" />
             Execution
           </h3>
           {elapsed && (
-            <span className="text-xs text-gray-400">{elapsed}</span>
+            <span className="text-xs text-text-subtle">{elapsed}</span>
           )}
         </div>
 
@@ -321,7 +321,7 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
         {error && (
           <Alert
             type="error"
-            message="Execution Error"
+            title="Execution Error"
             description={error}
             showIcon
             className="mb-3"
@@ -330,21 +330,21 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
 
         {/* Pending approval */}
         {pendingApproval && (
-          <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
+          <div className="mb-4 p-3 bg-warn/10 rounded-lg border border-warn/30">
             <div className="flex items-start gap-2 mb-2">
-              <Hand className="w-5 h-5 text-yellow-500 shrink-0" />
+              <Hand className="w-5 h-5 text-warn shrink-0" />
               <div>
                 <div className="font-medium text-sm">
                   Approval Required
                 </div>
-                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                <p className="text-xs text-text-muted mt-1">
                   {pendingApproval.promptMessage}
                 </p>
               </div>
             </div>
 
             {/* Data preview */}
-            <div className="mt-2 p-2 bg-white dark:bg-gray-800 rounded text-xs font-mono max-h-32 overflow-y-auto">
+            <div className="mt-2 p-2 bg-surface rounded text-xs font-mono max-h-32 overflow-y-auto">
               {JSON.stringify(pendingApproval.dataToReview, null, 2)}
             </div>
 
@@ -388,8 +388,8 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
 
       {/* Run info */}
       {runId && (
-        <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
-          <div className="text-xs text-gray-400">
+        <div className="p-3 border-t border-border bg-surface">
+          <div className="text-xs text-text-subtle">
             Run ID: <code className="font-mono">{runId}</code>
           </div>
         </div>

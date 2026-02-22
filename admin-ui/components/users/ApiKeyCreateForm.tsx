@@ -40,6 +40,7 @@ export const ApiKeyCreateForm = ({
   });
 
   const expiresField = form.register('expires_days');
+  const expiresError = form.formState.errors.expires_days;
 
   const handleSubmit = form.handleSubmit(async (data) => {
     await onSubmit(data);
@@ -84,6 +85,8 @@ export const ApiKeyCreateForm = ({
                   type="number"
                   min="1"
                   max="365"
+                  aria-invalid={expiresError ? 'true' : undefined}
+                  aria-describedby={expiresError ? 'expires_days-error' : undefined}
                   {...expiresField}
                   onChange={(e) => expiresField.onChange(e)}
                 />
@@ -91,8 +94,8 @@ export const ApiKeyCreateForm = ({
             </div>
 
             <div className="flex gap-2">
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? 'Creating...' : 'Create Key'}
+              <Button type="submit" loading={isSubmitting} loadingText="Creating...">
+                Create Key
               </Button>
               <Button type="button" variant="outline" onClick={handleCancel} disabled={isSubmitting}>
                 Cancel

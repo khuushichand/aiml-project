@@ -32,6 +32,7 @@ class ChatSessionCreate(BaseModel):
     character_id: int = Field(..., description="ID of the character for this chat", gt=0)
     title: Optional[str] = Field(None, description="Optional title for the chat session")
     parent_conversation_id: Optional[str] = Field(None, description="Parent conversation ID for forked chats")
+    forked_from_message_id: Optional[str] = Field(None, description="Message ID where this fork begins")
     state: Optional[str] = Field(None, description="Lifecycle state for the conversation")
     topic_label: Optional[str] = Field(None, description="Primary topic label for the conversation")
     cluster_id: Optional[str] = Field(None, description="Cluster/group identifier for navigation")
@@ -89,6 +90,9 @@ class ChatSessionResponse(BaseModel):
     last_modified: datetime = Field(..., description="Last modification timestamp")
     message_count: Optional[int] = Field(0, description="Number of messages in the chat")
     version: int = Field(1, description="Version number for optimistic locking")
+    parent_conversation_id: Optional[str] = Field(None, description="Parent conversation ID when forked")
+    root_id: Optional[str] = Field(None, description="Root conversation ID for fork trees")
+    forked_from_message_id: Optional[str] = Field(None, description="Source message ID for forked chats")
     settings: Optional[dict[str, Any]] = Field(
         None,
         description="Optional per-chat settings payload when explicitly requested.",
@@ -251,6 +255,26 @@ class CharacterChatCompletionV1Response(BaseModel):
 # Character Chat v2 + Prep Schemas (centralized)
 # ========================================================================
 
+class MessageSteeringPromptOverrides(BaseModel):
+    """Optional prompt text overrides for single-turn message steering."""
+
+    continue_as_user: Optional[str] = Field(
+        None,
+        max_length=2_000,
+        description="Override prompt text used when continue_as_user is enabled.",
+    )
+    impersonate_user: Optional[str] = Field(
+        None,
+        max_length=2_000,
+        description="Override prompt text used when impersonate_user is enabled.",
+    )
+    force_narrate: Optional[str] = Field(
+        None,
+        max_length=2_000,
+        description="Override prompt text used when force_narrate is enabled.",
+    )
+
+
 class CharacterChatCompletionPrepRequest(BaseModel):
     """Prepare chat messages for use with the main Chat API.
 
@@ -280,6 +304,10 @@ class CharacterChatCompletionPrepRequest(BaseModel):
     force_narrate: bool = Field(
         False,
         description="Single response: force narration style for the assistant reply.",
+    )
+    message_steering_prompts: Optional[MessageSteeringPromptOverrides] = Field(
+        None,
+        description="Optional prompt text overrides for steering instructions.",
     )
     prompt_preset: Optional[str] = Field(
         None,
@@ -330,12 +358,35 @@ class CharacterChatCompletionV2Request(BaseModel):
         False,
         description="Single response: force narration style for the assistant reply.",
     )
+    message_steering_prompts: Optional[MessageSteeringPromptOverrides] = Field(
+        None,
+        description="Optional prompt text overrides for steering instructions.",
+    )
+    mood_label: Optional[str] = Field(
+        None,
+        max_length=80,
+        description="Optional mood/expression label to persist with this assistant turn.",
+    )
+    mood_confidence: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Optional confidence score for mood_label (0.0-1.0).",
+    )
+    mood_topic: Optional[str] = Field(
+        None,
+        max_length=200,
+        description="Optional short topic cue associated with the detected mood.",
+    )
     prompt_preset: Optional[str] = Field(
         None,
         description="Optional single-turn prompt preset override.",
     )
     # LLM controls
-    provider: Optional[str] = Field(None, description="LLM provider (e.g., openai, anthropic, local-llm). Defaults to local-llm if omitted.")
+    provider: Optional[str] = Field(
+        None,
+        description="LLM provider (e.g., openai, anthropic, local-llm). When omitted, server default provider settings are used.",
+    )
     model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Sampling temperature")
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0, description="Nucleus sampling probability")
@@ -358,6 +409,9 @@ class CharacterChatCompletionV2Response(BaseModel):
     assistant_content: str
     speaker_character_id: Optional[int] = None
     speaker_character_name: Optional[str] = None
+    mood_label: Optional[str] = None
+    mood_confidence: Optional[float] = None
+    mood_topic: Optional[str] = None
     lorebook_diagnostics: Optional[list[dict[str, Any]]] = Field(
         None,
         description="Lorebook/world book trigger diagnostics for this turn",
@@ -380,6 +434,22 @@ class CharacterChatStreamPersistRequest(BaseModel):
     speaker_character_name: Optional[str] = Field(
         None,
         description="Optional speaker character display name for multi-character chats.",
+    )
+    mood_label: Optional[str] = Field(
+        None,
+        max_length=80,
+        description="Optional mood/expression label to persist in message metadata.",
+    )
+    mood_confidence: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Optional confidence score for mood_label (0.0-1.0).",
+    )
+    mood_topic: Optional[str] = Field(
+        None,
+        max_length=200,
+        description="Optional short topic cue associated with the detected mood.",
     )
     tool_calls: Optional[list[dict[str, Any]]] = Field(None, description="Optional tool_calls metadata to store")
     usage: Optional[dict[str, int]] = Field(None, description="Optional token usage stats: prompt_tokens, completion_tokens, total_tokens")

@@ -117,7 +117,8 @@ MCP_REDIS_POOL_SIZE=10
 MCP_RATE_LIMIT_ENABLED=true
 MCP_RATE_LIMIT_RPM=60
 MCP_RATE_LIMIT_BURST=100
-MCP_RATE_LIMIT_STORAGE=redis  # or memory
+RG_BACKEND=redis  # or memory
+REDIS_URL=redis://localhost:6379/0
 
 # Security
 MCP_CORS_ORIGINS=["https://app.example.com"]

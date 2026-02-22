@@ -61,3 +61,73 @@ def test_openrouter_alias_dummy_maps_and_preserves_namespace(monkeypatch):
     assert provider == "openrouter"
     # In tests, alias 'dummy' -> 'z-ai/glm-4.6' for OpenRouter and keep namespace
     assert req.model == "z-ai/glm-4.6"
+
+
+@pytest.mark.unit
+def test_model_availability_accepts_namespaced_request_for_plain_inventory(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Chat import chat_service
+
+    monkeypatch.setattr(
+        chat_service,
+        "known_models_for_provider_cached",
+        lambda _provider: ("glm-4.6",),
+    )
+
+    assert (
+        chat_service.is_model_known_for_provider("openrouter", "z-ai/glm-4.6")
+        is True
+    )
+
+
+@pytest.mark.unit
+def test_model_availability_accepts_plain_request_for_namespaced_inventory(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Chat import chat_service
+
+    monkeypatch.setattr(
+        chat_service,
+        "known_models_for_provider_cached",
+        lambda _provider: ("z-ai/glm-4.6",),
+    )
+
+    assert chat_service.is_model_known_for_provider("openrouter", "glm-4.6") is True
+
+
+@pytest.mark.unit
+def test_together_preserves_namespaced_model(monkeypatch):
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat_service_normalization::together_namespace")
+    from tldw_Server_API.app.core.Chat.chat_service import (
+        normalize_request_provider_and_model,
+    )
+
+    class Req:
+        def __init__(self):
+            self.api_provider = "together"
+            self.model = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+
+    req = Req()
+    provider = normalize_request_provider_and_model(req, default_provider="together")
+    assert provider == "together"
+    assert req.model == "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+
+
+@pytest.mark.unit
+def test_model_availability_accepts_namespaced_request_for_together_inventory(monkeypatch):
+    from tldw_Server_API.app.core.Chat import chat_service
+
+    monkeypatch.setattr(
+        chat_service,
+        "known_models_for_provider_cached",
+        lambda _provider: ("Llama-3.3-70B-Instruct-Turbo",),
+    )
+
+    assert (
+        chat_service.is_model_known_for_provider(
+            "together",
+            "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        )
+        is True
+    )

@@ -42,7 +42,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toasts.map((t) => (
           <div key={t.id} className={cn('pointer-events-auto animate-fade-in-up rounded-md border p-3 shadow-lg backdrop-blur', variantClass(t.variant))}>
             {t.title && <div className="text-sm font-semibold">{t.title}</div>}
-            {t.description && <div className="mt-0.5 text-sm text-gray-700">{t.description}</div>}
+            {t.description && <div className="mt-0.5 text-sm text-text">{t.description}</div>}
           </div>
         ))}
       </div>
@@ -52,11 +52,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
 function variantClass(v?: Variant) {
   switch (v) {
-    case 'success': return 'border-green-200 bg-green-50 text-green-900';
-    case 'warning': return 'border-yellow-200 bg-yellow-50 text-yellow-900';
-    case 'danger': return 'border-red-200 bg-red-50 text-red-900';
+    case 'success': return 'border-success/30 bg-success/10 text-success';
+    case 'warning': return 'border-warn/30 bg-warn/10 text-warn';
+    case 'danger': return 'border-danger/30 bg-danger/10 text-danger';
     case 'info':
-    default: return 'border-blue-200 bg-blue-50 text-blue-900';
+    default: return 'border-primary/30 bg-primary/10 text-primary';
   }
 }
 

@@ -123,10 +123,10 @@ class QwenAdapter(ChatProvider):
             if t is not None:
                 try:
                     return float(t)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except (TypeError, ValueError) as timeout_parse_error:
+                    logger.debug("Qwen adapter timeout value is not numeric", exc_info=timeout_parse_error)
+        except Exception as config_error:
+            logger.debug("Qwen adapter failed to read timeout config", exc_info=config_error)
         if fallback is not None:
             return float(fallback)
         return float(self.capabilities().get("default_timeout_seconds", 90))

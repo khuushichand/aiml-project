@@ -35,12 +35,19 @@ from tldw_Server_API.app.core.Workflows.adapters.content._config import (
     SlidesGenerateConfig,
 )
 
+try:
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+except ImportError:
+    async def perform_chat_api_call_async(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise ImportError("chat_service_unavailable")
+
 _GENERATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
     ImportError,
     LookupError,
     OSError,
     RuntimeError,
+    Exception,
     TypeError,
     UnicodeError,
     ValueError,
@@ -102,7 +109,6 @@ async def run_flashcard_generate_adapter(config: dict[str, Any], context: dict[s
     )
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
         messages = [{"role": "user", "content": f"Generate flashcards from:\n\n{text[:8000]}"}]
         response = await perform_chat_api_call_async(
             messages=messages,
@@ -169,7 +175,6 @@ async def run_quiz_generate_adapter(config: dict[str, Any], context: dict[str, A
     )
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
         messages = [{"role": "user", "content": f"Generate quiz from:\n\n{text[:8000]}"}]
         response = await perform_chat_api_call_async(
             messages=messages,
@@ -223,7 +228,6 @@ async def run_outline_generate_adapter(config: dict[str, Any], context: dict[str
     )
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
         response = await perform_chat_api_call_async(
             messages=[{"role": "user", "content": f"Outline:\n\n{text[:8000]}"}],
             api_provider=provider,
@@ -274,7 +278,6 @@ async def run_glossary_extract_adapter(config: dict[str, Any], context: dict[str
     system_prompt = f'Extract up to {max_terms} key terms. Return JSON: [{{"term": "Name", "definition": "Def"}}]'
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
         response = await perform_chat_api_call_async(
             messages=[{"role": "user", "content": f"Extract glossary:\n\n{text[:8000]}"}],
             api_provider=provider,
@@ -327,7 +330,6 @@ async def run_mindmap_generate_adapter(config: dict[str, Any], context: dict[str
     )
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
         response = await perform_chat_api_call_async(
             messages=[{"role": "user", "content": f"Mindmap:\n\n{text[:8000]}"}],
             api_provider=provider,
@@ -390,8 +392,6 @@ async def run_slides_generate_adapter(config: dict[str, Any], context: dict[str,
     style = config.get("style", "professional")
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
-
         prompt = f"""Create a {num_slides}-slide presentation outline titled "{title}".
 Style: {style}
 
@@ -474,8 +474,6 @@ async def run_report_generate_adapter(config: dict[str, Any], context: dict[str,
     output_format = config.get("format", "markdown")
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
-
         sections_str = ""
         if sections:
             sections_str = f"\n\nInclude these sections: {', '.join(sections)}"
@@ -552,8 +550,6 @@ async def run_newsletter_generate_adapter(config: dict[str, Any], context: dict[
     output_format = config.get("format", "markdown")
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
-
         items_text = ""
         if items:
             for i, item in enumerate(items[:20]):
@@ -631,8 +627,6 @@ async def run_diagram_generate_adapter(config: dict[str, Any], context: dict[str
     output_format = config.get("format", "mermaid")
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
-
         format_examples = {
             "mermaid": "```mermaid\nflowchart TD\n    A --> B\n```",
             "graphviz": "digraph G {\n    A -> B;\n}",

@@ -27,7 +27,7 @@ def test_mcp_ws_top_level_exception_closes_1011(monkeypatch):
     try:
         srv.config.debug_mode = True
     except Exception:
-        pass
+        _ = None
     srv.config.allowed_client_ips = []
 
     # Ensure router is mounted for the test (policy-agnostic)
@@ -36,7 +36,7 @@ def test_mcp_ws_top_level_exception_closes_1011(monkeypatch):
         from tldw_Server_API.app.core.config import API_V1_PREFIX
         app.include_router(mcp_router, prefix=f"{API_V1_PREFIX}/mcp")
     except Exception:
-        pass
+        _ = None
 
     with TestClient(app) as client:
         try:

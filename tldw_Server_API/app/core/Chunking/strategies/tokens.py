@@ -213,7 +213,7 @@ class FallbackTokenizer:
         token_ids = []
         for token in tokens:
             # Use MD5 hash for better distribution and consistency across runs
-            h = hashlib.md5(token.encode('utf-8', errors='replace')).hexdigest()
+            h = hashlib.md5(token.encode('utf-8', errors='replace'), usedforsecurity=False).hexdigest()
             token_id = int(h[:8], 16) % 2147483647  # 2^31 - 1
             token_ids.append(token_id)
 
@@ -222,7 +222,10 @@ class FallbackTokenizer:
                 # Add extra tokens for long words
                 extra_tokens = (len(token) - 7) // 3
                 for i in range(extra_tokens):
-                    h = hashlib.md5(f"{token}_{i}".encode('utf-8', errors='replace')).hexdigest()
+                    h = hashlib.md5(
+                        f"{token}_{i}".encode('utf-8', errors='replace'),
+                        usedforsecurity=False,
+                    ).hexdigest()
                     token_ids.append(int(h[:8], 16) % 2147483647)
 
         return token_ids

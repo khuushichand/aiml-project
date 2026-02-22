@@ -13,6 +13,7 @@ SimpleQA features:
 """
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -342,7 +343,8 @@ class SimpleQADataset:
 
     @staticmethod
     def load_from_huggingface(dataset_id: str = "openai/simple-qa",
-                            split: str = "test") -> list[dict[str, Any]]:
+                            split: str = "test",
+                            revision: str | None = None) -> list[dict[str, Any]]:
         """Load SimpleQA from HuggingFace.
 
         Args:
@@ -359,7 +361,8 @@ class SimpleQADataset:
             return []
 
         try:
-            dataset = load_dataset(dataset_id, split=split)
+            resolved_revision = revision or os.getenv("HF_DATASETS_DEFAULT_REVISION")
+            dataset = load_dataset(dataset_id, split=split, revision=resolved_revision)  # nosec B615
 
             questions = []
             for item in dataset:

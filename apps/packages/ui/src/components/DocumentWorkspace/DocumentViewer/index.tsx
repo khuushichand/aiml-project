@@ -249,7 +249,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         onPreviousPage={goToPreviousPage}
         onNextPage={goToNextPage}
       />
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-neutral-200 dark:bg-neutral-800">
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-surface2">
         {activeDocumentType === "pdf" && (
           <PdfSearch pdfDocumentRef={pdfDocumentRef} />
         )}

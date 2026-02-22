@@ -124,7 +124,7 @@ export const DataTablesList: React.FC = () => {
       key: "name",
       render: (name: string, record: DataTableSummary) => (
         <button
-          className="text-left text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
+          className="text-left text-primary hover:text-primaryStrong font-medium"
           onClick={() => openTableDetail(record.id)}
         >
           {name}
@@ -169,6 +169,8 @@ export const DataTablesList: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("dataTables:view", "View")}
+              className="min-h-[44px] min-w-[44px] md:min-h-[32px] md:min-w-[32px]"
               icon={<Eye className="h-4 w-4" />}
               onClick={() => openTableDetail(record.id)}
             />
@@ -179,6 +181,8 @@ export const DataTablesList: React.FC = () => {
               type="text"
               size="small"
               danger
+              aria-label={t("dataTables:delete", "Delete")}
+              className="min-h-[44px] min-w-[44px] md:min-h-[32px] md:min-w-[32px]"
               icon={<Trash2 className="h-4 w-4" />}
               onClick={() => openDeleteConfirm(record.id)}
             />
@@ -194,7 +198,7 @@ export const DataTablesList: React.FC = () => {
       <div className="flex items-center justify-between gap-4">
         <Input
           placeholder={t("dataTables:searchPlaceholder", "Search tables...")}
-          prefix={<Search className="h-4 w-4 text-zinc-400" />}
+          prefix={<Search className="h-4 w-4 text-text-subtle" />}
           value={tablesSearch}
           onChange={(e) => setTablesSearch(e.target.value)}
           className="max-w-xs"
@@ -211,8 +215,8 @@ export const DataTablesList: React.FC = () => {
 
       {/* Error state */}
       {tablesError && (
-        <Card className="bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800">
-          <p className="text-red-600 dark:text-red-400">{tablesError}</p>
+        <Card className="bg-danger/10 border-danger/30">
+          <p className="text-danger">{tablesError}</p>
         </Card>
       )}
 
@@ -226,9 +230,9 @@ export const DataTablesList: React.FC = () => {
       {/* Empty state */}
       {!isLoading && tables.length === 0 && !tablesError && (
         <Empty
-          image={<FileSpreadsheet className="h-16 w-16 mx-auto text-zinc-300 dark:text-zinc-600" />}
+          image={<FileSpreadsheet className="h-16 w-16 mx-auto text-text-subtle" />}
           description={
-            <span className="text-zinc-500 dark:text-zinc-400">
+            <span className="text-text-muted">
               {tablesSearch
                 ? t("dataTables:noSearchResults", "No tables found matching your search")
                 : t("dataTables:noTables", "No tables yet. Create your first table!")}
@@ -271,7 +275,7 @@ export const DataTablesList: React.FC = () => {
       {tableDetailOpen && (
         <Suspense
           fallback={
-            <Card className="bg-white dark:bg-zinc-900">
+            <Card className="bg-surface">
               <Skeleton active title paragraph={{ rows: 2 }} />
             </Card>
           }

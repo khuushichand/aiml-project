@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -26,7 +27,7 @@ import {
   validateRateLimitInputs,
 } from '@/lib/rate-limits';
 import { canEditFromMemberships } from '@/lib/permissions';
-import { User, Permission } from '@/types';
+import { User, Permission, AuditLog } from '@/types';
 import Link from 'next/link';
 
 type UserRateLimits = {
@@ -50,10 +51,13 @@ type PermissionOverride = {
   grant: boolean;
 };
 
+type EffectivePermissionSource = 'role' | 'override' | 'inherited';
+
 type EffectivePermission = {
   id: number;
   name: string;
-  source: 'role' | 'override';
+  source: EffectivePermissionSource;
+  sourceLabel?: string;
 };
 
 const roleOptions = [
@@ -88,6 +92,36 @@ type UserSession = {
   created_at: string;
   last_activity?: string | null;
   expires_at?: string | null;
+};
+
+type PasswordResetResponse = {
+  temporary_password?: string;
+  force_password_change?: boolean;
+  message?: string;
+};
+
+type LoginHistoryStatus = 'success' | 'failure';
+
+type LoginHistoryEntry = {
+  id: string;
+  timestamp: string;
+  ipAddress?: string;
+  userAgent?: string;
+  status: LoginHistoryStatus;
+};
+
+type OrgMembership = {
+  org_id: number;
+  role: string;
+  org_name?: string;
+};
+
+type TeamMembership = {
+  team_id: number;
+  org_id: number;
+  role: string;
+  team_name?: string;
+  org_name?: string;
 };
 
 type RateLimitRecord = {
@@ -152,6 +186,145 @@ const isForbiddenError = (err: unknown): boolean => {
 
 const formatDate = (dateStr?: string) => formatDateTime(dateStr, { fallback: 'Never' });
 
+const getLoginAttemptStatus = (entry: AuditLog): LoginHistoryStatus => {
+  const details = entry.details ?? {};
+  const raw = entry.raw ?? {};
+  const successValue = details.success ?? raw.success;
+  if (typeof successValue === 'boolean') {
+    return successValue ? 'success' : 'failure';
+  }
+
+  const statusText = String(details.status ?? details.result ?? raw.status ?? '').toLowerCase();
+  if (statusText.includes('fail') || statusText.includes('error') || statusText.includes('denied')) {
+    return 'failure';
+  }
+  if (statusText.includes('success') || statusText.includes('ok')) {
+    return 'success';
+  }
+
+  const actionText = String(entry.action ?? raw.action ?? '').toLowerCase();
+  if (actionText.includes('fail') || actionText.includes('denied')) {
+    return 'failure';
+  }
+  return 'success';
+};
+
+const toLoginHistoryEntry = (entry: AuditLog, index: number): LoginHistoryEntry => {
+  const details = entry.details ?? {};
+  const raw = entry.raw ?? {};
+  const ipValue = entry.ip_address
+    ?? (typeof details.ip_address === 'string' ? details.ip_address : undefined)
+    ?? (typeof details.ip === 'string' ? details.ip : undefined)
+    ?? (typeof raw.ip_address === 'string' ? raw.ip_address : undefined)
+    ?? (typeof raw.ip === 'string' ? raw.ip : undefined);
+  const detailsUserAgent = details['user_agent'];
+  const detailsUserAgentAlt = details['userAgent'];
+  const rawUserAgent = raw['user_agent'];
+  const rawUserAgentAlt = raw['userAgent'];
+  const userAgentValue = (typeof detailsUserAgent === 'string' ? detailsUserAgent : undefined)
+    ?? (typeof detailsUserAgentAlt === 'string' ? detailsUserAgentAlt : undefined)
+    ?? (typeof rawUserAgent === 'string' ? rawUserAgent : undefined)
+    ?? (typeof rawUserAgentAlt === 'string' ? rawUserAgentAlt : undefined);
+
+  return {
+    id: entry.id || `${entry.timestamp}-${index}`,
+    timestamp: entry.timestamp,
+    ipAddress: ipValue,
+    userAgent: userAgentValue,
+    status: getLoginAttemptStatus(entry),
+  };
+};
+
+const normalizePermissionOverrideList = (value: unknown): PermissionOverride[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const record = item as Record<string, unknown>;
+      const id = Number(record.id);
+      const permissionId = Number(record.permission_id ?? record.permissionId ?? record.id);
+      const permissionName = String(record.permission_name ?? record.permissionName ?? '').trim();
+      const grantValue = record.grant;
+      const grant = typeof grantValue === 'boolean' ? grantValue : true;
+      if (!permissionName || !Number.isFinite(permissionId)) return null;
+      return {
+        id: Number.isFinite(id) ? id : permissionId,
+        permission_id: permissionId,
+        permission_name: permissionName,
+        grant,
+      };
+    })
+    .filter((entry): entry is PermissionOverride => entry !== null);
+};
+
+const normalizeEffectivePermissionList = (
+  value: unknown,
+  overrideEntries: PermissionOverride[],
+  roleName?: string
+): EffectivePermission[] => {
+  if (!Array.isArray(value)) return [];
+  const overrideGrantNames = new Set(
+    overrideEntries
+      .filter((entry) => entry.grant)
+      .map((entry) => entry.permission_name)
+  );
+  return value
+    .map((item, index) => {
+      const roleLabel = roleName || '';
+      if (typeof item === 'string') {
+        const permissionName = item.trim();
+        if (!permissionName) return null;
+        if (overrideGrantNames.has(permissionName)) {
+          return {
+            id: index,
+            name: permissionName,
+            source: 'override' as const,
+            sourceLabel: 'Direct override',
+          };
+        }
+        return {
+          id: index,
+          name: permissionName,
+          source: 'role' as const,
+          sourceLabel: roleLabel || 'role',
+        };
+      }
+
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      const permissionName = String(
+        record.name ?? record.permission_name ?? record.permission ?? ''
+      ).trim();
+      if (!permissionName) return null;
+      const sourceText = String(record.source ?? '').toLowerCase();
+      const explicitRoleName = String(record.role_name ?? record.source_role ?? '').trim();
+      const idValue = Number(record.id ?? index);
+
+      let source: EffectivePermissionSource = 'inherited';
+      let sourceLabel = 'Inherited';
+      if (sourceText.includes('override') || overrideGrantNames.has(permissionName)) {
+        source = 'override';
+        sourceLabel = 'Direct override';
+      } else if (sourceText.includes('inherit')) {
+        source = 'inherited';
+        sourceLabel = 'Inherited';
+      } else if (sourceText.includes('role') || explicitRoleName) {
+        source = 'role';
+        sourceLabel = explicitRoleName || roleLabel || 'role';
+      } else if (roleLabel) {
+        source = 'role';
+        sourceLabel = roleLabel;
+      }
+
+      return {
+        id: Number.isFinite(idValue) ? idValue : index,
+        name: permissionName,
+        source,
+        sourceLabel,
+      };
+    })
+    .filter((entry): entry is EffectivePermission => entry !== null);
+};
+
 export default function UserDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -169,6 +342,20 @@ export default function UserDetailPage() {
   const [securityError, setSecurityError] = useState('');
   const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
   const [sessions, setSessions] = useState<UserSession[]>([]);
+  const [loginHistory, setLoginHistory] = useState<LoginHistoryEntry[]>([]);
+  const [loginHistoryLoading, setLoginHistoryLoading] = useState(false);
+  const [loginHistoryError, setLoginHistoryError] = useState('');
+  const [showOrgMembershipsDialog, setShowOrgMembershipsDialog] = useState(false);
+  const [showTeamMembershipsDialog, setShowTeamMembershipsDialog] = useState(false);
+  const [orgMemberships, setOrgMemberships] = useState<OrgMembership[]>([]);
+  const [teamMemberships, setTeamMemberships] = useState<TeamMembership[]>([]);
+  const [orgMembershipsLoading, setOrgMembershipsLoading] = useState(false);
+  const [teamMembershipsLoading, setTeamMembershipsLoading] = useState(false);
+  const [orgMembershipsError, setOrgMembershipsError] = useState('');
+  const [teamMembershipsError, setTeamMembershipsError] = useState('');
+  const [forcePasswordChangeOnNextLogin, setForcePasswordChangeOnNextLogin] = useState(true);
+  const [passwordResetLoading, setPasswordResetLoading] = useState(false);
+  const [temporaryPassword, setTemporaryPassword] = useState('');
 
   const [formData, setFormData] = useState<UserFormData>({
     username: '',
@@ -214,7 +401,7 @@ export default function UserDetailPage() {
       setError('');
       setIsAuthorized(true);
       const data = await api.getUser(userId);
-      const userValue = data as User & { rate_limits?: UserRateLimits };
+      const userValue = data as User & { rate_limits?: UserRateLimits; metadata?: Record<string, unknown> };
       const roleValue = userValue.role && isValidRole(userValue.role) ? userValue.role : 'member';
       setUser(userValue);
       setFormData({
@@ -226,6 +413,11 @@ export default function UserDetailPage() {
       });
       const normalizedRateLimits = normalizeRateLimits(userValue.rate_limits);
       applyRateLimits(normalizedRateLimits);
+      const forceChange =
+        typeof userValue.metadata?.force_password_change === 'boolean'
+          ? userValue.metadata.force_password_change
+          : true;
+      setForcePasswordChangeOnNextLogin(forceChange);
 
       try {
         const currentUser = await api.getCurrentUser();
@@ -300,6 +492,104 @@ export default function UserDetailPage() {
     }
   }, [userId]);
 
+  const loadLoginHistory = useCallback(async () => {
+    if (!userId) return;
+    try {
+      setLoginHistoryLoading(true);
+      setLoginHistoryError('');
+      const response = await api.getAuditLogs({
+        user_id: String(userId),
+        action: 'login',
+        limit: '20',
+        offset: '0',
+      });
+      const entries = Array.isArray(response?.entries)
+        ? (response.entries as AuditLog[])
+        : [];
+      const mapped = entries.map((entry, index) => toLoginHistoryEntry(entry, index));
+      mapped.sort((a, b) => {
+        const aTime = Date.parse(a.timestamp || '');
+        const bTime = Date.parse(b.timestamp || '');
+        return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+      });
+      setLoginHistory(mapped.slice(0, 20));
+    } catch (err: unknown) {
+      console.error('Failed to load login history:', err);
+      setLoginHistory([]);
+      setLoginHistoryError('Failed to load login history.');
+    } finally {
+      setLoginHistoryLoading(false);
+    }
+  }, [userId]);
+
+  const loadOrgMemberships = useCallback(async () => {
+    if (!userId) return;
+    try {
+      setOrgMembershipsLoading(true);
+      setOrgMembershipsError('');
+      const response = await api.getUserOrgMemberships(userId);
+      const items = Array.isArray(response) ? response : [];
+      const normalized = items
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null;
+          const record = item as Record<string, unknown>;
+          const orgId = Number(record.org_id);
+          const role = String(record.role ?? '').trim();
+          const orgName = record.org_name;
+          if (!Number.isFinite(orgId) || !role) return null;
+          return {
+            org_id: orgId,
+            role,
+            org_name: typeof orgName === 'string' ? orgName : undefined,
+          };
+        })
+        .filter((entry): entry is OrgMembership => entry !== null);
+      setOrgMemberships(normalized);
+    } catch (err: unknown) {
+      console.error('Failed to load user organizations:', err);
+      setOrgMemberships([]);
+      setOrgMembershipsError('Failed to load user organizations.');
+    } finally {
+      setOrgMembershipsLoading(false);
+    }
+  }, [userId]);
+
+  const loadTeamMemberships = useCallback(async () => {
+    if (!userId) return;
+    try {
+      setTeamMembershipsLoading(true);
+      setTeamMembershipsError('');
+      const response = await api.getUserTeamMemberships(userId);
+      const items = Array.isArray(response) ? response : [];
+      const normalized = items
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null;
+          const record = item as Record<string, unknown>;
+          const teamId = Number(record.team_id);
+          const orgId = Number(record.org_id);
+          const role = String(record.role ?? '').trim();
+          const teamName = record.team_name;
+          const orgName = record.org_name;
+          if (!Number.isFinite(teamId) || !Number.isFinite(orgId) || !role) return null;
+          return {
+            team_id: teamId,
+            org_id: orgId,
+            role,
+            team_name: typeof teamName === 'string' ? teamName : undefined,
+            org_name: typeof orgName === 'string' ? orgName : undefined,
+          };
+        })
+        .filter((entry): entry is TeamMembership => entry !== null);
+      setTeamMemberships(normalized);
+    } catch (err: unknown) {
+      console.error('Failed to load user teams:', err);
+      setTeamMemberships([]);
+      setTeamMembershipsError('Failed to load user teams.');
+    } finally {
+      setTeamMembershipsLoading(false);
+    }
+  }, [userId]);
+
   const loadPermissions = useCallback(async () => {
     if (!userId) return;
     try {
@@ -320,22 +610,26 @@ export default function UserDetailPage() {
         return;
       }
 
-      if (effectiveResult.status === 'fulfilled') {
-        const data = effectiveResult.value as { permissions?: EffectivePermission[]; items?: EffectivePermission[] };
-        setEffectivePermissions(
-          Array.isArray(data.permissions) ? data.permissions :
-          Array.isArray(data.items) ? data.items :
-          Array.isArray(data) ? data as EffectivePermission[] : []
-        );
-      }
-
+      let normalizedOverrides: PermissionOverride[] = [];
       if (overridesResult.status === 'fulfilled') {
-        const data = overridesResult.value as { overrides?: PermissionOverride[]; items?: PermissionOverride[] };
-        setPermissionOverrides(
-          Array.isArray(data.overrides) ? data.overrides :
+        const data = overridesResult.value as { overrides?: unknown; items?: unknown };
+        const rawOverrides = Array.isArray(data.overrides) ? data.overrides :
           Array.isArray(data.items) ? data.items :
-          Array.isArray(data) ? data as PermissionOverride[] : []
+          Array.isArray(data) ? data : [];
+        normalizedOverrides = normalizePermissionOverrideList(rawOverrides);
+      }
+      setPermissionOverrides(normalizedOverrides);
+
+      if (effectiveResult.status === 'fulfilled') {
+        const data = effectiveResult.value as { permissions?: unknown; items?: unknown };
+        const rawPermissions = Array.isArray(data.permissions) ? data.permissions :
+          Array.isArray(data.items) ? data.items :
+          Array.isArray(data) ? data : [];
+        setEffectivePermissions(
+          normalizeEffectivePermissionList(rawPermissions, normalizedOverrides, user?.role)
         );
+      } else {
+        setEffectivePermissions([]);
       }
 
       if (allPermsResult.status === 'fulfilled') {
@@ -351,7 +645,7 @@ export default function UserDetailPage() {
     } finally {
       setPermissionsLoading(false);
     }
-  }, [applyRateLimits, userId]);
+  }, [applyRateLimits, user?.role, userId]);
 
   useEffect(() => {
     loadUser();
@@ -361,8 +655,9 @@ export default function UserDetailPage() {
     if (user && isAuthorized) {
       void loadSecurity();
       void loadPermissions();
+      void loadLoginHistory();
     }
-  }, [user, isAuthorized, loadSecurity, loadPermissions]);
+  }, [user, isAuthorized, loadLoginHistory, loadSecurity, loadPermissions]);
 
   const handleSave = async () => {
     if (!isAuthorized) {
@@ -453,6 +748,45 @@ export default function UserDetailPage() {
       const message = err instanceof Error ? err.message : 'Failed to revoke sessions';
       showError('Revoke failed', message);
     }
+  };
+
+  const handleResetPassword = async () => {
+    const confirmed = await confirm({
+      title: 'Reset Password',
+      message: `Reset password for ${user?.username || user?.email || 'this user'}?`,
+      confirmText: 'Reset password',
+      variant: 'warning',
+      icon: 'warning',
+    });
+    if (!confirmed) return;
+
+    try {
+      setPasswordResetLoading(true);
+      const result = await api.resetUserPassword(userId, {
+        force_password_change: forcePasswordChangeOnNextLogin,
+      }) as PasswordResetResponse;
+      const tempPassword = typeof result.temporary_password === 'string'
+        ? result.temporary_password
+        : '';
+      setTemporaryPassword(tempPassword);
+      toastSuccess('Password reset', 'A new temporary password has been generated.');
+      void loadUser();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to reset password';
+      showError('Password reset failed', message);
+    } finally {
+      setPasswordResetLoading(false);
+    }
+  };
+
+  const handleViewOrganizations = () => {
+    setShowOrgMembershipsDialog(true);
+    void loadOrgMemberships();
+  };
+
+  const handleViewTeams = () => {
+    setShowTeamMembershipsDialog(true);
+    void loadTeamMemberships();
   };
 
   const buildRateLimitPayload = (
@@ -760,9 +1094,9 @@ export default function UserDetailPage() {
                     <Label htmlFor="is_active">Active</Label>
                   </div>
 
-                  <Button onClick={handleSave} disabled={saving || !isAuthorized}>
+                  <Button onClick={handleSave} disabled={saving || !isAuthorized} loading={saving} loadingText="Saving...">
                     <Save className="mr-2 h-4 w-4" />
-                    {saving ? 'Saving...' : 'Save Changes'}
+                    Save Changes
                   </Button>
                 </CardContent>
               </Card>
@@ -868,6 +1202,43 @@ export default function UserDetailPage() {
                     </Alert>
                   )}
 
+                  <div className="rounded-lg border p-4 space-y-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="font-medium">Password reset</div>
+                        <p className="text-sm text-muted-foreground">
+                          Generate a temporary password for this user.
+                        </p>
+                      </div>
+                      <Button
+                        onClick={handleResetPassword}
+                        disabled={!isAuthorized || passwordResetLoading}
+                        loading={passwordResetLoading}
+                        loadingText="Resetting..."
+                      >
+                        Reset Password
+                      </Button>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={forcePasswordChangeOnNextLogin}
+                        onChange={(event) => setForcePasswordChangeOnNextLogin(event.target.checked)}
+                        disabled={!isAuthorized || passwordResetLoading}
+                        className="h-4 w-4 rounded border-primary"
+                      />
+                      Force Password Change on Next Login
+                    </label>
+                    {temporaryPassword && (
+                      <Alert>
+                        <AlertDescription className="space-y-1">
+                          <div className="font-medium">Temporary password (shown once)</div>
+                          <code className="rounded bg-muted px-2 py-1 text-xs">{temporaryPassword}</code>
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
+
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
@@ -967,6 +1338,66 @@ export default function UserDetailPage() {
                       </div>
                     )}
                   </div>
+
+                  <div className="space-y-3 border-t pt-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Clock className="h-4 w-4 text-muted-foreground" />
+                        <span className="font-medium">Login History</span>
+                        <Badge variant="outline">{loginHistory.length}</Badge>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={loadLoginHistory}
+                        disabled={loginHistoryLoading}
+                      >
+                        <RefreshCw className={`mr-2 h-4 w-4 ${loginHistoryLoading ? 'animate-spin' : ''}`} />
+                        Refresh
+                      </Button>
+                    </div>
+
+                    {loginHistoryError && (
+                      <Alert variant="destructive">
+                        <AlertDescription>{loginHistoryError}</AlertDescription>
+                      </Alert>
+                    )}
+
+                    {loginHistoryLoading ? (
+                      <div className="text-sm text-muted-foreground">Loading login history...</div>
+                    ) : loginHistory.length === 0 ? (
+                      <div className="text-sm text-muted-foreground">No recent login attempts found.</div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Timestamp</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>IP Address</TableHead>
+                              <TableHead>User Agent</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {loginHistory.map((entry) => (
+                              <TableRow key={entry.id}>
+                                <TableCell className="text-sm">{formatDate(entry.timestamp)}</TableCell>
+                                <TableCell>
+                                  <Badge variant={entry.status === 'success' ? 'default' : 'destructive'}>
+                                    {entry.status === 'success' ? 'Success' : 'Failure'}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-sm font-mono">{entry.ipAddress || '—'}</TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {entry.userAgent || 'Unknown client'}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
 
@@ -1024,8 +1455,10 @@ export default function UserDetailPage() {
                     <Button
                       onClick={handleSaveRateLimits}
                       disabled={rateLimitsSaving || !isAuthorized}
+                      loading={rateLimitsSaving}
+                      loadingText="Saving..."
                     >
-                      {rateLimitsSaving ? 'Saving...' : 'Save Limits'}
+                      Save Limits
                     </Button>
                     {(rateLimits.requests_per_minute || rateLimits.requests_per_hour || rateLimits.requests_per_day) && (
                       <Button
@@ -1173,9 +1606,19 @@ export default function UserDetailPage() {
                             className="flex items-center justify-between p-2 rounded bg-muted/30"
                           >
                             <code className="font-mono text-xs">{perm.name}</code>
-                            <Badge variant="outline" className="text-xs">
-                              {perm.source || 'role'}
-                            </Badge>
+                            {perm.source === 'override' ? (
+                              <Badge variant="secondary" className="text-xs">
+                                Direct override
+                              </Badge>
+                            ) : perm.source === 'role' ? (
+                              <Badge variant="outline" className="text-xs">
+                                Role: {perm.sourceLabel || user.role || 'role'}
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-xs">
+                                Inherited
+                              </Badge>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1197,17 +1640,119 @@ export default function UserDetailPage() {
                         Manage API Keys
                       </Button>
                     </Link>
-                    <Button variant="outline" disabled>
+                    <Button variant="outline" onClick={handleViewOrganizations}>
                       <Building2 className="mr-2 h-4 w-4" />
                       View Organizations
                     </Button>
-                    <Button variant="outline" disabled>
+                    <Button variant="outline" onClick={handleViewTeams}>
                       <Users className="mr-2 h-4 w-4" />
                       View Teams
                     </Button>
                   </div>
                 </CardContent>
               </Card>
+
+              <Dialog open={showOrgMembershipsDialog} onOpenChange={setShowOrgMembershipsDialog}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>User Organizations</DialogTitle>
+                    <DialogDescription>
+                      Organizations this user belongs to and their role in each organization.
+                    </DialogDescription>
+                  </DialogHeader>
+                  {orgMembershipsError && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{orgMembershipsError}</AlertDescription>
+                    </Alert>
+                  )}
+                  {orgMembershipsLoading ? (
+                    <div className="text-sm text-muted-foreground">Loading organizations...</div>
+                  ) : orgMemberships.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">No organization memberships found.</div>
+                  ) : (
+                    <div className="max-h-80 overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Organization</TableHead>
+                            <TableHead>Role</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {orgMemberships.map((membership) => (
+                            <TableRow key={membership.org_id}>
+                              <TableCell className="text-sm">
+                                {membership.org_name || `Organization ${membership.org_id}`}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline">{membership.role}</Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setShowOrgMembershipsDialog(false)}>
+                      Close
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              <Dialog open={showTeamMembershipsDialog} onOpenChange={setShowTeamMembershipsDialog}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>User Teams</DialogTitle>
+                    <DialogDescription>
+                      Team memberships with organization context and assigned role.
+                    </DialogDescription>
+                  </DialogHeader>
+                  {teamMembershipsError && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{teamMembershipsError}</AlertDescription>
+                    </Alert>
+                  )}
+                  {teamMembershipsLoading ? (
+                    <div className="text-sm text-muted-foreground">Loading teams...</div>
+                  ) : teamMemberships.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">No team memberships found.</div>
+                  ) : (
+                    <div className="max-h-80 overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Team</TableHead>
+                            <TableHead>Organization</TableHead>
+                            <TableHead>Role</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {teamMemberships.map((membership) => (
+                            <TableRow key={`${membership.org_id}-${membership.team_id}`}>
+                              <TableCell className="text-sm">
+                                {membership.team_name || `Team ${membership.team_id}`}
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {membership.org_name || `Organization ${membership.org_id}`}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline">{membership.role}</Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setShowTeamMembershipsDialog(false)}>
+                      Close
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </div>
           </div>
     );

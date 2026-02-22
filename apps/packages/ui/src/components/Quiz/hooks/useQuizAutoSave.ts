@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react"
+import { useEffect, useRef, useCallback, useState } from "react"
 import type { AnswerValue } from "@/services/quizzes"
 import { createLocalRegistryBucket } from "@/services/settings/local-bucket"
 
@@ -13,6 +13,7 @@ const BUCKET_PREFIX = "registry:quiz-attempt:"
 const LEGACY_STORAGE_PREFIX = "quiz-attempt-"
 const DEBOUNCE_MS = 500
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000 // 24 hours
+const STORAGE_HEALTHCHECK_KEY = "__autosave_healthcheck__"
 
 const quizAttemptBucket = createLocalRegistryBucket<SavedAttempt>({
   prefix: BUCKET_PREFIX,
@@ -125,6 +126,14 @@ export function useQuizAutoSave(
 ) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedRef = useRef<string | null>(null)
+  const storageWarningNotifiedRef = useRef(false)
+  const [storageUnavailable, setStorageUnavailable] = useState(false)
+
+  const notifyStorageUnavailable = useCallback(() => {
+    if (storageWarningNotifiedRef.current) return
+    storageWarningNotifiedRef.current = true
+    setStorageUnavailable(true)
+  }, [])
 
   // Save answers to local-only storage with debouncing
   const saveAnswers = useCallback(async () => {
@@ -147,8 +156,9 @@ export function useQuizAutoSave(
       lastSavedRef.current = serialized
     } catch (error) {
       console.warn("Failed to save quiz progress:", error)
+      notifyStorageUnavailable()
     }
-  }, [attemptId, quizId, answers])
+  }, [attemptId, quizId, answers, notifyStorageUnavailable])
 
   // Debounced save effect
   useEffect(() => {
@@ -186,10 +196,11 @@ export function useQuizAutoSave(
       }
     } catch (error) {
       console.warn("Failed to restore quiz progress:", error)
+      notifyStorageUnavailable()
     }
 
     return false
-  }, [attemptId, setAnswers])
+  }, [attemptId, setAnswers, notifyStorageUnavailable])
 
   // Check if there's saved progress for an attempt
   const hasSavedProgress = useCallback(async (checkAttemptId: number): Promise<boolean> => {
@@ -227,8 +238,9 @@ export function useQuizAutoSave(
       lastSavedRef.current = null
     } catch (error) {
       console.warn("Failed to clear quiz progress:", error)
+      notifyStorageUnavailable()
     }
-  }, [attemptId])
+  }, [attemptId, notifyStorageUnavailable])
 
   // Force immediate save (for "Save & Exit" button)
   const forceSave = useCallback(async () => {
@@ -242,9 +254,32 @@ export function useQuizAutoSave(
   useEffect(() => {
     void quizAttemptBucket.cleanup()
     void cleanupLegacyAttempts()
-  }, [])
+    void (async () => {
+      const healthcheckPayload: SavedAttempt = {
+        attemptId: -1,
+        quizId: -1,
+        answers: {},
+        timestamp: Date.now()
+      }
+      try {
+        await quizAttemptBucket.set(
+          STORAGE_HEALTHCHECK_KEY,
+          healthcheckPayload,
+          healthcheckPayload.timestamp
+        )
+        const record = await quizAttemptBucket.get(STORAGE_HEALTHCHECK_KEY)
+        await quizAttemptBucket.remove(STORAGE_HEALTHCHECK_KEY)
+        if (!record) {
+          notifyStorageUnavailable()
+        }
+      } catch {
+        notifyStorageUnavailable()
+      }
+    })()
+  }, [notifyStorageUnavailable])
 
   return {
+    storageUnavailable,
     restoreSavedAnswers,
     hasSavedProgress,
     getSavedProgress,

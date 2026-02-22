@@ -7,7 +7,7 @@ import contextlib
 import json
 import os
 import time
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -18,7 +18,11 @@ from loguru import logger
 from starlette import status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+    get_chacha_db_for_user,
+    get_chacha_db_for_user_id,
+)
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import _resolve_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import UsageEventLogger, get_usage_event_logger
 from tldw_Server_API.app.api.v1.endpoints.audio.audio_tts import get_tts_service
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
@@ -30,7 +34,7 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     StreamingTestResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER, get_api_keys
-from tldw_Server_API.app.core.Audio.error_payloads import _maybe_debug_details, _ws_error_payload
+from tldw_Server_API.app.core.Audio.error_payloads import _maybe_debug_details
 from tldw_Server_API.app.core.Audio.quota_helpers import EXPECTED_DB_EXC, EXPECTED_REDIS_EXC, _get_failopen_cap_minutes
 from tldw_Server_API.app.core.Audio.streaming_service import (
     CHAT_HISTORY_MAX_MESSAGES,
@@ -41,8 +45,13 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credential
 from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async as chat_api_call_async
+from tldw_Server_API.app.core.Chat.chat_helpers import (
+    get_or_create_character_context,
+    get_or_create_conversation,
+)
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import upsert_transcript
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
     QuotaExceeded,
     SileroTurnDetector,
@@ -59,6 +68,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry, increment_counter
 from tldw_Server_API.app.core.Streaming import speech_chat_service
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 
@@ -99,17 +109,51 @@ router = APIRouter(
 )
 
 def _audio_shim_attr(name: str):
-    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
-    try:
-        if name in getattr(audio_shim, "__dict__", {}):
-            return getattr(audio_shim, name)
-    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-        pass
+    def _is_override(value: Any) -> bool:
+        # Keep default module/package objects as non-overrides; treat externally
+        # supplied test doubles/lambdas as overrides.
+        if value is None or isinstance(value, ModuleType):
+            return False
+        mod_name = getattr(value, "__module__", None)
+        if isinstance(mod_name, str) and mod_name:
+            if mod_name.startswith("tldw_Server_API.tests."):
+                return True
+            return not mod_name.startswith("tldw_Server_API.")
+        return True
+
+    mod_has = False
+    mod_value: Any = None
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
 
         if hasattr(audio_mod, name):
-            return getattr(audio_mod, name)
+            mod_has = True
+            mod_value = getattr(audio_mod, name)
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        mod_has = False
+        mod_value = None
+    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
+    pkg_dict = getattr(audio_shim, "__dict__", {})
+    pkg_has = name in pkg_dict
+    pkg_value = pkg_dict.get(name) if pkg_has else None
+
+    if pkg_has and mod_has and pkg_value is not mod_value:
+        pkg_override = _is_override(pkg_value)
+        mod_override = _is_override(mod_value)
+        if mod_override and not pkg_override:
+            return mod_value
+        if pkg_override and not mod_override:
+            return pkg_value
+        if mod_override and pkg_override:
+            return mod_value
+
+    if pkg_has:
+        return pkg_value
+    if mod_has:
+        return mod_value
+    try:
+        if hasattr(audio_shim, name):
+            return getattr(audio_shim, name)
     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         pass
     if not hasattr(audio_shim, name):
@@ -138,6 +182,110 @@ def _shim_get_metrics_registry():
     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         fn = get_metrics_registry
     return fn()
+
+
+def _audio_ws_compat_error_type_enabled() -> bool:
+    """
+    Return True when Audio WS payloads should include the legacy `error_type`
+    alias alongside canonical `code`.
+    """
+    raw = str(os.getenv("AUDIO_WS_COMPAT_ERROR_TYPE", "1")).strip().lower()
+    return is_truthy(raw)
+
+
+def _audio_ws_error_payload(
+    *,
+    code: str,
+    message: str,
+    request_id: Optional[str] = None,
+    data: Optional[dict[str, Any]] = None,
+    exc: Optional[Exception] = None,
+    extra: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"type": "error", "code": code, "message": message}
+    if request_id:
+        payload["request_id"] = request_id
+    if data is not None:
+        payload["data"] = data
+    details = _maybe_debug_details(exc)
+    if details:
+        payload["details"] = details
+    if extra:
+        payload.update(extra)
+    if _audio_ws_compat_error_type_enabled():
+        payload["error_type"] = code
+    return payload
+
+
+def _audio_ws_quota_error_payload(
+    *,
+    quota: str,
+    message: str,
+    request_id: Optional[str] = None,
+) -> dict[str, Any]:
+    payload = _audio_ws_error_payload(
+        code="quota_exceeded",
+        message=message,
+        request_id=request_id,
+        data={"quota": quota},
+    )
+    if _audio_ws_compat_error_type_enabled():
+        payload["quota"] = quota
+    return payload
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    try:
+        lowered = str(value).strip().lower()
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        return default
+    if lowered in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if lowered in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
+def _coerce_positive_float(raw: Any, default: float, *, min_value: float = 0.0) -> float:
+    try:
+        value = float(raw)
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        return default
+    if value < min_value:
+        return default
+    return value
+
+
+def _coerce_positive_int(raw: Any) -> Optional[int]:
+    try:
+        value = int(raw)
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _stream_model_label(config: UnifiedStreamingConfig) -> str:
+    model = str(getattr(config, "model", "parakeet") or "parakeet").strip().lower()
+    variant = str(getattr(config, "model_variant", "standard") or "standard").strip().lower()
+    return f"stream:{model}:{variant}"
+
+
+def _compose_transcript_snapshot(full_text: str, latest_text: str) -> str:
+    full = str(full_text or "").strip()
+    latest = str(latest_text or "").strip()
+    if full and latest:
+        if full.endswith(latest) or latest in full:
+            return full
+        return f"{full} {latest}".strip()
+    return full or latest
 
 
 def _shim_get_api_keys():
@@ -176,6 +324,37 @@ async def _shim_get_tts_service():
     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         fn = get_tts_service
     return await fn()
+
+
+async def _shim_get_chacha_db_for_user_id(user_id: int, client_id: Optional[str] = None):
+    try:
+        fn = _audio_shim_attr("get_chacha_db_for_user_id")
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        fn = get_chacha_db_for_user_id
+    return await fn(user_id, client_id=client_id)
+
+
+async def _shim_get_or_create_character_context(db: CharactersRAGDB, character_id: Optional[str], loop):
+    try:
+        fn = _audio_shim_attr("get_or_create_character_context")
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        fn = get_or_create_character_context
+    return await fn(db, character_id, loop)
+
+
+async def _shim_get_or_create_conversation(
+    db: CharactersRAGDB,
+    conversation_id: Optional[str],
+    character_id: int,
+    character_name: str,
+    client_id: str,
+    loop,
+):
+    try:
+        fn = _audio_shim_attr("get_or_create_conversation")
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        fn = get_or_create_conversation
+    return await fn(db, conversation_id, character_id, character_name, client_id, loop)
 
 
 async def _can_start_stream(user_id: int):
@@ -328,7 +507,7 @@ async def websocket_transcribe(
     - Single-user: API key via header, `token` query parameter, or an initial auth message; an IP allowlist may be enforced.
     Supported incoming message types: "auth" (for token-based auth), "config" (streaming configuration), "audio" (base64-encoded audio chunks), and "commit" (finalize current utterance).
     Outgoing message types include partial updates ("partial"), interim/final transcriptions ("transcription"), the final transcript ("full_transcript"), and structured error frames ("error").
-    Per-user limits are enforced (concurrent streams and daily minute quotas); when a quota is exceeded the server sends an "error" with "error_type": "quota_exceeded" and closes the connection with code 4003 (or 1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`).
+    Per-user limits are enforced (concurrent streams and daily minute quotas); when a quota is exceeded the server sends an "error" with `code="quota_exceeded"` and closes the connection with code 4003 (or 1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`). A compatibility alias `error_type` is included when `AUDIO_WS_COMPAT_ERROR_TYPE=1` (default).
     A server-side default streaming configuration is used if the client does not provide one before audio arrives.
     Parameters:
         websocket (WebSocket): The active WebSocket connection.
@@ -343,7 +522,7 @@ async def websocket_transcribe(
             websocket,
             heartbeat_interval_s=0,
             idle_timeout_s=0,
-            compat_error_type=True,
+            compat_error_type=_audio_ws_compat_error_type_enabled(),
             labels={"component": "audio", "endpoint": "audio_unified_ws"},
         )
         await _outer_stream.start()
@@ -375,9 +554,7 @@ async def websocket_transcribe(
                     logger.debug(f"_BareStream.send_json failed: {exc}")
 
             async def error(self, code: str, message: str, *, data: Optional[dict[str, Any]] = None) -> None:
-                p = {"type": "error", "error_type": code, "message": message}
-                if data is not None:
-                    p["data"] = data
+                p = _audio_ws_error_payload(code=code, message=message, data=data)
                 await self.send_json(p)
 
             async def done(self) -> None:
@@ -412,7 +589,7 @@ async def websocket_transcribe(
 
     def _policy_close_code() -> int:
         flag = str(_os.getenv("AUDIO_WS_QUOTA_CLOSE_1008", "0")).strip().lower()
-        return 1008 if flag in {"1", "true", "yes", "on"} else 4003
+        return 1008 if is_truthy(flag) else 4003
 
     # Authenticate (shared helper; parity with other audio WS endpoints)
     auth_ok, jwt_user_id = await _shim_audio_ws_authenticate(
@@ -441,14 +618,21 @@ async def websocket_transcribe(
         # If Nemo toolkit is unavailable in this environment, prefer Whisper
         # as the initial streaming model so we avoid repeated initialization
         # failures before falling back.
+        nemo_ok = False
+        _is_nemo_available = None
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (  # type: ignore
                 is_nemo_available as _is_nemo_available,
             )
-
-            nemo_ok = _is_nemo_available()
+        except ImportError as exc:
+            logger.debug(f"Nemo availability probe import failed; defaulting to Whisper: {exc}")
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-            nemo_ok = False
+            _is_nemo_available = None
+        if callable(_is_nemo_available):
+            try:
+                nemo_ok = bool(_is_nemo_available())
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                nemo_ok = False
         if not nemo_ok:
             default_model = "whisper"
 
@@ -486,6 +670,175 @@ async def websocket_transcribe(
             await websocket.close()
             return
         acquired_stream = True
+
+        query_params = getattr(websocket, "query_params", {}) or {}
+        persistence_enabled = _coerce_bool(
+            query_params.get("persist_transcript", query_params.get("persist")),
+            default=_coerce_bool(os.getenv("AUDIO_STREAM_TRANSCRIBE_PERSISTENCE", "0"), default=False),
+        )
+        persistence_partial_enabled = _coerce_bool(
+            query_params.get("persist_partial_transcript"),
+            default=_coerce_bool(os.getenv("AUDIO_STREAM_TRANSCRIBE_PARTIAL_PERSISTENCE", "1"), default=True),
+        )
+        persistence_partial_interval_s = _coerce_positive_float(
+            os.getenv("AUDIO_STREAM_TRANSCRIBE_PARTIAL_INTERVAL_S", "2.0"),
+            default=2.0,
+            min_value=0.25,
+        )
+        persistence_media_id = _coerce_positive_int(query_params.get("media_id"))
+        persistence_model = str(
+            query_params.get("transcription_model", "").strip()
+            if hasattr(query_params, "get")
+            else ""
+        ) or _stream_model_label(config)
+        persistence_db = None
+        persistence_warning_sent = False
+        last_partial_persist_ts = 0.0
+
+        async def _send_persistence_warning(message: str, details: Optional[str] = None) -> None:
+            nonlocal persistence_warning_sent
+            if persistence_warning_sent:
+                return
+            persistence_warning_sent = True
+            warning_payload: dict[str, Any] = {
+                "type": "warning",
+                "warning_type": "transcript_persistence_unavailable",
+                "message": message,
+            }
+            if request_id:
+                warning_payload["request_id"] = request_id
+            if details:
+                warning_payload["details"] = details
+            try:
+                if _outer_stream:
+                    await _outer_stream.send_json(warning_payload)
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
+                logger.debug(f"Audio WS transcript persistence warning send failed: {send_exc}")
+
+        async def _ensure_persistence_context() -> Optional[tuple[Any, int]]:
+            nonlocal persistence_db
+            nonlocal persistence_enabled
+            if not persistence_enabled:
+                return None
+            if persistence_media_id is None:
+                persistence_enabled = False
+                await _send_persistence_warning("Transcript persistence requested but media_id is missing")
+                return None
+            if persistence_db is not None:
+                return persistence_db, persistence_media_id
+            try:
+                persistence_user = User(
+                    id=int(user_id_for_usage),
+                    username=f"audio_stream_{user_id_for_usage}",
+                    role="user",
+                    is_active=True,
+                    is_verified=True,
+                )
+                persistence_db = _resolve_media_db_for_user(persistence_user)
+                return persistence_db, persistence_media_id
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Audio WS transcript persistence context unavailable; continuing without persistence. "
+                    f"user_id={user_id_for_usage}, error={exc}"
+                )
+                persistence_enabled = False
+                await _send_persistence_warning(
+                    "Transcript persistence unavailable; continuing without persistence",
+                    str(exc),
+                )
+                return None
+
+        async def _persist_transcript_snapshot(text: str, *, is_final: bool) -> None:
+            nonlocal last_partial_persist_ts
+            nonlocal persistence_enabled
+            snapshot = str(text or "").strip()
+            if not snapshot or not persistence_enabled:
+                return
+            now = time.time()
+            if not is_final:
+                if not persistence_partial_enabled:
+                    return
+                if (now - last_partial_persist_ts) < persistence_partial_interval_s:
+                    return
+            context = await _ensure_persistence_context()
+            if context is None:
+                return
+            db_instance, media_id = context
+            try:
+                upsert_transcript(
+                    db_instance,
+                    media_id=media_id,
+                    transcription=snapshot,
+                    whisper_model=persistence_model,
+                )
+                if not is_final:
+                    last_partial_persist_ts = now
+            except Exception as exc:  # noqa: BLE001 - persistence is fail-open
+                logger.warning(
+                    "Audio WS transcript persistence write failed; continuing without persistence. "
+                    f"media_id={media_id}, model={persistence_model}, error={exc}"
+                )
+                persistence_enabled = False
+                await _send_persistence_warning(
+                    "Failed to persist transcript; continuing stream",
+                    str(exc),
+                )
+
+        async def _on_stream_config_resolved(
+            config_payload: dict[str, Any],
+            resolved_config: UnifiedStreamingConfig,
+        ) -> None:
+            nonlocal persistence_enabled
+            nonlocal persistence_partial_enabled
+            nonlocal persistence_media_id
+            nonlocal persistence_model
+            metadata = config_payload.get("metadata") if isinstance(config_payload, dict) else None
+            if not isinstance(metadata, dict):
+                metadata = {}
+            persist_hint = config_payload.get("persist_transcript") if isinstance(config_payload, dict) else None
+            if persist_hint is None and metadata:
+                persist_hint = metadata.get("persist_transcript", metadata.get("persist"))
+            if persist_hint is not None:
+                persistence_enabled = _coerce_bool(persist_hint, default=persistence_enabled)
+
+            partial_hint = (
+                config_payload.get("persist_partial_transcript") if isinstance(config_payload, dict) else None
+            )
+            if partial_hint is None and metadata:
+                partial_hint = metadata.get("persist_partial_transcript")
+            if partial_hint is not None:
+                persistence_partial_enabled = _coerce_bool(partial_hint, default=persistence_partial_enabled)
+
+            media_id_hint = config_payload.get("media_id") if isinstance(config_payload, dict) else None
+            if media_id_hint is None and metadata:
+                media_id_hint = metadata.get("media_id")
+            media_id_from_cfg = _coerce_positive_int(media_id_hint)
+            if media_id_from_cfg is not None:
+                persistence_media_id = media_id_from_cfg
+
+            model_hint = config_payload.get("transcription_model") if isinstance(config_payload, dict) else None
+            if model_hint is None and metadata:
+                model_hint = metadata.get("transcription_model")
+            if isinstance(model_hint, str) and model_hint.strip():
+                persistence_model = model_hint.strip()
+            else:
+                persistence_model = _stream_model_label(resolved_config)
+
+        async def _on_transcript_result(result: dict[str, Any], full_transcript: str) -> None:
+            if not persistence_enabled:
+                return
+            result_type = str(result.get("type", "")).strip().lower()
+            if result_type not in {"partial", "transcription"}:
+                return
+            text = result.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return
+            is_final = bool(result.get("is_final"))
+            snapshot = _compose_transcript_snapshot(full_transcript, text)
+            await _persist_transcript_snapshot(snapshot, is_final=is_final)
+
+        async def _on_full_transcript(text: str, _auto_commit: bool) -> None:
+            await _persist_transcript_snapshot(text, is_final=True)
 
         # Resource Governor: acquire a 'streams' concurrency lease (policy resolved via route_map)
         # Track and enforce minutes chunk-by-chunk
@@ -608,17 +961,19 @@ async def websocket_transcribe(
                 config,
                 on_audio_seconds=_on_audio_quota,
                 on_heartbeat=_on_heartbeat,
+                on_stream_config_resolved=_on_stream_config_resolved,
+                on_transcript_result=_on_transcript_result,
+                on_full_transcript=_on_full_transcript,
             )
         except _QuotaExceeded as qe:
             try:
                 if _outer_stream:
                     await _outer_stream.send_json(
-                        {
-                            "type": "error",
-                            "error_type": "quota_exceeded",
-                            "quota": qe.quota,
-                            "message": "Streaming transcription quota exceeded (daily minutes)",
-                        }
+                        _audio_ws_quota_error_payload(
+                            quota=qe.quota,
+                            message="Streaming transcription quota exceeded (daily minutes)",
+                            request_id=request_id,
+                        )
                     )
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                 logger.debug(f"WebSocket send_json quota error failed: error={send_exc}")
@@ -635,6 +990,10 @@ async def websocket_transcribe(
                         f"Failed to release streaming quota slot (stream/transcribe): "
                         f"user_id={user_id_for_usage}, error={e}"
                     )
+            if persistence_db is not None:
+                with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                    if hasattr(persistence_db, "release_context_connection"):
+                        persistence_db.release_context_connection()
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
@@ -650,12 +1009,11 @@ async def websocket_transcribe(
                 try:
                     if _outer_stream:
                         await _outer_stream.send_json(
-                            {
-                                "type": "error",
-                                "error_type": "quota_exceeded",
-                                "quota": quota_name,
-                                "message": "Streaming transcription quota exceeded",
-                            }
+                            _audio_ws_quota_error_payload(
+                                quota=quota_name,
+                                message="Streaming transcription quota exceeded",
+                                request_id=request_id,
+                            )
                         )
                 finally:
                     try:
@@ -728,7 +1086,7 @@ async def websocket_audio_chat_stream(
         _outer_stream = _WSStream(
             websocket,
             heartbeat_interval_s=None,
-            compat_error_type=True,
+            compat_error_type=_audio_ws_compat_error_type_enabled(),
             close_on_done=False,
             idle_timeout_s=_idle_timeout,
             labels={"component": "audio", "endpoint": "audio_chat_ws"},
@@ -756,7 +1114,7 @@ async def websocket_audio_chat_stream(
 
     def _policy_close_code() -> int:
         flag = str(os.getenv("AUDIO_WS_QUOTA_CLOSE_1008", "0")).strip().lower()
-        return 1008 if flag in {"1", "true", "yes", "on"} else 4003
+        return 1008 if is_truthy(flag) else 4003
 
     # Authenticate (parity with STT/WS TTS)
     auth_ok, jwt_user_id = await _shim_audio_ws_authenticate(
@@ -786,11 +1144,11 @@ async def websocket_audio_chat_stream(
             if not ok_stream:
                 if _outer_stream:
                     await _outer_stream.send_json(
-                        {
-                            "type": "error",
-                            "message": msg_stream or "Concurrent audio streams limit reached",
-                            "error_type": "rate_limited",
-                        }
+                        _audio_ws_error_payload(
+                            code="rate_limited",
+                            message=msg_stream or "Concurrent audio streams limit reached",
+                            request_id=request_id,
+                        )
                     )
                 await websocket.close(code=_policy_close_code())
                 return
@@ -798,11 +1156,11 @@ async def websocket_audio_chat_stream(
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             if _outer_stream:
                 await _outer_stream.send_json(
-                    {
-                        "type": "error",
-                        "message": "Unable to evaluate audio stream quota or concurrency",
-                        "error_type": "quota",
-                    }
+                    _audio_ws_error_payload(
+                        code="quota",
+                        message="Unable to evaluate audio stream quota or concurrency",
+                        request_id=request_id,
+                    )
                 )
             await websocket.close(code=_policy_close_code())
             return
@@ -895,11 +1253,11 @@ async def websocket_audio_chat_stream(
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             if _outer_stream:
                 await _outer_stream.send_json(
-                    _ws_error_payload(
-                        "config frame required",
+                    _audio_ws_error_payload(
+                        code="bad_request",
+                        message="config frame required",
                         request_id=request_id,
                         exc=exc,
-                        error_type="bad_request",
                     )
                 )
             await websocket.close(code=4400)
@@ -916,8 +1274,35 @@ async def websocket_audio_chat_stream(
         stt_cfg = cfg_data.get("stt") or cfg_data
         llm_cfg = cfg_data.get("llm") or {}
         tts_cfg = cfg_data.get("tts") or {}
-        session_id = cfg_data.get("session_id")
+        raw_session_id = cfg_data.get("session_id")
+        session_id = str(raw_session_id).strip() if raw_session_id else None
         metadata = cfg_data.get("metadata") if isinstance(cfg_data.get("metadata"), dict) else None
+
+        def _coerce_bool(value: Any, default: bool = False) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                return is_truthy(value)
+            return default
+
+        persist_hint = cfg_data.get("persist_history")
+        if persist_hint is None and metadata:
+            persist_hint = (
+                metadata.get("persist_history")
+                if "persist_history" in metadata
+                else metadata.get("persist_session")
+            )
+        persist_default = _coerce_bool(os.getenv("AUDIO_CHAT_WS_PERSISTENCE", "0"), default=False)
+        persistence_enabled = _coerce_bool(persist_hint, default=persist_default)
+        persistence_db: Optional[CharactersRAGDB] = None
+        persistence_session_id: Optional[str] = session_id
+        persistence_ready = False
+        persistence_warning_sent = False
+        persistence_announced = False
 
         config = UnifiedStreamingConfig()
         try:
@@ -1044,6 +1429,156 @@ async def websocket_audio_chat_stream(
                 logger.debug(f"Failed to read action hint from llm_extra_params: {exc}")
             return None
 
+        async def _send_persistence_warning(message: str, details: Optional[str] = None) -> None:
+            nonlocal persistence_warning_sent
+            if persistence_warning_sent:
+                return
+            persistence_warning_sent = True
+            payload: dict[str, Any] = {
+                "type": "warning",
+                "warning_type": "persistence_unavailable",
+                "message": message,
+            }
+            if details:
+                payload["details"] = details
+            try:
+                if _outer_stream:
+                    await _outer_stream.send_json(payload)
+                else:
+                    await websocket.send_json(payload)
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
+                logger.debug(f"audio.chat.stream persistence warning send failed: {send_exc}")
+
+        async def _ensure_persistence_context() -> Optional[tuple[CharactersRAGDB, str]]:
+            nonlocal persistence_db
+            nonlocal persistence_session_id
+            nonlocal persistence_ready
+            nonlocal persistence_enabled
+            nonlocal session_id
+            nonlocal persistence_announced
+            if not persistence_enabled:
+                return None
+            if persistence_ready and persistence_db is not None and persistence_session_id:
+                return persistence_db, persistence_session_id
+            try:
+                if persistence_db is None:
+                    persistence_db = await _shim_get_chacha_db_for_user_id(
+                        int(user_id_for_usage),
+                        client_id=str(user_id_for_usage),
+                    )
+                loop = asyncio.get_running_loop()
+                character_card, character_db_id = await _shim_get_or_create_character_context(
+                    persistence_db,
+                    None,
+                    loop,
+                )
+                if not character_db_id:
+                    raise ValueError("Unable to resolve character context for WS persistence")
+                character_name = "Helpful AI Assistant"
+                if isinstance(character_card, dict) and character_card.get("name"):
+                    character_name = str(character_card.get("name"))
+
+                persistence_session_id, _ = await _shim_get_or_create_conversation(
+                    persistence_db,
+                    persistence_session_id,
+                    int(character_db_id),
+                    character_name,
+                    str(user_id_for_usage),
+                    loop,
+                )
+                session_id = persistence_session_id
+
+                if session_id and not any(
+                    msg.get("role") == "system" and msg.get("content") == f"session:{session_id}"
+                    for msg in chat_history
+                ):
+                    chat_history.insert(0, {"role": "system", "content": f"session:{session_id}"})
+
+                action_hint = _action_hint()
+                settings_payload = {
+                    "audio_chat_ws": {
+                        "session_id": persistence_session_id,
+                        "action_hint": action_hint,
+                        "metadata": metadata or {},
+                    }
+                }
+                try:
+                    await loop.run_in_executor(
+                        None,
+                        persistence_db.upsert_conversation_settings,
+                        persistence_session_id,
+                        settings_payload,
+                    )
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as settings_exc:
+                    logger.debug(f"audio.chat.stream conversation_settings upsert failed: {settings_exc}")
+
+                if _outer_stream and not persistence_announced:
+                    await _outer_stream.send_json({"type": "session", "session_id": persistence_session_id})
+                    persistence_announced = True
+
+                persistence_ready = True
+                return persistence_db, persistence_session_id
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(f"audio.chat.stream persistence unavailable: {exc}")
+                persistence_enabled = False
+                await _send_persistence_warning(
+                    "Session persistence unavailable; continuing without persistence",
+                    _maybe_debug_details(exc),
+                )
+                return None
+
+        async def _persist_turn(
+            transcript_text: str,
+            assistant_text: str,
+            action_result: Optional[dict[str, Any]],
+        ) -> None:
+            context = await _ensure_persistence_context()
+            if not context:
+                return
+            chat_db, conversation_id = context
+
+            def _persist_sync() -> None:
+                chat_db.add_message(
+                    {
+                        "conversation_id": conversation_id,
+                        "sender": "user",
+                        "content": transcript_text,
+                        "client_id": str(user_id_for_usage),
+                    }
+                )
+                chat_db.add_message(
+                    {
+                        "conversation_id": conversation_id,
+                        "sender": "assistant",
+                        "content": assistant_text,
+                        "client_id": str(user_id_for_usage),
+                    }
+                )
+                if action_result is not None:
+                    try:
+                        tool_content = json.dumps(action_result)
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+                        logger.warning(f"Failed to serialize action_result for WS persistence: {exc}")
+                    else:
+                        chat_db.add_message(
+                            {
+                                "conversation_id": conversation_id,
+                                "sender": "tool",
+                                "content": tool_content,
+                                "client_id": str(user_id_for_usage),
+                            }
+                        )
+
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, _persist_sync)
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(f"audio.chat.stream turn persistence failed: {exc}")
+                await _send_persistence_warning(
+                    "Failed to persist chat turn; continuing stream",
+                    _maybe_debug_details(exc),
+                )
+
         async def _maybe_run_action(transcript_text: str) -> Optional[dict[str, Any]]:
             action_name = _action_hint()
             if not action_name:
@@ -1105,12 +1640,12 @@ async def websocket_audio_chat_stream(
             if not provider_api_key:
                 if _outer_stream:
                     await _outer_stream.send_json(
-                        {
-                            "type": "error",
-                            "error_type": "missing_provider_credentials",
-                            "message": "No API key available for provider",
-                            "provider": llm_provider,
-                        }
+                        _audio_ws_error_payload(
+                            code="missing_provider_credentials",
+                            message="No API key available for provider",
+                            request_id=request_id,
+                            extra={"provider": llm_provider},
+                        )
                     )
                 return "", "missing_provider_credentials", None
             messages_payload = list(chat_history)
@@ -1171,11 +1706,11 @@ async def websocket_audio_chat_stream(
                 logger.error(f"LLM stream failed: {exc}", exc_info=True)
                 if _outer_stream:
                     await _outer_stream.send_json(
-                        _ws_error_payload(
-                            "LLM call failed",
+                        _audio_ws_error_payload(
+                            code="llm_error",
+                            message="LLM call failed",
                             request_id=request_id,
                             exc=exc,
-                            error_type="llm_error",
                         )
                     )
                 return "", None, None
@@ -1210,11 +1745,11 @@ async def websocket_audio_chat_stream(
                 if "error" in payload:
                     if _outer_stream:
                         await _outer_stream.send_json(
-                            {
-                                "type": "error",
-                                "error_type": "llm_error",
-                                "message": payload.get("error"),
-                            }
+                            _audio_ws_error_payload(
+                                code="llm_error",
+                                message=str(payload.get("error") or "LLM streaming error"),
+                                request_id=request_id,
+                            )
                         )
                     continue
                 choices = payload.get("choices") or []
@@ -1255,22 +1790,22 @@ async def websocket_audio_chat_stream(
             if not text:
                 if _outer_stream:
                     await _outer_stream.send_json(
-                        {
-                            "type": "error",
-                            "error_type": "empty_assistant",
-                            "message": "Assistant reply empty",
-                        }
+                        _audio_ws_error_payload(
+                            code="empty_assistant",
+                            message="Assistant reply empty",
+                            request_id=request_id,
+                        )
                     )
                 return
             allowed_formats = {"mp3", "opus", "aac", "flac", "wav", "pcm"}
             if response_format not in allowed_formats:
                 if _outer_stream:
                     await _outer_stream.send_json(
-                        {
-                            "type": "error",
-                            "error_type": "bad_request",
-                            "message": f"Unsupported format '{response_format}'",
-                        }
+                        _audio_ws_error_payload(
+                            code="bad_request",
+                            message=f"Unsupported format '{response_format}'",
+                            request_id=request_id,
+                        )
                     )
                 return
 
@@ -1305,11 +1840,11 @@ async def websocket_audio_chat_stream(
                         try:
                             logger.error(f"audio.chat.stream TTS generation failed: {exc}", exc_info=True)
                             await _outer_stream.send_json(
-                                _ws_error_payload(
-                                    "TTS generation failed",
+                                _audio_ws_error_payload(
+                                    code="tts_error",
+                                    message="TTS generation failed",
                                     request_id=request_id,
                                     exc=exc,
-                                    error_type="tts_error",
                                 )
                             )
                         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
@@ -1339,7 +1874,7 @@ async def websocket_audio_chat_stream(
                             f"audio.chat.stream tts_done frame send failed: error={send_exc}"
                         )
 
-        async def _finalize_turn(commit_at: float, *, auto: bool = False) -> None:
+        async def _finalize_turn(commit_at: Optional[float], *, auto: bool = False) -> None:
             nonlocal processing_turn
             if processing_turn:
                 return
@@ -1347,11 +1882,19 @@ async def websocket_audio_chat_stream(
             try:
                 transcript_text = transcriber.get_full_transcript()
                 final_emit_at = time.time()
+                eos_detected_at = final_emit_at
+                try:
+                    commit_ts = float(commit_at) if commit_at is not None else None
+                    if commit_ts and commit_ts > 0:
+                        eos_detected_at = commit_ts
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                    eos_detected_at = final_emit_at
                 payload = {
                     "type": "full_transcript",
                     "text": transcript_text,
                     "timestamp": final_emit_at,
-                    "voice_to_voice_start": final_emit_at,
+                    # EOS/turn-end anchor used for downstream voice-to-voice metric timing.
+                    "voice_to_voice_start": eos_detected_at,
                 }
                 if auto:
                     payload["auto_commit"] = True
@@ -1362,7 +1905,7 @@ async def websocket_audio_chat_stream(
                 try:
                     reg.observe(
                         "stt_final_latency_seconds",
-                        max(0.0, final_emit_at - float(commit_at or final_emit_at)),
+                        max(0.0, final_emit_at - eos_detected_at),
                         labels={
                             "model": getattr(config, "model", "parakeet"),
                             "variant": getattr(config, "model_variant", "standard"),
@@ -1371,8 +1914,7 @@ async def websocket_audio_chat_stream(
                     )
                 except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.debug(
-                        "metrics observe failed "
-                        "(stt_final_latency_seconds, endpoint=audio.chat.stream): %s",
+                        'metrics observe failed (stt_final_latency_seconds, endpoint=audio.chat.stream): {}',
                         exc,
                     )
 
@@ -1394,7 +1936,8 @@ async def websocket_audio_chat_stream(
                         logger.debug(f"Failed to append action_result to chat_history: {exc}")
                     if _outer_stream:
                         await _outer_stream.send_json({"type": "action_result", **action_result})
-                await _stream_tts(assistant_text, final_emit_at)
+                await _persist_turn(transcript_text, assistant_text, action_result)
+                await _stream_tts(assistant_text, eos_detected_at)
             finally:
                 try:
                     transcriber.reset()
@@ -1415,7 +1958,11 @@ async def websocket_audio_chat_stream(
                 except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                     if _outer_stream:
                         await _outer_stream.send_json(
-                            {"type": "error", "error_type": "bad_request", "message": "Invalid JSON"}
+                            _audio_ws_error_payload(
+                                code="bad_request",
+                                message="Invalid JSON",
+                                request_id=request_id,
+                            )
                         )
                     continue
 
@@ -1427,11 +1974,11 @@ async def websocket_audio_chat_stream(
                     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                         if _outer_stream:
                             await _outer_stream.send_json(
-                                {
-                                    "type": "error",
-                                    "error_type": "bad_request",
-                                    "message": "Invalid base64 audio frame",
-                                }
+                                _audio_ws_error_payload(
+                                    code="bad_request",
+                                    message="Invalid base64 audio frame",
+                                    request_id=request_id,
+                                )
                             )
                         continue
 
@@ -1458,12 +2005,11 @@ async def websocket_audio_chat_stream(
                         if _outer_stream:
                             try:
                                 await _outer_stream.send_json(
-                                    {
-                                        "type": "error",
-                                        "error_type": "quota_exceeded",
-                                        "quota": getattr(qe, "quota", "daily_minutes"),
-                                        "message": "Streaming quota exceeded",
-                                    }
+                                    _audio_ws_quota_error_payload(
+                                        quota=getattr(qe, "quota", "daily_minutes"),
+                                        message="Streaming quota exceeded",
+                                        request_id=request_id,
+                                    )
                                 )
                             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                                 logger.debug(
@@ -1522,11 +2068,11 @@ async def websocket_audio_chat_stream(
             try:
                 if _outer_stream:
                     await _outer_stream.send_json(
-                        _ws_error_payload(
-                            "Internal error",
+                        _audio_ws_error_payload(
+                            code="internal_error",
+                            message="Internal error",
                             request_id=request_id,
                             exc=exc,
-                            error_type="internal_error",
                         )
                     )
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:  # noqa: BLE001
@@ -1582,7 +2128,7 @@ async def websocket_tts(
         _outer_stream = _WSStream(
             websocket,
             heartbeat_interval_s=None,
-            compat_error_type=True,
+            compat_error_type=_audio_ws_compat_error_type_enabled(),
             close_on_done=True,
             idle_timeout_s=_idle_timeout,
             labels={"component": "audio", "endpoint": "audio_tts_ws"},
@@ -1609,7 +2155,7 @@ async def websocket_tts(
 
     def _policy_close_code() -> int:
         flag = str(os.getenv("AUDIO_WS_QUOTA_CLOSE_1008", "0")).strip().lower()
-        return 1008 if flag in {"1", "true", "yes", "on"} else 4003
+        return 1008 if is_truthy(flag) else 4003
 
     # Authenticate (parity with STT WS)
     auth_ok, jwt_user_id = await _shim_audio_ws_authenticate(
@@ -1807,7 +2353,7 @@ async def websocket_tts_realtime(
         _outer_stream = _WSStream(
             websocket,
             heartbeat_interval_s=None,
-            compat_error_type=True,
+            compat_error_type=_audio_ws_compat_error_type_enabled(),
             close_on_done=True,
             idle_timeout_s=_idle_timeout,
             labels={"component": "audio", "endpoint": "audio_tts_realtime_ws"},
@@ -1829,7 +2375,7 @@ async def websocket_tts_realtime(
 
     def _policy_close_code() -> int:
         flag = str(os.getenv("AUDIO_WS_QUOTA_CLOSE_1008", "0")).strip().lower()
-        return 1008 if flag in {"1", "true", "yes", "on"} else 4003
+        return 1008 if is_truthy(flag) else 4003
 
     async def _send_json(payload: dict[str, Any]) -> None:
         if _outer_stream:
@@ -1855,10 +2401,11 @@ async def websocket_tts_realtime(
             "type": "error",
             "code": code,
             "message": message,
-            "error_type": code,
             "request_id": request_id,
             "data": {"request_id": request_id},
         }
+        if _audio_ws_compat_error_type_enabled():
+            payload["error_type"] = code
         if _outer_stream:
             await _outer_stream.send_json(payload)
         else:

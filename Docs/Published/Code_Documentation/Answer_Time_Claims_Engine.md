@@ -41,6 +41,15 @@ Both the extractor and the LLM judge resolve provider, model, and temperature us
 
 The engine accepts an injected `analyze` function and passes through `model_override` and temperature as resolved above for consistency across paths.
 
+Additional behavior controls:
+- `CLAIMS_JSON_PARSE_MODE` (`lenient|strict`, default `lenient`) controls parser tolerance for model output.
+- `CLAIMS_ALIGNMENT_MODE` (`off|exact|fuzzy`) and `CLAIMS_ALIGNMENT_THRESHOLD` control span alignment for extracted claims.
+- Adaptive provider throttling can be enabled with:
+  - `CLAIMS_ADAPTIVE_THROTTLE_ENABLED`
+  - `CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS`
+  - `CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE`
+  - `CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO`
+
 ## Output
 
 `ClaimsEngine.run(...)` returns:
@@ -107,3 +116,16 @@ print(result["summary"])
 - NLI is attempted first for efficiency; the LLM judge runs only when NLI is unavailable or below confidence threshold.
 - This engine is answer-time only; ingestion-time claims and API endpoints are documented separately.
  - Citations are populated for supported/refuted decisions using the selected evidence snippets (document IDs with best-effort character ranges).
+
+## Monitoring
+
+When `CLAIMS_MONITORING_ENABLED=true`, answer-time flows emit:
+- Provider health/cost: `claims_provider_requests_total`, `claims_provider_errors_total`, `claims_provider_latency_seconds`, `claims_provider_estimated_cost_usd_total`
+- Structured-output telemetry: `claims_response_format_selected_total`
+- Parse quality telemetry: `claims_output_parse_events_total`
+- Degradation telemetry: `claims_fallback_total`, `claims_provider_budget_exhausted_total`, `claims_provider_throttled_total`
+
+Operational references:
+- Dashboard: `Docs/Monitoring/claims_grafana_dashboard.json`
+- Alerts: `Docs/Monitoring/claims_alerts_prometheus.yaml`
+- Runbook: `Docs/Operations/Claims_Alerts_Runbook.md`

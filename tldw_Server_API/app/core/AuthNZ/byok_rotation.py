@@ -6,7 +6,7 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     decrypt_byok_payload,
@@ -37,6 +37,11 @@ class RotationSummary:
     dry_run: bool = False
 
 
+def _is_postgres_pool(pool: DatabasePool) -> bool:
+    """Return backend type from DatabasePool state."""
+    return getattr(pool, "pool", None) is not None
+
+
 def _extract_row_fields(row: Any) -> tuple[int, str | None]:
     if isinstance(row, dict):
         return int(row.get("id")), row.get("encrypted_blob")
@@ -52,22 +57,24 @@ async def _fetch_rows(
     is_postgres: bool,
 ) -> list[Any]:
     if is_postgres:
-        query = f"""
+        fetch_rows_sql_template = """
             SELECT id, encrypted_blob
             FROM {table}
             WHERE id > $1
             ORDER BY id
             LIMIT $2
         """
+        query = fetch_rows_sql_template.format_map(locals())  # nosec B608
         return await conn.fetch(query, last_id, batch_size)
 
-    query = f"""
+    fetch_rows_sql_template = """
         SELECT id, encrypted_blob
         FROM {table}
         WHERE id > ?
         ORDER BY id
         LIMIT ?
     """
+    query = fetch_rows_sql_template.format_map(locals())  # nosec B608
     cursor = await conn.execute(query, last_id, batch_size)
     return list(await cursor.fetchall())
 
@@ -79,16 +86,19 @@ async def _apply_updates(
     updates: Iterable[tuple[str, int]],
     is_postgres: bool,
 ) -> None:
-    if is_postgres:
-        query = f"UPDATE {table} SET encrypted_blob = $1 WHERE id = $2"
-    else:
-        query = f"UPDATE {table} SET encrypted_blob = ? WHERE id = ?"
-
-    if hasattr(conn, "executemany"):
-        await conn.executemany(query, list(updates))
+    updates_list = list(updates)
+    if not updates_list:
         return
 
-    for params in updates:
+    if is_postgres:
+        update_blob_sql_template = "UPDATE {table} SET encrypted_blob = $1 WHERE id = $2"
+        query = update_blob_sql_template.format_map(locals())  # nosec B608
+        await conn.executemany(query, updates_list)
+        return
+
+    update_blob_sql_template = "UPDATE {table} SET encrypted_blob = ? WHERE id = ?"
+    query = update_blob_sql_template.format_map(locals())  # nosec B608
+    for params in updates_list:
         await conn.execute(query, *params)
 
 
@@ -172,7 +182,7 @@ async def rotate_byok_secrets(
         )
 
     db_pool = pool or await get_db_pool()
-    is_postgres = await is_postgres_backend()
+    is_postgres = _is_postgres_pool(db_pool)
 
     tables = {}
     total = RotationStats()

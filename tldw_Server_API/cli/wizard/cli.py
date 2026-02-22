@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 import typer
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .utils import detect as detect_utils
 from .utils import env as env_utils
@@ -849,7 +850,7 @@ def providers(
         config_action["masked_values"] = masked_updates
         actions.append({"config_txt": config_action})
 
-    should_check = check_provider or os.getenv("TLDW_CHECK_PROVIDER", "").lower() in {"1", "true", "yes", "on"}
+    should_check = check_provider or is_truthy(os.getenv("TLDW_CHECK_PROVIDER"))
     if should_check:
         checks = []
         for entry in provider_status:

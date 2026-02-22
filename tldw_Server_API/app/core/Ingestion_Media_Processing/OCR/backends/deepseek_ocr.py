@@ -6,6 +6,7 @@ import tempfile
 import threading
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import logging
 
 _TF_MODEL = None
@@ -42,7 +43,7 @@ def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
+    return is_truthy(str(raw).strip().lower())
 
 
 def _env_int(name: str, default: int) -> int:
@@ -249,10 +250,15 @@ def _load_transformers():
         from transformers import AutoModel, AutoTokenizer
 
         model_id = os.getenv("DEEPSEEK_OCR_MODEL_ID", "deepseek-ai/DeepSeek-OCR")
+        model_revision = (os.getenv("DEEPSEEK_OCR_MODEL_REVISION") or "").strip() or None
         device = _resolve_device()
         attn_impl = _resolve_attn_impl(device)
 
-        _TF_TOKENIZER = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        _TF_TOKENIZER = AutoTokenizer.from_pretrained(  # nosec B615
+            model_id,
+            revision=model_revision,
+            trust_remote_code=True,
+        )
         dtype = _resolve_dtype()
         model_kwargs = {
             "trust_remote_code": True,
@@ -262,12 +268,22 @@ def _load_transformers():
             model_kwargs["torch_dtype"] = dtype
 
         try:
-            _TF_MODEL = AutoModel.from_pretrained(model_id, use_safetensors=True, **model_kwargs)
+            _TF_MODEL = AutoModel.from_pretrained(  # nosec B615
+                model_id,
+                revision=model_revision,
+                use_safetensors=True,
+                **model_kwargs,
+            )
         except _DEEPSEEK_NONCRITICAL_EXCEPTIONS as exc:
             logging.warning(
                 f"DeepSeek OCR: safetensors load failed ({exc}); retrying with use_safetensors=False."
             )
-            _TF_MODEL = AutoModel.from_pretrained(model_id, use_safetensors=False, **model_kwargs)
+            _TF_MODEL = AutoModel.from_pretrained(  # nosec B615
+                model_id,
+                revision=model_revision,
+                use_safetensors=False,
+                **model_kwargs,
+            )
 
         try:
             if device.startswith("cuda"):

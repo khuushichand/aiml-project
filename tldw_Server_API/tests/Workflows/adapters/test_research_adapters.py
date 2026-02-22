@@ -52,6 +52,22 @@ async def test_arxiv_search_adapter_test_mode(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_arxiv_search_adapter_test_mode_y(monkeypatch):
+    """Test arXiv search treats TEST_MODE=y as enabled."""
+    monkeypatch.setenv("TEST_MODE", "y")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_arxiv_search_adapter,
+    )
+
+    result = await run_arxiv_search_adapter({"query": "graph theory"}, {})
+
+    assert result.get("simulated") is True
+    assert result["query"] == "graph theory"
+
+
+@pytest.mark.asyncio
 async def test_arxiv_search_adapter_empty_query(monkeypatch):
     """Test arXiv search handles empty query gracefully."""
     monkeypatch.setenv("TEST_MODE", "1")

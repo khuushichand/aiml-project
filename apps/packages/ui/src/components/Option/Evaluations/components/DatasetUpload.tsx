@@ -88,7 +88,7 @@ export const DatasetUpload: React.FC<DatasetUploadProps> = ({
         <Alert
           type="error"
           showIcon
-          message={t("evaluations:datasetUploadErrorTitle", {
+          title={t("evaluations:datasetUploadErrorTitle", {
             defaultValue: "Upload failed"
           })}
           description={error}

@@ -1059,6 +1059,7 @@ async def export_reading_items(
     include_clean_html: bool = Query(False),
     include_text: bool = Query(False),
     include_highlights: bool = Query(False),
+    include_notes: bool = Query(True),
     format: str = Query("jsonl", description="Export format: jsonl or zip"),
     current_user: User = Depends(get_request_user),
 ) -> StreamingResponse:
@@ -1089,7 +1090,6 @@ async def export_reading_items(
             "domain": row.domain,
             "title": row.title,
             "summary": row.summary,
-            "notes": row.notes,
             "status": row.status,
             "favorite": row.favorite,
             "tags": row.tags,
@@ -1099,6 +1099,8 @@ async def export_reading_items(
             "published_at": row.published_at,
             "origin_type": row.origin_type,
         }
+        if include_notes:
+            payload["notes"] = row.notes
         if include_metadata:
             payload["metadata"] = metadata
         if include_clean_html:

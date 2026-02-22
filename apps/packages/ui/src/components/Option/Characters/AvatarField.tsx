@@ -172,7 +172,7 @@ export function AvatarField({
       } else {
         message.error(
           t("settings:manageCharacters.avatar.formatError", {
-            defaultValue: "Only PNG, JPEG, and GIF images are supported"
+            defaultValue: "Only PNG, JPEG, GIF, and WebP images are supported"
           })
         )
       }
@@ -398,7 +398,7 @@ export function AvatarField({
             <Alert
               type="info"
               showIcon
-              message={t("settings:manageCharacters.avatar.generate.noBackendsTitle", {
+              title={t("settings:manageCharacters.avatar.generate.noBackendsTitle", {
                 defaultValue: "No image backends configured"
               })}
               description={t("settings:manageCharacters.avatar.generate.noBackendsDesc", {
@@ -452,7 +452,7 @@ export function AvatarField({
                 <Alert
                   type="error"
                   showIcon
-                  message={generationError}
+                  title={generationError}
                   closable
                   onClose={() => setGenerationError(null)}
                 />

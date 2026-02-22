@@ -1,3 +1,5 @@
-import dynamic from "next/dynamic"
+import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
 
-export default dynamic(() => import("@/routes/option-media-multi"), { ssr: false })
+export default function ReviewAliasPage() {
+  return <RouteRedirect to="/media-multi" />;
+}

@@ -16,6 +16,23 @@ import os
 import sys
 
 from loguru import logger
+from starlette import status as _starlette_status
+from tldw_Server_API.app.core.testing import is_truthy
+
+# Compatibility aliases across Starlette versions.
+if not hasattr(_starlette_status, "HTTP_413_CONTENT_TOO_LARGE"):
+    setattr(
+        _starlette_status,
+        "HTTP_413_CONTENT_TOO_LARGE",
+        getattr(_starlette_status, "HTTP_413_REQUEST_ENTITY_TOO_LARGE", 413),
+    )
+
+if not hasattr(_starlette_status, "HTTP_422_UNPROCESSABLE_CONTENT"):
+    setattr(
+        _starlette_status,
+        "HTTP_422_UNPROCESSABLE_CONTENT",
+        getattr(_starlette_status, "HTTP_422_UNPROCESSABLE_ENTITY", 422),
+    )
 
 
 def _under_pytest() -> bool:
@@ -30,8 +47,7 @@ def _under_pytest() -> bool:
 
 
 def _env_flag_true(name: str) -> bool:
-    val = os.getenv(name, "").strip().lower()
-    return val in {"1", "true", "yes", "on"}
+    return is_truthy(os.getenv(name))
 
 
 if _env_flag_true("TESTING") or _under_pytest():

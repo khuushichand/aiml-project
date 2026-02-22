@@ -54,8 +54,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tldw-worker-chatbooks.service
 ```
 
-Timers are optional. They periodically attempt to start the worker if it is not running.
-Most installs should enable the `.service` units and skip the `.timer` units.
+Timers are optional. They trigger a one-time start shortly after boot or when the
+timer is enabled, which can be useful if you prefer enabling timers instead of
+services directly. Most installs should enable the `.service` units and skip the
+`.timer` units.
 
 ## Option D: launchd (macOS)
 
@@ -84,5 +86,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tldw.worker.chatbook
 launchctl load -w ~/Library/LaunchAgents/com.tldw.worker.chatbooks.plist
 ```
 
-Ensure the log directory exists (default `/opt/tldw_server/logs/launchd`).
+Confirm the log directory is writable (default `/opt/tldw_server/logs/launchd`).
+Launchd writes `StandardOutPath` and `StandardErrorPath` to this directory, so missing
+or non-writable paths will prevent the job from starting.
 Use `launchctl list | grep tldw.worker` to confirm the worker is running.

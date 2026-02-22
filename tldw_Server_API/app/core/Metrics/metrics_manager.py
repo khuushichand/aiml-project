@@ -98,6 +98,7 @@ class MetricsRegistry:
             "circuit_breaker_successes_total",
             "circuit_breaker_rejections_total",
             "circuit_breaker_trips_total",
+            "circuit_breaker_timeouts_total",
         }
 
         # Initialize with telemetry manager
@@ -1131,6 +1132,48 @@ class MetricsRegistry:
                 labels=["user_id", "media_type"]
             )
         )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_requests_total",
+                type=MetricType.COUNTER,
+                description="Total ingestion requests by media type and outcome",
+                labels=["media_type", "outcome"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_processing_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Ingestion processing duration in seconds",
+                unit="s",
+                labels=["media_type", "processor"],
+                buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_validation_failures_total",
+                type=MetricType.COUNTER,
+                description="Validation failures observed during ingestion",
+                labels=["reason", "path_kind"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_chunks_total",
+                type=MetricType.COUNTER,
+                description="Total persisted chunks across ingestion flows",
+                labels=["media_type", "chunk_method"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_embeddings_enqueue_total",
+                type=MetricType.COUNTER,
+                description="Embeddings enqueue attempts/outcomes for ingestion flows",
+                labels=["path_kind", "outcome"],
+            )
+        )
 
         self.register_metric(
             MetricDefinition(
@@ -1224,6 +1267,34 @@ class MetricsRegistry:
                 description="Extracted scrape content length in bytes",
                 unit="bytes",
                 labels=["backend"],
+                buckets=[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="extraction_strategy_total",
+                type=MetricType.COUNTER,
+                description="Total extraction strategy attempts",
+                labels=["strategy", "status"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="extraction_strategy_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration of article extraction strategy runs",
+                unit="s",
+                labels=["strategy", "status"],
+                buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="extraction_content_length_bytes",
+                type=MetricType.HISTOGRAM,
+                description="Extracted article content length in bytes by strategy",
+                unit="bytes",
+                labels=["strategy"],
                 buckets=[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072],
             )
         )
@@ -1322,6 +1393,14 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total circuit breaker trips",
                 labels=["category", "service", "reason"]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="circuit_breaker_timeouts_total",
+                type=MetricType.COUNTER,
+                description="Total circuit breaker call timeouts",
+                labels=["category", "service", "operation"]
             )
         )
 
@@ -1556,8 +1635,8 @@ class MetricsRegistry:
                 try:
                     if definition.buckets:
                         self.telemetry.register_histogram_view(definition.name, definition.buckets)
-                except Exception:
-                    pass
+                except Exception as view_error:
+                    logger.debug("Metrics manager failed to register histogram view", exc_info=view_error)
                 return self.meter.create_histogram(
                     name=definition.name,
                     description=definition.description,
@@ -1795,6 +1874,28 @@ class MetricsRegistry:
         label_key = self._normalize_label_key(labels or {})
         with self._lock:
             return self._cumulative_counters.get(metric_name, {}).get(label_key, 0.0)
+
+    def get_cumulative_counter_total(self, metric_name: str) -> float:
+        """Get the cumulative counter total across every label-set for a metric."""
+        metric_name = self._normalize_metric_name(metric_name)
+        with self._lock:
+            series = self._cumulative_counters.get(metric_name, {})
+            return float(sum(series.values()))
+
+    def get_cumulative_counter_totals_by_label(self, metric_name: str, label_name: str) -> dict[str, float]:
+        """Aggregate cumulative counter totals grouped by a specific label key."""
+        metric_name = self._normalize_metric_name(metric_name)
+        normalized_label = self._normalize_label_name(label_name)
+        totals: dict[str, float] = defaultdict(float)
+        with self._lock:
+            series = self._cumulative_counters.get(metric_name, {})
+            for label_key, value in series.items():
+                label_dict = dict(label_key)
+                label_value = label_dict.get(normalized_label)
+                if label_value is None:
+                    continue
+                totals[str(label_value)] += float(value)
+        return dict(totals)
 
     def get_metric_stats(self, metric_name: str, labels: Optional[dict[str, str]] = None) -> dict[str, Any]:
         """

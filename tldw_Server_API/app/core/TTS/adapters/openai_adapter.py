@@ -403,8 +403,8 @@ class OpenAIAdapter(TTSAdapter):
                 try:
                     if hasattr(response, "aclose"):
                         await response.aclose()  # type: ignore[func-returns-value]
-                except Exception:
-                    pass
+                except Exception as stream_close_error:
+                    logger.debug("OpenAI TTS response close after stream failed", exc_info=stream_close_error)
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
     ProviderKeyTestRequest,
     SharedProviderKeyResponse,
@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
 from tldw_Server_API.app.core.AuthNZ.byok_testing import test_provider_credentials
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_members, list_team_members
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
     AuthnzOrgProviderSecretsRepo,
 )
@@ -39,6 +40,7 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 
 router = APIRouter(prefix="", tags=["org-team-keys"])
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 async def _get_shared_byok_repo() -> AuthnzOrgProviderSecretsRepo:
@@ -54,12 +56,41 @@ def _is_manager(role: str | None) -> bool:
     return str(role).lower() in {"owner", "admin", "lead"}
 
 
-async def _require_org_manager(user: dict, org_id: int) -> None:
-    if str(user.get("role", "")).lower() == "admin":
+def _is_admin_principal(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
+def _principal_user_id(principal: AuthPrincipal) -> int:
+    raw_id = principal.user_id
+    try:
+        user_id = int(raw_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid user context") from exc
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid user context")
+    return user_id
+
+
+async def _require_org_manager(principal: AuthPrincipal, org_id: int) -> None:
+    if _is_admin_principal(principal):
         return
+    if principal.user_id is None:
+        raise HTTPException(status_code=403, detail="Org manager role required")
     try:
         members = await list_org_members(org_id=org_id, limit=1000, offset=0)
-        uid = int(user.get("id"))
+        uid = int(principal.user_id)
         for m in members:
             if int(m.get("user_id")) == uid and _is_manager(m.get("role")):
                 return
@@ -68,12 +99,14 @@ async def _require_org_manager(user: dict, org_id: int) -> None:
     raise HTTPException(status_code=403, detail="Org manager role required")
 
 
-async def _require_team_manager(user: dict, team_id: int) -> None:
-    if str(user.get("role", "")).lower() == "admin":
+async def _require_team_manager(principal: AuthPrincipal, team_id: int) -> None:
+    if _is_admin_principal(principal):
         return
+    if principal.user_id is None:
+        raise HTTPException(status_code=403, detail="Team manager role required")
     try:
         members = await list_team_members(team_id)
-        uid = int(user.get("id"))
+        uid = int(principal.user_id)
         for m in members:
             if int(m.get("user_id")) == uid and _is_manager(m.get("role")):
                 return
@@ -119,10 +152,10 @@ async def upsert_org_shared_key(
     org_id: int,
     payload: UserProviderKeyUpsertRequest,
     request: Request,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> SharedProviderKeyResponse:
     _require_byok_enabled()
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
 
     provider_norm = normalize_provider_name(payload.provider)
     if not is_provider_allowlisted(provider_norm):
@@ -132,7 +165,7 @@ async def upsert_org_shared_key(
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
 
-    allow_base_url = is_trusted_base_url_request(request, user=user)
+    allow_base_url = is_trusted_base_url_request(request, principal=principal)
     raw_fields = payload.credential_fields or {}
     if isinstance(raw_fields, dict) and "base_url" in raw_fields and not allow_base_url:
         raise HTTPException(
@@ -175,7 +208,7 @@ async def upsert_org_shared_key(
 
     repo = await _get_shared_byok_repo()
     now = datetime.now(timezone.utc)
-    actor_id = int(user.get("id"))
+    actor_id = _principal_user_id(principal)
     row = await repo.upsert_secret(
         scope_type="org",
         scope_id=org_id,
@@ -199,10 +232,10 @@ async def upsert_org_shared_key(
 @router.get("/orgs/{org_id}/keys/shared", response_model=SharedProviderKeysResponse)
 async def list_org_shared_keys(
     org_id: int,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> SharedProviderKeysResponse:
     _require_byok_enabled()
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     repo = await _get_shared_byok_repo()
     rows = await repo.list_secrets(scope_type="org", scope_id=org_id)
     items = [
@@ -227,10 +260,10 @@ async def test_org_shared_key(
     org_id: int,
     payload: ProviderKeyTestRequest,
     request: Request,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> SharedProviderKeyTestResponse:
     _require_byok_enabled()
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
 
     provider_norm = normalize_provider_name(payload.provider)
     if not is_provider_allowlisted(provider_norm):
@@ -252,7 +285,7 @@ async def test_org_shared_key(
     if not api_key:
         raise HTTPException(status_code=404, detail="Key not found")
 
-    allow_base_url = is_trusted_base_url_request(request, user=user)
+    allow_base_url = is_trusted_base_url_request(request, principal=principal)
     credential_fields_raw = stored_payload.get("credential_fields") or {}
     if isinstance(credential_fields_raw, dict) and "base_url" in credential_fields_raw and not allow_base_url:
         credential_fields_raw = dict(credential_fields_raw)
@@ -309,12 +342,12 @@ async def test_org_shared_key(
 async def delete_org_shared_key(
     org_id: int,
     provider: str,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> Response:
     _require_byok_enabled()
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     repo = await _get_shared_byok_repo()
-    actor_id = int(user.get("id"))
+    actor_id = _principal_user_id(principal)
     deleted = await repo.delete_secret(
         "org",
         org_id,
@@ -335,10 +368,10 @@ async def upsert_team_shared_key(
     team_id: int,
     payload: UserProviderKeyUpsertRequest,
     request: Request,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> SharedProviderKeyResponse:
     _require_byok_enabled()
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
 
     provider_norm = normalize_provider_name(payload.provider)
     if not is_provider_allowlisted(provider_norm):
@@ -348,7 +381,7 @@ async def upsert_team_shared_key(
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
 
-    allow_base_url = is_trusted_base_url_request(request, user=user)
+    allow_base_url = is_trusted_base_url_request(request, principal=principal)
     raw_fields = payload.credential_fields or {}
     if isinstance(raw_fields, dict) and "base_url" in raw_fields and not allow_base_url:
         raise HTTPException(
@@ -391,7 +424,7 @@ async def upsert_team_shared_key(
 
     repo = await _get_shared_byok_repo()
     now = datetime.now(timezone.utc)
-    actor_id = int(user.get("id"))
+    actor_id = _principal_user_id(principal)
     row = await repo.upsert_secret(
         scope_type="team",
         scope_id=team_id,
@@ -415,10 +448,10 @@ async def upsert_team_shared_key(
 @router.get("/teams/{team_id}/keys/shared", response_model=SharedProviderKeysResponse)
 async def list_team_shared_keys(
     team_id: int,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> SharedProviderKeysResponse:
     _require_byok_enabled()
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     repo = await _get_shared_byok_repo()
     rows = await repo.list_secrets(scope_type="team", scope_id=team_id)
     items = [
@@ -443,10 +476,10 @@ async def test_team_shared_key(
     team_id: int,
     payload: ProviderKeyTestRequest,
     request: Request,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> SharedProviderKeyTestResponse:
     _require_byok_enabled()
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
 
     provider_norm = normalize_provider_name(payload.provider)
     if not is_provider_allowlisted(provider_norm):
@@ -468,7 +501,7 @@ async def test_team_shared_key(
     if not api_key:
         raise HTTPException(status_code=404, detail="Key not found")
 
-    allow_base_url = is_trusted_base_url_request(request, user=user)
+    allow_base_url = is_trusted_base_url_request(request, principal=principal)
     credential_fields_raw = stored_payload.get("credential_fields") or {}
     if isinstance(credential_fields_raw, dict) and "base_url" in credential_fields_raw and not allow_base_url:
         credential_fields_raw = dict(credential_fields_raw)
@@ -525,12 +558,12 @@ async def test_team_shared_key(
 async def delete_team_shared_key(
     team_id: int,
     provider: str,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> Response:
     _require_byok_enabled()
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     repo = await _get_shared_byok_repo()
-    actor_id = int(user.get("id"))
+    actor_id = _principal_user_id(principal)
     deleted = await repo.delete_secret(
         "team",
         team_id,

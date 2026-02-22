@@ -19,6 +19,7 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.TTS.utils import clean_text_for_tts
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_workflow_file_path
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.text._config import (
@@ -67,9 +68,18 @@ async def run_json_transform_adapter(config: dict[str, Any], context: dict[str, 
         # Fallback: simple path extraction
         if expression == ".":
             return {"result": data, "expression": expression}
-        parts = expression.strip(".").split(".")
+        parts = re.findall(r"[^\.\[\]]+|\[\d+\]", expression.strip("."))
         result = data
         for part in parts:
+            if part.startswith("[") and part.endswith("]"):
+                idx_str = part[1:-1]
+                if isinstance(result, list) and idx_str.isdigit():
+                    idx = int(idx_str)
+                    result = result[idx] if 0 <= idx < len(result) else None
+                else:
+                    result = None
+                    break
+                continue
             if isinstance(result, dict):
                 result = result.get(part)
             elif isinstance(result, list) and part.isdigit():
@@ -342,6 +352,41 @@ async def run_text_clean_adapter(config: dict[str, Any], context: dict[str, Any]
         with contextlib.suppress(Exception):
             text = text.encode('utf-8', errors='ignore').decode('utf-8')
 
+    # strip_markdown MUST run before normalize_whitespace so that
+    # re.MULTILINE patterns (^-anchored headers, list markers, blockquotes)
+    # can match at actual line boundaries.
+    if "strip_markdown" in operations:
+        # Headers
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+        # Bold/italic
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = re.sub(r'[*_](.+?)[*_]', r'\1', text)
+        # Links -> text only
+        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+        # Images
+        text = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', text)
+        # Code blocks and inline code
+        text = re.sub(r'```[\s\S]*?```', '', text)
+        text = re.sub(r'`([^`]+)`', r'\1', text)
+        # List markers
+        text = re.sub(r'^[-*+]\s+', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^\d+\.\s+', '', text, flags=re.MULTILINE)
+        # Blockquotes and horizontal rules
+        text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+
+    if "strip_reasoning_blocks" in operations:
+        text = re.sub(
+            r"<(?:think|thinking|reasoning)>[\s\S]*?</(?:think|thinking|reasoning)>\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"</?(?:think|thinking|reasoning)>", "", text, flags=re.IGNORECASE)
+
+    if "tts_normalize" in operations:
+        text = clean_text_for_tts(text)
+
     if "normalize_whitespace" in operations:
         text = re.sub(r'\s+', ' ', text)
 
@@ -356,5 +401,13 @@ async def run_text_clean_adapter(config: dict[str, Any], context: dict[str, Any]
 
     if "remove_emails" in operations:
         text = re.sub(r'\S+@\S+\.\S+', '', text)
+
+    if "normalize_unicode" in operations:
+        import unicodedata
+        text = unicodedata.normalize('NFKC', text)
+        text = text.replace('\u2018', "'").replace('\u2019', "'")
+        text = text.replace('\u201c', '"').replace('\u201d', '"')
+        text = text.replace('\u2013', '-').replace('\u2014', '-')
+        text = text.replace('\u2026', '...')
 
     return {"text": text, "original_length": original_len, "cleaned_length": len(text), "operations": operations}

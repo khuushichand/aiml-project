@@ -86,7 +86,7 @@ def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
     try:
         _svc_module._service_instance = service
     except Exception:
-        pass
+        _ = None
 
     try:
         cache = getattr(_svc_module, "_service_instances_by_user")
@@ -122,11 +122,11 @@ def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
             cache = getattr(_svc_module, "_service_instances_by_user")
             cache.pop(user_id, None)
         except Exception:
-            pass
+            _ = None
         try:
             _svc_module._service_instance = None
         except Exception:
-            pass
+            _ = None
         event_loop.run_until_complete(service.shutdown())
         app.dependency_overrides.pop(get_unified_evaluation_service, None)
 
@@ -788,9 +788,15 @@ class TestRateLimiting:
     def test_rate_limit_exceeded(self, client, auth_headers, sample_geval_request):
 
         """Test rate limit exceeded response"""
-        # Mock rate limiter to always reject
-        with patch('tldw_Server_API.app.core.AuthNZ.rate_limiter.RateLimiter.check_rate_limit') as mock_check:
-            mock_check.return_value = (False, {"retry_after": 60})
+        # Mock evaluations user limiter to always reject
+        mock_limiter = AsyncMock()
+        mock_limiter.check_rate_limit = AsyncMock(
+            return_value=(False, {"retry_after": 60, "error": "Rate limit exceeded"})
+        )
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified.get_user_rate_limiter_for_user',
+            return_value=mock_limiter,
+        ):
 
             response = client.post(
                 "/api/v1/evaluations/geval",

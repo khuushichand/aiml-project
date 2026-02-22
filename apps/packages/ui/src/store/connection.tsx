@@ -17,6 +17,7 @@ import { CONNECTED_THROTTLE_MS } from "@/config/connection-timing"
 export const CONNECTION_TIMEOUT_MS = 20_000
 const HEALTH_LIVENESS_PATH = "/api/v1/health/live"
 const CONNECTED_FAILURE_THRESHOLD = 3
+const KNOWLEDGE_RECHECK_INTERVAL_MS = 5 * 60_000
 
 const TEST_BYPASS_KEY = "__tldw_allow_offline"
 const FORCE_UNCONFIGURED_KEY = "__tldw_force_unconfigured"
@@ -48,10 +49,10 @@ const getStorageFlag = async (key: string): Promise<boolean> => {
 
 const getOfflineBypassFlag = async (): Promise<boolean> => {
   // Build-time flag for Playwright/CI: VITE_TLDW_E2E_ALLOW_OFFLINE=true
-  const meta = import.meta as unknown as {
-    env?: { VITE_TLDW_E2E_ALLOW_OFFLINE?: string }
-  }
-  if (meta?.env?.VITE_TLDW_E2E_ALLOW_OFFLINE === "true") {
+  const env = import.meta.env as
+    | { VITE_TLDW_E2E_ALLOW_OFFLINE?: string }
+    | undefined
+  if (env?.VITE_TLDW_E2E_ALLOW_OFFLINE === "true") {
     return true
   }
 
@@ -178,6 +179,83 @@ const deriveKnowledgeStatusFromHealth = (raw: any): KnowledgeStatus => {
     // ignore parse errors and fall back to ready
   }
   return "ready"
+}
+
+const getNormalizedOrigin = (value: string | null | undefined): string | null => {
+  if (!value) return null
+  try {
+    return new URL(String(value)).origin
+  } catch {
+    return null
+  }
+}
+
+const getCurrentBrowserOrigin = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    return window.location?.origin ?? null
+  } catch {
+    return null
+  }
+}
+
+const CORS_ERROR_PATTERNS = [
+  /cors/i,
+  /cross-origin/i,
+  /disallowed origin/i
+]
+
+const NETWORK_BLOCK_PATTERNS = [
+  /networkerror when attempting to fetch resource/i,
+  /failed to fetch/i,
+  /network request failed/i,
+  /load failed/i
+]
+
+const maybeAnnotateCorsMismatchError = ({
+  error,
+  status,
+  serverUrl
+}: {
+  error: string | null
+  status: number
+  serverUrl: string | null
+}): string | null => {
+  if (!error) return error
+  const trimmed = String(error).trim()
+  if (!trimmed) return error
+  const normalized = trimmed.toLowerCase()
+  if (normalized.startsWith("likely cors mismatch:")) {
+    return trimmed
+  }
+
+  const mentionsCors = CORS_ERROR_PATTERNS.some((pattern) =>
+    pattern.test(trimmed)
+  )
+  const looksLikeNetworkBlock = NETWORK_BLOCK_PATTERNS.some((pattern) =>
+    pattern.test(trimmed)
+  )
+  if (!mentionsCors && !looksLikeNetworkBlock) {
+    return trimmed
+  }
+
+  const browserOrigin = getCurrentBrowserOrigin()
+  const backendOrigin = getNormalizedOrigin(serverUrl)
+  if (browserOrigin && backendOrigin && browserOrigin === backendOrigin && !mentionsCors) {
+    return trimmed
+  }
+
+  if (status > 0 && status < 400 && !mentionsCors) {
+    return trimmed
+  }
+
+  const browserLabel = browserOrigin || "current browser origin"
+  const backendLabel = backendOrigin || (serverUrl ? String(serverUrl) : "configured server")
+  return (
+    `Likely CORS mismatch: ${browserLabel} is not allowed by ${backendLabel}. ` +
+    `Set ALLOWED_ORIGINS to include ${browserLabel} (or disable CORS for local development). ` +
+    `Original error: ${trimmed}`
+  )
 }
 
 type ConnectionStore = {
@@ -438,12 +516,21 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       ])
       console.log('[CONN_DEBUG] health check result', { ok: raced.ok, status: raced.status, error: raced.error })
       const ok = raced.ok
+      const resolvedHealthError = maybeAnnotateCorsMismatchError({
+        error: raced.error,
+        status: raced.status,
+        serverUrl
+      })
 
       let knowledgeStatus: KnowledgeStatus = prev.knowledgeStatus
       let knowledgeLastCheckedAt = prev.knowledgeLastCheckedAt
       let knowledgeError = prev.knowledgeError
+      const shouldRefreshKnowledge =
+        !prev.knowledgeLastCheckedAt ||
+        now - prev.knowledgeLastCheckedAt >= KNOWLEDGE_RECHECK_INTERVAL_MS ||
+        prev.knowledgeStatus !== "ready"
 
-      if (ok) {
+      if (ok && shouldRefreshKnowledge) {
         try {
           console.log('[CONN_DEBUG] starting RAG health check')
           // Add timeout to RAG health check to prevent hanging
@@ -470,7 +557,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           knowledgeLastCheckedAt = Date.now()
           knowledgeError = (e as Error)?.message ?? "unknown-error"
         }
-      } else {
+      } else if (!ok) {
         knowledgeStatus = "offline"
         knowledgeLastCheckedAt = Date.now()
         knowledgeError = "core-offline"
@@ -510,7 +597,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             isChecking: false,
             offlineBypass: false,
             lastCheckedAt: Date.now(),
-            lastError: raced.error || "transient-health-check-failure",
+            lastError: resolvedHealthError || "transient-health-check-failure",
             lastStatusCode: raced.status || 0,
             errorKind: "partial",
             consecutiveFailures: nextConsecutiveFailures
@@ -541,7 +628,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
                 : 0,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
-          lastError: ok ? null : (raced.error || 'timeout-or-offline'),
+          lastError: ok ? null : (resolvedHealthError || 'timeout-or-offline'),
           lastStatusCode: ok ? null : raced.status,
           knowledgeStatus,
           knowledgeLastCheckedAt,
@@ -552,6 +639,12 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       })
       console.log('[CONN_DEBUG] state updated, new state:', get().state.phase, get().state.isConnected)
     } catch (error) {
+      const fallbackError =
+        maybeAnnotateCorsMismatchError({
+          error: (error as Error)?.message ?? "unknown-error",
+          status: 0,
+          serverUrl: prev.serverUrl
+        }) ?? "unknown-error"
       set({
         state: {
           ...prev,
@@ -561,11 +654,11 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           consecutiveFailures: prev.consecutiveFailures + 1,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
-          lastError: (error as Error)?.message ?? "unknown-error",
+          lastError: fallbackError,
           lastStatusCode: 0,
           knowledgeStatus: "offline",
           knowledgeLastCheckedAt: Date.now(),
-          knowledgeError: (error as Error)?.message ?? "unknown-error",
+          knowledgeError: fallbackError,
           errorKind: "unreachable",
           checksSinceConfigChange: nextChecksSinceConfigChange
         }

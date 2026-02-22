@@ -133,10 +133,10 @@ export function ConfirmDialog({
         ref={dialogRef}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        className="relative z-10 w-full max-w-md rounded-lg bg-white p-6 shadow-lg"
+        className="relative z-10 w-full max-w-md rounded-lg bg-surface p-6 shadow-lg"
       >
-        <h2 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h2>
-        <p id={descriptionId} className="mt-2 text-sm text-gray-600">{message}</p>
+        <h2 id={titleId} className="text-lg font-semibold text-text">{title}</h2>
+        <p id={descriptionId} className="mt-2 text-sm text-text-muted">{message}</p>
         <div className="mt-6 flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={() => onCancelRef.current()}>
             {cancelText}

@@ -32,7 +32,7 @@ export const MentionHighlighter: React.FC<MentionHighlighterProps> = ({
       parts.push(
         <span
           key={`mention-${match.index}`}
-          className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 px-1 py-0.5 rounded font-medium"
+          className="bg-primary/10 text-primary px-1 py-0.5 rounded font-medium"
         >
           {match[0]}
         </span>

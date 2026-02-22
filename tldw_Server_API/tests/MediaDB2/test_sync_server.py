@@ -2,18 +2,19 @@
 # Description: This file contains unit tests for the server-side synchronization processor, specifically focusing on applying client changes and handling conflicts. The tests ensure that the server correctly processes incoming changes, resolves conflicts, and maintains data integrity in the database.
 #
 # Imports
-from datetime import timezone, datetime
+import json
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
-import json
-import time
-from unittest.mock import MagicMock, patch
+
 #
 # 3rd-party Libraries
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.endpoints.sync import ServerSyncProcessor
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
 #
 #######################################################################################################################
 #
@@ -34,6 +35,22 @@ def get_entity_state(db: MediaDatabase, entity: str, uuid: str) -> dict | None:
     cursor = db.execute_query(f"SELECT * FROM `{entity}` WHERE uuid = ?", (uuid,))
     row = cursor.fetchone()
     return dict(row) if row else None
+
+
+def get_media_keyword_link_count(db: MediaDatabase, media_uuid: str, keyword_uuid: str) -> int:
+    cursor = db.execute_query(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM MediaKeywords mk
+        JOIN Media m ON m.id = mk.media_id
+        JOIN Keywords k ON k.id = mk.keyword_id
+        WHERE m.uuid = ? AND k.uuid = ?
+        """,
+        (media_uuid, keyword_uuid),
+    )
+    row = cursor.fetchone()
+    return int(row["cnt"]) if row else 0
+
 
 @pytest.fixture(scope="function")
 def server_user_db(memory_db_factory):
@@ -108,6 +125,109 @@ class TestServerSyncProcessorApply:
         assert state['version'] == 2
         assert state['client_id'] == "client_sender_1"
         assert state['last_modified'] > "2023-11-01T10:00:00Z"
+
+    def test_apply_client_mediakeywords_link_success(self, server_processor, server_user_db):
+        """MediaKeywords link should be handled without generic uuid/version lookup."""
+        media_id, media_uuid, _ = server_user_db.add_media_with_keywords(
+            title="server sync link media",
+            media_type="article",
+            content="server media body",
+            keywords=[],
+        )
+        keyword_id, keyword_uuid = server_user_db.add_keyword("server-sync-link-keyword")
+        assert media_id is not None
+        assert keyword_id is not None
+
+        link_change = create_mock_log_entry(
+            change_id=20,
+            entity="MediaKeywords",
+            uuid=f"{media_uuid}_{keyword_uuid}",
+            op="link",
+            client="client_sender_1",
+            version=1,
+            payload_dict={"media_uuid": media_uuid, "keyword_uuid": keyword_uuid},
+            ts="2023-11-01T10:30:00Z",
+        )
+
+        success, errors = server_processor.apply_client_changes_batch([link_change])
+
+        assert success is True
+        assert not errors
+        assert get_media_keyword_link_count(server_user_db, media_uuid, keyword_uuid) == 1
+
+    def test_apply_client_mediakeywords_unlink_success(self, server_processor, server_user_db):
+        """MediaKeywords unlink should remove the link idempotently."""
+        media_id, media_uuid, _ = server_user_db.add_media_with_keywords(
+            title="server sync unlink media",
+            media_type="article",
+            content="server media body",
+            keywords=[],
+        )
+        keyword_id, keyword_uuid = server_user_db.add_keyword("server-sync-unlink-keyword")
+        assert media_id is not None
+        assert keyword_id is not None
+
+        server_user_db.execute_query(
+            "INSERT INTO MediaKeywords (media_id, keyword_id) VALUES (?, ?)",
+            (media_id, keyword_id),
+            commit=True,
+        )
+        assert get_media_keyword_link_count(server_user_db, media_uuid, keyword_uuid) == 1
+
+        unlink_change = create_mock_log_entry(
+            change_id=21,
+            entity="MediaKeywords",
+            uuid=f"{media_uuid}_{keyword_uuid}",
+            op="unlink",
+            client="client_sender_1",
+            version=2,
+            payload_dict={"media_uuid": media_uuid, "keyword_uuid": keyword_uuid},
+            ts="2023-11-01T10:31:00Z",
+        )
+
+        success, errors = server_processor.apply_client_changes_batch([unlink_change])
+
+        assert success is True
+        assert not errors
+        assert get_media_keyword_link_count(server_user_db, media_uuid, keyword_uuid) == 0
+
+    def test_apply_client_change_rejects_invalid_entity_operation(self, server_processor):
+        """Unsupported entity/operation combinations should be rejected cleanly."""
+        invalid_change = create_mock_log_entry(
+            change_id=22,
+            entity="Keywords",
+            uuid="invalid-op-uuid",
+            op="link",
+            client="client_sender_1",
+            version=1,
+            payload_dict={"keyword": "invalid"},
+            ts="2023-11-01T10:32:00Z",
+        )
+
+        success, errors = server_processor.apply_client_changes_batch([invalid_change])
+
+        assert success is False
+        assert errors
+        assert any("only valid for MediaKeywords" in err for err in errors)
+
+    def test_apply_client_change_rejects_disallowed_entity(self, server_processor):
+        """Entities outside the server /sync/send allowlist should be rejected."""
+        invalid_change = create_mock_log_entry(
+            change_id=23,
+            entity="Transcripts",
+            uuid="invalid-entity-uuid",
+            op="create",
+            client="client_sender_1",
+            version=1,
+            payload_dict={"uuid": "invalid-entity-uuid", "transcription": "not supported by sync send"},
+            ts="2023-11-01T10:33:00Z",
+        )
+
+        success, errors = server_processor.apply_client_changes_batch([invalid_change])
+
+        assert success is False
+        assert errors
+        assert any("Unsupported sync entity 'Transcripts'" in err for err in errors)
 
     # Remove @pytest.mark.asyncio and async/await
     def test_apply_idempotency_on_server(self, server_processor, server_user_db):
@@ -238,9 +358,6 @@ class TestServerSyncProcessorConflict:
         # Mocked time is *earlier* than ts_server_v2
         mock_now_dt_object = datetime.now(timezone.utc).replace(year=2023, month=11, day=1, hour=13, minute=0,
                                                                  second=15, microsecond=456000)
-        # Format it using the *exact same* strftime as the main code
-        server_authoritative_time_str = mock_now_dt_object.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-        # server_authoritative_time_str should be "2023-11-01T13:00:15.456Z"
 
         # Patching logic remains the same
         with patch('tldw_Server_API.app.api.v1.endpoints.sync.datetime') as mock_datetime_module:
@@ -263,6 +380,146 @@ class TestServerSyncProcessorConflict:
         assert state['client_id'] == "server_updater"
         # Timestamp should be the server's winning timestamp string
         assert state['last_modified'] == ts_server_v2
+
+    def test_server_conflict_server_wins_lww_with_plus00_offset_timestamp(self, server_processor, server_user_db):
+        """Server conflict resolution should accept +00:00 server timestamps."""
+        kw_uuid = "server-conflict-server-wins-plus00"
+        ts_v1 = "2023-11-01T14:00:00.000Z"
+        server_processor.db.execute_query(
+            "INSERT INTO Keywords (uuid, keyword, version, client_id, last_modified, deleted) VALUES (?, ?, 1, ?, ?, 0)",
+            (kw_uuid, "server_v1_plus00", "other_client", ts_v1),
+            commit=True,
+        )
+        ts_server_v2 = "2023-11-01T14:00:20+00:00"
+        server_processor.db.execute_query(
+            "UPDATE Keywords SET keyword='server_v2_plus00', version=2, client_id='server_updater', last_modified=? WHERE uuid=?",
+            (ts_server_v2, kw_uuid),
+            commit=True,
+        )
+
+        client_change = create_mock_log_entry(
+            change_id=12,
+            entity="Keywords",
+            uuid=kw_uuid,
+            op="update",
+            client="client_sender_1",
+            version=2,
+            payload_dict={"keyword": "client_v2_loses_plus00"},
+            ts="2023-11-01T14:00:10.000Z",
+        )
+
+        mock_now_dt_object = datetime.now(timezone.utc).replace(
+            year=2023,
+            month=11,
+            day=1,
+            hour=14,
+            minute=0,
+            second=15,
+            microsecond=111000,
+        )
+        with patch("tldw_Server_API.app.api.v1.endpoints.sync.datetime") as mock_datetime_module:
+            mock_datetime_module.now.return_value = mock_now_dt_object
+            mock_datetime_module.strptime = datetime.strptime
+            success, errors = server_processor.apply_client_changes_batch([client_change])
+
+        assert success is True, f"Expected success=True, got False. Errors: {errors}"
+        assert not errors
+
+        state = get_entity_state(server_user_db, "Keywords", kw_uuid)
+        assert state is not None
+        assert state["keyword"] == "server_v2_plus00"
+        assert state["version"] == 2
+        assert state["client_id"] == "server_updater"
+        assert state["last_modified"] == ts_server_v2
+
+    def test_server_conflict_client_wins_lww_with_non_utc_offset_timestamp(self, server_processor, server_user_db):
+        """Server conflict resolution should normalize non-UTC offsets before LWW compare."""
+        kw_uuid = "server-conflict-client-wins-offset"
+        ts_v1 = "2023-11-01T11:00:00.000Z"
+        server_processor.db.execute_query(
+            "INSERT INTO Keywords (uuid, keyword, version, client_id, last_modified, deleted) VALUES (?, ?, 1, ?, ?, 0)",
+            (kw_uuid, "server_v1_offset", "other_client", ts_v1),
+            commit=True,
+        )
+        ts_server_v2 = "2023-11-01T13:00:20+02:00"  # Equivalent to 11:00:20Z
+        server_processor.db.execute_query(
+            "UPDATE Keywords SET keyword='server_v2_offset', version=2, client_id='server_updater', last_modified=? WHERE uuid=?",
+            (ts_server_v2, kw_uuid),
+            commit=True,
+        )
+
+        client_change = create_mock_log_entry(
+            change_id=13,
+            entity="Keywords",
+            uuid=kw_uuid,
+            op="update",
+            client="client_sender_1",
+            version=2,
+            payload_dict={"keyword": "client_v2_wins_offset"},
+            ts="2023-11-01T11:00:21.000Z",
+        )
+
+        mock_now_dt_object = datetime.now(timezone.utc).replace(
+            year=2023,
+            month=11,
+            day=1,
+            hour=11,
+            minute=0,
+            second=25,
+            microsecond=250000,
+        )
+        expected_authoritative_time_str = mock_now_dt_object.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        with patch("tldw_Server_API.app.api.v1.endpoints.sync.datetime") as mock_datetime_module:
+            mock_datetime_module.now.return_value = mock_now_dt_object
+            mock_datetime_module.strptime = datetime.strptime
+            success, errors = server_processor.apply_client_changes_batch([client_change])
+
+        assert success is True, f"Expected success=True, got False. Errors: {errors}"
+        assert not errors
+
+        state = get_entity_state(server_user_db, "Keywords", kw_uuid)
+        assert state is not None
+        assert state["keyword"] == "client_v2_wins_offset"
+        assert state["version"] == 3
+        assert state["client_id"] == "client_sender_1"
+        assert state["last_modified"] == expected_authoritative_time_str
+
+    def test_resolve_server_conflict_accepts_authoritative_plus00_offset(self, server_processor):
+        """Conflict resolver should parse authoritative timestamps using +00:00 offsets."""
+        kw_uuid = "server-conflict-authoritative-plus00"
+        server_processor.db.execute_query(
+            "INSERT INTO Keywords (uuid, keyword, version, client_id, last_modified, deleted) VALUES (?, ?, 2, ?, ?, 0)",
+            (kw_uuid, "server_v2_authoritative", "server_updater", "2023-11-01T14:00:20+00:00"),
+            commit=True,
+        )
+
+        client_change = create_mock_log_entry(
+            change_id=14,
+            entity="Keywords",
+            uuid=kw_uuid,
+            op="update",
+            client="client_sender_1",
+            version=2,
+            payload_dict={"keyword": "client_v2_loses_authoritative"},
+            ts="2023-11-01T14:00:10.000Z",
+        )
+
+        with server_processor.db.transaction() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT version, client_id, last_modified FROM Keywords WHERE uuid = ?",
+                (kw_uuid,),
+            )
+            server_record_info = cursor.fetchone()
+            resolved, error_msg = server_processor._resolve_server_conflict_sync(
+                cursor=cursor,
+                client_change=client_change,
+                server_record_info=server_record_info,
+                current_server_time_str="2023-11-01T14:00:15+00:00",
+            )
+
+        assert resolved is True
+        assert error_msg is None
 
 #
 # End of test_sync_server.py

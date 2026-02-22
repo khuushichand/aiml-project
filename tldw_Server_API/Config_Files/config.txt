@@ -14,6 +14,7 @@ quickstart_url =
 
 [Server]
 disable_cors = false
+cors_allow_credentials = false
 
 [Files]
 # Max inline export size (bytes) for file artifacts. Default: 262144 (256KB).
@@ -51,7 +52,7 @@ sd_cpp_timeout_seconds = 120
 
 # SwarmUI backend settings
 # Base URL for SwarmUI (eg http://localhost:7801)
-swarmui_base_url =
+swarmui_base_url = http://127.0.0.1:7801
 # Optional default model to use when payload.model is omitted.
 swarmui_default_model =
 # Optional swarm_token cookie value for authenticated SwarmUI instances.
@@ -60,6 +61,28 @@ swarmui_swarm_token =
 # Empty list disables extra_params passthrough.
 swarmui_allowed_extra_params = []
 swarmui_timeout_seconds = 120
+
+# OpenRouter image backend settings
+openrouter_image_base_url = https://openrouter.ai/api/v1
+openrouter_image_api_key =
+openrouter_image_default_model = openai/gpt-image-1
+openrouter_image_allowed_extra_params = []
+openrouter_image_timeout_seconds = 120
+
+# Novita image backend settings
+novita_image_base_url = https://api.novita.ai
+novita_image_api_key =
+novita_image_default_model = sd_xl_base_1.0.safetensors
+novita_image_allowed_extra_params = []
+novita_image_timeout_seconds = 180
+novita_image_poll_interval_seconds = 2
+
+# Together image backend settings
+together_image_base_url = https://api.together.xyz/v1
+together_image_api_key =
+together_image_default_model = black-forest-labs/FLUX.1-schnell-Free
+together_image_allowed_extra_params = []
+together_image_timeout_seconds = 120
 
 [ACP]
 # Command used to launch the ACP runner (tldw-agent-acp).
@@ -120,6 +143,14 @@ audio_processing_timeout_seconds = 600
 video_processing_timeout_seconds = 1200
 max_archive_internal_files = 100
 max_archive_uncompressed_size_mb = 200
+max_archive_member_uncompressed_size_mb = 100
+# Keep upload sanitization on by default for markup inputs.
+sanitize_html_uploads = true
+sanitize_xml_uploads = true
+# Sanitize text/html email bodies before converting to plaintext.
+sanitize_email_html_bodies = true
+# Enforce deep archive content validation for email ZIP URL ingestion.
+validate_email_archive_contents = true
 audio_transcription_buffer_size_mb = 10
 uuid_generation_length = 8
 kept_video_max_files = 5
@@ -168,6 +199,41 @@ rate_limit_tokens_per_minute = 100000
 history_messages_limit = 20
 # Ordering for loaded history: asc (oldest first) or desc (newest first). Default: desc.
 history_messages_order = desc
+# Default persona exemplar budget tokens for character chat augmentation
+# when request-level override is omitted.
+# Env override: PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS
+persona_exemplar_default_budget_tokens = 600
+# Auto-adjust persona exemplar budget when sustained IOO alerts indicate
+# over-copying risk. Applies only when request-level budget override is omitted.
+# Env override: PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED
+persona_ioo_budget_auto_adjust_enabled = true
+# Multiplicative reduction factor for sustained-IOO auto-adjust.
+# Clamped to [0.10, 0.95]. Env override: PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR
+persona_ioo_budget_auto_reduction_factor = 0.75
+# Lower bound for auto-adjusted persona exemplar budget tokens.
+# Env override: PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS
+persona_ioo_budget_auto_min_tokens = 240
+
+# Server-side tool auto-execution (Phase 2; default remains off)
+# Env: CHAT_AUTO_EXECUTE_TOOLS=true|false
+chat_auto_execute_tools = false
+# Per-response ceiling for model-requested tool calls. Clamped to [1, 20].
+# Env: CHAT_MAX_TOOL_CALLS
+chat_max_tool_calls = 3
+# Per-tool-call execution timeout budget in milliseconds. Clamped to [1000, 120000].
+# Env: CHAT_TOOL_TIMEOUT_MS
+chat_tool_timeout_ms = 15000
+# Allow-list for tool names/prefixes used by auto-exec.
+# Use '*' for unrestricted, or comma-separated entries like:
+#   notes.search,media.*,prompts.get
+# Env: CHAT_TOOL_ALLOW_CATALOG
+chat_tool_allow_catalog = *
+# Attach idempotency keys when auto-executing tools (recommended for write-capable tools).
+# Env: CHAT_TOOL_IDEMPOTENCY=true|false
+chat_tool_idempotency = true
+# Run one follow-up non-streaming assistant turn after tool results are persisted.
+# Env: CHAT_TOOL_AUTO_CONTINUE_ONCE=true|false
+chat_tool_auto_continue_once = false
 
 [Chat-Commands]
 # Enable slash commands (env: CHAT_COMMANDS_ENABLED)
@@ -178,8 +244,20 @@ commands_enabled = false
 injection_mode = system
 
 # Per-user, per-command requests per minute (RPM) limit
+# env: CHAT_COMMANDS_RATE_LIMIT_USER
+commands_rate_limit_user = 10
+
+# Global per-command requests per minute (RPM) limit
+# env: CHAT_COMMANDS_RATE_LIMIT_GLOBAL
+commands_rate_limit_global = 100
+
+# Legacy per-user alias retained for compatibility
 # env: CHAT_COMMANDS_RATE_LIMIT
 commands_rate_limit = 10
+
+# Maximum characters injected from a command result
+# env: CHAT_COMMANDS_MAX_CHARS
+commands_max_chars = 300
 
 # Enforce RBAC permissions on commands (env: CHAT_COMMANDS_REQUIRE_PERMISSIONS)
 require_permissions = false
@@ -610,6 +688,66 @@ precomputed_spans_retention_days = 30
 # Enable/disable implicit feedback capture (click/copy/expand/dwell/citation-used)
 # Env override: IMPLICIT_FEEDBACK_ENABLED=true|false (default true)
 implicit_feedback_enabled = true
+
+[Search-Agent]
+# Enable LLM-based query classification before search (routes queries intelligently)
+# Env override: SEARCH_QUERY_CLASSIFICATION=true|false (default false)
+search_query_classification = false
+
+# Default search depth mode: speed, balanced, quality
+# Env override: SEARCH_DEFAULT_MODE=speed|balanced|quality (default balanced)
+search_default_mode = balanced
+
+# Enable standalone query reformulation for chat follow-ups
+# Env override: SEARCH_QUERY_REFORMULATION=true|false (default true)
+search_query_reformulation = true
+
+# Enable iterative agentic research loop (for quality mode)
+# Env override: SEARCH_RESEARCH_LOOP=true|false (default false)
+search_research_loop = false
+
+# Enable discussion/forum search as a search source
+# Env override: SEARCH_DISCUSSIONS_ENABLED=true|false (default true)
+search_discussions_enabled = true
+
+# Discussion platforms to search (comma-separated)
+# Env override: SEARCH_DISCUSSION_PLATFORMS=reddit,stackoverflow,hackernews
+search_discussion_platforms = reddit,stackoverflow,hackernews
+
+# Enable research progress streaming events
+# Env override: SEARCH_PROGRESS_STREAMING=true|false (default true)
+search_progress_streaming = true
+
+# Enable URL scraping during research
+# Env override: SEARCH_URL_SCRAPING=true|false (default true)
+search_url_scraping = true
+
+# LLM provider/model for query classification (uses default chat provider if empty)
+# Env override: SEARCH_CLASSIFIER_PROVIDER, SEARCH_CLASSIFIER_MODEL
+search_classifier_provider =
+search_classifier_model =
+
+# Max research iterations per mode (0 = use defaults: speed=2, balanced=6, quality=25)
+# Env overrides: SEARCH_MAX_ITERATIONS_SPEED, SEARCH_MAX_ITERATIONS_BALANCED, SEARCH_MAX_ITERATIONS_QUALITY
+search_max_iterations_speed = 0
+search_max_iterations_balanced = 0
+search_max_iterations_quality = 0
+
+# Enable follow-up suggestion generation after RAG responses
+# Env override: SEARCH_SUGGESTIONS=true|false (default false)
+search_suggestions = false
+
+# Enable structured response writer with XML-tagged context and citation enforcement
+# Env override: SEARCH_STRUCTURED_RESPONSE=true|false (default false)
+search_structured_response = false
+
+# Enable image search as a research action
+# Env override: SEARCH_IMAGE_SEARCH=true|false (default false)
+search_image_search = false
+
+# Enable video search as a research action
+# Env override: SEARCH_VIDEO_SEARCH=true|false (default false)
+search_video_search = false
 
 [ResourceGovernor]
 # Global Resource Governor enable flag (env: RG_ENABLED)
@@ -1182,7 +1320,7 @@ stable_only = false
 disable =
 
 # Comma-separated list of route keys to force-enable (useful when stable_only = true)
-enable = tools, jobs, acp
+enable = tools, jobs, acp, workflows, scheduler
 
 # Optionally extend the curated experimental set (comma-separated)
 experimental_routes =
@@ -1289,6 +1427,10 @@ cache_ttl = 300
 
 [Web-Scraping]
 stealth_wait_ms = 5000
+# Ephemeral web-scraping result store tuning (env-only today):
+# - EPHEMERAL_STORE_TTL_SECONDS (default: 900)
+# - EPHEMERAL_STORE_MAX_ENTRIES (default: 256)
+# - EPHEMERAL_STORE_MAX_BYTES (default: 0 = disabled)
 
 # --- Feature Flags: Personalization & Persona Agent ---
 [personalization]

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api } from '@/lib/api-client';
+import { getKeyAgeIndicator, resolveUnifiedApiKeyStatus, type ApiKeyMetadataLike } from '@/lib/api-keys-hub';
 import { formatDateTime } from '@/lib/format';
 import { isSecurityHealthData } from '@/lib/type-guards';
 import type { SecurityHealthData } from '@/types';
@@ -28,6 +29,46 @@ type SecurityAlertStatus = {
     timestamp: string;
     source?: string;
   }[];
+};
+
+type SecurityRiskFactorSeverity = 'low' | 'medium' | 'high';
+
+type SecurityRiskFactor = {
+  key: 'users_without_mfa' | 'keys_over_180d' | 'failed_logins_24h' | 'suspicious_activity';
+  label: string;
+  description: string;
+  value: number;
+  weight: number;
+  cap: number;
+  contribution: number;
+  severity: SecurityRiskFactorSeverity;
+  remediationHref: string;
+  remediationLabel: string;
+};
+
+type SecurityRiskBreakdownContext = {
+  totalUsers: number;
+  sampledUsers: number;
+  estimatedFromSample: boolean;
+  usersWithoutMfa: number;
+  agedApiKeys: number;
+  failedLogins24h: number;
+  suspiciousActivity: number;
+};
+
+type SecurityRiskBreakdown = {
+  factors: SecurityRiskFactor[];
+  estimatedScore: number;
+  context: SecurityRiskBreakdownContext;
+};
+
+const USER_PAGE_LIMIT = 100;
+const MAX_USERS_FOR_KEY_SCAN = 200;
+
+const toNonNegativeInt = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.round(parsed));
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -82,12 +123,192 @@ const getRiskBarColor = (score: number) => {
   return 'bg-green-500';
 };
 
+const getRiskFactorSeverity = (contribution: number): SecurityRiskFactorSeverity => {
+  if (contribution >= 20) return 'high';
+  if (contribution >= 10) return 'medium';
+  return 'low';
+};
+
+const getRiskFactorSeverityVariant = (severity: SecurityRiskFactorSeverity): 'outline' | 'secondary' | 'destructive' => {
+  if (severity === 'high') return 'destructive';
+  if (severity === 'medium') return 'secondary';
+  return 'outline';
+};
+
+const normalizeApiKeyList = (value: unknown): ApiKeyMetadataLike[] => {
+  if (Array.isArray(value)) {
+    return value as ApiKeyMetadataLike[];
+  }
+  if (!isRecord(value)) return [];
+  if (Array.isArray(value.items)) return value.items as ApiKeyMetadataLike[];
+  if (Array.isArray(value.keys)) return value.keys as ApiKeyMetadataLike[];
+  return [];
+};
+
+const countAgedActiveKeys = (keys: ApiKeyMetadataLike[]) => {
+  return keys.reduce((count, key) => {
+    const status = resolveUnifiedApiKeyStatus(key.status, key.expires_at);
+    if (status !== 'active') return count;
+    const age = getKeyAgeIndicator(key.created_at ?? null);
+    if (!age || age.ageDays <= 180) return count;
+    return count + 1;
+  }, 0);
+};
+
+const buildRiskBreakdown = (context: SecurityRiskBreakdownContext): SecurityRiskBreakdown => {
+  const factors: SecurityRiskFactor[] = [
+    {
+      key: 'users_without_mfa',
+      label: 'Users without MFA',
+      description: 'Accounts without MFA protection increase account takeover risk.',
+      value: context.usersWithoutMfa,
+      weight: 3,
+      cap: 40,
+      contribution: Math.min(40, context.usersWithoutMfa * 3),
+      severity: 'low',
+      remediationHref: '/users?mfa=disabled',
+      remediationLabel: 'Review MFA-disabled users',
+    },
+    {
+      key: 'keys_over_180d',
+      label: 'API keys older than 180 days',
+      description: 'Long-lived active API keys should be rotated regularly.',
+      value: context.agedApiKeys,
+      weight: 2,
+      cap: 25,
+      contribution: Math.min(25, context.agedApiKeys * 2),
+      severity: 'low',
+      remediationHref: '/api-keys?status=active',
+      remediationLabel: 'Review active API keys',
+    },
+    {
+      key: 'failed_logins_24h',
+      label: 'Failed logins (24h)',
+      description: 'Repeated failed login attempts may indicate brute-force activity.',
+      value: context.failedLogins24h,
+      weight: 1,
+      cap: 20,
+      contribution: Math.min(20, context.failedLogins24h),
+      severity: 'low',
+      remediationHref: '/audit?action=login.failed',
+      remediationLabel: 'Inspect failed login events',
+    },
+    {
+      key: 'suspicious_activity',
+      label: 'Suspicious activity (24h)',
+      description: 'Security anomaly count from recent event analysis.',
+      value: context.suspiciousActivity,
+      weight: 4,
+      cap: 20,
+      contribution: Math.min(20, context.suspiciousActivity * 4),
+      severity: 'low',
+      remediationHref: '/monitoring',
+      remediationLabel: 'Open monitoring alerts',
+    },
+  ].map((factor) => ({
+    ...factor,
+    severity: getRiskFactorSeverity(factor.contribution),
+  }));
+
+  const estimatedScore = Math.min(
+    100,
+    factors.reduce((sum, factor) => sum + factor.contribution, 0),
+  );
+
+  return {
+    factors,
+    estimatedScore,
+    context,
+  };
+};
+
+const buildFallbackRiskContext = (health: SecurityHealthData): SecurityRiskBreakdownContext => ({
+  totalUsers: 0,
+  sampledUsers: 0,
+  estimatedFromSample: false,
+  usersWithoutMfa: 0,
+  agedApiKeys: 0,
+  failedLogins24h: toNonNegativeInt(health.failed_logins_24h),
+  suspiciousActivity: toNonNegativeInt(health.suspicious_activity),
+});
+
+const loadRiskBreakdownContext = async (health: SecurityHealthData): Promise<SecurityRiskBreakdownContext> => {
+  const mfaAdoptionRate = Math.min(100, Math.max(0, Number(health.mfa_adoption_rate ?? 0)));
+  const failedLogins24h = toNonNegativeInt(health.failed_logins_24h);
+  const suspiciousActivity = toNonNegativeInt(health.suspicious_activity);
+
+  let totalUsers = 0;
+  const sampledUsers: Array<{ id: number }> = [];
+
+  let page = 1;
+  let pages = 1;
+
+  while (page <= pages && sampledUsers.length < MAX_USERS_FOR_KEY_SCAN) {
+    const usersPage = await api.getUsersPage({
+      page: String(page),
+      limit: String(USER_PAGE_LIMIT),
+    });
+
+    totalUsers = Math.max(totalUsers, Number(usersPage.total ?? 0));
+    pages = usersPage.pages > 0
+      ? usersPage.pages
+      : Math.max(1, Math.ceil((usersPage.total ?? 0) / Math.max(usersPage.limit || USER_PAGE_LIMIT, 1)));
+
+    usersPage.items.forEach((user) => {
+      if (sampledUsers.length < MAX_USERS_FOR_KEY_SCAN) {
+        sampledUsers.push({ id: user.id });
+      }
+    });
+
+    if (usersPage.items.length === 0) break;
+    page += 1;
+  }
+
+  if (totalUsers === 0) {
+    totalUsers = sampledUsers.length;
+  }
+
+  const usersWithoutMfa = totalUsers > 0
+    ? Math.round(totalUsers * ((100 - mfaAdoptionRate) / 100))
+    : 0;
+
+  const keyResults = await Promise.allSettled(
+    sampledUsers.map(async (user) => {
+      const response = await api.getUserApiKeys(String(user.id), { include_revoked: true });
+      return normalizeApiKeyList(response);
+    })
+  );
+
+  const agedDetected = keyResults.reduce((count, result) => {
+    if (result.status !== 'fulfilled') return count;
+    return count + countAgedActiveKeys(result.value);
+  }, 0);
+
+  const sampledCount = sampledUsers.length;
+  const estimatedFromSample = totalUsers > sampledCount && sampledCount > 0;
+  const agedApiKeys = estimatedFromSample
+    ? Math.round((agedDetected / sampledCount) * totalUsers)
+    : agedDetected;
+
+  return {
+    totalUsers,
+    sampledUsers: sampledCount,
+    estimatedFromSample,
+    usersWithoutMfa,
+    agedApiKeys: Math.max(0, agedApiKeys),
+    failedLogins24h,
+    suspiciousActivity,
+  };
+};
+
 export default function SecurityPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [securityHealth, setSecurityHealth] = useState<SecurityHealthData | null>(null);
   const [alertStatus, setAlertStatus] = useState<SecurityAlertStatus | null>(null);
+  const [riskBreakdown, setRiskBreakdown] = useState<SecurityRiskBreakdown | null>(null);
+  const [riskBreakdownLoading, setRiskBreakdownLoading] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -101,9 +322,20 @@ export default function SecurityPage() {
 
       if (healthResult.status === 'fulfilled' && isSecurityHealthData(healthResult.value)) {
         setSecurityHealth(healthResult.value);
+        setRiskBreakdownLoading(true);
+        void (async () => {
+          try {
+            const context = await loadRiskBreakdownContext(healthResult.value);
+            setRiskBreakdown(buildRiskBreakdown(context));
+          } catch {
+            setRiskBreakdown(buildRiskBreakdown(buildFallbackRiskContext(healthResult.value)));
+          } finally {
+            setRiskBreakdownLoading(false);
+          }
+        })();
       } else {
         // Set defaults if endpoint unavailable
-        setSecurityHealth({
+        const fallbackHealth = {
           risk_score: 0,
           recent_security_events: 0,
           failed_logins_24h: 0,
@@ -111,7 +343,10 @@ export default function SecurityPage() {
           mfa_adoption_rate: 0,
           active_sessions: 0,
           api_keys_active: 0,
-        });
+        };
+        setSecurityHealth(fallbackHealth);
+        setRiskBreakdown(buildRiskBreakdown(buildFallbackRiskContext(fallbackHealth)));
+        setRiskBreakdownLoading(false);
       }
 
       if (alertsResult.status === 'fulfilled' && isSecurityAlertStatus(alertsResult.value)) {
@@ -157,8 +392,8 @@ export default function SecurityPage() {
                 Monitor security posture, alerts, and authentication activity
               </p>
             </div>
-            <Button variant="outline" onClick={loadData} disabled={loading}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            <Button variant="outline" onClick={() => { void loadData(); }} loading={loading} loadingText="Refreshing...">
+              <RefreshCw className="mr-2 h-4 w-4" />
               Refresh
             </Button>
           </div>
@@ -211,6 +446,73 @@ export default function SecurityPage() {
                       ? `Last scan: ${formatTimestamp(securityHealth.last_security_scan)}`
                       : 'Risk score based on recent security events and configuration'}
                   </p>
+
+                  <div className="mt-4 rounded-md border p-3">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold">Risk factor breakdown</h3>
+                      <Badge variant="outline" data-testid="risk-breakdown-estimated-score">
+                        Estimated {riskBreakdown?.estimatedScore ?? 0}/100
+                      </Badge>
+                    </div>
+                    {riskBreakdownLoading ? (
+                      <div className="text-sm text-muted-foreground">Loading risk factor details...</div>
+                    ) : riskBreakdown ? (
+                      <>
+                        <div className="overflow-x-auto rounded-md border">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Factor</TableHead>
+                                <TableHead>Value</TableHead>
+                                <TableHead>Weight</TableHead>
+                                <TableHead>Contribution</TableHead>
+                                <TableHead>Severity</TableHead>
+                                <TableHead>Remediation</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {riskBreakdown.factors.map((factor) => (
+                                <TableRow key={factor.key} data-testid={`risk-factor-${factor.key}`}>
+                                  <TableCell>
+                                    <div className="font-medium">{factor.label}</div>
+                                    <div className="text-xs text-muted-foreground">{factor.description}</div>
+                                  </TableCell>
+                                  <TableCell>{factor.value}</TableCell>
+                                  <TableCell>{factor.weight}</TableCell>
+                                  <TableCell>
+                                    <div>{factor.contribution}</div>
+                                    <div className="text-xs text-muted-foreground">
+                                      min({factor.cap}, {factor.value} x {factor.weight})
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge variant={getRiskFactorSeverityVariant(factor.severity)}>
+                                      {factor.severity}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Link href={factor.remediationHref} className="text-primary underline text-sm">
+                                      {factor.remediationLabel}
+                                    </Link>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Calculation: {riskBreakdown.factors.map((factor) => factor.contribution).join(' + ')} = {riskBreakdown.estimatedScore}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {riskBreakdown.context.estimatedFromSample
+                            ? `API key-age factor estimated from ${riskBreakdown.context.sampledUsers} sampled users out of ${riskBreakdown.context.totalUsers}.`
+                            : `API key-age factor calculated from ${riskBreakdown.context.sampledUsers} users.`}
+                        </p>
+                      </>
+                    ) : (
+                      <div className="text-sm text-muted-foreground">Risk factor data is unavailable.</div>
+                    )}
+                  </div>
                 </div>
               </div>
             </CardContent>

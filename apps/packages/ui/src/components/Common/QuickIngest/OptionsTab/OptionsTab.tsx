@@ -9,6 +9,8 @@ type ProgressMeta = {
   done: number
   pct: number
   elapsedLabel?: string | null
+  state?: "running" | "failed" | "complete" | "ready"
+  error?: string | null
 }
 
 type OptionsTabProps = {
@@ -48,6 +50,7 @@ type OptionsTabProps = {
   totalCount: number
   plannedCount: number
   progressMeta: ProgressMeta
+  lastRunError?: string | null
   run: () => void
   hasMissingFiles: boolean
   missingFileCount: number

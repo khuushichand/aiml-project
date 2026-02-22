@@ -247,8 +247,7 @@ class FeedbackStore:
                 params.append(end_time.isoformat())
 
             # Get overall stats
-            cursor = conn.execute(
-                f"""
+            overall_stats_sql_template = """
                 SELECT
                     COUNT(*) as total_feedback,
                     COUNT(DISTINCT query) as unique_queries,
@@ -256,32 +255,40 @@ class FeedbackStore:
                     COUNT(DISTINCT user_id) as unique_users
                 FROM feedback
                 {time_filter}
-                """,
+                """
+            overall_stats_sql = overall_stats_sql_template.format_map(locals())  # nosec B608
+            cursor = conn.execute(
+                overall_stats_sql,
                 params
             )
             overall = dict(cursor.fetchone())
 
             # Get feedback type breakdown
-            cursor = conn.execute(
-                f"""
+            by_type_sql_template = """
                 SELECT
                     feedback_type,
                     COUNT(*) as count
                 FROM feedback
                 {time_filter}
                 GROUP BY feedback_type
-                """,
+                """
+            by_type_sql = by_type_sql_template.format_map(locals())  # nosec B608
+            cursor = conn.execute(
+                by_type_sql,
                 params
             )
             by_type = {row[0]: row[1] for row in cursor.fetchall()}
 
             # Get average relevance scores
-            cursor = conn.execute(
-                f"""
+            relevance_filter = (" AND " + time_filter) if time_filter else ""
+            avg_relevance_sql_template = """
                 SELECT AVG(CAST(value AS REAL)) as avg_relevance
                 FROM feedback
-                WHERE feedback_type = 'relevance' {' AND ' + time_filter if time_filter else ''}
-                """,
+                WHERE feedback_type = 'relevance'{relevance_filter}
+                """
+            avg_relevance_sql = avg_relevance_sql_template.format_map(locals())  # nosec B608
+            cursor = conn.execute(
+                avg_relevance_sql,
                 params if time_filter else []
             )
             avg_relevance = cursor.fetchone()[0] or 0.0

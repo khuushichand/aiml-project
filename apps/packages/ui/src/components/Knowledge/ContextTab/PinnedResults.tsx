@@ -54,7 +54,7 @@ export const PinnedResults: React.FC<PinnedResultsProps> = ({
         {results.length > 0 && (
           <button
             onClick={onClear}
-            className="p-1 text-text-muted hover:text-red-500 transition-colors rounded hover:bg-surface3"
+            className="p-1 text-text-muted hover:text-danger transition-colors rounded hover:bg-surface3"
             aria-label={t("sidepanel:rag.clearPins", "Clear all pinned")}
             title={t("sidepanel:rag.clearPins", "Clear all pinned")}
           >
@@ -93,7 +93,7 @@ export const PinnedResults: React.FC<PinnedResultsProps> = ({
                   </div>
                   <button
                     onClick={() => onUnpin(result.id)}
-                    className="p-0.5 text-text-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                    className="p-0.5 text-text-muted hover:text-danger transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
                     aria-label={t("sidepanel:rag.unpinResult", "Unpin result")}
                   >
                     <X className="h-3.5 w-3.5" />

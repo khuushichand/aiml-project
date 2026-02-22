@@ -1,27 +1,68 @@
 from __future__ import annotations
 
-import aiofiles  # type: ignore  # pragma: no cover
+import importlib
+import inspect
+
 from fastapi import (
     APIRouter,
 )
+from loguru import logger
+
+try:
+    import aiofiles  # type: ignore  # pragma: no cover
+except Exception:  # pragma: no cover - optional import
+    aiofiles = None  # type: ignore[assignment]
+
+_MEDIA_IMPORT_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ImportError,
+    ModuleNotFoundError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
+
+def _optional_import_module(module_path: str):
+    try:
+        return importlib.import_module(module_path)
+    except _MEDIA_IMPORT_EXCEPTIONS as exc:
+        logger.warning("Media import skipped: {} ({})", module_path, exc)
+        return None
+
+
+def _optional_import_attr(module_path: str, attr_name: str):
+    module = _optional_import_module(module_path)
+    if module is None:
+        return None
+    return getattr(module, attr_name, None)
+
 
 # Processing libraries re-exported for tests/monkeypatching
-import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib as books  # type: ignore  # pragma: no cover
-import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as pdf_lib  # type: ignore  # pragma: no cover
-import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs  # type: ignore  # pragma: no cover
+books = _optional_import_module(
+    "tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib"
+)  # type: ignore[assignment]
+pdf_lib = _optional_import_module(
+    "tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib"
+)  # type: ignore[assignment]
+docs = _optional_import_module(
+    "tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files"
+)  # type: ignore[assignment]
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user  # pragma: no cover
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger  # pragma: no cover
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (
     file_validator_instance,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
-from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier  # pragma: no cover
+TemplateClassifier = _optional_import_attr(
+    "tldw_Server_API.app.core.Chunking.templates",
+    "TemplateClassifier",
+)  # type: ignore[assignment]
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,  # pragma: no cover
     get_document_version,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
-    process_audio_files as _process_audio_files_core,  # type: ignore  # pragma: no cover
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
     download_url_async as _download_url_async,
@@ -35,10 +76,34 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
     validate_add_media_inputs as _validate_inputs,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import (
-    process_videos as _process_videos_core,  # type: ignore  # pragma: no cover
-)
-from tldw_Server_API.app.core.Utils.Utils import smart_download as _smart_download
+# Keep heavyweight processor imports lazy to avoid hard-abort side effects
+# (e.g., OpenMP/torch initialization) during router import.
+_process_audio_files_core = None
+_process_videos_core = None
+_smart_download = _optional_import_attr(
+    "tldw_Server_API.app.core.Utils.Utils",
+    "smart_download",
+)  # type: ignore[assignment]
+
+
+def _load_process_audio_files_core():
+    global _process_audio_files_core
+    if _process_audio_files_core is None:
+        _process_audio_files_core = _optional_import_attr(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files",
+            "process_audio_files",
+        )
+    return _process_audio_files_core
+
+
+def _load_process_videos_core():
+    global _process_videos_core
+    if _process_videos_core is None:
+        _process_videos_core = _optional_import_attr(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib",
+            "process_videos",
+        )
+    return _process_videos_core
 
 try:
     # Optional shim so tests can monkeypatch media.process_web_scraping_task
@@ -51,100 +116,59 @@ except ImportError:  # pragma: no cover - keep import failures isolated during m
 # name collisions with core processing helpers that share similar names.
 import contextlib
 
-from tldw_Server_API.app.api.v1.endpoints.media import add as add_endpoint  # noqa: E402
-from tldw_Server_API.app.api.v1.endpoints.media import debug as debug_endpoint  # noqa: E402
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_annotations as document_annotations_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_figures as document_figures_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_insights as document_insights_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_outline as document_outline_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_references as document_references_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import file as file_endpoint  # noqa: E402
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    ingest_jobs as ingest_jobs_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    ingest_web_content as ingest_web_content_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import item as item_endpoint  # noqa: E402
-from tldw_Server_API.app.api.v1.endpoints.media import listing as listing_endpoint  # noqa: E402
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_audios as process_audios_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_code as process_code_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_documents as process_documents_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_ebooks as process_ebooks_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_emails as process_emails_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_mediawiki as process_mediawiki_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_pdfs as process_pdfs_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_videos as process_videos_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_web_scraping as process_web_scraping_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    reading_progress as reading_progress_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    reprocess as reprocess_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    transcription_models as transcription_models_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import versions as versions_endpoint  # noqa: E402
-
 router = APIRouter()
-for _router in (
-    listing_endpoint.router,
-    item_endpoint.router,
-    versions_endpoint.router,
-    file_endpoint.router,
-    add_endpoint.router,
-    debug_endpoint.router,
-    ingest_web_content_endpoint.router,
-    ingest_jobs_endpoint.router,
-    process_code_endpoint.router,
-    process_documents_endpoint.router,
-    process_pdfs_endpoint.router,
-    process_ebooks_endpoint.router,
-    process_emails_endpoint.router,
-    process_videos_endpoint.router,
-    process_audios_endpoint.router,
-    process_web_scraping_endpoint.router,
-    process_mediawiki_endpoint.router,
-    reprocess_endpoint.router,
-    transcription_models_endpoint.router,
-    document_outline_endpoint.router,
-    document_insights_endpoint.router,
-    document_references_endpoint.router,
-    document_figures_endpoint.router,
-    document_annotations_endpoint.router,
-    reading_progress_endpoint.router,
-):
-    for route in _router.routes:
+
+# Load subrouters defensively so one optional import failure does not disable
+# the full media route surface.
+_MEDIA_ENDPOINT_MODULES: tuple[str, ...] = (
+    "listing",
+    "item",
+    "versions",
+    "file",
+    "add",
+    "debug",
+    "ingest_web_content",
+    "ingest_jobs",
+    "process_code",
+    "process_documents",
+    "process_pdfs",
+    "process_ebooks",
+    "process_emails",
+    "process_videos",
+    "process_audios",
+    "process_web_scraping",
+    "process_mediawiki",
+    "reprocess",
+    "transcription_models",
+    "navigation",
+    "document_outline",
+    "document_insights",
+    "document_references",
+    "document_figures",
+    "document_annotations",
+    "reading_progress",
+)
+
+
+def _append_router_from_module(module_name: str) -> None:
+    endpoint_module = _optional_import_module(
+        f"tldw_Server_API.app.api.v1.endpoints.media.{module_name}"
+    )
+    if endpoint_module is None:
+        return
+    subrouter = getattr(endpoint_module, "router", None)
+    if subrouter is None:
+        logger.warning(
+            "Media endpoint module '{}' has no router attribute; skipping.",
+            module_name,
+        )
+        return
+    for route in subrouter.routes:
         router.routes.append(route)
+
+
+for _module_name in _MEDIA_ENDPOINT_MODULES:
+    _append_router_from_module(_module_name)
 
 
 # Helpers/exported patch points
@@ -207,7 +231,7 @@ def cache_response(key: str, response: dict) -> None:
         import json as _json
 
         content = _json.dumps(response)
-        etag = _hashlib.md5(content.encode()).hexdigest()
+        etag = _hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
         cache.setex(key, 300, f"{etag}|{content}")
         parts = key.split(":", 2)
         if len(parts) >= 3:
@@ -274,8 +298,69 @@ async def _process_document_like_item(*args, **kwargs):  # type: ignore[override
 process_document_content = getattr(docs, "process_document_content", None)
 process_pdf_task = getattr(pdf_lib, "process_pdf_task", None)
 process_epub = getattr(books, "process_epub", None)
-process_videos = _process_videos_core
-process_audio_files = _process_audio_files_core
+
+
+def process_videos(*args, **kwargs):
+    impl = _load_process_videos_core()
+    if impl is None:
+        raise RuntimeError("Video processing backend is unavailable")
+    return _invoke_core_with_supported_kwargs(impl, *args, **kwargs)
+
+
+def process_audio_files(*args, **kwargs):
+    impl = _load_process_audio_files_core()
+    if impl is None:
+        raise RuntimeError("Audio processing backend is unavailable")
+    return _invoke_core_with_supported_kwargs(impl, *args, **kwargs)
+
+
+def _invoke_core_with_supported_kwargs(impl, *args, **kwargs):
+    """
+    Forward only kwargs accepted by the current core callable.
+
+    The endpoint-level shims intentionally keep permissive `*args, **kwargs`
+    signatures for test/legacy patch points. When callers send compatibility
+    kwargs that the current core callable does not support (for example
+    `chunk_options`), filter those keys here instead of raising `TypeError`.
+    """
+    if not kwargs:
+        return impl(*args, **kwargs)
+
+    try:
+        signature = inspect.signature(impl)
+    except (TypeError, ValueError):
+        return impl(*args, **kwargs)
+
+    parameters = signature.parameters
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return impl(*args, **kwargs)
+
+    supported_keyword_names = {
+        name
+        for name, parameter in parameters.items()
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    }
+    dropped_keywords = sorted(set(kwargs) - supported_keyword_names)
+    if dropped_keywords:
+        logger.debug(
+            "Dropping unsupported kwargs for {}: {}",
+            getattr(impl, "__name__", repr(impl)),
+            dropped_keywords,
+        )
+
+    filtered_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if key in supported_keyword_names
+    }
+    return impl(*args, **filtered_kwargs)
 
 
 __all__ = [

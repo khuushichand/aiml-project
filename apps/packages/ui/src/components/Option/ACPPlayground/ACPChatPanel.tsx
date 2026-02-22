@@ -3,33 +3,31 @@ import { useTranslation } from "react-i18next"
 import { Button, Input, Empty, Spin } from "antd"
 import { Send, Square, Bot, User, Wrench, AlertCircle } from "lucide-react"
 import { useACPSessionsStore } from "@/store/acp-sessions"
-import { useACPSession } from "@/hooks/useACPSession"
-import type { ACPUpdate } from "@/services/acp/types"
+import type { ACPUpdate, ACPSessionState } from "@/services/acp/types"
 
 const { TextArea } = Input
 
-export const ACPChatPanel: React.FC = () => {
+interface ACPChatPanelProps {
+  state: ACPSessionState
+  isConnected: boolean
+  updates: ACPUpdate[]
+  sendPrompt: (messages: Array<{ role: "system" | "user" | "assistant"; content: string }>) => void
+  cancel: () => void
+}
+
+export const ACPChatPanel: React.FC<ACPChatPanelProps> = ({
+  state,
+  isConnected,
+  updates,
+  sendPrompt,
+  cancel,
+}) => {
   const { t } = useTranslation(["playground", "option", "common"])
   const [inputValue, setInputValue] = useState("")
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Store
   const activeSessionId = useACPSessionsStore((s) => s.activeSessionId)
-  const activeSession = useACPSessionsStore((s) =>
-    s.activeSessionId ? s.getSession(s.activeSessionId) : undefined
-  )
-
-  // WebSocket connection
-  const {
-    state,
-    isConnected,
-    updates,
-    sendPrompt,
-    cancel,
-  } = useACPSession({
-    sessionId: activeSessionId ?? undefined,
-    autoConnect: !!activeSessionId,
-  })
 
   // Auto-scroll to bottom
   useEffect(() => {

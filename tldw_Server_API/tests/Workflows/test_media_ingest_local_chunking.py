@@ -44,7 +44,7 @@ def client_with_wf(tmp_path, monkeypatch, auth_headers):
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
         return principal
 
     def override_db():

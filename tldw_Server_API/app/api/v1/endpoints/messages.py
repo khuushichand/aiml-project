@@ -42,9 +42,13 @@ from tldw_Server_API.app.core.LLM_Calls.anthropic_messages import (
     openai_stream_to_anthropic,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 
 router = APIRouter()
 public_router = APIRouter()
+
+# Backward-compatible symbol used by legacy tests.
+http_client_factory = async_http_client_factory
 
 MESSAGES_NATIVE_PROVIDERS = {"anthropic", "llama.cpp"}
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
@@ -85,7 +89,7 @@ def _get_default_provider() -> str:
     env_val = os.getenv("DEFAULT_LLM_PROVIDER")
     if env_val:
         return env_val
-    if os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes"}:
+    if is_test_mode():
         return "local-llm"
     return DEFAULT_LLM_PROVIDER
 
@@ -277,7 +281,7 @@ def _extract_stream_flag(raw: Any) -> bool:
     if isinstance(raw, bool):
         return raw
     if isinstance(raw, str):
-        return raw.strip().lower() in {"1", "true", "yes", "on"}
+        return is_truthy(raw)
     return bool(raw)
 
 

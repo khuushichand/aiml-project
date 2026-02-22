@@ -55,7 +55,7 @@ def test_literal_starting_with_slash_is_not_regex():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -104,7 +104,7 @@ def test_load_block_patterns_and_evaluate_actions():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 @pytest.mark.unit
 def test_warn_with_categories_and_category_label():
@@ -137,7 +137,7 @@ def test_warn_with_categories_and_category_label():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -163,7 +163,7 @@ def test_invalid_and_dangerous_regex_lines_are_skipped():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -218,7 +218,7 @@ def test_replacement_limits_are_enforced():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -253,7 +253,7 @@ def test_user_override_empty_categories_clears_gating():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -277,7 +277,7 @@ def test_blocklist_update_preserves_pii_rules(monkeypatch):
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -309,7 +309,7 @@ def test_uncategorized_category_allows_untagged_rules():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -345,7 +345,7 @@ def test_evaluate_action_redacts_all_matching_rules():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -377,7 +377,7 @@ def test_evaluate_action_block_precedence_over_warn():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -412,7 +412,7 @@ def test_chunk_scanning_detects_matches_past_max_chars():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -486,7 +486,7 @@ def test_set_blocklist_lines_empty_writes_empty_file():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -505,7 +505,7 @@ def test_append_blocklist_line_rejects_newlines():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -538,7 +538,7 @@ def test_replacement_limit_zero_is_unlimited():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -572,7 +572,7 @@ def test_chunk_boundary_match_window_detects_long_match():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -604,7 +604,7 @@ def test_redaction_replacement_treated_as_literal():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -639,4 +639,4 @@ def test_redact_text_with_count_tracks_replacements():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None

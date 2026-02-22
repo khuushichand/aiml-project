@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 import {
@@ -9,7 +10,7 @@ import {
 test.describe('ServerConnectionCard loading CTAs', () => {
   test('shows loading state and opens settings from primary CTA', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Force a loading/searching state via the shared connection store
     await waitForConnectionStore(page, 'connection-loading-searching')

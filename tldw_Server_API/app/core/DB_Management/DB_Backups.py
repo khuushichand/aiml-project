@@ -5,6 +5,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import time
 import urllib.parse
 from datetime import datetime
 from typing import Optional
@@ -33,6 +34,111 @@ DB_BACKUP_RUNTIME_EXCEPTIONS = (
     RuntimeError,
     InvalidStoragePathError,
 )
+
+
+def _sqlite_error_is_busy(exc: BaseException) -> bool:
+    """Return True when a SQLite exception indicates lock/busy contention."""
+    text = str(exc or "").lower()
+    return (
+        "database is locked" in text
+        or "database is busy" in text
+        or "database is in use" in text
+    )
+
+
+def _copy_sqlite_database_via_backup(
+    *,
+    source_db_path: str,
+    target_db_path: str,
+    require_target_exclusive_lock: bool = False,
+    lock_timeout_seconds: float = 0.5,
+) -> None:
+    """Copy SQLite database contents using SQLite's backup API.
+
+    When ``require_target_exclusive_lock`` is True, this performs a preflight
+    exclusive-lock check on the target so restore callers fail safely when
+    other writers/readers are active.
+    """
+    source_path = str(source_db_path).strip()
+    target_path = str(target_db_path).strip()
+    if not source_path:
+        raise sqlite3.OperationalError("source database path is empty")
+    if not target_path:
+        raise sqlite3.OperationalError("target database path is empty")
+
+    source_is_uri = source_path.lower().startswith("file:")
+    target_is_uri = target_path.lower().startswith("file:")
+
+    # For backup artifact writes (non-restore mode), require target paths to stay
+    # within the configured backup base directory. Restore-mode callers
+    # intentionally target live database paths and should be validated by their
+    # own DB-path validation before reaching this helper.
+    if not target_is_uri:
+        normalized_target_path = os.path.realpath(os.path.abspath(target_path))
+        if not require_target_exclusive_lock:
+            backup_base_dir = os.path.abspath(_get_backup_base_dir())
+            try:
+                common = os.path.commonpath([backup_base_dir, normalized_target_path])
+            except ValueError:
+                raise sqlite3.OperationalError("invalid target database path") from None
+            if common != backup_base_dir:
+                raise sqlite3.OperationalError("target database path is outside backup directory")
+        # Use the normalized path from this point forward.
+        target_path = normalized_target_path
+
+        target_parent = os.path.dirname(target_path)
+        if target_parent:
+            os.makedirs(target_parent, exist_ok=True)
+
+    timeout = max(0.0, float(lock_timeout_seconds))
+    busy_timeout_ms = int(timeout * 1000)
+
+    # Preflight lock check for restore callers: fail fast if the target DB is
+    # currently busy instead of attempting any raw file replacement.
+    if require_target_exclusive_lock:
+        with sqlite3.connect(target_path, timeout=timeout, uri=target_is_uri) as guard:
+            guard.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+            guard.execute("BEGIN EXCLUSIVE")
+            guard.rollback()
+
+    with sqlite3.connect(source_path, timeout=timeout, uri=source_is_uri) as source:
+        source.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+        # Best-effort checkpoint to reduce WAL sidecar churn around backups.
+        try:
+            source.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except sqlite3.OperationalError:
+            pass
+
+        with sqlite3.connect(target_path, timeout=timeout, uri=target_is_uri) as target:
+            target.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+            busy_started_at: float | None = None
+
+            def _backup_progress(status: int, _remaining: int, _total: int) -> None:
+                nonlocal busy_started_at
+                if status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    if busy_started_at is None:
+                        busy_started_at = time.monotonic()
+                    elif timeout > 0 and (time.monotonic() - busy_started_at) >= timeout:
+                        raise sqlite3.OperationalError("database is busy")
+                else:
+                    busy_started_at = None
+
+            source.backup(target, pages=256, progress=_backup_progress, sleep=0.05)
+
+
+def restore_sqlite_database_file(
+    *,
+    source_db_path: str,
+    target_db_path: str,
+    lock_timeout_seconds: float = 0.5,
+) -> None:
+    """Safely restore a target SQLite DB from a source SQLite file."""
+    _copy_sqlite_database_via_backup(
+        source_db_path=source_db_path,
+        target_db_path=target_db_path,
+        require_target_exclusive_lock=True,
+        lock_timeout_seconds=lock_timeout_seconds,
+    )
 
 
 def _safe_join(base_dir: str, name: str) -> Optional[str]:
@@ -244,19 +350,15 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
             return error_msg
         logger.info(f"  Full backup path: {backup_file}")
 
-        # Create a backup using SQLite's backup API
+        # Create a backup using SQLite's backup API. Do not copy WAL/SHM sidecars:
+        # sidecar replay against a different restore context can corrupt targets.
         source_connect_path = raw_db_path if is_uri else db_path
-        with sqlite3.connect(source_connect_path, uri=is_uri) as source, \
-                sqlite3.connect(backup_file) as target:
-            source.backup(target)
-
-        # Copy associated WAL/SHM files when present to keep the journal consistent.
-        for suffix in ("-wal", "-shm"):
-            sidecar = f"{db_path}{suffix}"
-            if os.path.exists(sidecar):
-                backup_sidecar = f"{backup_file}{suffix}"
-                shutil.copy2(sidecar, backup_sidecar)
-                logger.info(f"Copied journal file: {backup_sidecar}")
+        _copy_sqlite_database_via_backup(
+            source_db_path=source_connect_path,
+            target_db_path=backup_file,
+            require_target_exclusive_lock=False,
+            lock_timeout_seconds=0.5,
+        )
 
         logger.info(f"Backup created successfully: {backup_file}")
         return f"Backup created: {backup_file}"
@@ -368,10 +470,6 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
             logger.error(f"Backup file not found: {backup_name}")
             return f"Backup file not found: {backup_name}"
 
-        parent_dir = os.path.dirname(db_path)
-        if parent_dir:
-            os.makedirs(parent_dir, exist_ok=True)
-
         if os.path.exists(db_path):
             # Create a timestamp for the current db
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -382,35 +480,35 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
 
             # Backup current database before restore
             logger.info(f"Creating backup of current database: {current_backup}")
-            shutil.copy2(db_path, current_backup)
-            for suffix in ("-wal", "-shm"):
-                existing_sidecar = f"{db_path}{suffix}"
-                backup_sidecar = f"{current_backup}{suffix}"
-                if os.path.exists(existing_sidecar):
-                    shutil.copy2(existing_sidecar, backup_sidecar)
-                    logger.info(f"Saved journal snapshot: {backup_sidecar}")
+            _copy_sqlite_database_via_backup(
+                source_db_path=db_path,
+                target_db_path=current_backup,
+                require_target_exclusive_lock=False,
+                lock_timeout_seconds=0.5,
+            )
         else:
             logger.info(
                 f"No existing database at {db_path}; skipping pre-restore snapshot."
             )
 
-        # Restore the backup
+        # Restore the backup. Fail safely if active clients hold DB locks.
         logger.info(f"Restoring database from {backup_name}")
-        shutil.copy2(backup_path, db_path)
-        for suffix in ("-wal", "-shm"):
-            backup_sidecar = f"{backup_path}{suffix}"
-            target_sidecar = f"{db_path}{suffix}"
-            if os.path.exists(backup_sidecar):
-                shutil.copy2(backup_sidecar, target_sidecar)
-                logger.info(f"Restored journal file: {target_sidecar}")
-            elif os.path.exists(target_sidecar):
-                # Remove stale sidecar files that do not exist for the backup snapshot.
-                os.remove(target_sidecar)
-                logger.info(f"Removed stale journal file: {target_sidecar}")
+        restore_sqlite_database_file(
+            source_db_path=backup_path,
+            target_db_path=db_path,
+            lock_timeout_seconds=0.5,
+        )
 
         logger.info(f"Database restored from {backup_name}")
         return f"Database restored from {backup_name}"
     except DB_BACKUP_RUNTIME_EXCEPTIONS as e:
+        if _sqlite_error_is_busy(e):
+            error_msg = (
+                "Failed to restore backup: target database is busy/locked; "
+                "stop active clients and retry"
+            )
+            logger.error(error_msg)
+            return error_msg
         error_msg = f"Failed to restore backup: {str(e)}"
         logger.error(error_msg)
         return error_msg

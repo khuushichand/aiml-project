@@ -65,5 +65,28 @@ export const createFormSelectInputNumberAntdMock = () => {
     />
   )
 
-  return { Form, Select, Input, InputNumber }
+  const Button = ({
+    children,
+    icon,
+    loading,
+    onClick,
+    disabled,
+    htmlType,
+    type: _type,
+    size: _size,
+    danger: _danger,
+    ...rest
+  }: any) => (
+    <button
+      type={htmlType === "submit" || htmlType === "reset" ? htmlType : "button"}
+      onClick={onClick}
+      disabled={Boolean(disabled) || Boolean(loading)}
+      {...rest}
+    >
+      {icon}
+      {children}
+    </button>
+  )
+
+  return { Form, Select, Input, InputNumber, Button }
 }

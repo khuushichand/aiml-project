@@ -132,7 +132,7 @@ class TestCharacterCardProperties:
             assert char_id1 != char_id2
         except Exception:
             # Duplicate rejection is also valid
-            pass
+            _ = None
 
     @pytest.mark.property
     @given(
@@ -664,7 +664,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
             try:
                 os.unlink(self.db_path)
             except:
-                pass
+                _ = None
 
 
 @pytest.mark.property

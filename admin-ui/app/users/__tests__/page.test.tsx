@@ -5,6 +5,7 @@ import { render, screen, waitFor, cleanup, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import UsersPage from '../page';
 import { api } from '@/lib/api-client';
+import { formatAxeViolations, getCriticalAndSeriousAxeViolations } from '@/test-utils/axe';
 
 const confirmMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
@@ -75,31 +76,51 @@ vi.mock('@/components/OrgContextSwitcher', () => ({
   OrgContextSwitcher: () => <div data-testid="org-switcher" />,
 }));
 
-vi.mock('@/lib/use-url-state', () => ({
-  useUrlState: () => ['', vi.fn()],
-  useUrlPagination: () => ({
-    page: 1,
-    pageSize: 25,
-    setPage: vi.fn(),
-    setPageSize: vi.fn(),
-    resetPagination: vi.fn(),
-  }),
-}));
+vi.mock('@/lib/use-url-state', async () => {
+  const React = await import('react');
+  return {
+    useUrlState: (_key: string, options?: { defaultValue?: unknown }) => {
+      const [value, setValue] = React.useState(options?.defaultValue);
+      return [value, setValue];
+    },
+    useUrlPagination: () => {
+      const [page, setPage] = React.useState(1);
+      const [pageSize, setPageSize] = React.useState(25);
+      return {
+        page,
+        pageSize,
+        setPage,
+        setPageSize,
+        resetPagination: () => setPage(1),
+      };
+    },
+  };
+});
 
 vi.mock('@/lib/api-client', () => ({
   api: {
     getUsers: vi.fn(),
+    getOrganizations: vi.fn(),
+    getOrgInvites: vi.fn(),
+    getUserMfaStatus: vi.fn(),
     deleteUser: vi.fn(),
     updateUser: vi.fn(),
     createUser: vi.fn(),
+    resetUserPassword: vi.fn(),
+    setUserMfaRequirement: vi.fn(),
   },
 }));
 
 type ApiMock = {
   getUsers: ReturnType<typeof vi.fn>;
+  getOrganizations: ReturnType<typeof vi.fn>;
+  getOrgInvites: ReturnType<typeof vi.fn>;
+  getUserMfaStatus: ReturnType<typeof vi.fn>;
   deleteUser: ReturnType<typeof vi.fn>;
   updateUser: ReturnType<typeof vi.fn>;
   createUser: ReturnType<typeof vi.fn>;
+  resetUserPassword: ReturnType<typeof vi.fn>;
+  setUserMfaRequirement: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -124,55 +145,207 @@ beforeEach(() => {
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
 
-  const currentUser = makeUser({ id: 1, username: 'Alice' });
-  window.localStorage.setItem('user', JSON.stringify(currentUser));
-
   apiMock.getUsers.mockResolvedValue([
-    currentUser,
-    makeUser({ id: 2, username: 'Bob', email: 'bob@example.com' }),
+    makeUser({ id: 1, username: 'Alice', email: 'alice@example.com', role: 'admin', is_active: true, is_verified: true }),
+    makeUser({ id: 2, uuid: 'user-2', username: 'Bob', email: 'bob@example.com', role: 'user', is_active: false, is_verified: true }),
+    makeUser({ id: 3, uuid: 'user-3', username: 'Carol', email: 'carol@example.com', role: 'service', is_active: true, is_verified: false }),
   ]);
+  apiMock.getOrganizations.mockResolvedValue([
+    { id: 11, name: 'Core Org' },
+  ]);
+  apiMock.getOrgInvites.mockResolvedValue({
+    items: [
+      {
+        id: 1001,
+        org_id: 11,
+        org_name: 'Core Org',
+        role_to_grant: 'member',
+        email: 'pending@example.com',
+        created_by: 1,
+        created_at: '2026-02-17T10:00:00Z',
+        expires_at: '2099-02-20T10:00:00Z',
+        uses_count: 0,
+      },
+      {
+        id: 1002,
+        org_id: 11,
+        org_name: 'Core Org',
+        role_to_grant: 'admin',
+        email: 'accepted@example.com',
+        created_by: 1,
+        created_at: '2026-02-16T10:00:00Z',
+        expires_at: '2099-02-20T10:00:00Z',
+        uses_count: 1,
+      },
+      {
+        id: 1003,
+        org_id: 11,
+        org_name: 'Core Org',
+        role_to_grant: 'member',
+        email: 'expired@example.com',
+        created_by: 1,
+        created_at: '2026-01-01T10:00:00Z',
+        expires_at: '2026-01-05T10:00:00Z',
+        uses_count: 0,
+      },
+    ],
+  });
+  apiMock.getUserMfaStatus.mockImplementation(async (userId: string) => {
+    if (userId === '2') return { enabled: false };
+    if (userId === '3') return { enabled: true };
+    return { enabled: true };
+  });
   apiMock.deleteUser.mockResolvedValue({});
+  apiMock.updateUser.mockResolvedValue({});
+  apiMock.createUser.mockResolvedValue({});
+  apiMock.resetUserPassword.mockResolvedValue({});
+  apiMock.setUserMfaRequirement.mockResolvedValue({});
 });
 
 afterEach(() => {
   cleanup();
-  window.localStorage.clear();
   vi.resetAllMocks();
 });
 
 describe('UsersPage', () => {
+  it('has no critical/serious axe violations in the default state', async () => {
+    const { container } = render(<UsersPage />);
+
+    await screen.findByText('Invitations');
+    const violations = await getCriticalAndSeriousAxeViolations(container);
+    expect(violations, formatAxeViolations(violations)).toEqual([]);
+  });
+
+  it('renders invitation funnel metrics and mixed invitation statuses', async () => {
+    render(<UsersPage />);
+
+    await screen.findByText('Invitations');
+    expect(screen.getByTestId('invitation-total-sent').textContent).toContain('3');
+    expect(screen.getByTestId('invitation-total-accepted').textContent).toContain('1');
+    expect(screen.getByTestId('invitation-conversion-rate').textContent).toContain('33.3%');
+
+    expect(screen.getByText('pending@example.com')).toBeInTheDocument();
+    expect(screen.getByText('accepted@example.com')).toBeInTheDocument();
+    expect(screen.getByText('expired@example.com')).toBeInTheDocument();
+    expect(screen.getByText('sent')).toBeInTheDocument();
+    expect(screen.getByText('accepted')).toBeInTheDocument();
+    expect(screen.getByText('expired')).toBeInTheDocument();
+  });
+
   it('disables selection and deletion for the current user', async () => {
     render(<UsersPage />);
 
-    const rowLabel = await screen.findByText('Alice');
-    const row = rowLabel.closest('tr');
-    expect(row).not.toBeNull();
-
-    const checkbox = within(row as HTMLElement).getByRole('checkbox', {
+    const checkbox = await screen.findByRole('checkbox', {
       name: /select user alice/i,
     });
-    expect(checkbox).toBeDisabled();
+    const row = checkbox.closest('tr');
+    expect(row).not.toBeNull();
+
+    const currentUserCheckbox = within(row as HTMLElement).getByRole('checkbox', {
+      name: /select user alice/i,
+    });
+    expect(currentUserCheckbox).toBeDisabled();
 
     const deleteButton = within(row as HTMLElement).getByTitle('Cannot delete yourself');
     expect(deleteButton).toBeDisabled();
   });
 
-  it('allows deleting another user after confirmation', async () => {
+  it('sends combined search and filter params to user API', async () => {
+    const user = userEvent.setup();
     render(<UsersPage />);
 
-    const rowLabel = await screen.findByText('Bob');
-    const row = rowLabel.closest('tr');
-    expect(row).not.toBeNull();
+    await screen.findByText('Bob');
+    await user.type(screen.getByLabelText(/search users by username, email, or role/i), 'bob');
+    await user.selectOptions(screen.getByLabelText(/filter by user status/i), 'inactive');
+    await user.selectOptions(screen.getByLabelText(/filter by verification state/i), 'verified');
+    await user.selectOptions(screen.getByLabelText(/filter by mfa status/i), 'disabled');
 
-    const deleteButton = within(row as HTMLElement).getByTitle('Delete user');
-    expect(deleteButton).not.toBeDisabled();
-
-    const user = userEvent.setup();
-    await user.click(deleteButton);
-
-    expect(confirmMock).toHaveBeenCalled();
     await waitFor(() => {
-      expect(apiMock.deleteUser).toHaveBeenCalledWith('2');
+      expect(apiMock.getUsers).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          limit: '200',
+          search: 'bob',
+          is_active: 'false',
+          is_verified: 'true',
+          mfa_enabled: 'false',
+        })
+      );
+    });
+  });
+
+  it('applies search and filters together with AND logic', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+
+    await screen.findByText('Bob');
+    await user.type(screen.getByLabelText(/search users by username, email, or role/i), 'bob');
+    await user.selectOptions(screen.getByLabelText(/filter by user status/i), 'inactive');
+    await user.selectOptions(screen.getByLabelText(/filter by verification state/i), 'verified');
+    await user.selectOptions(screen.getByLabelText(/filter by mfa status/i), 'disabled');
+
+    expect(await screen.findByText('Bob')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('checkbox', { name: /select user alice/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /select user carol/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it('supports bulk role assignment from the selected role dropdown', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+
+    await screen.findByText('Bob');
+    await user.click(screen.getByRole('checkbox', { name: /select user bob/i }));
+    await user.selectOptions(screen.getByLabelText(/bulk role selection/i), 'admin');
+    await user.click(screen.getByRole('button', { name: 'Assign Role' }));
+
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Assign role to selected users' })
+      );
+    });
+    await waitFor(() => {
+      expect(apiMock.updateUser).toHaveBeenCalledWith('2', { role: 'admin' });
+    });
+  });
+
+  it('supports bulk password reset for selected users', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+
+    await screen.findByText('Bob');
+    await user.click(screen.getByRole('checkbox', { name: /select user bob/i }));
+    await user.click(screen.getByRole('button', { name: 'Reset Passwords' }));
+
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Reset selected user passwords' })
+      );
+    });
+    await waitFor(() => {
+      expect(apiMock.resetUserPassword).toHaveBeenCalledWith('2', {
+        force_password_change: true,
+      });
+    });
+  });
+
+  it('supports bulk MFA requirement updates for selected users', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+
+    await screen.findByText('Bob');
+    await user.click(screen.getByRole('checkbox', { name: /select user bob/i }));
+    await user.click(screen.getByRole('button', { name: 'Require MFA' }));
+
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Require MFA for selected users' })
+      );
+    });
+    await waitFor(() => {
+      expect(apiMock.setUserMfaRequirement).toHaveBeenCalledWith('2', {
+        require_mfa: true,
+      });
     });
   });
 });

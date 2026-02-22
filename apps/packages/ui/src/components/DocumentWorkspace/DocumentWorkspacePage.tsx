@@ -40,6 +40,7 @@ import { DocumentShortcutsModal } from "./DocumentShortcutsModal"
 import { DocumentTabBar } from "./DocumentTabBar"
 import { SyncStatusIndicator } from "./SyncStatusIndicator"
 import { getDocumentMimeType, inferDocumentTypeFromMedia } from "./document-utils"
+import { TabIconLabel } from "./TabIconLabel"
 import {
   useAnnotations,
   useAnnotationSync,
@@ -76,7 +77,7 @@ const LeftSidebarContent: React.FC = () => {
 
   const sidebarTabs: Array<{
     key: SidebarTab
-    label: React.ReactNode
+    label: string
     icon: React.ReactNode
     children: React.ReactNode
   }> = [
@@ -119,16 +120,7 @@ const LeftSidebarContent: React.FC = () => {
         onChange={(key) => setActiveSidebarTab(key as SidebarTab)}
         items={sidebarTabs.map((tab) => ({
           key: tab.key,
-          label: (
-            <Tooltip title={tab.label}>
-              <span
-                className="flex items-center"
-                aria-label={typeof tab.label === "string" ? tab.label : undefined}
-              >
-                {tab.icon}
-              </span>
-            </Tooltip>
-          ),
+          label: <TabIconLabel label={tab.label} icon={tab.icon} />,
           children: (
             <div className="h-full min-h-0 overflow-auto overscroll-contain">
               {tab.children}
@@ -155,7 +147,7 @@ const RightPanelContent: React.FC = () => {
 
   const rightTabs: Array<{
     key: RightPanelTab
-    label: React.ReactNode
+    label: string
     icon: React.ReactNode
     children: React.ReactNode
   }> = [
@@ -192,16 +184,7 @@ const RightPanelContent: React.FC = () => {
         onChange={(key) => setActiveRightTab(key as RightPanelTab)}
         items={rightTabs.map((tab) => ({
           key: tab.key,
-          label: (
-            <Tooltip title={tab.label}>
-              <span
-                className="flex items-center"
-                aria-label={typeof tab.label === "string" ? tab.label : undefined}
-              >
-                {tab.icon}
-              </span>
-            </Tooltip>
-          ),
+          label: <TabIconLabel label={tab.label} icon={tab.icon} />,
           children: tab.children
         }))}
         size="small"
@@ -239,26 +222,24 @@ const WorkspaceHeader: React.FC<{
     const doc = s.openDocuments.find((d) => d.id === s.activeDocumentId)
     return doc
   })
+  const leftPaneToggleLabel = leftPaneOpen
+    ? t("option:documentWorkspace.collapseSidebar", "Collapse sidebar")
+    : t("option:documentWorkspace.expandSidebar", "Expand sidebar")
+  const rightPaneToggleLabel = rightPaneOpen
+    ? t("option:documentWorkspace.collapseChatPanel", "Collapse chat panel")
+    : t("option:documentWorkspace.expandChatPanel", "Expand chat panel")
 
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface px-4">
       <div className="flex items-center gap-3">
         {!hideToggles && (
-          <Tooltip
-            title={
-              leftPaneOpen
-                ? t("common:collapse", "Collapse")
-                : t("common:expand", "Expand")
-            }
-          >
+          <Tooltip title={leftPaneToggleLabel}>
             <button
               onClick={onToggleLeftPane}
               className="rounded p-1.5 hover:bg-hover"
-              aria-label={
-                leftPaneOpen
-                  ? t("common:collapse", "Collapse")
-                  : t("common:expand", "Expand")
-              }
+              data-testid="document-workspace-toggle-left"
+              aria-label={leftPaneToggleLabel}
+              title={leftPaneToggleLabel}
             >
               {leftPaneOpen ? (
                 <PanelLeftClose className="h-5 w-5" />
@@ -301,21 +282,13 @@ const WorkspaceHeader: React.FC<{
           </button>
         </Tooltip>
         {!hideToggles && (
-          <Tooltip
-            title={
-              rightPaneOpen
-                ? t("common:collapse", "Collapse")
-                : t("common:expand", "Expand")
-            }
-          >
+          <Tooltip title={rightPaneToggleLabel}>
             <button
               onClick={onToggleRightPane}
               className="rounded p-1.5 hover:bg-hover"
-              aria-label={
-                rightPaneOpen
-                  ? t("common:collapse", "Collapse")
-                  : t("common:expand", "Expand")
-              }
+              data-testid="document-workspace-toggle-right"
+              aria-label={rightPaneToggleLabel}
+              title={rightPaneToggleLabel}
             >
               {rightPaneOpen ? (
                 <PanelRightClose className="h-5 w-5" />
@@ -638,7 +611,7 @@ export const DocumentWorkspacePage: React.FC = () => {
         <Alert
           type="info"
           showIcon
-          message={t(
+          title={t(
             "option:documentWorkspace.loadingDocument",
             "Loading document..."
           )}
@@ -674,7 +647,7 @@ export const DocumentWorkspacePage: React.FC = () => {
         <Alert
           type="warning"
           showIcon
-          message={t(
+          title={t(
             "option:documentWorkspace.healthWarningTitle",
             "Document workspace storage unavailable"
           )}
@@ -836,7 +809,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             placement="left"
             onClose={() => setLeftDrawerOpen(false)}
             open={leftDrawerOpen}
-            width={320}
+            size={320}
             className="lg:hidden"
             styles={{ body: { padding: 0, height: "100%", display: "flex", flexDirection: "column" } }}
           >
@@ -870,7 +843,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             placement="right"
             onClose={() => setRightDrawerOpen(false)}
             open={rightDrawerOpen}
-            width={360}
+            size={360}
             className="lg:hidden"
             styles={{ body: { padding: 0 } }}
           >

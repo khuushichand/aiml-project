@@ -217,7 +217,7 @@ async def upsert_override(
             updated_at=now,
         )
     except Exception as exc:
-        logger.error("Provider override upsert failed for provider=%s: %s", provider_norm, exc)
+        logger.error("Provider override upsert failed for provider={}: {}", provider_norm, exc)
         raise HTTPException(status_code=500, detail="Failed to store provider override") from exc
 
     await refresh_llm_provider_overrides()
@@ -233,7 +233,7 @@ async def delete_override(provider: str) -> None:
     try:
         deleted = await repo.delete_override(provider_norm)
     except Exception as exc:
-        logger.error("Provider override delete failed for provider=%s: %s", provider_norm, exc)
+        logger.error("Provider override delete failed for provider={}: {}", provider_norm, exc)
         raise HTTPException(status_code=500, detail="Failed to delete provider override") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Provider override not found")

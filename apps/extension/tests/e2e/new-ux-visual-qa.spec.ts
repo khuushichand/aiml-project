@@ -3,6 +3,7 @@
  * Captures screenshots of all new components with feature flags enabled.
  */
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -40,7 +41,7 @@ function captureConsole(page: any): string[] {
 
 test.describe('New UX Visual QA - Onboarding', () => {
   test('new single-step onboarding form', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
       // No serverUrl triggers onboarding
     })
@@ -67,7 +68,7 @@ test.describe('New UX Visual QA - Onboarding', () => {
 
 test.describe('New UX Visual QA - Chat Interface', () => {
   test('sidepanel with new control row (labels + keyboard hints)', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -101,7 +102,7 @@ test.describe('New UX Visual QA - Chat Interface', () => {
   })
 
   test('sidepanel with compact messages', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -134,7 +135,7 @@ test.describe('New UX Visual QA - Chat Interface', () => {
   })
 
   test('options page with chat sidebar', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -163,7 +164,7 @@ test.describe('New UX Visual QA - Chat Interface', () => {
 
 test.describe('New UX Visual QA - Command Palette', () => {
   test('command palette opens with keyboard shortcut', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -206,7 +207,7 @@ test.describe('New UX Visual QA - Command Palette', () => {
   })
 
   test('command palette with search query', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -237,7 +238,7 @@ test.describe('New UX Visual QA - Command Palette', () => {
 
 test.describe('New UX Visual QA - Header Components', () => {
   test('header with extracted components', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -270,7 +271,7 @@ test.describe('New UX Visual QA - Header Components', () => {
   })
 
   test('header shortcuts section expanded', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -290,7 +291,7 @@ test.describe('New UX Visual QA - Header Components', () => {
 
 test.describe('New UX Visual QA - Settings', () => {
   test('settings page with new layout', async () => {
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -319,7 +320,7 @@ test.describe('New UX Visual QA - Settings', () => {
   })
 
   test('settings - chat settings page', async () => {
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -340,7 +341,7 @@ test.describe('New UX Visual QA - Settings', () => {
 
 test.describe('New UX Visual QA - Dark Mode', () => {
   test('sidepanel dark mode', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -365,7 +366,7 @@ test.describe('New UX Visual QA - Dark Mode', () => {
   })
 
   test('options page dark mode', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',
@@ -390,7 +391,7 @@ test.describe('New UX Visual QA - Dark Mode', () => {
 
 test.describe('New UX Visual QA - Comparison (Old vs New)', () => {
   test('sidepanel OLD UX (feature flags disabled)', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: {
         // No feature flags = old UX
         serverUrl: 'http://127.0.0.1:8000',
@@ -410,7 +411,7 @@ test.describe('New UX Visual QA - Comparison (Old vs New)', () => {
   })
 
   test('sidepanel NEW UX (feature flags enabled)', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://127.0.0.1:8000',
         authMode: 'single-user',

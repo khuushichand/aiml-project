@@ -1,14 +1,15 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Empty, Skeleton, Input, Modal, message } from "antd"
+import { Empty, Skeleton, Input, Modal, Select, message } from "antd"
 import { useStorage } from "@plasmohq/storage/hook"
-import { FolderPlus, Tag, Trash2 } from "lucide-react"
+import { FolderPlus, RotateCcw, Tag, Trash2 } from "lucide-react"
 import { browser } from "wxt/browser"
 
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useConnectionState } from "@/hooks/useConnectionState"
 import { useServerChatHistory, type ServerChatHistoryItem } from "@/hooks/useServerChatHistory"
+import { useSetting } from "@/hooks/useSetting"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useSelectServerChat } from "@/hooks/chat/useSelectServerChat"
 import { useBulkChatOperations } from "@/hooks/useBulkChatOperations"
@@ -26,6 +27,10 @@ import { normalizeConversationState } from "@/utils/conversation-state"
 import { useDataTablesStore } from "@/store/data-tables"
 import { queueDataTablesPrefill } from "@/utils/data-tables-prefill"
 import { startCreateTableFromChat } from "@/utils/data-tables-create-flow"
+import {
+  SIDEBAR_SERVER_CHAT_FILTER_SETTING,
+  type SidebarServerChatFilterValue
+} from "@/services/settings/ui-settings"
 import { ServerChatRow } from "./ServerChatRow"
 
 const BulkFolderPickerModal = React.lazy(
@@ -34,6 +39,9 @@ const BulkFolderPickerModal = React.lazy(
 const BulkTagPickerModal = React.lazy(
   () => import("@/components/Sidepanel/Chat/BulkTagPickerModal")
 )
+
+const CHAT_HISTORY_PAGE_SIZE = 25
+type BulkConfirmAction = "trash" | "hard_delete"
 
 interface ServerChatListProps {
   searchQuery: string
@@ -69,6 +77,10 @@ export function ServerChatList({
     "tldw:server-chat-pins",
     []
   )
+  const [chatTypeFilter, setChatTypeFilter] = useSetting(
+    SIDEBAR_SERVER_CHAT_FILTER_SETTING
+  )
+  const isTrashView = chatTypeFilter === "trash"
 
   const {
     serverChatId,
@@ -106,6 +118,8 @@ export function ServerChatList({
   const [topicValue, setTopicValue] = React.useState("")
   const selectionMode = selectionModeProp ?? false
   const [selectedChatIds, setSelectedChatIds] = React.useState<string[]>([])
+  const [currentPage, setCurrentPage] = React.useState(1)
+  const [pageJumpValue, setPageJumpValue] = React.useState("1")
   const selectedChatIdSet = React.useMemo(
     () => new Set(selectedChatIds),
     [selectedChatIds]
@@ -113,6 +127,9 @@ export function ServerChatList({
   const [bulkFolderPickerOpen, setBulkFolderPickerOpen] = React.useState(false)
   const [bulkTagPickerOpen, setBulkTagPickerOpen] = React.useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = React.useState(false)
+  const [bulkConfirmAction, setBulkConfirmAction] =
+    React.useState<BulkConfirmAction>("trash")
+  const [isBulkDeleting, setIsBulkDeleting] = React.useState(false)
   const openSettingsTimeoutRef = React.useRef<number | null>(null)
 
   const openExtensionUrl = React.useCallback(
@@ -164,15 +181,9 @@ export function ServerChatList({
     []
   )
 
-  const {
-    folderApiAvailable,
-    ensureKeyword,
-    addKeywordToConversation
-  } = useFolderStore(
+  const { folderApiAvailable } = useFolderStore(
     (state) => ({
-      folderApiAvailable: state.folderApiAvailable,
-      ensureKeyword: state.ensureKeyword,
-      addKeywordToConversation: state.addKeywordToConversation
+      folderApiAvailable: state.folderApiAvailable
     }),
     shallow
   )
@@ -225,27 +236,82 @@ export function ServerChatList({
     data: serverChatData,
     status,
     isLoading
-  } = useServerChatHistory(searchQuery)
+  } = useServerChatHistory(searchQuery, {
+    deletedOnly: isTrashView
+  })
   const serverChats = serverChatData || []
+  const filteredChatsByType = React.useMemo(() => {
+    if (chatTypeFilter === "trash") return serverChats
+    if (chatTypeFilter === "all") return serverChats
+    const isCharacterChat = (chat: ServerChatHistoryItem) => {
+      const characterId = chat.character_id
+      if (characterId == null) return false
+      if (typeof characterId === "string") return characterId.trim().length > 0
+      return true
+    }
+    if (chatTypeFilter === "character") {
+      return serverChats.filter((chat) => isCharacterChat(chat))
+    }
+    return serverChats.filter((chat) => !isCharacterChat(chat))
+  }, [chatTypeFilter, serverChats])
   const pinnedChatSet = React.useMemo(
-    () => new Set(pinnedChatIds || []),
-    [pinnedChatIds]
+    () => (isTrashView ? new Set<string>() : new Set(pinnedChatIds || [])),
+    [isTrashView, pinnedChatIds]
   )
-  const pinnedChats = serverChats.filter((chat) => pinnedChatSet.has(chat.id))
-  const unpinnedChats = serverChats.filter(
-    (chat) => !pinnedChatSet.has(chat.id)
+  const pinnedChats = React.useMemo(
+    () =>
+      isTrashView
+        ? []
+        : filteredChatsByType.filter((chat) => pinnedChatSet.has(chat.id)),
+    [filteredChatsByType, isTrashView, pinnedChatSet]
   )
+  const unpinnedChats = React.useMemo(
+    () =>
+      isTrashView
+        ? filteredChatsByType
+        : filteredChatsByType.filter((chat) => !pinnedChatSet.has(chat.id)),
+    [filteredChatsByType, isTrashView, pinnedChatSet]
+  )
+  const orderedChats = React.useMemo(
+    () => [...pinnedChats, ...unpinnedChats],
+    [pinnedChats, unpinnedChats]
+  )
+  const totalPages = Math.max(
+    1,
+    Math.ceil(orderedChats.length / CHAT_HISTORY_PAGE_SIZE)
+  )
+  const currentPageSafe = Math.min(currentPage, totalPages)
+  const pageStartIndex = (currentPageSafe - 1) * CHAT_HISTORY_PAGE_SIZE
+  const pagedChats = React.useMemo(
+    () =>
+      orderedChats.slice(
+        pageStartIndex,
+        pageStartIndex + CHAT_HISTORY_PAGE_SIZE
+      ),
+    [orderedChats, pageStartIndex]
+  )
+  const pagedPinnedChats = React.useMemo(
+    () => pagedChats.filter((chat) => pinnedChatSet.has(chat.id)),
+    [pagedChats, pinnedChatSet]
+  )
+  const pagedUnpinnedChats = React.useMemo(
+    () => pagedChats.filter((chat) => !pinnedChatSet.has(chat.id)),
+    [pagedChats, pinnedChatSet]
+  )
+  const pageStartNumber = orderedChats.length === 0 ? 0 : pageStartIndex + 1
+  const pageEndNumber = pageStartIndex + pagedChats.length
+  const hasMultiplePages = totalPages > 1
   const visibleChatIds = React.useMemo(
-    () => Array.from(new Set(serverChats.map((chat) => chat.id))),
-    [serverChats]
+    () => Array.from(new Set(pagedChats.map((chat) => chat.id))),
+    [pagedChats]
   )
   const visibleChatIdSet = React.useMemo(
     () => new Set(visibleChatIds),
     [visibleChatIds]
   )
   const chatById = React.useMemo(
-    () => new Map(serverChats.map((chat) => [chat.id, chat])),
-    [serverChats]
+    () => new Map(filteredChatsByType.map((chat) => [chat.id, chat])),
+    [filteredChatsByType]
   )
   const selectedChats = React.useMemo(
     () =>
@@ -258,16 +324,29 @@ export function ServerChatList({
     () => selectedChats.map((chat) => chat.id),
     [selectedChats]
   )
-  const { openBulkFolderPicker, openBulkTagPicker, applyBulkTrash } =
+  const { openBulkFolderPicker, openBulkTagPicker, applyBulkDelete } =
     useBulkChatOperations({
       selectedConversationIds,
       folderApiAvailable,
-      ensureKeyword,
-      addKeywordToConversation,
+      deleteConversation: (conversationId) => tldwClient.deleteChat(conversationId),
       t,
       setBulkFolderPickerOpen,
       setBulkTagPickerOpen
     })
+
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [searchQuery, chatTypeFilter])
+
+  React.useEffect(() => {
+    if (currentPage !== currentPageSafe) {
+      setCurrentPage(currentPageSafe)
+    }
+  }, [currentPage, currentPageSafe])
+
+  React.useEffect(() => {
+    setPageJumpValue(String(currentPageSafe))
+  }, [currentPageSafe])
 
   const togglePinned = React.useCallback(
     (chatId: string) => {
@@ -351,6 +430,7 @@ export function ServerChatList({
     setBulkFolderPickerOpen(false)
     setBulkTagPickerOpen(false)
     setBulkDeleteConfirmOpen(false)
+    setBulkConfirmAction("trash")
   }, [selectionMode])
 
   const toggleChatSelected = React.useCallback((chatId: string) => {
@@ -372,6 +452,24 @@ export function ServerChatList({
   const clearSelection = React.useCallback(() => {
     setSelectedChatIds([])
   }, [])
+
+  const handlePreviousPage = React.useCallback(() => {
+    setCurrentPage((prev) => Math.max(1, prev - 1))
+  }, [])
+
+  const handleNextPage = React.useCallback(() => {
+    setCurrentPage((prev) => Math.min(totalPages, prev + 1))
+  }, [totalPages])
+
+  const handleJumpToPage = React.useCallback(() => {
+    const nextPage = Number.parseInt(pageJumpValue, 10)
+    if (!Number.isFinite(nextPage)) {
+      setPageJumpValue(String(currentPageSafe))
+      return
+    }
+    const clamped = Math.min(totalPages, Math.max(1, nextPage))
+    setCurrentPage(clamped)
+  }, [currentPageSafe, pageJumpValue, totalPages])
 
   const handleRenameSubmit = () => {
     if (renameLoading) return
@@ -485,20 +583,22 @@ export function ServerChatList({
     ]
   )
 
-  const handleDeleteChat = React.useCallback(
+  const handleMoveChatToTrash = React.useCallback(
     async (chat: ServerChatHistoryItem) => {
       const ok = await confirmDanger({
         title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
         content: t("common:deleteHistoryConfirmation", {
-          defaultValue: "Are you sure you want to delete this chat?"
+          defaultValue: "Move this chat to trash?"
         }),
-        okText: t("common:delete", { defaultValue: "Delete" }),
+        okText: t("common:moveToTrash", { defaultValue: "Move to trash" }),
         cancelText: t("common:cancel", { defaultValue: "Cancel" })
       })
       if (!ok) return
 
       try {
-        await tldwClient.deleteChat(chat.id)
+        await tldwClient.deleteChat(chat.id, {
+          expectedVersion: chat.version ?? undefined
+        })
         setPinnedChatIds((prev) =>
           (prev || []).filter((id) => id !== chat.id)
         )
@@ -513,7 +613,73 @@ export function ServerChatList({
         })
         message.error(
           t("common:deleteChatError", {
-            defaultValue: "Failed to delete chat."
+            defaultValue: "Failed to move chat to trash."
+          })
+        )
+      }
+    },
+    [clearChat, confirmDanger, queryClient, serverChatId, setPinnedChatIds, t]
+  )
+
+  const handleRestoreChat = React.useCallback(
+    async (chat: ServerChatHistoryItem) => {
+      try {
+        await tldwClient.restoreChat(chat.id, {
+          expectedVersion: chat.version ?? undefined
+        })
+        queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
+        message.success(
+          t("common:chatRestored", {
+            defaultValue: "Chat restored."
+          })
+        )
+      } catch (err) {
+        console.error("[ServerChatList] Failed to restore chat", {
+          error: err,
+          chatId: chat.id
+        })
+        message.error(
+          t("common:restoreChatError", {
+            defaultValue: "Failed to restore chat."
+          })
+        )
+      }
+    },
+    [queryClient, t]
+  )
+
+  const handleHardDeleteChat = React.useCallback(
+    async (chat: ServerChatHistoryItem) => {
+      const ok = await confirmDanger({
+        title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
+        content: t("common:deleteHistoryPermanentlyConfirmation", {
+          defaultValue: "Delete this chat permanently? This cannot be undone."
+        }),
+        okText: t("common:deletePermanently", {
+          defaultValue: "Delete permanently"
+        }),
+        cancelText: t("common:cancel", { defaultValue: "Cancel" })
+      })
+      if (!ok) return
+
+      try {
+        await tldwClient.deleteChat(chat.id, {
+          expectedVersion: chat.version ?? undefined,
+          hardDelete: true
+        })
+        setPinnedChatIds((prev) => (prev || []).filter((id) => id !== chat.id))
+        queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
+        if (serverChatId === chat.id) {
+          clearChat()
+        }
+      } catch (err) {
+        console.error("[ServerChatList] Failed to permanently delete chat", {
+          error: err,
+          chatId: chat.id
+        })
+        message.error(
+          t("common:deleteChatError", {
+            defaultValue: "Failed to delete chat permanently."
           })
         )
       }
@@ -570,9 +736,10 @@ export function ServerChatList({
         toggleChatSelected(chat.id)
         return
       }
+      if (isTrashView) return
       selectServerChat(chat)
     },
-    [selectionMode, selectServerChat, toggleChatSelected]
+    [isTrashView, selectionMode, selectServerChat, toggleChatSelected]
   )
 
   const selectionPropsForChat = React.useCallback(
@@ -588,6 +755,12 @@ export function ServerChatList({
   )
 
   const openBulkDeleteConfirm = React.useCallback(() => {
+    setBulkConfirmAction("trash")
+    setBulkDeleteConfirmOpen(true)
+  }, [])
+
+  const openBulkHardDeleteConfirm = React.useCallback(() => {
+    setBulkConfirmAction("hard_delete")
     setBulkDeleteConfirmOpen(true)
   }, [])
 
@@ -603,40 +776,166 @@ export function ServerChatList({
     setBulkDeleteConfirmOpen(false)
   }, [])
 
-  const handleBulkDelete = React.useCallback(async () => {
+  const handleBulkRestore = React.useCallback(async () => {
+    if (selectedChats.length === 0) return
+
+    setIsBulkDeleting(true)
     try {
-      const result = await applyBulkTrash()
-      if (!result) return
-      const { failedConversationIds } = result
-      setPinnedChatIds((prev) =>
-        (prev || []).filter(
-          (id) =>
-            !selectedConversationIds.includes(id) ||
-            failedConversationIds.has(id)
+      const results = await Promise.allSettled(
+        selectedChats.map((chat) =>
+          tldwClient.restoreChat(chat.id, {
+            expectedVersion: chat.version ?? undefined
+          })
         )
       )
+      const restoredConversationIds = new Set<string>()
+      const failedConversationIds = new Set<string>()
+      results.forEach((result, index) => {
+        const chat = selectedChats[index]
+        if (!chat) return
+        if (result.status === "fulfilled") {
+          restoredConversationIds.add(chat.id)
+        } else {
+          failedConversationIds.add(chat.id)
+        }
+      })
+
+      const failureCount = failedConversationIds.size
+      if (failureCount === 0) {
+        message.success(
+          t("sidepanel:multiSelect.restoreSuccess", {
+            defaultValue: "Chats restored."
+          })
+        )
+      } else if (failureCount === selectedChats.length) {
+        message.error(
+          t("sidepanel:multiSelect.restoreFailed", {
+            defaultValue: "Unable to restore selected chats."
+          })
+        )
+      } else {
+        message.error(
+          t("sidepanel:multiSelect.restorePartial", {
+            defaultValue: "Some chats could not be restored."
+          })
+        )
+      }
+
+      if (restoredConversationIds.size > 0) {
+        queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
+      }
       setSelectedChatIds(
-        selectedConversationIds.filter((id) =>
-          failedConversationIds.has(id)
-        )
+        selectedChats
+          .map((chat) => chat.id)
+          .filter((id) => failedConversationIds.has(id))
       )
+    } catch (error) {
+      console.error("[ServerChatList] Failed to bulk restore chats", {
+        error,
+        selectedCount: selectedChats.length
+      })
+      message.error(
+        t("sidepanel:multiSelect.restoreFailed", {
+          defaultValue: "Unable to restore selected chats."
+        })
+      )
+    } finally {
+      setIsBulkDeleting(false)
+    }
+  }, [queryClient, selectedChats, t])
+
+  const handleBulkDelete = React.useCallback(async () => {
+    if (selectedChats.length === 0) return
+
+    setIsBulkDeleting(true)
+    try {
+      if (bulkConfirmAction === "hard_delete") {
+        const results = await Promise.allSettled(
+          selectedChats.map((chat) =>
+            tldwClient.deleteChat(chat.id, {
+              expectedVersion: chat.version ?? undefined,
+              hardDelete: true
+            })
+          )
+        )
+        const deletedConversationIds = new Set<string>()
+        const failedConversationIds = new Set<string>()
+        results.forEach((result, index) => {
+          const chat = selectedChats[index]
+          if (!chat) return
+          if (result.status === "fulfilled") {
+            deletedConversationIds.add(chat.id)
+          } else {
+            failedConversationIds.add(chat.id)
+          }
+        })
+
+        const failureCount = failedConversationIds.size
+        if (failureCount === 0) {
+          message.success(
+            t("sidepanel:multiSelect.deleteSuccess", {
+              defaultValue: "Chats deleted permanently."
+            })
+          )
+        } else if (failureCount === selectedChats.length) {
+          message.error(
+            t("sidepanel:multiSelect.deleteFailed", {
+              defaultValue: "Unable to delete selected chats."
+            })
+          )
+        } else {
+          message.error(
+            t("sidepanel:multiSelect.deletePartial", {
+              defaultValue: "Some chats could not be deleted."
+            })
+          )
+        }
+
+        setPinnedChatIds((prev) =>
+          (prev || []).filter((id) => !deletedConversationIds.has(id))
+        )
+        const selectedIds = selectedChats.map((chat) => chat.id)
+        setSelectedChatIds(selectedIds.filter((id) => failedConversationIds.has(id)))
+        if (serverChatId && deletedConversationIds.has(serverChatId)) {
+          clearChat()
+        }
+      } else {
+        const result = await applyBulkDelete()
+        if (!result) return
+        const { deletedConversationIds, failedConversationIds } = result
+        setPinnedChatIds((prev) =>
+          (prev || []).filter((id) => !deletedConversationIds.has(id))
+        )
+        setSelectedChatIds(
+          selectedConversationIds.filter((id) => failedConversationIds.has(id))
+        )
+        if (serverChatId && deletedConversationIds.has(serverChatId)) {
+          clearChat()
+        }
+      }
       queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
       setBulkDeleteConfirmOpen(false)
     } catch (error) {
       console.error("[ServerChatList] Failed to bulk delete chats", {
         error,
-        selectedCount: selectedConversationIds.length
+        selectedCount: selectedChats.length
       })
       message.error(
         t("sidepanel:multiSelect.deleteFailed", {
-          defaultValue: "Unable to move chats to trash."
+          defaultValue: "Unable to delete selected chats."
         })
       )
+    } finally {
+      setIsBulkDeleting(false)
     }
   }, [
-    applyBulkTrash,
+    applyBulkDelete,
+    bulkConfirmAction,
+    clearChat,
     queryClient,
+    selectedChats,
     selectedConversationIds,
+    serverChatId,
     setPinnedChatIds,
     t
   ])
@@ -683,9 +982,15 @@ export function ServerChatList({
     return (
       <div className={cn("flex justify-center items-center py-8", className)}>
         <Empty
-          description={t("common:chatSidebar.noServerChats", {
-            defaultValue: "No server chats yet"
-          })}
+          description={
+            isTrashView
+              ? t("common:chatSidebar.trashEmpty", {
+                  defaultValue: "Trash is empty."
+                })
+              : t("common:chatSidebar.noServerChats", {
+                  defaultValue: "No server chats yet"
+                })
+          }
         />
       </div>
     )
@@ -723,7 +1028,7 @@ export function ServerChatList({
             disabled={renameLoading}
           />
           {renameError && (
-            <div className="mt-1 text-xs text-red-500">{renameError}</div>
+            <div className="mt-1 text-xs text-danger">{renameError}</div>
           )}
         </Modal>
       )}
@@ -754,6 +1059,48 @@ export function ServerChatList({
           />
         </Modal>
       )}
+      <div className="px-2 pt-1">
+        <label id="chat-sidebar-type-filter-label" className="sr-only">
+          {t("common:chatSidebar.filter.label", {
+            defaultValue: "Chat type filter"
+          })}
+        </label>
+        <Select<SidebarServerChatFilterValue>
+          value={chatTypeFilter}
+          onChange={(value) => {
+            void setChatTypeFilter(value)
+          }}
+          size="small"
+          className="w-full"
+          aria-labelledby="chat-sidebar-type-filter-label"
+          options={[
+            {
+              value: "all",
+              label: t("common:chatSidebar.filter.allChats", {
+                defaultValue: "All Chats"
+              })
+            },
+            {
+              value: "character",
+              label: t("common:chatSidebar.filter.characterChats", {
+                defaultValue: "Character Chats"
+              })
+            },
+            {
+              value: "non_character",
+              label: t("common:chatSidebar.filter.nonCharacterChats", {
+                defaultValue: "Non-Character Chats"
+              })
+            },
+            {
+              value: "trash",
+              label: t("common:chatSidebar.filter.trash", {
+                defaultValue: "Trash"
+              })
+            }
+          ]}
+        />
+      </div>
       {selectionMode && (
         <div className="sticky top-0 z-10 border-b border-border bg-surface2 px-2 py-2">
           <div className="flex items-center justify-between text-xs text-text-subtle">
@@ -783,86 +1130,195 @@ export function ServerChatList({
             </div>
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={openBulkFolderPicker}
-              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2"
-              disabled={selectedChatIds.length === 0}
-            >
-              <FolderPlus className="size-3.5" />
-              {t("sidepanel:multiSelect.addToFolder", "Add to folders")}
-            </button>
-            <button
-              type="button"
-              onClick={openBulkTagPicker}
-              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2"
-              disabled={selectedChatIds.length === 0}
-            >
-              <Tag className="size-3.5" />
-              {t("sidepanel:multiSelect.addTags", "Add tags")}
-            </button>
-            <button
-              type="button"
-              onClick={openBulkDeleteConfirm}
-              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-red-600 hover:bg-surface2"
-              disabled={selectedChatIds.length === 0}
-            >
-              <Trash2 className="size-3.5" />
-              {t("common:delete", "Delete")}
-            </button>
+            {!isTrashView && (
+              <>
+                <button
+                  type="button"
+                  onClick={openBulkFolderPicker}
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2"
+                  disabled={selectedChatIds.length === 0}
+                >
+                  <FolderPlus className="size-3.5" />
+                  {t("sidepanel:multiSelect.addToFolder", "Add to folders")}
+                </button>
+                <button
+                  type="button"
+                  onClick={openBulkTagPicker}
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2"
+                  disabled={selectedChatIds.length === 0}
+                >
+                  <Tag className="size-3.5" />
+                  {t("sidepanel:multiSelect.addTags", "Add tags")}
+                </button>
+                <button
+                  type="button"
+                  onClick={openBulkDeleteConfirm}
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-danger hover:bg-surface2"
+                  disabled={selectedChatIds.length === 0}
+                >
+                  <Trash2 className="size-3.5" />
+                  {t("common:moveToTrash", "Move to trash")}
+                </button>
+              </>
+            )}
+            {isTrashView && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleBulkRestore}
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2"
+                  disabled={selectedChatIds.length === 0 || isBulkDeleting}
+                >
+                  <RotateCcw className="size-3.5" />
+                  {t("common:restore", "Restore")}
+                </button>
+                <button
+                  type="button"
+                  onClick={openBulkHardDeleteConfirm}
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-danger hover:bg-surface2"
+                  disabled={selectedChatIds.length === 0}
+                >
+                  <Trash2 className="size-3.5" />
+                  {t("common:deletePermanently", "Delete permanently")}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
-      {pinnedChats.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <div className="px-2 text-[11px] font-medium text-text-subtle uppercase tracking-wide">
-            {t("common:pinned", { defaultValue: "Pinned" })}
-          </div>
-          {pinnedChats.map((chat) => (
-            <ServerChatRow
-              key={chat.id}
-              chat={chat}
-              isPinned={pinnedChatSet.has(chat.id)}
-              isActive={serverChatId === chat.id}
-              openMenuFor={openMenuFor}
-              setOpenMenuFor={setOpenMenuFor}
-              onSelectChat={handleRowClick}
-              onTogglePinned={togglePinned}
-              onOpenSettings={handleOpenSettings}
-              onRenameChat={handleRenameChat}
-              onCreateTable={handleCreateTable}
-              onEditTopic={handleEditTopic}
-              onDeleteChat={handleDeleteChat}
-              onUpdateState={handleUpdateState}
-              {...selectionPropsForChat(chat.id)}
-              t={t}
-            />
-          ))}
+      {orderedChats.length === 0 ? (
+        <div className="px-2 py-8">
+          <Empty
+            description={t("common:chatSidebar.noChatsForFilter", {
+              defaultValue:
+                chatTypeFilter === "character"
+                  ? "No character chats found."
+                  : chatTypeFilter === "non_character"
+                    ? "No non-character chats found."
+                    : chatTypeFilter === "trash"
+                      ? "Trash is empty."
+                    : "No chats found."
+            })}
+          />
         </div>
-      )}
-      {unpinnedChats.length > 0 && (
-        <div className={cn("flex flex-col gap-2", pinnedChats.length > 0 && "mt-3")}>
-          {unpinnedChats.map((chat) => (
-            <ServerChatRow
-              key={chat.id}
-              chat={chat}
-              isPinned={pinnedChatSet.has(chat.id)}
-              isActive={serverChatId === chat.id}
-              openMenuFor={openMenuFor}
-              setOpenMenuFor={setOpenMenuFor}
-              onSelectChat={handleRowClick}
-              onTogglePinned={togglePinned}
-              onOpenSettings={handleOpenSettings}
-              onRenameChat={handleRenameChat}
-              onCreateTable={handleCreateTable}
-              onEditTopic={handleEditTopic}
-              onDeleteChat={handleDeleteChat}
-              onUpdateState={handleUpdateState}
-              {...selectionPropsForChat(chat.id)}
-              t={t}
-            />
-          ))}
-        </div>
+      ) : (
+        <>
+          {pagedPinnedChats.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <div className="px-2 text-[11px] font-medium text-text-subtle uppercase tracking-wide">
+                {t("common:pinned", { defaultValue: "Pinned" })}
+              </div>
+              {pagedPinnedChats.map((chat) => (
+                <ServerChatRow
+                  key={chat.id}
+                  chat={chat}
+                  isTrashView={isTrashView}
+                  isPinned={pinnedChatSet.has(chat.id)}
+                  isActive={serverChatId === chat.id}
+                  openMenuFor={openMenuFor}
+                  setOpenMenuFor={setOpenMenuFor}
+                  onSelectChat={handleRowClick}
+                  onTogglePinned={togglePinned}
+                  onOpenSettings={handleOpenSettings}
+                  onRenameChat={handleRenameChat}
+                  onCreateTable={handleCreateTable}
+                  onEditTopic={handleEditTopic}
+                  onDeleteChat={isTrashView ? handleHardDeleteChat : handleMoveChatToTrash}
+                  onRestoreChat={handleRestoreChat}
+                  onUpdateState={handleUpdateState}
+                  {...selectionPropsForChat(chat.id)}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
+          {pagedUnpinnedChats.length > 0 && (
+            <div
+              className={cn(
+                "flex flex-col gap-2",
+                pagedPinnedChats.length > 0 && "mt-3"
+              )}
+            >
+              {pagedUnpinnedChats.map((chat) => (
+                <ServerChatRow
+                  key={chat.id}
+                  chat={chat}
+                  isTrashView={isTrashView}
+                  isPinned={pinnedChatSet.has(chat.id)}
+                  isActive={serverChatId === chat.id}
+                  openMenuFor={openMenuFor}
+                  setOpenMenuFor={setOpenMenuFor}
+                  onSelectChat={handleRowClick}
+                  onTogglePinned={togglePinned}
+                  onOpenSettings={handleOpenSettings}
+                  onRenameChat={handleRenameChat}
+                  onCreateTable={handleCreateTable}
+                  onEditTopic={handleEditTopic}
+                  onDeleteChat={isTrashView ? handleHardDeleteChat : handleMoveChatToTrash}
+                  onRestoreChat={handleRestoreChat}
+                  onUpdateState={handleUpdateState}
+                  {...selectionPropsForChat(chat.id)}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
+          {hasMultiplePages && (
+            <div className="mt-3 border-t border-border px-2 pt-3">
+              <div className="mb-2 text-xs text-text-subtle">
+                {t("common:chatSidebar.paginationRange", {
+                  defaultValue: "Showing {{start}}-{{end}} of {{total}} chats",
+                  start: pageStartNumber,
+                  end: pageEndNumber,
+                  total: orderedChats.length
+                })}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handlePreviousPage}
+                  disabled={currentPageSafe <= 1}
+                  className="rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {t("common:previous", { defaultValue: "Previous" })}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNextPage}
+                  disabled={currentPageSafe >= totalPages}
+                  className="rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {t("common:next", { defaultValue: "Next" })}
+                </button>
+                <span className="text-xs text-text-subtle">
+                  {t("common:pageOf", {
+                    defaultValue: "Page {{page}} of {{pages}}",
+                    page: currentPageSafe,
+                    pages: totalPages
+                  })}
+                </span>
+                <Input
+                  value={pageJumpValue}
+                  onChange={(event) => setPageJumpValue(event.target.value)}
+                  onPressEnter={handleJumpToPage}
+                  size="small"
+                  className="w-16"
+                  inputMode="numeric"
+                  aria-label={t("common:chatSidebar.pageNumber", {
+                    defaultValue: "Page number"
+                  })}
+                />
+                <button
+                  type="button"
+                  onClick={handleJumpToPage}
+                  className="rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2"
+                >
+                  {t("common:go", { defaultValue: "Go" })}
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
       <React.Suspense fallback={null}>
         {bulkFolderPickerOpen && (
@@ -886,20 +1342,36 @@ export function ServerChatList({
         open={bulkDeleteConfirmOpen}
         onCancel={handleBulkDeleteConfirmClose}
         onOk={handleBulkDelete}
-        okText={t("sidepanel:multiSelect.deleteConfirmOk", "Move to trash")}
+        okText={
+          bulkConfirmAction === "hard_delete"
+            ? t("common:deletePermanently", "Delete permanently")
+            : t("common:moveToTrash", "Move to trash")
+        }
         cancelText={t("common:cancel", "Cancel")}
-        okButtonProps={{ danger: true }}
-        title={t(
-          "sidepanel:multiSelect.deleteConfirmTitle",
-          "Move chats to trash?"
-        )}
+        okButtonProps={{ danger: true, loading: isBulkDeleting }}
+        title={
+          bulkConfirmAction === "hard_delete"
+            ? t(
+                "sidepanel:multiSelect.deletePermanentConfirmTitle",
+                "Delete selected chats permanently?"
+              )
+            : t(
+                "sidepanel:multiSelect.trashConfirmTitle",
+                "Move selected chats to trash?"
+              )
+        }
         destroyOnHidden
       >
         <p>
-          {t(
-            "sidepanel:multiSelect.deleteConfirmBody",
-            "This will hide the selected chats by tagging them as Trash."
-          )}
+          {bulkConfirmAction === "hard_delete"
+            ? t(
+                "sidepanel:multiSelect.deletePermanentConfirmBody",
+                "This will permanently delete the selected chats and cannot be undone."
+              )
+            : t(
+                "sidepanel:multiSelect.trashConfirmBody",
+                "This will move the selected chats to trash."
+              )}
         </p>
       </Modal>
     </div>

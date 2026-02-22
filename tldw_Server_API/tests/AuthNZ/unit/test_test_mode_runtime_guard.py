@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.testing import (
+    is_test_mode,
     is_production_like_env,
     validate_test_runtime_flags,
 )
@@ -59,6 +60,19 @@ def test_validate_test_runtime_flags_rejects_even_with_override_without_pytest_r
         validate_test_runtime_flags()
 
 
+def test_is_test_mode_accepts_single_letter_y(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_test_flags(monkeypatch)
+    monkeypatch.setenv("TEST_MODE", "y")
+    assert is_test_mode() is True
+
+
+def test_is_test_mode_checks_test_mode_and_tldw_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_test_flags(monkeypatch)
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "y")
+    assert is_test_mode() is True
+
+
 def test_is_production_like_env_detects_multiple_markers(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_test_flags(monkeypatch)
     assert is_production_like_env() is False
@@ -89,3 +103,35 @@ def test_app_startup_guard_allows_explicit_pytest_runtime(monkeypatch: pytest.Mo
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests::authnz::startup_guard")
     validate_test_runtime_flags()
+
+
+def test_app_startup_fails_fast_when_lazy_evaluations_warmup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_test_flags(monkeypatch)
+
+    from tldw_Server_API.app import main as main_mod
+    from tldw_Server_API.app.core.Evaluations import connection_pool as eval_pool
+
+    monkeypatch.setattr(main_mod, "_TEST_MODE", False, raising=True)
+    monkeypatch.setattr(main_mod, "route_enabled", lambda key, **_kwargs: key == "evaluations")
+
+    def _boom():
+        raise RuntimeError("forced warmup failure")
+
+    monkeypatch.setattr(eval_pool, "get_connection_manager", _boom)
+
+    with pytest.raises(RuntimeError, match="forced warmup failure|lazy subsystem warmup failed"):
+        with TestClient(main_mod.app):
+            pass
+
+
+def test_main_loguru_reconfig_override_accepts_single_letter_y(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_test_flags(monkeypatch)
+    monkeypatch.setenv("TLDW_ALLOW_LOGURU_RECONFIG", "y")
+
+    from tldw_Server_API.app import main as main_mod
+
+    assert main_mod._caller_allowed_for_loguru_config() is True

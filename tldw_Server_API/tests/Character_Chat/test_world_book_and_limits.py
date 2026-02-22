@@ -98,12 +98,12 @@ async def test_world_book_entries_and_attach_flow():
         try:
             crl._rate_limiter = None
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.asyncio
 async def test_legacy_complete_endpoint_rate_limit():
-    if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("Character chat rate limits are enforced by Resource Governor when enabled.")
     tmpdir = tempfile.mkdtemp(prefix="chacha_rate_")
     env_overrides = {
@@ -176,4 +176,4 @@ async def test_legacy_complete_endpoint_rate_limit():
         try:
             crl._rate_limiter = None
         except Exception:
-            pass
+            _ = None

@@ -176,7 +176,7 @@ async def test_non_json_body_skips_model_enforcement_sqlite(tmp_path):
         except Exception as e:
             # Route may raise on non-JSON; middleware behavior under test is "no 403/402" which still holds
             # when the request is not blocked by allowlists/budget middleware.
-            pass
+            _ = e
 
 
 @pytest.mark.asyncio
@@ -230,4 +230,4 @@ async def test_invalid_json_body_skips_model_enforcement_sqlite(tmp_path):
             assert r.status_code not in (403, 402), r.text
         except Exception:
             # Invalid JSON can trip downstream parsing; we're only asserting middleware does not block.
-            pass
+            _ = None

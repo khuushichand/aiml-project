@@ -71,13 +71,13 @@ def jobs_db_path(tmp_path, monkeypatch):
         with audiobooks_endpoints._job_manager_lock:
             audiobooks_endpoints._job_manager_cache.clear()
     except Exception:
-        pass
+        _ = None
     yield db_path
     try:
         with audiobooks_endpoints._job_manager_lock:
             audiobooks_endpoints._job_manager_cache.clear()
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.fixture()

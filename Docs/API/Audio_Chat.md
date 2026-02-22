@@ -50,7 +50,7 @@ Purpose: speech in → transcript → LLM → speech out (optional action execut
 ## Testing / Harness
 - Unit: validation, action execution, error mapping.
 - Integration: `tldw_Server_API/tests/Audio/test_audio_chat_endpoint.py`, `test_speech_chat_service.py`.
-- Harness: `python Helper_Scripts/voice_latency_harness/run.py --out out.json --short` (metrics scrape) or run a real turn (omit `--short`; pass `--api-key`/`--base-url` if needed). Outputs p50/p90 for STT/TTS/voice-to-voice/audio_chat latencies.
+- Harness: `python Helper_Scripts/voice_latency_harness/run.py --out out.json --short` (metrics scrape) or run a real turn (omit `--short`; pass `--api-key`/`--base-url` if needed). Output JSON includes `run_id`, `fixture`, `runs`, and `metrics` with p50/p90 values for STT/TTS/voice-to-voice (and audio_chat when available).
 
 # /api/v1/audio/chat/stream (Streaming Voice Chat v2)
 
@@ -67,7 +67,7 @@ Purpose: low-latency voice commands with partial STT, streaming LLM deltas, and 
 ## Server Frames
 - STT partial/final frames mirror `/audio/stream/transcribe` plus `full_transcript` with `voice_to_voice_start` + `auto_commit`.
 - LLM streaming: `llm_delta` for each text chunk; `llm_message` + `assistant_summary` at end.
-- TTS streaming: binary audio frames; bracketed by `tts_start` / `tts_done`. Errors use `{type:"error", error_type:"...", message, quota?}`.
+- TTS streaming: binary audio frames; bracketed by `tts_start` / `tts_done`. Errors use canonical `{type:"error", code:"...", message, data?}`; compatibility alias `error_type` is included when `AUDIO_WS_COMPAT_ERROR_TYPE=1`.
 
 ## Limits & Metrics
 - Auth/quotas: API key/JWT/single-user key; per-user concurrency guard; minute accounting per chunk with bounded fail-open; quota/rate errors close with 4003 (1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`).

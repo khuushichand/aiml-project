@@ -18,6 +18,11 @@ class WorldBookEntryBase(BaseModel):
     """Base schema for world book entries."""
     keywords: list[str] = Field(..., min_length=1, description="Keywords to match")
     content: str = Field(..., min_length=1, description="Content to inject when matched")
+    group: Optional[str] = Field(
+        None,
+        max_length=120,
+        description="Optional entry group/category label for organization.",
+    )
     appendable: Optional[bool] = Field(
         None,
         description="Whether this entry can be concatenated with other appendable blocks",
@@ -39,6 +44,7 @@ class WorldBookEntryUpdate(BaseModel):
     """Schema for updating a world book entry."""
     keywords: Optional[list[str]] = Field(None, description="New keywords")
     content: Optional[str] = Field(None, description="New content (empty string allowed; validated server-side)")
+    group: Optional[str] = Field(None, max_length=120, description="New entry group/category label")
     appendable: Optional[bool] = Field(None, description="New appendable flag")
     priority: Optional[int] = Field(None, description="New priority")
     enabled: Optional[bool] = Field(None, description="New enabled status")
@@ -172,6 +178,14 @@ class WorldBookListResponse(BaseModel):
     total: int = Field(..., description="Total number of world books")
     enabled_count: int = Field(..., description="Number of enabled world books")
     disabled_count: int = Field(..., description="Number of disabled world books")
+
+
+class WorldBookRuntimeConfig(BaseModel):
+    """Runtime world-book config surfaced to frontend UIs."""
+    max_recursive_depth: int = Field(
+        ...,
+        description="Maximum recursive scanning depth before recursive matching stops."
+    )
 
 
 class EntryListResponse(BaseModel):

@@ -87,7 +87,7 @@ export const TagSelector: React.FC<TagSelectorProps> = ({
           closable
           closeIcon={<X className="h-3 w-3" />}
           onClose={() => handleRemoveTag(tag)}
-          className="flex items-center gap-1 border-0 bg-zinc-100 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
+          className="flex items-center gap-1 border-0 bg-surface text-text"
         >
           {tag}
         </Tag>
@@ -109,12 +109,12 @@ export const TagSelector: React.FC<TagSelectorProps> = ({
           />
           {/* Suggestions dropdown */}
           {inputValue && filteredSuggestions.length > 0 && (
-            <div className="absolute left-0 top-full z-10 mt-1 max-h-32 w-40 overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+            <div className="absolute left-0 top-full z-10 mt-1 max-h-32 w-40 overflow-auto rounded-md border border-border bg-surface shadow-lg">
               {filteredSuggestions.slice(0, 5).map((suggestion) => (
                 <button
                   key={suggestion}
                   type="button"
-                  className="w-full px-3 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
+                  className="w-full px-3 py-1.5 text-left text-sm hover:bg-surface"
                   onMouseDown={(e) => {
                     e.preventDefault()
                     handleSuggestionClick(suggestion)
@@ -130,7 +130,7 @@ export const TagSelector: React.FC<TagSelectorProps> = ({
         <button
           type="button"
           onClick={() => setInputVisible(true)}
-          className="flex items-center gap-1 rounded border border-dashed border-zinc-300 px-2 py-0.5 text-xs text-zinc-500 transition-colors hover:border-zinc-400 hover:text-zinc-600 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-300"
+          className="flex items-center gap-1 rounded border border-dashed border-border px-2 py-0.5 text-xs text-text-muted transition-colors hover:border-border-strong hover:text-text"
         >
           <Plus className="h-3 w-3" />
           {placeholder}

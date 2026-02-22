@@ -12,6 +12,7 @@ import {
   Popover,
   Radio,
   Select,
+  Space,
   Switch,
   Tooltip,
   message
@@ -97,6 +98,19 @@ import { generateID } from "@/db/dexie/helpers"
 import type { UploadedFile } from "@/db/dexie/types"
 import { formatFileSize } from "@/utils/format"
 import { formatPinnedResults } from "@/utils/rag-format"
+import {
+  buildAvailableChatModelIds,
+  findUnavailableChatModel,
+  normalizeChatModelId
+} from "@/utils/chat-model-availability"
+import {
+  DEFAULT_CHARACTER_STORAGE_KEY,
+  defaultCharacterStorage,
+  isFreshChatState,
+  resolveCharacterSelectionId,
+  shouldApplyDefaultCharacter,
+  shouldResetDefaultCharacterBootstrap
+} from "@/utils/default-character-preference"
 import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings"
 import { browser } from "wxt/browser"
 import type { Character } from "@/types/character"
@@ -106,6 +120,10 @@ type Props = {
   inputRef?: React.RefObject<HTMLTextAreaElement>
   onHeightChange?: (height: number) => void
   draftKey?: string
+}
+
+type DefaultCharacterPreferenceQueryResult = {
+  defaultCharacterId: string | null
 }
 
 export const SidepanelForm = ({
@@ -128,7 +146,25 @@ export const SidepanelForm = ({
     false
   )
   const [imageBackendDefault] = useStorage("imageBackendDefault", "")
-  const [storedCharacter] = useSelectedCharacter<Character | null>(null)
+  const [storedCharacter, setStoredCharacter] =
+    useSelectedCharacter<Character | null>(null)
+  const [defaultCharacter, setDefaultCharacter] = useStorage<Character | null>(
+    {
+      key: DEFAULT_CHARACTER_STORAGE_KEY,
+      instance: defaultCharacterStorage
+    },
+    null
+  )
+  const { data: defaultCharacterPreference } = useQuery<DefaultCharacterPreferenceQueryResult>({
+    queryKey: ["tldw:defaultCharacterPreference:chat"],
+    queryFn: async () => {
+      await tldwClient.initialize()
+      const defaultCharacterId = await tldwClient.getDefaultCharacterPreference()
+      return { defaultCharacterId }
+    },
+    staleTime: 60 * 1000,
+    throwOnError: false
+  })
   const [contextFileMaxSizeMb] = useSetting(CONTEXT_FILE_SIZE_MB_SETTING)
   const maxContextFileSizeBytes = React.useMemo(
     () => contextFileMaxSizeMb * 1024 * 1024,
@@ -166,6 +202,10 @@ export const SidepanelForm = ({
     }
     return options
   }, [voiceChatModels, t])
+  const availableChatModelIds = React.useMemo(
+    () => buildAvailableChatModelIds(voiceChatModels as any[]),
+    [voiceChatModels]
+  )
   // STT settings consolidated into a single hook
   const sttSettings = useSttSettings()
   const {
@@ -659,14 +699,110 @@ export const SidepanelForm = ({
   )
 
   // Character selection state
+  const storedCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(storedCharacter),
+    [storedCharacter]
+  )
+  const localDefaultCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(defaultCharacter),
+    [defaultCharacter]
+  )
+  const serverDefaultCharacterId = defaultCharacterPreference?.defaultCharacterId
+  const effectiveDefaultCharacter = React.useMemo<Character | null>(() => {
+    if (typeof serverDefaultCharacterId === "undefined") {
+      return defaultCharacter
+    }
+    if (!serverDefaultCharacterId) {
+      return null
+    }
+    if (
+      localDefaultCharacterId === serverDefaultCharacterId &&
+      defaultCharacter
+    ) {
+      return defaultCharacter
+    }
+    return { id: serverDefaultCharacterId } as Character
+  }, [
+    defaultCharacter,
+    localDefaultCharacterId,
+    serverDefaultCharacterId
+  ])
+  const effectiveDefaultCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(effectiveDefaultCharacter),
+    [effectiveDefaultCharacter]
+  )
+  const isFreshChat = React.useMemo(
+    () => isFreshChatState(serverChatId, messages.length),
+    [messages.length, serverChatId]
+  )
+  const defaultCharacterBootstrapAppliedRef = React.useRef(false)
+  const previousFreshChatRef = React.useRef(isFreshChat)
   const [selectedCharacterId, setSelectedCharacterId] = React.useState<
     string | null
-  >(storedCharacter?.id ? String(storedCharacter.id) : null)
+  >(storedCharacterId)
 
   React.useEffect(() => {
-    const nextId = storedCharacter?.id ? String(storedCharacter.id) : null
-    setSelectedCharacterId((prev) => (prev === nextId ? prev : nextId))
-  }, [storedCharacter?.id])
+    setSelectedCharacterId((prev) =>
+      prev === storedCharacterId ? prev : storedCharacterId
+    )
+  }, [storedCharacterId])
+
+  React.useEffect(() => {
+    if (typeof serverDefaultCharacterId === "undefined") return
+
+    if (!serverDefaultCharacterId) {
+      if (localDefaultCharacterId) {
+        void setDefaultCharacter(null)
+      }
+      return
+    }
+
+    if (localDefaultCharacterId === serverDefaultCharacterId) return
+    void setDefaultCharacter({ id: serverDefaultCharacterId } as Character)
+  }, [
+    localDefaultCharacterId,
+    serverDefaultCharacterId,
+    setDefaultCharacter
+  ])
+
+  React.useEffect(() => {
+    defaultCharacterBootstrapAppliedRef.current = false
+  }, [effectiveDefaultCharacterId])
+
+  React.useEffect(() => {
+    if (
+      shouldResetDefaultCharacterBootstrap(
+        previousFreshChatRef.current,
+        isFreshChat
+      )
+    ) {
+      defaultCharacterBootstrapAppliedRef.current = false
+    }
+    previousFreshChatRef.current = isFreshChat
+  }, [isFreshChat])
+
+  React.useEffect(() => {
+    if (!effectiveDefaultCharacter || !effectiveDefaultCharacterId) return
+    if (
+      !shouldApplyDefaultCharacter({
+        defaultCharacterId: effectiveDefaultCharacterId,
+        selectedCharacterId: storedCharacterId,
+        isFreshChat,
+        hasAppliedInSession: defaultCharacterBootstrapAppliedRef.current
+      })
+    ) {
+      return
+    }
+
+    defaultCharacterBootstrapAppliedRef.current = true
+    void setStoredCharacter(effectiveDefaultCharacter)
+  }, [
+    effectiveDefaultCharacter,
+    effectiveDefaultCharacterId,
+    isFreshChat,
+    setStoredCharacter,
+    storedCharacterId
+  ])
 
   const {
     filteredSlashCommands,
@@ -1122,8 +1258,23 @@ export const SidepanelForm = ({
     }
     await stopListening()
     if (!intent.isImageCommand) {
-      if (!selectedModel || selectedModel.length === 0) {
+      const normalizedSelectedModel = normalizeChatModelId(selectedModel)
+      if (!normalizedSelectedModel) {
         form.setFieldError("message", t("formError.noModel"))
+        return
+      }
+      const unavailableModel = findUnavailableChatModel(
+        [normalizedSelectedModel],
+        availableChatModelIds
+      )
+      if (unavailableModel) {
+        form.setFieldError(
+          "message",
+          t(
+            "playground:composer.validationModelUnavailableInline",
+            "Selected model is not available on this server. Refresh models or choose a different model."
+          )
+        )
         return
       }
     }
@@ -1334,7 +1485,7 @@ export const SidepanelForm = ({
 
   const voiceChatToneClass = React.useMemo(() => {
     if (voiceChat.state === "error") {
-      return "border-red-500 text-red-600"
+      return "border-danger text-danger"
     }
     if (voiceChatEnabled && voiceChat.state !== "idle") {
       return "border-primary text-primaryStrong"
@@ -1599,8 +1750,23 @@ export const SidepanelForm = ({
     if (!isConnectionReady) return
     await stopListening()
     stopServerDictation()
-    if (!selectedModel || selectedModel.length === 0) {
+    const normalizedSelectedModel = normalizeChatModelId(selectedModel)
+    if (!normalizedSelectedModel) {
       form.setFieldError("message", t("formError.noModel"))
+      return
+    }
+    const unavailableModel = findUnavailableChatModel(
+      [normalizedSelectedModel],
+      availableChatModelIds
+    )
+    if (unavailableModel) {
+      form.setFieldError(
+        "message",
+        t(
+          "playground:composer.validationModelUnavailableInline",
+          "Selected model is not available on this server. Refresh models or choose a different model."
+        )
+      )
       return
     }
     await sendMessage({
@@ -1693,6 +1859,33 @@ export const SidepanelForm = ({
     }
   }, [defaultInternetSearchOn])
 
+  React.useEffect(() => {
+    const handler = (
+      event: CustomEvent<{ message?: string; append?: boolean; ifEmptyOnly?: boolean }>
+    ) => {
+      const incoming = String(event.detail?.message || "").trim()
+      if (!incoming) return
+      const current = String(form.values.message || "")
+      if (event.detail?.ifEmptyOnly && current.trim().length > 0) return
+      const nextMessage =
+        event.detail?.append && current.trim().length > 0
+          ? `${current}\n\n${incoming}`
+          : incoming
+      form.setFieldValue("message", nextMessage)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    }
+    window.addEventListener(
+      "tldw:set-composer-message",
+      handler as EventListener
+    )
+    return () => {
+      window.removeEventListener(
+        "tldw:set-composer-message",
+        handler as EventListener
+      )
+    }
+  }, [form, form.values.message, textareaRef])
+
   // Clear error messages when user starts typing (they're taking action)
   // Errors persist until user interaction rather than auto-dismissing
   React.useEffect(() => {
@@ -1771,6 +1964,7 @@ export const SidepanelForm = ({
                     multiple={false}
                     tabIndex={-1}
                     aria-hidden="true"
+                    aria-label={t("playground:actions.attachImage", "Attach image") as string}
                     onChange={onInputChange}
                   />
                   <input
@@ -1782,12 +1976,13 @@ export const SidepanelForm = ({
                     multiple
                     tabIndex={-1}
                     aria-hidden="true"
+                    aria-label={t("playground:actions.attachDocument", "Attach document") as string}
                     onChange={handleContextFileChange}
                   />
                   <div
                     className={`w-full flex flex-col px-1 ${
                       !isConnectionReady
-                        ? "rounded-md border border-dashed border-amber-400 bg-amber-50/50 dark:border-amber-600 dark:bg-amber-900/10"
+                        ? "rounded-md border border-dashed border-warn bg-warn/10"
                         : ""
                     }`}>
                     {/* Connection status indicator when disconnected */}
@@ -1959,7 +2154,7 @@ export const SidepanelForm = ({
                         role="alert"
                         aria-live="assertive"
                         aria-atomic="true"
-                        className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-red-600 dark:text-red-400 animate-shake"
+                        className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-danger animate-shake"
                       >
                         <div className="flex items-center gap-2">
                           <svg className="h-3.5 w-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -1970,7 +2165,7 @@ export const SidepanelForm = ({
                         <button
                           type="button"
                           onClick={() => form.clearFieldError("message")}
-                          className="flex-shrink-0 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300"
+                          className="flex-shrink-0 text-danger hover:text-danger"
                           aria-label={t("common:dismiss", "Dismiss")}
                           title={t("common:dismiss", "Dismiss")}
                         >
@@ -2142,100 +2337,18 @@ export const SidepanelForm = ({
                                       </button>
                                     </Tooltip>
                                   )}
-                                  <Dropdown.Button
-                                    aria-label={t(
-                                      "playground:composer.submitAria",
-                                      "Send message"
-                                    )}
-                                    data-testid="chat-send"
-                                    title={sendButtonTitle}
-                                    htmlType="submit"
-                                    disabled={isSending || !isConnectionReady}
-                                    className="!justify-end !w-auto"
-                                    icon={
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        fill="none"
-                                        viewBox="0 0 24 24"
-                                        strokeWidth={1.5}
-                                        stroke="currentColor"
-                                        className="w-4 h-4">
-                                        <path
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                          d="m19.5 8.25-7.5 7.5-7.5-7.5"
-                                        />
-                                      </svg>
-                                    }
-                                    menu={{
-                                      items: [
-                                        {
-                                          key: "send-section",
-                                          type: "group",
-                                          label: t(
-                                            "playground:composer.actions",
-                                            "Send options"
-                                          ),
-                                          children: [
-                                            {
-                                              key: 1,
-                                              label: (
-                                                <Checkbox
-                                                  checked={sendWhenEnter}
-                                                  onChange={(e) =>
-                                                    setSendWhenEnter(e.target.checked)
-                                                  }>
-                                                  {t("sendWhenEnter")}
-                                                </Checkbox>
-                                              )
-                                            }
-                                          ]
-                                        },
-                                        {
-                                          type: "divider",
-                                          key: "divider-1"
-                                        },
-                                        {
-                                          key: "context-section",
-                                          type: "group",
-                                          label: t(
-                                            "playground:composer.coreTools",
-                                            "Conversation options"
-                                          ),
-                                          children: [
-                                            {
-                                              key: 2,
-                                              label: (
-                                                <Checkbox
-                                                  checked={chatMode === "rag"}
-                                                  onChange={(e) => {
-                                                    setChatMode(
-                                                      e.target.checked
-                                                        ? "rag"
-                                                        : "normal"
-                                                    )
-                                                  }}>
-                                                  {t("common:chatWithCurrentPage")}
-                                                </Checkbox>
-                                              )
-                                            },
-                                            {
-                                              key: 3,
-                                              label: (
-                                                <Checkbox
-                                                  checked={useOCR}
-                                                  onChange={(e) =>
-                                                    setUseOCR(e.target.checked)
-                                                  }>
-                                                  {t("useOCR")}
-                                                </Checkbox>
-                                              )
-                                            }
-                                          ]
-                                        }
-                                      ]
-                                    }}>
-                                    <div className="inline-flex gap-2">
+                                  <Space.Compact>
+                                    <button
+                                      aria-label={t(
+                                        "playground:composer.submitAria",
+                                        "Send message"
+                                      )}
+                                      data-testid="chat-send"
+                                      title={sendButtonTitle}
+                                      type="submit"
+                                      disabled={isSending || !isConnectionReady}
+                                      className="inline-flex min-h-[44px] items-center gap-2 rounded-l-md border border-border bg-surface px-3 text-sm text-text transition-colors hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
                                       {sendWhenEnter ? (
                                         <svg
                                           xmlns="http://www.w3.org/2000/svg"
@@ -2245,14 +2358,120 @@ export const SidepanelForm = ({
                                           strokeLinejoin="round"
                                           strokeWidth="2"
                                           className="h-4 w-4"
-                                          viewBox="0 0 24 24">
+                                          viewBox="0 0 24 24"
+                                        >
                                           <path d="M9 10L4 15 9 20"></path>
                                           <path d="M20 4v7a4 4 0 01-4 4H4"></path>
                                         </svg>
                                       ) : null}
                                       {t("common:send", "Send")}
-                                    </div>
-                                  </Dropdown.Button>
+                                    </button>
+                                    <Dropdown
+                                      disabled={isSending || !isConnectionReady}
+                                      trigger={["click"]}
+                                      menu={{
+                                        items: [
+                                          {
+                                            key: "send-section",
+                                            type: "group",
+                                            label: t(
+                                              "playground:composer.actions",
+                                              "Send options"
+                                            ),
+                                            children: [
+                                              {
+                                                key: 1,
+                                                label: (
+                                                  <Checkbox
+                                                    checked={sendWhenEnter}
+                                                    onChange={(e) =>
+                                                      setSendWhenEnter(e.target.checked)
+                                                    }>
+                                                    {t("sendWhenEnter")}
+                                                  </Checkbox>
+                                                )
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            type: "divider",
+                                            key: "divider-1"
+                                          },
+                                          {
+                                            key: "context-section",
+                                            type: "group",
+                                            label: t(
+                                              "playground:composer.coreTools",
+                                              "Conversation options"
+                                            ),
+                                            children: [
+                                              {
+                                                key: 2,
+                                                label: (
+                                                  <Checkbox
+                                                    checked={chatMode === "rag"}
+                                                    onChange={(e) => {
+                                                      setChatMode(
+                                                        e.target.checked
+                                                          ? "rag"
+                                                          : "normal"
+                                                      )
+                                                    }}>
+                                                    {t("common:chatWithCurrentPage")}
+                                                  </Checkbox>
+                                                )
+                                              },
+                                              {
+                                                key: 3,
+                                                label: (
+                                                  <Checkbox
+                                                    checked={useOCR}
+                                                    onChange={(e) =>
+                                                      setUseOCR(e.target.checked)
+                                                    }>
+                                                    {t("useOCR")}
+                                                  </Checkbox>
+                                                )
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        aria-label={
+                                          t(
+                                            "playground:composer.sendOptions",
+                                            "Open send options"
+                                          ) as string
+                                        }
+                                        title={
+                                          t(
+                                            "playground:composer.sendOptions",
+                                            "Open send options"
+                                          ) as string
+                                        }
+                                        disabled={isSending || !isConnectionReady}
+                                        className="inline-flex min-h-[44px] items-center rounded-r-md border border-l-0 border-border bg-surface px-2 text-text transition-colors hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          fill="none"
+                                          viewBox="0 0 24 24"
+                                          strokeWidth={1.5}
+                                          stroke="currentColor"
+                                          className="w-4 h-4"
+                                        >
+                                          <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            d="m19.5 8.25-7.5 7.5-7.5-7.5"
+                                          />
+                                        </svg>
+                                      </button>
+                                    </Dropdown>
+                                  </Space.Compact>
                                   {/* Current Conversation Settings button to the right of submit */}
                                   <Tooltip
                                     title={
@@ -2329,125 +2548,145 @@ export const SidepanelForm = ({
                         </>
                       ) : (
                         <>
-                          <div className="flex items-center gap-2">
-                            <Tooltip
-                              title={t("playground:actions.upload", "Attach image")}
-                            >
-                              <button
-                                type="button"
-                                onClick={openUploadDialog}
-                                className="h-9 w-9 rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                                aria-label={t(
-                                  "playground:actions.upload",
-                                  "Attach image"
-                                )}
-                                title={t(
-                                  "playground:actions.upload",
-                                  "Attach image"
-                                )}
+                          <div className="flex flex-wrap items-end gap-2">
+                            <div className="flex flex-col items-center gap-1">
+                              <Tooltip
+                                title={t("playground:actions.upload", "Attach image")}
                               >
-                                <ImageIcon className="h-4 w-4" />
-                              </button>
-                            </Tooltip>
+                                <button
+                                  type="button"
+                                  onClick={openUploadDialog}
+                                  className="h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                                  aria-label={t(
+                                    "playground:actions.upload",
+                                    "Attach image"
+                                  )}
+                                  title={t(
+                                    "playground:actions.upload",
+                                    "Attach image"
+                                  )}
+                                >
+                                  <ImageIcon className="h-4 w-4" />
+                                </button>
+                              </Tooltip>
+                              <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                {t("playground:actions.uploadShort", "Image")}
+                              </span>
+                            </div>
                             {(browserSupportsSpeechRecognition || hasServerAudio) && (
-                              <div className="flex items-center gap-1">
-                                <Tooltip
-                                  title={
-                                    voiceChatAvailable
-                                      ? voiceChatStatusLabel
-                                      : t(
-                                          "playground:voiceChat.unavailableTitle",
-                                          "Voice chat unavailable"
-                                        )
-                                  }
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={handleVoiceChatToggle}
-                                    disabled={!voiceChatAvailable || streaming}
-                                    className={`h-9 w-9 rounded-full border p-0 transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${voiceChatToneClass}`}
-                                    aria-label={voiceChatStatusLabel}
-                                  >
-                                    <Headphones className="h-4 w-4" />
-                                  </button>
-                                </Tooltip>
-                                <Popover content={voiceChatSettingsContent} trigger="click">
-                                  <button
-                                    type="button"
-                                    className="h-9 w-9 rounded-full border border-border p-0 text-text-muted hover:bg-surface2"
-                                    aria-label={t(
-                                      "playground:voiceChat.settingsButton",
-                                      "Voice chat settings"
-                                    )}
-                                  >
-                                    <Settings2 className="h-3.5 w-3.5" />
-                                  </button>
-                                </Popover>
-                                <Tooltip
-                                  title={
-                                    !speechAvailable
-                                      ? t(
-                                          "playground:actions.speechUnavailableBody",
-                                          "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-                                        )
-                                      : speechUsesServer
-                                        ? t(
-                                            "playground:tooltip.speechToTextServer",
-                                            "Dictation via your tldw server"
-                                          )
+                              <div className="flex flex-wrap items-end gap-1.5">
+                                <div className="flex flex-col items-center gap-1">
+                                  <Tooltip
+                                    title={
+                                      voiceChatAvailable
+                                        ? voiceChatStatusLabel
                                         : t(
-                                            "playground:tooltip.speechToTextBrowser",
-                                            "Dictation via browser speech recognition"
+                                            "playground:voiceChat.unavailableTitle",
+                                            "Voice chat unavailable"
                                           )
-                                  }
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={speechUsesServer ? startServerDictation : handleSpeechToggle}
-                                    disabled={!speechAvailable || voiceChatEnabled}
-                                    className={`h-9 w-9 rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50 ${
-                                      speechAvailable &&
-                                      ((speechUsesServer && isServerDictating) ||
-                                        (!speechUsesServer && isListening))
-                                        ? "border-primary text-primaryStrong"
-                                        : ""
-                                    }`}
-                                    aria-label={
-                                      !speechAvailable
-                                        ? (t(
-                                            "playground:actions.speechUnavailableTitle",
-                                            "Dictation unavailable"
-                                          ) as string)
-                                        : speechUsesServer
-                                          ? (isServerDictating
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
-                                          : (isListening
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
                                     }
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={handleVoiceChatToggle}
+                                      disabled={!voiceChatAvailable || streaming}
+                                      className={`h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border p-0 transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${voiceChatToneClass}`}
+                                      aria-label={voiceChatStatusLabel}
+                                    >
+                                      <Headphones className="h-4 w-4" />
+                                    </button>
+                                  </Tooltip>
+                                  <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                    {t("playground:voiceChat.toggleShort", "Voice")}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-center gap-1">
+                                  <Popover content={voiceChatSettingsContent} trigger="click">
+                                    <button
+                                      type="button"
+                                      className="h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border border-border p-0 text-text-muted hover:bg-surface2"
+                                      aria-label={t(
+                                        "playground:voiceChat.settingsButton",
+                                        "Voice chat settings"
+                                      )}
+                                    >
+                                      <Settings2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </Popover>
+                                  <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                    {t("playground:voiceChat.settingsShort", "Config")}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-center gap-1">
+                                  <Tooltip
                                     title={
                                       !speechAvailable
-                                        ? (t(
-                                            "playground:actions.speechUnavailableTitle",
-                                            "Dictation unavailable"
-                                          ) as string)
+                                        ? t(
+                                            "playground:actions.speechUnavailableBody",
+                                            "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
+                                          )
                                         : speechUsesServer
-                                          ? (isServerDictating
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
-                                          : (isListening
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
+                                          ? t(
+                                              "playground:tooltip.speechToTextServer",
+                                              "Dictation via your tldw server"
+                                            )
+                                          : t(
+                                              "playground:tooltip.speechToTextBrowser",
+                                              "Dictation via browser speech recognition"
+                                            )
                                     }
                                   >
-                                    <MicIcon className="h-4 w-4" />
-                                  </button>
-                                </Tooltip>
+                                    <button
+                                      type="button"
+                                      onClick={speechUsesServer ? startServerDictation : handleSpeechToggle}
+                                      disabled={!speechAvailable || voiceChatEnabled}
+                                      className={`h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50 ${
+                                        speechAvailable &&
+                                        ((speechUsesServer && isServerDictating) ||
+                                          (!speechUsesServer && isListening))
+                                          ? "border-primary text-primaryStrong"
+                                          : ""
+                                      }`}
+                                      aria-label={
+                                        !speechAvailable
+                                          ? (t(
+                                              "playground:actions.speechUnavailableTitle",
+                                              "Dictation unavailable"
+                                            ) as string)
+                                          : speechUsesServer
+                                            ? (isServerDictating
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                            : (isListening
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                      }
+                                      title={
+                                        !speechAvailable
+                                          ? (t(
+                                              "playground:actions.speechUnavailableTitle",
+                                              "Dictation unavailable"
+                                            ) as string)
+                                          : speechUsesServer
+                                            ? (isServerDictating
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                            : (isListening
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                      }
+                                    >
+                                      <MicIcon className="h-4 w-4" />
+                                    </button>
+                                  </Tooltip>
+                                  <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                    {t("playground:actions.speechShort", "Dictate")}
+                                  </span>
+                                </div>
                               </div>
                             )}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-end gap-2">
                             {!streaming ? (
                               <Button
                                 type="submit"
@@ -2459,29 +2698,34 @@ export const SidepanelForm = ({
                                   "Send message"
                                 )}
                                 title={sendButtonTitle}
-                                className="rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.12em]"
+                                className="min-h-[44px] rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.12em]"
                               >
                                 {t("common:send", "Send")}
                               </Button>
                             ) : (
-                              <Tooltip title={t("tooltip.stopStreaming")}>
-                                <button
-                                  type="button"
-                                  onClick={stopStreamingRequest}
-                                  data-testid="chat-stop-streaming"
-                                  className="h-9 w-9 rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text"
-                                  aria-label={t(
-                                    "playground:composer.stopStreaming",
-                                    "Stop streaming response"
-                                  )}
-                                  title={t(
-                                    "playground:composer.stopStreaming",
-                                    "Stop streaming response"
-                                  )}
-                                >
-                                  <StopCircleIcon className="h-4 w-4" />
-                                </button>
-                              </Tooltip>
+                              <div className="flex flex-col items-center gap-1">
+                                <Tooltip title={t("tooltip.stopStreaming")}>
+                                  <button
+                                    type="button"
+                                    onClick={stopStreamingRequest}
+                                    data-testid="chat-stop-streaming"
+                                    className="h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text"
+                                    aria-label={t(
+                                      "playground:composer.stopStreaming",
+                                      "Stop streaming response"
+                                    )}
+                                    title={t(
+                                      "playground:composer.stopStreaming",
+                                      "Stop streaming response"
+                                    )}
+                                  >
+                                    <StopCircleIcon className="h-4 w-4" />
+                                  </button>
+                                </Tooltip>
+                                <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                  {t("playground:composer.stopShort", "Stop")}
+                                </span>
+                              </div>
                             )}
                           </div>
                         </>

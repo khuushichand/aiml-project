@@ -300,7 +300,7 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
         </span>
       </div>
       {hasError && !loading && (
-        <div className="mt-1 text-xs text-red-500" role="alert">
+        <div className="mt-1 text-xs text-danger" role="alert">
           {t("option:omniSearch.searchError", {
             defaultValue: "Search failed. Please try again."
           })}

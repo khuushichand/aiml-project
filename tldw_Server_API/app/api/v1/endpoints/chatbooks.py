@@ -25,19 +25,22 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, A
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 
+from ..API_Deps.auth_deps import rbac_rate_limit
+from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ....core.AuthNZ.User_DB_Handling import User, get_request_user
 from ....core.Chatbooks.chatbook_models import ContentType, ExportJob, ExportStatus
-from ....core.Chatbooks.exceptions import JobError
 from ....core.Chatbooks.chatbook_service import ChatbookService
 from ....core.Chatbooks.chatbook_validators import ChatbookValidator
+from ....core.Chatbooks.exceptions import JobError
 from ....core.Chatbooks.quota_manager import QuotaManager
 from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ....core.DB_Management.db_path_utils import DatabasePaths
-from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ..schemas.chatbook_schemas import (
     CancelJobResponse,
     ChatbookManifestResponse,
+    ChatbookVersion as SchemaChatbookVersion,
     CleanupExpiredExportsResponse,
+    ContinueExportRequest,
     CreateChatbookRequest,
     CreateChatbookResponse,
     ExportJobResponse,
@@ -48,9 +51,6 @@ from ..schemas.chatbook_schemas import (
     ListImportJobsResponse,
     PreviewChatbookResponse,
     RemoveJobResponse,
-)
-from ..schemas.chatbook_schemas import (
-    ChatbookVersion as SchemaChatbookVersion,
 )
 
 _CHATBOOKS_NONCRITICAL_EXCEPTIONS = (
@@ -165,7 +165,11 @@ async def chatbooks_health():
     return health
 
 
-@router.post("/export", response_model=CreateChatbookResponse)
+@router.post(
+    "/export",
+    response_model=CreateChatbookResponse,
+    dependencies=[Depends(rbac_rate_limit("chatbooks.export"))],
+)
 async def create_chatbook(
     request_data: CreateChatbookRequest,
     background_tasks: BackgroundTasks,
@@ -378,7 +382,71 @@ async def create_chatbook(
         raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook") from None
 
 
-@router.post("/import", response_model=ImportChatbookResponse)
+@router.post(
+    "/export/continue",
+    response_model=CreateChatbookResponse,
+    dependencies=[Depends(rbac_rate_limit("chatbooks.export"))],
+)
+async def continue_chatbook_export(
+    request_data: ContinueExportRequest,
+    request: Request,
+    service: ChatbookService = Depends(get_chatbook_service),
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
+):
+    """
+    Continue a truncated chatbook export using continuation tokens.
+
+    When an export is truncated (e.g. evaluation runs exceed the max row limit),
+    the manifest includes continuation tokens. This endpoint produces a new linked
+    chatbook containing the next batch of data.
+    """
+    try:
+        if not request_data.continuations:
+            raise HTTPException(status_code=400, detail="No continuation tokens provided")
+
+        rid = ensure_request_id(request)
+        ensure_traceparent(request)
+        success, message, result = await service.continue_chatbook_export(
+            export_id=request_data.export_id,
+            continuations=request_data.continuations,
+            name=request_data.name,
+            async_mode=request_data.async_mode,
+            request_id=rid,
+        )
+        if success:
+            _safe_increment_metric(
+                "chatbooks_continuation_exports_total",
+                {"user_id": str(user.id), "status": "success"},
+            )
+            if request_data.async_mode:
+                return CreateChatbookResponse(
+                    success=True, message=message, job_id=result
+                )
+            return CreateChatbookResponse(
+                success=True, message=message, file_path=result
+            )
+        raise HTTPException(status_code=500, detail=message)
+
+    except HTTPException:
+        raise
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
+        get_ps_logger(
+            request_id=ensure_request_id(request),
+            ps_component="endpoint",
+            ps_job_kind="chatbooks",
+            traceparent=ensure_traceparent(request),
+        ).exception(f"Unhandled exception continuing chatbook export for user {user.id}")
+        raise HTTPException(
+            status_code=500, detail="An error occurred while continuing the chatbook export"
+        ) from None
+
+
+@router.post(
+    "/import",
+    response_model=ImportChatbookResponse,
+    dependencies=[Depends(rbac_rate_limit("chatbooks.import"))],
+)
 async def import_chatbook(
     background_tasks: BackgroundTasks,
     request: Request,
@@ -450,6 +518,8 @@ async def import_chatbook(
         valid, error, safe_filename = ChatbookValidator.validate_filename(file.filename)
         if not valid:
             raise HTTPException(status_code=400, detail=error)
+        if Path(safe_filename).name != safe_filename or "/" in safe_filename or "\\" in safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid file path")
 
         # Check file size
         file.file.seek(0, 2)  # Seek to end
@@ -639,6 +709,8 @@ async def preview_chatbook(
         valid, error, safe_filename = ChatbookValidator.validate_filename(file.filename)
         if not valid:
             raise HTTPException(status_code=400, detail=error)
+        if Path(safe_filename).name != safe_filename or "/" in safe_filename or "\\" in safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid file path")
 
         # Initialize quota manager (DB-backed) for consistent rate limiting
         quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)

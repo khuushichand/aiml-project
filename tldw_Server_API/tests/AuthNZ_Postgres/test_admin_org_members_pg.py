@@ -118,7 +118,7 @@ async def test_admin_org_members_endpoints_postgres(test_db_pool):
             )
         except Exception:
             # Best-effort; not all code paths require request.state.auth
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override

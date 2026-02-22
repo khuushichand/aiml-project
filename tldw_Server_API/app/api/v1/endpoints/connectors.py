@@ -10,12 +10,12 @@ from starlette.status import HTTP_403_FORBIDDEN, HTTP_500_INTERNAL_SERVER_ERROR
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
-    get_current_active_user,
     get_db_transaction,
     get_org_policy_from_principal,
     require_permissions,
     require_roles,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.api.v1.schemas.connectors import (
     AuthorizeURLResponse,
     ConnectorAccount,
@@ -52,6 +52,7 @@ from tldw_Server_API.app.core.External_Sources.policy import (
     evaluate_policy_constraints,
     get_default_policy_from_env,
 )
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.http_client import RetryPolicy as _RetryPolicy
 from tldw_Server_API.app.core.http_client import afetch as _http_afetch
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
@@ -81,14 +82,36 @@ def _resolve_redirect_base(request: Request | None, conn) -> str:
     return resolved
 
 
-def _get_user_id(current_user: dict[str, Any]) -> int:
-    user_id = current_user.get("id")
+def _get_user_id(principal: AuthPrincipal) -> int:
+    user_id = principal.user_id
     if user_id is None:
-        raise HTTPException(status_code=401, detail="User ID not found in token")
+        raise HTTPException(status_code=401, detail="User ID not found in principal")
     try:
         return int(user_id)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=401, detail="Invalid user ID in token") from exc
+        raise HTTPException(status_code=401, detail="Invalid user ID in principal") from exc
+
+
+def _normalize_policy_role(role_name: str | None) -> str:
+    normalized = str(role_name or "").strip().lower()
+    if normalized == "user":
+        return "member"
+    return normalized
+
+
+def _principal_has_role(principal: AuthPrincipal, role_name: str) -> bool:
+    target = _normalize_policy_role(role_name)
+    return any(_normalize_policy_role(str(role)) == target for role in principal.roles or [])
+
+
+def _principal_role_for_policy(principal: AuthPrincipal) -> str:
+    if _principal_has_role(principal, "admin"):
+        return "admin"
+    for role in principal.roles or []:
+        role_text = _normalize_policy_role(str(role))
+        if role_text:
+            return role_text
+    return "member"
 
 
 def get_connectors_job_counter() -> Callable[[int], int]:
@@ -96,12 +119,37 @@ def get_connectors_job_counter() -> Callable[[int], int]:
     return count_connectors_jobs_today
 
 
+def _gmail_connector_enabled() -> bool:
+    try:
+        return bool(settings.get("EMAIL_GMAIL_CONNECTOR_ENABLED", False))
+    except Exception:
+        return False
+
+
+def _ensure_connector_provider_enabled(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized not in {"drive", "notion", "gmail"}:
+        raise HTTPException(status_code=404, detail=f"Unknown connector provider: {provider}")
+    if normalized == "gmail" and not _gmail_connector_enabled():
+        raise HTTPException(status_code=404, detail="Connector provider 'gmail' is disabled.")
+    return normalized
+
+
 @router.get("/providers", response_model=list[ConnectorProvider])
 async def list_providers() -> list[ConnectorProvider]:
-    return [
+    providers: list[ConnectorProvider] = [
         ConnectorProvider(name="drive", scopes_required=["drive.readonly"], auth_type="oauth2"),
         ConnectorProvider(name="notion", scopes_required=[], auth_type="oauth2"),
     ]
+    if _gmail_connector_enabled():
+        providers.append(
+            ConnectorProvider(
+                name="gmail",
+                scopes_required=["https://www.googleapis.com/auth/gmail.readonly"],
+                auth_type="oauth2",
+            )
+        )
+    return providers
 
 
 @router.post("/providers/{provider}/authorize", response_model=AuthorizeURLResponse)
@@ -111,14 +159,15 @@ async def start_authorize(
     state: str | None = None,
     scopes: str | None = None,
     db=Depends(get_db_transaction),
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AuthorizeURLResponse:
+    provider = _ensure_connector_provider_enabled(provider)
     conn = get_connector_by_name(provider)
     redirect_base = _resolve_redirect_base(request, conn)
     if redirect_base:
         conn.redirect_base = redirect_base
     state = state or secrets.token_urlsafe(32)
-    user_id = _get_user_id(current_user)
+    user_id = _get_user_id(principal)
     await create_oauth_state(db, user_id, provider, state)
     scopes_list = [s for s in (scopes or "").split(",") if s]
     url = conn.authorize_url(state=state, scopes=scopes_list or None, redirect_path=f"/api/v1/connectors/providers/{provider}/callback")
@@ -132,12 +181,13 @@ async def oauth_callback(
     request: Request,
     state: str | None = None,
     db=Depends(get_db_transaction),
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorAccount:
+    provider = _ensure_connector_provider_enabled(provider)
     conn = get_connector_by_name(provider)
     pol = org_policy
-    user_id = _get_user_id(current_user)
+    user_id = _get_user_id(principal)
     if not state:
         raise HTTPException(status_code=400, detail="Missing OAuth state")
     default_ttl_minutes = 10
@@ -179,8 +229,8 @@ async def oauth_callback(
     # Enforce org-level account linking role based on org policy; single-user
     # callers pass via their role/admin claims rather than global mode checks.
     try:
-        role = str(current_user.get("role", "member")).lower()
-        required = str(pol.get("account_linking_role", "admin")).lower()
+        role = _principal_role_for_policy(principal)
+        required = _normalize_policy_role(str(pol.get("account_linking_role", "admin")))
         # Admin bypass
         if role != "admin" and required and role != required:
             raise HTTPException(status_code=403, detail="Account linking not permitted for your role")
@@ -264,18 +314,18 @@ async def oauth_callback(
 
 @router.get("/accounts", response_model=list[ConnectorAccount])
 async def get_accounts(
-    db=Depends(get_db_transaction), current_user: dict[str, Any] = Depends(get_current_active_user)
+    db=Depends(get_db_transaction), principal: AuthPrincipal = Depends(get_auth_principal)
 ) -> list[ConnectorAccount]:
-    user_id = _get_user_id(current_user)
+    user_id = _get_user_id(principal)
     rows = await list_accounts(db, user_id)
     return [ConnectorAccount(id=int(r["id"]), provider=r["provider"], display_name=r.get("display_name") or "", email=r.get("email"), created_at=str(r.get("created_at")), connected=True) for r in rows]
 
 
 @router.delete("/accounts/{account_id}")
 async def remove_account(
-    account_id: int, db=Depends(get_db_transaction), current_user: dict[str, Any] = Depends(get_current_active_user)
+    account_id: int, db=Depends(get_db_transaction), principal: AuthPrincipal = Depends(get_auth_principal)
 ) -> dict[str, Any]:
-    user_id = _get_user_id(current_user)
+    user_id = _get_user_id(principal)
     await delete_account(db, user_id, account_id)
     return {"ok": True}
 
@@ -288,9 +338,10 @@ async def browse_provider_sources(
     page_size: int = Query(50, ge=1, le=200),
     cursor: str | None = None,
     db=Depends(get_db_transaction),
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> dict[str, Any]:
-    user_id = _get_user_id(current_user)
+    provider = _ensure_connector_provider_enabled(provider)
+    user_id = _get_user_id(principal)
     tokens = await get_account_tokens(db, user_id, account_id)
     if not tokens:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -315,18 +366,19 @@ async def browse_provider_sources(
 async def add_source(
     payload: ConnectorSourceCreateRequest,
     db=Depends(get_db_transaction),
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorSource:
     # payload keys: account_id, provider, remote_id, type, path, options
     account_id = int(payload.account_id)
     provider = str(payload.provider)
+    provider = _ensure_connector_provider_enabled(provider)
     remote_id = str(payload.remote_id)
     type_ = str(payload.type)
     path = payload.path
     options = payload.options or {}
 
-    user_id = _get_user_id(current_user)
+    user_id = _get_user_id(principal)
     acct = await get_account_for_user(db, user_id, account_id)
     if not acct:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -372,9 +424,9 @@ async def add_source(
 
 @router.get("/sources", response_model=list[ConnectorSource])
 async def get_sources(
-    db=Depends(get_db_transaction), current_user: dict[str, Any] = Depends(get_current_active_user)
+    db=Depends(get_db_transaction), principal: AuthPrincipal = Depends(get_auth_principal)
 ) -> list[ConnectorSource]:
-    user_id = _get_user_id(current_user)
+    user_id = _get_user_id(principal)
     rows = await list_sources(db, user_id)
     out: list[ConnectorSource] = []
     for r in rows:
@@ -399,11 +451,11 @@ async def patch_source(
     source_id: int,
     payload: ConnectorSourcePatchRequest,
     db=Depends(get_db_transaction),
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> ConnectorSource:
     enabled = payload.enabled
     options = payload.options
-    user_id = _get_user_id(current_user)
+    user_id = _get_user_id(principal)
     row = await update_source(db, user_id, source_id, enabled=enabled, options=options)
     if not row:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -425,14 +477,14 @@ async def import_source(
     source_id: int,
     request: Request,
     db=Depends(get_db_transaction),
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
     count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
 ) -> ImportJob:
     # Enforce per-role daily quota from org policy for all modes; single-user
     # admin callers naturally bypass via their configured role/quotas.
-    user_id = _get_user_id(current_user)
-    role = str(current_user.get("role", "member")).lower()
+    user_id = _get_user_id(principal)
+    role = _principal_role_for_policy(principal)
     qpr = org_policy.get("quotas_per_role") or {}
     limits = qpr.get(role) or {}
     max_jobs = int(limits.get("max_jobs_per_day") or 0)

@@ -3,16 +3,19 @@
 #
 import asyncio
 import importlib
-import math
 import os
-import time
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 #
 # Third-party Imports
 from loguru import logger
 
+from tldw_Server_API.app.core.Infrastructure.provider_registry import (
+    ProviderRegistryBase,
+    ProviderRegistryConfig,
+    ProviderStatus as RegistryProviderStatus,
+)
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 #
@@ -74,6 +77,47 @@ class TTSProvider(Enum):
     MOCK = "mock"  # Mock provider for testing
 
 
+def _provider_alias_tokens(value: str) -> set[str]:
+    token = str(value or "").strip().lower()
+    if not token:
+        return set()
+    return {
+        token,
+        token.replace("_", "-"),
+        token.replace("-", "_"),
+        token.replace("_", "").replace("-", ""),
+    }
+
+
+def _build_tts_provider_aliases() -> dict[str, TTSProvider]:
+    aliases: dict[str, TTSProvider] = {}
+
+    for provider in TTSProvider:
+        for token in _provider_alias_tokens(provider.value):
+            aliases[token] = provider
+        for token in _provider_alias_tokens(provider.name):
+            aliases[token] = provider
+
+    # Common user-facing synonyms
+    explicit_aliases: dict[str, TTSProvider] = {
+        "open-ai": TTSProvider.OPENAI,
+        "oai": TTSProvider.OPENAI,
+        "eleven-labs": TTSProvider.ELEVENLABS,
+        "elevenlabs-tts": TTSProvider.ELEVENLABS,
+        "qwen3tts": TTSProvider.QWEN3_TTS,
+        "echotts": TTSProvider.ECHO_TTS,
+        "vibevoice-asr": TTSProvider.VIBEVOICE,
+    }
+    for alias, provider in explicit_aliases.items():
+        for token in _provider_alias_tokens(alias):
+            aliases[token] = provider
+
+    return aliases
+
+
+_TTS_PROVIDER_ALIASES: dict[str, TTSProvider] = _build_tts_provider_aliases()
+
+
 class TTSAdapterRegistry:
     """
     Registry for TTS adapters.
@@ -100,7 +144,25 @@ class TTSAdapterRegistry:
         TTSProvider.LUX_TTS: "tldw_Server_API.app.core.TTS.adapters.luxtts_adapter.LuxTTSAdapter",
     }
 
-    def __init__(self, config: Optional[dict[str, Any]] = None):
+    @classmethod
+    def resolve_provider(cls, provider: Union[TTSProvider, str, None]) -> Optional[TTSProvider]:
+        """Resolve provider aliases (enum names, dashed/underscored forms, and common synonyms)."""
+        if isinstance(provider, TTSProvider):
+            return provider
+        if provider is None:
+            return None
+        for token in _provider_alias_tokens(str(provider)):
+            mapped = _TTS_PROVIDER_ALIASES.get(token)
+            if mapped is not None:
+                return mapped
+        return None
+
+    def __init__(
+        self,
+        config: Optional[dict[str, Any]] = None,
+        *,
+        include_defaults: bool = True,
+    ):
         """
         Initialize the registry.
 
@@ -128,10 +190,10 @@ class TTSAdapterRegistry:
 
         self._adapters: dict[TTSProvider, TTSAdapter] = {}
         # Store either classes or dotted paths; resolve lazily when needed
-        self._adapter_specs: dict[TTSProvider, Any] = self.DEFAULT_ADAPTERS.copy()
-        self._init_lock = asyncio.Lock()
+        self._adapter_specs: dict[TTSProvider, Any] = (
+            self.DEFAULT_ADAPTERS.copy() if include_defaults else {}
+        )
         self._initialized_providers: set[TTSProvider] = set()
-        self._failed_providers: dict[TTSProvider, float] = {}  # Provider -> retry timestamp
 
         def _extract_retry_seconds(raw_cfg: Any) -> Optional[float]:
             if raw_cfg is None:
@@ -161,8 +223,65 @@ class TTSAdapterRegistry:
             retry_seconds = None
 
         self._failure_retry_seconds: Optional[float] = retry_seconds
+        self._base: ProviderRegistryBase[TTSAdapter] = ProviderRegistryBase(
+            config=ProviderRegistryConfig(failure_retry_seconds=retry_seconds),
+            adapter_validator=lambda adapter: isinstance(adapter, TTSAdapter),
+            adapter_materializer_async=self._materialize_adapter_async,
+            provider_enabled_callback=self._is_provider_enabled_by_config,
+        )
+        for provider_name, adapter_spec in self._adapter_specs.items():
+            self._base.register_adapter(provider_name.value, adapter_spec)
 
-    def register_adapter(self, provider: TTSProvider, adapter: Any):
+    def _is_provider_enabled_by_config(self, provider_key: str) -> Optional[bool]:
+        """
+        Return config-driven provider enablement for base registry checks.
+
+        This preserves existing precedence:
+        - Unified config manager uses `is_provider_enabled(...)`.
+        - Direct dict config honors explicit `providers.<name>.enabled`, then
+          legacy `{provider}_enabled` flags.
+        - No explicit flag => no opinion (`None`) so wrapper logic is unchanged.
+        """
+        provider = self.resolve_provider(provider_key)
+        if provider is None:
+            return None
+
+        if self.config_manager:
+            try:
+                return bool(self.config_manager.is_provider_enabled(provider.value))
+            except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS:
+                return None
+
+        explicit_enabled = self._get_dict_provider_enabled_flag(provider)
+        if explicit_enabled is not None:
+            return explicit_enabled
+        return None
+
+    def _get_dict_provider_enabled_flag(self, provider: TTSProvider) -> Optional[bool]:
+        """
+        Resolve explicit provider enablement from dict-style config.
+
+        Precedence:
+        1. providers.<provider>.enabled
+        2. legacy <provider>_enabled
+        """
+        if not isinstance(self.config, dict):
+            return None
+
+        providers_cfg = self.config.get("providers")
+        if isinstance(providers_cfg, dict):
+            provider_cfg = providers_cfg.get(provider.value)
+            if provider_cfg is not None and not isinstance(provider_cfg, dict):
+                provider_cfg = model_dump_compat(provider_cfg)
+            if isinstance(provider_cfg, dict) and "enabled" in provider_cfg:
+                return parse_bool(provider_cfg.get("enabled"), default=True)
+
+        enabled_key = f"{provider.value}_enabled"
+        if enabled_key in self.config:
+            return parse_bool(self.config.get(enabled_key), default=True)
+        return None
+
+    def register_adapter(self, provider: Union[TTSProvider, str], adapter: Any):
         """
         Register a custom adapter class for a provider.
 
@@ -170,19 +289,22 @@ class TTSAdapterRegistry:
             provider: The provider enum
             adapter: Adapter class or dotted import path string to register
         """
-        self._adapter_specs[provider] = adapter
+        resolved_provider = self.resolve_provider(provider)
+        if resolved_provider is None:
+            raise ValueError(f"Unknown provider '{provider}'")
+        self._adapter_specs[resolved_provider] = adapter
+        self._adapters.pop(resolved_provider, None)
+        self._initialized_providers.discard(resolved_provider)
+        self._base.register_adapter(resolved_provider.value, adapter)
         try:
             name = adapter.__name__  # type: ignore[attr-defined]
         except (AttributeError, TypeError):
             name = str(adapter)
-        logger.info(f"Registered adapter {name} for provider {provider.value}")
+        logger.info(f"Registered adapter {name} for provider {resolved_provider.value}")
 
     def _schedule_retry(self, provider: TTSProvider) -> None:
         """Record a failed provider with optional retry backoff."""
-        if self._failure_retry_seconds is None:
-            self._failed_providers[provider] = math.inf
-        else:
-            self._failed_providers[provider] = time.time() + self._failure_retry_seconds
+        self._base.mark_failure(provider.value)
 
     def _resolve_adapter_class(self, spec: Any) -> type[TTSAdapter]:
         """Resolve an adapter class from a class object or dotted path string."""
@@ -195,7 +317,32 @@ class TTSAdapterRegistry:
             return cls
         return spec
 
-    async def get_adapter(self, provider: TTSProvider) -> Optional[TTSAdapter]:
+    async def _materialize_adapter_async(self, provider_key: str, spec: Any) -> TTSAdapter:
+        """
+        Async materialization hook used by the shared provider registry base.
+        """
+        resolved_provider = self.resolve_provider(provider_key)
+        if resolved_provider is None:
+            raise TTSProviderNotConfiguredError(
+                f"Unknown provider '{provider_key}'",
+                provider=str(provider_key),
+            )
+
+        # Reuse already initialized adapter if available.
+        existing = self._adapters.get(resolved_provider)
+        if existing and existing.status == ProviderStatus.AVAILABLE:
+            return existing
+
+        success = await self._initialize_adapter(resolved_provider)
+        if not success:
+            raise RuntimeError(f"Failed to initialize {resolved_provider.value} adapter")
+
+        adapter = self._adapters.get(resolved_provider)
+        if adapter is None or adapter.status != ProviderStatus.AVAILABLE:
+            raise RuntimeError(f"{resolved_provider.value} adapter is not available")
+        return adapter
+
+    async def get_adapter(self, provider: Union[TTSProvider, str]) -> Optional[TTSAdapter]:
         """
         Get an adapter instance for the specified provider.
 
@@ -208,96 +355,70 @@ class TTSAdapterRegistry:
         Raises:
             TTSProviderNotConfiguredError: If provider is not registered
         """
-        if provider not in self._adapter_specs:
-            error_msg = f"No adapter registered for provider {provider.value}"
+        resolved_provider = self.resolve_provider(provider)
+        if resolved_provider is None:
+            error_msg = f"Unknown provider '{provider}'"
+            logger.error(error_msg)
+            raise TTSProviderNotConfiguredError(error_msg, provider=str(provider))
+
+        if resolved_provider not in self._adapter_specs:
+            error_msg = f"No adapter registered for provider {resolved_provider.value}"
             logger.error(error_msg)
             raise TTSProviderNotConfiguredError(
                 error_msg,
-                provider=provider.value
+                provider=resolved_provider.value
             )
+        adapter = await self._base.get_adapter_async(resolved_provider.value)
+        if adapter is None:
+            return None
+        if adapter.status == ProviderStatus.AVAILABLE:
+            self._adapters[resolved_provider] = adapter
+            self._initialized_providers.add(resolved_provider)
+            return adapter
 
-        retry_after = self._failed_providers.get(provider)
-        if retry_after:
-            if math.isinf(retry_after):
-                logger.debug(f"Skipping {provider.value} - initialization previously failed (retry disabled)")
-                return None
-            if retry_after > time.time():
-                logger.debug(
-                    f"Skipping {provider.value} - retry available in {retry_after - time.time():.1f}s"
-                )
-                return None
-            else:
-                self._failed_providers.pop(provider, None)
-
-        # Check if adapter already exists
-        if provider in self._adapters:
-            adapter = self._adapters[provider]
-            if adapter.status == ProviderStatus.AVAILABLE:
-                return adapter
-
-        # Initialize adapter if needed
-        async with self._init_lock:
-            retry_after = self._failed_providers.get(provider)
-            if retry_after:
-                if math.isinf(retry_after):
-                    logger.debug(f"Skipping {provider.value} - initialization previously failed (retry disabled)")
-                    return None
-                if retry_after > time.time():
-                    logger.debug(
-                        f"Skipping {provider.value} - retry available in {retry_after - time.time():.1f}s"
-                    )
-                    return None
-            else:
-                self._failed_providers.pop(provider, None)
-
-            if provider not in self._adapters:
-                success = await self._initialize_adapter(provider)
-                if not success:
-                    self._schedule_retry(provider)
-                    return None
-
-            adapter = self._adapters.get(provider)
-            if adapter and adapter.status == ProviderStatus.AVAILABLE:
-                self._failed_providers.pop(provider, None)
-                return adapter
-            else:
-                logger.warning(
-                    f"Adapter for {provider.value} is not available (status: {adapter.status if adapter else 'None'})"
-                )
-                return None
+        logger.warning(
+            "Adapter for {} is not available (status: {})",
+            resolved_provider.value,
+            adapter.status,
+        )
+        self._schedule_retry(resolved_provider)
+        return None
 
     async def create_adapter_with_overrides(
         self,
-        provider: TTSProvider,
+        provider: Union[TTSProvider, str],
         overrides: Optional[dict[str, Any]] = None,
     ) -> Optional[TTSAdapter]:
         """Create a non-cached adapter instance with config overrides."""
-        if provider not in self._adapter_specs:
-            error_msg = f"No adapter registered for provider {provider.value}"
+        resolved_provider = self.resolve_provider(provider)
+        if resolved_provider is None:
+            error_msg = f"Unknown provider '{provider}'"
             logger.error(error_msg)
-            raise TTSProviderNotConfiguredError(error_msg, provider=provider.value)
+            raise TTSProviderNotConfiguredError(error_msg, provider=str(provider))
+        if resolved_provider not in self._adapter_specs:
+            error_msg = f"No adapter registered for provider {resolved_provider.value}"
+            logger.error(error_msg)
+            raise TTSProviderNotConfiguredError(error_msg, provider=resolved_provider.value)
 
         # Respect explicit enable/disable flags; BYOK can supply credentials.
         if self.config_manager:
             try:
-                if not self.config_manager.is_provider_enabled(provider.value):
-                    logger.info(f"Provider {provider.value} is disabled in configuration")
+                if not self.config_manager.is_provider_enabled(resolved_provider.value):
+                    logger.info(f"Provider {resolved_provider.value} is disabled in configuration")
                     return None
             except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS:
                 pass
         else:
-            enabled_key = f"{provider.value}_enabled"
-            if enabled_key in self.config:
-                enabled = parse_bool(self.config.get(enabled_key), default=True)
-                if not enabled:
-                    logger.info(f"Provider {provider.value} is disabled in configuration")
-                    return None
+            explicit_enabled = self._get_dict_provider_enabled_flag(resolved_provider)
+            if explicit_enabled is False:
+                logger.info(f"Provider {resolved_provider.value} is disabled in configuration")
+                return None
 
-        adapter_class = self._resolve_adapter_class(self._adapter_specs[provider])
+        adapter_class = self._resolve_adapter_class(self._adapter_specs[resolved_provider])
 
         provider_cfg: dict[str, Any] = {}
         if self.config_manager:
-            base_cfg = self.config_manager.get_provider_config(provider.value)
+            base_cfg = self.config_manager.get_provider_config(resolved_provider.value)
             if base_cfg:
                 provider_cfg = (
                     dict(base_cfg)
@@ -307,7 +428,7 @@ class TTSAdapterRegistry:
         else:
             providers = self.config.get("providers") if isinstance(self.config, dict) else None
             if isinstance(providers, dict):
-                base_cfg = providers.get(provider.value)
+                base_cfg = providers.get(resolved_provider.value)
                 if isinstance(base_cfg, dict):
                     provider_cfg = dict(base_cfg)
                 elif base_cfg is not None:
@@ -320,10 +441,10 @@ class TTSAdapterRegistry:
         try:
             success = await adapter.ensure_initialized()
         except _TTS_REGISTRY_ADAPTER_EXCEPTIONS as exc:
-            logger.error(f"Error initializing {provider.value} adapter with overrides: {exc}")
+            logger.error(f"Error initializing {resolved_provider.value} adapter with overrides: {exc}")
             return None
         if not success:
-            logger.error(f"Failed to initialize {provider.value} adapter with overrides")
+            logger.error(f"Failed to initialize {resolved_provider.value} adapter with overrides")
             return None
         return adapter
 
@@ -355,18 +476,14 @@ class TTSAdapterRegistry:
                     return False
             else:
                 # Heuristic for direct dict configs used in tests:
-                # - If an explicit "{provider}_enabled" flag is present, honor it.
+                # - If an explicit provider enable flag is present, honor it.
                 # - Otherwise, enable lightweight/remote providers when credentials are present
                 #   (e.g., OPENAI/ELEVENLABS) and keep heavy local providers disabled by default.
-                enabled_key = f"{provider.value}_enabled"
-                if enabled_key in self.config:
-                    raw_enabled = self.config.get(enabled_key)
-                    # Treat unknown non-empty string tokens as enabled by default
-                    enabled = parse_bool(raw_enabled, default=True)
-                    if not enabled:
-                        logger.info(f"Provider {provider.value} is disabled in configuration")
-                        return False
-                else:
+                explicit_enabled = self._get_dict_provider_enabled_flag(provider)
+                if explicit_enabled is False:
+                    logger.info(f"Provider {provider.value} is disabled in configuration")
+                    return False
+                if explicit_enabled is None:
                     remote_providers = {TTSProvider.OPENAI, TTSProvider.ELEVENLABS}
                     if provider in remote_providers:
                         # Consider provider enabled if API key is supplied via config or env
@@ -585,14 +702,7 @@ class TTSAdapterRegistry:
                     return provider_cfg.enabled
                 return None
             if isinstance(self.config, dict):
-                providers_cfg = self.config.get("providers")
-                if isinstance(providers_cfg, dict):
-                    provider_cfg = providers_cfg.get(provider.value)
-                    if isinstance(provider_cfg, dict) and "enabled" in provider_cfg:
-                        return parse_bool(provider_cfg.get("enabled"), default=None)
-                enabled_key = f"{provider.value}_enabled"
-                if enabled_key in self.config:
-                    return parse_bool(self.config.get(enabled_key), default=None)
+                return self._get_dict_provider_enabled_flag(provider)
             return None
 
         for provider in TTSProvider:
@@ -603,14 +713,10 @@ class TTSAdapterRegistry:
             if enabled_flag is False:
                 continue
 
-            # Skip providers that are disabled or have failed
-            retry_after = self._failed_providers.get(provider)
-            if retry_after:
-                if math.isinf(retry_after):
-                    continue
-                if retry_after > time.time():
-                    continue
-                self._failed_providers.pop(provider, None)
+            # Skip providers currently marked as failed by registry backoff.
+            status = self._base.get_status(provider.value)
+            if status == RegistryProviderStatus.FAILED:
+                continue
 
             # Only try to get adapters that are likely to work quickly
             # Skip local model providers in testing unless explicitly enabled
@@ -637,6 +743,56 @@ class TTSAdapterRegistry:
                     self._schedule_retry(provider)
 
         return capabilities
+
+    async def list_capabilities(self, *, include_disabled: bool = True) -> list[dict[str, Any]]:
+        """
+        Return standardized capability envelopes for registered TTS providers.
+
+        Envelope shape:
+            {"provider": str, "availability": str, "capabilities": Any}
+        """
+        output: list[dict[str, Any]] = []
+        provider_names = self._base.list_providers(include_disabled=include_disabled)
+
+        for provider_name in provider_names:
+            status = self._base.get_status(provider_name)
+            capabilities: Any = None
+
+            if status == RegistryProviderStatus.ENABLED:
+                try:
+                    provider_enum = self.resolve_provider(provider_name)
+                    adapter = await self.get_adapter(provider_enum or provider_name)
+                except _TTS_REGISTRY_ADAPTER_EXCEPTIONS as exc:
+                    logger.warning(
+                        "Capability discovery failed for provider '{}': {}",
+                        provider_name,
+                        exc,
+                    )
+                    adapter = None
+
+                status = self._base.get_status(provider_name)
+                if adapter is not None and status == RegistryProviderStatus.ENABLED:
+                    try:
+                        caps = adapter.capabilities
+                        if caps is None:
+                            caps = await adapter.get_capabilities()
+                        capabilities = caps
+                    except _TTS_REGISTRY_ADAPTER_EXCEPTIONS as exc:
+                        logger.warning(
+                            "Capability fetch failed for provider '{}': {}",
+                            provider_name,
+                            exc,
+                        )
+
+            output.append(
+                {
+                    "provider": provider_name,
+                    "availability": status.value,
+                    "capabilities": capabilities,
+                }
+            )
+
+        return output
 
     async def find_adapter_for_requirements(
         self,
@@ -703,10 +859,10 @@ class TTSAdapterRegistry:
 
         priority = []
         for provider_name in priority_names:
-            try:
-                provider = TTSProvider(provider_name)
+            provider = self.resolve_provider(provider_name)
+            if provider is not None:
                 priority.append(provider)
-            except ValueError:
+            else:
                 logger.warning(f"Unknown provider in priority list: {provider_name}")
 
         # Fallback to default if no valid providers
@@ -749,6 +905,8 @@ class TTSAdapterRegistry:
 
         self._adapters.clear()
         self._initialized_providers.clear()
+        self._base.clear_cache()
+        self._base.reset_failures()
 
         # Clean up resource manager connections
         if resource_manager:
@@ -766,6 +924,14 @@ class TTSAdapterRegistry:
         Returns:
             Dictionary with status information
         """
+        cached_by_name = self._base.get_cached_adapters()
+        self._adapters = {}
+        for provider_name, adapter in cached_by_name.items():
+            provider_enum = self.resolve_provider(provider_name)
+            if provider_enum is not None:
+                self._adapters[provider_enum] = adapter
+        self._initialized_providers = set(self._adapters.keys())
+
         summary = {
             "total_providers": len(TTSProvider),
             "initialized": len(self._initialized_providers),
@@ -783,10 +949,7 @@ class TTSAdapterRegistry:
                 provider_info = {
                     "status": status_value,
                     "initialized": bool(getattr(adapter, "_initialized", False)),
-                    "failed": (
-                        provider in self._failed_providers
-                        and self._failed_providers[provider] > time.time()
-                    ),
+                    "failed": self._base.get_status(provider.value) == RegistryProviderStatus.FAILED,
                 }
                 try:
                     if adapter.capabilities:
@@ -800,10 +963,7 @@ class TTSAdapterRegistry:
                 provider_info = {
                     "status": status_value,
                     "initialized": False,
-                    "failed": (
-                        provider in self._failed_providers
-                        and self._failed_providers[provider] > time.time()
-                    ),
+                    "failed": self._base.get_status(provider.value) == RegistryProviderStatus.FAILED,
                 }
             summary["providers"][provider.value] = provider_info
 
@@ -935,7 +1095,11 @@ class TTSAdapterFactory:
         """
         if not model:
             return None
-        return self.MODEL_PROVIDER_MAP.get(model.lower())
+        key = model.lower()
+        provider = self.MODEL_PROVIDER_MAP.get(key)
+        if provider is not None:
+            return provider
+        return self.registry.resolve_provider(model)
 
     async def get_adapter_by_model(self, model: str) -> Optional[TTSAdapter]:
         """

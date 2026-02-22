@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -10,26 +10,46 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   message
 } from "antd"
 import type { ColumnsType } from "antd/es/table"
 import { Download } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { useWatchlistsStore } from "@/store/watchlists"
 import {
+  cancelWatchlistRun,
   exportRunTalliesCsv,
+  fetchWatchlistSources,
   fetchScrapedItems,
   getRunDetails,
+  triggerWatchlistRun,
   updateScrapedItem
 } from "@/services/watchlists"
+import {
+  buildWatchlistsRunWebSocketUrl,
+  parseWatchlistsRunStreamPayload
+} from "@/services/watchlists-stream"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { RunDetailResponse, ScrapedItem } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { StatusTag } from "../shared"
+import { classifyRunFailure, getRunFailureHint } from "./run-notifications"
 
 interface RunDetailDrawerProps {
   runId: number | null
   open: boolean
   onClose: () => void
 }
+
+type StreamConnectionState =
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
+  | "error"
+
+const SOURCE_LOOKUP_LIMIT = 1000
 
 export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   runId,
@@ -47,6 +67,22 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const [itemsPageSize, setItemsPageSize] = useState(20)
   const [updatingItemIds, setUpdatingItemIds] = useState<number[]>([])
   const [exportingTalliesCsv, setExportingTalliesCsv] = useState(false)
+  const [streamState, setStreamState] = useState<StreamConnectionState>("disconnected")
+  const [streamError, setStreamError] = useState<string | null>(null)
+  const [lastStreamEventAt, setLastStreamEventAt] = useState<string | null>(null)
+  const [streamingEnabled, setStreamingEnabled] = useState(true)
+  const [cancelState, setCancelState] = useState<"idle" | "cancelling" | "failed-to-cancel">("idle")
+  const [retryingRun, setRetryingRun] = useState(false)
+  const [sourceNamesById, setSourceNamesById] = useState<Record<number, string>>({})
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reconnectAttemptRef = useRef(0)
+  const manuallyClosedRef = useRef(false)
+  const currentStatusRef = useRef<string | null>(null)
+  const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
+  const addRun = useWatchlistsStore((s) => s.addRun)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const openJobForm = useWatchlistsStore((s) => s.openJobForm)
 
   const downloadCsv = (content: string, filename: string): void => {
     const blob = new Blob([content], { type: "text/csv;charset=utf-8" })
@@ -60,17 +96,108 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     URL.revokeObjectURL(url)
   }
 
+  const clearReconnectTimer = () => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+  }
+
+  const closeStream = () => {
+    clearReconnectTimer()
+    if (wsRef.current && wsRef.current.readyState < WebSocket.CLOSING) {
+      wsRef.current.close()
+    }
+    wsRef.current = null
+    reconnectAttemptRef.current = 0
+  }
+
+  const appendLogText = (incoming: string) => {
+    const MAX_LOG_CHARS = 200_000
+    setData((prev) => {
+      if (!prev) return prev
+      const current = prev.log_text || ""
+      const merged = `${current}${incoming}`
+      if (merged.length <= MAX_LOG_CHARS) {
+        return { ...prev, log_text: merged }
+      }
+      return {
+        ...prev,
+        log_text: merged.slice(-MAX_LOG_CHARS),
+        truncated: true
+      }
+    })
+  }
+
+  const applyRunSnapshot = (
+    run: {
+      id: number
+      job_id: number
+      status: string
+      started_at?: string | null
+      finished_at?: string | null
+    },
+    stats: Record<string, number>,
+    errorMsg?: string | null
+  ) => {
+    setData((prev) => {
+      if (!prev) {
+        return {
+          id: run.id,
+          job_id: run.job_id,
+          status: run.status,
+          started_at: run.started_at ?? null,
+          finished_at: run.finished_at ?? null,
+          stats,
+          filter_tallies: null,
+          error_msg: errorMsg ?? null,
+          log_text: null,
+          log_path: null,
+          truncated: false,
+          filtered_sample: null
+        }
+      }
+      return {
+        ...prev,
+        id: run.id,
+        job_id: run.job_id,
+        status: run.status,
+        started_at: run.started_at ?? prev.started_at,
+        finished_at: run.finished_at ?? prev.finished_at,
+        stats,
+        error_msg: errorMsg ?? prev.error_msg
+      }
+    })
+
+    updateRunInList(run.id, {
+      status: run.status as any,
+      started_at: run.started_at ?? null,
+      finished_at: run.finished_at ?? null,
+      stats,
+      error_msg: errorMsg ?? null
+    })
+  }
+
+  useEffect(() => {
+    currentStatusRef.current = data?.status || null
+  }, [data?.status])
+
   useEffect(() => {
     if (open && runId) {
       setLoading(true)
       setError(null)
+      setStreamError(null)
+      setCancelState("idle")
       getRunDetails(runId)
         .then((result) => {
           setData(result)
         })
         .catch((err) => {
           console.error("Failed to fetch run details:", err)
-          setError(err.message || "Failed to load details")
+          setError(
+            err?.message ||
+              t("watchlists:runs.detail.loadError", "Failed to load details")
+          )
         })
         .finally(() => {
           setLoading(false)
@@ -78,6 +205,37 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     } else {
       setData(null)
       setError(null)
+      setStreamState("disconnected")
+      setStreamError(null)
+      setLastStreamEventAt(null)
+    }
+  }, [open, runId])
+
+  useEffect(() => {
+    let active = true
+
+    if (!open) {
+      setSourceNamesById({})
+      return () => {
+        active = false
+      }
+    }
+
+    fetchWatchlistSources({ page: 1, size: SOURCE_LOOKUP_LIMIT })
+      .then((result) => {
+        if (!active) return
+        const next: Record<number, string> = {}
+        for (const source of result.items || []) {
+          next[source.id] = source.name
+        }
+        setSourceNamesById(next)
+      })
+      .catch((err) => {
+        console.warn("Failed to resolve source names for run detail:", err)
+      })
+
+    return () => {
+      active = false
     }
   }, [open, runId])
 
@@ -117,6 +275,153 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     loadItems()
   }, [loadItems])
 
+  useEffect(() => {
+    if (!open || !runId || !streamingEnabled) {
+      manuallyClosedRef.current = true
+      closeStream()
+      return
+    }
+
+    let disposed = false
+
+    const connectStream = async () => {
+      const attempt = reconnectAttemptRef.current
+      setStreamState(attempt > 0 ? "reconnecting" : "connecting")
+      setStreamError(null)
+
+      try {
+        const config = await tldwClient.getConfig()
+        if (disposed) return
+        if (!config) {
+          setStreamState("error")
+          setStreamError(t("watchlists:runs.detail.streamSetupError", "Failed to connect live stream"))
+          return
+        }
+        const wsUrl = buildWatchlistsRunWebSocketUrl(config, runId)
+        const ws = new WebSocket(wsUrl)
+        wsRef.current = ws
+
+        ws.onopen = () => {
+          if (disposed || wsRef.current !== ws) return
+          reconnectAttemptRef.current = 0
+          setStreamState("connected")
+          setStreamError(null)
+        }
+
+        ws.onmessage = (event) => {
+          if (disposed || typeof event.data !== "string") return
+          let parsedJson: unknown = null
+          try {
+            parsedJson = JSON.parse(event.data)
+          } catch {
+            return
+          }
+
+          const streamEvent = parseWatchlistsRunStreamPayload(parsedJson)
+          if (!streamEvent) return
+          setLastStreamEventAt(new Date().toISOString())
+
+          if (streamEvent.type === "snapshot") {
+            applyRunSnapshot(streamEvent.run, streamEvent.stats, streamEvent.error_msg)
+            setData((prev) => {
+              if (!prev) {
+                return {
+                  id: streamEvent.run.id,
+                  job_id: streamEvent.run.job_id,
+                  status: streamEvent.run.status,
+                  started_at: streamEvent.run.started_at ?? null,
+                  finished_at: streamEvent.run.finished_at ?? null,
+                  stats: streamEvent.stats,
+                  filter_tallies: null,
+                  error_msg: streamEvent.error_msg ?? null,
+                  log_text: typeof streamEvent.log_tail === "string" ? streamEvent.log_tail : null,
+                  log_path: null,
+                  truncated: Boolean(streamEvent.log_truncated),
+                  filtered_sample: null
+                }
+              }
+              return {
+                ...prev,
+                log_text: typeof streamEvent.log_tail === "string" ? streamEvent.log_tail : prev.log_text,
+                truncated: Boolean(streamEvent.log_truncated || prev.truncated)
+              }
+            })
+            return
+          }
+
+          if (streamEvent.type === "run_update") {
+            applyRunSnapshot(streamEvent.run, streamEvent.stats, streamEvent.error_msg)
+            return
+          }
+
+          if (streamEvent.type === "log") {
+            appendLogText(streamEvent.text)
+            return
+          }
+
+          if (streamEvent.type === "complete") {
+            const finalStatus = streamEvent.status || currentStatusRef.current || "completed"
+            setData((prev) => (prev ? { ...prev, status: finalStatus } : prev))
+            updateRunInList(runId, { status: finalStatus as any })
+            setStreamState("disconnected")
+            manuallyClosedRef.current = true
+            closeStream()
+          }
+        }
+
+        ws.onerror = () => {
+          if (disposed) return
+          setStreamState("error")
+          setStreamError(t("watchlists:runs.detail.streamError", "Live stream error"))
+        }
+
+        ws.onclose = () => {
+          if (disposed || wsRef.current !== ws) return
+          wsRef.current = null
+
+          if (manuallyClosedRef.current) {
+            setStreamState("disconnected")
+            return
+          }
+
+          const status = String(currentStatusRef.current || "").toLowerCase()
+          const terminal = status === "completed" || status === "failed" || status === "cancelled"
+          if (terminal) {
+            setStreamState("disconnected")
+            return
+          }
+
+          const nextAttempt = reconnectAttemptRef.current + 1
+          reconnectAttemptRef.current = nextAttempt
+          setStreamState("reconnecting")
+          const delayMs = Math.min(1000 * 2 ** Math.max(nextAttempt - 1, 0), 10000)
+          clearReconnectTimer()
+          reconnectTimerRef.current = setTimeout(() => {
+            if (!disposed) void connectStream()
+          }, delayMs)
+        }
+      } catch (err) {
+        if (disposed) return
+        setStreamState("error")
+        setStreamError(
+          err instanceof Error
+            ? err.message
+            : t("watchlists:runs.detail.streamSetupError", "Failed to connect live stream")
+        )
+      }
+    }
+
+    manuallyClosedRef.current = false
+    void connectStream()
+
+    return () => {
+      disposed = true
+      manuallyClosedRef.current = true
+      closeStream()
+      setStreamState("disconnected")
+    }
+  }, [open, runId, streamingEnabled, t, updateRunInList])
+
   // Calculate duration
   const calculateDuration = (): string => {
     if (!data?.started_at) return "-"
@@ -124,10 +429,28 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     const end = data.finished_at ? new Date(data.finished_at) : new Date()
     const durationMs = end.getTime() - start.getTime()
 
-    if (durationMs < 1000) return "<1 second"
-    if (durationMs < 60000) return `${Math.round(durationMs / 1000)} seconds`
-    if (durationMs < 3600000) return `${Math.round(durationMs / 60000)} minutes`
-    return `${(durationMs / 3600000).toFixed(1)} hours`
+    if (durationMs < 1000) {
+      return t(
+        "watchlists:runs.detail.duration.lessThanSecond",
+        "<1 second"
+      )
+    }
+
+    if (durationMs < 60000) {
+      return t("watchlists:runs.detail.duration.seconds", "{{count}} seconds", {
+        count: Math.max(1, Math.round(durationMs / 1000))
+      })
+    }
+
+    if (durationMs < 3600000) {
+      return t("watchlists:runs.detail.duration.minutes", "{{count}} minutes", {
+        count: Math.max(1, Math.round(durationMs / 60000))
+      })
+    }
+
+    return t("watchlists:runs.detail.duration.hours", "{{count}} hours", {
+      count: (durationMs / 3600000).toFixed(1)
+    })
   }
 
   const handleToggleReviewed = async (item: ScrapedItem, reviewed: boolean) => {
@@ -167,6 +490,44 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     }
   }
 
+  const handleCancelRun = async () => {
+    if (!runId || cancelState === "cancelling") return
+    setCancelState("cancelling")
+    try {
+      const result = await cancelWatchlistRun(runId)
+      if (!result?.cancelled) {
+        setCancelState("failed-to-cancel")
+        message.error(t("watchlists:runs.cancelRunError", "Failed to cancel run"))
+        return
+      }
+      const finishedAt = new Date().toISOString()
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "cancelled",
+              finished_at: prev.finished_at || finishedAt,
+              error_msg: prev.error_msg || "cancelled_by_user"
+            }
+          : prev
+      )
+      updateRunInList(runId, {
+        status: "cancelled" as any,
+        finished_at: finishedAt,
+        error_msg: "cancelled_by_user"
+      })
+      setCancelState("idle")
+      message.success(t("watchlists:runs.cancelRunSuccess", "Run cancelled"))
+      manuallyClosedRef.current = true
+      closeStream()
+      setStreamState("disconnected")
+    } catch (err) {
+      console.error("Failed to cancel run:", err)
+      setCancelState("failed-to-cancel")
+      message.error(t("watchlists:runs.cancelRunError", "Failed to cancel run"))
+    }
+  }
+
   const itemColumns: ColumnsType<ScrapedItem> = [
     {
       title: t("watchlists:runs.detail.itemsColumns.title", "Title"),
@@ -181,7 +542,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
                 href={record.url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-blue-600 hover:underline"
+                className="text-primary hover:underline"
               >
                 {title || record.url}
               </a>
@@ -190,7 +551,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
             )}
           </div>
           {record.summary && (
-            <div className="text-xs text-zinc-500 line-clamp-2">{record.summary}</div>
+            <div className="text-xs text-text-muted line-clamp-2">{record.summary}</div>
           )}
         </div>
       )
@@ -224,8 +585,22 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       title: t("watchlists:runs.detail.itemsColumns.source", "Source"),
       dataIndex: "source_id",
       key: "source_id",
-      width: 90,
-      render: (sourceId: number) => `#${sourceId}`
+      width: 180,
+      render: (sourceId: number) => {
+        const sourceReference = t(
+          "watchlists:runs.detail.itemsSourceReference",
+          "#{{id}}",
+          { id: sourceId }
+        )
+        const sourceName = sourceNamesById[sourceId]
+        if (!sourceName) return sourceReference
+
+        return (
+          <Tooltip title={sourceReference}>
+            <span className="text-sm text-text-muted">{sourceName}</span>
+          </Tooltip>
+        )
+      }
     },
     {
       title: t("watchlists:runs.detail.itemsColumns.published", "Published"),
@@ -234,11 +609,11 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       width: 150,
       render: (date: string | null) =>
         date ? (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-text-muted">
             {formatRelativeTime(date, t)}
           </span>
         ) : (
-          <span className="text-sm text-zinc-400">-</span>
+          <span className="text-sm text-text-subtle">-</span>
         )
     },
     {
@@ -247,12 +622,77 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       key: "created_at",
       width: 150,
       render: (date: string) => (
-        <span className="text-sm text-zinc-500">
+        <span className="text-sm text-text-muted">
           {formatRelativeTime(date, t)}
         </span>
       )
     }
   ]
+
+  const streamStateColorMap: Record<StreamConnectionState, string> = {
+    connecting: "blue",
+    connected: "green",
+    reconnecting: "gold",
+    disconnected: "default",
+    error: "red"
+  }
+
+  const streamStateLabelMap: Record<StreamConnectionState, string> = {
+    connecting: t("watchlists:runs.detail.streamState.connecting", "Connecting"),
+    connected: t("watchlists:runs.detail.streamState.connected", "Connected"),
+    reconnecting: t("watchlists:runs.detail.streamState.reconnecting", "Reconnecting"),
+    disconnected: t("watchlists:runs.detail.streamState.disconnected", "Disconnected"),
+    error: t("watchlists:runs.detail.streamState.error", "Error")
+  }
+
+  const failureKind = useMemo(
+    () => classifyRunFailure(data?.error_msg),
+    [data?.error_msg]
+  )
+
+  const remediationHint = useMemo(
+    () => getRunFailureHint(data?.error_msg, t),
+    [data?.error_msg, t]
+  )
+
+  const showSourceRecoveryAction = failureKind === "auth" ||
+    failureKind === "timeout" ||
+    failureKind === "dns" ||
+    failureKind === "tls" ||
+    failureKind === "network"
+
+  const handleRetryRun = async () => {
+    if (!data?.job_id || retryingRun) return
+    setRetryingRun(true)
+    try {
+      const rerun = await triggerWatchlistRun(data.job_id)
+      addRun(rerun)
+      message.success(
+        t("watchlists:runs.detail.retryTriggered", "Retry started as run #{{id}}.", {
+          id: rerun.id
+        })
+      )
+      setActiveTab("runs")
+      onClose()
+    } catch (err) {
+      console.error("Failed to trigger retry run:", err)
+      message.error(t("watchlists:runs.detail.retryError", "Failed to retry run"))
+    } finally {
+      setRetryingRun(false)
+    }
+  }
+
+  const handleEditMonitor = () => {
+    if (!data?.job_id) return
+    setActiveTab("jobs")
+    openJobForm(data.job_id)
+    onClose()
+  }
+
+  const handleOpenSources = () => {
+    setActiveTab("sources")
+    onClose()
+  }
 
   const tabItems = [
     {
@@ -262,40 +702,126 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
         <div className="space-y-4">
           {data && (
             <Descriptions column={2} size="small" bordered>
-              <Descriptions.Item label="Status">
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.status", "Status")}>
                 <StatusTag status={data.status} />
               </Descriptions.Item>
-              <Descriptions.Item label="Duration">
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.duration", "Duration")}>
                 {calculateDuration()}
               </Descriptions.Item>
-              <Descriptions.Item label="Started">
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.started", "Started")}>
                 {data.started_at ? formatRelativeTime(data.started_at, t) : "-"}
               </Descriptions.Item>
-              <Descriptions.Item label="Finished">
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.finished", "Finished")}>
                 {data.finished_at ? formatRelativeTime(data.finished_at, t) : "-"}
               </Descriptions.Item>
-              <Descriptions.Item label="Items Found">
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.itemsFound", "Items Found")}>
                 {data.stats?.items_found ?? 0}
               </Descriptions.Item>
-              <Descriptions.Item label="Items Ingested">
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.itemsIngested", "Items Ingested")}>
                 {data.stats?.items_ingested ?? 0}
               </Descriptions.Item>
-              <Descriptions.Item label="Items Filtered">
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.itemsFiltered", "Items Filtered")}>
                 {data.stats?.items_filtered ?? 0}
               </Descriptions.Item>
-              <Descriptions.Item label="Errors">
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.errors", "Errors")}>
                 {data.stats?.items_errored ?? 0}
               </Descriptions.Item>
             </Descriptions>
           )}
 
           {data?.error_msg && (
-            <div className="mt-4">
-              <div className="text-sm font-medium mb-2 text-red-600">
-                Error Message
-              </div>
-              <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-300 font-mono">
+            <div className="mt-4 space-y-3">
+              <Alert
+                type="warning"
+                showIcon
+                title={t("watchlists:runs.detail.remediationTitle", "Suggested recovery steps")}
+                description={remediationHint || t(
+                  "watchlists:runs.detail.remediationFallback",
+                  "Open logs and adjust source or monitor settings, then retry."
+                )}
+                action={(
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="small"
+                      type="primary"
+                      onClick={handleRetryRun}
+                      loading={retryingRun}
+                    >
+                      {t("watchlists:runs.detail.retryRun", "Retry run")}
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={handleEditMonitor}
+                    >
+                      {t("watchlists:runs.detail.editMonitor", "Edit monitor schedule")}
+                    </Button>
+                    {showSourceRecoveryAction && (
+                      <Button
+                        size="small"
+                        onClick={handleOpenSources}
+                      >
+                        {t("watchlists:runs.detail.openSources", "Review source settings")}
+                      </Button>
+                    )}
+                  </div>
+                )}
+              />
+              <div className="p-3 bg-danger/10 border border-danger/30 rounded text-sm text-danger font-mono">
                 {data.error_msg}
+              </div>
+            </div>
+          )}
+
+          {Array.isArray(data?.filtered_sample) && data.filtered_sample.length > 0 && (
+            <div className="mt-4 space-y-2">
+              <div className="text-sm font-medium">
+                {t("watchlists:runs.detail.filteredSampleTitle", "Filtered item sample")}
+              </div>
+              <Alert
+                type="info"
+                showIcon
+                title={t(
+                  "watchlists:runs.detail.filteredSampleSummary",
+                  "Showing {{count}} recently filtered item{{plural}} for quick diagnosis.",
+                  {
+                    count: data.filtered_sample.length,
+                    plural: data.filtered_sample.length === 1 ? "" : "s"
+                  }
+                )}
+                description={t(
+                  "watchlists:runs.detail.filteredSampleHelp",
+                  "Use this sample with filter tallies below to tune include/exclude rules."
+                )}
+              />
+              <div className="space-y-2">
+                {data.filtered_sample.map((sample, index) => {
+                  const record = typeof sample === "object" && sample !== null
+                    ? (sample as Record<string, unknown>)
+                    : {}
+                  const title =
+                    typeof record.title === "string" && record.title.trim().length > 0
+                      ? record.title
+                      : typeof record.url === "string" && record.url.trim().length > 0
+                        ? record.url
+                        : t("watchlists:runs.detail.itemsUntitled", "Untitled")
+                  const statusText =
+                    typeof record.status === "string" && record.status.trim().length > 0
+                      ? record.status
+                      : "filtered"
+                  return (
+                    <div
+                      key={String(record.id ?? `${index}`)}
+                      className="rounded border border-border px-3 py-2 text-sm"
+                    >
+                      <div className="font-medium">{title}</div>
+                      <div className="text-xs text-text-muted">
+                        {t("watchlists:runs.detail.filteredSampleStatus", "Status: {{status}}", {
+                          status: statusText
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -303,7 +829,9 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
           {data?.filter_tallies && Object.keys(data.filter_tallies).length > 0 && (
             <div className="mt-4">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-sm font-medium">Filter Matches</div>
+                <div className="text-sm font-medium">
+                  {t("watchlists:runs.detail.filterMatches", "Filter Matches")}
+                </div>
                 <Button
                   size="small"
                   icon={<Download className="h-3.5 w-3.5" />}
@@ -330,21 +858,51 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       label: t("watchlists:runs.detail.logs", "Logs"),
       children: (
         <div>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Tag color={streamStateColorMap[streamState]}>
+                {t("watchlists:runs.detail.stream", "Live stream")}: {streamStateLabelMap[streamState]}
+              </Tag>
+              {lastStreamEventAt && (
+                <span className="text-xs text-text-muted">
+                  {t("watchlists:runs.detail.lastStreamEvent", "Last event {{time}}", {
+                    time: formatRelativeTime(lastStreamEventAt, t, { compact: true })
+                  })}
+                </span>
+              )}
+            </div>
+            <Switch
+              checked={streamingEnabled}
+              size="small"
+              onChange={setStreamingEnabled}
+              checkedChildren={t("watchlists:runs.detail.liveOn", "Live")}
+              unCheckedChildren={t("watchlists:runs.detail.liveOff", "Off")}
+            />
+          </div>
+          {streamError && (
+            <Alert
+              type="error"
+              showIcon
+              className="mb-3"
+              title={t("watchlists:runs.detail.streamErrorTitle", "Stream error")}
+              description={streamError}
+            />
+          )}
           {data?.truncated && (
             <Alert
               type="warning"
               showIcon
               className="mb-3"
-              message={t("watchlists:runs.detail.logsTruncated", "Logs truncated")}
+              title={t("watchlists:runs.detail.logsTruncated", "Logs truncated")}
               description={t("watchlists:runs.detail.logsTruncatedDesc", "Showing the most recent log output.")}
             />
           )}
           {data?.log_text ? (
-            <pre className="bg-zinc-900 text-zinc-100 p-4 rounded-lg font-mono text-xs max-h-96 overflow-auto whitespace-pre-wrap">
+            <pre className="bg-bg text-text p-4 rounded-lg font-mono text-xs max-h-96 overflow-auto whitespace-pre-wrap border border-border">
               {data.log_text}
             </pre>
           ) : data?.log_path ? (
-            <div className="text-sm text-zinc-500">
+            <div className="text-sm text-text-muted">
               {t("watchlists:runs.detail.logsPath", "Logs stored at {{path}}", { path: data.log_path })}
             </div>
           ) : (
@@ -395,17 +953,40 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   return (
     <Drawer
       title={t("watchlists:runs.detail.title", "Run Details")}
+      extra={
+        data && ["running", "pending", "queued"].includes(String(data.status || "").toLowerCase()) ? (
+          <Button
+            danger
+            size="small"
+            loading={cancelState === "cancelling"}
+            aria-label={
+              cancelState === "cancelling"
+                ? t("watchlists:runs.cancelling", "Cancelling...")
+                : cancelState === "failed-to-cancel"
+                  ? t("watchlists:runs.cancelFailedRetry", "Cancel failed. Retry.")
+                  : t("watchlists:runs.cancelRun", "Cancel run")
+            }
+            onClick={handleCancelRun}
+          >
+            {cancelState === "cancelling"
+              ? t("watchlists:runs.cancelling", "Cancelling...")
+              : cancelState === "failed-to-cancel"
+                ? t("watchlists:runs.cancelFailedRetry", "Cancel failed. Retry.")
+                : t("watchlists:runs.cancelRun", "Cancel run")}
+          </Button>
+        ) : undefined
+      }
       placement="right"
       onClose={onClose}
       open={open}
-      width={600}
+      styles={{ wrapper: { width: 600 } }}
     >
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Spin size="large" />
         </div>
       ) : error ? (
-        <div className="text-center py-12 text-red-500">{error}</div>
+        <div className="text-center py-12 text-danger">{error}</div>
       ) : data ? (
         <Tabs items={tabItems} />
       ) : null}

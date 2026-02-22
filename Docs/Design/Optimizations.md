@@ -7,3 +7,4 @@ https://repository.upenn.edu/entities/publication/72ca3499-c5f6-4fc1-b5a3-9d66d8
 https://errorprone.info/docs/time?=&aid=reckdgpiDCgNr2z5k
 https://github.com/ulab-uiuc/LLMRouter
 
+https://arxiv.org/pdf/2509.04664

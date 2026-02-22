@@ -1,5 +1,5 @@
 import { Modal, Button, Tooltip, Dropdown } from "antd"
-import { MessageCircle, Pen, Copy, History, Trash2, Download } from "lucide-react"
+import { MessageCircle, Pen, Copy, History, Trash2, Download, ExternalLink, Clock3 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { CharacterPreview } from "./CharacterPreview"
 
@@ -18,12 +18,19 @@ interface CharacterPreviewPopupProps {
   } | null
   open: boolean
   onClose: () => void
+  onQuickChat: () => void
   onChat: () => void
+  onChatInNewTab: () => void
   onEdit: () => void
   onDuplicate: () => void
   onExport: (format?: 'json' | 'png') => void
   onDelete: () => void
   onViewConversations: () => void
+  onViewVersionHistory: () => void
+  attachedWorldBooks?: Array<{ id: number; name: string }>
+  attachedWorldBooksLoading?: boolean
+  launchedFromWorldBooks?: boolean
+  launchedFromWorldBookId?: number | null
   deleting?: boolean
   exporting?: boolean
 }
@@ -32,12 +39,19 @@ export function CharacterPreviewPopup({
   character,
   open,
   onClose,
+  onQuickChat,
   onChat,
+  onChatInNewTab,
   onEdit,
   onDuplicate,
   onExport,
   onDelete,
   onViewConversations,
+  onViewVersionHistory,
+  attachedWorldBooks = [],
+  attachedWorldBooksLoading = false,
+  launchedFromWorldBooks = false,
+  launchedFromWorldBookId = null,
   deleting = false,
   exporting = false
 }: CharacterPreviewPopupProps) {
@@ -53,6 +67,12 @@ export function CharacterPreviewPopup({
 
   const chatLabel = t("settings:manageCharacters.actions.chat", {
     defaultValue: "Chat"
+  })
+  const quickChatLabel = t("settings:manageCharacters.actions.quickChat", {
+    defaultValue: "Quick chat"
+  })
+  const chatInNewTabLabel = t("settings:manageCharacters.actions.chatInNewTab", {
+    defaultValue: "Chat in new tab"
   })
   const editLabel = t("settings:manageCharacters.actions.edit", {
     defaultValue: "Edit"
@@ -72,6 +92,18 @@ export function CharacterPreviewPopup({
       defaultValue: "View conversations"
     }
   )
+  const versionHistoryLabel = t(
+    "settings:manageCharacters.actions.versionHistory",
+    {
+      defaultValue: "Version history"
+    }
+  )
+  const characterIdParam = encodeURIComponent(String(character.id || ""))
+  const worldBooksWorkspaceHref = `/world-books?from=characters&focusCharacterId=${characterIdParam}`
+  const backToWorldBooksHref =
+    launchedFromWorldBooks && launchedFromWorldBookId != null
+      ? `/world-books?focusWorldBookId=${encodeURIComponent(String(launchedFromWorldBookId))}`
+      : "/world-books"
 
   const exportMenuItems = [
     {
@@ -107,7 +139,79 @@ export function CharacterPreviewPopup({
           system_prompt={character.system_prompt}
           greeting={character.greeting || character.first_message}
           tags={character.tags}
+          expandedMetadata
         />
+
+        <div className="rounded-md border border-border bg-surface p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-medium">
+              {t("settings:manageCharacters.worldBooks.title", {
+                defaultValue: "World Books"
+              })}
+            </div>
+            <a
+              href={worldBooksWorkspaceHref}
+              className="text-xs text-primary hover:underline"
+              aria-label={t("settings:manageCharacters.worldBooks.openWorkspaceAria", {
+                defaultValue: "Open World Books workspace"
+              })}
+            >
+              {t("settings:manageCharacters.worldBooks.openWorkspace", {
+                defaultValue: "Open workspace"
+              })}
+            </a>
+          </div>
+
+          {launchedFromWorldBooks && (
+            <div className="mt-2">
+              <a
+                href={backToWorldBooksHref}
+                className="text-xs text-primary hover:underline"
+                aria-label={t("settings:manageCharacters.worldBooks.backAria", {
+                  defaultValue: "Back to World Books"
+                })}
+              >
+                {t("settings:manageCharacters.worldBooks.back", {
+                  defaultValue: "Back to World Books"
+                })}
+              </a>
+            </div>
+          )}
+
+          <div className="mt-2">
+            {attachedWorldBooksLoading ? (
+              <div className="text-xs text-text-muted">
+                {t("settings:manageCharacters.worldBooks.loading", {
+                  defaultValue: "Loading attached world books..."
+                })}
+              </div>
+            ) : attachedWorldBooks.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {attachedWorldBooks.map((worldBook) => (
+                  <a
+                    key={worldBook.id}
+                    href={`${worldBooksWorkspaceHref}&focusWorldBookId=${encodeURIComponent(
+                      String(worldBook.id)
+                    )}`}
+                    className="inline-flex items-center rounded border border-border px-2 py-1 text-xs text-primary hover:bg-surface2"
+                    aria-label={t("settings:manageCharacters.worldBooks.openBookAria", {
+                      defaultValue: "Open world book {{name}}",
+                      name: worldBook.name
+                    })}
+                  >
+                    {worldBook.name}
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-text-muted">
+                {t("settings:manageCharacters.worldBooks.empty", {
+                  defaultValue: "No world books attached to this character."
+                })}
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center justify-center gap-2 border-t border-border pt-4">
@@ -118,6 +222,32 @@ export function CharacterPreviewPopup({
           >
             {chatLabel}
           </Button>
+
+          <Tooltip title={chatInNewTabLabel}>
+            <Button
+              icon={<ExternalLink className="w-4 h-4" />}
+              onClick={onChatInNewTab}
+              aria-label={t("settings:manageCharacters.aria.chatWithInNewTab", {
+                defaultValue: "Chat with {{name}} in a new tab",
+                name: displayName
+              })}
+            >
+              {chatInNewTabLabel}
+            </Button>
+          </Tooltip>
+
+          <Tooltip title={quickChatLabel}>
+            <Button
+              icon={<MessageCircle className="w-4 h-4" />}
+              onClick={onQuickChat}
+              aria-label={t("settings:manageCharacters.aria.quickChatWith", {
+                defaultValue: "Quick chat with {{name}}",
+                name: displayName
+              })}
+            >
+              {quickChatLabel}
+            </Button>
+          </Tooltip>
 
           <Tooltip title={editLabel}>
             <Button
@@ -173,6 +303,19 @@ export function CharacterPreviewPopup({
               })}
             >
               {viewConversationsLabel}
+            </Button>
+          </Tooltip>
+
+          <Tooltip title={versionHistoryLabel}>
+            <Button
+              icon={<Clock3 className="w-4 h-4" />}
+              onClick={onViewVersionHistory}
+              aria-label={t("settings:manageCharacters.aria.viewVersionHistory", {
+                defaultValue: "View version history for {{name}}",
+                name: displayName
+              })}
+            >
+              {versionHistoryLabel}
             </Button>
           </Tooltip>
 

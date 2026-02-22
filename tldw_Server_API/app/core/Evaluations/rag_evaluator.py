@@ -18,6 +18,7 @@ from loguru import logger
 from sklearn.metrics.pairwise import cosine_similarity
 
 import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
+from tldw_Server_API.app.core.testing import is_test_mode
 
 _RAG_EVAL_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -537,8 +538,7 @@ class RAGEvaluator:
             except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Embedding-based similarity failed: {e}. Falling back.")
                 # Only synthesize embeddings in TEST_MODE when an API key was explicitly provided
-                import os as _os
-                if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes") and self.api_key and (self.embedding_provider == "openai"):
+                if is_test_mode() and self.api_key and (self.embedding_provider == "openai"):
                     import hashlib
                     def _cheap_embed(text: str, dim: int = 128):
                         h = hashlib.sha256((text or "").encode("utf-8")).digest()
@@ -565,8 +565,7 @@ class RAGEvaluator:
                     })
         # If embeddings are not available at all but we have api_key in TEST_MODE, synthesize
         else:
-            import os as _os
-            if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes") and self.api_key and (self.embedding_provider == "openai"):
+            if is_test_mode() and self.api_key and (self.embedding_provider == "openai"):
                 import hashlib
                 def _cheap_embed(text: str, dim: int = 128):
                     h = hashlib.sha256((text or "").encode("utf-8")).digest()

@@ -116,14 +116,14 @@ export const SourceSeenDrawer: React.FC<SourceSeenDrawerProps> = ({
       placement="right"
       onClose={onClose}
       open={open}
-      width={520}
+      styles={{ wrapper: { width: 520 } }}
     >
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Spin size="large" />
         </div>
       ) : error ? (
-        <Alert type="error" showIcon message={error} className="mb-4" />
+        <Alert type="error" showIcon title={error} className="mb-4" />
       ) : stats ? (
         <div className="space-y-6">
           {/* Stats section */}
@@ -168,11 +168,11 @@ export const SourceSeenDrawer: React.FC<SourceSeenDrawerProps> = ({
                   count: stats.recent_keys.length
                 })}
               </div>
-              <div className="max-h-48 overflow-auto rounded border border-zinc-200 dark:border-zinc-700 p-2">
+              <div className="max-h-48 overflow-auto rounded border border-border p-2">
                 {stats.recent_keys.map((key, idx) => (
                   <div
                     key={idx}
-                    className="text-xs font-mono py-0.5 border-b border-zinc-100 dark:border-zinc-800 last:border-b-0 truncate"
+                    className="text-xs font-mono py-0.5 border-b border-border last:border-b-0 truncate"
                     title={key}
                   >
                     {key}
@@ -218,7 +218,7 @@ export const SourceSeenDrawer: React.FC<SourceSeenDrawerProps> = ({
 
           {/* Admin section */}
           {isAdmin && (
-            <div className="border-t border-zinc-200 dark:border-zinc-700 pt-4 space-y-3">
+            <div className="border-t border-border pt-4 space-y-3">
               <div className="text-sm font-medium">
                 {t("watchlists:sources.seen.adminSection", "Admin: Inspect Other User")}
               </div>

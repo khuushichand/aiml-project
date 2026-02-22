@@ -22,10 +22,9 @@ class AuthnzMfaRepo:
 
     db_pool: DatabasePool
 
-    @staticmethod
-    def _is_postgres(conn: Any) -> bool:
-        """Return True when the underlying connection is PostgreSQL (asyncpg-style)."""
-        return hasattr(conn, "fetchrow")
+    def _is_postgres_backend(self) -> bool:
+        """Return True when the underlying DatabasePool is using PostgreSQL."""
+        return bool(getattr(self.db_pool, "pool", None))
 
     @staticmethod
     def _normalize_datetime_for_postgres(dt: datetime) -> datetime:
@@ -76,7 +75,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if self._is_postgres(conn):
+                if self._is_postgres_backend():
                     ts = self._normalize_datetime_for_postgres(updated_at)
                     result = await conn.execute(
                         """
@@ -125,7 +124,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if self._is_postgres(conn):
+                if self._is_postgres_backend():
                     ts = self._normalize_datetime_for_postgres(updated_at)
                     result = await conn.execute(
                         """
@@ -162,7 +161,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if self._is_postgres(conn):
+                if self._is_postgres_backend():
                     encrypted = await conn.fetchval(
                         "SELECT totp_secret FROM users WHERE id = $1",
                         user_id,
@@ -193,7 +192,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if self._is_postgres(conn):
+                if self._is_postgres_backend():
                     row = await conn.fetchrow(
                         """
                         SELECT two_factor_enabled,
@@ -236,7 +235,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if self._is_postgres(conn):
+                if self._is_postgres_backend():
                     value = await conn.fetchval(
                         "SELECT backup_codes FROM users WHERE id = $1",
                         user_id,
@@ -269,7 +268,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if self._is_postgres(conn):
+                if self._is_postgres_backend():
                     result = await conn.execute(
                         "UPDATE users SET backup_codes = $1 WHERE id = $2",
                         backup_codes_json,
@@ -314,7 +313,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if self._is_postgres(conn):
+                if self._is_postgres_backend():
                     result = await conn.execute(
                         "UPDATE users SET backup_codes = $1 WHERE id = $2 AND backup_codes = $3",
                         updated_backup_codes_json,
@@ -363,7 +362,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if self._is_postgres(conn):
+                if self._is_postgres_backend():
                     ts = self._normalize_datetime_for_postgres(updated_at)
                     result = await conn.execute(
                         "UPDATE users SET backup_codes = $1, updated_at = $2 WHERE id = $3",

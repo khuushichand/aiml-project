@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import shutil
+import stat
 import string
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -32,6 +33,9 @@ from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, ge
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.testing import is_test_mode
+
+_OWNER_ONLY_DIR_MODE = stat.S_IRWXU
 
 #######################################################################################################################
 #
@@ -59,6 +63,23 @@ class RegistrationService:
             f"RegistrationService initialized (enabled={self.registration_enabled}, "
             f"require_code={self.require_code})"
         )
+
+    def _is_postgres_backend(self) -> bool:
+        """
+        Return True when this service is operating on a PostgreSQL backend.
+
+        Backend selection is derived from DatabasePool state instead of probing
+        connection method presence, because shim connections can expose methods
+        that do not reflect the active backend.
+        """
+        if not self.db_pool:
+            return False
+        if getattr(self.db_pool, "pool", None):
+            return True
+        backend = getattr(self.db_pool, "backend", None)
+        if isinstance(backend, str):
+            return backend.strip().lower() in {"postgres", "postgresql", "pg"}
+        return False
 
     async def initialize(self):
         """Initialize the registration service"""
@@ -107,9 +128,9 @@ class RegistrationService:
 
             # Set permissions on Unix-like systems
             if os.name != 'nt':
-                os.chmod(user_dir, 0o750)
+                os.chmod(user_dir, _OWNER_ONLY_DIR_MODE)
                 for subdir in subdirs:
-                    os.chmod(user_dir / subdir, 0o750)
+                    os.chmod(user_dir / subdir, _OWNER_ONLY_DIR_MODE)
 
             logger.debug(f"Created directories for user {user_id}")
             return True
@@ -185,7 +206,7 @@ class RegistrationService:
             org_role_value = "member"
 
         was_already_member = False
-        if hasattr(conn, 'fetchrow'):
+        if self._is_postgres_backend():
             existing = await conn.fetchrow(
                 "SELECT 1 FROM org_members WHERE org_id = $1 AND user_id = $2",
                 org_id,
@@ -286,7 +307,7 @@ class RegistrationService:
         try:
             async with self.db_pool.transaction() as conn:
                 # Check for duplicate username/email
-                if hasattr(conn, 'fetchrow'):
+                if self._is_postgres_backend():
                     # PostgreSQL
                     existing = await conn.fetchrow(
                         """
@@ -354,7 +375,7 @@ class RegistrationService:
                 if created_by is not None:
                     is_verified = bool(is_verified_override) if is_verified_override is not None else True
 
-                if hasattr(conn, 'fetchval'):
+                if self._is_postgres_backend():
                     # PostgreSQL
                     user_id = await conn.fetchval(
                         """
@@ -402,7 +423,7 @@ class RegistrationService:
                 )
 
                 if not directories_created:
-                    if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                    if is_test_mode():
                         logger.warning(f"TEST_MODE: Skipping directory creation failure for user {user_id}")
                     else:
                         raise DirectoryCreationError(
@@ -484,7 +505,7 @@ class RegistrationService:
 
         async with self.db_pool.transaction() as conn:
             user_email = None
-            if hasattr(conn, "fetchrow"):
+            if self._is_postgres_backend():
                 user_row = await conn.fetchrow("SELECT email FROM users WHERE id = $1", user_id)
                 if user_row:
                     user_email = user_row["email"]
@@ -539,7 +560,7 @@ class RegistrationService:
         Raises:
             InvalidRegistrationCodeError: If code is invalid
         """
-        if hasattr(conn, 'fetchrow'):
+        if self._is_postgres_backend():
             # PostgreSQL - Use SELECT FOR UPDATE to lock the row
             code_row = await conn.fetchrow(
                 """
@@ -680,7 +701,7 @@ class RegistrationService:
     ):
         """Add password to user's password history"""
         try:
-            if hasattr(conn, 'execute'):
+            if self._is_postgres_backend():
                 # PostgreSQL
                 await conn.execute(
                     """
@@ -730,7 +751,7 @@ class RegistrationService:
                 "registration_code_team_id": registration_code_team_id,
             }
 
-            if hasattr(conn, 'execute'):
+            if self._is_postgres_backend():
                 # PostgreSQL
                 await conn.execute(
                     """
@@ -793,7 +814,7 @@ class RegistrationService:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchval'):
+                if self._is_postgres_backend():
                     # PostgreSQL
                     code_id = await conn.fetchval(
                         """
@@ -864,7 +885,7 @@ class RegistrationService:
 
         if active_only:
             query_parts.append("AND is_active = ?")
-            params.append(1 if self.db_pool.pool else True)
+            params.append(True if self._is_postgres_backend() else 1)
             query_parts.append("AND expires_at > ?")
             params.append(datetime.utcnow())
 

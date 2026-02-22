@@ -4,12 +4,33 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import (
+    build_postgres_in_clause,
+    build_sqlite_in_clause,
+)
 from tldw_Server_API.app.core.exceptions import ToolCatalogConflictError
 
 
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probing."""
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    # SQLite shims in AuthNZ DatabasePool expose underlying aiosqlite connection as `_c`.
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    # Last-resort interface hint for test doubles and adapters.
+    return callable(getattr(db, "fetchrow", None))
+
+
 async def list_tool_catalogs(db, *, org_id: int | None, team_id: int | None, limit: int, offset: int) -> list[dict[str, Any]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     where: list[str] = []
     params: list[Any] = []
     if org_id is not None:
@@ -24,13 +45,22 @@ async def list_tool_catalogs(db, *, org_id: int | None, team_id: int | None, lim
     where_clause = (" WHERE " + " AND ".join(where)) if where else ""
     try:
         if pg:
-            q = (
-                f"SELECT id, name, description, org_id, team_id, COALESCE(is_active,TRUE) as is_active, created_at, updated_at FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT $ {len(params)+1} OFFSET $ {len(params)+2}"
-            ).replace('$ ', '$')
+            limit_param = len(params) + 1
+            offset_param = len(params) + 2
+            list_catalogs_sql_template = (
+                "SELECT id, name, description, org_id, team_id, COALESCE(is_active,TRUE) as is_active, created_at, updated_at "
+                "FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT ${limit_param} OFFSET ${offset_param}"
+            )
+            q = list_catalogs_sql_template.format_map(locals())  # nosec B608
             rows = await db.fetch(q, *params, limit, offset)
             return [dict(r) for r in rows]
+        list_catalogs_sql_template = (
+            "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+            "FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        list_catalogs_sql = list_catalogs_sql_template.format_map(locals())  # nosec B608
         cur = await db.execute(
-            f"SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            list_catalogs_sql,
             [*params, limit, offset],
         )
         rows = await cur.fetchall()
@@ -43,8 +73,154 @@ async def list_tool_catalogs(db, *, org_id: int | None, team_id: int | None, lim
         raise
 
 
+async def list_visible_tool_catalogs(
+    db,
+    *,
+    scope_norm: str,
+    admin_all: bool,
+    org_ids: set[int] | None = None,
+    team_ids: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    List catalogs visible to the caller scope for MCP unified discovery.
+
+    This encapsulates backend-specific SQL for global/org/team scope listing
+    so API endpoints do not branch on backend details.
+    """
+    pg = _is_postgres_connection(db)
+    visible_rows: list[dict[str, Any]] = []
+    org_ids = org_ids or set()
+    team_ids = team_ids or set()
+
+    async def _extend_rows(rows: list[Any]) -> None:
+        for row in rows or []:
+            if isinstance(row, dict) or hasattr(row, "keys"):
+                data = dict(row)
+                data["is_active"] = bool(data.get("is_active", True))
+            else:
+                data = {
+                    "id": row[0],
+                    "name": row[1],
+                    "description": row[2],
+                    "org_id": row[3],
+                    "team_id": row[4],
+                    "is_active": bool(row[5]),
+                    "created_at": row[6],
+                    "updated_at": row[7],
+                }
+            visible_rows.append(data)
+
+    try:
+        if admin_all:
+            if scope_norm in {"all", "global"}:
+                if pg:
+                    rows = await db.fetch(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                        "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                    )
+                else:
+                    cur = await db.execute(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                        "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                    )
+                    rows = await cur.fetchall()
+                await _extend_rows(rows)
+
+            if scope_norm in {"all", "org"}:
+                if pg:
+                    rows = await db.fetch(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                        "FROM tool_catalogs WHERE org_id IS NOT NULL AND team_id IS NULL ORDER BY created_at DESC"
+                    )
+                else:
+                    cur = await db.execute(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                        "FROM tool_catalogs WHERE org_id IS NOT NULL AND team_id IS NULL ORDER BY created_at DESC"
+                    )
+                    rows = await cur.fetchall()
+                await _extend_rows(rows)
+
+            if scope_norm in {"all", "team"}:
+                if pg:
+                    rows = await db.fetch(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                        "FROM tool_catalogs WHERE team_id IS NOT NULL ORDER BY created_at DESC"
+                    )
+                else:
+                    cur = await db.execute(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                        "FROM tool_catalogs WHERE team_id IS NOT NULL ORDER BY created_at DESC"
+                    )
+                    rows = await cur.fetchall()
+                await _extend_rows(rows)
+            return visible_rows
+
+        if scope_norm in {"all", "global"}:
+            if pg:
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+            else:
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+                rows = await cur.fetchall()
+            await _extend_rows(rows)
+
+        if scope_norm in {"all", "org"} and org_ids:
+            if pg:
+                placeholders, params = build_postgres_in_clause(sorted(org_ids))
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",  # nosec B608
+                    *params,
+                )
+            else:
+                placeholders, params = build_sqlite_in_clause(sorted(org_ids))
+                org_catalogs_sql_template = (
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC"
+                )
+                org_catalogs_sql = org_catalogs_sql_template.format_map(locals())  # nosec B608
+                cur = await db.execute(
+                    org_catalogs_sql,
+                    params,
+                )
+                rows = await cur.fetchall()
+            await _extend_rows(rows)
+
+        if scope_norm in {"all", "team"} and team_ids:
+            if pg:
+                placeholders, params = build_postgres_in_clause(sorted(team_ids))
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",  # nosec B608
+                    *params,
+                )
+            else:
+                placeholders, params = build_sqlite_in_clause(sorted(team_ids))
+                team_catalogs_sql_template = (
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    "FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC"
+                )
+                team_catalogs_sql = team_catalogs_sql_template.format_map(locals())  # nosec B608
+                cur = await db.execute(
+                    team_catalogs_sql,
+                    params,
+                )
+                rows = await cur.fetchall()
+            await _extend_rows(rows)
+
+        return visible_rows
+    except Exception as e:
+        logger.error(f"admin_tool_catalog_service.list_visible_tool_catalogs failed: {e}")
+        raise
+
+
 async def create_tool_catalog(db, *, name: str, description: str | None, org_id: int | None, team_id: int | None, is_active: bool) -> dict[str, Any]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             # Pre-check case-insensitive existence within scope
@@ -86,7 +262,7 @@ async def create_tool_catalog(db, *, name: str, description: str | None, org_id:
 
 
 async def get_tool_catalog(db, catalog_id: int) -> dict[str, Any] | None:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             row = await db.fetchrow(
@@ -117,7 +293,7 @@ async def get_tool_catalog(db, catalog_id: int) -> dict[str, Any] | None:
 
 
 async def delete_tool_catalog(db, catalog_id: int) -> None:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             await db.execute("DELETE FROM tool_catalogs WHERE id = $1", catalog_id)
@@ -137,7 +313,7 @@ async def list_tool_catalog_entries(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             rows = await db.fetch(
@@ -159,7 +335,7 @@ async def list_tool_catalog_entries(
 
 
 async def add_tool_catalog_entry(db, catalog_id: int, tool_name: str, module_id: str | None) -> dict[str, Any]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             await db.execute("INSERT INTO tool_catalog_entries (catalog_id, tool_name, module_id) VALUES ($1,$2,$3) ON CONFLICT (catalog_id, tool_name) DO NOTHING", catalog_id, tool_name, module_id)
@@ -181,7 +357,7 @@ async def add_tool_catalog_entry(db, catalog_id: int, tool_name: str, module_id:
 
 
 async def delete_tool_catalog_entry(db, catalog_id: int, tool_name: str) -> None:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             await db.execute("DELETE FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2", catalog_id, tool_name)

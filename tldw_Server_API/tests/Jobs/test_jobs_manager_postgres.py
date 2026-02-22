@@ -20,7 +20,7 @@ def _setup_pg_env(jobs_pg_dsn, monkeypatch):
         import tldw_Server_API.app.core.Jobs.manager as _jm
         monkeypatch.setattr(_jm, "ensure_jobs_tables_pg", lambda url: url, raising=False)
     except Exception:
-        pass
+        _ = None
     yield
 
 

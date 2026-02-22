@@ -27,9 +27,12 @@ import {
 import type { ClaimCluster, WatchlistJob, WatchlistClusterSubscription } from "@/types/watchlists"
 import { humanizeMilliseconds } from "@/utils/humanize-milliseconds"
 import { formatRelativeTime } from "@/utils/dateFormatters"
+import { WatchlistsHelpTooltip } from "../shared"
+import { WATCHLISTS_HELP_DOCS } from "../shared/help-docs"
 
 export const SettingsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
+  const showInternalDiagnostics = process.env.NEXT_PUBLIC_WATCHLISTS_SHOW_INTERNAL_DIAGNOSTICS === "true"
 
   // Store state
   const settings = useWatchlistsStore((s) => s.settings)
@@ -160,7 +163,7 @@ export const SettingsTab: React.FC = () => {
           <div className="font-medium text-sm">
             {record.summary || record.canonical_claim_text || `#${record.id}`}
           </div>
-          <div className="text-xs text-zinc-500">
+          <div className="text-xs text-text-muted">
             {t("watchlists:settings.clusters.idLabel", "ID {{id}}", { id: record.id })}
           </div>
         </div>
@@ -180,11 +183,11 @@ export const SettingsTab: React.FC = () => {
       width: 140,
       render: (date: string | null | undefined) =>
         date ? (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-text-muted">
             {formatRelativeTime(date, t)}
           </span>
         ) : (
-          <span className="text-sm text-zinc-400">-</span>
+          <span className="text-sm text-text-subtle">-</span>
         )
     },
     {
@@ -227,8 +230,8 @@ export const SettingsTab: React.FC = () => {
       </div>
 
       {/* Description */}
-      <div className="text-sm text-zinc-500">
-        {t("watchlists:settings.description", "Server configuration and retention settings for the watchlists module.")}
+      <div className="text-sm text-text-muted">
+        {t("watchlists:settings.description", "Manage retention and related topic subscriptions for this watchlist workspace.")}
       </div>
 
       {settingsLoading && !settings ? (
@@ -256,21 +259,70 @@ export const SettingsTab: React.FC = () => {
             </Descriptions>
             <Alert
               className="mt-4"
-              message={t("watchlists:settings.ttl.note", "TTL values are configured on the server.")}
+              title={t("watchlists:settings.ttl.note", "TTL values are configured on the server.")}
               type="info"
               showIcon
             />
           </Card>
 
+          {showInternalDiagnostics && (
+            <Card
+              title={t("watchlists:settings.diagnostics.title", "Internal diagnostics")}
+            >
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label={t("watchlists:settings.diagnostics.forumsEnabled", "Forums enabled")}>
+                  {settings.forums_enabled ? t("common:yes", "Yes") : t("common:no", "No")}
+                </Descriptions.Item>
+                <Descriptions.Item label={t("watchlists:settings.diagnostics.forumsDefaultTopN", "Forum default top N")}>
+                  {typeof settings.forum_default_top_n === "number" ? settings.forum_default_top_n : 20}
+                </Descriptions.Item>
+                <Descriptions.Item label={t("watchlists:settings.diagnostics.sharingMode", "Sharing mode")}>
+                  {settings.sharing_mode || t("watchlists:settings.diagnostics.adminCrossUser", "admin_cross_user")}
+                </Descriptions.Item>
+                <Descriptions.Item label={t("watchlists:settings.diagnostics.backend", "Watchlists backend")}>
+                  {settings.watchlists_backend || "sqlite"}
+                </Descriptions.Item>
+              </Descriptions>
+              <Alert
+                className="mt-4"
+                type="info"
+                showIcon
+                title={t(
+                  "watchlists:settings.diagnostics.note",
+                  "Internal diagnostics are enabled for this environment."
+                )}
+              />
+            </Card>
+          )}
+
           {/* Claim Clusters */}
           <Card
-            title={t("watchlists:settings.clusters.title", "Claim Clusters")}
+            title={t("watchlists:settings.clusters.title", "Related Topics (Claim Clusters)")}
             className="md:col-span-2"
           >
             <div className="space-y-3">
+              <div className="text-sm text-text-muted">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>
+                    {t(
+                      "watchlists:settings.clusters.help",
+                      "Claim clusters group similar claims detected across feeds. Subscribe a monitor to include those cluster updates in briefings."
+                    )}
+                  </span>
+                  <a
+                    href={WATCHLISTS_HELP_DOCS.claimClusters}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    {t("watchlists:help.learnMore", "Learn more")}
+                  </a>
+                  <WatchlistsHelpTooltip topic="claimClusters" />
+                </div>
+              </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Select
-                  placeholder={t("watchlists:settings.clusters.jobPlaceholder", "Select job")}
+                  placeholder={t("watchlists:settings.clusters.jobPlaceholder", "Select monitor")}
                   value={selectedJobId ?? undefined}
                   onChange={(value) => setSelectedJobId(value ?? null)}
                   loading={jobsLoading}
@@ -299,15 +351,15 @@ export const SettingsTab: React.FC = () => {
                 <Alert
                   type="info"
                   showIcon
-                  message={t(
+                  title={t(
                     "watchlists:settings.clusters.selectJob",
-                    "Select a job to manage cluster subscriptions."
+                    "Select a monitor to manage cluster subscriptions."
                   )}
                 />
               )}
 
               {clustersError ? (
-                <Alert type="warning" showIcon message={clustersError} />
+                <Alert type="warning" showIcon title={clustersError} />
               ) : clusters.length === 0 && !clustersLoading ? (
                 <Empty
                   description={t("watchlists:settings.clusters.empty", "No clusters found")}
@@ -328,7 +380,7 @@ export const SettingsTab: React.FC = () => {
         </div>
       ) : (
         <Alert
-          message={t("watchlists:settings.unavailable", "Settings unavailable")}
+          title={t("watchlists:settings.unavailable", "Settings unavailable")}
           description={t("watchlists:settings.unavailableDesc", "Could not load server settings. Make sure the server is running.")}
           type="warning"
           showIcon

@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.stream_client import ACPStre
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType, SessionSpec
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
+from tldw_Server_API.app.core.testing import is_truthy
 
 _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS = (
     ACPResponseError,
@@ -112,7 +113,7 @@ class ACPSandboxRunnerManager:
         try:
             env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
             if env_bg is not None:
-                background = str(env_bg).strip().lower() in {"1", "true", "yes", "on", "y"}
+                background = is_truthy(env_bg)
             else:
                 background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -122,7 +123,7 @@ class ACPSandboxRunnerManager:
         try:
             env_exec = os.getenv("SANDBOX_ENABLE_EXECUTION")
             if env_exec is not None:
-                execute_enabled = str(env_exec).strip().lower() in {"1", "true", "yes", "on", "y"}
+                execute_enabled = is_truthy(env_exec)
             else:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -220,6 +221,7 @@ class ACPSandboxRunnerManager:
         client.set_request_handler(self._handle_request)
 
         reader_task = asyncio.create_task(self._reader_loop(status.id, q, client))
+        session_registered = False
 
         try:
             await client.start()
@@ -270,6 +272,7 @@ class ACPSandboxRunnerManager:
             async with self._sessions_lock:
                 self._sessions[session_id] = handle
 
+            session_registered = True
             return session_id
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
@@ -280,9 +283,11 @@ class ACPSandboxRunnerManager:
                 sandbox_service.cancel_run(status.id)
             with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 sandbox_service.destroy_session(sandbox_session.id)
-            if ssh_port is not None:
-                await self._release_ssh_port(ssh_port)
             raise
+        finally:
+            if ssh_port is not None and not session_registered:
+                with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                    await self._release_ssh_port(ssh_port)
 
     async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
         sess = await self._get_session(session_id)
@@ -334,6 +339,11 @@ class ACPSandboxRunnerManager:
         for _ in range(min(limit, len(queue))):
             updates.append(queue.popleft())
         return updates
+
+    async def verify_session_access(self, session_id: str, user_id: int) -> bool:
+        """Verify that the given user owns the sandbox-backed ACP session."""
+        sess = await self._get_session(session_id, required=False)
+        return bool(sess and int(sess.user_id) == int(user_id))
 
     # -------------------------------------------------------------------------
     # SSH metadata
@@ -603,8 +613,25 @@ class ACPSandboxRunnerManager:
             priv = key.export_private_key().decode("utf-8")
             pub = key.export_public_key().decode("utf-8")
             return priv, pub
-        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-            raise ACPResponseError(f"Failed to generate SSH key: {e}") from e
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            try:
+                import subprocess
+                import tempfile
+                from pathlib import Path
+
+                with tempfile.TemporaryDirectory(prefix="acp_ssh_key_") as tmpdir:
+                    key_path = Path(tmpdir) / "id_ed25519"
+                    subprocess.run(
+                        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_path)],
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+                    priv = key_path.read_text(encoding="utf-8")
+                    pub = key_path.with_suffix(".pub").read_text(encoding="utf-8").strip()
+                    return priv, pub
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                raise ACPResponseError(f"Failed to generate SSH key: {e}") from e
 
     async def _allocate_ssh_port(self) -> int:
         async with self._ssh_ports_lock:

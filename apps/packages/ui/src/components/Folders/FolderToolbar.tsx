@@ -18,7 +18,7 @@ import {
   MoreHorizontal,
   RefreshCw
 } from "lucide-react"
-import { useFolderStore, useFolderActions, useFolderViewMode, useFolderIsLoading } from "@/store/folder"
+import { useFolderActions, useFolderViewMode, useFolderIsLoading } from "@/store/folder"
 import { useTranslation } from "react-i18next"
 import { useState } from "react"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
@@ -26,6 +26,9 @@ import { useAntdMessage } from "@/hooks/useAntdMessage"
 interface FolderToolbarProps {
   compact?: boolean
 }
+
+const TOOLBAR_FOCUS_RING_CLASS =
+  "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
 export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
   const { t } = useTranslation()
@@ -98,6 +101,7 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
               ? <Calendar className="w-4 h-4" />
               : <Folder className="w-4 h-4" />
             }
+            className={TOOLBAR_FOCUS_RING_CLASS}
             aria-label={viewMode === 'folders' ? t("common:dateView") : t("common:folderView")}
             onClick={() => setViewMode(viewMode === 'folders' ? 'date' : 'folders')}
           />
@@ -109,6 +113,7 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
                 type="text"
                 size="small"
                 icon={<FolderPlus className="w-4 h-4" />}
+                className={TOOLBAR_FOCUS_RING_CLASS}
                 aria-label={t("common:newFolder")}
                 onClick={() => setNewFolderModalOpen(true)}
               />
@@ -118,6 +123,7 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
                 type="text"
                 size="small"
                 icon={<MoreHorizontal className="w-4 h-4" />}
+                className={TOOLBAR_FOCUS_RING_CLASS}
                 aria-label={t("option:moreActions")}
               />
             </Dropdown>
@@ -136,7 +142,7 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
             size="small"
             icon={<Folder className="w-4 h-4" />}
             onClick={() => setViewMode('folders')}
-            className="flex items-center gap-1"
+            className={`${TOOLBAR_FOCUS_RING_CLASS} flex items-center gap-1`}
           >
             {t("common:folders")}
           </Button>
@@ -145,7 +151,7 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
             size="small"
             icon={<Calendar className="w-4 h-4" />}
             onClick={() => setViewMode('date')}
-            className="flex items-center gap-1"
+            className={`${TOOLBAR_FOCUS_RING_CLASS} flex items-center gap-1`}
           >
             {t("common:date")}
           </Button>
@@ -158,6 +164,7 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
                 type="text"
                 size="small"
                 icon={<FolderPlus className="w-4 h-4" />}
+                className={TOOLBAR_FOCUS_RING_CLASS}
                 aria-label={t("common:newFolder")}
                 onClick={() => setNewFolderModalOpen(true)}
               />
@@ -167,6 +174,7 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
                 type="text"
                 size="small"
                 icon={<ChevronDown className="w-4 h-4" />}
+                className={TOOLBAR_FOCUS_RING_CLASS}
                 aria-label={t("common:expandAll")}
                 onClick={expandAllFolders}
               />
@@ -176,6 +184,7 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
                 type="text"
                 size="small"
                 icon={<ChevronRight className="w-4 h-4" />}
+                className={TOOLBAR_FOCUS_RING_CLASS}
                 aria-label={t("common:collapseAll")}
                 onClick={collapseAllFolders}
               />
@@ -185,6 +194,7 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
                 type="text"
                 size="small"
                 icon={<RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />}
+                className={TOOLBAR_FOCUS_RING_CLASS}
                 aria-label={t("common:refresh")}
                 onClick={refreshFromServer}
                 loading={isLoading}

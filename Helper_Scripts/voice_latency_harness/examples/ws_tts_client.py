@@ -44,9 +44,9 @@ async def run(base: str, token: str | None, text: str, outfile: str) -> None:
                                 break
                         except Exception:
                             # Ignore non-JSON text
-                            pass
+                            _ = None
             except (websockets.ConnectionClosedOK, websockets.ConnectionClosedError):
-                pass
+                _ = None
 
 
 def main() -> None:

@@ -21,6 +21,64 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Skill name validation: lowercase letters, numbers, and hyphens only
 SKILL_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9-]{0,63}$')
+SUPPORTING_FILE_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$')
+
+# Aggregate limits for supporting files
+MAX_SUPPORTING_FILES_COUNT = 20
+MAX_SUPPORTING_FILE_BYTES = 500000
+MAX_SUPPORTING_FILES_TOTAL_BYTES = 5 * 1024 * 1024  # 5MB
+
+
+def _normalize_and_validate_skill_name(value: str) -> str:
+    normalized = value.strip().lower()
+    if not SKILL_NAME_PATTERN.match(normalized):
+        raise ValueError(
+            "Skill name must start with a letter, contain only lowercase letters, "
+            "numbers, and hyphens, and be 1-64 characters long"
+        )
+    return normalized
+
+
+def _validate_supporting_files(
+    value: dict[str, str | None] | None,
+    *,
+    allow_deletes: bool,
+) -> dict[str, str | None] | None:
+    if value is None:
+        return None
+
+    non_null_count = 0
+    total_bytes = 0
+    for filename, content in value.items():
+        # Validate filename format
+        if not SUPPORTING_FILE_NAME_PATTERN.match(filename):
+            raise ValueError(f"Invalid supporting file name: {filename}")
+        # Don't allow SKILL.md as supporting file
+        if filename.lower() == "skill.md":
+            raise ValueError("SKILL.md cannot be a supporting file")
+
+        if content is None:
+            if allow_deletes:
+                continue
+            raise ValueError(f"Supporting file {filename} cannot be null")
+
+        non_null_count += 1
+        if non_null_count > MAX_SUPPORTING_FILES_COUNT:
+            raise ValueError(
+                f"Too many supporting files ({non_null_count}); maximum is {MAX_SUPPORTING_FILES_COUNT}"
+            )
+        # Limit individual content size
+        file_bytes = len(content.encode("utf-8"))
+        if file_bytes > MAX_SUPPORTING_FILE_BYTES:
+            raise ValueError(f"Supporting file {filename} exceeds 500KB limit")
+        total_bytes += file_bytes
+
+    if total_bytes > MAX_SUPPORTING_FILES_TOTAL_BYTES:
+        raise ValueError(
+            f"Total supporting files size ({total_bytes} bytes) exceeds "
+            f"{MAX_SUPPORTING_FILES_TOTAL_BYTES // (1024 * 1024)}MB limit"
+        )
+    return value
 
 
 #######################################################################################################################
@@ -55,13 +113,7 @@ class SkillBase(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        value = value.strip().lower()
-        if not SKILL_NAME_PATTERN.match(value):
-            raise ValueError(
-                "Skill name must start with a letter, contain only lowercase letters, "
-                "numbers, and hyphens, and be 1-64 characters long"
-            )
-        return value
+        return _normalize_and_validate_skill_name(value)
 
 
 class SkillCreate(BaseModel):
@@ -76,55 +128,36 @@ class SkillCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        value = value.strip().lower()
-        if not SKILL_NAME_PATTERN.match(value):
-            raise ValueError(
-                "Skill name must start with a letter, contain only lowercase letters, "
-                "numbers, and hyphens, and be 1-64 characters long"
-            )
-        return value
+        return _normalize_and_validate_skill_name(value)
 
     @field_validator("supporting_files")
     @classmethod
     def validate_supporting_files(cls, value: dict[str, str] | None) -> dict[str, str] | None:
-        if value is None:
-            return None
-        for filename, content in value.items():
-            # Validate filename format
-            if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$', filename):
-                raise ValueError(f"Invalid supporting file name: {filename}")
-            # Don't allow SKILL.md as supporting file
-            if filename.lower() == "skill.md":
-                raise ValueError("SKILL.md cannot be a supporting file")
-            # Limit content size
-            if len(content) > 500000:
-                raise ValueError(f"Supporting file {filename} exceeds 500KB limit")
-        return value
+        validated = _validate_supporting_files(
+            value,
+            allow_deletes=False,
+        )
+        return validated  # type: ignore[return-value]
 
 
 class SkillUpdate(BaseModel):
     """Schema for updating an existing skill."""
     content: str | None = Field(None, min_length=1, max_length=500000, description="Full SKILL.md content")
-    supporting_files: dict[str, str] | None = Field(
+    supporting_files: dict[str, str | None] | None = Field(
         None,
         description="Additional files to update/add. Set value to None to remove a file."
     )
 
     @field_validator("supporting_files")
     @classmethod
-    def validate_supporting_files(cls, value: dict[str, str] | None) -> dict[str, str] | None:
-        if value is None:
-            return None
-        for filename, content in value.items():
-            if content is None:
-                continue  # None means delete the file
-            if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$', filename):
-                raise ValueError(f"Invalid supporting file name: {filename}")
-            if filename.lower() == "skill.md":
-                raise ValueError("SKILL.md cannot be a supporting file")
-            if len(content) > 500000:
-                raise ValueError(f"Supporting file {filename} exceeds 500KB limit")
-        return value
+    def validate_supporting_files(
+        cls,
+        value: dict[str, str | None] | None,
+    ) -> dict[str, str | None] | None:
+        return _validate_supporting_files(
+            value,
+            allow_deletes=True,
+        )
 
 
 class SkillResponse(SkillBase):
@@ -182,21 +215,31 @@ class SkillExecutionResult(BaseModel):
 
 class SkillImportRequest(BaseModel):
     """Request to import a skill from text content."""
-    name: str = Field(..., min_length=1, max_length=64, description="Skill name (will use frontmatter name if not provided)")
+    name: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        description="Optional skill name override (uses frontmatter name if omitted)",
+    )
     content: str = Field(..., min_length=1, max_length=500000, description="SKILL.md content")
     supporting_files: dict[str, str] | None = Field(None, description="Additional files")
     overwrite: bool = Field(False, description="If true, overwrite existing skill with same name")
 
     @field_validator("name")
     @classmethod
-    def validate_name(cls, value: str) -> str:
-        value = value.strip().lower()
-        if not SKILL_NAME_PATTERN.match(value):
-            raise ValueError(
-                "Skill name must start with a letter, contain only lowercase letters, "
-                "numbers, and hyphens, and be 1-64 characters long"
-            )
-        return value
+    def validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_and_validate_skill_name(value)
+
+    @field_validator("supporting_files")
+    @classmethod
+    def validate_supporting_files(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        validated = _validate_supporting_files(
+            value,
+            allow_deletes=False,
+        )
+        return validated  # type: ignore[return-value]
 
 
 class SkillContextPayload(BaseModel):

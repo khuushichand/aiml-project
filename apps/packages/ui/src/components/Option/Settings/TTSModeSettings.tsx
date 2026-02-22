@@ -31,6 +31,7 @@ import { useTranslation } from "react-i18next"
 import React, { useState } from "react"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
+import { isTimeoutLikeError } from "@/utils/request-timeout"
 
 export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
   const { t } = useTranslation("settings")
@@ -114,7 +115,7 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     }
   })
 
-  const { status, data } = useQuery({
+  const { status, data, refetch } = useQuery({
     queryKey: ["fetchTTSSettings"],
     queryFn: async () => {
       const data = await getTTSSettings()
@@ -142,9 +143,12 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     [form.values.tldwTtsModel]
   )
 
-  const { data: tldwVoices = [], isLoading: tldwVoicesLoading } = useQuery<
-    TldwVoice[]
-  >({
+  const {
+    data: tldwVoices = [],
+    isLoading: tldwVoicesLoading,
+    error: tldwVoicesError,
+    refetch: refetchTldwVoices
+  } = useQuery<TldwVoice[]>({
     queryKey: ["fetchTldwVoices", inferredTldwProviderKey],
     queryFn: async () => {
       if (inferredTldwProviderKey) {
@@ -153,9 +157,10 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
         )
         if (catalog.length > 0) return catalog
       }
-      return fetchTldwVoices()
+      return fetchTldwVoices({ throwOnError: true })
     },
-    enabled: form.values.ttsProvider === "tldw"
+    enabled: form.values.ttsProvider === "tldw",
+    retry: false
   })
 
   const { data: customVoices = [] } = useQuery<TldwCustomVoice[]>({
@@ -164,11 +169,17 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     enabled: form.values.ttsProvider === "tldw"
   })
 
-  const { data: tldwProvidersInfo, isLoading: tldwProvidersLoading } =
+  const {
+    data: tldwProvidersInfo,
+    isLoading: tldwProvidersLoading,
+    error: tldwProvidersError,
+    refetch: refetchTldwProviders
+  } =
     useQuery<TldwTtsProvidersInfo | null>({
       queryKey: ["fetchTldwTtsProviders"],
-      queryFn: fetchTtsProviders,
-      enabled: form.values.ttsProvider === "tldw"
+      queryFn: () => fetchTtsProviders({ throwOnError: true }),
+      enabled: form.values.ttsProvider === "tldw",
+      retry: false
     })
 
   const activeProviderCaps = React.useMemo((): TldwTtsProviderCapabilities | null => {
@@ -219,10 +230,15 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     }))
   }, [activeProviderCaps])
 
-  const { data: tldwModels } = useQuery<TldwTtsModel[]>({
+  const {
+    data: tldwModels,
+    error: tldwModelsError,
+    refetch: refetchTldwModels
+  } = useQuery<TldwTtsModel[]>({
     queryKey: ["fetchTldwTtsModels"],
     queryFn: fetchTldwTtsModels,
-    enabled: form.values.ttsProvider === "tldw"
+    enabled: form.values.ttsProvider === "tldw",
+    retry: false
   })
 
   const providerVoices = React.useMemo((): TldwTtsVoiceInfo[] => {
@@ -318,6 +334,26 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     form.setFieldValue("tldwTtsVoice", values[0])
   }, [form.values.ttsProvider, form.values.tldwTtsVoice, form.setFieldValue, tldwVoiceOptions])
 
+  const tldwCatalogError = React.useMemo(() => {
+    const issue = tldwVoicesError || tldwProvidersError || tldwModelsError
+    if (!issue) return null
+    return isTimeoutLikeError(issue)
+      ? (t(
+          "generalSettings.tts.tldwCatalogTimeout",
+          "tldw voice and model catalog took longer than 10 seconds. Retry to continue."
+        ) as string)
+      : (t(
+          "generalSettings.tts.tldwCatalogError",
+          "Unable to load tldw voices/models. Retry or verify server audio configuration."
+        ) as string)
+  }, [t, tldwModelsError, tldwProvidersError, tldwVoicesError])
+
+  const retryTldwCatalog = React.useCallback(() => {
+    void refetchTldwProviders()
+    void refetchTldwVoices()
+    void refetchTldwModels()
+  }, [refetchTldwModels, refetchTldwProviders, refetchTldwVoices])
+
   // Save mutation with loading state
   const { mutate: saveTTSMutation, isPending: isSaving } = useMutation({
     mutationFn: async (values: typeof form.values) => {
@@ -405,8 +441,19 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     }
   }
 
-  if (status === "pending" || status === "error") {
+  if (status === "pending") {
     return <Skeleton active />
+  }
+  if (status === "error") {
+    return (
+      <Alert
+        type="warning"
+        showIcon
+        title={t("generalSettings.tts.loadError", "Unable to load TTS settings")}
+        description={t("generalSettings.tts.loadErrorDesc", "Check your server connection and try again.")}
+        action={<Button size="small" onClick={() => refetch()}>{t("common:retry", "Retry")}</Button>}
+      />
+    )
   }
 
   return (
@@ -531,7 +578,7 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
             {elevenLabsTestResult && (
               <Alert
                 type={elevenLabsTestResult.ok ? "success" : "error"}
-                message={elevenLabsTestResult.message}
+                title={elevenLabsTestResult.message}
                 showIcon
                 closable
                 onClose={() => setElevenLabsTestResult(null)}
@@ -542,7 +589,7 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
             {elevenLabsError && (
               <Alert
                 type="error"
-                message={t("generalSettings.tts.elevenLabs.fetchError", "Failed to fetch voices and models")}
+                title={t("generalSettings.tts.elevenLabs.fetchError", "Failed to fetch voices and models")}
                 description={t("generalSettings.tts.elevenLabs.fetchErrorHelp", "Check your API key and internet connection, then try again.")}
                 showIcon
                 className="mt-2"
@@ -656,6 +703,22 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
         )}
         {form.values.ttsProvider === "tldw" && (
           <>
+            {tldwCatalogError && (
+              <Alert
+                type="warning"
+                showIcon
+                title={tldwCatalogError}
+                action={
+                  <Button
+                    size="small"
+                    onClick={retryTldwCatalog}
+                    disabled={tldwVoicesLoading || tldwProvidersLoading}
+                  >
+                    {t("common:retry", "Retry")}
+                  </Button>
+                }
+              />
+            )}
             <div className="flex sm:flex-row flex-col space-y-4 sm:space-y-0 sm:justify-between">
               <span className="text-text">
                 TTS Model

@@ -1,7 +1,8 @@
 import React, { useEffect } from "react"
-import { Alert, Empty, Tabs } from "antd"
+import { Empty, Tabs } from "antd"
+import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
-import { BookOpen, Highlighter, FileText, ArrowLeftRight } from "lucide-react"
+import { BookOpen, Highlighter, FileText, ArrowLeftRight, CalendarClock } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { PageShell } from "@/components/Common/PageShell"
@@ -11,6 +12,7 @@ import { ReadingItemsList } from "./ReadingList/ReadingItemsList"
 import { HighlightsList } from "./Highlights/HighlightsList"
 import { TemplatesList } from "./Templates/TemplatesList"
 import { ImportExportPanel } from "./ImportExport/ImportExportPanel"
+import { DigestSchedulesPanel } from "./Digests/DigestSchedulesPanel"
 
 /**
  * CollectionsPlaygroundPage
@@ -26,12 +28,14 @@ export const CollectionsPlaygroundPage: React.FC = () => {
   const setActiveTab = useCollectionsStore((s) => s.setActiveTab)
   const resetStore = useCollectionsStore((s) => s.resetStore)
 
-  // Reset store on unmount
+  // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
+  const resetStoreRef = React.useRef(resetStore)
+  resetStoreRef.current = resetStore
   useEffect(() => {
     return () => {
-      resetStore()
+      resetStoreRef.current()
     }
-  }, [resetStore])
+  }, [])
 
   const tabItems: TabsProps["items"] = [
     {
@@ -65,6 +69,16 @@ export const CollectionsPlaygroundPage: React.FC = () => {
       children: <TemplatesList />
     },
     {
+      key: "digests",
+      label: (
+        <span className="flex items-center gap-2">
+          <CalendarClock className="h-4 w-4" />
+          {t("collections:tabs.digests", "Digest Schedules")}
+        </span>
+      ),
+      children: <DigestSchedulesPanel />
+    },
+    {
       key: "import-export",
       label: (
         <span className="flex items-center gap-2">
@@ -92,10 +106,10 @@ export const CollectionsPlaygroundPage: React.FC = () => {
   return (
     <PageShell className="py-6" maxWidthClassName="max-w-6xl">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+        <h1 className="text-2xl font-semibold text-text">
           {t("collections:title", "Collections")}
         </h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-text-muted">
           {t(
             "collections:description",
             "Save articles, create highlights, manage templates, and import/export your reading list."
@@ -103,14 +117,13 @@ export const CollectionsPlaygroundPage: React.FC = () => {
         </p>
       </div>
 
-      <Alert
+      <DismissibleBetaAlert
+        storageKey="beta-dismissed:collections"
         message={t("collections:betaNotice", "Beta Feature")}
         description={t(
           "collections:betaDescription",
           "Collections is currently in beta. Some features may require backend support."
         )}
-        type="info"
-        showIcon
         className="mb-6"
       />
 

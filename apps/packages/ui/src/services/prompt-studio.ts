@@ -212,6 +212,31 @@ export type PromptStudioStatus = {
   success_rate?: number
 }
 
+export type LlmProviderModelInfo = {
+  name?: string
+  id?: string
+  model_id?: string
+  display_name?: string
+  deprecated?: boolean
+  [key: string]: any
+}
+
+export type LlmProviderConfig = {
+  name: string
+  display_name?: string
+  models?: string[]
+  models_info?: LlmProviderModelInfo[]
+  default_model?: string | null
+  [key: string]: any
+}
+
+export type LlmProvidersResponse = {
+  providers: LlmProviderConfig[]
+  default_provider?: string | null
+  total_configured?: number
+  [key: string]: any
+}
+
 const withIdempotency = (
   key?: string | null
 ): Record<string, string> | undefined => {
@@ -483,6 +508,16 @@ export async function getPromptStudioStatus(params?: { warn_seconds?: number }) 
   const query = buildQuery({ warn_seconds: params?.warn_seconds })
   return await apiSend<StandardResponse<PromptStudioStatus>>({
     path: appendPathQuery("/api/v1/prompt-studio/status", query),
+    method: "GET"
+  })
+}
+
+export async function getLlmProviders(params?: { include_deprecated?: boolean }) {
+  const query = buildQuery({
+    include_deprecated: params?.include_deprecated
+  })
+  return await apiSend<LlmProvidersResponse>({
+    path: appendPathQuery("/api/v1/llm/providers", query),
     method: "GET"
   })
 }

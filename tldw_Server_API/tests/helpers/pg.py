@@ -62,7 +62,7 @@ def ensure_db_exists(dsn: str) -> None:
                     _cur.execute(f"CREATE DATABASE {db_name}")
     except Exception:
         # Best effort; let schema ensure fail if truly unavailable
-        pass
+        _ = None
 
 
 def truncate_jobs_table(dsn: str) -> None:
@@ -95,7 +95,7 @@ def pg_schema_and_cleanup():
         ensure_jobs_tables_pg(dsn)
     except Exception:
         # If migrations aren't importable, let tests fail naturally
-        pass
+        _ = None
 
     # Clean slate
     truncate_jobs_table(dsn)
@@ -107,4 +107,4 @@ def pg_schema_and_cleanup():
     try:
         truncate_jobs_table(dsn)
     except Exception:
-        pass
+        _ = None

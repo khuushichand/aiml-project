@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 import { MockTldwServer } from './utils/mock-server'
@@ -52,7 +53,7 @@ test.describe('Server-backed chats UX', () => {
     const serverBaseUrl = `http://127.0.0.1:${port}`
 
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, extensionId } = (await launchWithExtension(extPath, {
+    const { context, page, extensionId } = (await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         tldwConfig: {
           serverUrl: serverBaseUrl,
@@ -115,7 +116,7 @@ test.describe('Server-backed chats UX', () => {
     const serverBaseUrl = `http://127.0.0.1:${port}`
 
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, extensionId } = (await launchWithExtension(extPath, {
+    const { context, page, extensionId } = (await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         tldwConfig: {
           serverUrl: serverBaseUrl,

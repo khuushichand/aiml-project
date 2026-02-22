@@ -162,13 +162,13 @@ def update_version_safe_metadata_in_transaction(
     except (sqlite3.OperationalError, DatabaseError) as exc:
         # Missing identifier table or unsupported upsert is not fatal.
         logger.debug(
-            "Identifier index update skipped (missing table/unsupported upsert) for dv_id=%s: %s",
+            'Identifier index update skipped (missing table/unsupported upsert) for dv_id={}: {}',
             dv_id,
             exc,
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.error(
-            "Identifier index update failed for dv_id=%s: %s",
+            'Identifier index update failed for dv_id={}: {}',
             dv_id,
             exc,
             exc_info=True,

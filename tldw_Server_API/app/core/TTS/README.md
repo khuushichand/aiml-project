@@ -42,10 +42,18 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
   - tldw_Server_API/app/core/TTS/tts_validation.py:1 — Input validation utilities
   - tldw_Server_API/app/core/TTS/voice_manager.py:1 — Upload, registry, quotas for voices
 - Configuration:
-  - YAML: tldw_Server_API/app/core/TTS/tts_providers_config.yaml:1 (providers, priority, performance, fallback, logging)
-  - Config file: `Config_Files/config.txt` → [TTS-Settings] (default provider/voice/speed/device)
+  - Canonical YAML: `tldw_Server_API/Config_Files/tts_providers_config.yaml` (providers, priority, performance, fallback, logging)
+  - Config file: `Config_Files/config.txt` -> `[TTS-Settings]` (canonical defaults: `default_provider`, `default_voice`, `default_speed`, `local_device`)
+  - Loader precedence: environment variables > `config.txt` > YAML > defaults
+  - Deprecated aliases in `[TTS-Settings]`:
+    - `default_tts_provider` -> `default_provider`
+    - `default_tts_voice` -> `default_voice`
+    - `default_tts_speed` -> `default_speed`
+    - `local_tts_device`/`tts_device` -> `local_device`
+    - Removal target for aliases: after 2026-06-30
   - Environment:
     - `TTS_STREAM_ERRORS_AS_AUDIO` — override streaming error behavior
+    - `TTS_VOICE_REGISTRY_ENABLED` — toggle persistent voice registry backing store (`true` default). Set `false` for compatibility-mode runtime/filesystem registry only; compatibility mode is deprecated and targeted for removal after 2026-12-31.
     - Secrets via `${ENV_VAR}` in YAML
 - Concurrency & Performance:
   - Global semaphore `performance.max_concurrent_generations` (default 4); provider-specific limits may apply inside adapters.
@@ -94,9 +102,11 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
   - Wraps adapter errors into the unified TTS exception taxonomy and records metrics:
     - `tts_requests_total{provider,model,voice,format,status}` for success/failure.
     - `tts_request_duration_seconds`, `tts_text_length_characters`, and `tts_audio_size_bytes` (on success).
+    - `tts_ttfb_seconds{provider,voice,format}` and `voice_to_voice_seconds{provider,route}` for latency slicing.
   - Fallback:
     - For retryable errors (`TTSNetworkError`, `TTSTimeoutError`, `TTSRateLimitError`, selected `TTSProviderError`), the service can attempt a fallback provider and increments `tts_fallback_attempts{from_provider,to_provider,success}`.
-    - For non-retryable errors (validation, auth, configuration), no fallback is attempted by default.
+    - Categorized fallback outcomes are emitted via `tts_fallback_outcomes_total{from_provider,to_provider,outcome,category}`.
+  - For non-retryable errors (validation, auth, configuration), no fallback is attempted by default.
   - Streaming vs. HTTP errors:
     - Default: `_stream_errors_as_audio == False` → errors propagate as structured HTTP responses / raised exceptions; streaming generators raise on failure.
     - Legacy/compat mode (`TTS_STREAM_ERRORS_AS_AUDIO=1` or `performance.stream_errors_as_audio=true`): streaming paths emit `"ERROR: ..."` chunks instead of raising, which is useful when mirroring OpenAI’s error-as-audio behavior.
@@ -126,6 +136,7 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
   - adapter_registry.py — registry/factory and provider enum
   - tts_config.py — unified configuration manager (env/config.txt/YAML)
   - voice_manager.py — user voice storage/validation/quotas + preview
+  - app/core/DB_Management/Voice_Registry_DB.py — persistent per-user voice registry (`voice_registry.db`)
   - audio_converter.py, streaming_audio_writer.py — format conversion and stream shaping
 - Extension Points:
   - Add a provider by creating `adapters/<name>_adapter.py` implementing `TTSAdapter` methods, register in `adapter_registry.py` (enum + DEFAULT_ADAPTERS), and add defaults to YAML.

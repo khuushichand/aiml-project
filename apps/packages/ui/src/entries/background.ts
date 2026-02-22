@@ -26,6 +26,13 @@ import {
   initBackground,
   MODEL_WARM_ALARM_NAME
 } from "@/entries/shared/background-init"
+import {
+  buildContextMenuAddPayload,
+  buildContextMenuProcessPayload,
+  extractYouTubeTimestampSeconds,
+  normalizeUrlForDedupe,
+  resolveContextMenuTargetUrl
+} from "@/entries/shared/ingest-payloads"
 
 type BackgroundDiagnostics = {
   startedAt: number
@@ -65,6 +72,35 @@ const logBackgroundError = (label: string, error: unknown) => {
   console.debug(`[tldw] background ${label} failed`, error)
 }
 
+type IngestLifecycleStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "auth_required"
+
+type IngestFunnelEvent =
+  | "context_click"
+  | "job_queued"
+  | "media_completed"
+  | "first_chat_message"
+
+type IngestSession = {
+  funnelId: string
+  url: string
+  normalizedUrl: string
+  tabId?: number
+  status: IngestLifecycleStatus
+  jobIds: number[]
+  createdAt: number
+  retryCount: number
+  awaitingAuth: boolean
+  mediaId?: number
+  lastError?: string
+  timestampSeconds?: number | null
+}
+
 const warmModels = async (
   force = false,
   throwOnError = false
@@ -73,7 +109,9 @@ const warmModels = async (
   backgroundDiagnostics.lastModelWarmAt = Date.now()
   backgroundDiagnostics.lastModelWarmError = null
   try {
-    const models = await tldwModels.warmCache(Boolean(force))
+    const models = await tldwModels.warmCache(Boolean(force), {
+      refreshOpenRouter: Boolean(force)
+    })
 
     // Sync models to local database
     if (models && models.length > 0) {
@@ -197,6 +235,258 @@ export default defineBackground({
 
     let refreshInFlight: Promise<any> | null = null
     let streamDebugEnabled = false
+    const ingestSessions = new Map<string, IngestSession>()
+    const pendingAuthReplay = new Set<string>()
+
+    const INGEST_FUNNEL_METRICS_KEY = "tldw:ingestFunnelMetrics"
+    const INGEST_FUNNEL_METRICS_LIMIT = 200
+    const METADATA_DEDUPE_FIELDS = [
+      "url",
+      "source_url",
+      "source",
+      "input_ref",
+      "canonical_url",
+      "webpage_url"
+    ]
+    const TERMINAL_INGEST_JOB_STATUSES = new Set([
+      "completed",
+      "failed",
+      "cancelled",
+      "quarantined"
+    ])
+
+    const createFunnelId = (): string =>
+      `ingest-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+    const isLikelyAuthError = (status: number, error?: string): boolean => {
+      if (status === 401) return true
+      const text = String(error || "").toLowerCase()
+      if (!text) return false
+      return (
+        text.includes("not authenticated") ||
+        text.includes("api key") ||
+        text.includes("login") ||
+        text.includes("unauthorized")
+      )
+    }
+
+    const hasUsableAuthConfig = (cfg: any): boolean => {
+      if (!cfg || typeof cfg !== "object") return false
+      const authMode = String(cfg.authMode || "single-user")
+      if (authMode === "multi-user") {
+        return Boolean(String(cfg.accessToken || "").trim())
+      }
+      return Boolean(String(cfg.apiKey || "").trim())
+    }
+
+    const toPositiveInt = (value: unknown): number | null => {
+      const parsed = Number(value)
+      if (!Number.isFinite(parsed) || parsed <= 0) return null
+      return Math.trunc(parsed)
+    }
+
+    const pickMediaIdFromAny = (value: unknown): number | null => {
+      if (!value || typeof value !== "object") return null
+      const row = value as Record<string, unknown>
+      return (
+        toPositiveInt(row.media_id) ||
+        toPositiveInt(row.db_id) ||
+        toPositiveInt(row.id)
+      )
+    }
+
+    const pickMetadataSearchMediaId = (data: unknown): number | null => {
+      if (!data || typeof data !== "object") return null
+      const root = data as Record<string, unknown>
+      const rows = Array.isArray(root.results) ? root.results : []
+      for (const row of rows) {
+        const mediaId = pickMediaIdFromAny(row)
+        if (mediaId != null) return mediaId
+      }
+      return null
+    }
+
+    const buildMetadataSearchPath = (urlValue: string): string => {
+      const filters = METADATA_DEDUPE_FIELDS.map((field) => ({
+        field,
+        op: "eq",
+        value: urlValue
+      }))
+      const query = new URLSearchParams({
+        filters: JSON.stringify(filters),
+        match_mode: "any",
+        group_by_media: "true",
+        page: "1",
+        per_page: "1"
+      })
+      return `/api/v1/media/metadata-search?${query.toString()}`
+    }
+
+    const appendIngestFunnelMetric = async (
+      event: IngestFunnelEvent,
+      funnelId: string,
+      metadata?: Record<string, unknown>
+    ) => {
+      try {
+        const current = await storage.get<any>(INGEST_FUNNEL_METRICS_KEY)
+        const entries = Array.isArray(current) ? current : []
+        entries.push({
+          event,
+          funnelId,
+          timestamp: new Date().toISOString(),
+          metadata: metadata || {}
+        })
+        if (entries.length > INGEST_FUNNEL_METRICS_LIMIT) {
+          entries.splice(0, entries.length - INGEST_FUNNEL_METRICS_LIMIT)
+        }
+        await storage.set(INGEST_FUNNEL_METRICS_KEY, entries)
+      } catch (error) {
+        logBackgroundError("append ingest funnel metric", error)
+      }
+    }
+
+    const emitBackgroundMessage = async (
+      tabId: number | undefined,
+      type: string,
+      payload?: Record<string, unknown>
+    ) => {
+      ensureSidepanelOpen(tabId)
+      try {
+        await browser.runtime.sendMessage({
+          from: "background",
+          type,
+          payload
+        })
+      } catch (error) {
+        logBackgroundError(`send ${type}`, error)
+        setTimeout(() => {
+          try {
+            browser.runtime.sendMessage({
+              from: "background",
+              type,
+              payload
+            })
+          } catch (retryError) {
+            logBackgroundError(`send ${type} (retry)`, retryError)
+          }
+        }, 500)
+      }
+    }
+
+    const emitIngestStatus = async (
+      session: IngestSession,
+      update: Partial<{
+        status: IngestLifecycleStatus
+        progressPercent: number
+        progressMessage: string
+        error: string
+        mediaId: number
+        canCancel: boolean
+        canRetry: boolean
+      }>
+    ) => {
+      if (update.status) {
+        session.status = update.status
+      }
+      if (typeof update.mediaId === "number" && update.mediaId > 0) {
+        session.mediaId = Math.trunc(update.mediaId)
+      }
+      if (update.error) {
+        session.lastError = update.error
+      }
+      const canCancel =
+        typeof update.canCancel === "boolean"
+          ? update.canCancel
+          : session.status === "queued" || session.status === "running"
+      const canRetry =
+        typeof update.canRetry === "boolean"
+          ? update.canRetry
+          : session.status === "failed" ||
+            session.status === "cancelled" ||
+            session.status === "auth_required"
+      await emitBackgroundMessage(session.tabId, "media-ingest-status", {
+        funnelId: session.funnelId,
+        url: session.url,
+        status: session.status,
+        progressPercent: update.progressPercent,
+        progressMessage: update.progressMessage,
+        error: update.error,
+        mediaId: session.mediaId,
+        jobIds: session.jobIds,
+        canCancel,
+        canRetry,
+        timestampSeconds: session.timestampSeconds ?? undefined
+      })
+    }
+
+    const sendIngestReadyMessage = async (
+      tabId: number | undefined,
+      payload: {
+        funnelId: string
+        mediaId: string
+        url?: string
+        mode: "rag_media"
+        timestampSeconds?: number
+      }
+    ) => {
+      await emitBackgroundMessage(tabId, "media-ingest-ready", payload)
+    }
+
+    const openAuthSettings = async () => {
+      try {
+        const settingsUrl = browser.runtime.getURL("options.html#/settings/tldw")
+        await browser.tabs.create({ url: settingsUrl })
+      } catch (error) {
+        logBackgroundError("open auth settings", error)
+      }
+    }
+
+    const queueAuthRecovery = async (session: IngestSession, errorText: string) => {
+      session.awaitingAuth = true
+      session.lastError = errorText
+      pendingAuthReplay.add(session.funnelId)
+      await emitIngestStatus(session, {
+        status: "auth_required",
+        error: errorText,
+        canCancel: false,
+        canRetry: true
+      })
+      notify(
+        "tldw_server",
+        "Authentication required. Opened settings to update credentials; ingest will retry automatically."
+      )
+      await openAuthSettings()
+    }
+
+    const findExistingMediaForUrl = async (
+      rawUrl: string,
+      normalizedUrl: string
+    ): Promise<number | null> => {
+      const candidates = Array.from(
+        new Set(
+          [String(rawUrl || "").trim(), String(normalizedUrl || "").trim()].filter(
+            (value) => value.length > 0
+          )
+        )
+      )
+      for (const candidate of candidates) {
+        const path = buildMetadataSearchPath(candidate)
+        const resp = (await handleTldwRequest({
+          path,
+          method: "GET",
+          timeoutMs: 15000
+        })) as { ok: boolean; status?: number; data?: any; error?: string } | undefined
+        if (!resp?.ok) {
+          if (isLikelyAuthError(Number(resp?.status || 0), resp?.error)) {
+            throw new Error(resp?.error || "Authentication required.")
+          }
+          continue
+        }
+        const mediaId = pickMetadataSearchMediaId(resp.data)
+        if (mediaId != null) return mediaId
+      }
+      return null
+    }
 
     const handleTranscribeClick = async (
       info: any,
@@ -613,6 +903,497 @@ export default defineBackground({
       }
     }
 
+    const extractIngestJobIds = (data: any): number[] => {
+      const jobs = Array.isArray(data?.jobs) ? data.jobs : []
+      const ids: number[] = []
+      for (const item of jobs) {
+        const id = Number(item?.id)
+        if (Number.isFinite(id) && id > 0) {
+          ids.push(Math.trunc(id))
+        }
+      }
+      return ids
+    }
+
+    const extractMediaIdFromJobStatus = (data: any): number | null => {
+      const direct = Number(data?.media_id)
+      if (Number.isFinite(direct) && direct > 0) {
+        return Math.trunc(direct)
+      }
+      const nested = Number(data?.result?.media_id)
+      if (Number.isFinite(nested) && nested > 0) {
+        return Math.trunc(nested)
+      }
+      return null
+    }
+
+    const extractMediaIdFromAddResponse = (data: any): number | null => {
+      if (!data || typeof data !== "object") return null
+      const root = data as Record<string, unknown>
+      const fromRoot = pickMediaIdFromAny(root)
+      if (fromRoot != null) return fromRoot
+      const rows = Array.isArray(root.results) ? root.results : []
+      for (const row of rows) {
+        const mediaId = pickMediaIdFromAny(row)
+        if (mediaId != null) return mediaId
+      }
+      return pickMediaIdFromAny(root.result)
+    }
+
+    const isQueuedStatus = (value: string): boolean =>
+      value === "queued" || value === "pending"
+
+    const isRunningStatus = (value: string): boolean =>
+      value === "running" || value === "in_progress" || value === "processing"
+
+    const pollIngestJobsForSession = async (
+      session: IngestSession,
+      opts?: { timeoutMs?: number; intervalMs?: number }
+    ): Promise<{
+      mediaId: number | null
+      finalStatus:
+        | "completed"
+        | "failed"
+        | "cancelled"
+        | "auth_required"
+        | "timeout"
+      error?: string
+    }> => {
+      const timeoutMs = Math.max(10_000, Number(opts?.timeoutMs) || 5 * 60 * 1000)
+      const intervalMs = Math.max(500, Number(opts?.intervalMs) || 1200)
+      const deadline = Date.now() + timeoutMs
+      const unresolved = new Set(session.jobIds.map((id) => Math.trunc(id)))
+      let lastStatus: IngestLifecycleStatus | null = null
+      let lastProgressPercent: number | null = null
+      let lastProgressMessage = ""
+      let finalStatus: "failed" | "cancelled" = "failed"
+      let finalError = ""
+
+      while (unresolved.size > 0 && Date.now() < deadline) {
+        const activeSession = ingestSessions.get(session.funnelId)
+        if (!activeSession || activeSession.status === "cancelled") {
+          return { mediaId: null, finalStatus: "cancelled" }
+        }
+
+        let sawPending = false
+        let anyQueued = false
+        let anyRunning = false
+        let anyFailed = false
+        let anyCancelled = false
+        let maxProgressPercent = 0
+        let progressMessage = ""
+        for (const jobId of Array.from(unresolved)) {
+          const resp = (await handleTldwRequest({
+            path: `/api/v1/media/ingest/jobs/${jobId}`,
+            method: "GET",
+            timeoutMs: intervalMs + 3000
+          })) as { ok: boolean; status?: number; data?: any; error?: string } | undefined
+          if (!resp?.ok) {
+            if (isLikelyAuthError(Number(resp?.status || 0), resp?.error)) {
+              return {
+                mediaId: null,
+                finalStatus: "auth_required",
+                error: resp?.error || "Authentication required."
+              }
+            }
+            finalError = resp?.error || finalError
+            sawPending = true
+            continue
+          }
+          const mediaId = extractMediaIdFromJobStatus(resp.data)
+          if (mediaId != null) {
+            return { mediaId, finalStatus: "completed" }
+          }
+          const status = String(resp.data?.status || "").toLowerCase()
+          if (isQueuedStatus(status)) anyQueued = true
+          else if (isRunningStatus(status)) anyRunning = true
+          else if (status === "failed" || status === "quarantined") anyFailed = true
+          else if (status === "cancelled") anyCancelled = true
+          const progressPercent = Number(resp.data?.progress_percent)
+          if (Number.isFinite(progressPercent) && progressPercent > maxProgressPercent) {
+            maxProgressPercent = Math.min(100, Math.max(0, progressPercent))
+          }
+          if (!progressMessage) {
+            const candidateMessage = String(resp.data?.progress_message || "").trim()
+            if (candidateMessage) progressMessage = candidateMessage
+          }
+
+          if (TERMINAL_INGEST_JOB_STATUSES.has(status)) {
+            unresolved.delete(jobId)
+          } else {
+            sawPending = true
+          }
+        }
+
+        let statusUpdate: IngestLifecycleStatus = "queued"
+        if (anyRunning) {
+          statusUpdate = "running"
+        } else if (!anyRunning && !anyQueued && anyFailed) {
+          statusUpdate = "failed"
+        } else if (!anyRunning && !anyQueued && anyCancelled && !anyFailed) {
+          statusUpdate = "cancelled"
+        } else if (anyQueued || sawPending) {
+          statusUpdate = "queued"
+        }
+
+        if (
+          statusUpdate !== lastStatus ||
+          maxProgressPercent !== lastProgressPercent ||
+          progressMessage !== lastProgressMessage
+        ) {
+          await emitIngestStatus(session, {
+            status: statusUpdate,
+            progressPercent: Number.isFinite(maxProgressPercent)
+              ? maxProgressPercent
+              : undefined,
+            progressMessage: progressMessage || undefined
+          })
+          lastStatus = statusUpdate
+          lastProgressPercent = Number.isFinite(maxProgressPercent)
+            ? maxProgressPercent
+            : null
+          lastProgressMessage = progressMessage
+        }
+
+        if (!sawPending && unresolved.size === 0) {
+          if (anyFailed) {
+            finalStatus = "failed"
+          } else if (anyCancelled && !anyFailed) {
+            finalStatus = "cancelled"
+          }
+          break
+        }
+        if (!sawPending) break
+        await new Promise((resolve) => setTimeout(resolve, intervalMs))
+      }
+
+      if (Date.now() >= deadline && unresolved.size > 0) {
+        return {
+          mediaId: null,
+          finalStatus: "timeout",
+          error: "Timed out while waiting for media ingest jobs."
+        }
+      }
+
+      return {
+        mediaId: null,
+        finalStatus,
+        error: finalError || undefined
+      }
+    }
+
+    const cancelIngestSessionById = async (
+      funnelId: string,
+      reason?: string
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const session = ingestSessions.get(funnelId)
+      if (!session) return { ok: false, error: "Ingest session not found." }
+      pendingAuthReplay.delete(funnelId)
+      session.awaitingAuth = false
+      session.status = "cancelled"
+      await emitIngestStatus(session, {
+        status: "cancelled",
+        progressMessage: "Cancelling ingest...",
+        canCancel: false,
+        canRetry: true
+      })
+      for (const jobId of session.jobIds) {
+        await handleTldwRequest({
+          path: `/api/v1/media/ingest/jobs/${jobId}?reason=${encodeURIComponent(
+            reason || "user_cancelled"
+          )}`,
+          method: "DELETE",
+          timeoutMs: 8000
+        }).catch((error) => {
+          logBackgroundError(`cancel ingest job ${jobId}`, error)
+        })
+      }
+      await emitIngestStatus(session, {
+        status: "cancelled",
+        progressMessage: "Ingest cancelled.",
+        canCancel: false,
+        canRetry: true
+      })
+      return { ok: true }
+    }
+
+    const startContextMenuIngest = async (
+      session: IngestSession,
+      options?: {
+        trackContextClick?: boolean
+        reason?: "initial" | "manual_retry" | "auth_replay"
+      }
+    ) => {
+      ingestSessions.set(session.funnelId, session)
+      session.awaitingAuth = false
+      session.lastError = undefined
+      session.mediaId = undefined
+      session.jobIds = []
+
+      if (options?.trackContextClick) {
+        await appendIngestFunnelMetric("context_click", session.funnelId, {
+          url: session.url
+        })
+      }
+
+      await emitIngestStatus(session, {
+        status: "queued",
+        progressMessage: "Checking for existing media...",
+        canCancel: false,
+        canRetry: false
+      })
+
+      let existingMediaId: number | null = null
+      try {
+        existingMediaId = await findExistingMediaForUrl(
+          session.url,
+          session.normalizedUrl
+        )
+      } catch (error) {
+        const msg = formatErrorMessage(error, "Authentication required.")
+        await queueAuthRecovery(session, msg)
+        return
+      }
+
+      if (existingMediaId != null) {
+        session.mediaId = existingMediaId
+        await appendIngestFunnelMetric("media_completed", session.funnelId, {
+          mediaId: existingMediaId,
+          deduped: true
+        })
+        await emitIngestStatus(session, {
+          status: "completed",
+          mediaId: existingMediaId,
+          progressPercent: 100,
+          progressMessage: "Already in your library. Opening media-scoped chat.",
+          canCancel: false,
+          canRetry: false
+        })
+        await sendIngestReadyMessage(session.tabId, {
+          funnelId: session.funnelId,
+          mediaId: String(existingMediaId),
+          url: session.url,
+          mode: "rag_media",
+          timestampSeconds:
+            typeof session.timestampSeconds === "number" &&
+            session.timestampSeconds >= 0
+              ? session.timestampSeconds
+              : undefined
+        })
+        notify(
+          "tldw_server",
+          "Already ingested. Opened media-scoped chat in sidebar."
+        )
+        return
+      }
+
+      const addPayload = buildContextMenuAddPayload(session.url)
+      const jobsResp = await handleUpload({
+        path: "/api/v1/media/ingest/jobs",
+        method: "POST",
+        fields: addPayload.fields,
+        timeoutMs: 180000
+      })
+      if (!jobsResp?.ok) {
+        if (isLikelyAuthError(Number(jobsResp?.status || 0), jobsResp?.error)) {
+          await queueAuthRecovery(
+            session,
+            jobsResp?.error || "Authentication required."
+          )
+          return
+        }
+        const addResp = await handleUpload(addPayload)
+        if (!addResp?.ok) {
+          if (isLikelyAuthError(Number(addResp?.status || 0), addResp?.error)) {
+            await queueAuthRecovery(
+              session,
+              addResp?.error || "Authentication required."
+            )
+            return
+          }
+          const msg = addResp?.error || jobsResp?.error || "Ingest failed"
+          session.lastError = msg
+          await emitIngestStatus(session, {
+            status: "failed",
+            error: msg,
+            progressMessage: msg,
+            canCancel: false,
+            canRetry: true
+          })
+          notify("tldw_server", msg)
+          return
+        }
+        const mediaId = extractMediaIdFromAddResponse(addResp.data)
+        if (mediaId == null) {
+          const msg = "Ingest completed but media id was not returned."
+          session.lastError = msg
+          await emitIngestStatus(session, {
+            status: "failed",
+            error: msg,
+            canCancel: false,
+            canRetry: true
+          })
+          notify("tldw_server", msg)
+          return
+        }
+        session.mediaId = mediaId
+        await appendIngestFunnelMetric("media_completed", session.funnelId, {
+          mediaId,
+          fallback: true
+        })
+        await emitIngestStatus(session, {
+          status: "completed",
+          mediaId,
+          progressPercent: 100,
+          progressMessage: "Ingest complete. Opening media-scoped chat.",
+          canCancel: false,
+          canRetry: false
+        })
+        await sendIngestReadyMessage(session.tabId, {
+          funnelId: session.funnelId,
+          mediaId: String(mediaId),
+          url: session.url,
+          mode: "rag_media",
+          timestampSeconds:
+            typeof session.timestampSeconds === "number" &&
+            session.timestampSeconds >= 0
+              ? session.timestampSeconds
+              : undefined
+        })
+        notify("tldw_server", "Ready. Opened media-scoped chat in sidebar.")
+        return
+      }
+
+      session.jobIds = extractIngestJobIds(jobsResp.data)
+      if (session.jobIds.length === 0) {
+        const msg = "Ingest job submission returned no job IDs."
+        session.lastError = msg
+        await emitIngestStatus(session, {
+          status: "failed",
+          error: msg,
+          canCancel: false,
+          canRetry: true
+        })
+        notify("tldw_server", msg)
+        return
+      }
+
+      await appendIngestFunnelMetric("job_queued", session.funnelId, {
+        jobIds: session.jobIds,
+        url: session.url
+      })
+
+      await emitIngestStatus(session, {
+        status: "queued",
+        progressPercent: 0,
+        progressMessage: "Queued for processing.",
+        canCancel: true,
+        canRetry: false
+      })
+      notify("tldw_server", "Queued for processing. Preparing chat when ready…")
+
+      const pollResult = await pollIngestJobsForSession(session, {
+        timeoutMs: 10 * 60 * 1000,
+        intervalMs: 1500
+      })
+      if (pollResult.finalStatus === "completed" && pollResult.mediaId != null) {
+        session.mediaId = pollResult.mediaId
+        await appendIngestFunnelMetric("media_completed", session.funnelId, {
+          mediaId: pollResult.mediaId,
+          deduped: false
+        })
+        await emitIngestStatus(session, {
+          status: "completed",
+          mediaId: pollResult.mediaId,
+          progressPercent: 100,
+          progressMessage: "Ingest complete. Opening media-scoped chat.",
+          canCancel: false,
+          canRetry: false
+        })
+        await sendIngestReadyMessage(session.tabId, {
+          funnelId: session.funnelId,
+          mediaId: String(pollResult.mediaId),
+          url: session.url,
+          mode: "rag_media",
+          timestampSeconds:
+            typeof session.timestampSeconds === "number" &&
+            session.timestampSeconds >= 0
+              ? session.timestampSeconds
+              : undefined
+        })
+        notify("tldw_server", "Ready. Opened media-scoped chat in sidebar.")
+        return
+      }
+
+      if (pollResult.finalStatus === "auth_required") {
+        await queueAuthRecovery(
+          session,
+          pollResult.error || "Authentication required."
+        )
+        return
+      }
+
+      if (pollResult.finalStatus === "cancelled") {
+        await emitIngestStatus(session, {
+          status: "cancelled",
+          progressMessage: "Ingest cancelled.",
+          canCancel: false,
+          canRetry: true
+        })
+        notify("tldw_server", "Ingest was cancelled.")
+        return
+      }
+
+      const failureMessage =
+        pollResult.error ||
+        (pollResult.finalStatus === "timeout"
+          ? "Ingest timed out. Retry or open Media to inspect job status."
+          : "No completed media yet. Open Media to check job status.")
+      session.lastError = failureMessage
+      await emitIngestStatus(session, {
+        status: "failed",
+        error: failureMessage,
+        progressMessage: failureMessage,
+        canCancel: false,
+        canRetry: true
+      })
+      notify("tldw_server", failureMessage)
+    }
+
+    const retryIngestSessionById = async (
+      funnelId: string,
+      reason: "manual_retry" | "auth_replay"
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const session = ingestSessions.get(funnelId)
+      if (!session) return { ok: false, error: "Ingest session not found." }
+      if (session.status === "queued" || session.status === "running") {
+        return { ok: false, error: "Ingest is already in progress." }
+      }
+      pendingAuthReplay.delete(funnelId)
+      session.retryCount += 1
+      void startContextMenuIngest(session, {
+        trackContextClick: false,
+        reason
+      })
+      return { ok: true }
+    }
+
+    const replayPendingAuthSessions = async () => {
+      if (pendingAuthReplay.size === 0) return
+      const cfg = await storage.get<any>("tldwConfig")
+      if (!hasUsableAuthConfig(cfg)) return
+      for (const funnelId of Array.from(pendingAuthReplay)) {
+        pendingAuthReplay.delete(funnelId)
+        const session = ingestSessions.get(funnelId)
+        if (!session) continue
+        session.awaitingAuth = false
+        void startContextMenuIngest(session, {
+          trackContextClick: false,
+          reason: "auth_replay"
+        })
+      }
+    }
+
     const handleRuntimeMessage = async (message: any, sender: any) => {
       // Simple ping for E2E tests - verifies message handler is working
       if (message.type === "tldw:ping") {
@@ -995,6 +1776,48 @@ export default defineBackground({
         }
         return undefined
       }
+      if (message.type === "tldw:media-ingest/cancel") {
+        const funnelId = String(message?.payload?.funnelId || "").trim()
+        if (!funnelId) {
+          return { ok: false, error: "Missing funnelId" }
+        }
+        return await cancelIngestSessionById(
+          funnelId,
+          String(message?.payload?.reason || "user_cancelled")
+        )
+      }
+      if (message.type === "tldw:media-ingest/retry") {
+        const funnelId = String(message?.payload?.funnelId || "").trim()
+        if (!funnelId) {
+          return { ok: false, error: "Missing funnelId" }
+        }
+        return await retryIngestSessionById(funnelId, "manual_retry")
+      }
+      if (message.type === "tldw:media-ingest/open-auth-settings") {
+        await openAuthSettings()
+        return { ok: true }
+      }
+      if (message.type === "tldw:media-ingest/funnel-event") {
+        const funnelId = String(message?.payload?.funnelId || "").trim()
+        const event = String(message?.payload?.event || "").trim()
+        if (!funnelId || !event) {
+          return { ok: false, error: "Missing funnel metric payload" }
+        }
+        if (
+          event === "context_click" ||
+          event === "job_queued" ||
+          event === "media_completed" ||
+          event === "first_chat_message"
+        ) {
+          await appendIngestFunnelMetric(event as IngestFunnelEvent, funnelId, {
+            ...(message?.payload?.metadata && typeof message.payload.metadata === "object"
+              ? message.payload.metadata
+              : {})
+          })
+          return { ok: true }
+        }
+        return { ok: false, error: "Unsupported funnel event" }
+      }
       if (message.type === 'tldw:upload') {
         return handleUpload(message.payload || {})
       }
@@ -1005,11 +1828,12 @@ export default defineBackground({
         try {
           const tabs = await browser.tabs.query({ active: true, currentWindow: true })
           const tab = tabs[0]
-          const pageUrl = tab?.url || ''
+          const pageUrl = resolveContextMenuTargetUrl({ pageUrl: tab?.url || "" }, tab)
           if (!pageUrl) return { ok: false, status: 400, error: 'No active tab URL' }
-          const path = message.mode === 'process' ? getProcessPathForUrl(pageUrl) : '/api/v1/media/add'
-          const resp = await apiSend({ path, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { url: pageUrl }, timeoutMs: 120000 })
-          return resp
+          if (message.mode === "process") {
+            return await handleTldwRequest(buildContextMenuProcessPayload(pageUrl))
+          }
+          return await handleUpload(buildContextMenuAddPayload(pageUrl))
         } catch (e: any) {
           return { ok: false, status: 0, error: e?.message || 'Ingest failed' }
         }
@@ -1076,6 +1900,14 @@ export default defineBackground({
       return true
     })
     console.log('[BG_STARTUP] Message listener registered')
+
+    browser.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local") return
+      if (!changes || !Object.prototype.hasOwnProperty.call(changes, "tldwConfig")) {
+        return
+      }
+      void replayPendingAuthSessions()
+    })
 
     browser.runtime.onConnect.addListener((port) => {
       console.log('[BG_CONNECT] Port connected', { name: port.name })
@@ -1281,29 +2113,42 @@ export default defineBackground({
         )
       } else if (info.menuItemId === "send-to-tldw") {
         try {
-          const pageUrl = info.pageUrl || (tab && tab.url) || ''
-          const targetUrl = (info.linkUrl && /^https?:/i.test(info.linkUrl)) ? info.linkUrl : pageUrl
+          const targetUrl = resolveContextMenuTargetUrl(info, tab)
           if (!targetUrl) return
-          await browser.runtime.sendMessage({
-            type: 'tldw:request',
-            payload: { path: '/api/v1/media/add', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { url: targetUrl } }
+          const addPayload = buildContextMenuAddPayload(targetUrl)
+          const session: IngestSession = {
+            funnelId: createFunnelId(),
+            url: targetUrl,
+            normalizedUrl: normalizeUrlForDedupe(targetUrl),
+            tabId: tab?.id,
+            status: "queued",
+            jobIds: [],
+            createdAt: Date.now(),
+            retryCount: 0,
+            awaitingAuth: false,
+            timestampSeconds: extractYouTubeTimestampSeconds(targetUrl)
+          }
+          notify("tldw_server", "Starting ingest…")
+          void startContextMenuIngest(session, {
+            trackContextClick: true,
+            reason: "initial"
           })
-          notify('tldw_server', 'Sent to tldw_server for processing')
         } catch (e) {
-          console.error('Failed to send to tldw_server:', e)
+          console.error("Failed to send to tldw_server:", e)
+          notify("tldw_server", "Failed to send item to tldw_server")
         }
-      } else if (info.menuItemId === 'process-local-tldw') {
+      } else if (info.menuItemId === "process-local-tldw") {
         try {
-          const pageUrl = info.pageUrl || (tab && tab.url) || ''
-          const targetUrl = (info.linkUrl && /^https?:/i.test(info.linkUrl)) ? info.linkUrl : pageUrl
+          const targetUrl = resolveContextMenuTargetUrl(info, tab)
           if (!targetUrl) return
-          await browser.runtime.sendMessage({
-            type: 'tldw:request',
-            payload: { path: getProcessPathForUrl(targetUrl), method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { url: targetUrl } }
-          })
-          notify('tldw_server', 'Processed page (not saved to server)')
+          const resp = await handleTldwRequest(buildContextMenuProcessPayload(targetUrl))
+          if (!resp?.ok) {
+            throw new Error(resp?.error || "Processing failed")
+          }
+          notify("tldw_server", "Processed page (not saved to server)")
         } catch (e) {
-          console.error('Failed to process locally:', e)
+          console.error("Failed to process locally:", e)
+          notify("tldw_server", "Failed to process page")
         }
       } else if (info.menuItemId === "summarize-pa") {
         ensureSidepanelOpen(tab?.id)

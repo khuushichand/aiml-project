@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "Студія таблиць даних"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "Бета-функція"
+  },
+  "betaDescription": {
+    "message": "Data Tables зараз у бета-версії. Генерація таблиць потребує підтримки бекенду."
+  },
+  "offline": {
+    "message": "Сервер офлайн. Підключіться, щоб користуватися Data Tables."
+  },
+  "tabs_tables": {
+    "message": "Мої таблиці"
+  },
+  "tabs_create": {
+    "message": "Створити таблицю"
+  },
+  "wizard_sources": {
+    "message": "Вибрати джерела"
+  },
+  "wizard_sourcesDesc": {
+    "message": "Оберіть джерела даних"
+  },
+  "wizard_prompt": {
+    "message": "Опишіть таблицю"
+  },
+  "wizard_promptDesc": {
+    "message": "Напишіть підказку"
+  },
+  "wizard_preview": {
+    "message": "Попередній перегляд"
+  },
+  "wizard_previewDesc": {
+    "message": "Перегляньте згенеровану таблицю"
+  },
+  "wizard_save": {
+    "message": "Зберегти"
+  },
+  "wizard_saveDesc": {
+    "message": "Зберегти до бібліотеки"
+  },
+  "wizard_tip": {
+    "message": "Порада"
+  },
+  "wizard_tipText": {
+    "message": "Виберіть чати, документи або пошукайте у своїй базі знань, щоб отримати структуровані дані. Чим точніші джерела, тим кращі результати."
+  },
+  "wizard_reset": {
+    "message": "Почати спочатку"
+  },
+  "sourceTypes_chat": {
+    "message": "Чати"
+  },
+  "sourceTypes_document": {
+    "message": "Документи"
+  },
+  "sourceTypes_rag": {
+    "message": "Пошук RAG"
+  },
+  "selectedSources": {
+    "message": "Вибрані джерела"
+  },
+  "sourcesSelected": {
+    "message": "Джерела вибрано"
+  },
+  "searchPlaceholder": {
+    "message": "Пошук..."
+  },
+  "ragPlaceholder": {
+    "message": "Введіть пошуковий запит для бази знань..."
+  },
+  "ragQuerySnippet": {
+    "message": "Пошуковий запит бази знань"
+  },
+  "ragAdded": {
+    "message": "Запит RAG додано як джерело"
+  },
+  "ragTip": {
+    "message": "Вводьте пошукові запити, щоб знайти релевантний вміст у базі знань. Кожен запит буде додано як окреме джерело."
+  },
+  "fetchError": {
+    "message": "Не вдалося завантажити елементи"
+  },
+  "promptLabel": {
+    "message": "Опишіть таблицю, яку ви хочете створити"
+  },
+  "promptPlaceholder": {
+    "message": "Напр., створіть таблицю, що порівнює основні теми обговорення, з колонками для теми, ключових пунктів і оцінки релевантності..."
+  },
+  "examplePrompts": {
+    "message": "Приклади підказок:"
+  },
+  "advancedOptions": {
+    "message": "Розширені параметри"
+  },
+  "columnHints": {
+    "message": "Підказки для колонок (необов'язково)"
+  },
+  "columnHintsDesc": {
+    "message": "Запропонуйте назви та типи колонок, щоб спрямувати LLM. Якщо не вказано, колонки будуть виведені з вашої підказки."
+  },
+  "newColumnName": {
+    "message": "Назва колонки"
+  },
+  "modelSelection": {
+    "message": "Модель"
+  },
+  "selectModel": {
+    "message": "Використовувати модель за замовчуванням"
+  },
+  "maxRows": {
+    "message": "Максимум рядків"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "Генеруємо таблицю з ваших джерел..."
+  },
+  "generatingNote": {
+    "message": "Це може зайняти деякий час залежно від обсягу даних."
+  },
+  "generateSuccess": {
+    "message": "Таблицю успішно згенеровано!"
+  },
+  "generationFailed": {
+    "message": "Помилка генерації"
+  },
+  "tryAgain": {
+    "message": "Спробувати ще раз"
+  },
+  "warnings": {
+    "message": "Попередження"
+  },
+  "noPreview": {
+    "message": "Попередній перегляд недоступний"
+  },
+  "promptUsed": {
+    "message": "Використана підказка:"
+  },
+  "previewModified": {
+    "message": "Ви змінили попередній перегляд. Зміни буде збережено разом із таблицею."
+  },
+  "addRow": {
+    "message": "Додати рядок"
+  },
+  "addColumn": {
+    "message": "Додати колонку"
+  },
+  "deleteRow": {
+    "message": "Видалити рядок?"
+  },
+  "deleteRowConfirm": {
+    "message": "Цю дію неможливо скасувати."
+  },
+  "deleteColumn": {
+    "message": "Видалити колонку?"
+  },
+  "deleteColumnConfirm": {
+    "message": "Цю дію неможливо скасувати."
+  },
+  "discard": {
+    "message": "Скасувати"
+  },
+  "changesDiscarded": {
+    "message": "Зміни скасовано"
+  },
+  "save": {
+    "message": "Зберегти"
+  },
+  "saveSuccess": {
+    "message": "Зміни успішно збережено!"
+  },
+  "unsavedChanges": {
+    "message": "У вас є незбережені зміни"
+  },
+  "columnAdded": {
+    "message": "Колонку '{{name}}' додано"
+  },
+  "rows": {
+    "message": "рядки"
+  },
+  "columnsLabel": {
+    "message": "колонки"
+  },
+  "showingRows": {
+    "message": "Показано {{total}} рядків"
+  },
+  "tableSummary": {
+    "message": "Підсумок таблиці"
+  },
+  "tableName": {
+    "message": "Назва таблиці"
+  },
+  "tableNamePlaceholder": {
+    "message": "Введіть назву для вашої таблиці"
+  },
+  "tableDescription": {
+    "message": "Опис (необов'язково)"
+  },
+  "tableDescPlaceholder": {
+    "message": "Додайте опис, щоб легше згадати, що містить ця таблиця"
+  },
+  "saveToLibrary": {
+    "message": "Зберегти до бібліотеки"
+  },
+  "tableSaved": {
+    "message": "Таблицю збережено!"
+  },
+  "tableSavedDesc": {
+    "message": "Вашу таблицю збережено у бібліотеці. Ви можете переглядати та експортувати її будь-коли."
+  },
+  "viewTables": {
+    "message": "Переглянути мої таблиці"
+  },
+  "createAnother": {
+    "message": "Створити ще одну"
+  },
+  "orExport": {
+    "message": "Або експортувати безпосередньо:"
+  },
+  "export": {
+    "message": "Експорт"
+  },
+  "exportCSV": {
+    "message": "Експортувати як CSV"
+  },
+  "exportExcel": {
+    "message": "Експортувати як Excel"
+  },
+  "exportJSON": {
+    "message": "Експортувати як JSON"
+  },
+  "exportSuccess": {
+    "message": "Таблицю експортовано у форматі {{format}}"
+  },
+  "noTableToSave": {
+    "message": "Немає таблиці для збереження"
+  },
+  "goBackToGenerate": {
+    "message": "Поверніться до попереднього кроку, щоб спочатку згенерувати таблицю."
+  },
+  "tableDetails": {
+    "message": "Деталі таблиці"
+  },
+  "tableNotFound": {
+    "message": "Таблицю не знайдено"
+  },
+  "noData": {
+    "message": "Немає даних"
+  },
+  "data": {
+    "message": "Дані"
+  },
+  "editMode": {
+    "message": "Режим редагування"
+  },
+  "editModeActive": {
+    "message": "Натисніть на клітинки, щоб редагувати"
+  },
+  "regenerate": {
+    "message": "Згенерувати знову"
+  },
+  "regenerateSuccess": {
+    "message": "Таблицю успішно згенеровано знову!"
+  },
+  "model": {
+    "message": "Модель"
+  },
+  "prompt": {
+    "message": "Підказка генерації"
+  },
+  "sources": {
+    "message": "Джерела"
+  },
+  "created": {
+    "message": "Створено"
+  },
+  "updated": {
+    "message": "Оновлено"
+  },
+  "noTables": {
+    "message": "Ще немає таблиць. Створіть свою першу таблицю!"
+  },
+  "noSearchResults": {
+    "message": "Не знайдено таблиць за вашим запитом"
+  },
+  "totalTables": {
+    "message": "{{total}} таблиць"
+  },
+  "view": {
+    "message": "Перегляд"
+  },
+  "delete": {
+    "message": "Видалити"
+  },
+  "deleteConfirmTitle": {
+    "message": "Видалити таблицю"
+  },
+  "deleteConfirmMessage": {
+    "message": "Ви впевнені, що хочете видалити цю таблицю? Цю дію неможливо скасувати."
+  },
+  "noTable": {
+    "message": "Немає даних таблиці"
+  },
+  "add": {
+    "message": "Додати"
+  },
+  "columnName": {
+    "message": "Назва колонки"
+  },
+  "columnNamePlaceholder": {
+    "message": "напр., Ціна, Статус, Дата"
+  },
+  "columnNameRequired": {
+    "message": "Будь ласка, введіть назву колонки"
+  },
+  "columnNameTooLong": {
+    "message": "Назва колонки має містити не більше 50 символів"
+  },
+  "columnNameExists": {
+    "message": "Колонка з такою назвою вже існує"
+  },
+  "columnType": {
+    "message": "Тип колонки"
+  },
+  "columnTypeRequired": {
+    "message": "Будь ласка, виберіть тип колонки"
+  },
+  "columnDescription": {
+    "message": "Опис (необов'язково)"
+  },
+  "columnDescriptionHint": {
+    "message": "Короткий опис того, що містить ця колонка"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "напр., Ціна товару в USD"
+  },
+  "discardUnsavedChanges": {
+    "message": "У вас є незбережені зміни. Ви впевнені, що хочете закрити?"
+  },
+  "createFromChat": {
+    "message": "Створити таблицю з чату"
+  },
+  "saveFromArtifact": {
+    "message": "Зберегти в Data Tables"
+  },
+  "importedPrompt": {
+    "message": "Імпортовано з артефакту таблиці"
+  },
+  "columns_name": {
+    "message": "Назва"
+  },
+  "columns_rows": {
+    "message": "Рядки"
+  },
+  "columns_columns": {
+    "message": "Колонки"
+  },
+  "columns_sources": {
+    "message": "Джерела"
+  },
+  "columns_created": {
+    "message": "Створено"
+  },
+  "columns_actions": {
+    "message": "Дії"
+  },
+  "dataTablesDescription": {
+    "message": "Створюйте структуровані таблиці з ваших чатів, документів і бази знань за допомогою підказок природною мовою."
+  },
+  "descriptionLabel": {
+    "message": "Опис"
+  }
+}

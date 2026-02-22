@@ -22,13 +22,23 @@ type TldwRequestRuntime = {
   fetchFn?: typeof fetch
 }
 
+const normalizeKnownPathQuirks = (path: PathOrUrl): PathOrUrl => {
+  if (typeof path !== "string") return path
+  // Some callers still build media listing URLs as `/api/v1/media/?...`.
+  // Certain proxies treat that as a distinct route and return 404.
+  return path.replace("/api/v1/media/?", "/api/v1/media?") as PathOrUrl
+}
+
+const isMediaApiPath = (path: string): boolean => /\/api\/v1\/media(?:\/|\?|$)/.test(path)
+const isFilesApiPath = (path: string): boolean => /\/api\/v1\/files(?:\/|\?|$)/.test(path)
+
 export const deriveRequestTimeout = (
   cfg: TldwConfigLike,
   path: PathOrUrl,
   override?: number
 ): number => {
   if (override && override > 0) return override
-  const p = String(path || "")
+  const p = String(normalizeKnownPathQuirks(path) || "")
   if (p.includes("/api/v1/chat/completions")) {
     return Number(cfg?.chatRequestTimeoutMs) > 0
       ? Number(cfg.chatRequestTimeoutMs)
@@ -43,14 +53,14 @@ export const deriveRequestTimeout = (
         ? Number(cfg.requestTimeoutMs)
         : 10000
   }
-  if (p.includes("/api/v1/media/")) {
+  if (isMediaApiPath(p)) {
     return Number(cfg?.mediaRequestTimeoutMs) > 0
       ? Number(cfg.mediaRequestTimeoutMs)
       : Number(cfg?.requestTimeoutMs) > 0
         ? Number(cfg.requestTimeoutMs)
         : 10000
   }
-  if (p.includes("/api/v1/files/")) {
+  if (isFilesApiPath(p)) {
     return Number(cfg?.mediaRequestTimeoutMs) > 0
       ? Number(cfg.mediaRequestTimeoutMs)
       : Number(cfg?.requestTimeoutMs) > 0
@@ -89,17 +99,20 @@ export const tldwRequest = async (
     abortSignal,
     responseType
   } = payload || {}
+  const normalizedPath = normalizeKnownPathQuirks(path)
   const fetchFn = runtime.fetchFn || fetch
   const cfg = await runtime.getConfig()
-  const isAbsolute = typeof path === "string" && /^https?:/i.test(path)
+  const isAbsolute = typeof normalizedPath === "string" && /^https?:/i.test(normalizedPath)
   if (!cfg?.serverUrl && !isAbsolute) {
     return { ok: false, status: 400, error: "tldw server not configured" }
   }
-  if (!path) {
+  if (!normalizedPath) {
     return { ok: false, status: 400, error: "Request path is required" }
   }
   const baseUrl = cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : ""
-  const url = isAbsolute ? path : `${baseUrl}${path.startsWith("/") ? "" : "/"}${path}`
+  const url = isAbsolute
+    ? normalizedPath
+    : `${baseUrl}${normalizedPath.startsWith("/") ? "" : "/"}${normalizedPath}`
   const h: Record<string, string> = { ...(headers || {}) }
   const hasContentType = Object.keys(h).some(
     (key) => key.toLowerCase() === "content-type"
@@ -164,7 +177,7 @@ export const tldwRequest = async (
   }
 
   const controller = new AbortController()
-  const timeoutMs = deriveRequestTimeout(cfg, path, Number(overrideTimeoutMs))
+  const timeoutMs = deriveRequestTimeout(cfg, normalizedPath, Number(overrideTimeoutMs))
   const onAbort = () => {
     try {
       controller.abort()

@@ -8,23 +8,24 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, require_permissions
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventCategory,
     AuditEventType,
     UnifiedAuditService,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core import config as app_config
+from tldw_Server_API.app.core.testing import is_truthy
 
 router = APIRouter()
 
 _DEFAULT_STREAM_AUTO_THRESHOLD = 5000
-_TRUTHY = {"1", "true", "yes", "on", "y"}
 raw_stream_auto = None
 try:
-    raw_stream_auto = settings.get("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS", None)
+    raw_stream_auto = app_config.settings.get("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS", None)
     if raw_stream_auto is None:
         STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
     else:
@@ -70,14 +71,45 @@ def _coerce_bool(value: object | None, default: bool = False) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in _TRUTHY
+    return is_truthy(str(value).strip().lower())
 
 
 def _shared_storage_enabled() -> bool:
+    settings = app_config.settings
     if _coerce_bool(settings.get("AUDIT_STORAGE_ROLLBACK"), False):
         return False
     mode = str(settings.get("AUDIT_STORAGE_MODE", "per_user")).strip().lower()
     return mode == "shared"
+
+
+def _principal_is_admin(principal: AuthPrincipal) -> bool:
+    try:
+        roles = {
+            str(role).strip().lower()
+            for role in (principal.roles or [])
+            if str(role).strip()
+        }
+        permissions = {
+            str(perm).strip().lower()
+            for perm in (principal.permissions or [])
+            if str(perm).strip()
+        }
+        if "admin" in roles:
+            return True
+        if "*" in permissions:
+            return True
+        if "system.configure" in permissions:
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _resolve_request_user_id(principal: AuthPrincipal, current_user: User) -> str:
+    principal_user_id = getattr(principal, "user_id", None)
+    if principal_user_id is not None:
+        return str(principal_user_id)
+    return current_user.id_str or str(current_user.id)
 
 
 def _map_event_types(values: list[str] | None | str | None) -> list[AuditEventType] | None:
@@ -97,8 +129,8 @@ def _map_event_types(values: list[str] | None | str | None) -> list[AuditEventTy
         try:
             mapped.append(AuditEventType[v])
             continue
-        except Exception:
-            pass
+        except Exception as enum_key_error:
+            logger.debug(f"Failed enum-key mapping for audit event type '{v}'", exc_info=enum_key_error)
         try:
             mapped.append(AuditEventType(v))
         except Exception:
@@ -127,8 +159,8 @@ def _map_categories(values: list[str] | None | str | None) -> list[AuditEventCat
         try:
             mapped.append(AuditEventCategory[v])
             continue
-        except Exception:
-            pass
+        except Exception as enum_key_error:
+            logger.debug(f"Failed enum-key mapping for audit category '{v}'", exc_info=enum_key_error)
         try:
             mapped.append(AuditEventCategory(v))
         except Exception:
@@ -182,6 +214,7 @@ async def export_audit_events(
     max_rows: int | None = Query(None, ge=1, description="Hard maximum rows to export"),
     filename: str | None = Query(None),
     stream: bool = Query(False, description="Stream JSON/JSONL/CSV output incrementally"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
 ):
@@ -215,13 +248,14 @@ async def export_audit_events(
 
     user_id_filter = user_id
     allow_cross_tenant = False
-    if _shared_storage_enabled():
-        if current_user.is_admin:
-            allow_cross_tenant = True
-        else:
-            user_id_filter = current_user.id_str or str(current_user.id)
-            if user_id and str(user_id) != user_id_filter:
-                logger.warning("Ignoring cross-tenant audit export request from non-admin user.")
+    principal_is_admin = _principal_is_admin(principal)
+    if principal_is_admin and _shared_storage_enabled():
+        allow_cross_tenant = True
+    elif not principal_is_admin:
+        request_user_id = _resolve_request_user_id(principal, current_user)
+        user_id_filter = request_user_id
+        if user_id and str(user_id) != request_user_id:
+            logger.warning("Ignoring audit export user_id override from non-admin user.")
     content = await audit_service.export_events(
         start_time=st,
         end_time=et,
@@ -302,6 +336,7 @@ async def count_audit_events(
     session_id: str | None = Query(None, description="Filter by session id"),
     endpoint: str | None = Query(None, description="Filter by endpoint path"),
     method: str | None = Query(None, description="Filter by HTTP method"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
 ):
@@ -317,13 +352,14 @@ async def count_audit_events(
 
     user_id_filter = user_id
     allow_cross_tenant = False
-    if _shared_storage_enabled():
-        if current_user.is_admin:
-            allow_cross_tenant = True
-        else:
-            user_id_filter = current_user.id_str or str(current_user.id)
-            if user_id and str(user_id) != user_id_filter:
-                logger.warning("Ignoring cross-tenant audit count request from non-admin user.")
+    principal_is_admin = _principal_is_admin(principal)
+    if principal_is_admin and _shared_storage_enabled():
+        allow_cross_tenant = True
+    elif not principal_is_admin:
+        request_user_id = _resolve_request_user_id(principal, current_user)
+        user_id_filter = request_user_id
+        if user_id and str(user_id) != request_user_id:
+            logger.warning("Ignoring audit count user_id override from non-admin user.")
     count = await audit_service.count_events(
         start_time=st,
         end_time=et,

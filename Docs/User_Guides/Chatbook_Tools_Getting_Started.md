@@ -68,14 +68,16 @@ Enabled via:
 [Chat-Commands]
 commands_enabled = true
 injection_mode = system   # or: preface | replace
-commands_rate_limit = 10  # per-user per-command RPM
+commands_rate_limit_user = 10    # per-user per-command RPM
+commands_rate_limit_global = 100 # global per-command RPM
+commands_max_chars = 300         # max injected chars per command result
 require_permissions = false
 default_location =        # fallback for /weather
 ```
 
 Built-in commands:
 - `/time [TZ]` → “Current time (America/New_York): 2025-11-10 20:15:00”
-- `/weather [location]` → “Boston: 42°F, clear skies” (requires provider config; otherwise “weather unavailable”). In this build, `/weather` uses a stub provider and will report "unavailable" unless a real provider is configured.
+- `/weather [location]` → “Boston: 42°F, clear skies” (requires provider config; otherwise “weather unavailable”). Configure `WEATHER_PROVIDER=openweather` and `OPENWEATHER_API_KEY` to enable live weather lookups.
 
 Preface-mode example:
 - Input (user): `/time America/Los_Angeles`
@@ -89,7 +91,7 @@ Replace-mode example:
 - Final user message text sent to the model: `[/weather] Boston: 42°F, clear skies`
 
 Discovery endpoint:
-- `GET /api/v1/chat/commands` → list of commands with `name`, `description`, and `required_permission` (RBAC filtered if enabled).
+- `GET /api/v1/chat/commands` → list of commands with `name`, `description`, `required_permission`, `usage`, `args`, `requires_api_key`, `rate_limit`, and `rbac_required` (RBAC filtered if enabled).
   - When commands are disabled (`commands_enabled=false`), this endpoint returns an empty list. Clients should fetch this endpoint on each session or page load rather than caching the list long-term, since RBAC and configuration may change which commands are available (e.g., enabling/disabling `/weather`).
 
 Moderation ordering:
@@ -143,7 +145,7 @@ Notes:
 
 ## 4) Chatbooks Import: Validator Warnings
 
-When importing Chatbooks synchronously via `/api/v1/chatbooks/import`, validator findings for embedded dictionaries are surfaced in the `warnings` array of the response. In strict mode (`CHATBOOKS_IMPORT_DICT_STRICT=1`), dictionaries with errors are skipped entirely; imports still complete best-effort, with warnings describing which dictionaries were rejected and why.
+When importing Chatbooks synchronously via `/api/v1/chatbooks/import`, validator findings for embedded dictionaries are surfaced in the `warnings` array of the response. In strict mode (`CHATBOOKS_IMPORT_DICT_STRICT=1`), dictionaries with fatal validation errors are skipped entirely; imports still complete best-effort, with warnings describing which dictionaries were rejected and why.
 
 ## 5) Troubleshooting
 

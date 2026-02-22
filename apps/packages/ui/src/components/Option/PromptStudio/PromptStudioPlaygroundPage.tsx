@@ -582,7 +582,7 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
     return (
       <Alert
         type="warning"
-        message={t("option:promptStudio.offline", "Connect to your server to use Prompt Studio")}
+        title={t("option:promptStudio.offline", "Connect to your server to use Prompt Studio")}
       />
     )
   }
@@ -595,7 +595,7 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
     return (
       <Alert
         type="info"
-        message={t("option:promptStudio.unavailable", "Prompt Studio is not enabled on this server.")}
+        title={t("option:promptStudio.unavailable", "Prompt Studio is not enabled on this server.")}
         description={t(
           "option:promptStudio.unavailableBody",
           "When available, you will see projects, prompt history, execute flows, and evaluations here."
@@ -655,10 +655,10 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
           {projectsQuery.isError && (
             <Alert
               type="error"
-              message={t("option:promptStudio.projectsError", "Could not load projects")}
+              title={t("option:promptStudio.projectsError", "Could not load projects")}
             />
           )}
-          <Space direction="vertical" className="w-full">
+          <Space orientation="vertical" className="w-full">
             <Select
               className="w-full"
               placeholder={t("common:selectProject", "Select project") as string}
@@ -910,7 +910,7 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                         <Alert
                           type="info"
                           className="mb-3"
-                          message={t("option:promptStudio.debugging", "Debugging {{name}}", {
+                          title={t("option:promptStudio.debugging", "Debugging {{name}}", {
                             name: lastDebugTestCase.name || lastDebugTestCase.id
                           })}
                           description={t(
@@ -953,7 +953,7 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                         </Space>
                       </Form>
                       {executionError && (
-                        <Alert className="mt-3" type="error" message={executionError} />
+                        <Alert className="mt-3" type="error" title={executionError} />
                       )}
                       {executionResult && (
                         <Card className="mt-3" size="small" title={t("common:result", "Result")}>
@@ -1113,7 +1113,7 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                                   )
                                 }
                                 if (run.status === "error") {
-                                  return <Alert type="error" message={run.error} />
+                                  return <Alert type="error" title={run.error} />
                                 }
                                 return (
                                   <div>

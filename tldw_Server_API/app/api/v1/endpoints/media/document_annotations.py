@@ -85,6 +85,22 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _log_missing_media_context(
+    operation: str,
+    media_id: int,
+    user_id: str,
+    db: MediaDatabase,
+) -> None:
+    db_path = getattr(db, "db_path_str", getattr(db, "db_path", "<unknown>"))
+    logger.warning(
+        "Document annotations {} requested for missing media_id={} user_id={} db_path={}",
+        operation,
+        media_id,
+        user_id,
+        db_path,
+    )
+
+
 def _row_to_response(row: dict, media_id: int) -> AnnotationResponse:
     """Convert a database row to an AnnotationResponse."""
     return AnnotationResponse(
@@ -133,6 +149,7 @@ async def list_annotations(
     # Verify media exists
     media = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media:
+        _log_missing_media_context("list", media_id, user_id, db)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found",
@@ -142,9 +159,9 @@ async def list_annotations(
     _ensure_annotations_table(db)
 
     # Fetch annotations
-    query = f"""
+    query = """
     SELECT id, location, text, color, note, annotation_type, chapter_title, percentage, created_at, updated_at
-    FROM {ANNOTATIONS_TABLE}
+    FROM document_annotations
     WHERE media_id = ? AND user_id = ? AND deleted = 0
     ORDER BY created_at DESC
     """
@@ -200,6 +217,7 @@ async def create_annotation(
     # Verify media exists
     media = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media:
+        _log_missing_media_context("create", media_id, user_id, db)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found",
@@ -212,8 +230,8 @@ async def create_annotation(
     annotation_id = _generate_annotation_id()
     now = _now_iso()
 
-    insert_sql = f"""
-    INSERT INTO {ANNOTATIONS_TABLE}
+    insert_sql = """
+    INSERT INTO document_annotations
     (id, media_id, user_id, location, text, color, note, annotation_type, chapter_title, percentage, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
@@ -292,9 +310,9 @@ async def update_annotation(
     _ensure_annotations_table(db)
 
     # Fetch existing annotation
-    select_sql = f"""
+    select_sql = """
     SELECT id, location, text, color, note, annotation_type, chapter_title, percentage, created_at, updated_at
-    FROM {ANNOTATIONS_TABLE}
+    FROM document_annotations
     WHERE id = ? AND media_id = ? AND user_id = ? AND deleted = 0
     """
     try:
@@ -343,11 +361,13 @@ async def update_annotation(
 
     params.extend([annotation_id, media_id, user_id])
 
-    update_sql = f"""
-    UPDATE {ANNOTATIONS_TABLE}
-    SET {", ".join(updates)}
+    set_clause_sql = ", ".join(updates)
+    update_sql_template = """
+    UPDATE document_annotations
+    SET {set_clause_sql}
     WHERE id = ? AND media_id = ? AND user_id = ? AND deleted = 0
     """
+    update_sql = update_sql_template.format_map(locals())  # nosec B608
     try:
         with db.transaction() as conn:
             conn.execute(update_sql, tuple(params))
@@ -394,8 +414,8 @@ async def delete_annotation(
 
     # Soft delete
     now = _now_iso()
-    delete_sql = f"""
-    UPDATE {ANNOTATIONS_TABLE}
+    delete_sql = """
+    UPDATE document_annotations
     SET deleted = 1, updated_at = ?
     WHERE id = ? AND media_id = ? AND user_id = ? AND deleted = 0
     """
@@ -453,6 +473,7 @@ async def sync_annotations(
     # Verify media exists
     media = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media:
+        _log_missing_media_context("sync", media_id, user_id, db)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found",
@@ -464,8 +485,8 @@ async def sync_annotations(
     synced_annotations: list[AnnotationResponse] = []
     id_mapping: dict = {}
 
-    insert_sql = f"""
-    INSERT INTO {ANNOTATIONS_TABLE}
+    insert_sql = """
+    INSERT INTO document_annotations
     (id, media_id, user_id, location, text, color, note, annotation_type, chapter_title, percentage, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """

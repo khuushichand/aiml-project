@@ -65,6 +65,37 @@ async def test_atom_links_extraction_and_follow(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_atom_item_fallback_link_skips_self_rel(monkeypatch):
+    base = "https://feed.example.com/atom"
+    xml = """
+<feed xmlns='http://www.w3.org/2005/Atom'>
+  <title>Example Feed</title>
+  <entry>
+    <title>Item 1</title>
+    <link rel='self' href='https://feed.example.com/entries/1.atom' />
+    <link rel='related' href='https://example.com/articles/1' />
+    <id>urn:item:1</id>
+    <updated>2024-01-01T00:00:00Z</updated>
+  </entry>
+</feed>
+""".strip()
+
+    async def _fake_afetch(method, url, client=None, headers=None, timeout=None, **kwargs):
+        if url != base:
+            return _FakeResp(404, "", {})
+        return _FakeResp(200, xml, {})
+
+    monkeypatch.setattr("tldw_Server_API.app.core.http_client.afetch", _fake_afetch)
+    monkeypatch.setattr(F, "is_url_allowed_for_tenant", lambda url, tenant_id: True)
+    monkeypatch.setattr(F, "is_url_allowed", lambda url: True)
+
+    res = await F.fetch_rss_feed(base)
+    assert res["status"] == 200
+    assert len(res["items"]) == 1
+    assert res["items"][0]["url"] == "https://example.com/articles/1"
+
+
+@pytest.mark.asyncio
 async def test_wordpress_paged_urls_behavior(monkeypatch):
     base = "https://blog.example.com/feed/"
     called = []

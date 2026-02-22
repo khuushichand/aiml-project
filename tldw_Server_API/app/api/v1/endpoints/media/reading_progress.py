@@ -66,6 +66,22 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _log_missing_media_context(
+    operation: str,
+    media_id: int,
+    user_id: str,
+    db: MediaDatabase,
+) -> None:
+    db_path = getattr(db, "db_path_str", getattr(db, "db_path", "<unknown>"))
+    logger.warning(
+        "Reading progress {} requested for missing media_id={} user_id={} db_path={}",
+        operation,
+        media_id,
+        user_id,
+        db_path,
+    )
+
+
 @router.get(
     "/{media_id:int}/progress",
     status_code=status.HTTP_200_OK,
@@ -97,6 +113,7 @@ async def get_reading_progress(
     # Verify media exists
     media = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media:
+        _log_missing_media_context("get", media_id, user_id, db)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found",
@@ -106,11 +123,12 @@ async def get_reading_progress(
     _ensure_progress_table(db)
 
     # Fetch progress
-    query = f"""
+    query_template = """
     SELECT current_page, total_pages, zoom_level, view_mode, cfi, percentage, last_read_at
     FROM {PROGRESS_TABLE}
     WHERE media_id = ? AND user_id = ?
     """
+    query = query_template.format_map(locals())  # nosec B608
     try:
         with db.transaction() as conn:
             cursor = conn.execute(query, (media_id, user_id))
@@ -182,6 +200,7 @@ async def update_reading_progress(
     # Verify media exists
     media = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media:
+        _log_missing_media_context("update", media_id, user_id, db)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found",
@@ -269,6 +288,7 @@ async def delete_reading_progress(
     # Verify media exists
     media = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media:
+        _log_missing_media_context("delete", media_id, user_id, db)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found",
@@ -277,10 +297,11 @@ async def delete_reading_progress(
     # Ensure table exists
     _ensure_progress_table(db)
 
-    delete_sql = f"""
+    delete_sql_template = """
     DELETE FROM {PROGRESS_TABLE}
     WHERE media_id = ? AND user_id = ?
     """
+    delete_sql = delete_sql_template.format_map(locals())  # nosec B608
     try:
         with db.transaction() as cursor:
             cursor.execute(delete_sql, (media_id, user_id))

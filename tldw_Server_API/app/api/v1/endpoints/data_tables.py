@@ -78,6 +78,7 @@ router = APIRouter(prefix="/data-tables", tags=["data-tables"])
 MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 _job_manager_lock = threading.Lock()
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _data_tables_jobs_queue() -> str:
@@ -139,9 +140,25 @@ def _model_dump(obj: Any) -> dict[str, Any]:
     return dict(obj)
 
 
+def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
 def _resolve_owner_id(principal: AuthPrincipal, current_user: User) -> int | str | None:
     """Resolve the owner id for data table queries based on auth context."""
-    if principal.is_admin:
+    if _principal_has_admin_claims(principal):
         return None
     owner_id = getattr(current_user, "id", None)
     if owner_id is None:
@@ -583,7 +600,7 @@ async def list_data_tables(
             table_ids.append(int(row.get("id")))
         except (TypeError, ValueError) as exc:
             logger.warning(
-                "data_tables.list: invalid table id row_id=%s row=%s error=%s",
+                'data_tables.list: invalid table id row_id={} row={} error={}',
                 row.get("id"),
                 row,
                 exc,
@@ -597,7 +614,7 @@ async def list_data_tables(
             table_id = int(row.get("id"))
         except (TypeError, ValueError) as exc:
             logger.warning(
-                "data_tables.list: invalid table id for summary row_id=%s row=%s error=%s",
+                'data_tables.list: invalid table id for summary row_id={} row={} error={}',
                 row.get("id"),
                 row,
                 exc,
@@ -1116,7 +1133,7 @@ async def get_data_table_job(
     if not job or str(job.get("domain") or "") != "data_tables":
         raise HTTPException(status_code=404, detail="job_not_found")
     owner = str(job.get("owner_user_id") or "")
-    if not (principal.is_admin or owner == str(current_user.id)):
+    if not (_principal_has_admin_claims(principal) or owner == str(current_user.id)):
         raise HTTPException(status_code=403, detail="not_authorized")
     payload = job.get("payload") or {}
     return DataTableJobStatus(
@@ -1159,7 +1176,7 @@ async def cancel_data_table_job(
     if not job or str(job.get("domain") or "") != "data_tables":
         raise HTTPException(status_code=404, detail="job_not_found")
     owner = str(job.get("owner_user_id") or "")
-    if not (principal.is_admin or owner == str(current_user.id)):
+    if not (_principal_has_admin_claims(principal) or owner == str(current_user.id)):
         raise HTTPException(status_code=403, detail="not_authorized")
     status_val = str(job.get("status") or "").lower()
     if status_val in {"completed", "failed", "cancelled", "quarantined"}:

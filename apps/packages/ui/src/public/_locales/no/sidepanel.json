@@ -1,0 +1,464 @@
+{
+  "tooltip_embed": {
+    "message": "Det kan ta noen minutter å bygge din siden. Vennligst vent..."
+  },
+  "tooltip_clear": {
+    "message": "Slett chathistorikken"
+  },
+  "tooltip_history": {
+    "message": "Chathistorikk"
+  },
+  "tooltip_openwebui": {
+    "message": "Åpne WebUI"
+  },
+  "toolbar_ragSearch": {
+    "message": "RAG-søk"
+  },
+  "errors_privateModeTitle": {
+    "message": "tldw Assistant kan ikke lagre data"
+  },
+  "errors_privateModeDescription": {
+    "message": "Firefox privatmodus støtter ikke lagring av chathistorikk. Midlertidig chat er aktivert som standard. Flere forbedringer kommer snart."
+  },
+  "connectionBanner_connecting": {
+    "message": "Kobler til tldw-serveren..."
+  },
+  "connectionBanner_authErrorTitle": {
+    "message": "API-nøkkelen trenger oppmerksomhet"
+  },
+  "connectionBanner_authErrorBody": {
+    "message": "Serveren er tilgjengelig, men API-nøkkelen er feil eller mangler."
+  },
+  "connectionBanner_unreachableTitle": {
+    "message": "Kan ikke nå tldw-serveren"
+  },
+  "connectionBanner_unreachableBody": {
+    "message": "Sjekk at serveren kjører og er tilgjengelig."
+  },
+  "connectionBanner_noUrlBody": {
+    "message": "Legg til server-URL i Innstillinger for å komme i gang."
+  },
+  "connectionBanner_disconnectedTitle": {
+    "message": "Ikke koblet til tldw-serveren"
+  },
+  "connectionBanner_disconnectedBody": {
+    "message": "Åpne Innstillinger for å konfigurere servertilkoblingen."
+  },
+  "connectionBanner_setupTitle": {
+    "message": "Fullfør oppsettet for å starte å chatte"
+  },
+  "connectionBanner_setupBody": {
+    "message": "Fullfør oppsettsveiviseren i Innstillinger for å koble til."
+  },
+  "connectionBanner_openSettings": {
+    "message": "Åpne Innstillinger"
+  },
+  "temporaryBadge_title": {
+    "message": "Midlertidig chat"
+  },
+  "temporaryBadge_label": {
+    "message": "Midl."
+  },
+  "temporaryBadge_description": {
+    "message": "Denne chatten blir ikke lagret. Meldinger slettes når du lukker eller starter en ny chat."
+  },
+  "temporaryBadge_clickHint": {
+    "message": "Klikk for å deaktivere"
+  },
+  "temporaryBadge_ariaLabel": {
+    "message": "Midlertidig chatmodus er aktiv. Klikk for å bytte."
+  },
+  "temporaryBadge_indicatorTooltip": {
+    "message": "Meldinger i denne chatten blir ikke lagret"
+  },
+  "temporaryBadge_indicatorAria": {
+    "message": "Midlertidig chat"
+  },
+  "header_ingest": {
+    "message": "Innhenting"
+  },
+  "header_saveCurrent": {
+    "message": "Lagre gjeldende side på serveren"
+  },
+  "header_processLocal": {
+    "message": "Behandle gjeldende side lokalt"
+  },
+  "header_viewProcessed": {
+    "message": "Vis behandlet"
+  },
+  "header_timeoutLabel": {
+    "message": "Tidsavbrudd (s)"
+  },
+  "header_toggleSidebar": {
+    "message": "Veksle sidepanel / fullskjerm"
+  },
+  "header_shortcuts": {
+    "message": "Hurtigtaster"
+  },
+  "header_showDebug": {
+    "message": "Vis strømdebugg"
+  },
+  "header_hideDebug": {
+    "message": "Skjul strømdebugg"
+  },
+  "header_moreOptionsAria": {
+    "message": "Flere alternativer"
+  },
+  "header_moreOptionsTitle": {
+    "message": "Innhenting og mer"
+  },
+  "header_openWebuiAria": {
+    "message": "Åpne Web UI"
+  },
+  "header_newChatAria": {
+    "message": "Ny chat"
+  },
+  "header_tempChatAria": {
+    "message": "Veksle midlertidig chat"
+  },
+  "header_clearHistoryAria": {
+    "message": "Tøm historikk"
+  },
+  "header_openHistoryAria": {
+    "message": "Åpne historikk"
+  },
+  "header_openModelSettingsAria": {
+    "message": "Åpne modellinnstillinger"
+  },
+  "header_openSettingsAria": {
+    "message": "Åpne innstillinger"
+  },
+  "header_tempPill": {
+    "message": "Midl."
+  },
+  "header_modesLabel": {
+    "message": "Åpne moduser i Web UI"
+  },
+  "header_modePlayground": {
+    "message": "Samtale"
+  },
+  "header_modeReview": {
+    "message": "Gjennomgang"
+  },
+  "header_modeMedia": {
+    "message": "Medier"
+  },
+  "header_modeKnowledge": {
+    "message": "Kunnskap Q&A"
+  },
+  "header_modeNotes": {
+    "message": "Notater"
+  },
+  "header_modePrompts": {
+    "message": "Prompter"
+  },
+  "header_modeFlashcards": {
+    "message": "Flashkort"
+  },
+  "controlRow_saveMode": {
+    "message": "Lagringsmodus"
+  },
+  "controlRow_ephemeral": {
+    "message": "Midlertidig"
+  },
+  "controlRow_searchSection": {
+    "message": "Søk og visjon"
+  },
+  "controlRow_webSearch": {
+    "message": "Nettsøk"
+  },
+  "controlRow_vision": {
+    "message": "Visjon"
+  },
+  "controlRow_uploadImage": {
+    "message": "Last opp bilde"
+  },
+  "controlRow_quickIngest": {
+    "message": "Hurtiginnlasting av side"
+  },
+  "controlRow_openInFullUI": {
+    "message": "Åpne i fullverdig grensesnitt"
+  },
+  "controlRow_modeChat": {
+    "message": "Samtale"
+  },
+  "controlRow_modeMedia": {
+    "message": "Medier"
+  },
+  "controlRow_modeNotes": {
+    "message": "Notater"
+  },
+  "controlRow_modeFlashcards": {
+    "message": "Læringskort"
+  },
+  "controlRow_ragSearch": {
+    "message": "RAG-søk"
+  },
+  "controlRow_moreTools": {
+    "message": "Flere verktøy"
+  },
+  "composer_connectHint": {
+    "message": "Koble til tldw-serveren din i Innstillinger for å sende meldinger."
+  },
+  "composer_connectingPlaceholder": {
+    "message": "Kobler til..."
+  },
+  "composer_disconnectedPlaceholder": {
+    "message": "Koble til tldw-serveren din i Innstillinger for å sende meldinger og se medier."
+  },
+  "notification_ingestSent": {
+    "message": "Sendt til tldw-serveren"
+  },
+  "notification_ingestSentDesc": {
+    "message": "Gjeldende side er sendt inn for innhenting."
+  },
+  "notification_processedLocal": {
+    "message": "Behandlet lokalt"
+  },
+  "notification_processedLocalDesc": {
+    "message": "Behandlet innhold lagres lokalt under Innstillinger > Behandlet."
+  },
+  "notification_transcriptionTitle": {
+    "message": "Transkripsjon"
+  },
+  "notification_transcriptionSummaryTitle": {
+    "message": "Transkripsjon + sammendrag"
+  },
+  "notification_transcriptionFallback": {
+    "message": "Transkripsjon fullført. Åpne Medier i Web UI for å se den."
+  },
+  "notification_sourceLabel": {
+    "message": "Kilde"
+  },
+  "notification_transcriptLabel": {
+    "message": "Transkripsjon"
+  },
+  "notification_summaryLabel": {
+    "message": "Sammendrag"
+  },
+  "saveStatus_ephemeral": {
+    "message": "Midlertidig: ikke lagret, slettes ved lukking"
+  },
+  "saveStatus_local": {
+    "message": "Lagret lokalt i denne nettleseren"
+  },
+  "saveStatus_server": {
+    "message": "Lagret på serveren"
+  },
+  "saveStatus_saveFailed": {
+    "message": "Kunne ikke lagre chatten på serveren"
+  },
+  "saveStatus_saveFailedDescription": {
+    "message": "Chatten lagres nå kun lokalt. Sjekk tilkoblingen og prøv igjen."
+  },
+  "rag_searchPlaceholder": {
+    "message": "Søk i kunnskapsbasen din…"
+  },
+  "rag_search": {
+    "message": "Søk"
+  },
+  "rag_show": {
+    "message": "Vis RAG-søk"
+  },
+  "rag_hide": {
+    "message": "Skjul RAG-søk"
+  },
+  "rag_addTagPlaceholder": {
+    "message": "Legg til tagg (Enter)"
+  },
+  "rag_add": {
+    "message": "Legg til"
+  },
+  "rag_noResults": {
+    "message": "Ingen resultater"
+  },
+  "rag_timeout_message": {
+    "message": "Forespørselen ble tidsavbrutt."
+  },
+  "rag_timeout_increase": {
+    "message": "Øk tidsavbrudd"
+  },
+  "rag_timeout_checkHealth": {
+    "message": "Sjekk serverstatus"
+  },
+  "rag_actions_insert": {
+    "message": "Sett inn"
+  },
+  "rag_actions_ask": {
+    "message": "Spør"
+  },
+  "rag_actions_open": {
+    "message": "Åpne"
+  },
+  "rag_actions_copy": {
+    "message": "Kopier"
+  },
+  "rag_hint_message": {
+    "message": "Søk i kunnskapsbasen din og sett inn resultater i meldingen din."
+  },
+  "rag_hint_dismiss": {
+    "message": "Lukk"
+  },
+  "tabs_newChat": {
+    "message": "Ny chat"
+  },
+  "tabs_newTabAria": {
+    "message": "Ny chattefane"
+  },
+  "tabs_closeTabAria": {
+    "message": "Lukk chattefane"
+  },
+  "characterSelect_label": {
+    "message": "Karakter"
+  },
+  "characterSelect_tooltip": {
+    "message": "Velg en karakter"
+  },
+  "characterSelect_search": {
+    "message": "Søk etter karakterer..."
+  },
+  "characterSelect_noMatches": {
+    "message": "Ingen matchende karakterer"
+  },
+  "characterSelect_noCharacters": {
+    "message": "Ingen karakterer tilgjengelig"
+  },
+  "characterSelect_none": {
+    "message": "Ingen karakter"
+  },
+  "characterSelect_createNewCharacter": {
+    "message": "Opprett ny karakter+"
+  },
+  "characterSelect_importCharacter": {
+    "message": "Importer karakter"
+  },
+  "rag_attachedContext": {
+    "message": "Vedlagt kontekst"
+  },
+  "rag_initialState": {
+    "message": "Ingen resultater"
+  },
+  "characterSelect_favorites": {
+    "message": "Favorites"
+  },
+  "characterSelect_favoriteAdd": {
+    "message": "Add to favorites"
+  },
+  "characterSelect_favoriteRemove": {
+    "message": "Remove from favorites"
+  },
+  "characterSelect_sort_favorites": {
+    "message": "Favorites"
+  },
+  "characterSelect_sort_az": {
+    "message": "A-Z"
+  },
+  "knowledge_tabs_qaSearch": {
+    "message": "QA Search"
+  },
+  "knowledge_tabs_fileSearch": {
+    "message": "File Search"
+  },
+  "knowledge_tabs_label": {
+    "message": "Knowledge panel sections"
+  },
+  "knowledge_tabs_contextBadge": {
+    "message": "{{count}} items attached"
+  },
+  "qaSearch_searching": {
+    "message": "Searching knowledge base..."
+  },
+  "qaSearch_generatedAnswer": {
+    "message": "Generated Answer"
+  },
+  "qaSearch_cached": {
+    "message": "Cached"
+  },
+  "qaSearch_copyAnswer": {
+    "message": "Copy answer"
+  },
+  "qaSearch_copied": {
+    "message": "Copied"
+  },
+  "qaSearch_copy": {
+    "message": "Copy"
+  },
+  "qaSearch_insertAnswer": {
+    "message": "Insert answer"
+  },
+  "qaSearch_copyChunk": {
+    "message": "Copy chunk"
+  },
+  "qaSearch_insertChunk": {
+    "message": "Insert chunk"
+  },
+  "qaSearch_sourceChunks": {
+    "message": "Source Chunks ({{count}})"
+  },
+  "qaSearch_sourceChunksList": {
+    "message": "Source chunks"
+  },
+  "qaSearch_strategy_standard": {
+    "message": "Standard"
+  },
+  "qaSearch_strategy_agentic": {
+    "message": "Agentic"
+  },
+  "qaSearch_sort_label": {
+    "message": "Sort source chunks"
+  },
+  "qaSearch_sort_relevance": {
+    "message": "Relevance"
+  },
+  "qaSearch_sort_source": {
+    "message": "Source"
+  },
+  "fileSearch_filterByType": {
+    "message": "Filter by type"
+  },
+  "fileSearch_resultsList": {
+    "message": "File search results"
+  },
+  "fileSearch_attached": {
+    "message": "Attached"
+  },
+  "fileSearch_alreadyAttached": {
+    "message": "Already attached"
+  },
+  "fileSearch_attach": {
+    "message": "Attach"
+  },
+  "fileSearch_openExternal": {
+    "message": "Open"
+  },
+  "fileSearch_open": {
+    "message": "Open"
+  },
+  "fileSearch_mediaType_video": {
+    "message": "Video"
+  },
+  "fileSearch_mediaType_audio": {
+    "message": "Audio"
+  },
+  "fileSearch_mediaType_pdf": {
+    "message": "PDF"
+  },
+  "fileSearch_mediaType_article": {
+    "message": "Article"
+  },
+  "fileSearch_mediaType_note": {
+    "message": "Note"
+  },
+  "fileSearch_mediaType_document": {
+    "message": "Document"
+  },
+  "fileSearch_mediaType_epub": {
+    "message": "EPUB"
+  },
+  "fileSearch_mediaType_html": {
+    "message": "HTML"
+  },
+  "fileSearch_mediaType_xml": {
+    "message": "XML"
+  }
+}

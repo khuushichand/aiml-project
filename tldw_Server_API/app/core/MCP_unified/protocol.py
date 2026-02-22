@@ -32,6 +32,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
 from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .auth.authnz_rbac import Action, Resource, get_rbac_policy
 from .auth.rate_limiter import RateLimitExceeded, get_rate_limiter
@@ -1168,7 +1169,7 @@ class MCPProtocol:
             elif isinstance(raw_strict, (int, float)):
                 strict = bool(raw_strict)
             elif isinstance(raw_strict, str):
-                strict = raw_strict.strip().lower() in {"1", "true", "yes", "on"}
+                strict = is_truthy(raw_strict)
         catalog_name = None
         catalog_id = None
         if isinstance(params, dict):
@@ -1597,6 +1598,22 @@ class MCPProtocol:
                             context
                         )
                         span.set_attribute("mcp.status", "success")
+                    except InvalidParamsException as _tool_e:
+                        span.set_attribute("mcp.status", "failure")
+                        span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)
+                        span.set_attribute("mcp.error_message", str(_tool_e)[:200])
+                        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                            self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
+                        raise
+                    except (TypeError, ValueError) as _tool_e:
+                        # Module argument validators often raise ValueError/TypeError.
+                        # Normalize those to INVALID_PARAMS so HTTP callers receive 400.
+                        span.set_attribute("mcp.status", "failure")
+                        span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)
+                        span.set_attribute("mcp.error_message", str(_tool_e)[:200])
+                        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                            self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
+                        raise InvalidParamsException(str(_tool_e)) from _tool_e
                     except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as _tool_e:
                         span.set_attribute("mcp.status", "failure")
                         span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)

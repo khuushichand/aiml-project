@@ -1,8 +1,7 @@
 import { test, expect, type Page } from "@playwright/test"
 import path from "path"
-import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 import { waitForConnectionStore, forceConnected } from "./utils/connection"
 
 const EXT_PATH = path.resolve("build/chrome-mv3")
@@ -101,7 +100,7 @@ test.describe("Sidepanel Phase 3 smoke", () => {
       const serverUrl = normalizeServerUrl(rawServerUrl)
 
       const { context, page, openSidepanel, extensionId } =
-        (await launchWithExtension(EXT_PATH, {
+        (await launchWithExtensionOrSkip(test, EXT_PATH, {
           seedConfig: {
             __tldw_first_run_complete: true,
             __tldw_allow_offline: true,

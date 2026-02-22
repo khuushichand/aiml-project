@@ -6,8 +6,10 @@ import {
   Search,
   MessageSquare,
   Settings,
+  CombineIcon,
   BookText,
   BookOpen,
+  NotebookPen,
   StickyNote,
   Layers,
   UploadCloud,
@@ -24,6 +26,8 @@ import {
   formatShortcut,
   type ShortcutModifier
 } from "@/hooks/useKeyboardShortcuts"
+import { useShortcutConfig } from "@/hooks/keyboard/useShortcutConfig"
+import type { KeyboardShortcut as ConfiguredKeyboardShortcut } from "@/hooks/keyboard/useKeyboardShortcuts"
 import { searchSettings, type SettingDefinition } from "@/data/settings-index"
 import { cn } from "@/libs/utils"
 
@@ -36,6 +40,20 @@ const buildShortcut = (
   key,
   modifiers
 })
+
+const toCommandShortcut = (
+  shortcut: ConfiguredKeyboardShortcut | null | undefined
+): CommandShortcut | undefined => {
+  if (!shortcut?.key) {
+    return undefined
+  }
+  const modifiers: ShortcutModifier[] = []
+  if (shortcut.metaKey) modifiers.push("meta")
+  if (shortcut.ctrlKey) modifiers.push("ctrl")
+  if (shortcut.altKey) modifiers.push("alt")
+  if (shortcut.shiftKey) modifiers.push("shift")
+  return buildShortcut(shortcut.key, ...modifiers)
+}
 
 export interface CommandItem {
   id: string
@@ -85,6 +103,7 @@ export function CommandPalette({
   const navigate = useNavigate()
   const { t } = useTranslation(["common", "settings"])
   const isSidepanel = scope === "sidepanel"
+  const { shortcuts: configuredShortcuts } = useShortcutConfig()
 
   // Register ⌘K shortcut to open
   useShortcut({
@@ -92,7 +111,7 @@ export function CommandPalette({
     modifiers: ["meta"],
     action: () => setOpen(true),
     description: "Open command palette",
-    allowInInput: true,
+    allowInInput: false,
   })
 
   // Also allow Escape to close
@@ -126,10 +145,17 @@ export function CommandPalette({
       },
       ...(!isSidepanel ? ([
         {
+          id: "nav-knowledge",
+          label: t("common:commandPalette.goToKnowledge", "Go to Knowledge QA"),
+          icon: <CombineIcon className="size-4" />,
+          action: () => { navigate("/knowledge"); setOpen(false) },
+          category: "navigation" as const,
+          keywords: ["knowledge", "qa", "rag", "search"],
+        },
+        {
           id: "nav-media",
           label: t("common:commandPalette.goToMedia", "Go to Media"),
           icon: <BookText className="size-4" />,
-          shortcut: buildShortcut("m", "meta", "shift"),
           action: () => { navigate("/media"); setOpen(false) },
           category: "navigation" as const,
           keywords: ["documents", "files", "library"],
@@ -141,6 +167,14 @@ export function CommandPalette({
           action: () => { navigate("/notes"); setOpen(false) },
           category: "navigation" as const,
           keywords: ["notes", "notebook"],
+        },
+        {
+          id: "nav-prompts",
+          label: t("common:commandPalette.goToPrompts", "Go to Prompts"),
+          icon: <NotebookPen className="size-4" />,
+          action: () => { navigate("/prompts"); setOpen(false) },
+          category: "navigation" as const,
+          keywords: ["prompts", "template", "studio"],
         },
         {
           id: "nav-flashcards",
@@ -166,7 +200,6 @@ export function CommandPalette({
         id: "nav-settings",
         label: t("common:commandPalette.goToSettings", "Go to Settings"),
         icon: <Settings className="size-4" />,
-        shortcut: buildShortcut(",", "meta"),
         action: () => { navigate("/settings"); setOpen(false) },
         category: "navigation",
         keywords: ["preferences", "config", "options"],
@@ -174,7 +207,10 @@ export function CommandPalette({
       ...(!isSidepanel ? ([
         {
           id: "nav-health",
-          label: t("common:commandPalette.goToHealth", "Health & Diagnostics"),
+          label: t(
+            "common:commandPalette.goToHealth",
+            "Go to Health & Diagnostics"
+          ),
           icon: <Activity className="size-4" />,
           action: () => { navigate("/settings/health"); setOpen(false) },
           category: "navigation" as const,
@@ -188,7 +224,7 @@ export function CommandPalette({
               id: "action-new-chat",
               label: t("common:commandPalette.newChat", "New Chat"),
               icon: <MessageSquare className="size-4" />,
-              shortcut: buildShortcut("u", "ctrl", "shift"),
+              shortcut: toCommandShortcut(configuredShortcuts.newChat),
               action: () => {
                 onNewChat()
                 setOpen(false)
@@ -211,7 +247,7 @@ export function CommandPalette({
                 "Search your knowledge base and context"
               ),
               icon: <Search className="size-4" />,
-              shortcut: buildShortcut("r", "alt"),
+              shortcut: toCommandShortcut(configuredShortcuts.toggleChatMode),
               action: () => {
                 onToggleRag()
                 setOpen(false)
@@ -234,7 +270,7 @@ export function CommandPalette({
                 "Search the internet"
               ),
               icon: <Globe className="size-4" />,
-              shortcut: buildShortcut("w", "alt"),
+              shortcut: toCommandShortcut(configuredShortcuts.toggleWebSearch),
               action: () => {
                 onToggleWebSearch()
                 setOpen(false)
@@ -254,7 +290,6 @@ export function CommandPalette({
                 "Save this page to your knowledge base"
               ),
               icon: <UploadCloud className="size-4" />,
-              shortcut: buildShortcut("i", "meta"),
               action: () => {
                 onIngestPage()
                 setOpen(false)
@@ -270,7 +305,6 @@ export function CommandPalette({
               id: "action-switch-model",
               label: t("common:commandPalette.switchModel", "Switch Model"),
               icon: <BrainCircuit className="size-4" />,
-              shortcut: buildShortcut("e", "meta"),
               action: () => {
                 onSwitchModel()
                 setOpen(false)
@@ -290,7 +324,7 @@ export function CommandPalette({
                 "Show or hide the chat sidebar"
               ),
               icon: <Eye className="size-4" />,
-              shortcut: buildShortcut("b", "ctrl", "shift"),
+              shortcut: toCommandShortcut(configuredShortcuts.toggleSidebar),
               action: () => {
                 onToggleSidebar()
                 setOpen(false)
@@ -347,6 +381,7 @@ export function CommandPalette({
     onIngestPage,
     onSwitchModel,
     onToggleSidebar,
+    configuredShortcuts,
     onSearchHistory,
     onSwitchChat,
     sidepanelChats,
@@ -517,6 +552,8 @@ export function CommandPalette({
   if (typeof document === "undefined") return null
 
   const categories = ["recent", "action", "navigation", "setting"] as const
+  const focusRingClasses =
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
   const categoryLabels: Record<string, string> = {
     action: t("common:commandPalette.categoryActions", "Actions"),
@@ -550,7 +587,10 @@ export function CommandPalette({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t("common:commandPalette.placeholder", "Type a command or search...")}
-            className="flex-1 bg-transparent text-base text-text outline-none placeholder:text-text-subtle"
+            className={cn(
+              "flex-1 rounded-md bg-transparent text-base text-text placeholder:text-text-subtle",
+              focusRingClasses
+            )}
             autoComplete="off"
             autoCorrect="off"
             spellCheck={false}
@@ -597,6 +637,7 @@ export function CommandPalette({
                           data-selected={isSelected}
                           className={cn(
                             "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
+                            focusRingClasses,
                             isSelected
                               ? "bg-primary/10 text-text"
                               : "text-text hover:bg-surface2"

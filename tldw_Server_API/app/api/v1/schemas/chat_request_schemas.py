@@ -5,6 +5,7 @@
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
 from dotenv import load_dotenv
@@ -12,6 +13,8 @@ from dotenv import load_dotenv
 #
 # 3rd-party imports
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+
+from tldw_Server_API.app.core.testing import is_test_mode
 
 #
 # Local Imports
@@ -28,14 +31,21 @@ DEFAULT_LLM_PROVIDER = "openai"
 model_config = ConfigDict(extra="allow", from_attributes=True)
 
 # Config Loading
-# Load standard .env, then also try uppercase .ENV for environments that use it.
+# Prefer the canonical Config_Files/.env location, then fall back to local .env variants.
 try:
-    load_dotenv()
-    # Attempt to load from an uppercase filename as well (non-standard but requested)
-    load_dotenv(dotenv_path=".ENV", override=False)
-except Exception:
+    api_root = Path(__file__).resolve().parents[4]
+    candidate_env_paths = [
+        api_root / "Config_Files" / ".env",
+        api_root / "Config_Files" / ".ENV",
+        Path(".env").resolve(),
+        Path(".ENV").resolve(),
+    ]
+    for env_path in candidate_env_paths:
+        if env_path.exists():
+            load_dotenv(dotenv_path=str(env_path), override=False)
+except Exception as dotenv_error:
     # Fall back silently if dotenv loading fails; environment may be pre-populated
-    pass
+    _ = dotenv_error
 
 # Use load_and_log_configs which returns a proper dict
 from tldw_Server_API.app.core.config import load_and_log_configs
@@ -59,7 +69,7 @@ def _config_default_llm_provider(config_data: Optional[dict[str, Any]]) -> Optio
 
 _cfg_default_provider = _config_default_llm_provider(_config)
 _env_default_provider = os.getenv("DEFAULT_LLM_PROVIDER")
-_test_mode_enabled = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+_test_mode_enabled = is_test_mode()
 
 if _cfg_default_provider:
     DEFAULT_LLM_PROVIDER = _cfg_default_provider
@@ -107,6 +117,9 @@ ALL_SUPPORTED_PROVIDER_NAMES_LIST: list[str] = [
     "mistral",
     "openai",
     "openrouter",
+    "novita",
+    "poe",
+    "together",
     "llama.cpp",
     "kobold",
     "ollama",
@@ -187,6 +200,9 @@ SUPPORTED_API_ENDPOINTS = Literal[
     "mistral",
     "openai",
     "openrouter",
+    "novita",
+    "poe",
+    "together",
     "llama.cpp",
     "kobold",
     "ollama",
@@ -750,7 +766,28 @@ class ChatCompletionRequest(BaseModel):
 
     # --- Optional Character Chat Parameters ---
     character_id: Optional[str] = Field(None, description="Optional ID of the character to use for context.")
+    persona_id: Optional[str] = Field(
+        None,
+        description=(
+            "[Compatibility] Optional persona alias. Accepted only when it can be deterministically resolved to "
+            "a character ID. Deprecated as of 2026-02-09; planned removal date: 2026-07-01."
+        ),
+    )
     conversation_id: Optional[str] = Field(None, description="Optional ID of the conversation to use for context.")
+    persona_exemplar_budget_tokens: Optional[int] = Field(
+        None,
+        ge=1,
+        le=20_000,
+        description="[Extension] Optional override for persona exemplar selection token budget.",
+    )
+    persona_exemplar_strategy: Optional[Literal["off", "default", "hybrid", "embeddings"]] = Field(
+        None,
+        description="[Extension] Persona exemplar selection strategy. 'off' disables selection for this request.",
+    )
+    persona_debug: Optional[bool] = Field(
+        False,
+        description="[Extension] Include persona selection debug metadata in response payload when available.",
+    )
     save_to_db: Optional[bool] = Field(
         None,
         description=(

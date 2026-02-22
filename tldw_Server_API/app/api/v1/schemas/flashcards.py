@@ -46,6 +46,10 @@ class Flashcard(BaseModel):
     is_cloze: bool
     tags_json: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
+    source_ref_type: Optional[Literal['media', 'message', 'note', 'manual']] = None
+    source_ref_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    message_id: Optional[str] = None
     ef: float
     interval_days: int
     repetitions: int
@@ -105,6 +109,50 @@ class FlashcardReviewResponse(BaseModel):
     version: int
 
 
+class FlashcardGenerateRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="Source text to generate flashcards from")
+    num_cards: int = Field(10, ge=1, le=100, description="Requested number of generated cards")
+    card_type: Literal['basic', 'basic_reverse', 'cloze'] = Field('basic')
+    difficulty: Literal['easy', 'medium', 'hard', 'mixed'] = Field('mixed')
+    focus_topics: list[str] = Field(default_factory=list)
+    provider: Optional[str] = Field(None, description="Optional LLM provider override")
+    model: Optional[str] = Field(None, description="Optional LLM model override")
+
+
+class GeneratedFlashcard(BaseModel):
+    front: str
+    back: str
+    tags: list[str] = Field(default_factory=list)
+    model_type: Literal['basic', 'basic_reverse', 'cloze'] = Field('basic')
+    notes: Optional[str] = None
+    extra: Optional[str] = None
+
+
+class FlashcardGenerateResponse(BaseModel):
+    flashcards: list[GeneratedFlashcard] = Field(default_factory=list)
+    count: int
+
+
+class FlashcardDeckProgress(BaseModel):
+    deck_id: int
+    deck_name: str
+    total: int
+    new: int
+    learning: int
+    due: int
+    mature: int
+
+
+class FlashcardAnalyticsSummaryResponse(BaseModel):
+    reviewed_today: int
+    retention_rate_today: Optional[float] = None
+    lapse_rate_today: Optional[float] = None
+    avg_answer_time_ms_today: Optional[float] = None
+    study_streak_days: int
+    generated_at: str
+    decks: list[FlashcardDeckProgress] = Field(default_factory=list)
+
+
 class FlashcardUpdate(BaseModel):
     deck_id: Optional[int] = None
     front: Optional[str] = None
@@ -116,6 +164,10 @@ class FlashcardUpdate(BaseModel):
     expected_version: Optional[int] = None
     model_type: Optional[Literal['basic','basic_reverse','cloze']] = None
     reverse: Optional[bool] = None
+
+
+class FlashcardResetSchedulingRequest(BaseModel):
+    expected_version: int = Field(..., ge=1)
 
 
 class FlashcardTagsUpdate(BaseModel):

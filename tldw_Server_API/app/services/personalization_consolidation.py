@@ -37,7 +37,7 @@ def _resolve_user_id_to_int(user_id: str) -> int:
     try:
         return int(user_id)
     except (ValueError, TypeError):
-        digest = hashlib.sha1(str(user_id).encode("utf-8")).digest()
+        digest = hashlib.sha1(str(user_id).encode("utf-8"), usedforsecurity=False).digest()
         return int.from_bytes(digest[:4], byteorder="big", signed=False)
 
 

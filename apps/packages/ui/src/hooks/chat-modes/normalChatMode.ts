@@ -18,11 +18,17 @@ import {
   parseExtraParams,
   resolveImageBackendConfig
 } from "@/services/image-generation"
+import type {
+  ImageGenerationRefineMetadata,
+  ImageGenerationPromptMode,
+  ImageGenerationRequestSnapshot
+} from "@/utils/image-generation-chat"
 import type { SaveMessageData, SaveMessageErrorData } from "@/types/chat-modes"
 import {
   runChatPipeline,
   type ChatModeDefinition
 } from "./chatModePipeline"
+import { appendSystemPromptSuffix } from "@/utils/output-formatting-guide"
 
 interface WebSearchPayload {
   query: string
@@ -113,6 +119,10 @@ type NormalChatModeParams = {
   selectedSystemPrompt: string
   currentChatModelSettings: any
   imageBackendOverride?: string
+  imageGenerationRequest?: Partial<ImageGenerationRequestSnapshot>
+  imageGenerationRefine?: ImageGenerationRefineMetadata
+  imageGenerationPromptMode?: ImageGenerationPromptMode
+  imageGenerationSource?: "slash-command" | "generate-modal" | "message-regen"
   toolChoice?: ToolChoice
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void
   saveMessageOnSuccess: (data: SaveMessageData) => Promise<string | null>
@@ -125,6 +135,7 @@ type NormalChatModeParams = {
   setHistoryId: (id: string) => void
   uploadedFiles?: any[]
   actorSettings?: ActorSettings
+  systemPromptAppendix?: string
   webSearch?: boolean
   setIsSearchingInternet?: (value: boolean) => void
   clusterId?: string
@@ -192,9 +203,10 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
     parentMessageId: ctx.resolvedAssistantParentMessageId ?? null
   }),
   preflight: async (ctx) => {
-    const overrideBackend = normalizeImageBackendOverride(
-      ctx.imageBackendOverride
-    )
+    const requestOverride = ctx.imageGenerationRequest || {}
+    const requestBackend = normalizeImageBackendOverride(requestOverride.backend)
+    const overrideBackend =
+      normalizeImageBackendOverride(ctx.imageBackendOverride) || requestBackend
     const overrideCandidates = overrideBackend
       ? [overrideBackend, ...resolveImageBackendCandidates(overrideBackend)]
       : []
@@ -206,7 +218,11 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
             ctx.selectedModel
           )
     if (imageBackendCandidates.length > 0) {
-      const prompt = ctx.message.trim()
+      const promptSource =
+        typeof requestOverride.prompt === "string"
+          ? requestOverride.prompt
+          : ctx.message
+      const prompt = promptSource.trim()
       ctx.setIsProcessing(true)
       let lastError: unknown = null
 
@@ -220,20 +236,66 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
           }
           const rawConfig = resolveImageBackendConfig(backend, backendConfigs)
           const config = normalizeImageBackendConfig(rawConfig)
-          const extraParams = parseExtraParams(config.extraParams)
-          const format = config.format || "png"
+          const overrideExtraParams =
+            requestOverride.extraParams &&
+            typeof requestOverride.extraParams === "object" &&
+            !Array.isArray(requestOverride.extraParams)
+              ? (requestOverride.extraParams as Record<string, unknown>)
+              : undefined
+          const extraParams =
+            overrideExtraParams ?? parseExtraParams(config.extraParams)
+          const format = requestOverride.format || config.format || "png"
+          const negativePrompt =
+            requestOverride.negativePrompt || config.negativePrompt
+          const width =
+            typeof requestOverride.width === "number"
+              ? requestOverride.width
+              : config.width
+          const height =
+            typeof requestOverride.height === "number"
+              ? requestOverride.height
+              : config.height
+          const steps =
+            typeof requestOverride.steps === "number"
+              ? requestOverride.steps
+              : config.steps
+          const cfgScale =
+            typeof requestOverride.cfgScale === "number"
+              ? requestOverride.cfgScale
+              : config.cfgScale
+          const seed =
+            typeof requestOverride.seed === "number"
+              ? requestOverride.seed
+              : config.seed
+          const sampler = requestOverride.sampler || config.sampler
+          const model = requestOverride.model || config.model
+
+          const requestSnapshot: ImageGenerationRequestSnapshot = {
+            prompt,
+            backend,
+            format,
+            negativePrompt,
+            width,
+            height,
+            steps,
+            cfgScale,
+            seed,
+            sampler,
+            model,
+            extraParams
+          }
           const response = await tldwClient.createImageArtifact({
             backend,
             prompt,
             format,
-            negativePrompt: config.negativePrompt,
-            width: config.width,
-            height: config.height,
-            steps: config.steps,
-            cfgScale: config.cfgScale,
-            seed: config.seed,
-            sampler: config.sampler,
-            model: config.model,
+            negativePrompt,
+            width,
+            height,
+            steps,
+            cfgScale,
+            seed,
+            sampler,
+            model,
             extraParams
           })
           const exportInfo = response?.artifact?.export
@@ -251,8 +313,21 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
               file_id: response?.artifact?.file_id,
               content_type: contentType,
               bytes: exportInfo?.bytes,
-              format: exportInfo?.format
-            }
+              format: exportInfo?.format,
+              image_generation: {
+                request: requestSnapshot,
+                promptMode: ctx.imageGenerationPromptMode,
+                source:
+                  ctx.imageGenerationSource ||
+                  (ctx.imageGenerationRequest ? "generate-modal" : "slash-command"),
+                createdAt: Date.now(),
+                refine: ctx.imageGenerationRefine,
+                refine_model: ctx.imageGenerationRefine?.model,
+                refine_latency_ms: ctx.imageGenerationRefine?.latencyMs,
+                diff_stats: ctx.imageGenerationRefine?.diffStats
+              }
+            },
+            skipHistoryAppend: true
           }
         } catch (error) {
           if (isBackendUnavailableError(error)) {
@@ -392,13 +467,18 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
       ctx.historyForModel ?? ctx.history,
       ctx.selectedModel
     )
+    const resolvePromptWithAppendix = (content?: string | null) =>
+      appendSystemPromptSuffix(content || "", ctx.systemPromptAppendix)
 
-    if (prompt && !selectedPrompt) {
-      applicationChatHistory.unshift(
-        await systemPromptFormatter({
-          content: prompt
-        })
-      )
+    if (!selectedPrompt) {
+      const resolvedDefaultPrompt = resolvePromptWithAppendix(prompt)
+      if (resolvedDefaultPrompt) {
+        applicationChatHistory.unshift(
+          await systemPromptFormatter({
+            content: resolvedDefaultPrompt
+          })
+        )
+      }
     }
 
     const isTempSystemprompt =
@@ -408,21 +488,26 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
     if (!isTempSystemprompt && selectedPrompt) {
       const selectedPromptContent =
         selectedPrompt.system_prompt ?? selectedPrompt.content
+      const resolvedSelectedPrompt =
+        resolvePromptWithAppendix(selectedPromptContent)
       applicationChatHistory.unshift(
         await systemPromptFormatter({
-          content: selectedPromptContent
+          content: resolvedSelectedPrompt
         })
       )
-      promptContent = selectedPromptContent
+      promptContent = resolvedSelectedPrompt
     }
 
     if (isTempSystemprompt) {
+      const resolvedTemporaryPrompt = resolvePromptWithAppendix(
+        ctx.currentChatModelSettings.systemPrompt
+      )
       applicationChatHistory.unshift(
         await systemPromptFormatter({
-          content: ctx.currentChatModelSettings.systemPrompt
+          content: resolvedTemporaryPrompt
         })
       )
-      promptContent = ctx.currentChatModelSettings.systemPrompt
+      promptContent = resolvedTemporaryPrompt
     }
 
     const templatesActive = !!ctx.selectedSystemPrompt

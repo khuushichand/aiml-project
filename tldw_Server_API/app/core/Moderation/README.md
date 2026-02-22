@@ -37,8 +37,10 @@
 
 - Folder Structure:
   - `Moderation/moderation_service.py`
+  - `Moderation/governance_utils.py` — pure utility functions for governance policy schedule/chat-type filtering; used by `supervised_policy.py` and `self_monitoring_service.py`
 - Extension Points:
   - Additional rule sources (e.g., remote policy loaders); category taxonomy
+  - Governance policy scheduling and chat-type scoping via `GovernancePolicy` objects linked to supervised policies and self-monitoring rules
 - Coding Patterns:
   - Keep scanning O(N); guard regex with clear limits
 - Tests:

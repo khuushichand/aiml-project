@@ -7,7 +7,13 @@ The Program Evaluator executes Python code produced by the LLM and scores output
 - Global: `PROMPT_STUDIO_ENABLE_CODE_EVAL=true`
 - Project-level: set project `metadata` to `{ "enable_code_eval": true }`
 
-Both must pass; if either disables, the evaluator falls back to a heuristic text-based reward.
+Project metadata takes precedence when set to a boolean; otherwise global flag controls behavior.
+
+## Runtime configuration
+
+- `PROMPT_STUDIO_CODE_EVAL_TIMEOUT_MS` (default: `8000`, i.e. 8 seconds — derived from the `WALL_TIME_SEC` class constant in `ProgramEvaluator`)
+- `PROMPT_STUDIO_CODE_EVAL_MEM_MB` (default: `256`)
+- `PROMPT_STUDIO_CODE_EVAL_IMPORT_WHITELIST` (default: `math,statistics`)
 
 ## Runner specification
 
@@ -28,6 +34,17 @@ Both must pass; if either disables, the evaluator falls back to a heuristic text
 - Success: code runs, constraints satisfied → reward in [0..10]
 - Failure: syntax/runtime error → -1
 - Partial: runs but fails some checks → 0..5 depending on objective proximity
+
+## Evaluator result shape
+
+`ProgramEvaluator.evaluate(...)` returns:
+- `success`
+- `return_code`
+- `stdout` (truncated)
+- `stderr` (truncated)
+- `metrics` (includes `mode`, `timeout_sec`, `memory_mb`, and failure details such as `failure_kind` when execution fails)
+- `reward`
+- `error` (optional)
 
 ## Usage with MCTS
 

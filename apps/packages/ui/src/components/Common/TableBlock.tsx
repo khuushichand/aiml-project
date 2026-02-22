@@ -23,6 +23,7 @@ interface TableData {
 
 export const TableBlock: FC<TableProps> = ({ children }) => {
   const [copyStatus, setCopyStatus] = useState<string>("")
+  const [artifactOriginId, setArtifactOriginId] = useState<string | null>(null)
   const { t } = useTranslation("common")
   const ref = useRef<HTMLDivElement>(null)
   const { openArtifact, isPinned } = useArtifactsStore()
@@ -118,6 +119,13 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
     return `table-${hash.toString(36)}`
   }
 
+  useEffect(() => {
+    const tableData = parseData()
+    if (!tableData) return
+    const nextOriginId = `artifact-origin-${buildArtifactId(tableData)}`
+    setArtifactOriginId((prev) => (prev === nextOriginId ? prev : nextOriginId))
+  }, [children])
+
   const handleOpenArtifact = () => {
     const tableData = parseData()
     if (!tableData) return
@@ -176,7 +184,13 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
   }
 
   return (
-    <div className="not-prose">
+    <div
+      id={artifactOriginId || undefined}
+      data-artifact-origin={
+        artifactOriginId ? artifactOriginId.replace("artifact-origin-", "") : undefined
+      }
+      className="not-prose"
+    >
       <div className="my-4 bg-surface rounded-xl border border-border overflow-hidden">
         <div className="flex flex-row px-4 py-2 rounded-t-xl bg-surface2 border-b border-border">
           <div className="flex items-center gap-2 flex-1">

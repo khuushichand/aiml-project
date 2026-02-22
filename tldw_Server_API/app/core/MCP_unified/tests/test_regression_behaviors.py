@@ -35,11 +35,11 @@ def _prepare_env(monkeypatch: pytest.MonkeyPatch, overrides: Dict[str, str]) -> 
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     try:
         get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.mark.asyncio

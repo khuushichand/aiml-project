@@ -98,7 +98,7 @@ class SemanticCache:
 
     def _generate_key(self, query: str) -> str:
         """Generate a cache key from query."""
-        return hashlib.md5(query.encode()).hexdigest()
+        return hashlib.md5(query.encode(), usedforsecurity=False).hexdigest()
 
     def _emit_counter(self, metric_name: str) -> None:
         """Emit a counter increment to Prometheus/OTEL if available."""

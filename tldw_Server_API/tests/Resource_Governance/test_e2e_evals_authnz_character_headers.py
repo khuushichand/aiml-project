@@ -25,6 +25,12 @@ def _reset_rg_state(app):
             continue
 
 
+@pytest.fixture(params=["memory", "redis"], ids=["rg-memory", "rg-redis"])
+def rg_backend(request) -> str:
+    """Exercise deny-header behavior under both RG backends."""
+    return str(request.param)
+
+
 @contextlib.contextmanager
 def _with_rg_middleware(app):
     """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
@@ -45,7 +51,7 @@ def _with_rg_middleware(app):
             try:
                 app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
         yield
     finally:
         if changed:
@@ -53,7 +59,7 @@ def _with_rg_middleware(app):
                 app.user_middleware = original_user_middleware
                 app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
 
 
 async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
@@ -66,13 +72,13 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         await reset_db_pool()
         reset_settings()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
 
         await ensure_authnz_schema_ready_once()
     except Exception:
-        pass
+        _ = None
 
 
 async def _create_user_and_key(*, username: str, email: str) -> tuple[int, str]:
@@ -103,7 +109,7 @@ async def _create_user_and_key(*, username: str, email: str) -> tuple[int, str]:
 
 
 @pytest.mark.asyncio
-async def test_e2e_evaluations_deny_headers_retry_after(monkeypatch, tmp_path):
+async def test_e2e_evaluations_deny_headers_retry_after(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_evals_e2e.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
     _user_id, api_key = await _create_user_and_key(username="evals-user", email="evals-user@example.com")
@@ -112,18 +118,19 @@ async def test_e2e_evaluations_deny_headers_retry_after(monkeypatch, tmp_path):
     # representative Evaluations endpoint via route_map.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
+    policy_id = f"evals.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  evals.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 1 }\n"
         "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    /api/v1/evaluations/rate-limits: evals.small\n"
+        f"    /api/v1/evaluations/rate-limits: {policy_id}\n"
     )
     p = tmp_path / "rg_evals.yaml"
     p.write_text(policy, encoding="utf-8")
@@ -162,22 +169,23 @@ async def test_e2e_evaluations_deny_headers_retry_after(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path):
+async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path, rg_backend):
     # Minimal app with RG middleware; enforce requests-only deny semantics for a
     # lightweight AuthNZ debug endpoint that does not require full login flow.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
+    policy_id = f"authnz.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  authnz.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 1 }\n"
         "    scopes: [ip]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    /api/v1/authnz/debug/api-key-id: authnz.small\n"
+        f"    /api/v1/authnz/debug/api-key-id: {policy_id}\n"
     )
     p = tmp_path / "rg_authnz.yaml"
     p.write_text(policy, encoding="utf-8")
@@ -260,7 +268,7 @@ async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path):
+async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_character_e2e.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
     user_id, api_key = await _create_user_and_key(username="character-user", email="character-user@example.com")
@@ -269,18 +277,19 @@ async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path
     # the legacy character chat completion endpoint used in tests.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
+    policy_id = f"character.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  character.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 1 }\n"
         "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    /api/v1/chats/*: character.small\n"
+        f"    /api/v1/chats/*: {policy_id}\n"
     )
     p = tmp_path / "rg_character.yaml"
     p.write_text(policy, encoding="utf-8")
@@ -334,7 +343,7 @@ async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_e2e_auth_deny_headers_retry_after(monkeypatch, tmp_path):
+async def test_e2e_auth_deny_headers_retry_after(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_auth_e2e.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
 
@@ -342,18 +351,19 @@ async def test_e2e_auth_deny_headers_retry_after(monkeypatch, tmp_path):
     # an auth endpoint.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
+    policy_id = f"auth.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  auth.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 1 }\n"
         "    scopes: [ip]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    /api/v1/auth/forgot-password: auth.small\n"
+        f"    /api/v1/auth/forgot-password: {policy_id}\n"
     )
     p = tmp_path / "rg_auth.yaml"
     p.write_text(policy, encoding="utf-8")

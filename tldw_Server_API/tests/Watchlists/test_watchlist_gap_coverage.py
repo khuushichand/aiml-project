@@ -282,3 +282,150 @@ async def test_source_group_ids_in_response(_pipeline_test_env):
         assert any(i["id"] == source_data["id"] for i in g4.json()["items"])
 
     app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# _maybe_auto_generate_output unit tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeRun:
+    def __init__(self, run_id: int = 1):
+        self.id = run_id
+
+
+class _FakeJob:
+    def __init__(self, job_id: int = 10, name: str = "TestJob"):
+        self.id = job_id
+        self.name = name
+
+
+class _FakeScrapedItemRow:
+    """Minimal stand-in for ScrapedItemRow returned by db.list_items()."""
+
+    def __init__(
+        self,
+        *,
+        item_id: int = 1,
+        title: str = "Article",
+        url: str = "https://example.com/a",
+        summary: str = "Summary text",
+        published_at: str = "2026-01-01T00:00:00Z",
+        tags_json: str | None = None,
+        media_id: int | None = None,
+    ):
+        self.id = item_id
+        self.media_id = media_id
+        self.title = title
+        self.url = url
+        self.summary = summary
+        self.published_at = published_at
+        self.tags_json = tags_json
+
+
+class _FakeArtifact:
+    def __init__(self, artifact_id: int = 42):
+        self.id = artifact_id
+
+
+@pytest.mark.asyncio
+async def test_auto_output_skipped_when_disabled():
+    """auto_output.enabled = False → returns None, no file written."""
+    from tldw_Server_API.app.core.Watchlists.pipeline import _maybe_auto_generate_output
+
+    result = await _maybe_auto_generate_output(
+        db=None,
+        collections_db=None,
+        user_id=1,
+        run=_FakeRun(),
+        job=_FakeJob(),
+        job_output_prefs={"auto_output": {"enabled": False}},
+        stats={"items_ingested": 5},
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_auto_output_skipped_when_no_items_ingested():
+    """items_ingested = 0 → returns None."""
+    from tldw_Server_API.app.core.Watchlists.pipeline import _maybe_auto_generate_output
+
+    result = await _maybe_auto_generate_output(
+        db=None,
+        collections_db=None,
+        user_id=1,
+        run=_FakeRun(),
+        job=_FakeJob(),
+        job_output_prefs={"auto_output": {"enabled": True}},
+        stats={"items_ingested": 0},
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_auto_output_generates_file_and_artifact(tmp_path, monkeypatch):
+    """Happy path: items returned → file written → artifact created → returns artifact ID."""
+    from tldw_Server_API.app.core.Watchlists.pipeline import _maybe_auto_generate_output
+
+    fake_items = [
+        _FakeScrapedItemRow(item_id=1, title="First", url="https://a.com", summary="Sum1"),
+        _FakeScrapedItemRow(item_id=2, title="Second", url="https://b.com", summary="Sum2"),
+    ]
+
+    class FakeDB:
+        def list_items(self, *, run_id, status, limit, offset):
+            return (fake_items, 2)
+
+    class FakeCollDB:
+        def create_output_artifact(self, **kwargs):
+            return _FakeArtifact(artifact_id=99)
+
+    # Patch _outputs_dir_for_user and _resolve_output_path_for_user to use tmp_path
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.outputs_service._outputs_dir_for_user",
+        lambda uid: tmp_path,
+    )
+
+    def fake_resolve(uid, filename):
+        return tmp_path / filename
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.outputs_service._resolve_output_path_for_user",
+        fake_resolve,
+    )
+
+    result = await _maybe_auto_generate_output(
+        db=FakeDB(),
+        collections_db=FakeCollDB(),
+        user_id=1,
+        run=_FakeRun(run_id=7),
+        job=_FakeJob(job_id=10, name="MyJob"),
+        job_output_prefs={"auto_output": {"enabled": True, "type": "briefing_markdown"}},
+        stats={"items_ingested": 2},
+    )
+    assert result == 99
+
+    # Verify a file was written
+    files = list(tmp_path.glob("*.md"))
+    assert len(files) == 1
+    content = files[0].read_text(encoding="utf-8")
+    assert "MyJob-Auto-7" in content
+    assert "First" in content
+    assert "Second" in content
+
+
+@pytest.mark.asyncio
+async def test_auto_output_tags_parsed_correctly(tmp_path, monkeypatch):
+    """Items with tags_json='["a","b"]' → context dict has tags: ["a", "b"]."""
+    from tldw_Server_API.app.services.outputs_service import build_items_context_from_content_items
+
+    rows = [
+        _FakeScrapedItemRow(item_id=1, title="Tagged", tags_json='["alpha", "beta"]'),
+        _FakeScrapedItemRow(item_id=2, title="NoTags", tags_json=None),
+        _FakeScrapedItemRow(item_id=3, title="BadJSON", tags_json="{not-json"),
+    ]
+    items = build_items_context_from_content_items(rows)
+
+    assert items[0]["tags"] == ["alpha", "beta"]
+    assert items[1]["tags"] == []
+    assert items[2]["tags"] == []

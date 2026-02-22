@@ -21,11 +21,16 @@ from email.header import decode_header, make_header
 from email.message import EmailMessage, Message
 from email.parser import BytesParser
 from email.utils import getaddresses
+from pathlib import PurePosixPath
 from typing import Any
 
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import DEFAULT_MEDIA_TYPE_CONFIG
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
+    DEFAULT_MEDIA_TYPE_CONFIG,
+    FileValidator,
+)
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Utils.Utils import logging
 
 _EMAIL_NONCRITICAL_EXCEPTIONS = (
@@ -52,6 +57,8 @@ try:
     import html2text as _html2text
 except ImportError:
     _html2text = None  # Optional dependency; fallback stripping will apply
+
+_EMAIL_HTML_VALIDATOR: FileValidator | None = None
 
 # Compatibility shim for Python 3.13 EmailMessage/contentmanager API changes
 # Some helpers call: outer.add_attachment(inner, maintype="message", subtype="rfc822").
@@ -156,20 +163,58 @@ def _part_payload_to_text(part: Message) -> str:
         return ""
 
 
+def _email_html_sanitization_enabled() -> bool:
+    try:
+        cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
+        if isinstance(cfg, dict):
+            return bool(cfg.get("sanitize_email_html_bodies", True))
+    except _EMAIL_NONCRITICAL_EXCEPTIONS:
+        pass
+    return True
+
+
+def _sanitize_email_html_content(html_content: str) -> str:
+    global _EMAIL_HTML_VALIDATOR
+    if not html_content or not _email_html_sanitization_enabled():
+        return html_content
+
+    try:
+        if _EMAIL_HTML_VALIDATOR is None:
+            _EMAIL_HTML_VALIDATOR = FileValidator()
+        html_cfg = _EMAIL_HTML_VALIDATOR.get_media_config("html") or {}
+        return _EMAIL_HTML_VALIDATOR.sanitize_html_content(html_content, html_cfg)
+    except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
+        logging.debug(f"Email HTML sanitization fallback due to error: {e}")
+        return html_content
+
+
 def _html_to_text(html: str) -> str:
     if not html:
         return ""
+    sanitized_html = _sanitize_email_html_content(html)
     try:
         if _html2text:
             conv = _html2text.HTML2Text()
             conv.ignore_links = False
             conv.ignore_images = True
             conv.body_width = 0
-            return conv.handle(html)
+            return conv.handle(sanitized_html)
         # Very light fallback: strip tags
-        return re.sub(r"<[^>]+>", " ", html)
+        return re.sub(r"<[^>]+>", " ", sanitized_html)
     except _EMAIL_NONCRITICAL_EXCEPTIONS:
-        return html
+        return sanitized_html
+
+
+def _is_safe_archive_member_name(member_name: str) -> bool:
+    if not member_name:
+        return False
+    normalized = member_name.replace("\\", "/")
+    if normalized.startswith("/"):
+        return False
+    pure_path = PurePosixPath(normalized)
+    if ".." in pure_path.parts:
+        return False
+    return True
 
 
 def parse_eml_bytes(
@@ -466,6 +511,7 @@ def process_eml_archive_bytes(
     cfg = DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {}) if isinstance(DEFAULT_MEDIA_TYPE_CONFIG, dict) else {}
     max_internal_files = int(cfg.get('max_internal_files', 100))
     max_uncompressed_size = int(cfg.get('max_internal_uncompressed_size_mb', 200)) * 1024 * 1024
+    max_member_uncompressed_size = int(cfg.get('max_member_uncompressed_size_mb', 100)) * 1024 * 1024
 
     members = zf.infolist()
     if len(members) > max_internal_files:
@@ -486,6 +532,36 @@ def process_eml_archive_bytes(
             "processing_source": f"archive:{archive_name}",
             "error": f"Archive declared uncompressed size exceeds limit ({total_size} > {max_uncompressed_size} bytes)",
         }]
+
+    for member in members:
+        member_name = member.filename or ""
+        if not _is_safe_archive_member_name(member_name):
+            return [{
+                "status": "Error",
+                "input_ref": archive_name,
+                "media_type": "email",
+                "processing_source": f"archive:{archive_name}",
+                "error": f"Archive contains unsafe member path: {member_name}",
+            }]
+        if getattr(member, "flag_bits", 0) & 0x1:
+            return [{
+                "status": "Error",
+                "input_ref": archive_name,
+                "media_type": "email",
+                "processing_source": f"archive:{archive_name}",
+                "error": "Encrypted ZIP archives are not supported for email ingestion.",
+            }]
+        if max_member_uncompressed_size > 0 and member.file_size > max_member_uncompressed_size:
+            return [{
+                "status": "Error",
+                "input_ref": archive_name,
+                "media_type": "email",
+                "processing_source": f"archive:{archive_name}",
+                "error": (
+                    "Archive member exceeds uncompressed size limit "
+                    f"({member.file_size} > {max_member_uncompressed_size} bytes)"
+                ),
+            }]
 
     group_tag = f"email_archive:{archive_name.rsplit('.', 1)[0]}" if archive_name else None
     base_keywords = list(keywords or [])

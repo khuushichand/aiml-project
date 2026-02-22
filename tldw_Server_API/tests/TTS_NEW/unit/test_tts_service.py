@@ -21,7 +21,8 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSProviderNotConfiguredError,
     TTSGenerationError,
-    TTSRateLimitError
+    TTSProviderError,
+    TTSRateLimitError,
 )
 from tldw_Server_API.app.core.TTS.voice_manager import VoiceReferenceMetadata
 
@@ -475,6 +476,91 @@ class TestMetricsCollection:
         assert kwargs["provider"] == "openai"
         assert "No audio data returned" in (kwargs.get("error") or "")
 
+    @pytest.mark.unit
+    async def test_generate_speech_writes_request_context_into_metadata(self):
+        adapter = MagicMock()
+        adapter.provider_name = "openai"
+        adapter.generate = AsyncMock(return_value=TTSResponse(audio_data=b"ok"))
+
+        factory = MagicMock()
+        factory.get_adapter_by_model = AsyncMock(return_value=adapter)
+        factory.registry = MagicMock()
+        factory.registry.get_adapter = AsyncMock(return_value=adapter)
+        factory.registry.config = {"performance": {"max_concurrent_generations": 1}}
+
+        service = TTSServiceV2(factory=factory)
+        service.factory = factory
+        service._factory = factory
+        service.metrics = MagicMock()
+
+        req = OpenAISpeechRequest(
+            model="tts-1",
+            input="hello",
+            voice="alloy",
+            response_format="mp3",
+            stream=False,
+            extra_params={"correlation_id": "corr-unit-1"},
+        )
+
+        chunks = [c async for c in service.generate_speech(req, fallback=False, request_id="req-unit-1")]
+        assert b"ok" in b"".join(chunks)
+        metadata = getattr(req, "_tts_metadata", {})
+        assert metadata.get("request_id") == "req-unit-1"
+        assert metadata.get("correlation_id") == "corr-unit-1"
+
+    @pytest.mark.unit
+    async def test_fallback_outcome_metric_emitted(self):
+        adapter = MagicMock()
+        adapter.provider_name = "openai"
+        adapter.generate = AsyncMock(side_effect=TTSProviderError("down", provider="openai"))
+
+        factory = MagicMock()
+        factory.get_adapter_by_model = AsyncMock(return_value=adapter)
+        factory.registry = MagicMock()
+        factory.registry.get_adapter = AsyncMock(return_value=adapter)
+        factory.registry.config = {"performance": {"max_concurrent_generations": 1, "stream_errors_as_audio": False}}
+
+        service = TTSServiceV2(factory=factory)
+        service.factory = factory
+        service._factory = factory
+        service.metrics = MagicMock()
+
+        async def fake_try_fallback(
+            request,
+            exclude,
+            from_provider,
+            *,
+            metadata_only: bool = False,
+            metadata_target=None,
+        ):
+            service._record_fallback_event(
+                from_provider=from_provider or "unknown",
+                to_provider="mock_fallback",
+                success="true",
+                outcome="success",
+                request_id="req-fallback-1",
+            )
+            yield b"fallback-audio"
+
+        service._try_fallback_providers = fake_try_fallback
+
+        req = OpenAISpeechRequest(
+            model="tts-1",
+            input="hello",
+            voice="alloy",
+            response_format="mp3",
+            stream=False,
+        )
+
+        chunks = [c async for c in service.generate_speech(req, fallback=True, request_id="req-fallback-1")]
+        assert b"fallback-audio" in b"".join(chunks)
+
+        fallback_outcome_calls = [
+            call for call in service.metrics.increment.call_args_list
+            if call.args and call.args[0] == "tts_fallback_outcomes_total"
+        ]
+        assert fallback_outcome_calls
+
 
 @pytest.mark.unit
 async def test_custom_voice_resolution_injects_reference(tts_service, monkeypatch):
@@ -536,6 +622,23 @@ async def test_convert_request_language_override(tts_service):
     )
     tts_request = tts_service._convert_request(req)
     assert tts_request.language == "ja"
+
+
+@pytest.mark.unit
+async def test_convert_request_target_sample_rate(tts_service):
+    req = OpenAISpeechRequest(
+        model="kokoro",
+        input="hello",
+        voice="af_heart",
+        response_format="pcm",
+        stream=False,
+        target_sample_rate=22050,
+        extra_params={"sample_rate": 16000},
+    )
+    tts_request = tts_service._convert_request(req)
+    assert tts_request.target_sample_rate == 22050
+    assert tts_request.extra_params.get("target_sample_rate") == 22050
+    assert tts_request.extra_params.get("sample_rate") == 22050
 
 
 @pytest.mark.unit

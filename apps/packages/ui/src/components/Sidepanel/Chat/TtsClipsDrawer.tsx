@@ -228,7 +228,7 @@ export const TtsClipsDrawer: React.FC<TtsClipsDrawerProps> = ({ open, onClose })
         onClose()
       }}
       title={t("playground:ttsClips.title", "TTS clips")}
-      width={360}
+      styles={{ wrapper: { width: 360 } }}
       className="tldw-tts-clips-drawer"
       extra={
         list.length ? (

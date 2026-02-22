@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.exceptions import StoragePathValidationError
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.services.outputs_service import normalize_output_storage_path
 
 _OUTPUTS_PURGE_NONCRITICAL_EXCEPTIONS = (
@@ -182,8 +183,11 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
     if ids:
         placeholders = ",".join(["?"] * len(ids))
         try:
+            output_ids_clause = f"({placeholders})"
+            purge_sql_template = "DELETE FROM outputs WHERE user_id = ? AND id IN {output_ids_clause}"
+            purge_sql = purge_sql_template.format_map(locals())  # nosec B608
             cdb.backend.execute(
-                f"DELETE FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
+                purge_sql,
                 tuple([str(user_id)] + list(ids)),
             )
             removed = len(ids)
@@ -201,7 +205,7 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
 
 
 async def start_outputs_purge_scheduler() -> asyncio.Task | None:
-    enabled = os.getenv("OUTPUTS_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    enabled = env_flag_enabled("OUTPUTS_PURGE_ENABLED")
     if not enabled:
         return None
     try:
@@ -209,7 +213,7 @@ async def start_outputs_purge_scheduler() -> asyncio.Task | None:
     except (TypeError, ValueError) as e:
         logger.debug(f"outputs_purge: invalid OUTPUTS_PURGE_INTERVAL_SEC; using default: {e}")
         interval = 86400
-    delete_files = os.getenv("OUTPUTS_PURGE_DELETE_FILES", "false").lower() in {"1", "true", "yes", "on"}
+    delete_files = env_flag_enabled("OUTPUTS_PURGE_DELETE_FILES")
     try:
         grace_days = int(os.getenv("OUTPUTS_PURGE_GRACE_DAYS", "30"))
     except (TypeError, ValueError) as e:

@@ -159,7 +159,7 @@ export const ImportPanel = ({ onImported }: ImportPanelProps) => {
       <Alert
         type="info"
         className="mb-4"
-        message="Supported formats"
+        title="Supported formats"
         description={
           <ul className="list-disc ml-4 mt-2">
             <li>
@@ -175,10 +175,10 @@ export const ImportPanel = ({ onImported }: ImportPanelProps) => {
 
       {/* Import result */}
       {importResult && (
-        <Card className="mb-4 border-green-300 bg-green-50 dark:bg-green-900/20">
+        <Card className="mb-4 border-success/30 bg-success/10">
           <div className="flex items-center gap-2 mb-3">
-            <CheckCircle className="w-5 h-5 text-green-600" />
-            <span className="font-medium text-green-700 dark:text-green-400">
+            <CheckCircle className="w-5 h-5 text-success" />
+            <span className="font-medium text-success">
               Import Successful!
             </span>
           </div>
@@ -212,10 +212,10 @@ export const ImportPanel = ({ onImported }: ImportPanelProps) => {
       {preview && !importResult && (
         <Card className="mb-4">
           <div className="flex items-center gap-2 mb-3">
-            <FileJson className="w-5 h-5 text-blue-500" />
+            <FileJson className="w-5 h-5 text-primary" />
             <span className="font-medium">File Preview</span>
             {preview.isTrello && (
-              <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+              <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">
                 Trello Format
               </span>
             )}
@@ -258,7 +258,7 @@ export const ImportPanel = ({ onImported }: ImportPanelProps) => {
       {!preview && !importResult && (
         <Upload.Dragger {...uploadProps} className="mb-4">
           <p className="ant-upload-drag-icon">
-            <UploadIcon className="w-12 h-12 mx-auto text-gray-400" />
+            <UploadIcon className="w-12 h-12 mx-auto text-text-subtle" />
           </p>
           <p className="ant-upload-text">
             Click or drag JSON file to this area

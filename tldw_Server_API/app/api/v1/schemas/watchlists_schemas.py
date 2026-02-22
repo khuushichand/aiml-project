@@ -64,6 +64,12 @@ class SourceUpdateRequest(BaseModel):
     group_ids: list[int] | None = None
 
 
+class SourceTestRequest(BaseModel):
+    url: AnyUrl
+    source_type: SourceType
+    settings: dict[str, Any] | None = None
+
+
 class Source(BaseModel):
     id: int
     name: str
@@ -84,6 +90,16 @@ class SourcesListResponse(BaseModel):
     total: int
 
 
+class ReversibleDeleteResponse(BaseModel):
+    success: bool = True
+    restore_window_seconds: int = Field(..., ge=1)
+    restore_expires_at: str
+
+
+class SourceDeleteResponse(ReversibleDeleteResponse):
+    source_id: int
+
+
 class SourceSeenStats(BaseModel):
     source_id: int
     user_id: int
@@ -99,6 +115,30 @@ class SourceSeenResetResponse(BaseModel):
     user_id: int
     cleared: int
     cleared_backoff: bool
+
+
+class SourcesCheckNowRequest(BaseModel):
+    source_ids: list[int] = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="One or more source IDs to manually check now.",
+    )
+
+
+class SourceCheckNowItem(BaseModel):
+    source_id: int
+    status: Literal["ok", "error", "not_found", "inactive"]
+    detail: str | None = None
+    last_scraped_at: str | None = None
+    run_id: int | None = None
+
+
+class SourcesCheckNowResponse(BaseModel):
+    items: list[SourceCheckNowItem]
+    total: int
+    success: int
+    failed: int
 
 
 class SourcesBulkCreateRequest(BaseModel):
@@ -226,6 +266,10 @@ class JobsListResponse(BaseModel):
     total: int
 
 
+class JobDeleteResponse(ReversibleDeleteResponse):
+    job_id: int
+
+
 class Run(BaseModel):
     id: int
     job_id: int
@@ -236,10 +280,51 @@ class Run(BaseModel):
     error_msg: str | None = None
 
 
+class RunCancelResponse(BaseModel):
+    run_id: int
+    status: str
+    cancelled: bool
+    message: str | None = None
+
+
 class RunsListResponse(BaseModel):
     items: list[Run]
     total: int
     has_more: bool | None = None
+
+
+WatchlistIaExperimentVariant = Literal["baseline", "experimental"]
+
+
+class WatchlistIaExperimentTelemetryIngestRequest(BaseModel):
+    variant: WatchlistIaExperimentVariant = "experimental"
+    session_id: str = Field(..., min_length=8, max_length=128)
+    previous_tab: str | None = Field(default=None, max_length=64)
+    current_tab: str = Field(..., min_length=1, max_length=64)
+    transitions: int = Field(default=0, ge=0, le=100_000)
+    visited_tabs: list[str] = Field(default_factory=list, max_length=64)
+    first_seen_at: str | None = None
+    last_seen_at: str | None = None
+
+
+class WatchlistIaExperimentTelemetryIngestResponse(BaseModel):
+    accepted: bool = True
+
+
+class WatchlistIaExperimentVariantSummary(BaseModel):
+    variant: WatchlistIaExperimentVariant
+    events: int = 0
+    sessions: int = 0
+    reached_target_sessions: int = 0
+    avg_transitions: float = 0.0
+    avg_visited_tabs: float = 0.0
+    avg_session_seconds: float = 0.0
+
+
+class WatchlistIaExperimentTelemetrySummaryResponse(BaseModel):
+    items: list[WatchlistIaExperimentVariantSummary]
+    since: str | None = None
+    until: str | None = None
 
 
 class PreviewItem(BaseModel):
@@ -289,6 +374,7 @@ class ScrapedItem(BaseModel):
     url: str | None = None
     title: str | None = None
     summary: str | None = None
+    content: str | None = None
     published_at: str | None = None
     tags: list[str] = []
     status: str
@@ -342,10 +428,68 @@ class WatchlistOutputCreateRequest(BaseModel):
         ge=1,
         description="Optional version of a watchlists template to render (supports template history).",
     )
+    summarize: bool = Field(default=False, description="Generate LLM-based per-article summaries before rendering")
+    summarize_prompt: str | None = Field(
+        default=None,
+        description="Custom prompt for per-article summarization. Default: 2-3 sentence summary.",
+    )
     generate_mece: bool = Field(default=False, description="Generate a MECE variant output")
     mece_template_name: str | None = Field(default=None, description="Override template name for MECE output")
     generate_tts: bool = Field(default=False, description="Generate a TTS audio variant output")
     tts_template_name: str | None = Field(default=None, description="Override template name for TTS output")
+    generate_audio: bool = Field(default=False, description="Generate a multi-voice audio briefing via workflow")
+    target_audio_minutes: int = Field(default=10, ge=1, le=60, description="Target audio briefing duration in minutes")
+    audio_model: str | None = Field(default=None, description="TTS model for audio briefing, e.g., 'kokoro'")
+    audio_voice: str | None = Field(default=None, description="Default voice for audio briefing, e.g., 'af_heart'")
+    audio_speed: float | None = Field(default=None, ge=0.25, le=4.0, description="Audio briefing speed override")
+    background_audio_uri: str | None = Field(
+        default=None,
+        description="Optional file:// URI for a background track to mix under generated briefing audio",
+    )
+    background_volume: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Background track volume multiplier when mixing briefing audio",
+    )
+    background_delay_ms: int | None = Field(
+        default=None,
+        ge=0,
+        le=120000,
+        description="Delay before background track starts, in milliseconds",
+    )
+    background_fade_seconds: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=30.0,
+        description="Fade-in/out duration applied to background track, in seconds",
+    )
+    audio_language: str | None = Field(
+        default=None,
+        description="Language for audio briefing script generation, e.g., 'en', 'es', 'fr'",
+    )
+    llm_provider: str | None = Field(default=None, description="LLM provider for summarization and script composition")
+    llm_model: str | None = Field(default=None, description="LLM model for summarization and script composition")
+    persona_summarize: bool = Field(
+        default=False,
+        description="Enable per-item persona pre-summarization before composing the final audio script",
+    )
+    persona_id: str | None = Field(
+        default=None,
+        description="Persona identifier/style hint for per-item pre-summarization",
+    )
+    persona_provider: str | None = Field(
+        default=None,
+        description="Optional provider override for persona pre-summarization",
+    )
+    persona_model: str | None = Field(
+        default=None,
+        description="Optional model override for persona pre-summarization",
+    )
+    voice_map: dict[str, str] | None = Field(
+        default=None,
+        description="Voice marker to Kokoro voice ID mapping, e.g., {'HOST': 'af_bella', 'REPORTER': 'am_adam'}",
+    )
     ingest_to_media_db: bool = Field(default=False, description="Ingest outputs into Media DB")
     tts_model: str | None = Field(default=None, description="TTS model id, e.g., 'kokoro', 'tts-1'")
     tts_voice: str | None = Field(default=None, description="TTS voice id, e.g., 'af_heart'")

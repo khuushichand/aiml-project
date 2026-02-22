@@ -74,3 +74,54 @@ def test_run_embeddings_abtest_synchronous_success(evals_client, monkeypatch):
     # In TESTING env this should be completed
     if body["status"] == "completed":
         assert body.get("progress", {}).get("phase") == 1.0
+
+
+@pytest.mark.integration
+def test_run_embeddings_abtest_treats_testing_y_as_synchronous(evals_client, monkeypatch):
+    client, headers = evals_client
+    monkeypatch.setenv("TESTING", "y")
+
+    class _DBStub:
+        def get_abtest(self, test_id, created_by=None):
+            return {"test_id": test_id, "created_by": created_by or "tester"}
+        def lookup_idempotency(self, *a, **kw):
+            return None
+        def record_idempotency(self, *a, **kw):
+            return None
+        def set_abtest_status(self, *a, **kw):
+            return None
+
+    class _SvcStub:
+        def __init__(self):
+            self.db = _DBStub()
+
+    import tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest as ab
+
+    monkeypatch.setattr(ab, "get_unified_evaluation_service_for_user", lambda uid: _SvcStub())
+
+    def _unexpected_jobs_manager():
+        raise AssertionError("jobs path should not run")
+
+    monkeypatch.setattr(ab, "abtest_jobs_manager", _unexpected_jobs_manager)
+
+    calls = {"run": 0}
+
+    async def _fake_run_abtest_full(db, cfg, test_id, user_id, media_db):
+        calls["run"] += 1
+        return None
+
+    monkeypatch.setattr(ab, "run_abtest_full", _fake_run_abtest_full)
+
+    payload = {
+        "config": {
+            "arms": [{"provider": "openai", "model": "text-embedding-3-small"}],
+            "media_ids": [],
+            "retrieval": {"k": 5, "search_mode": "vector"},
+            "queries": [{"text": "hello"}],
+            "metric_level": "media",
+            "reuse_existing": True,
+        }
+    }
+    r = client.post("/api/v1/evaluations/embeddings/abtest/mytest/run", json=payload, headers=headers)
+    assert r.status_code == 200, r.text
+    assert calls["run"] == 1

@@ -18,8 +18,8 @@ def atomic_write(path: Path, data: str, encoding: str = "utf-8") -> None:
         try:
             if os.path.exists(tmp):
                 os.unlink(tmp)
-        except Exception:
-            pass
+        except OSError:
+            tmp = ""
 
 
 def ensure_gitignore(path: Path, entries: Iterable[str]) -> None:

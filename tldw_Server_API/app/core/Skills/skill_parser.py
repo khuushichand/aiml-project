@@ -22,7 +22,7 @@ context: inline
 
 Skill instructions here...
 $ARGUMENTS will be replaced with the arguments.
-$0, $1, etc. for specific arguments.
+${0}, ${1}, etc. for specific arguments.
 ```
 """
 

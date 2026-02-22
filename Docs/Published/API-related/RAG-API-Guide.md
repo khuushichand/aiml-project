@@ -26,6 +26,8 @@ OpenAPI tags: `rag-unified`, `rag-health`
 ### Available Endpoints
 - `POST /search`              - Unified RAG search (all features via params)
 - `POST /search/stream`       - Streaming answer chunks (NDJSON)
+- `POST /batch`               - Batch multiple queries concurrently
+- `POST /batch/resume/{id}`   - Resume an interrupted batch run
 - `GET  /simple`              - Simple search (query param)
 - `GET  /advanced`            - Advanced search with common flags
 - `GET  /capabilities`        - Pipeline capabilities and defaults
@@ -48,8 +50,8 @@ curl -X POST http://localhost:8000/api/v1/rag/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "machine learning concepts",
-    "limit": 5,
-    "databases": ["media_db"]
+    "top_k": 5,
+    "sources": ["media_db"]
   }'
 ```
 
@@ -85,6 +87,14 @@ interface UnifiedSearchRequest {
   keyword_filter?: string[];                  // Optional
   enable_generation?: boolean;                // Include model-generated answer
   enable_citations?: boolean;                 // Include citations
+  enable_query_classification?: boolean;      // Search-Agent router toggle, Default: false
+  enable_research_loop?: boolean;             // Iterative research mode, Default: false
+  search_depth_mode?: 'speed' | 'balanced' | 'quality'; // Default: 'balanced'
+  enable_suggestions?: boolean;               // Follow-up suggestion generation, Default: false
+  num_suggestions?: number;                   // 1-10, Default: 5
+  enable_structured_response?: boolean;       // XML context + citation-oriented writer
+  enable_image_search?: boolean;              // Media search action (images)
+  enable_video_search?: boolean;              // Media search action (videos)
 }
 ```
 
@@ -98,6 +108,31 @@ interface UnifiedSearchResponse {
   timings: Record<string, number>;
   generated_answer?: string;
   citations?: object[];
+  research_summary?: ResearchSummary;          // Mirrors metadata.research when enabled
+  suggestions?: string[];                     // Mirrors metadata.suggestions when enabled
+  images?: ImageResult[];                     // Mirrors metadata.images when enabled
+  videos?: VideoResult[];                     // Mirrors metadata.videos when enabled
+}
+
+interface ResearchSummary {
+  title?: string;           // Short title for the research summary
+  summary: string;          // Human-readable summary of retrieved context
+  sources?: string[];       // Source identifiers or URLs used in the summary
+}
+
+interface ImageResult {
+  url: string;              // Image URL
+  caption?: string;         // Descriptive caption
+  alt?: string;             // Alt text for accessibility
+  width?: number;           // Width in pixels
+  height?: number;          // Height in pixels
+}
+
+interface VideoResult {
+  url: string;              // Video URL
+  title?: string;           // Video title
+  durationSeconds?: number; // Duration in seconds
+  thumbnailUrl?: string;    // Thumbnail image URL
 }
 ```
 
@@ -111,14 +146,73 @@ const response = await fetch('http://localhost:8000/api/v1/rag/search', {
   },
   body: JSON.stringify({
     query: "deep learning tutorials",
-    search_type: "hybrid",
-    limit: 10,
-    databases: ["media_db", "notes"],
-    keywords: ["python", "tensorflow"]
+    search_mode: "hybrid",
+    top_k: 10,
+    sources: ["media_db", "notes"],
+    keyword_filter: ["python", "tensorflow"]
   })
 });
 
 const data = await response.json();
+```
+
+Search-Agent defaults for omitted request fields:
+- The server applies `[Search-Agent]` defaults from `tldw_Server_API/Config_Files/config.txt`.
+- Environment variables override config values.
+- Router, research, and depth defaults:
+  - `enable_query_classification` ← `SEARCH_QUERY_CLASSIFICATION` / `search_query_classification` (default `false`)
+  - `enable_research_loop` ← `SEARCH_RESEARCH_LOOP` / `search_research_loop` (default `false`)
+  - `search_depth_mode` ← `SEARCH_DEFAULT_MODE` / `search_default_mode` (default `'balanced'`)
+  - `num_suggestions` ← schema default only, no env/config override (default `5`)
+- Round 2 toggles and defaults:
+  - `enable_suggestions` ← `SEARCH_SUGGESTIONS` / `search_suggestions` (default `false`)
+  - `enable_structured_response` ← `SEARCH_STRUCTURED_RESPONSE` / `search_structured_response` (default `false`)
+  - `enable_image_search` ← `SEARCH_IMAGE_SEARCH` / `search_image_search` (default `false`)
+  - `enable_video_search` ← `SEARCH_VIDEO_SEARCH` / `search_video_search` (default `false`)
+
+### 1a. Batch Search - `POST /batch`
+
+Run multiple queries concurrently with shared parameters. When `enable_checkpoint=true`, the server emits a `checkpoint_id` and saves per-query progress so you can resume later.
+
+Request (subset):
+```typescript
+interface UnifiedBatchRequest {
+  queries: string[];                 // Required, 1-100
+  max_concurrent?: number;           // Default: 5
+  enable_checkpoint?: boolean;       // Default: false
+  // ...all other UnifiedRAGRequest fields apply to every query
+}
+```
+
+Response (excerpt):
+```typescript
+interface UnifiedBatchResponse {
+  results: UnifiedRAGResponse[];
+  total_queries: number;
+  successful: number;
+  failed: number;
+  total_time: number;
+  checkpoint_id?: string;           // Present when enable_checkpoint=true
+}
+```
+
+Resume:
+```bash
+curl -X POST http://localhost:8000/api/v1/rag/batch/resume/{checkpoint_id} \
+  -H "X-API-KEY: your-api-key"
+```
+
+Example:
+```bash
+curl -X POST http://localhost:8000/api/v1/rag/batch \
+  -H "X-API-KEY: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "queries": ["What is RAG?", "Explain vector search"],
+    "max_concurrent": 5,
+    "enable_checkpoint": true,
+    "enable_generation": true
+  }'
 ```
 
 ### 2. Advanced Search - `GET /advanced`
@@ -896,13 +990,13 @@ Handle validation errors gracefully:
 
 ### Rate Limits
 
-Defaults are configured via AuthNZ settings and enforced per client/IP (token bucket):
-- RATE_LIMIT_ENABLED: true
-- RATE_LIMIT_PER_MINUTE: 60
-- RATE_LIMIT_BURST: 10
+Defaults are configured via Resource Governor policies:
+- RG_ENABLED: true
+- requests.rpm / requests.burst on route policy IDs in `Config_Files/resource_governor_policies.yaml`
 
 Notes:
-- Endpoints apply a general `check_rate_limit` dependency; administrators can tune settings via environment or config.
+- Endpoints enforce limits through Resource Governor route-map policy bindings.
+- `check_rate_limit` dependencies are diagnostics-only compatibility shims.
 - Health endpoints may be left open or gated by global policies per deployment.
 
 ### Rate Limit Headers

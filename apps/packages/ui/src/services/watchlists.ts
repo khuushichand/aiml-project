@@ -13,12 +13,16 @@ import type {
   ScrapedItemUpdate,
   SourceSeenResetResponse,
   SourceSeenStats,
+  SourcesCheckNowResponse,
   SourcesBulkCreateResponse,
   SourcesImportResponse,
   WatchlistClusterSubscription,
   WatchlistFilter,
   WatchlistGroup,
   WatchlistGroupCreate,
+  WatchlistsIaExperimentTelemetryPayload,
+  WatchlistsIaExperimentTelemetryResponse,
+  WatchlistsIaExperimentTelemetrySummaryResponse,
   WatchlistJob,
   WatchlistJobCreate,
   WatchlistJobUpdate,
@@ -64,6 +68,16 @@ export interface FetchSourcesParams {
   size?: number
 }
 
+export interface ReversibleDeleteResponse {
+  success: boolean
+  restore_window_seconds: number
+  restore_expires_at: string
+}
+
+export interface SourceDeleteResponse extends ReversibleDeleteResponse {
+  source_id: number
+}
+
 export const fetchWatchlistSources = async (
   params?: FetchSourcesParams
 ): Promise<PaginatedResponse<WatchlistSource>> => {
@@ -102,10 +116,21 @@ export const updateWatchlistSource = async (
   })
 }
 
-export const deleteWatchlistSource = async (sourceId: number): Promise<void> => {
-  return bgRequest<void>({
+export const deleteWatchlistSource = async (
+  sourceId: number
+): Promise<SourceDeleteResponse> => {
+  return bgRequest<SourceDeleteResponse>({
     path: `/api/v1/watchlists/sources/${sourceId}` as any,
     method: "DELETE"
+  })
+}
+
+export const restoreWatchlistSource = async (
+  sourceId: number
+): Promise<WatchlistSource> => {
+  return bgRequest<WatchlistSource>({
+    path: `/api/v1/watchlists/sources/${sourceId}/restore` as any,
+    method: "POST"
   })
 }
 
@@ -167,6 +192,45 @@ export const clearSourceSeen = async (
   return bgRequest<SourceSeenResetResponse>({
     path: `/api/v1/watchlists/sources/${sourceId}/seen${qs}` as any,
     method: "DELETE"
+  })
+}
+
+export const checkWatchlistSourcesNow = async (
+  sourceIds: number[]
+): Promise<SourcesCheckNowResponse> => {
+  return bgRequest<SourcesCheckNowResponse>({
+    path: "/api/v1/watchlists/sources/check-now" as any,
+    method: "POST",
+    body: { source_ids: sourceIds }
+  })
+}
+
+export const testWatchlistSource = async (
+  sourceId: number,
+  params?: { limit?: number }
+): Promise<JobPreviewResult> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<JobPreviewResult>({
+    path: `/api/v1/watchlists/sources/${sourceId}/test${qs}` as any,
+    method: "POST"
+  })
+}
+
+export interface WatchlistSourceDraftTestRequest {
+  url: string
+  source_type: "rss" | "site" | "forum"
+  settings?: Record<string, unknown> | null
+}
+
+export const testWatchlistSourceDraft = async (
+  payload: WatchlistSourceDraftTestRequest,
+  params?: { limit?: number }
+): Promise<JobPreviewResult> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<JobPreviewResult>({
+    path: `/api/v1/watchlists/sources/test${qs}` as any,
+    method: "POST",
+    body: payload
   })
 }
 
@@ -236,6 +300,10 @@ export interface FetchJobsParams {
   size?: number
 }
 
+export interface JobDeleteResponse extends ReversibleDeleteResponse {
+  job_id: number
+}
+
 export const fetchWatchlistJobs = async (
   params?: FetchJobsParams
 ): Promise<PaginatedResponse<WatchlistJob>> => {
@@ -272,10 +340,17 @@ export const updateWatchlistJob = async (
   })
 }
 
-export const deleteWatchlistJob = async (jobId: number): Promise<void> => {
-  return bgRequest<void>({
+export const deleteWatchlistJob = async (jobId: number): Promise<JobDeleteResponse> => {
+  return bgRequest<JobDeleteResponse>({
     path: `/api/v1/watchlists/jobs/${jobId}` as any,
     method: "DELETE"
+  })
+}
+
+export const restoreWatchlistJob = async (jobId: number): Promise<WatchlistJob> => {
+  return bgRequest<WatchlistJob>({
+    path: `/api/v1/watchlists/jobs/${jobId}/restore` as any,
+    method: "POST"
   })
 }
 
@@ -367,6 +442,22 @@ export const getRunDetails = async (runId: number): Promise<RunDetailResponse> =
 export const triggerWatchlistRun = async (jobId: number): Promise<WatchlistRun> => {
   return bgRequest<WatchlistRun>({
     path: `/api/v1/watchlists/jobs/${jobId}/run` as any,
+    method: "POST"
+  })
+}
+
+export interface CancelWatchlistRunResponse {
+  run_id: number
+  status: string
+  cancelled: boolean
+  message?: string | null
+}
+
+export const cancelWatchlistRun = async (
+  runId: number
+): Promise<CancelWatchlistRunResponse> => {
+  return bgRequest<CancelWatchlistRunResponse>({
+    path: `/api/v1/watchlists/runs/${runId}/cancel` as any,
     method: "POST"
   })
 }
@@ -480,6 +571,37 @@ export const downloadWatchlistOutput = async (outputId: number): Promise<string>
 // Templates API
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface JobOutputTemplateSummary {
+  id: string
+  name: string
+  format: "md" | "html" | "mp3" | string
+  updated_at?: string | null
+}
+
+export const fetchJobOutputTemplates = async (
+  params?: { q?: string; limit?: number; offset?: number }
+): Promise<{ items: JobOutputTemplateSummary[]; total: number }> => {
+  const qs = buildQuery(params || {})
+  const data = await bgRequest<{ items?: Array<Record<string, unknown>>; total?: number }>({
+    path: `/api/v1/outputs/templates${qs}` as any,
+    method: "GET"
+  })
+  const items = Array.isArray(data?.items)
+    ? data.items
+      .filter((item) => typeof item?.name === "string" && item.name.trim().length > 0)
+      .map((item) => ({
+        id: String(item.id),
+        name: String(item.name).trim(),
+        format: typeof item.format === "string" ? item.format : "md",
+        updated_at: typeof item.updated_at === "string" ? item.updated_at : null
+      }))
+    : []
+  return {
+    items,
+    total: Number.isFinite(data?.total) ? Number(data.total) : items.length
+  }
+}
+
 export const fetchWatchlistTemplates = async (): Promise<{ items: WatchlistTemplate[] }> => {
   return bgRequest<{ items: WatchlistTemplate[] }>({
     path: "/api/v1/watchlists/templates",
@@ -531,6 +653,27 @@ export const deleteWatchlistTemplate = async (templateName: string): Promise<voi
 export const getWatchlistSettings = async (): Promise<WatchlistSettings> => {
   return bgRequest<WatchlistSettings>({
     path: "/api/v1/watchlists/settings",
+    method: "GET"
+  })
+}
+
+export const recordWatchlistsIaExperimentTelemetry = async (
+  payload: WatchlistsIaExperimentTelemetryPayload
+): Promise<WatchlistsIaExperimentTelemetryResponse> => {
+  return bgRequest<WatchlistsIaExperimentTelemetryResponse>({
+    path: "/api/v1/watchlists/telemetry/ia-experiment" as any,
+    method: "POST",
+    body: payload
+  })
+}
+
+export const fetchWatchlistsIaExperimentTelemetrySummary = async (params?: {
+  since?: string
+  until?: string
+}): Promise<WatchlistsIaExperimentTelemetrySummaryResponse> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<WatchlistsIaExperimentTelemetrySummaryResponse>({
+    path: `/api/v1/watchlists/telemetry/ia-experiment/summary${qs}` as any,
     method: "GET"
   })
 }

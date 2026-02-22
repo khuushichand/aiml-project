@@ -1,6 +1,25 @@
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
+
+
+def _hf_runtime_is_importable() -> bool:
+    probe = subprocess.run(
+        [sys.executable, "-c", "import transformers, torch; print('ok')"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return probe.returncode == 0
+
+
+if not _hf_runtime_is_importable():
+    pytest.skip(
+        "transformers/torch runtime is unavailable or crashes during import in this environment",
+        allow_module_level=True,
+    )
 
 transformers = pytest.importorskip("transformers")
 torch = pytest.importorskip("torch")
@@ -15,6 +34,7 @@ async def test_hf_download_rejects_traversal(monkeypatch, tmp_path: Path):
     models_dir = tmp_path / "models"
     cfg = HuggingFaceConfig(models_dir=models_dir)
     handler = HuggingFaceHandler(cfg, global_app_config={})
+    handler._ensure_hf_dependencies()
 
     import tldw_Server_API.app.core.Local_LLM.Huggingface_Handler as hf_mod
 
@@ -32,6 +52,7 @@ async def test_hf_download_rejects_traversal(monkeypatch, tmp_path: Path):
 async def test_hf_cache_key_includes_quantization(monkeypatch, tmp_path: Path):
     cfg = HuggingFaceConfig(models_dir=tmp_path)
     handler = HuggingFaceHandler(cfg, global_app_config={})
+    handler._ensure_hf_dependencies()
     model_dir = tmp_path / "toy"
     model_dir.mkdir(parents=True, exist_ok=True)
     (model_dir / "config.json").write_text("{}")

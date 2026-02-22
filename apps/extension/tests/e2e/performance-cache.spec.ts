@@ -6,6 +6,7 @@
  */
 
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 import { createReport, logReport } from "./utils/performance"
@@ -27,7 +28,7 @@ test.describe("React Query Cache Performance", () => {
   test.skip(!API_KEY, "TLDW_E2E_API_KEY must be set for performance-cache e2e tests")
 
   test("tracks API requests on initial load", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -116,7 +117,7 @@ test.describe("React Query Cache Performance", () => {
   })
 
   test("navigation between routes reuses cached data", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -200,7 +201,7 @@ test.describe("React Query Cache Performance", () => {
   })
 
   test("model selector shares cached data", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -251,7 +252,7 @@ test.describe("React Query Cache Performance", () => {
   })
 
   test("connection status polling is efficient", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -316,7 +317,7 @@ test.describe("React Query Cache Performance", () => {
   })
 
   test("background script message deduplication", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -386,7 +387,7 @@ test.describe("Stale Time Analysis", () => {
   test.skip(!API_KEY, "TLDW_E2E_API_KEY must be set for performance-cache e2e tests")
 
   test("documents current staleTime configurations", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",

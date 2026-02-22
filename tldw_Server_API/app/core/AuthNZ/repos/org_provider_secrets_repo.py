@@ -56,6 +56,17 @@ class AuthnzOrgProviderSecretsRepo:
     def _normalize_datetime_for_postgres(dt: datetime) -> datetime:
         return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
+    @staticmethod
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        if isinstance(row, dict):
+            return dict(row)
+        try:
+            keys = row.keys()
+            return {key: row[key] for key in keys}
+        except Exception as row_keys_error:
+            logger.debug("Org provider secret row key materialization failed; falling back to dict(row)", exc_info=row_keys_error)
+        return dict(row)
+
     async def upsert_secret(
         self,
         *,
@@ -102,7 +113,7 @@ class AuthnzOrgProviderSecretsRepo:
                     updated_by,
                     ts,
                 )
-                return dict(row) if row else {}
+                return self._row_to_dict(row) if row else {}
 
             await self.db_pool.execute(
                 """
@@ -141,7 +152,7 @@ class AuthnzOrgProviderSecretsRepo:
                 """,
                 (scope_norm, int(scope_id), provider_norm),
             )
-            return dict(row) if row else {}
+            return self._row_to_dict(row) if row else {}
         except Exception as exc:
             logger.error(f"AuthnzOrgProviderSecretsRepo.upsert_secret failed: {exc}")
             raise
@@ -159,29 +170,33 @@ class AuthnzOrgProviderSecretsRepo:
         try:
             if getattr(self.db_pool, "pool", None) is not None:
                 revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
-                row = await self.db_pool.fetchone(
-                    f"""
+                fetch_secret_sql_template = """
                     SELECT id, scope_type, scope_id, provider, encrypted_blob, key_hint, metadata,
                            created_at, updated_at, last_used_at, created_by, updated_by, revoked_by, revoked_at
                     FROM org_provider_secrets
                     WHERE scope_type = $1 AND scope_id = $2 AND provider = $3{revoked_clause}
-                    """,
+                    """
+                fetch_secret_sql = fetch_secret_sql_template.format_map(locals())  # nosec B608
+                row = await self.db_pool.fetchone(
+                    fetch_secret_sql,
                     scope_norm,
                     int(scope_id),
                     provider_norm,
                 )
             else:
                 revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
-                row = await self.db_pool.fetchone(
-                    f"""
+                fetch_secret_sql_template = """
                     SELECT id, scope_type, scope_id, provider, encrypted_blob, key_hint, metadata,
                            created_at, updated_at, last_used_at, created_by, updated_by, revoked_by, revoked_at
                     FROM org_provider_secrets
                     WHERE scope_type = ? AND scope_id = ? AND provider = ?{revoked_clause}
-                    """,
+                    """
+                fetch_secret_sql = fetch_secret_sql_template.format_map(locals())  # nosec B608
+                row = await self.db_pool.fetchone(
+                    fetch_secret_sql,
                     (scope_norm, int(scope_id), provider_norm),
                 )
-            return dict(row) if row else None
+            return self._row_to_dict(row) if row else None
         except Exception as exc:
             logger.error(f"AuthnzOrgProviderSecretsRepo.fetch_secret failed: {exc}")
             raise
@@ -220,14 +235,16 @@ class AuthnzOrgProviderSecretsRepo:
                 if not include_revoked:
                     clauses.append("revoked_at IS NULL")
                 where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-                rows = await self.db_pool.fetchall(
-                    f"""
+                list_secrets_sql_template = """
                     SELECT id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
                            created_by, updated_by, revoked_by, revoked_at
                     FROM org_provider_secrets
                     {where}
                     ORDER BY scope_type, scope_id, provider
-                    """,
+                    """
+                list_secrets_sql = list_secrets_sql_template.format_map(locals())  # nosec B608
+                rows = await self.db_pool.fetchall(
+                    list_secrets_sql,
                     *params,
                 )
             else:
@@ -245,18 +262,20 @@ class AuthnzOrgProviderSecretsRepo:
                 if not include_revoked:
                     clauses.append("revoked_at IS NULL")
                 where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-                rows = await self.db_pool.fetchall(
-                    f"""
+                list_secrets_sql_template = """
                     SELECT id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
                            created_by, updated_by, revoked_by, revoked_at
                     FROM org_provider_secrets
                     {where}
                     ORDER BY scope_type, scope_id, provider
-                    """,
+                    """
+                list_secrets_sql = list_secrets_sql_template.format_map(locals())  # nosec B608
+                rows = await self.db_pool.fetchall(
+                    list_secrets_sql,
                     tuple(params),
                 )
 
-            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row} for row in rows]
+            return [self._row_to_dict(row) for row in rows]
         except Exception as exc:
             logger.error(f"AuthnzOrgProviderSecretsRepo.list_secrets failed: {exc}")
             raise

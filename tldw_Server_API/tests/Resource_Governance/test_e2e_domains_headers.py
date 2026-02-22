@@ -7,19 +7,34 @@ from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSim
 pytestmark = pytest.mark.rate_limit
 
 
-def _write_policy(*, tmp_path, policy_name: str, path_glob: str, scopes: list[str] | None = None) -> str:
+@pytest.fixture(params=["memory", "redis"], ids=["rg-memory", "rg-redis"])
+def rg_backend(request) -> str:
+    return str(request.param)
+
+
+def _write_policy(
+    *,
+    tmp_path,
+    policy_name: str,
+    path_glob: str,
+    scopes: list[str] | None = None,
+    policy_suffix: str | None = None,
+) -> str:
     if scopes is None:
         scopes = ["ip"]
     scopes_yaml = ", ".join(scopes)
+    policy_id = f"{policy_name}.small"
+    if policy_suffix:
+        policy_id = f"{policy_id}.{policy_suffix}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        f"  {policy_name}.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 1 }\n"
         f"    scopes: [{scopes_yaml}]\n"
         "route_map:\n"
         "  by_path:\n"
-        f"    {path_glob}: {policy_name}.small\n"
+        f"    {path_glob}: {policy_id}\n"
     )
     p = tmp_path / f"rg_{policy_name}.yaml"
     p.write_text(policy, encoding="utf-8")
@@ -36,12 +51,20 @@ def _assert_deny_headers(resp) -> None:
     assert reset is not None and int(reset) >= 1
 
 
-def test_e2e_rag_deny_headers_retry_after(monkeypatch, tmp_path):
+def test_e2e_rag_deny_headers_retry_after(monkeypatch, tmp_path, rg_backend):
 
 
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
-    monkeypatch.setenv("RG_POLICY_PATH", _write_policy(tmp_path=tmp_path, policy_name="rag", path_glob="/api/v1/rag/*"))
+    monkeypatch.setenv(
+        "RG_POLICY_PATH",
+        _write_policy(
+            tmp_path=tmp_path,
+            policy_name="rag",
+            path_glob="/api/v1/rag/*",
+            policy_suffix=f"{rg_backend}.{tmp_path.name.replace('-', '_')}",
+        ),
+    )
 
     from tldw_Server_API.app.api.v1.endpoints.rag_health import router as rag_health_router
 
@@ -58,14 +81,19 @@ def test_e2e_rag_deny_headers_retry_after(monkeypatch, tmp_path):
         _assert_deny_headers(r2)
 
 
-def test_e2e_media_deny_headers_retry_after(monkeypatch, tmp_path):
+def test_e2e_media_deny_headers_retry_after(monkeypatch, tmp_path, rg_backend):
 
 
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv(
         "RG_POLICY_PATH",
-        _write_policy(tmp_path=tmp_path, policy_name="media", path_glob="/api/v1/media/*"),
+        _write_policy(
+            tmp_path=tmp_path,
+            policy_name="media",
+            path_glob="/api/v1/media/*",
+            policy_suffix=f"{rg_backend}.{tmp_path.name.replace('-', '_')}",
+        ),
     )
 
     from tldw_Server_API.app.api.v1.endpoints.media.transcription_models import (
@@ -85,14 +113,19 @@ def test_e2e_media_deny_headers_retry_after(monkeypatch, tmp_path):
         _assert_deny_headers(r2)
 
 
-def test_e2e_research_deny_headers_retry_after(monkeypatch, tmp_path):
+def test_e2e_research_deny_headers_retry_after(monkeypatch, tmp_path, rg_backend):
 
 
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv(
         "RG_POLICY_PATH",
-        _write_policy(tmp_path=tmp_path, policy_name="research", path_glob="/api/v1/research/*"),
+        _write_policy(
+            tmp_path=tmp_path,
+            policy_name="research",
+            path_glob="/api/v1/research/*",
+            policy_suffix=f"{rg_backend}.{tmp_path.name.replace('-', '_')}",
+        ),
     )
 
     import tldw_Server_API.app.api.v1.endpoints.research as research_ep
@@ -128,10 +161,10 @@ def test_e2e_research_deny_headers_retry_after(monkeypatch, tmp_path):
         _assert_deny_headers(r2)
 
 
-def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path, auth_headers):
+def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path, auth_headers, rg_backend):
 
 
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv(
         "RG_POLICY_PATH",
@@ -140,6 +173,7 @@ def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path, auth_
             policy_name="prompt_studio",
             path_glob="/api/v1/prompt-studio/*",
             scopes=["ip", "api_key"],
+            policy_suffix=f"{rg_backend}.{tmp_path.name.replace('-', '_')}",
         ),
     )
 

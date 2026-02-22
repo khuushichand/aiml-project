@@ -4,11 +4,12 @@
 # Imports
 import base64
 import json
+import os
 import pathlib
 import struct
 import zlib
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 #
 # Third-party Libraries
@@ -21,6 +22,11 @@ from starlette import status
 # Constants for file upload validation
 MAX_CHARACTER_FILE_SIZE = 10 * 1024 * 1024  # 10MB max file size
 ALLOWED_EXTENSIONS = frozenset({".png", ".webp", ".jpeg", ".jpg", ".json", ".yaml", ".yml", ".txt", ".md"})
+
+
+def _format_allowed_extensions() -> str:
+    """Return supported import extensions in stable sorted order for API errors/docs."""
+    return ", ".join(sorted(ALLOWED_EXTENSIONS))
 
 def _detect_mime_type(data: bytes) -> Optional[str]:
     """
@@ -76,7 +82,11 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> tuple[bool, str
 
     # Check extension first
     if ext and ext not in ALLOWED_EXTENSIONS:
-        return False, f"File extension '{ext}' not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}", None
+        return (
+            False,
+            f"File extension '{ext}' not allowed. Allowed: {_format_allowed_extensions()}",
+            None,
+        )
 
     # Detect MIME type from content
     detected_mime = _detect_mime_type(data)
@@ -119,9 +129,26 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> tuple[bool, str
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.character_schemas import (
     CharacterCreate,
+    CharacterExemplarDeletionResponse,
+    CharacterExemplarIn,
+    CharacterExemplarResponse,
+    CharacterExemplarSearchRequest,
+    CharacterExemplarSearchResponse,
+    CharacterExemplarSelectionConfig,
+    CharacterExemplarSelectionDebug,
+    CharacterExemplarSelectionDebugRequest,
+    CharacterExemplarUpdate,
     CharacterImportResponse,
+    CharacterListQueryResponse,
+    CharacterRevertRequest,
+    CharacterTagOperationRequest,
+    CharacterTagOperationResponse,
     CharacterResponse,
     CharacterUpdate,
+    CharacterVersionDiffField,
+    CharacterVersionDiffResponse,
+    CharacterVersionEntry,
+    CharacterVersionListResponse,
     DeletionResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
@@ -140,6 +167,7 @@ from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
     WorldBookImportRequest,
     WorldBookImportResponse,
     WorldBookListResponse,
+    WorldBookRuntimeConfig,
     WorldBookResponse,
     WorldBookStatistics,
     WorldBookUpdate,
@@ -157,12 +185,23 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
 )
 from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
+from tldw_Server_API.app.core.Character_Chat.constants import MAX_RECURSIVE_DEPTH
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector import (
+    PersonaExemplarSelectorConfig,
+    select_character_exemplars,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_embeddings import (
+    score_exemplars_with_embeddings,
+    upsert_character_exemplar_embeddings,
+    delete_character_exemplar_embeddings,
+)
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
     InputError,
+    RestoreWindowExpiredError,
 )
 
 _CHARACTERS_NONCRITICAL_EXCEPTIONS = (
@@ -190,22 +229,156 @@ _CHARACTERS_NONCRITICAL_EXCEPTIONS = (
 # --- Router ---
 router = APIRouter()
 
+_EXEMPLAR_SEARCH_HYBRID_CANDIDATE_CAP = 200
+_EXEMPLAR_SEARCH_HYBRID_MIN_POOL = 40
+_EXEMPLAR_SEARCH_HYBRID_VECTOR_WEIGHT = 0.55
+_EXEMPLAR_SEARCH_HYBRID_LEXICAL_WEIGHT = 0.45
+_CHARACTERS_RESTORE_RETENTION_ENV_KEY = "CHARACTERS_RESTORE_RETENTION_DAYS"
+_CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS = 30
+_CHARACTER_REVERT_FIELDS = (
+    "name",
+    "description",
+    "personality",
+    "scenario",
+    "system_prompt",
+    "post_history_instructions",
+    "first_message",
+    "message_example",
+    "creator_notes",
+    "alternate_greetings",
+    "tags",
+    "creator",
+    "character_version",
+    "extensions",
+)
+
+
+def _get_characters_restore_retention_days() -> int:
+    """Read and validate restore retention policy from environment."""
+    raw = os.getenv(
+        _CHARACTERS_RESTORE_RETENTION_ENV_KEY,
+        str(_CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS),
+    )
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid {} value {!r}; using default {} days.",
+            _CHARACTERS_RESTORE_RETENTION_ENV_KEY,
+            raw,
+            _CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS,
+        )
+        return _CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS
+
+    if parsed < 1:
+        logger.warning(
+            "Non-positive {} value {}; using default {} days.",
+            _CHARACTERS_RESTORE_RETENTION_ENV_KEY,
+            parsed,
+            _CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS,
+        )
+        return _CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS
+
+    return parsed
+
+
+def _build_character_revert_payload(
+    snapshot_payload: dict[str, Any],
+    current_character: dict[str, Any],
+) -> dict[str, Any]:
+    if not any(field in snapshot_payload for field in _CHARACTER_REVERT_FIELDS):
+        raise InputError(
+            "Target version does not contain a full character snapshot and cannot be reverted."
+        )
+
+    payload: dict[str, Any] = {}
+    for field in _CHARACTER_REVERT_FIELDS:
+        if field in snapshot_payload:
+            payload[field] = snapshot_payload.get(field)
+            continue
+        if field in current_character:
+            payload[field] = current_character.get(field)
+
+    if not payload.get("name"):
+        raise InputError("Target version snapshot is missing a valid character name.")
+    return payload
+
+
+def _build_character_version_entry(entry: dict[str, Any]) -> CharacterVersionEntry:
+    raw_version = int(entry.get("version") or 0)
+    normalized_version = raw_version if raw_version >= 1 else 1
+    return CharacterVersionEntry(
+        change_id=int(entry.get("change_id") or 0),
+        version=normalized_version,
+        operation=str(entry.get("operation") or "update"),
+        timestamp=entry.get("timestamp"),
+        client_id=entry.get("client_id"),
+        payload=entry.get("payload")
+        if isinstance(entry.get("payload"), dict)
+        else {},
+    )
+
+
+def _normalize_snapshot_comparison_value(value: Any) -> str:
+    if value is None:
+        return "__null__"
+    if isinstance(value, str):
+        return f"str:{value}"
+    if isinstance(value, (int, float, bool)):
+        return f"scalar:{value}"
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def _build_character_version_diff_fields(
+    from_payload: dict[str, Any],
+    to_payload: dict[str, Any],
+) -> list[CharacterVersionDiffField]:
+    changed_fields: list[CharacterVersionDiffField] = []
+    for field in _CHARACTER_REVERT_FIELDS:
+        old_value = from_payload.get(field)
+        new_value = to_payload.get(field)
+        if _normalize_snapshot_comparison_value(old_value) == _normalize_snapshot_comparison_value(new_value):
+            continue
+        changed_fields.append(
+            CharacterVersionDiffField(
+                field=field,
+                old_value=old_value,
+                new_value=new_value,
+            )
+        )
+    return changed_fields
+
 
 # --- Helper Functions (Keep _convert_db_char_to_response_model as is) ---
-def _convert_db_char_to_response_model(char_dict_from_db: dict[str, Any]) -> CharacterResponse:
+def _convert_db_char_to_response_model(
+        char_dict_from_db: dict[str, Any],
+        *,
+        include_image_base64: bool = True
+) -> CharacterResponse:
     response_data = char_dict_from_db.copy()
     if response_data.get('image') and isinstance(response_data['image'], bytes):
-        try:
-            response_data['image_base64'] = base64.b64encode(response_data['image']).decode('utf-8')
-            response_data['image_present'] = True
-        except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
-            logger.error(f"Error encoding image for char {response_data.get('id')}: {e}")
+        if include_image_base64:
+            try:
+                response_data['image_base64'] = base64.b64encode(response_data['image']).decode('utf-8')
+                response_data['image_present'] = True
+            except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+                logger.error(f"Error encoding image for char {response_data.get('id')}: {e}")
+                response_data['image_base64'] = None
+                response_data['image_present'] = False
+        else:
             response_data['image_base64'] = None
-            response_data['image_present'] = False
+            response_data['image_present'] = True
     else:
         response_data['image_base64'] = None
         response_data['image_present'] = bool(
             response_data.get('image') and isinstance(response_data.get('image'), bytes))
+    if response_data.get("updated_at") is None:
+        response_data["updated_at"] = response_data.get("last_modified")
+    if response_data.get("last_modified") is None:
+        response_data["last_modified"] = response_data.get("updated_at")
     response_data.pop('image', None)
     return CharacterResponse.model_validate(response_data)
 
@@ -246,13 +419,328 @@ def _build_conflict_import_response(
     )
 
 
+def _coerce_string_list(value: Any) -> list[str]:
+    """Normalize API/DB mixed list payloads to a list[str]."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed if str(item).strip()]
+        except _CHARACTERS_NONCRITICAL_EXCEPTIONS:
+            pass
+        return [value] if value.strip() else []
+    return [str(value)] if str(value).strip() else []
+
+
+def _flatten_character_exemplar_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Flatten exemplar API payload structure into DB fields."""
+    flat: dict[str, Any] = {}
+
+    if 'text' in payload:
+        flat['text'] = payload.get('text')
+    if 'novelty_hint' in payload:
+        flat['novelty_hint'] = payload.get('novelty_hint')
+    if 'length_tokens' in payload:
+        flat['length_tokens'] = payload.get('length_tokens')
+
+    source = payload.get('source')
+    if isinstance(source, dict):
+        if 'type' in source:
+            flat['source_type'] = source.get('type')
+        if 'url_or_id' in source:
+            flat['source_url_or_id'] = source.get('url_or_id')
+        if 'date' in source:
+            flat['source_date'] = source.get('date')
+
+    labels = payload.get('labels')
+    if isinstance(labels, dict):
+        if 'emotion' in labels:
+            flat['emotion'] = labels.get('emotion')
+        if 'scenario' in labels:
+            flat['scenario'] = labels.get('scenario')
+        if 'rhetorical' in labels:
+            flat['rhetorical'] = labels.get('rhetorical')
+        if 'register' in labels:
+            flat['register'] = labels.get('register')
+
+    safety = payload.get('safety')
+    if isinstance(safety, dict):
+        if 'allowed' in safety:
+            flat['safety_allowed'] = safety.get('allowed')
+        if 'blocked' in safety:
+            flat['safety_blocked'] = safety.get('blocked')
+
+    rights = payload.get('rights')
+    if isinstance(rights, dict):
+        if 'public_figure' in rights:
+            flat['rights_public_figure'] = rights.get('public_figure')
+        if 'notes' in rights:
+            flat['rights_notes'] = rights.get('notes')
+
+    return flat
+
+
+def _is_permission_denied_db_error(error: Exception) -> bool:
+    """Best-effort matcher for DB/auth scope violations surfaced as DB errors."""
+    message = str(error).strip().lower()
+    if not message:
+        return False
+    permission_markers = (
+        "permission denied",
+        "forbidden",
+        "not authorized",
+        "not authorised",
+        "insufficient privilege",
+        "insufficient permissions",
+    )
+    return any(marker in message for marker in permission_markers)
+
+
+def _convert_db_exemplar_to_response_model(exemplar_dict_from_db: dict[str, Any]) -> CharacterExemplarResponse:
+    """Convert DB exemplar row shape to API response shape."""
+    source_type = exemplar_dict_from_db.get('source_type') or 'other'
+    novelty_hint = exemplar_dict_from_db.get('novelty_hint') or 'unknown'
+    emotion = exemplar_dict_from_db.get('emotion') or 'other'
+    scenario = exemplar_dict_from_db.get('scenario') or 'other'
+
+    response_data = {
+        'id': exemplar_dict_from_db.get('id'),
+        'character_id': exemplar_dict_from_db.get('character_id'),
+        'text': exemplar_dict_from_db.get('text'),
+        'source': {
+            'type': source_type,
+            'url_or_id': exemplar_dict_from_db.get('source_url_or_id'),
+            'date': exemplar_dict_from_db.get('source_date'),
+        },
+        'novelty_hint': novelty_hint,
+        'labels': {
+            'emotion': emotion,
+            'scenario': scenario,
+            'rhetorical': _coerce_string_list(exemplar_dict_from_db.get('rhetorical')),
+            'register': exemplar_dict_from_db.get('register'),
+        },
+        'safety': {
+            'allowed': _coerce_string_list(exemplar_dict_from_db.get('safety_allowed')),
+            'blocked': _coerce_string_list(exemplar_dict_from_db.get('safety_blocked')),
+        },
+        'rights': {
+            'public_figure': bool(exemplar_dict_from_db.get('rights_public_figure', True)),
+            'notes': exemplar_dict_from_db.get('rights_notes'),
+        },
+        'length_tokens': exemplar_dict_from_db.get('length_tokens'),
+        'created_at': exemplar_dict_from_db.get('created_at'),
+        'updated_at': exemplar_dict_from_db.get('updated_at'),
+    }
+
+    return CharacterExemplarResponse.model_validate(response_data)
+
+
+def _resolve_exemplar_embedding_user_id(db: CharactersRAGDB) -> str | None:
+    user_id = str(getattr(db, "client_id", "") or "").strip()
+    return user_id or None
+
+
+def _sync_exemplar_embeddings_best_effort(
+    *,
+    db: CharactersRAGDB,
+    character_id: int,
+    exemplars: list[dict[str, Any]],
+) -> None:
+    user_id = _resolve_exemplar_embedding_user_id(db)
+    if not user_id or not exemplars:
+        return
+    try:
+        upsert_character_exemplar_embeddings(
+            user_id=user_id,
+            character_id=character_id,
+            exemplars=exemplars,
+        )
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Failed to sync exemplar embeddings for character {} user {}: {}",
+            character_id,
+            user_id,
+            exc,
+        )
+
+
+def _delete_exemplar_embeddings_best_effort(
+    *,
+    db: CharactersRAGDB,
+    character_id: int,
+    exemplar_ids: list[str],
+) -> None:
+    user_id = _resolve_exemplar_embedding_user_id(db)
+    if not user_id or not exemplar_ids:
+        return
+    try:
+        delete_character_exemplar_embeddings(
+            user_id=user_id,
+            character_id=character_id,
+            exemplar_ids=exemplar_ids,
+        )
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Failed to delete exemplar embeddings for character {} user {}: {}",
+            character_id,
+            user_id,
+            exc,
+        )
+
+
+def _build_lexical_rank_scores(exemplars: list[dict[str, Any]]) -> dict[str, float]:
+    """Build deterministic lexical rank scores in [0, 1] for hybrid re-ranking."""
+    if not exemplars:
+        return {}
+
+    denom = max(1, len(exemplars) - 1)
+    scores: dict[str, float] = {}
+    for idx, item in enumerate(exemplars):
+        exemplar_id = str(item.get("id") or "").strip()
+        if not exemplar_id:
+            continue
+        scores[exemplar_id] = round(1.0 - (idx / denom), 6)
+    return scores
+
+
+def _as_sortable_timestamp(value: Any) -> str:
+    """Normalize DB timestamp-ish values for stable descending sort keys."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value or "")
+
+
+def _search_character_exemplars_hybrid_best_effort(
+    *,
+    db: CharactersRAGDB,
+    character_id: int,
+    search_request: CharacterExemplarSearchRequest,
+) -> tuple[list[dict[str, Any]], int]:
+    """Run best-effort lexical+embedding hybrid search with safe lexical fallback."""
+    normalized_query = str(search_request.query or "").strip()
+    if not normalized_query or not search_request.use_embedding_scores:
+        return db.search_character_exemplars(
+            character_id,
+            query=search_request.query,
+            emotion=search_request.filter.emotion,
+            scenario=search_request.filter.scenario,
+            rhetorical=search_request.filter.rhetorical,
+            limit=search_request.limit,
+            offset=search_request.offset,
+        )
+
+    base_window = max(1, int(search_request.limit) + int(search_request.offset))
+    candidate_pool_size = min(
+        _EXEMPLAR_SEARCH_HYBRID_CANDIDATE_CAP,
+        max(_EXEMPLAR_SEARCH_HYBRID_MIN_POOL, base_window * 4),
+    )
+
+    lexical_candidates, _ = db.search_character_exemplars(
+        character_id,
+        query=normalized_query,
+        emotion=search_request.filter.emotion,
+        scenario=search_request.filter.scenario,
+        rhetorical=search_request.filter.rhetorical,
+        limit=candidate_pool_size,
+        offset=0,
+    )
+    lexical_scores = _build_lexical_rank_scores(lexical_candidates)
+
+    candidate_map: dict[str, dict[str, Any]] = {}
+    for item in lexical_candidates:
+        exemplar_id = str(item.get("id") or "").strip()
+        if exemplar_id:
+            candidate_map[exemplar_id] = item
+
+    if len(candidate_map) < candidate_pool_size:
+        try:
+            listed = db.list_character_exemplars(character_id, limit=candidate_pool_size, offset=0)
+            for item in listed:
+                exemplar_id = str(item.get("id") or "").strip()
+                if exemplar_id and exemplar_id not in candidate_map:
+                    candidate_map[exemplar_id] = item
+                if len(candidate_map) >= candidate_pool_size:
+                    break
+        except CharactersRAGDBError as exc:
+            logger.warning("Hybrid exemplar search list backfill failed for character {}: {}", character_id, exc)
+
+    all_candidates = list(candidate_map.values())
+    if not all_candidates:
+        return [], 0
+
+    user_id = _resolve_exemplar_embedding_user_id(db)
+    if not user_id:
+        total = len(lexical_candidates)
+        return lexical_candidates[search_request.offset:search_request.offset + search_request.limit], total
+
+    try:
+        embedding_scores = score_exemplars_with_embeddings(
+            normalized_query,
+            all_candidates,
+            user_id=user_id,
+            character_id=character_id,
+            model_id_override=search_request.embedding_model_id,
+        )
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Hybrid exemplar search embedding scoring failed for character {}: {}", character_id, exc)
+        total = len(lexical_candidates)
+        return lexical_candidates[search_request.offset:search_request.offset + search_request.limit], total
+    if not embedding_scores:
+        total = len(lexical_candidates)
+        return lexical_candidates[search_request.offset:search_request.offset + search_request.limit], total
+
+    ranked: list[dict[str, Any]] = []
+    for item in all_candidates:
+        exemplar_id = str(item.get("id") or "").strip()
+        if not exemplar_id:
+            continue
+        lexical_score = float(lexical_scores.get(exemplar_id, 0.0))
+        vector_score = float(embedding_scores.get(exemplar_id, 0.0))
+        if lexical_score <= 0.0 and vector_score <= 0.0:
+            continue
+        hybrid_score = (
+            _EXEMPLAR_SEARCH_HYBRID_VECTOR_WEIGHT * vector_score
+            + _EXEMPLAR_SEARCH_HYBRID_LEXICAL_WEIGHT * lexical_score
+        )
+        ranked.append(
+            {
+                "item": item,
+                "hybrid_score": round(hybrid_score, 6),
+                "vector_score": round(vector_score, 6),
+                "lexical_score": round(lexical_score, 6),
+                "updated_at": _as_sortable_timestamp(item.get("updated_at") or item.get("created_at")),
+            }
+        )
+
+    ranked.sort(
+        key=lambda entry: (
+            entry["hybrid_score"],
+            entry["vector_score"],
+            entry["lexical_score"],
+            entry["updated_at"],
+        ),
+        reverse=True,
+    )
+
+    sorted_items = [entry["item"] for entry in ranked]
+    total = len(sorted_items)
+    return sorted_items[search_request.offset:search_request.offset + search_request.limit], total
+
+
 # --- API Endpoints ---
 
 @router.post("/import", response_model=CharacterImportResponse,
              summary="Import character card", tags=["characters"],
              status_code=status.HTTP_201_CREATED)
 async def import_character_endpoint(
-        character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
+        character_file: UploadFile = File(
+            ...,
+            description="Character card file (PNG, WEBP, JPEG, JSON, YAML, YML, MD, TXT).",
+        ),
         allow_image_only: bool = Form(False),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         current_user: User = Depends(get_request_user),
@@ -261,10 +749,10 @@ async def import_character_endpoint(
     Import a character card from a file.
 
     Supports:
-    - Image files (PNG, WEBP) with embedded character data
+    - Image files (PNG, WEBP, JPEG) with embedded character data
     - JSON files (including Character Card V3 format)
-    - Markdown files
-    - Plain text files with JSON content
+    - YAML files
+    - Markdown and plain text files (including text containing JSON)
 
     For JSON data, you can upload a .json file or a text file containing JSON.
     """
@@ -418,6 +906,76 @@ async def list_all_characters(  # Renamed from list_characters to avoid conflict
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
+@router.get("/query", response_model=CharacterListQueryResponse, summary="Query characters", tags=["characters"])
+async def query_characters(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+        query: Optional[str] = Query(None, description="Search term across name/description/prompt fields"),
+        tags: list[str] = Query([], description="Filter by tags"),
+        match_all_tags: bool = Query(False, description="Require all tags instead of any tag"),
+        creator: Optional[str] = Query(None, description="Filter by creator"),
+        has_conversations: Optional[bool] = Query(None, description="Filter by conversation existence"),
+        favorite_only: bool = Query(False, description="Return only favorited characters"),
+        created_from: Optional[str] = Query(None, description="Created-at lower bound (ISO timestamp)"),
+        created_to: Optional[str] = Query(None, description="Created-at upper bound (ISO timestamp)"),
+        updated_from: Optional[str] = Query(None, description="Updated-at lower bound (ISO timestamp)"),
+        updated_to: Optional[str] = Query(None, description="Updated-at upper bound (ISO timestamp)"),
+        include_deleted: bool = Query(False, description="Include soft-deleted characters in query results"),
+        deleted_only: bool = Query(False, description="Return only soft-deleted characters"),
+        sort_by: Literal[
+            "name",
+            "creator",
+            "created_at",
+            "updated_at",
+            "last_used_at",
+            "conversation_count"
+        ] = Query("name"),
+        sort_order: Literal["asc", "desc"] = Query("asc"),
+        include_image_base64: bool = Query(False, description="Include image_base64 payloads in list results")
+):
+    try:
+        offset = (page - 1) * page_size
+        raw_cards, total = db.query_character_cards(
+            query=query,
+            tags=tags,
+            match_all_tags=match_all_tags,
+            creator=creator,
+            has_conversations=has_conversations,
+            favorite_only=favorite_only,
+            created_from=created_from,
+            created_to=created_to,
+            updated_from=updated_from,
+            updated_to=updated_to,
+            include_deleted=include_deleted,
+            deleted_only=deleted_only,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=page_size,
+            offset=offset
+        )
+        items = [
+            _convert_db_char_to_response_model(
+                card,
+                include_image_base64=include_image_base64
+            )
+            for card in raw_cards
+        ]
+        return CharacterListQueryResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            has_more=(offset + len(items)) < total
+        )
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error querying characters: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error querying characters: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
+
+
 @router.get("/rate-limit-status", summary="Get rate limit status", tags=["characters"])
 async def get_rate_limit_status(
     current_user: User = Depends(get_request_user)
@@ -546,6 +1104,357 @@ async def filter_characters_by_tags(
         ) from e
 
 
+@router.post(
+    "/tags/operations",
+    response_model=CharacterTagOperationResponse,
+    summary="Manage character tags in bulk",
+    tags=["characters"],
+)
+async def manage_character_tags_endpoint(
+    request: CharacterTagOperationRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Apply rename, merge, or delete operations to character tags."""
+    try:
+        result = db.manage_character_tags(
+            operation=request.operation,
+            source_tag=request.source_tag,
+            target_tag=request.target_tag,
+        )
+        return CharacterTagOperationResponse.model_validate(result)
+    except InputError as e:
+        logger.warning(f"Invalid tag operation request: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error applying tag operation: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error applying tag operation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating character tags",
+        ) from e
+
+
+@router.post(
+    "/{character_id:int}/exemplars",
+    response_model=CharacterExemplarResponse | list[CharacterExemplarResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Create character exemplar(s)",
+    tags=["characters"],
+)
+async def create_character_exemplars_endpoint(
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    exemplar_payload: CharacterExemplarIn | list[CharacterExemplarIn] = ...,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Create one or multiple exemplars for a character."""
+    try:
+        if not db.get_character_card_by_id(character_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        if isinstance(exemplar_payload, list):
+            if not exemplar_payload:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Exemplar payload list cannot be empty.",
+                )
+            created_items: list[CharacterExemplarResponse] = []
+            created_rows_for_sync: list[dict[str, Any]] = []
+            for exemplar in exemplar_payload:
+                flattened = _flatten_character_exemplar_payload(exemplar.model_dump(exclude_none=False))
+                created = db.add_character_exemplar(character_id, flattened)
+                created_items.append(_convert_db_exemplar_to_response_model(created))
+                created_rows_for_sync.append(created)
+            _sync_exemplar_embeddings_best_effort(
+                db=db,
+                character_id=character_id,
+                exemplars=created_rows_for_sync,
+            )
+            return created_items
+
+        flattened = _flatten_character_exemplar_payload(exemplar_payload.model_dump(exclude_none=False))
+        created = db.add_character_exemplar(character_id, flattened)
+        _sync_exemplar_embeddings_best_effort(
+            db=db,
+            character_id=character_id,
+            exemplars=[created],
+        )
+        return _convert_db_exemplar_to_response_model(created)
+    except (InputError, ConflictError) as e:
+        status_code = status.HTTP_400_BAD_REQUEST if isinstance(e, InputError) else status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error creating exemplar(s) for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error creating exemplar(s) for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating exemplars.",
+        ) from e
+
+
+@router.get(
+    "/{character_id:int}/exemplars/{exemplar_id:int}",
+    response_model=CharacterExemplarResponse,
+    summary="Get character exemplar by ID",
+    tags=["characters"],
+)
+async def get_character_exemplar_endpoint(
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    exemplar_id: str = FastAPIPath(..., description="Exemplar ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Fetch a single exemplar for a character."""
+    try:
+        exemplar = db.get_character_exemplar_by_id(character_id, exemplar_id)
+        if not exemplar:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Exemplar '{exemplar_id}' not found for character {character_id}.",
+            )
+        return _convert_db_exemplar_to_response_model(exemplar)
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error fetching exemplar {exemplar_id} for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error fetching exemplar {exemplar_id} for character {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching exemplar.",
+        ) from e
+
+
+@router.put(
+    "/{character_id:int}/exemplars/{exemplar_id:int}",
+    response_model=CharacterExemplarResponse,
+    summary="Update character exemplar",
+    tags=["characters"],
+)
+async def update_character_exemplar_endpoint(
+    update_data: CharacterExemplarUpdate,
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    exemplar_id: str = FastAPIPath(..., description="Exemplar ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Update a character exemplar."""
+    try:
+        if not db.get_character_card_by_id(character_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+        flattened = _flatten_character_exemplar_payload(update_data.model_dump(exclude_unset=True))
+        updated = db.update_character_exemplar(character_id, exemplar_id, flattened)
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Exemplar '{exemplar_id}' not found for character {character_id}.",
+            )
+        _sync_exemplar_embeddings_best_effort(
+            db=db,
+            character_id=character_id,
+            exemplars=[updated],
+        )
+        return _convert_db_exemplar_to_response_model(updated)
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error updating exemplar {exemplar_id} for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error updating exemplar {exemplar_id} for character {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating exemplar.",
+        ) from e
+
+
+@router.delete(
+    "/{character_id:int}/exemplars/{exemplar_id:int}",
+    response_model=CharacterExemplarDeletionResponse,
+    summary="Delete character exemplar",
+    tags=["characters"],
+)
+async def delete_character_exemplar_endpoint(
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    exemplar_id: str = FastAPIPath(..., description="Exemplar ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Soft-delete a character exemplar."""
+    try:
+        existing = db.get_character_exemplar_by_id(character_id, exemplar_id, include_deleted=True)
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Exemplar '{exemplar_id}' not found for character {character_id}.",
+            )
+
+        deleted = db.soft_delete_character_exemplar(character_id, exemplar_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to delete exemplar '{exemplar_id}'.",
+            )
+        _delete_exemplar_embeddings_best_effort(
+            db=db,
+            character_id=character_id,
+            exemplar_ids=[exemplar_id],
+        )
+
+        return CharacterExemplarDeletionResponse(
+            message=f"Exemplar '{exemplar_id}' soft-deleted for character {character_id}.",
+            character_id=character_id,
+            exemplar_id=exemplar_id,
+        )
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error deleting exemplar {exemplar_id} for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error deleting exemplar {exemplar_id} for character {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting exemplar.",
+        ) from e
+
+
+@router.post(
+    "/{character_id:int}/exemplars/search",
+    response_model=CharacterExemplarSearchResponse,
+    summary="Search character exemplars",
+    tags=["characters"],
+)
+async def search_character_exemplars_endpoint(
+    search_request: CharacterExemplarSearchRequest,
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Search exemplars for a character using query + labels filters."""
+    try:
+        if not db.get_character_card_by_id(character_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        results, total = _search_character_exemplars_hybrid_best_effort(
+            db=db,
+            character_id=character_id,
+            search_request=search_request,
+        )
+        return CharacterExemplarSearchResponse(
+            items=[_convert_db_exemplar_to_response_model(item) for item in results],
+            total=total,
+        )
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error searching exemplars for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error searching exemplars for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while searching exemplars.",
+        ) from e
+
+
+@router.post(
+    "/{character_id:int}/exemplars/select/debug",
+    response_model=CharacterExemplarSelectionDebug,
+    summary="Debug exemplar selection",
+    tags=["characters"],
+)
+async def select_character_exemplars_debug_endpoint(
+    request: CharacterExemplarSelectionDebugRequest,
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Return selected exemplars and scoring metadata for debug workflows."""
+    try:
+        if not db.get_character_card_by_id(character_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        selection_config: CharacterExemplarSelectionConfig = request.selection_config
+        selector_config = PersonaExemplarSelectorConfig(
+            budget_tokens=selection_config.budget_tokens,
+            max_exemplar_tokens=selection_config.max_exemplar_tokens,
+            mmr_lambda=selection_config.mmr_lambda,
+        )
+        embedding_callback = None
+        if selection_config.use_embedding_scores:
+            embedding_model_id = selection_config.embedding_model_id
+            embedding_user_id = _resolve_exemplar_embedding_user_id(db)
+
+            def _embedding_callback(user_turn: str, candidates: list[dict[str, Any]]) -> dict[str, float]:
+                return score_exemplars_with_embeddings(
+                    user_turn,
+                    candidates,
+                    user_id=embedding_user_id,
+                    character_id=character_id,
+                    model_id_override=embedding_model_id,
+                )
+
+            embedding_callback = _embedding_callback
+
+        selected_result = select_character_exemplars(
+            db=db,
+            character_id=character_id,
+            user_turn=request.user_turn,
+            config=selector_config,
+            embedding_score_fn=embedding_callback,
+        )
+
+        return CharacterExemplarSelectionDebug(
+            selected=[_convert_db_exemplar_to_response_model(item) for item in selected_result.selected],
+            budget_tokens=selected_result.budget_tokens_used,
+            coverage=selected_result.coverage,
+            scores=selected_result.scores,
+        )
+    except (InputError, ValueError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error running exemplar debug selection for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error running exemplar debug selection for character {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while selecting exemplars.",
+        ) from e
+
+
 
 # --- World Book List (deduplicated, defined before /{character_id}) ---
 
@@ -595,7 +1504,19 @@ async def list_world_books(
         logger.error(f"Unexpected error listing world books: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
-@router.get("/{character_id}", response_model=CharacterResponse, summary="Get character by ID", tags=["characters"])
+
+@router.get(
+    "/world-books/config",
+    response_model=WorldBookRuntimeConfig,
+    summary="Get world book runtime config",
+    tags=["World Books"],
+)
+async def get_world_book_runtime_config():
+    """Expose runtime constants used by world-book authoring UIs."""
+    return WorldBookRuntimeConfig(max_recursive_depth=MAX_RECURSIVE_DEPTH)
+
+
+@router.get("/{character_id:int}", response_model=CharacterResponse, summary="Get character by ID", tags=["characters"])
 async def get_character_by_id_endpoint(  # Renamed from get_character
         character_id: int = FastAPIPath(..., description="ID of the character.", gt=0),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -616,7 +1537,210 @@ async def get_character_by_id_endpoint(  # Renamed from get_character
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
-@router.put("/{character_id}", response_model=CharacterResponse, summary="Update character", tags=["characters"])
+@router.get(
+    "/{character_id:int}/versions/diff",
+    response_model=CharacterVersionDiffResponse,
+    summary="Diff two character versions",
+    tags=["characters"],
+)
+async def get_character_versions_diff_endpoint(
+    character_id: int = FastAPIPath(..., description="ID of the character.", gt=0),
+    from_version: int = Query(..., ge=1, description="Baseline version number."),
+    to_version: int = Query(..., ge=1, description="Comparison version number."),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        current_char = get_character_details(db, character_id)
+        if not current_char:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+        if from_version == to_version:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="from_version and to_version must be different.",
+            )
+
+        history_entries = db.get_character_version_history(character_id, limit=500)
+        from_entry = next(
+            (
+                entry
+                for entry in history_entries
+                if int(entry.get("version") or -1) == from_version
+            ),
+            None,
+        )
+        to_entry = next(
+            (
+                entry
+                for entry in history_entries
+                if int(entry.get("version") or -1) == to_version
+            ),
+            None,
+        )
+
+        if not from_entry:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {from_version} not found for character {character_id}.",
+            )
+        if not to_entry:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {to_version} not found for character {character_id}.",
+            )
+
+        from_payload = from_entry.get("payload")
+        to_payload = to_entry.get("payload")
+        if not isinstance(from_payload, dict) or not isinstance(to_payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One or both version payloads are missing or malformed.",
+            )
+
+        changed_fields = _build_character_version_diff_fields(from_payload, to_payload)
+        return CharacterVersionDiffResponse(
+            character_id=character_id,
+            from_entry=_build_character_version_entry(from_entry),
+            to_entry=_build_character_version_entry(to_entry),
+            changed_fields=changed_fields,
+            changed_count=len(changed_fields),
+        )
+    except CharactersRAGDBError as e:
+        logger.error(
+            f"DB error getting character version diff for {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error getting character version diff for {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
+
+
+@router.get(
+    "/{character_id:int}/versions",
+    response_model=CharacterVersionListResponse,
+    summary="Get character version history",
+    tags=["characters"],
+)
+async def get_character_versions_endpoint(
+    character_id: int = FastAPIPath(..., description="ID of the character.", gt=0),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of versions to return."),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        current_char = get_character_details(db, character_id)
+        if not current_char:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        raw_entries = db.get_character_version_history(character_id, limit=limit)
+        items = [_build_character_version_entry(entry) for entry in raw_entries]
+        return CharacterVersionListResponse(items=items, total=len(items))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error getting character versions for {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error getting character versions for {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
+
+
+@router.post(
+    "/{character_id:int}/revert",
+    response_model=CharacterResponse,
+    summary="Revert character to a previous version snapshot",
+    tags=["characters"],
+)
+async def revert_character_to_version_endpoint(
+    revert_request: CharacterRevertRequest,
+    character_id: int = FastAPIPath(..., description="ID of the character to revert.", gt=0),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        current_char = get_character_details(db, character_id)
+        if not current_char:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        target_version = int(revert_request.target_version)
+        history_entries = db.get_character_version_history(character_id, limit=500)
+        target_entry = next(
+            (
+                entry
+                for entry in history_entries
+                if int(entry.get("version") or -1) == target_version
+            ),
+            None,
+        )
+        if not target_entry:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {target_version} not found for character {character_id}.",
+            )
+
+        snapshot_payload = target_entry.get("payload")
+        if not isinstance(snapshot_payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target version payload is missing or malformed.",
+            )
+
+        revert_payload = _build_character_revert_payload(snapshot_payload, current_char)
+        expected_version = int(current_char.get("version") or 0)
+        if expected_version <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Current character version is invalid. Refresh and try again.",
+            )
+
+        success = update_existing_character_details(
+            db,
+            character_id,
+            revert_payload,
+            expected_version,
+        )
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to revert character (unexpected boolean failure).",
+            )
+
+        updated_char = get_character_details(db, character_id)
+        if not updated_char:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Character reverted but could not be retrieved.",
+            )
+        return _convert_db_char_to_response_model(updated_char)
+    except InputError as e:
+        logger.warning(f"Validation error reverting character {character_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except ConflictError as e:
+        logger.warning(f"Version conflict reverting character {character_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error reverting character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error reverting character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
+
+
+@router.put("/{character_id:int}", response_model=CharacterResponse, summary="Update character", tags=["characters"])
 async def update_character_endpoint(  # Renamed from update_character
         update_data: CharacterUpdate,
         character_id: int = FastAPIPath(..., description="ID of the character to update.", gt=0),
@@ -664,7 +1788,7 @@ async def update_character_endpoint(  # Renamed from update_character
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
-@router.delete("/{character_id}", response_model=DeletionResponse, summary="Delete character", tags=["characters"])
+@router.delete("/{character_id:int}", response_model=DeletionResponse, summary="Delete character", tags=["characters"])
 async def delete_character_endpoint(  # Renamed from delete_character
         character_id: int = FastAPIPath(..., description="ID of the character to delete.", gt=0),
         expected_version: int = Query(...,
@@ -707,7 +1831,7 @@ async def delete_character_endpoint(  # Renamed from delete_character
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
-@router.post("/{character_id}/restore", response_model=CharacterResponse, summary="Restore deleted character", tags=["characters"])
+@router.post("/{character_id:int}/restore", response_model=CharacterResponse, summary="Restore deleted character", tags=["characters"])
 async def restore_character_endpoint(
         character_id: int = FastAPIPath(..., description="ID of the character to restore.", gt=0),
         expected_version: int = Query(...,
@@ -719,9 +1843,16 @@ async def restore_character_endpoint(
 
     This endpoint undoes a soft delete, making the character visible and usable again.
     The expected_version must match the current version of the soft-deleted character.
+    Restore eligibility is enforced by `CHARACTERS_RESTORE_RETENTION_DAYS` (default: 30).
     """
     try:
-        success = restore_character_from_db(db, character_id, expected_version)
+        retention_days = _get_characters_restore_retention_days()
+        success = restore_character_from_db(
+            db,
+            character_id,
+            expected_version,
+            retention_days=retention_days,
+        )
 
         if not success:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -737,6 +1868,23 @@ async def restore_character_endpoint(
 
         return _convert_db_char_to_response_model(restored_char)
 
+    except RestoreWindowExpiredError as e:
+        logger.info(
+            "Restore denied for character {} with reason=restore_window_expired "
+            "(deleted_at={}, restore_expires_at={}, retention_days={}).",
+            character_id,
+            e.deleted_at_iso,
+            e.restore_expires_at_iso,
+            e.retention_days,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Restore window expired for character ID {character_id}. "
+                f"This character was deleted at {e.deleted_at_iso} and could only be restored until "
+                f"{e.restore_expires_at_iso} UTC."
+            ),
+        ) from e
     except ConflictError as e:
         logger.warning(f"Conflict error restoring character {character_id}: {e}")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
@@ -869,6 +2017,10 @@ async def get_world_book(
 async def update_world_book(
         world_book_id: int,
         update_data: WorldBookUpdate,
+        expected_version: Optional[int] = Query(
+            None,
+            description="Expected current version of the world book for optimistic locking."
+        ),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     """Update a world book."""
@@ -882,6 +2034,14 @@ async def update_world_book(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"World book with ID {world_book_id} not found"
             )
+        if expected_version is not None and existing.get("version") != expected_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Version mismatch. Expected {expected_version}, "
+                    f"found {existing.get('version')}. Please refresh and try again."
+                )
+            )
 
         # Update
         success = service.update_world_book(
@@ -891,7 +2051,8 @@ async def update_world_book(
             scan_depth=update_data.scan_depth,
             token_budget=update_data.token_budget,
             recursive_scanning=update_data.recursive_scanning,
-            enabled=update_data.enabled
+            enabled=update_data.enabled,
+            expected_version=expected_version
         )
 
         if not success:
@@ -970,11 +2131,32 @@ def _merge_entry_appendable_metadata(
         metadata: Optional[dict[str, Any]],
         appendable: Optional[bool],
 ) -> Optional[dict[str, Any]]:
-    if appendable is None:
-        return metadata
     merged = dict(metadata or {})
-    merged["appendable"] = bool(appendable)
+    if appendable is not None:
+        merged["appendable"] = bool(appendable)
     return merged
+
+
+def _normalize_entry_group(group: Optional[str]) -> Optional[str]:
+    if group is None:
+        return None
+    normalized = str(group).strip()
+    return normalized or None
+
+
+def _merge_entry_group_metadata(
+        metadata: Optional[dict[str, Any]],
+        group: Optional[str],
+) -> Optional[dict[str, Any]]:
+    merged = dict(metadata or {})
+    normalized_group = _normalize_entry_group(group)
+    if group is None:
+        return merged or None
+    if normalized_group is None:
+        merged.pop("group", None)
+    else:
+        merged["group"] = normalized_group
+    return merged or None
 
 @router.post("/world-books/{world_book_id}/entries", response_model=WorldBookEntryResponse,
              status_code=status.HTTP_201_CREATED, summary="Add entry to world book", tags=["World Books"])
@@ -995,9 +2177,9 @@ async def add_world_book_entry(
                 detail=f"World book with ID {world_book_id} not found"
             )
 
-        entry_metadata = _merge_entry_appendable_metadata(
-            entry.metadata,
-            entry.appendable,
+        entry_metadata = _merge_entry_group_metadata(
+            _merge_entry_appendable_metadata(entry.metadata, entry.appendable),
+            entry.group,
         )
 
         entry_id = service.add_entry(
@@ -1108,7 +2290,7 @@ async def update_world_book_entry(
         service = WorldBookService(db)
 
         entry_metadata = update_data.metadata
-        if update_data.appendable is not None:
+        if update_data.appendable is not None or update_data.group is not None:
             if entry_metadata is None:
                 existing_entries = service.get_entries(enabled_only=False)
                 existing_entry = next(
@@ -1125,10 +2307,8 @@ async def update_world_book_entry(
                         entry_metadata = existing_entry.get('metadata') or {}
                     elif hasattr(existing_entry, '_d'):
                         entry_metadata = getattr(existing_entry, '_d', {}).get('metadata') or {}
-            entry_metadata = _merge_entry_appendable_metadata(
-                entry_metadata,
-                update_data.appendable,
-            )
+            entry_metadata = _merge_entry_appendable_metadata(entry_metadata, update_data.appendable)
+            entry_metadata = _merge_entry_group_metadata(entry_metadata, update_data.group)
 
         success = service.update_entry(
             entry_id=entry_id,
@@ -1278,6 +2458,11 @@ async def attach_world_book_to_character(
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
+        if _is_permission_denied_db_error(e):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to modify character world-book attachments",
+            ) from e
         logger.error(f"DB error attaching world book {attachment.world_book_id} to character {character_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
@@ -1312,6 +2497,11 @@ async def detach_world_book_from_character(
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
+        if _is_permission_denied_db_error(e):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to modify character world-book attachments",
+            ) from e
         logger.error(f"DB error detaching world book {world_book_id} from character {character_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
@@ -1354,6 +2544,11 @@ async def get_character_world_books(
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
+        if _is_permission_denied_db_error(e):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to access character world-book attachments",
+            ) from e
         logger.error(f"DB error getting world books for character {character_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
@@ -1449,7 +2644,7 @@ async def process_context_with_world_info(
             )
 
         logger.error(
-            "WorldBookService.process_context returned unexpected type %s",
+            'WorldBookService.process_context returned unexpected type {}',
             type(result).__name__,
         )
         raise HTTPException(
@@ -1719,7 +2914,7 @@ def _encode_png_with_chara_metadata(
     return png_header + ihdr + text_chunk + idat + iend
 
 
-@router.get("/{character_id}/export", response_model=None,
+@router.get("/{character_id:int}/export", response_model=None,
             summary="Export character in various formats", tags=["characters"])
 async def export_character(
     character_id: int = FastAPIPath(..., description="Character ID to export", gt=0),

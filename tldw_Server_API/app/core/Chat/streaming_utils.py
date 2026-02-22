@@ -20,9 +20,12 @@ from typing import Any, Optional, Union
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.testing import is_truthy
 
 _STREAMING_NONCRITICAL_EXCEPTIONS = (
+    ChatAPIError,
     OSError,
     ValueError,
     TypeError,
@@ -104,10 +107,10 @@ MAX_RESPONSE_LIST_LENGTH = _parse_int(
 
 # Offload sync iterators to a background thread to avoid blocking the event loop
 try:
-    STREAMING_SYNC_BRIDGE_ENABLED = str(
+    STREAMING_SYNC_BRIDGE_ENABLED = is_truthy(str(
         os.getenv('STREAMING_SYNC_BRIDGE_ENABLED') or
         _chat_config.get('streaming_sync_bridge_enabled', 'true')
-    ).lower() in {"1", "true", "yes", "y", "on"}
+    ).lower())
 except (ValueError, TypeError) as exc:
     logger.debug(f"Failed to parse STREAMING_SYNC_BRIDGE_ENABLED, using default: {exc}")
     STREAMING_SYNC_BRIDGE_ENABLED = True
@@ -129,7 +132,7 @@ try:
         or _chat_config.get("chat_stream_include_metadata")
         or "true"
     )
-    CHAT_STREAM_INCLUDE_METADATA = str(_include_meta_raw).strip().lower() in {"1", "true", "yes", "on"}
+    CHAT_STREAM_INCLUDE_METADATA = is_truthy(_include_meta_raw)
 except (ValueError, TypeError) as exc:
     logger.debug(f"Failed to parse CHAT_STREAM_INCLUDE_METADATA, using default: {exc}")
     CHAT_STREAM_INCLUDE_METADATA = True
@@ -367,6 +370,52 @@ class StreamingResponseHandler:
         if self.saved_message_id:
             payload.setdefault("tldw_message_id", self.saved_message_id)
         return payload
+
+    def _parse_save_callback_result(self, save_result: Any) -> tuple[Optional[str], list[dict[str, Any]]]:
+        """Normalize save-callback return payload.
+
+        Supported return values:
+        - `"message_id"` string (legacy)
+        - `{"saved_message_id": "...", "events": [{"event": "...", "data": {...}}]}`
+        """
+        saved_message_id: Optional[str] = None
+        extra_events: list[dict[str, Any]] = []
+
+        if isinstance(save_result, str):
+            normalized = save_result.strip()
+            if normalized:
+                saved_message_id = normalized
+            return saved_message_id, extra_events
+
+        if not isinstance(save_result, dict):
+            return saved_message_id, extra_events
+
+        raw_id = save_result.get("saved_message_id")
+        if raw_id is None:
+            raw_id = save_result.get("message_id")
+        if isinstance(raw_id, str):
+            normalized = raw_id.strip()
+            if normalized:
+                saved_message_id = normalized
+
+        raw_events = save_result.get("events")
+        if raw_events is None:
+            raw_events = save_result.get("extra_events")
+        if not isinstance(raw_events, list):
+            return saved_message_id, extra_events
+
+        for raw_event in raw_events:
+            if not isinstance(raw_event, dict):
+                continue
+            raw_name = raw_event.get("event")
+            event_name = raw_name.strip() if isinstance(raw_name, str) else ""
+            if not event_name:
+                continue
+            if "data" not in raw_event:
+                continue
+            extra_events.append({"event": event_name, "data": raw_event.get("data")})
+
+        return saved_message_id, extra_events
 
     def update_activity(self):
         """Update the last activity timestamp."""
@@ -884,6 +933,7 @@ class StreamingResponseHandler:
                     full_text = "".join(self.full_response)
                     aggregated_tool_calls = self.get_accumulated_tool_calls()
                     aggregated_function_call = self.get_accumulated_function_call()
+                    extra_events: list[dict[str, Any]] = []
                     try:
                         # Support flexible callback signatures (text only or extended)
                         maybe_result = None
@@ -900,17 +950,41 @@ class StreamingResponseHandler:
                             save_result = await maybe_result
                         else:
                             save_result = maybe_result
-                        if isinstance(save_result, str) and save_result:
-                            self.saved_message_id = save_result
+                        parsed_message_id, parsed_events = self._parse_save_callback_result(save_result)
+                        if parsed_message_id:
+                            self.saved_message_id = parsed_message_id
+                        extra_events = parsed_events
                         logger.info(
-                            "Saved streaming response for %s (text_len=%d, tool_calls=%d, function_call=%s)",
+                            'Saved streaming response for {} (text_len={}, tool_calls={}, function_call={}, events={})',
                             self.conversation_id,
                             len(full_text),
                             len(aggregated_tool_calls or []),
                             "yes" if aggregated_function_call else "no",
+                            len(extra_events),
                         )
-                    except _STREAMING_NONCRITICAL_EXCEPTIONS as e:
+                    except Exception as e:
                         logger.error(f"Failed to save streaming response for {self.conversation_id}: {e}")
+                        extra_events = []
+
+                    for event_entry in extra_events:
+                        event_name = str(event_entry.get("event") or "").strip()
+                        if not event_name:
+                            continue
+                        payload_obj = event_entry.get("data")
+                        if payload_obj is None:
+                            continue
+                        try:
+                            if isinstance(payload_obj, dict):
+                                payload = dict(payload_obj)
+                                self._attach_stream_metadata(payload)
+                                payload_json = json.dumps(payload)
+                            else:
+                                payload_json = json.dumps(payload_obj, default=str)
+                            yield f"event: {event_name}\ndata: {payload_json}\n\n"
+                        except _STREAMING_NONCRITICAL_EXCEPTIONS as event_err:
+                            logger.debug(
+                                f"Skipping extra stream event {event_name} for {self.conversation_id}: {event_err}"
+                            )
 
                 # Send completion marker(s) after save so metadata includes IDs.
                 if not self.error_occurred:

@@ -34,8 +34,8 @@ class UsageLoggingMiddleware(BaseHTTPMiddleware):
             for prefix in (getattr(settings, "USAGE_LOG_EXCLUDE_PREFIXES", []) or []):
                 if path.startswith(prefix):
                     return True
-        except Exception:
-            pass
+        except Exception as config_error:
+            logger.debug("Usage logging exclude-prefix check failed; defaulting to include", exc_info=config_error)
         return False
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:

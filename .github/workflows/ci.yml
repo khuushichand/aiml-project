@@ -54,6 +54,20 @@ jobs:
           ok = compileall.compile_dir('tldw_Server_API/app', force=True, quiet=1)
           sys.exit(0 if ok else 1)
           PY
+  quickstart-dry-run:
+    name: Quickstart Dry-Run Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify quickstart-install target shape
+        run: |
+          make -n quickstart-install
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
@@ -1519,14 +1533,14 @@ jobs:
 
       - name: Upload test results (Linux ${{ matrix.python }})
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: full-suite-ubuntu-py${{ matrix.python }}
           path: test-results-linux-${{ matrix.python }}
 
       - name: Upload coverage artifact
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-ubuntu-py${{ matrix.python }}
           path: coverage.xml
@@ -2759,14 +2773,14 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: full-suite-${{ matrix.os }}-py3.12
           path: test-results-${{ matrix.os }}-3.12
 
       - name: Upload coverage artifact
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-${{ matrix.os }}-py3.12
           path: coverage.xml

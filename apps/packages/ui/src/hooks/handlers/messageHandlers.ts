@@ -18,7 +18,8 @@ export const createRegenerateLastMessage = ({
   messages,
   setHistory,
   setMessages,
-  onSubmit
+  onSubmit,
+  beforeSubmit
 }: {
   validateBeforeSubmitFn: () => boolean
   history: ChatHistory
@@ -26,35 +27,106 @@ export const createRegenerateLastMessage = ({
   setHistory: (history: ChatHistory) => void
   setMessages: (messages: Message[]) => void
   onSubmit: (params: any) => Promise<void>
+  beforeSubmit?: (params: {
+    lastAssistant: Message
+    lastAssistantIndex: number
+    userContent: string
+    userImage: string
+    userMessageType: Message["messageType"] | undefined
+    newHistory: ChatHistory
+    nextMessages: Message[]
+  }) => Promise<
+    | {
+        memory?: ChatHistory
+        messages?: Message[]
+        submitExtras?: Record<string, unknown>
+      }
+    | void
+  >
 }) => {
   return async () => {
+    if (typeof setHistory !== "function") {
+      console.error("[chat] regenerate aborted: setHistory is not callable", {
+        setHistoryType: typeof setHistory
+      })
+      return
+    }
     const isOk = validateBeforeSubmitFn()
 
     if (!isOk) {
       return
     }
-    if (history.length > 0) {
-      const lastMessage = history[history.length - 2]
-      const lastAssistant = messages[messages.length - 1]
-      if (!lastAssistant || !lastAssistant.isBot) {
-        return
+    const lastAssistantIndex = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]?.isBot) return i
       }
-      let newHistory = history.slice(0, -2)
-      const mewMessages = messages.slice(0, -1)
-      setHistory(newHistory)
-      setMessages(mewMessages)
-      if (lastMessage.role === "user") {
-        const newController = new AbortController()
-        await onSubmit({
-          message: lastMessage.content,
-          image: lastMessage.image || "",
-          isRegenerate: true,
-          memory: newHistory,
-          controller: newController,
-          regenerateFromMessage: lastAssistant
-        })
-      }
+      return -1
+    })()
+    if (lastAssistantIndex < 0) {
+      return
     }
+
+    const lastAssistant = messages[lastAssistantIndex]
+    const historyUser = (() => {
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i]?.role === "user") {
+          return { index: i, entry: history[i] }
+        }
+      }
+      return null
+    })()
+    const messageUser = (() => {
+      for (let i = lastAssistantIndex - 1; i >= 0; i--) {
+        if (!messages[i]?.isBot) return messages[i]
+      }
+      return null
+    })()
+
+    const userContent =
+      (historyUser?.entry?.content ?? messageUser?.message ?? "").trim()
+    if (!userContent) {
+      return
+    }
+
+    const userImage =
+      historyUser?.entry?.image || messageUser?.images?.[0] || ""
+    const userMessageType =
+      historyUser?.entry?.messageType || messageUser?.messageType
+
+    const newHistory = historyUser
+      ? history.slice(0, historyUser.index)
+      : history.slice(0, Math.max(history.length - 2, 0))
+    const nextMessages = messages.filter((_, idx) => idx !== lastAssistantIndex)
+
+    const beforeSubmitResult =
+      (await beforeSubmit?.({
+        lastAssistant,
+        lastAssistantIndex,
+        userContent,
+        userImage,
+        userMessageType,
+        newHistory,
+        nextMessages
+      })) || {}
+    const submitHistory = beforeSubmitResult.memory ?? newHistory
+    const submitMessages = beforeSubmitResult.messages ?? nextMessages
+    const submitExtras = beforeSubmitResult.submitExtras ?? {}
+
+    setHistory(submitHistory)
+    setMessages(submitMessages)
+
+    const newController = new AbortController()
+    await onSubmit({
+      message: userContent,
+      image: userImage,
+      isRegenerate: true,
+      memory: submitHistory,
+      messages: submitMessages,
+      controller: newController,
+      messageType: userMessageType,
+      regenerateFromMessage: lastAssistant,
+      ...submitExtras
+    })
   }
 }
 
@@ -153,7 +225,8 @@ export const createBranchMessage = ({
   serverChatExternalRef,
   messages,
   history,
-  onServerChatMutated
+  onServerChatMutated,
+  serverOnly = false
 }: {
   setMessages: (messages: Message[]) => void
   setHistory: (history: ChatHistory) => void
@@ -183,6 +256,7 @@ export const createBranchMessage = ({
   messages?: Message[]
   history?: ChatHistory
   onServerChatMutated?: () => void
+  serverOnly?: boolean
   notification: NotificationInstance
 }) => {
   const createLocalBranch = async (index: number): Promise<string | null> => {
@@ -408,6 +482,14 @@ export const createBranchMessage = ({
         return newChatId
       } catch (e) {
         console.log("[branch] server branch failed", e)
+        if (serverOnly) {
+          notification.error({
+            message: "Branch failed",
+            description:
+              "Unable to create a branched server chat. Check your server connection and try again."
+          })
+          return null
+        }
         const fallbackTitle = `${String(serverChatId).slice(0, 8)} · msg #${
           index + 1
         }`

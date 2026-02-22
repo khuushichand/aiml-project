@@ -88,7 +88,7 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
         </h3>
 
         {/* Description */}
-        <p className="text-sm text-textMuted line-clamp-2">
+        <p className="text-sm text-text-muted line-clamp-2">
           {t(workflow.descriptionToken, "")}
         </p>
       </div>

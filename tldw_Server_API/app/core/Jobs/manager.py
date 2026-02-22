@@ -23,6 +23,10 @@ from tldw_Server_API.app.core.Security.crypto import (
     encrypt_json_blob,
     encrypt_json_blob_with_key,
 )
+from tldw_Server_API.app.core.testing import (
+    is_test_mode as _is_test_mode,
+    is_truthy as _shared_is_truthy,
+)
 
 from .audit_bridge import submit_job_audit_event
 from .event_stream import emit_job_event
@@ -122,15 +126,12 @@ class JobManager:
     _RLS_DOMAIN_ALLOWLIST: ContextVar[str | None] = ContextVar("jobs_rls_domain_allowlist", default=None)
     _RLS_OWNER_USER_ID: ContextVar[str | None] = ContextVar("jobs_rls_owner_user_id", default=None)
 
-    _TRUTHY = {"1", "true", "yes", "y", "on"}
     # Test-mode only: remember last acquired job per (domain,queue) to stabilize duplicate acquires
     _LAST_ACQUIRED_TEST: dict[tuple[str, str], dict[str, Any]] = {}
 
     @staticmethod
     def _is_truthy(val: str | None) -> bool:
-        if val is None:
-            return False
-        return str(val).strip().lower() in JobManager._TRUTHY
+        return _shared_is_truthy(val)
 
     def __init__(
         self,
@@ -354,7 +355,7 @@ class JobManager:
             _set_or_reset("app.domain_allowlist", dom)
             owner = JobManager._RLS_OWNER_USER_ID.get()
             _set_or_reset("app.owner_user_id", owner)
-            if os.getenv("JOBS_PG_RLS_DEBUG", "").lower() in {"1", "true", "yes", "on"}:
+            if JobManager._is_truthy(os.getenv("JOBS_PG_RLS_DEBUG", "")):
                 try:
                     cur.execute(
                         "SELECT "
@@ -516,7 +517,7 @@ class JobManager:
         else:
             raise ValueError("Unsupported action; expected pause|resume|drain")  # noqa: TRY003
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -574,13 +575,7 @@ class JobManager:
         try:
             conn = self._connect()
             try:
-                counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                    "1",
-                    "true",
-                    "yes",
-                    "y",
-                    "on",
-                }
+                counters_enabled = JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", ""))
                 if self.backend == "postgres":
                     with self._pg_cursor(conn) as cur:
                         if counters_enabled:
@@ -673,7 +668,7 @@ class JobManager:
         enabled: bool = True,
     ) -> None:
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -784,10 +779,10 @@ class JobManager:
     # --- Encryption helpers ---
     def _should_encrypt(self, domain: str | None) -> bool:
         try:
-            if str(os.getenv("JOBS_ENCRYPT", "")).lower() in {"1", "true", "yes", "y", "on"}:
+            if JobManager._is_truthy(os.getenv("JOBS_ENCRYPT", "")):
                 return True
             if domain:  # noqa: SIM102
-                if str(os.getenv(f"JOBS_ENCRYPT_{str(domain).upper()}", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                if JobManager._is_truthy(os.getenv(f"JOBS_ENCRYPT_{str(domain).upper()}", "")):
                     return True
         except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
@@ -914,7 +909,7 @@ class JobManager:
 
         Returns (possibly-redacted-object, found_any, findings).
         """
-        redact = str(os.getenv("JOBS_SECRET_REDACT", "")).lower() in {"1", "true", "yes", "y", "on"}
+        redact = JobManager._is_truthy(os.getenv("JOBS_SECRET_REDACT", ""))
         patterns, deny_keys = self._secret_patterns()
         findings: list[str] = []
 
@@ -981,7 +976,7 @@ class JobManager:
     def _pg_advisory_key(self, *parts: str) -> int:
         """Compute a signed 64-bit advisory lock key from parts."""
         s = (":".join(["jobs"] + [p or "" for p in parts])).encode("utf-8", "ignore")
-        h = int.from_bytes(hashlib.sha1(s).digest()[:8], "big", signed=False)
+        h = int.from_bytes(hashlib.sha1(s, usedforsecurity=False).digest()[:8], "big", signed=False)
         # Fit into signed BIGINT range used by pg advisory locks
         if h >= 2**63:
             h = h - 2**63
@@ -1055,7 +1050,7 @@ class JobManager:
         # Secret hygiene (reject/redact)
         try:
             cleaned, found, where = self._scan_and_redact_secrets(payload)
-            if found and str(os.getenv("JOBS_SECRET_REJECT", "")).lower() in {"1", "true", "yes", "y", "on"}:
+            if found and JobManager._is_truthy(os.getenv("JOBS_SECRET_REJECT", "")):
                 raise ValueError(f"Payload appears to contain secrets at: {where[:3]}{'...' if len(where) > 3 else ''}")  # noqa: TRY003
             payload = cleaned if found else payload
         except _JOB_NONCRITICAL_EXCEPTIONS as _sec_e:
@@ -1063,7 +1058,7 @@ class JobManager:
 
         # JSON payload size cap
         max_bytes = int(os.getenv("JOBS_MAX_JSON_BYTES", "1048576") or "1048576")
-        truncate = str(os.getenv("JOBS_JSON_TRUNCATE", "")).lower() in {"1", "true", "yes", "y", "on"}
+        truncate = JobManager._is_truthy(os.getenv("JOBS_JSON_TRUNCATE", ""))
         # Optional encryption at rest for payload
         payload = self._maybe_encrypt_json(payload, domain)
         payload_json = json.dumps(payload)
@@ -1209,13 +1204,7 @@ class JobManager:
                                 pass
                             # Counters bump (PG, idempotent insert occurred)
                             try:
-                                if was_insert and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if was_insert and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     is_sched = bool(avail_param)
                                     cur.execute(
                                         (
@@ -1258,13 +1247,7 @@ class JobManager:
                                 pass
                             # Emit event for in-process listeners when outbox is disabled
                             try:
-                                if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
                                     emit_job_event(
                                         "job.created",
                                         job=d,
@@ -1340,7 +1323,7 @@ class JobManager:
                             increment_created({"domain": domain, "queue": queue, "job_type": job_type})
                         # Counters bump (PG, non-idempotent path)
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 is_sched = bool(avail_param)
                                 cur.execute(
                                     (
@@ -1381,7 +1364,7 @@ class JobManager:
                             pass
                         # Emit event for in-process listeners when outbox is disabled
                         try:
-                            if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1", "true", "yes", "y", "on"}:
+                            if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
                                 emit_job_event(
                                     "job.created",
                                     job=d,
@@ -1536,7 +1519,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     is_sched = bool(avail_param_sqlite)
                                     # Upsert counters: initialize ready/scheduled appropriately, then increment on conflict
                                     conn.execute(
@@ -1585,7 +1568,7 @@ class JobManager:
                                 pass
                             # Emit event for in-process listeners when outbox is disabled
                             try:
-                                if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1", "true", "yes", "y", "on"}:
+                                if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
                                     emit_job_event(
                                         "job.created",
                                         job={**d, "request_id": request_id, "trace_id": trace_id},
@@ -2191,7 +2174,7 @@ class JobManager:
         `leased_until` is NULL or in the past.
         """
         # Honor global acquire gate for graceful shutdown
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         if _test_mode:
             with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 logger.info(
@@ -2244,7 +2227,7 @@ class JobManager:
             req = int(lease_seconds)
         except _JOB_NONCRITICAL_EXCEPTIONS:
             req = 0
-        if req <= 0 and str(os.getenv("JOBS_ADAPTIVE_LEASE_ENABLE", "")).lower() in {"1", "true", "yes", "y", "on"}:
+        if req <= 0 and JobManager._is_truthy(os.getenv("JOBS_ADAPTIVE_LEASE_ENABLE", "")):
             try:
                 req = self._adaptive_lease_seconds(domain, queue, None)
             except _JOB_NONCRITICAL_EXCEPTIONS:
@@ -2263,13 +2246,7 @@ class JobManager:
                 with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         d = None  # type: ignore[assignment]
-                        if str(os.getenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "y",
-                            "on",
-                        }:
+                        if JobManager._is_truthy(os.getenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "")):
                             # Build ordering clause with optional env overrides
                             prio_dir = self._priority_dir_for(domain, backend="pg")
                             tie = self._tie_break_for(domain, backend="pg")
@@ -2374,7 +2351,7 @@ class JobManager:
                             pass
                         # Counters: adjust queued->processing
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now = self._clock.now_utc()
                                 _av = _parse_dt(d.get("available_at"))
                                 if _av is not None and _av.tzinfo is None:
@@ -2434,13 +2411,7 @@ class JobManager:
             else:
                 with conn:
                     # Optional one-shot acquisition path for SQLite to reduce contention
-                    if str(os.getenv("JOBS_SQLITE_SINGLE_UPDATE_ACQUIRE", "")).lower() in {
-                        "1",
-                        "true",
-                        "yes",
-                        "y",
-                        "on",
-                    }:
+                    if JobManager._is_truthy(os.getenv("JOBS_SQLITE_SINGLE_UPDATE_ACQUIRE", "")):
                         lease_id = str(_uuid.uuid4())
                         sub = (
                             "SELECT id FROM jobs WHERE domain = ? AND queue = ? AND ("
@@ -2468,7 +2439,7 @@ class JobManager:
                             )
                         sub += order_sql
                         sql = (
-                            "UPDATE jobs SET status='processing', "
+                            "UPDATE jobs SET status='processing', "  # nosec B608
                             "started_at = COALESCE(started_at, DATETIME('now')), "
                             "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
                             "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
@@ -2509,7 +2480,7 @@ class JobManager:
                             self._assert_invariants(d)
                         # Counters queued->processing
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now = self._clock.now_utc()
                                 _av = _parse_dt(d.get("available_at"))
                                 if _av is not None and _av.tzinfo is None:
@@ -2623,7 +2594,7 @@ class JobManager:
                                     f"[JM TEST] acquired id={d.get('id')} status={d.get('status')} leased_until={d.get('leased_until')} worker_id={d.get('worker_id')} lease_id={d.get('lease_id')}"
                                 )
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now = self._clock.now_utc()
                                 _av = _parse_dt(d.get("available_at"))
                                 if _av is not None and _av.tzinfo is None:
@@ -2739,7 +2710,7 @@ class JobManager:
                                 params.append(str(progress_message))
                             params.extend([int(job_id), worker_id, lease_id])
                             cur.execute(
-                                f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s AND status = 'processing' AND worker_id = %s AND lease_id = %s",
+                                f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s AND status = 'processing' AND worker_id = %s AND lease_id = %s",  # nosec B608
                                 tuple(params),
                             )
                             ok = cur.rowcount > 0
@@ -2761,7 +2732,7 @@ class JobManager:
                                 sets.append("progress_message = %s")
                                 params2.append(str(progress_message))
                             cur.execute(
-                                f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s AND status = 'processing'",
+                                f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s AND status = 'processing'",  # nosec B608
                                 tuple(params2 + [int(job_id)]),
                             )
                             ok2 = cur.rowcount > 0
@@ -2849,7 +2820,7 @@ class JobManager:
                         return False
                     params.append(int(job_id))
                     cur.execute(
-                        f"UPDATE jobs SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s",
+                        f"UPDATE jobs SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s",  # nosec B608
                         tuple(params),
                     )
                     return cur.rowcount > 0
@@ -2866,7 +2837,7 @@ class JobManager:
                     if not sets2:
                         return False
                     params2.append(int(job_id))
-                    sql = f"UPDATE jobs SET {', '.join(sets2)}, updated_at = DATETIME('now') WHERE id = ?"
+                    sql = f"UPDATE jobs SET {', '.join(sets2)}, updated_at = DATETIME('now') WHERE id = ?"  # nosec B608
                     cur2 = conn.execute(sql, tuple(params2))
                     return (cur2.rowcount or 0) > 0
         finally:
@@ -2893,7 +2864,7 @@ class JobManager:
             res_obj = result
 
         max_bytes = int(os.getenv("JOBS_MAX_JSON_BYTES", "1048576") or "1048576")
-        truncate = str(os.getenv("JOBS_JSON_TRUNCATE", "")).lower() in {"1", "true", "yes", "y", "on"}
+        truncate = JobManager._is_truthy(os.getenv("JOBS_JSON_TRUNCATE", ""))
         try:
             res_json = json.dumps(res_obj)
         except (TypeError, ValueError) as exc:
@@ -2943,7 +2914,7 @@ class JobManager:
         """
         # Strong exactly-once finalize (optional): require a completion_token when enabled
         if (
-            str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}
+            JobManager._is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", ""))
             and not completion_token
         ):
             raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
@@ -2951,7 +2922,7 @@ class JobManager:
             enforce = self._should_enforce_ack()
         # Cap result size if configured
         max_bytes = int(os.getenv("JOBS_MAX_JSON_BYTES", "1048576") or "1048576")
-        truncate = str(os.getenv("JOBS_JSON_TRUNCATE", "")).lower() in {"1", "true", "yes", "y", "on"}
+        truncate = JobManager._is_truthy(os.getenv("JOBS_JSON_TRUNCATE", ""))
         res_obj = result
         res_ok = False
         if res_obj is not None:
@@ -2970,7 +2941,7 @@ class JobManager:
                         raise ValueError(f"Result too large: {res_bytes} bytes > limit {max_bytes}")  # noqa: TRY003
         # Optional encryption at rest for result (requires domain; will be resolved per-backend)
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -3146,13 +3117,7 @@ class JobManager:
                                     pass
                                 # Decrement processing counter
                                 try:
-                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                        "1",
-                                        "true",
-                                        "yes",
-                                        "y",
-                                        "on",
-                                    }:
+                                    if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                         if completed_from_processing:
                                             cur.execute(
                                                 "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
@@ -3377,13 +3342,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     if completed_from_processing:
                                         conn.execute(
                                             "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
@@ -3444,13 +3403,7 @@ class JobManager:
                                 pass
                             # Emit event for in-process listeners when outbox is disabled
                             try:
-                                if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
                                     emit_job_event(
                                         "job.completed",
                                         job={
@@ -3700,7 +3653,7 @@ class JobManager:
                 conn.close()
 
     def batch_fail_jobs(self, items: list[dict[str, Any]], *, enforce: bool | None = None) -> int:
-        if str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}:
+        if JobManager._is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")):
             for it in items:
                 if not it.get("completion_token"):
                     raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
@@ -3797,7 +3750,7 @@ class JobManager:
         """
         # Strong exactly-once finalize (optional): require a completion_token when enabled
         if (
-            str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}
+            JobManager._is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", ""))
             and not completion_token
         ):
             raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
@@ -3806,7 +3759,7 @@ class JobManager:
         if enforce is None:
             enforce = self._should_enforce_ack()
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -3832,20 +3785,14 @@ class JobManager:
                             row = cur.fetchone()
                             current = int(row["retry_count"]) if row else 0
                             exp_backoff = max(1, int(backoff_seconds * (2**current)))
-                            test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
+                            test_mode = _is_test_mode()
                             jitter = 0 if exp_backoff <= 2 or test_mode else random.randint(0, max(1, exp_backoff // 4))
                             delay = exp_backoff + jitter
                             # In tests, enforce a generous minimum when the caller requested
                             # immediate retry (backoff_seconds=0) so that newer jobs can be
                             # acquired before recently failed ones.
                             if test_mode:
-                                _outbox = str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }
+                                _outbox = JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", ""))
                                 # Permit immediate retry in tests when caller requests backoff=0
                                 # unless outbox mode is enabled (which needs a larger gap).
                                 if not _outbox and exp_backoff <= 1:
@@ -3959,13 +3906,7 @@ class JobManager:
                                             pass
                                         # Counters: processing -> queued (ready/scheduled) or quarantined
                                         try:
-                                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                                "1",
-                                                "true",
-                                                "yes",
-                                                "y",
-                                                "on",
-                                            }:
+                                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                                 dmn = elem.get("domain")
                                                 qq = elem.get("queue")
                                                 jt = elem.get("job_type")
@@ -4029,7 +3970,7 @@ class JobManager:
                                             pass
                                 except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
-                                if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
+                                if _is_test_mode():
                                     try:
                                         # Snapshot after scheduling retry (PG)
                                         cur.execute("SELECT failure_timeline FROM jobs WHERE id = %s", (int(job_id),))
@@ -4159,13 +4100,7 @@ class JobManager:
                                     pass
                                 # Counters: processing -> failed (terminal)
                                 try:
-                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {  # noqa: SIM102
-                                        "1",
-                                        "true",
-                                        "yes",
-                                        "y",
-                                        "on",
-                                    }:
+                                    if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):  # noqa: SIM102
                                         if not failed_from_queued:
                                             cur.execute(
                                                 "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
@@ -4204,7 +4139,7 @@ class JobManager:
                                     self._cancel_dependent_jobs(d.get("uuid"), reason="dependency_failed")
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
+                        if _is_test_mode():
                             try:
                                 cur.execute("SELECT COUNT(*) AS c FROM jobs")
                                 _total = (cur.fetchone() or {}).get("c", 0)
@@ -4243,19 +4178,13 @@ class JobManager:
                         row = conn.execute("SELECT retry_count FROM jobs WHERE id = ?", (job_id,)).fetchone()
                         current = int(row[0]) if row else 0
                         exp_backoff = max(1, int(backoff_seconds * (2**current)))
-                        test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
+                        test_mode = _is_test_mode()
                         jitter = 0 if exp_backoff <= 2 or test_mode else random.randint(0, max(1, exp_backoff // 4))
                         delay = exp_backoff + jitter
                         base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
                         thresh = base_thresh
                         if test_mode:
-                            _outbox = str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {
-                                "1",
-                                "true",
-                                "yes",
-                                "y",
-                                "on",
-                            }
+                            _outbox = JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", ""))
                             if not _outbox and exp_backoff <= 1:
                                 delay = 0
                             try:
@@ -4366,13 +4295,7 @@ class JobManager:
                                         pass
                                     # Counters: processing -> queued (ready/scheduled) or quarantined
                                     try:
-                                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                            "1",
-                                            "true",
-                                            "yes",
-                                            "y",
-                                            "on",
-                                        }:
+                                        if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                             # Use current streak value after increment to decide counters update
                                             try:
                                                 row_fs = conn.execute(
@@ -4438,8 +4361,7 @@ class JobManager:
                                         # Update last-acquired snapshot for test-mode fallbacks to preserve timeline growth
                                         try:
                                             if (
-                                                str(os.getenv("TEST_MODE", "")).lower()
-                                                in {"1", "true", "yes", "y", "on"}
+                                                _is_test_mode()
                                                 and rowl
                                             ):
                                                 rnow = conn.execute(
@@ -4453,7 +4375,7 @@ class JobManager:
                                         pass
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
-                            if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
+                            if _is_test_mode():
                                 try:
                                     _row = conn.execute(
                                         "SELECT failure_timeline FROM jobs WHERE id = ?", (int(job_id),)
@@ -4565,13 +4487,7 @@ class JobManager:
                                     pass
                                 # Counters: processing -> failed (terminal)
                                 try:
-                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {  # noqa: SIM102
-                                        "1",
-                                        "true",
-                                        "yes",
-                                        "y",
-                                        "on",
-                                    }:
+                                    if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):  # noqa: SIM102
                                         if not failed_from_queued:
                                             conn.execute(
                                                 "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
@@ -4631,7 +4547,7 @@ class JobManager:
                                     pass
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
+                        if _is_test_mode():
                             try:
                                 _total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
                                 _dist = {
@@ -4662,7 +4578,7 @@ class JobManager:
         Emits gauge updates on successful cancellation for the job's domain/queue/job_type.
         """
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -4697,13 +4613,7 @@ class JobManager:
                                 pass
                             # Counters: queued (ready/scheduled) -> cancelled
                             try:
-                                if rowd and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if rowd and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     _now2 = self._clock.now_utc()
                                     _av2 = _parse_dt(rowd.get("available_at")) if rowd else None
                                     if _av2 is not None and _av2.tzinfo is None:
@@ -4776,8 +4686,7 @@ class JobManager:
                             if (
                                 ok
                                 and row0
-                                and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower()
-                                in {"1", "true", "yes", "y", "on"}
+                                and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", ""))
                             ):
                                 cur.execute(
                                     "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
@@ -4850,13 +4759,7 @@ class JobManager:
                             pass
                         # Counters: queued (ready/scheduled) -> cancelled
                         try:
-                            if rowd and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                "1",
-                                "true",
-                                "yes",
-                                "y",
-                                "on",
-                            }:
+                            if rowd and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now3 = self._clock.now_utc()
                                 _av3 = _parse_dt(rowd["available_at"]) if rowd and rowd["available_at"] else None
                                 if _av3 is not None and _av3.tzinfo is None:
@@ -4947,8 +4850,7 @@ class JobManager:
                             if (
                                 ok
                                 and row0
-                                and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower()
-                                in {"1", "true", "yes", "y", "on"}
+                                and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", ""))
                             ):
                                 conn.execute(
                                     "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
@@ -5035,13 +4937,7 @@ class JobManager:
                             with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
                         try:
-                            if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                "1",
-                                "true",
-                                "yes",
-                                "y",
-                                "on",
-                            }:
+                            if ok and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now = self._clock.now_utc()
                                 _av = _parse_dt(row.get("available_at"))
                                 if _av is not None and _av.tzinfo is None:
@@ -5107,13 +5003,7 @@ class JobManager:
                         with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
                     try:
-                        if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "y",
-                            "on",
-                        }:
+                        if ok and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                             _now = self._clock.now_utc()
                             _av = _parse_dt(row["available_at"]) if row["available_at"] else None
                             if _av is not None and _av.tzinfo is None:
@@ -5179,7 +5069,7 @@ class JobManager:
         if not statuses:
             return 0
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -5207,7 +5097,7 @@ class JobManager:
                         if dry_run and detail_top_k > 0:
                             cur.execute(
                                 (
-                                    f"SELECT domain, queue, job_type, status, COUNT(*) AS c FROM jobs{where_clause} "
+                                    f"SELECT domain, queue, job_type, status, COUNT(*) AS c FROM jobs{where_clause} "  # nosec B608
                                     "GROUP BY domain, queue, job_type, status ORDER BY c DESC LIMIT %s"
                                 ),
                                 tuple(params + [int(detail_top_k)]),
@@ -5215,7 +5105,7 @@ class JobManager:
                             # Note: caller doesn't consume this form currently; kept for future extension
                             # We still return the total count below for compatibility
                         if dry_run:
-                            cur.execute(f"SELECT COUNT(*) AS c FROM jobs{where_clause}", tuple(params))
+                            cur.execute(f"SELECT COUNT(*) AS c FROM jobs{where_clause}", tuple(params))  # nosec B608
                             row = cur.fetchone()
                             _cnt = int(row["c"]) if row is not None else 0
                             if _test_mode:
@@ -5223,30 +5113,18 @@ class JobManager:
                                     logger.info(f"[JM TEST MUT] prune_jobs dry_run count={_cnt}")
                             return _cnt
                         # Optional archive copy
-                        if str(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                        if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")):
                             cur.execute(
-                                f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
+                                f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",  # nosec B608
                                 tuple(params),
                             )
                             # Optional compression for archived payload/result (Postgres)
                             try:
-                                if str(os.getenv("JOBS_ARCHIVE_COMPRESS", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS", "")):
                                     import gzip
 
-                                    drop_json = str(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", "")).lower() in {
-                                        "1",
-                                        "true",
-                                        "yes",
-                                        "y",
-                                        "on",
-                                    }
-                                    cur.execute(f"SELECT id, payload, result FROM jobs{where_clause}", tuple(params))
+                                    drop_json = JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", ""))
+                                    cur.execute(f"SELECT id, payload, result FROM jobs{where_clause}", tuple(params))  # nosec B608
                                     rows_cr = cur.fetchall() or []
                                     for r in rows_cr:
                                         try:
@@ -5279,10 +5157,10 @@ class JobManager:
                                 pass
                         # Counters: subtract queued/processing/quarantined rows if they are part of prune set
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 # Ready queued
                                 cur.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= NOW()) GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= NOW()) GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 )
                                 for r in cur.fetchall() or []:
@@ -5292,7 +5170,7 @@ class JobManager:
                                     )
                                 # Scheduled queued
                                 cur.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 )
                                 for r in cur.fetchall() or []:
@@ -5302,7 +5180,7 @@ class JobManager:
                                     )
                                 # Processing
                                 cur.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='processing' GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='processing' GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 )
                                 for r in cur.fetchall() or []:
@@ -5312,7 +5190,7 @@ class JobManager:
                                     )
                                 # Quarantined
                                 cur.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='quarantined' GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='quarantined' GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 )
                                 for r in cur.fetchall() or []:
@@ -5328,7 +5206,7 @@ class JobManager:
                                 _before = (cur.fetchone() or {}).get("c", 0)
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 _before = None
-                        cur.execute(f"DELETE FROM jobs{where_clause}", tuple(params))
+                        cur.execute(f"DELETE FROM jobs{where_clause}", tuple(params))  # nosec B608
                         deleted = cur.rowcount or 0
                         if _test_mode:
                             try:
@@ -5381,9 +5259,9 @@ class JobManager:
                     where_clause = " WHERE " + " AND ".join(where_parts)
                     # Diagnostics in TEST_MODE: show which rows match the prune filter (SQLite)
                     try:
-                        if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                        if _is_test_mode():
                             dbg_rows = conn.execute(
-                                f"SELECT id, status, completed_at, created_at FROM jobs{where_clause}",
+                                f"SELECT id, status, completed_at, created_at FROM jobs{where_clause}",  # nosec B608
                                 tuple(params),
                             ).fetchall()
                             all_rows = conn.execute(
@@ -5398,7 +5276,7 @@ class JobManager:
                     except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Compute match count up front for accurate reporting
-                    cur_cnt = conn.execute(f"SELECT COUNT(*) FROM jobs{where_clause}", tuple(params))
+                    cur_cnt = conn.execute(f"SELECT COUNT(*) FROM jobs{where_clause}", tuple(params))  # nosec B608
                     row = cur_cnt.fetchone()
                     count = int(row[0]) if row is not None else 0
                     if dry_run:
@@ -5421,25 +5299,19 @@ class JobManager:
                                 logger.info(f"[JM TEST MUT] prune_jobs dry_run count={int(count)}")
                         return count
                     # Optional archive copy
-                    if str(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                    if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")):
                         conn.execute(
-                            f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
+                            f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",  # nosec B608
                             tuple(params),
                         )
                         # Optional compression for archived payload/result (SQLite: base64-gz prefix)
                         try:
-                            if str(os.getenv("JOBS_ARCHIVE_COMPRESS", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS", "")):
                                 import base64
                                 import gzip
 
-                                drop_json = str(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }
-                                qsel = f"SELECT id, payload, result FROM jobs{where_clause}"
+                                drop_json = JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", ""))
+                                qsel = f"SELECT id, payload, result FROM jobs{where_clause}"  # nosec B608
                                 for rid, pl, rs in conn.execute(qsel, tuple(params)).fetchall() or []:
                                     try:
                                         p64 = None
@@ -5468,10 +5340,10 @@ class JobManager:
                             pass
                     # Counters: subtract queued/processing/quarantined rows if they are part of prune set
                     try:
-                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                        if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                             for r in (
                                 conn.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 ).fetchall()
                                 or []
@@ -5482,7 +5354,7 @@ class JobManager:
                                 )
                             for r in (
                                 conn.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 ).fetchall()
                                 or []
@@ -5493,7 +5365,7 @@ class JobManager:
                                 )
                             for r in (
                                 conn.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='processing' GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='processing' GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 ).fetchall()
                                 or []
@@ -5504,7 +5376,7 @@ class JobManager:
                                 )
                             for r in (
                                 conn.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='quarantined' GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='quarantined' GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 ).fetchall()
                                 or []
@@ -5520,7 +5392,7 @@ class JobManager:
                             _before2 = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             _before2 = None
-                    conn.execute(f"DELETE FROM jobs{where_clause}", tuple(params))
+                    conn.execute(f"DELETE FROM jobs{where_clause}", tuple(params))  # nosec B608
                     deleted = int(count)
                     if _test_mode:
                         try:
@@ -5594,15 +5466,9 @@ class JobManager:
                                 params.append(job_type)
                             # Counters: queued (ready/scheduled) -> cancelled/failed, and metrics increments
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     cur.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= %s) GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= %s) GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params + [now_ts]),
                                     )
                                     grp_ready_rows = cur.fetchall() or []
@@ -5612,7 +5478,7 @@ class JobManager:
                                             (int(r["c"]), r["domain"], r["queue"], r["job_type"]),
                                         )
                                     cur.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > %s) GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > %s) GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params + [now_ts]),
                                     )
                                     grp_sched_rows = cur.fetchall() or []
@@ -5663,12 +5529,12 @@ class JobManager:
                                 pass
                             if action == "cancel":
                                 cur.execute(
-                                    f"UPDATE jobs SET status='cancelled', cancelled_at = %s, cancellation_reason = 'ttl_age' WHERE {' AND '.join(where)}",
+                                    f"UPDATE jobs SET status='cancelled', cancelled_at = %s, cancellation_reason = 'ttl_age' WHERE {' AND '.join(where)}",  # nosec B608
                                     tuple([now_ts] + params),
                                 )
                             else:
                                 cur.execute(
-                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_age', completed_at = %s WHERE {' AND '.join(where)}",
+                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_age', completed_at = %s WHERE {' AND '.join(where)}",  # nosec B608
                                     tuple([now_ts] + params),
                                 )
                             affected_age = int(cur.rowcount or 0)
@@ -5691,15 +5557,9 @@ class JobManager:
                                 params2.append(job_type)
                             # Counters: processing -> cancelled/failed, and metrics increments
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     cur.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params2),
                                     )
                                     grp_proc_rows = cur.fetchall() or []
@@ -5735,12 +5595,12 @@ class JobManager:
                                 pass
                             if action == "cancel":
                                 cur.execute(
-                                    f"UPDATE jobs SET status='cancelled', cancelled_at = %s, cancellation_reason = 'ttl_runtime', leased_until = NULL WHERE {' AND '.join(where)}",
+                                    f"UPDATE jobs SET status='cancelled', cancelled_at = %s, cancellation_reason = 'ttl_runtime', leased_until = NULL WHERE {' AND '.join(where)}",  # nosec B608
                                     tuple([now_ts2] + params2),
                                 )
                             else:
                                 cur.execute(
-                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_runtime', completed_at = %s, leased_until = NULL WHERE {' AND '.join(where)}",
+                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_runtime', completed_at = %s, leased_until = NULL WHERE {' AND '.join(where)}",  # nosec B608
                                     tuple([now_ts2] + params2),
                                 )
                             affected_runtime = int(cur.rowcount or 0)
@@ -5784,11 +5644,11 @@ class JobManager:
                             params3.append(job_type)
                         # Counters adjustments (ready/scheduled) before status change
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 # ready subset (available_at <= now)
                                 ready_rows = (
                                     conn.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params3),
                                     ).fetchall()
                                     or []
@@ -5801,7 +5661,7 @@ class JobManager:
                                 # scheduled subset (available_at > now)
                                 sched_rows = (
                                     conn.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params3),
                                     ).fetchall()
                                     or []
@@ -5838,7 +5698,7 @@ class JobManager:
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         sql = (
-                            "UPDATE jobs SET "
+                            "UPDATE jobs SET "  # nosec B608
                             + (
                                 "status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_age'"
                                 if action == "cancel"
@@ -5848,7 +5708,7 @@ class JobManager:
                         )
                         cur = conn.execute(sql, tuple(params3))
                         try:
-                            _tm = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
+                            _tm = _is_test_mode()
                             if _tm:
                                 logger.info(
                                     f"[TEST] TTL(age) SQLite updated rows={cur.rowcount} for where={where} params={params3}"
@@ -5875,10 +5735,10 @@ class JobManager:
                             params4.append(job_type)
                         # Counters adjustments for processing and metrics
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 proc_rows = (
                                     conn.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params4),
                                     ).fetchall()
                                     or []
@@ -5906,7 +5766,7 @@ class JobManager:
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         sql2 = (
-                            "UPDATE jobs SET "
+                            "UPDATE jobs SET "  # nosec B608
                             + (
                                 "status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_runtime', leased_until = NULL"
                                 if action == "cancel"
@@ -5916,7 +5776,7 @@ class JobManager:
                         )
                         cur2 = conn.execute(sql2, tuple(params4))
                         try:
-                            _tm = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
+                            _tm = _is_test_mode()
                             if _tm:
                                 logger.info(
                                     f"[TEST] TTL(runtime) SQLite updated rows={cur2.rowcount} for where={where} params={params4}"
@@ -6013,7 +5873,7 @@ class JobManager:
                         where.append("status=%s")
                         params.append(status)
                     wh = " AND ".join(where)
-                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {wh}", tuple(params))
+                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {wh}", tuple(params))  # nosec B608
                     _cnt_row = cur.fetchone()
                     count = int(_cnt_row.get("c") if isinstance(_cnt_row, dict) else 0)
                     if dry_run:
@@ -6021,11 +5881,11 @@ class JobManager:
                     if set_now:
                         # When moving to now, queued scheduled -> queued ready: update counters if enabled
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 now_ts = self._clock.now_utc()
                                 cur.execute(
                                     (
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "  # nosec B608
                                         "AND status='queued' AND (available_at IS NOT NULL AND available_at > %s) GROUP BY domain,queue,job_type"
                                     ),
                                     tuple(params + [now_ts]),
@@ -6037,12 +5897,12 @@ class JobManager:
                                     )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh}", tuple(params))
+                        cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh}", tuple(params))  # nosec B608
                     else:
                         if delta_seconds is None:
                             raise ValueError("delta_seconds required when set_now=false")  # noqa: TRY003
                         cur.execute(
-                            f"UPDATE jobs SET available_at=COALESCE(available_at, NOW()) + (%s || ' seconds')::interval WHERE {wh}",
+                            f"UPDATE jobs SET available_at=COALESCE(available_at, NOW()) + (%s || ' seconds')::interval WHERE {wh}",  # nosec B608
                             tuple([int(delta_seconds)] + params),
                         )
                     with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
@@ -6064,7 +5924,7 @@ class JobManager:
                     where.append("status=?")
                     params.append(status)
                 wh = " AND ".join(where)
-                row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {wh}", tuple(params)).fetchone()
+                row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {wh}", tuple(params)).fetchone()  # nosec B608
                 count = int(row[0]) if row else 0
                 if dry_run:
                     return count
@@ -6072,12 +5932,12 @@ class JobManager:
                     if set_now:
                         # Counters: queued scheduled -> queued ready for matching scope
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 now_str = self._clock.now_utc().astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
                                 for r in (
                                     conn.execute(
                                         (
-                                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} "
+                                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} "  # nosec B608
                                             "AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME(?)) GROUP BY domain,queue,job_type"
                                         ),
                                         tuple(params + [now_str]),
@@ -6093,16 +5953,16 @@ class JobManager:
                                     )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh}", tuple(params))
+                        conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh}", tuple(params))  # nosec B608
                     else:
                         if delta_seconds is None:
                             raise ValueError("delta_seconds required when set_now=false")  # noqa: TRY003
                         conn.execute(
-                            f"UPDATE jobs SET available_at=COALESCE(available_at, DATETIME('now')) WHERE {wh}",
+                            f"UPDATE jobs SET available_at=COALESCE(available_at, DATETIME('now')) WHERE {wh}",  # nosec B608
                             tuple(params),
                         )
                         conn.execute(
-                            f"UPDATE jobs SET available_at=DATETIME(available_at, ?) WHERE {wh}",
+                            f"UPDATE jobs SET available_at=DATETIME(available_at, ?) WHERE {wh}",  # nosec B608
                             tuple([f"+{int(delta_seconds)} seconds"] + params),
                         )
                 return count
@@ -6145,7 +6005,7 @@ class JobManager:
                     wh = " AND ".join(where)
                     cur.execute(
                         (
-                            f"SELECT COUNT(*) AS c FROM jobs WHERE {wh} AND ("
+                            f"SELECT COUNT(*) AS c FROM jobs WHERE {wh} AND ("  # nosec B608
                             "(status='failed' AND retry_count < max_retries) "
                             + (" OR (status='queued' AND available_at >= NOW())" if not only_failed else "")
                             + ")"
@@ -6158,17 +6018,11 @@ class JobManager:
                         return count
                     with conn:
                         failed_groups: list[dict[str, Any]] = []
-                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "y",
-                            "on",
-                        }:
+                        if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                             try:
                                 cur.execute(
                                     (
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "  # nosec B608
                                         "AND status='failed' AND retry_count < max_retries GROUP BY domain,queue,job_type"
                                     ),
                                     tuple(params),
@@ -6177,7 +6031,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 failed_groups = []
                         cur.execute(
-                            f"UPDATE jobs SET status='queued', available_at=NOW() WHERE {wh} AND status='failed' AND retry_count < max_retries",
+                            f"UPDATE jobs SET status='queued', available_at=NOW() WHERE {wh} AND status='failed' AND retry_count < max_retries",  # nosec B608
                             tuple(params),
                         )
                         if failed_groups:
@@ -6198,17 +6052,11 @@ class JobManager:
                         if not only_failed:
                             # Counters: queued scheduled -> queued ready
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     now_ts = self._clock.now_utc()
                                     cur.execute(
                                         (
-                                            f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "
+                                            f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "  # nosec B608
                                             "AND status='queued' AND available_at > %s GROUP BY domain,queue,job_type"
                                         ),
                                         tuple(params + [now_ts]),
@@ -6221,7 +6069,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             cur.execute(
-                                f"UPDATE jobs SET available_at=NOW() WHERE {wh} AND status='queued' AND available_at >= NOW()",
+                                f"UPDATE jobs SET available_at=NOW() WHERE {wh} AND status='queued' AND available_at >= NOW()",  # nosec B608
                                 tuple(params),
                             )
                     return count
@@ -6243,7 +6091,7 @@ class JobManager:
                 wh = " AND ".join(where)
                 row = conn.execute(
                     (
-                        f"SELECT COUNT(*) FROM jobs WHERE {wh} AND ("
+                        f"SELECT COUNT(*) FROM jobs WHERE {wh} AND ("  # nosec B608
                         "(status='failed' AND retry_count < max_retries) "
                         + (" OR (status='queued' AND available_at >= DATETIME('now'))" if not only_failed else "")
                         + ")"
@@ -6255,12 +6103,12 @@ class JobManager:
                     return count
                 with conn:
                     failed_groups_sqlite: list[Any] = []
-                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                    if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                         try:
                             failed_groups_sqlite = (
                                 conn.execute(
                                     (
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} "
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} "  # nosec B608
                                         "AND status='failed' AND retry_count < max_retries GROUP BY domain,queue,job_type"
                                     ),
                                     tuple(params),
@@ -6270,7 +6118,7 @@ class JobManager:
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             failed_groups_sqlite = []
                     conn.execute(
-                        f"UPDATE jobs SET status='queued', available_at=DATETIME('now') WHERE {wh} AND status='failed' AND retry_count < max_retries",
+                        f"UPDATE jobs SET status='queued', available_at=DATETIME('now') WHERE {wh} AND status='failed' AND retry_count < max_retries",  # nosec B608
                         tuple(params),
                     )
                     if failed_groups_sqlite:
@@ -6290,10 +6138,10 @@ class JobManager:
                     if not only_failed:
                         # Counters: queued scheduled -> queued ready
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 for r in (
                                     conn.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} AND status='queued' AND available_at > DATETIME('now') GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} AND status='queued' AND available_at > DATETIME('now') GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params),
                                     ).fetchall()
                                     or []
@@ -6308,7 +6156,7 @@ class JobManager:
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         conn.execute(
-                            f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh} AND status='queued' AND available_at >= DATETIME('now')",
+                            f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh} AND status='queued' AND available_at >= DATETIME('now')",  # nosec B608
                             tuple(params),
                         )
                 return count
@@ -6341,7 +6189,7 @@ class JobManager:
                     where.append("job_type = %s")
                     params.append(job_type)
                 sql = (
-                    "SELECT domain, queue, job_type, "
+                    "SELECT domain, queue, job_type, "  # nosec B608
                     "SUM(CASE WHEN status='queued' AND (available_at IS NULL OR available_at <= NOW()) THEN 1 ELSE 0 END) AS queued, "
                     "SUM(CASE WHEN status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) THEN 1 ELSE 0 END) AS scheduled, "
                     "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS processing, "
@@ -6376,7 +6224,7 @@ class JobManager:
                     where.append("job_type = ?")
                     params2.append(job_type)
                 sql = (
-                    "SELECT domain, queue, job_type, "
+                    "SELECT domain, queue, job_type, "  # nosec B608
                     "SUM(CASE WHEN status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) THEN 1 ELSE 0 END) AS queued, "
                     "SUM(CASE WHEN status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) THEN 1 ELSE 0 END) AS scheduled, "
                     "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS processing, "
@@ -6415,7 +6263,7 @@ class JobManager:
                     where.append("queue = %s")
                     params.append(queue)
                 with self._pg_cursor(conn) as cur:
-                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))
+                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))  # nosec B608
                     row = cur.fetchone()
                     return int(row["c"]) if row is not None else 0
             else:
@@ -6427,7 +6275,7 @@ class JobManager:
                 if queue:
                     where.append("queue = ?")
                     params2.append(queue)
-                row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2)).fetchone()
+                row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2)).fetchone()  # nosec B608
                 return int(row[0]) if row else 0
         finally:
             with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
@@ -6550,7 +6398,7 @@ class JobManager:
                         where.append("job_type=%s")
                         params.append(job_type)
                     cur.execute(
-                        f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT %s",
+                        f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT %s",  # nosec B608
                         tuple(params + [int(limit)]),
                     )
                     rows = cur.fetchall() or []
@@ -6585,7 +6433,7 @@ class JobManager:
                                     sets.append(f"{k}=%s::jsonb")
                                     params_upd.append(json.dumps(v))
                                 params_upd.append(int(r["id"]))
-                                cur.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s", tuple(params_upd))
+                                cur.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s", tuple(params_upd))  # nosec B608
                                 affected += 1
                 return affected
             else:
@@ -6600,7 +6448,7 @@ class JobManager:
                 if job_type:
                     where.append("job_type=?")
                     params2.append(job_type)
-                sql = f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT ?"
+                sql = f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT ?"  # nosec B608
                 rows = conn.execute(sql, tuple(params2 + [int(limit)])).fetchall() or []
                 if dry_run:
                     for _rid, pl, rs, *_ in rows:
@@ -6653,7 +6501,7 @@ class JobManager:
                                 sets.append(f"{k} = ?")
                                 params_upd.append(v)
                             params_upd.append(int(rid))
-                            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", tuple(params_upd))
+                            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", tuple(params_upd))  # nosec B608
                             affected += 1
                 return affected
         finally:
@@ -6709,13 +6557,7 @@ class JobManager:
                                 queue=row.get("queue"),
                                 job_type=row.get("job_type"),
                             )
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                "1",
-                                "true",
-                                "yes",
-                                "y",
-                                "on",
-                            }:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 if state == "processing":
                                     cur.execute(
                                         (
@@ -6809,13 +6651,7 @@ class JobManager:
                             queue=row["queue"],
                             job_type=row["job_type"],
                         )
-                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "y",
-                            "on",
-                        }:
+                        if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                             if state == "processing":
                                 conn.execute(
                                     (
@@ -6918,22 +6754,22 @@ class JobManager:
                             params_np.append(job_type)
                             where_pr.append("job_type = %s")
                             params_pr.append(job_type)
-                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))
+                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))  # nosec B608
                         _np = cur.fetchone()
                         res["non_processing_with_lease"] = int(_np.get("c") if isinstance(_np, dict) else 0)
-                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))
+                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))  # nosec B608
                         _pr = cur.fetchone()
                         res["processing_expired"] = int(_pr.get("c") if isinstance(_pr, dict) else 0)
                         if fix:
                             # Clear leases for non-processing
                             cur.execute(
-                                f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",
+                                f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",  # nosec B608
                                 tuple(params_np),
                             )
                             res["fixed"] += cur.rowcount or 0
                             # Reset expired processing to queued
                             cur.execute(
-                                f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",
+                                f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",  # nosec B608
                                 tuple(params_pr),
                             )
                             res["fixed"] += cur.rowcount or 0
@@ -6960,19 +6796,19 @@ class JobManager:
                     params_np.append(job_type)
                     where_pr.append("job_type = ?")
                     params_pr.append(job_type)
-                cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))
+                cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))  # nosec B608
                 res["non_processing_with_lease"] = int(cur.fetchone()[0])
-                cur2 = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))
+                cur2 = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))  # nosec B608
                 res["processing_expired"] = int(cur2.fetchone()[0])
                 if fix:
                     with conn:
                         cur_fix_1 = conn.execute(
-                            f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",
+                            f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",  # nosec B608
                             tuple(params_np),
                         )
                         res["fixed"] += int(cur_fix_1.rowcount or 0)
                         cur_fix_2 = conn.execute(
-                            f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",
+                            f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",  # nosec B608
                             tuple(params_pr),
                         )
                         res["fixed"] += int(cur_fix_2.rowcount or 0)

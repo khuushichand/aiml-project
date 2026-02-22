@@ -13,9 +13,11 @@ describe('FilterChips', () => {
   const defaultProps = {
     mediaTypes: [] as string[],
     keywords: [] as string[],
+    excludedKeywords: [] as string[],
     showFavoritesOnly: false,
     onRemoveMediaType: vi.fn(),
     onRemoveKeyword: vi.fn(),
+    onRemoveExcludedKeyword: vi.fn(),
     onToggleFavorites: vi.fn(),
     onClearAll: vi.fn(),
   }
@@ -49,6 +51,12 @@ describe('FilterChips', () => {
 
     expect(screen.getByText('test')).toBeInTheDocument()
     expect(screen.getByText('demo')).toBeInTheDocument()
+  })
+
+  it('renders excluded keyword chips', () => {
+    render(<FilterChips {...defaultProps} excludedKeywords={['secret']} />)
+
+    expect(screen.getByText('-secret')).toBeInTheDocument()
   })
 
   it('renders all filter types together', () => {
@@ -102,6 +110,24 @@ describe('FilterChips', () => {
     expect(onRemoveKeyword).toHaveBeenCalledWith('test')
   })
 
+  it('calls onRemoveExcludedKeyword when excluded keyword chip clicked', () => {
+    const onRemoveExcludedKeyword = vi.fn()
+    render(
+      <FilterChips
+        {...defaultProps}
+        excludedKeywords={['secret']}
+        onRemoveExcludedKeyword={onRemoveExcludedKeyword}
+      />
+    )
+
+    const excludedChip = screen.getByText('-secret').closest('button')
+    expect(excludedChip).not.toBeNull()
+    fireEvent.click(excludedChip!)
+
+    expect(onRemoveExcludedKeyword).toHaveBeenCalledTimes(1)
+    expect(onRemoveExcludedKeyword).toHaveBeenCalledWith('secret')
+  })
+
   it('calls onToggleFavorites when favorites chip clicked', () => {
     const onToggleFavorites = vi.fn()
     render(
@@ -135,6 +161,18 @@ describe('FilterChips', () => {
     fireEvent.click(clearAllButton)
 
     expect(onClearAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders clear all label with count when activeFilterCount is provided', () => {
+    render(
+      <FilterChips
+        {...defaultProps}
+        mediaTypes={['video']}
+        activeFilterCount={3}
+      />
+    )
+
+    expect(screen.getByText(/Clear all/)).toBeInTheDocument()
   })
 
   it('displays clear all button when any filter is active', () => {

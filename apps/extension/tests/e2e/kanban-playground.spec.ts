@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 
 import { launchWithExtension } from './utils/extension'
@@ -28,7 +29,7 @@ const waitForKanbanEvent = async (
 test.describe('Kanban playground smoke', () => {
   test('creates, edits, moves cards and imports a board', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page: basePage, optionsUrl } = await launchWithExtension(extPath, {
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true

@@ -21,7 +21,7 @@ async def test_protocol_error_log_redacts_tokens():
         await proto.process_request(req, ctx)
     except Exception:
         # process_request swallows and returns MCPResponse; shouldn't raise
-        pass
+        _ = None
     finally:
         logger.remove(sink_id)
 

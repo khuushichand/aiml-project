@@ -144,18 +144,11 @@ export function ActiveSessionsPanel({ onSessionEnded }: ActiveSessionsPanelProps
                       onClick={() => handleEndSession(session)}
                       className="text-destructive hover:text-destructive"
                       disabled={endingSessionId === session.session_id}
+                      loading={endingSessionId === session.session_id}
+                      loadingText="Ending..."
                     >
-                      {endingSessionId === session.session_id ? (
-                        <>
-                          <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
-                          Ending...
-                        </>
-                      ) : (
-                        <>
-                          <XCircle className="h-4 w-4 mr-1" />
-                          End
-                        </>
-                      )}
+                      <XCircle className="h-4 w-4 mr-1" />
+                      End
                     </Button>
                   </TableCell>
                 </TableRow>

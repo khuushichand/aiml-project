@@ -20,6 +20,10 @@ import { PageShell } from "@/components/Common/PageShell"
 import { buildMlxLoadRequest } from "@/utils/build-mlx-load-request"
 import { StatusBanner } from "./StatusBanner"
 import { CollapsibleSection } from "./CollapsibleSection"
+import {
+  deriveAdminGuardFromError,
+  sanitizeAdminErrorMessage
+} from "./admin-error-utils"
 
 const { Title, Text } = Typography
 const { TextArea } = Input
@@ -120,11 +124,9 @@ export const MlxAdminPage: React.FC = () => {
   const [adminGuard, setAdminGuard] = React.useState<"forbidden" | "notFound" | null>(null)
 
   const markAdminGuardFromError = (err: any) => {
-    const msg = String(err?.message || "")
-    if (msg.includes("Request failed: 403")) {
-      setAdminGuard("forbidden")
-    } else if (msg.includes("Request failed: 404")) {
-      setAdminGuard("notFound")
+    const guardState = deriveAdminGuardFromError(err)
+    if (guardState) {
+      setAdminGuard(guardState)
     }
   }
 
@@ -148,7 +150,7 @@ export const MlxAdminPage: React.FC = () => {
         setMaxConcurrent(data.max_concurrent)
       }
     } catch (e: any) {
-      setStatusError(e?.message || "Failed to load MLX status.")
+      setStatusError(sanitizeAdminErrorMessage(e, "Failed to load MLX status."))
       markAdminGuardFromError(e)
     } finally {
       setStatusLoading(false)
@@ -216,7 +218,7 @@ export const MlxAdminPage: React.FC = () => {
       setStatus(data)
       setStatusError(null)
     } catch (e: any) {
-      setStatusError(e?.message || "Failed to load MLX model.")
+      setStatusError(sanitizeAdminErrorMessage(e, "Failed to load MLX model."))
       markAdminGuardFromError(e)
     } finally {
       setActionLoading(false)
@@ -229,7 +231,7 @@ export const MlxAdminPage: React.FC = () => {
       await tldwClient.unloadMlxModel()
       await loadStatus()
     } catch (e: any) {
-      setStatusError(e?.message || "Failed to unload MLX model.")
+      setStatusError(sanitizeAdminErrorMessage(e, "Failed to unload MLX model."))
       markAdminGuardFromError(e)
     } finally {
       setActionLoading(false)
@@ -250,16 +252,23 @@ export const MlxAdminPage: React.FC = () => {
 
   const effectiveState = status?.active ? "active" : "inactive"
   const providerModels = (mlxProvider?.models_info || []) as Array<Record<string, any>>
+  const statusUnavailable = !status && Boolean(statusError)
+  const concurrencyLabel = status?.active
+    ? t("settings:admin.mlxConcurrency", "Concurrent")
+    : t(
+        "settings:admin.mlxConcurrencyWhenInactive",
+        "Configured concurrency (inactive)"
+      )
 
   return (
     <PageShell>
-      <Space direction="vertical" size="large" className="w-full py-6">
+      <Space orientation="vertical" size="large" className="w-full py-6">
         {/* Admin Guard Alert */}
         {adminGuard && (
           <Alert
             type="warning"
             showIcon
-            message={
+            title={
               adminGuard === "forbidden"
                 ? t("settings:admin.adminGuardForbiddenTitle", "Admin access required")
                 : t("settings:admin.adminGuardNotFoundTitle", "Admin APIs not available")
@@ -314,7 +323,7 @@ export const MlxAdminPage: React.FC = () => {
                   code: true
                 },
                 {
-                  label: t("settings:admin.mlxConcurrency", "Concurrent"),
+                  label: concurrencyLabel,
                   value: status?.max_concurrent
                 }
               ]}
@@ -335,10 +344,28 @@ export const MlxAdminPage: React.FC = () => {
                   : t("settings:admin.mlxInactive", "Inactive")
               }
             />
+            {!status?.active && (
+              <Text type="secondary" className="text-xs">
+                {t(
+                  "settings:admin.mlxInactiveConcurrencyHint",
+                  "Concurrency is a configured limit and applies once a model is active."
+                )}
+              </Text>
+            )}
+            {statusUnavailable && (
+              <Alert
+                type="warning"
+                showIcon
+                title={t(
+                  "settings:admin.mlxUnavailableHint",
+                  "MLX controls are temporarily unavailable until status checks succeed."
+                )}
+              />
+            )}
 
             {/* Model Load Card */}
             <Card title={t("settings:admin.mlxLoadTitle", "Load Model")}>
-              <Space direction="vertical" size="middle" className="w-full">
+              <Space orientation="vertical" size="middle" className="w-full">
                 {/* Model Path Input */}
                 <div>
                   <Text strong className="mb-2 block">
@@ -363,11 +390,11 @@ export const MlxAdminPage: React.FC = () => {
                 </div>
 
                 {/* Basic Settings - Always Visible */}
-                <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+                <div className="rounded-lg border border-border p-4">
                   <Text strong className="mb-3 block">
                     {t("settings:admin.mlxBasicSettings", "Basic Settings")}
                   </Text>
-                  <Space direction="vertical" size="small" className="w-full">
+                  <Space orientation="vertical" size="small" className="w-full">
                     {/* Device */}
                     <div className="flex flex-wrap items-center gap-3">
                       <Text className="w-32">
@@ -419,7 +446,7 @@ export const MlxAdminPage: React.FC = () => {
                   title={t("settings:admin.mlxPerformanceSettings", "Performance Settings")}
                   description={t("settings:admin.mlxPerformanceSettingsDesc", "Sequence length, batch size, data type, cache")}
                 >
-                  <Space direction="vertical" size="small" className="w-full">
+                  <Space orientation="vertical" size="small" className="w-full">
                     {/* Max Sequence Length */}
                     <div className="flex items-center gap-3">
                       <Text className="w-36">
@@ -491,7 +518,7 @@ export const MlxAdminPage: React.FC = () => {
                   title={t("settings:admin.mlxAdvancedSettings", "Advanced Settings")}
                   description={t("settings:admin.mlxAdvancedSettingsDesc", "Quantization, tokenizer, prompt template")}
                 >
-                  <Space direction="vertical" size="small" className="w-full">
+                  <Space orientation="vertical" size="small" className="w-full">
                     {/* Quantization */}
                     <div className="flex items-center gap-3">
                       <Text className="w-36">
@@ -585,7 +612,7 @@ export const MlxAdminPage: React.FC = () => {
                   title={t("settings:admin.mlxLoraSettings", "LoRA / Adapter Settings")}
                   description={t("settings:admin.mlxLoraSettingsDesc", "Load fine-tuned adapters")}
                 >
-                  <Space direction="vertical" size="small" className="w-full">
+                  <Space orientation="vertical" size="small" className="w-full">
                     {/* Adapter Path */}
                     <div className="flex items-center gap-3">
                       <Text className="w-36">
@@ -622,7 +649,7 @@ export const MlxAdminPage: React.FC = () => {
                     type="primary"
                     onClick={handleLoadModel}
                     loading={actionLoading}
-                    disabled={!modelPath.trim()}
+                    disabled={!modelPath.trim() || statusLoading || statusUnavailable}
                   >
                     {t("settings:admin.mlxLoadCta", "Load Model")}
                   </Button>
@@ -630,7 +657,7 @@ export const MlxAdminPage: React.FC = () => {
                     danger
                     onClick={handleUnloadModel}
                     loading={actionLoading}
-                    disabled={!status?.active}
+                    disabled={!status?.active || statusLoading || statusUnavailable}
                   >
                     {t("settings:admin.mlxUnloadCta", "Unload Model")}
                   </Button>
@@ -639,7 +666,7 @@ export const MlxAdminPage: React.FC = () => {
                 {status?.active && (
                   <Alert
                     type="info"
-                    message={t(
+                    title={t(
                       "settings:admin.mlxAlreadyLoaded",
                       "A model is currently loaded. Unload it first or load a different model to replace it."
                     )}
@@ -655,7 +682,9 @@ export const MlxAdminPage: React.FC = () => {
               description={t("settings:admin.mlxProviderDesc", `${providerModels.length} model(s) configured`)}
             >
               {loadingProvider ? (
-                <Text type="secondary">{t("common:loading", "Loading...")}</Text>
+                <Text type="secondary">
+                  {t("common:loading.title", "Loading...")}
+                </Text>
               ) : providerModels.length > 0 ? (
                 <List
                   size="small"

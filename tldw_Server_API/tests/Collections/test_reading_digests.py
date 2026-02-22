@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.Collections.reading_digest_jobs import (
     READING_DIGEST_DOMAIN,
     READING_DIGEST_JOB_TYPE,
+    _normalize_suggestions_config,
     _score_suggestion_candidate,
     handle_reading_digest_job,
     reading_digest_queue,
@@ -140,6 +141,27 @@ def test_reading_digest_suggestion_scoring():
     score_old, _ = _score_suggestion_candidate(old, {"ai"}, now)
     assert score_recent > score_old
     assert "favorite" in reasons
+
+
+def test_reading_digest_suggestions_flags_accept_y():
+    cfg = _normalize_suggestions_config(
+        {
+            "suggestions": {
+                "enabled": "y",
+                "include_read": "y",
+                "include_archived": "y",
+                "limit": 2,
+                "status": ["saved"],
+            }
+        }
+    )
+
+    assert cfg is not None
+    assert cfg["enabled"] is True
+    assert cfg["include_read"] is True
+    assert cfg["include_archived"] is True
+    assert "read" in cfg["status"]
+    assert "archived" in cfg["status"]
 
 
 def test_reading_digest_schedule_crud(client_with_user):

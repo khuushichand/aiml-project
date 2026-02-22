@@ -50,7 +50,7 @@ def test_membership_policy_summary(auth_headers) -> None:
                 try:
                     await conn.commit()
                 except Exception:
-                    pass
+                    _ = None
             return int(org["id"])
 
         org_id = _run_async(_setup())

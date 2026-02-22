@@ -53,6 +53,41 @@ async def test_require_admin_for_remote_allows_admin_role(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_require_admin_for_remote_rejects_boolean_admin_without_claims(monkeypatch):
+    async def fake_get_auth_principal(_request):
+        return AuthPrincipal(kind="user", user_id=999, roles=["user"], permissions=[], is_admin=True)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_auth_principal",
+        fake_get_auth_principal,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await setup_deps._require_admin_for_remote(_make_request())
+
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_require_admin_for_remote_allows_system_configure_permission(monkeypatch):
+    async def fake_get_auth_principal(_request):
+        return AuthPrincipal(
+            kind="user",
+            user_id=999,
+            roles=["user"],
+            permissions=["system.configure"],
+            is_admin=False,
+        )
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_auth_principal",
+        fake_get_auth_principal,
+    )
+
+    await setup_deps._require_admin_for_remote(_make_request())
+
+
+@pytest.mark.asyncio
 async def test_require_local_setup_access_calls_admin_guard(monkeypatch):
     called = {"value": False}
 

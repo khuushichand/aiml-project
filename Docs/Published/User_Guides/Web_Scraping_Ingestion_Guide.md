@@ -186,6 +186,64 @@ Example flow:
 2. Extract result URLs.
 3. Submit those URLs to `POST /api/v1/media/process-web-scraping` with `scrape_method: "Individual URLs"`.
 
+### 4chan engine (`engine: "4chan"`)
+
+Use the `4chan` engine when you want thread-level discovery from selected boards.
+
+Supported request fields:
+
+- `engine`: must be `4chan`.
+- `boards`: optional list of board names (example: `["g", "tv", "pol"]`).
+  - Default: `["g", "tv", "pol"]` unless overridden by server config/env.
+- `max_threads_per_board`: optional scan cap for live catalog threads per board.
+  - Range: `1..1000`.
+  - Default: `250` (or server override).
+- `include_archived`: include archived thread scan per board.
+  - Default: `false`.
+- `max_archived_threads_per_board`: optional scan cap for archived threads per board.
+  - Range: `1..500`.
+  - Default: `min(max_threads_per_board, 50)` (or server override).
+- `result_count`: optional global cap on the final number of results returned.
+  - This limit is applied **after** per-board scans and deduplication/merge, not per-board. Unless explicitly specified as a per-board override, `result_count` truncates the combined global result set across all boards.
+
+Behavior notes:
+
+- Per-board scans (live catalog and, optionally, archived threads) run independently for each board.
+- Results from all boards are then combined and deduped globally by `(board, thread_no)`: when a duplicate exists, non-archived items are preferred and metadata is merged from both sources.
+- After deduplication, the global result set is truncated to `result_count`. Because this truncation happens after the cross-board merge, the final count may include threads from any combination of the requested boards.
+- Board failures are fail-soft: one board can fail while others still return results.
+- Warning metadata is returned when a board fails; if all boards fail, result set is empty and `error` is populated.
+
+Minimal example:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/research/websearch \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "query": "rust memory safety",
+        "engine": "4chan",
+        "result_count": 5
+      }'
+```
+
+Advanced example (board + archive tuning):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/research/websearch \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "query": "rust ownership borrowing",
+        "engine": "4chan",
+        "result_count": 20,
+        "boards": ["g", "tv"],
+        "max_threads_per_board": 300,
+        "include_archived": true,
+        "max_archived_threads_per_board": 80
+      }'
+```
+
 ## Request knobs (what you can tweak)
 
 ### `/process-web-scraping` (WebScrapingRequest)

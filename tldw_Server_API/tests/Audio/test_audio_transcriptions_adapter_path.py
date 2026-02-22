@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -27,6 +28,7 @@ def test_audio_transcriptions_uses_adapter_base_dir(
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", TEST_API_KEY)
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
 
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -57,7 +59,7 @@ def test_audio_transcriptions_uses_adapter_base_dir(
         ):
             assert hotwords is None
             assert base_dir is not None
-            assert base_dir == audio_ep.PathLib(audio_path).parent
+            assert base_dir == Path(audio_path).parent
             return {
                 "text": "stub transcript",
                 "language": language or "en",
@@ -110,3 +112,146 @@ def test_audio_transcriptions_uses_adapter_base_dir(
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["text"] == "stub transcript"
+
+
+def test_audio_transcriptions_returns_503_when_provider_disabled(
+    monkeypatch,
+    bypass_api_limits,
+):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", TEST_API_KEY)
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
+
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter as stt_adapter
+
+    async def _fake_get_request_user() -> User:
+        return User(id=1, username="single_user")
+
+    async def _allow_job(*_args, **_kwargs):
+        return True, None
+
+    async def _noop_async(*_args, **_kwargs):
+        return None
+
+    class _StubRegistry:
+        def resolve_provider_for_model(self, _model):
+            return "external", "external:stub", None
+
+        def list_capabilities(self, include_disabled=True):
+            assert include_disabled is True
+            return [{"provider": "external", "availability": "disabled", "capabilities": None}]
+
+        def get_adapter(self, _provider):
+            pytest.fail("get_adapter should not be called for disabled providers")
+
+    monkeypatch.setattr(audio_ep, "can_start_job", _allow_job)
+    monkeypatch.setattr(audio_ep, "increment_jobs_started", _noop_async)
+    monkeypatch.setattr(audio_ep, "finish_job", _noop_async)
+    monkeypatch.setattr(audio_ep, "check_daily_minutes_allow", _allow_job)
+    monkeypatch.setattr(audio_ep, "add_daily_minutes", _noop_async)
+    monkeypatch.setattr(stt_adapter, "get_stt_provider_registry", lambda: _StubRegistry())
+    monkeypatch.setattr(atlib, "convert_to_wav", lambda path, *args, **kwargs: path)
+
+    app = FastAPI()
+    app.dependency_overrides[get_request_user] = _fake_get_request_user
+    app.include_router(audio_router, prefix="/api/v1/audio")
+
+    with bypass_api_limits(app), TestClient(app) as client:
+        wav_bytes = _make_wav_bytes()
+        headers = {"X-API-KEY": TEST_API_KEY}
+        files = {"file": ("sample.wav", io.BytesIO(wav_bytes), "audio/wav")}
+        data = {"model": "external:stub", "response_format": "json"}
+        resp = client.post(
+            "/api/v1/audio/transcriptions",
+            headers=headers,
+            files=files,
+            data=data,
+        )
+        if resp.status_code == 404:
+            pytest.skip("audio/transcriptions endpoint not mounted in this build")
+        assert resp.status_code == 503, resp.text
+        detail = resp.json().get("detail") or {}
+        assert detail.get("status") == "provider_unavailable"
+        assert detail.get("provider") == "external"
+        assert detail.get("availability") == "disabled"
+
+
+def test_audio_transcriptions_prevents_cross_provider_fallback(
+    monkeypatch,
+    bypass_api_limits,
+):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", TEST_API_KEY)
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
+
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter as stt_adapter
+
+    async def _fake_get_request_user() -> User:
+        return User(id=1, username="single_user")
+
+    async def _allow_job(*_args, **_kwargs):
+        return True, None
+
+    async def _noop_async(*_args, **_kwargs):
+        return None
+
+    class _AdapterName:
+        value = "faster-whisper"
+
+    class _MismatchedAdapter:
+        name = _AdapterName()
+
+        def transcribe_batch(self, *args, **kwargs):
+            pytest.fail("transcribe_batch should not be called for mismatched provider fallback")
+
+    class _StubRegistry:
+        def resolve_provider_for_model(self, _model):
+            return "external", "external:stub", None
+
+        def list_capabilities(self, include_disabled=True):
+            assert include_disabled is True
+            return [{"provider": "external", "availability": "enabled", "capabilities": {"streaming": True}}]
+
+        def get_adapter(self, _provider):
+            return _MismatchedAdapter()
+
+    monkeypatch.setattr(audio_ep, "can_start_job", _allow_job)
+    monkeypatch.setattr(audio_ep, "increment_jobs_started", _noop_async)
+    monkeypatch.setattr(audio_ep, "finish_job", _noop_async)
+    monkeypatch.setattr(audio_ep, "check_daily_minutes_allow", _allow_job)
+    monkeypatch.setattr(audio_ep, "add_daily_minutes", _noop_async)
+    monkeypatch.setattr(stt_adapter, "get_stt_provider_registry", lambda: _StubRegistry())
+    monkeypatch.setattr(atlib, "convert_to_wav", lambda path, *args, **kwargs: path)
+
+    app = FastAPI()
+    app.dependency_overrides[get_request_user] = _fake_get_request_user
+    app.include_router(audio_router, prefix="/api/v1/audio")
+
+    with bypass_api_limits(app), TestClient(app) as client:
+        wav_bytes = _make_wav_bytes()
+        headers = {"X-API-KEY": TEST_API_KEY}
+        files = {"file": ("sample.wav", io.BytesIO(wav_bytes), "audio/wav")}
+        data = {"model": "external:stub", "response_format": "json"}
+        resp = client.post(
+            "/api/v1/audio/transcriptions",
+            headers=headers,
+            files=files,
+            data=data,
+        )
+        if resp.status_code == 404:
+            pytest.skip("audio/transcriptions endpoint not mounted in this build")
+        assert resp.status_code == 503, resp.text
+        detail = resp.json().get("detail") or {}
+        assert detail.get("status") == "provider_unavailable"
+        assert detail.get("provider") == "external"
+        assert detail.get("resolved_provider") == "faster-whisper"

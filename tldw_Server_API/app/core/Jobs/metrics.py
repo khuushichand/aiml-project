@@ -5,6 +5,7 @@ import random
 from datetime import datetime
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 def _parse_buckets(env_key: str, default: list[float]) -> list[float]:
@@ -250,7 +251,7 @@ def observe_queue_latency(job: dict, acquired_at: datetime | None, created_at: d
     labels = _labels(job)
     # Optional exemplars: attach sample of trace/request IDs as labels at a low rate
     try:
-        if os.getenv("JOBS_METRICS_EXEMPLARS", "").lower() in {"1","true","yes","y","on"}:
+        if is_truthy(os.getenv("JOBS_METRICS_EXEMPLARS")):
             rate = float(os.getenv("JOBS_METRICS_EXEMPLAR_SAMPLING", "0.01") or "0.01")
             if random.random() < max(0.0, min(1.0, rate)):
                 if job.get("trace_id"):
@@ -259,8 +260,8 @@ def observe_queue_latency(job: dict, acquired_at: datetime | None, created_at: d
                 if job.get("request_id"):
                     labels = dict(labels)
                     labels["request_id"] = str(job.get("request_id"))
-    except Exception:
-        pass
+    except Exception as label_error:
+        logger.debug("Failed to enrich queue latency metric labels", exc_info=label_error)
     get_metrics_registry().observe("jobs.queue_latency_seconds", latency, labels)
 
 
@@ -279,7 +280,7 @@ def observe_duration(job: dict, started_at: datetime | None, completed_at: datet
     duration = max(0.0, (completed_at - start).total_seconds())
     labels = _labels(job)
     try:
-        if os.getenv("JOBS_METRICS_EXEMPLARS", "").lower() in {"1","true","yes","y","on"}:
+        if is_truthy(os.getenv("JOBS_METRICS_EXEMPLARS")):
             rate = float(os.getenv("JOBS_METRICS_EXEMPLAR_SAMPLING", "0.01") or "0.01")
             if random.random() < max(0.0, min(1.0, rate)):
                 if job.get("trace_id"):
@@ -288,8 +289,8 @@ def observe_duration(job: dict, started_at: datetime | None, completed_at: datet
                 if job.get("request_id"):
                     labels = dict(labels)
                     labels["request_id"] = str(job.get("request_id"))
-    except Exception:
-        pass
+    except Exception as label_error:
+        logger.debug("Failed to enrich job duration metric labels", exc_info=label_error)
     get_metrics_registry().observe("jobs.duration_seconds", duration, labels)
 
 

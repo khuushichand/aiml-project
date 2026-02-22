@@ -1,0 +1,1469 @@
+{
+  "formError_noModel": {
+    "message": "请选择一个模型"
+  },
+  "formError_noEmbeddingModel": {
+    "message": "请在设置>RAG页面设置一个文本嵌入模型"
+  },
+  "form_textarea_placeholder": {
+    "message": "输入一条消息..."
+  },
+  "form_webSearch_on": {
+    "message": "开"
+  },
+  "form_webSearch_off": {
+    "message": "关"
+  },
+  "tooltip_searchInternet": {
+    "message": "搜索互联网"
+  },
+  "tooltip_speechToText": {
+    "message": "语音到文本"
+  },
+  "tooltip_uploadImage": {
+    "message": "上传图片"
+  },
+  "tooltip_stopStreaming": {
+    "message": "停止流式传输"
+  },
+  "tooltip_knowledge": {
+    "message": "知识"
+  },
+  "tooltip_vision": {
+    "message": "[实验性] 视觉聊天"
+  },
+  "tooltip_clearContext": {
+    "message": "清除上下文"
+  },
+  "tooltip_speechToTextServer": {
+    "message": "通过 tldw 服务器听写"
+  },
+  "tooltip_speechToTextBrowser": {
+    "message": "通过浏览器语音识别听写"
+  },
+  "tooltip_speechToTextDetails": {
+    "message": "使用 {{model}} · {{task}} · {{format}}。在 设置 → 通用 → 语音转文本 中配置。"
+  },
+  "tooltip_uploadDocuments": {
+    "message": "上传文档（测试版）"
+  },
+  "sendWhenEnter": {
+    "message": "按Enter发送"
+  },
+  "welcome": {
+    "message": "你好！今天我能帮你什么？"
+  },
+  "useOCR": {
+    "message": "从图片中提取文字（OCR）"
+  },
+  "tips_title": {
+    "message": "提示"
+  },
+  "tips_quickIngest": {
+    "message": "使用快速导入添加文档和网页。"
+  },
+  "tips_pickModelPrompt": {
+    "message": "在页眉选择模型和提示词。"
+  },
+  "tips_startChatFocus": {
+    "message": "连接后，“开始聊天”会聚焦输入框。"
+  },
+  "tldwState_searching": {
+    "message": "正在搜索您的 tldw server"
+  },
+  "tldwState_running": {
+    "message": "tldw 正在运行"
+  },
+  "tldwState_notRunning": {
+    "message": "无法连接到 tldw server"
+  },
+  "tldwState_connectionError": {
+    "message": "看起来您遇到了连接错误。请参阅这<anchor>文档</anchor>进行故障排除。"
+  },
+  "tldwState_openTldwSettings": {
+    "message": "打开 tldw 设置"
+  },
+  "tldwState_cancelSearch": {
+    "message": "取消搜索"
+  },
+  "tldwState_connectionFailedWithCode": {
+    "message": "连接失败（HTTP {{code}}）"
+  },
+  "tldwState_connectionFailed": {
+    "message": "连接失败"
+  },
+  "tldwState_errorDetailsLabel": {
+    "message": "详情："
+  },
+  "tldwState_title": {
+    "message": "正在等待你的 tldw 服务器"
+  },
+  "tldwState_subtitle": {
+    "message": "正在 ping {{host}} 以验证连接。"
+  },
+  "tldwState_missing": {
+    "message": "未配置服务器 URL"
+  },
+  "tldwState_noServer": {
+    "message": "添加你的 tldw 服务器以开始聊天。"
+  },
+  "tldwState_connectedSubtitle": {
+    "message": "已连接 {{host}}。准备好后开始聊天。"
+  },
+  "tldwState_errorSubtitle": {
+    "message": "仍无法连接 {{host}}。请重试或更新服务器设置。"
+  },
+  "tldwState_openSettings": {
+    "message": "打开设置"
+  },
+  "tldwState_changeServer": {
+    "message": "更换服务器"
+  },
+  "tldwState_elapsed": {
+    "message": "检查中… {{seconds}} 秒"
+  },
+  "tldwState_connectedHint": {
+    "message": "已连接 {{host}}。"
+  },
+  "tldwState_lastChecked": {
+    "message": "{{seconds}} 秒前检查"
+  },
+  "tldwState_recheck": {
+    "message": "重新检查"
+  },
+  "tldwState_errorToast": {
+    "message": "无法连接 {{host}}"
+  },
+  "tldwState_missingHelp": {
+    "message": "打开 设置 → tldw Server 添加 URL，或连接到选项页。"
+  },
+  "tldwState_troubleshoot": {
+    "message": "确认服务器运行且浏览器可访问后，再从选项页重试。"
+  },
+  "errors_privateModeDescription": {
+    "message": "Firefox 隐私模式不支持保存聊天。临时聊天默认开启。后续会改进。"
+  },
+  "tts_playErrorTitle": {
+    "message": "错误"
+  },
+  "tts_playErrorDescription": {
+    "message": "播放音频时出错"
+  },
+  "tts_browserInfoTitle": {
+    "message": "浏览器 TTS 使用系统音频"
+  },
+  "tts_browserInfoDescription": {
+    "message": "浏览器 TTS 使用系统合成器播放，不提供可下载的音频文件。使用下方的片段控件，或切换提供商以获得曲目列表和播放器。"
+  },
+  "tts_unsupportedProviderTitle": {
+    "message": "不支持的 TTS 提供商"
+  },
+  "tts_unsupportedProviderDescription": {
+    "message": "提供商“{{provider}}”暂未在 Playground 播放器中支持。"
+  },
+  "tts_unsupportedFormatTitle": {
+    "message": "不支持的音频格式"
+  },
+  "tts_unsupportedFormatDescription": {
+    "message": "返回格式“{{format}}”不受支持，将回退为 MP3。"
+  },
+  "tts_elevenLabsMissingTitle": {
+    "message": "ElevenLabs 需要 API 密钥"
+  },
+  "tts_elevenLabsMissingBody": {
+    "message": "在设置中添加您的 ElevenLabs API 密钥以加载音色和模型。"
+  },
+  "tts_elevenLabsUnavailableTitle": {
+    "message": "ElevenLabs 音色不可用"
+  },
+  "tts_elevenLabsUnavailableBody": {
+    "message": "无法加载音色或模型。请检查您的 API 密钥并重试。"
+  },
+  "tts_elevenLabsMissingCta": {
+    "message": "在设置中设置 API 密钥"
+  },
+  "tts_generateErrorTitle": {
+    "message": "生成音频时出错"
+  },
+  "tts_generateErrorDescription": {
+    "message": "生成 TTS 音频时出现问题。"
+  },
+  "tts_sampleText": {
+    "message": "插入示例文本"
+  },
+  "tts_playHelper": {
+    "message": "播放会使用所选的提供商、音色和语速。"
+  },
+  "tts_playDisabledNoText": {
+    "message": "输入文本以启用播放。"
+  },
+  "tts_playDisabledTtsOff": {
+    "message": "请先在上方启用文本转语音以播放音频。"
+  },
+  "tts_playDisabledElevenLabs": {
+    "message": "添加 ElevenLabs API 密钥、音色和模型以启用播放。"
+  },
+  "tts_stopDisabled": {
+    "message": "音频开始播放后才能停止。"
+  },
+  "tts_providerChangeHelper": {
+    "message": "打开下方的提供商选择器，在浏览器、tldw、OpenAI 或 Supersonic 之间切换。"
+  },
+  "tts_changeProvider": {
+    "message": "更换提供商"
+  },
+  "tts_title": {
+    "message": "TTS 游乐场"
+  },
+  "tts_subtitle": {
+    "message": "试用文本转语音并调整提供商、模型和音色。"
+  },
+  "tts_currentProvider": {
+    "message": "当前提供商"
+  },
+  "tts_settingsIntro": {
+    "message": "调整你的 TTS 提供商、模型和音色。这些设置会在从聊天或媒体播放音频时复用。"
+  },
+  "tts_providerCapabilities": {
+    "message": "提供商能力"
+  },
+  "tts_voicesPreview": {
+    "message": "服务器音色"
+  },
+  "tts_providerDetails": {
+    "message": "查看提供商原始配置"
+  },
+  "tts_providerDetailsTitle": {
+    "message": "提供商详情"
+  },
+  "tts_inputLabel": {
+    "message": "输入文本以听到朗读。"
+  },
+  "tts_inputPlaceholder": {
+    "message": "在此输入或粘贴文本，然后点击播放。"
+  },
+  "tts_play": {
+    "message": "播放"
+  },
+  "tts_playing": {
+    "message": "播放中…"
+  },
+  "tts_stop": {
+    "message": "停止"
+  },
+  "tts_browserSegmentsTitle": {
+    "message": "浏览器 TTS 片段"
+  },
+  "tts_browserSegmentsHelp": {
+    "message": "使用系统音频排队片段或播放单个片段。"
+  },
+  "tts_browserQueueAll": {
+    "message": "全部排队"
+  },
+  "tts_browserQueueFromHere": {
+    "message": "从此处排队"
+  },
+  "tts_browserSegmentPlay": {
+    "message": "播放片段"
+  },
+  "tts_browserStatusSpeaking": {
+    "message": "正在朗读片段 {{current}}/{{total}}"
+  },
+  "tts_browserStatusPaused": {
+    "message": "已暂停"
+  },
+  "tts_browserPause": {
+    "message": "暂停"
+  },
+  "tts_browserResume": {
+    "message": "继续"
+  },
+  "tts_tldwStatusOnline": {
+    "message": "检测到 tldw 服务器音频 API（audio/speech）"
+  },
+  "tts_tldwStatusOffline": {
+    "message": "未检测到音频 API；请检查 tldw 服务器版本。"
+  },
+  "tts_tldwWarningTitle": {
+    "message": "未检测到 tldw audio/speech API"
+  },
+  "tts_tldwWarningBody": {
+    "message": "确保 tldw_server 版本包含 /api/v1/audio/speech，并且扩展已使用有效 API 密钥连接。"
+  },
+  "tts_speechErrorTitle": {
+    "message": "听写失败"
+  },
+  "tts_speechErrorBody": {
+    "message": "转写请求失败。请检查 tldw 服务器状态。"
+  },
+  "tts_speechNoText": {
+    "message": "转写未返回任何文本。"
+  },
+  "tts_speechMicError": {
+    "message": "无法访问麦克风。请检查浏览器权限并重试。"
+  },
+  "tts_savedToNotes": {
+    "message": "转写已保存为笔记。"
+  },
+  "empty_title": {
+    "message": "开始新聊天"
+  },
+  "empty_description": {
+    "message": "在这里尝试不同模型、提示词和知识来源。"
+  },
+  "empty_demoDescription": {
+    "message": "你处于演示模式——试着提问看看助手如何回应。稍后可以连接自己的 tldw 服务器。"
+  },
+  "empty_example1": {
+    "message": "提问后，把想讨论的文档或网页拖进来。"
+  },
+  "empty_example2": {
+    "message": "使用快速导入添加转写或笔记，然后在聊天中引用。"
+  },
+  "empty_example3": {
+    "message": "Try different prompts or models, or open Model Playground to compare answers."
+  },
+  "empty_primaryCta": {
+    "message": "开始聊天"
+  },
+  "empty_secondaryCta": {
+    "message": "打开服务器设置"
+  },
+  "drop_hint": {
+    "message": "拖放文件以附加到消息"
+  },
+  "drop_readySingle": {
+    "message": "{{name}} 已准备发送"
+  },
+  "drop_readyMultiple": {
+    "message": "{{count}} 个文件已准备发送"
+  },
+  "drop_unsupported": {
+    "message": "该文件类型不受支持。请尝试图片或文本文件。"
+  },
+  "drop_defaultFileName": {
+    "message": "文件"
+  },
+  "drop_imageOnly": {
+    "message": "目前这里只能拖放图片。"
+  },
+  "drop_imageHint": {
+    "message": "拖放图片以添加到消息"
+  },
+  "drop_overlayInstruction": {
+    "message": "拖放图片以附加到下一条回复"
+  },
+  "aria_chatTranscript": {
+    "message": "聊天消息"
+  },
+  "more_history": {
+    "message": "聊天保存"
+  },
+  "more_searchKnowledge": {
+    "message": "搜索与 RAG"
+  },
+  "more_voice": {
+    "message": "更多语音选项"
+  },
+  "more_uploads": {
+    "message": "上传与导入"
+  },
+  "fileRetrievalEnabled": {
+    "message": "为文档启用 RAG"
+  },
+  "stt_title": {
+    "message": "STT 游乐场"
+  },
+  "stt_subtitle": {
+    "message": "试用转写模型，进行更长的听写会话，并将转写保存到笔记。"
+  },
+  "stt_currentModelLabel": {
+    "message": "当前转写模型"
+  },
+  "stt_defaultModel": {
+    "message": "使用设置中的默认值"
+  },
+  "stt_settingsNotice": {
+    "message": "语言、任务、响应格式、分段与提示词将复用设置中的语音转文本默认值。"
+  },
+  "stt_sessionMode": {
+    "message": "会话模式"
+  },
+  "stt_modeLong": {
+    "message": "长时运行（分段录音）"
+  },
+  "stt_modeShort": {
+    "message": "短听写（单段录音）"
+  },
+  "stt_languageTag": {
+    "message": "语言"
+  },
+  "stt_taskTag": {
+    "message": "任务"
+  },
+  "stt_formatTag": {
+    "message": "格式"
+  },
+  "stt_segmentationEnabled": {
+    "message": "已启用分段"
+  },
+  "stt_recordButton": {
+    "message": "录制"
+  },
+  "stt_stopButton": {
+    "message": "停止"
+  },
+  "stt_startTooltip": {
+    "message": "开始录音进行转写"
+  },
+  "stt_stopTooltip": {
+    "message": "停止并发送到服务器"
+  },
+  "stt_transcribingButton": {
+    "message": "转写中..."
+  },
+  "stt_transcribingTooltip": {
+    "message": "正在转写音频..."
+  },
+  "stt_transcribingPlaceholder": {
+    "message": "正在转写音频..."
+  },
+  "stt_historyTitle": {
+    "message": "转写历史"
+  },
+  "stt_clearAll": {
+    "message": "全部清除"
+  },
+  "stt_emptyHistory": {
+    "message": "开始录音即可在此看到转写。你可以将任何条目保存到笔记。"
+  },
+  "stt_saveToNotes": {
+    "message": "保存到笔记"
+  },
+  "stt_delete": {
+    "message": "删除"
+  },
+  "stt_durationTag": {
+    "message": "时长"
+  },
+  "stt_modelTag": {
+    "message": "模型"
+  },
+  "stt_currentTranscriptTitle": {
+    "message": "当前会话转写"
+  },
+  "stt_currentTranscriptPlaceholder": {
+    "message": "录音时会在这里显示实时转写。"
+  },
+  "actions_temporaryOn": {
+    "message": "临时聊天（不保存）"
+  },
+  "actions_temporaryOff": {
+    "message": "保存聊天到历史记录"
+  },
+  "actions_webSearchOn": {
+    "message": "网页搜索已开启"
+  },
+  "actions_webSearchOff": {
+    "message": "网页搜索已关闭"
+  },
+  "actions_speechStart": {
+    "message": "开始听写"
+  },
+  "actions_speechStop": {
+    "message": "停止听写"
+  },
+  "actions_streamStart": {
+    "message": "实时字幕"
+  },
+  "actions_streamStop": {
+    "message": "停止字幕"
+  },
+  "actions_visionOn": {
+    "message": "视觉模式开启"
+  },
+  "actions_visionOff": {
+    "message": "视觉模式关闭"
+  },
+  "actions_upload": {
+    "message": "附加图片"
+  },
+  "actions_ingest": {
+    "message": "快速导入"
+  },
+  "actions_ingestDisabled": {
+    "message": "连接你的 tldw 服务器以导入。"
+  },
+  "actions_ingestHint": {
+    "message": "使用高级选项上传 URL 或文件。"
+  },
+  "actions_ingestSub": {
+    "message": "使用 URL/文件；下载或存储。"
+  },
+  "actions_streamErrorTitle": {
+    "message": "实时字幕不可用"
+  },
+  "composer_toolsButton": {
+    "message": "+工具"
+  },
+  "composer_queuedBanner_title": {
+    "message": "离线排队"
+  },
+  "composer_queuedBanner_body": {
+    "message": "我们会暂存这些消息，等你的 tldw 服务器连接后再发送。"
+  },
+  "composer_queuedBanner_sendNow": {
+    "message": "发送队列消息"
+  },
+  "composer_queuedBanner_clear": {
+    "message": "清空队列"
+  },
+  "composer_coreTools": {
+    "message": "对话选项"
+  },
+  "composer_captureTools": {
+    "message": "捕获与辅助工具"
+  },
+  "composer_actions": {
+    "message": "发送选项"
+  },
+  "composer_moreTools": {
+    "message": "更多工具"
+  },
+  "composer_scrollToLatest": {
+    "message": "滚动到最新消息"
+  },
+  "composer_submitAria": {
+    "message": "发送消息"
+  },
+  "composer_openModelSettings": {
+    "message": "打开当前聊天设置"
+  },
+  "composer_stopStreaming": {
+    "message": "停止流式回复"
+  },
+  "composer_connectionPlaceholder": {
+    "message": "在设置中连接 tldw 服务器以发送消息并查看媒体。"
+  },
+  "composer_connectNotice": {
+    "message": "在设置中连接 tldw 服务器以发送消息并查看媒体。"
+  },
+  "composer_connectionChipDisconnected": {
+    "message": "服务器：未连接"
+  },
+  "composer_contextLabel": {
+    "message": "上下文："
+  },
+  "composer_contextKnowledgeEmpty": {
+    "message": "未选择知识"
+  },
+  "composer_contextTabs": {
+    "message": "{{count}} 个标签页"
+  },
+  "composer_contextFiles": {
+    "message": "{{count}} 个文件"
+  },
+  "composer_contextMedia": {
+    "message": "媒体与笔记"
+  },
+  "composer_contextMediaHint": {
+    "message": "附加会影响回复的媒体与笔记。"
+  },
+  "composer_contextMediaSelected": {
+    "message": "媒体或笔记"
+  },
+  "composer_contextMediaEmpty": {
+    "message": "尚未选择媒体与笔记。"
+  },
+  "composer_addKnowledge": {
+    "message": "添加媒体与笔记"
+  },
+  "composer_contextTabsTitle": {
+    "message": "上下文中的标签页"
+  },
+  "composer_contextTabsHint": {
+    "message": "查看或移除已引用的标签页，或从已打开的标签页中添加更多。"
+  },
+  "composer_contextManager": {
+    "message": "上下文管理"
+  },
+  "composer_contextManagerTitle": {
+    "message": "上下文管理"
+  },
+  "composer_contextKnowledge": {
+    "message": "上下文与知识"
+  },
+  "composer_contextKnowledgeClose": {
+    "message": "关闭上下文与知识"
+  },
+  "composer_knowledgeSearch": {
+    "message": "知识搜索"
+  },
+  "composer_knowledgeSearchClose": {
+    "message": "关闭知识搜索"
+  },
+  "composer_persistence_ephemeral": {
+    "message": "不保存到历史记录；关闭此标签页后会清除。"
+  },
+  "composer_persistence_local": {
+    "message": "仅保存在此浏览器。"
+  },
+  "composer_persistence_server": {
+    "message": "本地+服务器保存"
+  },
+  "composer_persistence_ephemeralPill": {
+    "message": "临时"
+  },
+  "composer_persistence_localPill": {
+    "message": "仅本地"
+  },
+  "composer_persistence_serverPill": {
+    "message": "本地 + 服务器"
+  },
+  "composer_ephemeralLabel": {
+    "message": "临时"
+  },
+  "composer_savedLabel": {
+    "message": "已保存"
+  },
+  "composer_persistence_saveToServer": {
+    "message": "同时将此聊天保存到服务器"
+  },
+  "composer_persistence_connectToSave": {
+    "message": "连接服务器以在那里保存聊天。"
+  },
+  "composer_persistence_serverDefaultTitle": {
+    "message": "扩展聊天"
+  },
+  "composer_persistence_serverSavedTitle": {
+    "message": "聊天已保存到服务器"
+  },
+  "composer_persistence_serverSaved": {
+    "message": "此聊天后续消息将同步到你的 tldw 服务器。"
+  },
+  "composer_persistence_serverCharacterRequired": {
+    "message": "无法在服务器上找到或创建默认助手角色。请在角色页面重试。"
+  },
+  "composer_connectToSend": {
+    "message": "在设置中连接 tldw 服务器以发送消息并查看媒体。"
+  },
+  "composer_compareTag": {
+    "message": "对比"
+  },
+  "composer_compareLabel": {
+    "message": "对比模式"
+  },
+  "composer_compareButton": {
+    "message": "对比模型"
+  },
+  "composer_compareButtonActive": {
+    "message": "对比：{{count}} 个模型"
+  },
+  "composer_compareButtonOn": {
+    "message": "已启用对比"
+  },
+  "composer_compareSettingsTitle": {
+    "message": "对比设置"
+  },
+  "composer_compareSettingsToggle": {
+    "message": "启用对比模式"
+  },
+  "composer_compareSettingsToggleHint": {
+    "message": "将下一条消息发送给多个模型。"
+  },
+  "composer_compareNoneSelected": {
+    "message": "未选择用于对比的模型"
+  },
+  "composer_compareSingle": {
+    "message": "正在对比 1 个模型"
+  },
+  "composer_compareMany": {
+    "message": "正在对比 {{count}} 个模型"
+  },
+  "composer_compareActiveSummary": {
+    "message": "下一条消息的活动模型：{{label}}"
+  },
+  "composer_compareModelPickerLabel": {
+    "message": "选择模型"
+  },
+  "composer_compareModelPickerPlaceholder": {
+    "message": "选择要对比的模型"
+  },
+  "composer_compareActiveModelsLabel": {
+    "message": "活动模型"
+  },
+  "composer_compareActiveModelsHint": {
+    "message": "下一条消息将发送给每个活动模型。"
+  },
+  "composer_compareSendToModels": {
+    "message": "发送给 {{count}} 个模型"
+  },
+  "composer_compareMaxModelsTitle": {
+    "message": "已达比较上限"
+  },
+  "composer_compareMaxModels": {
+    "message": "每次最多可比较 {{limit}} 个模型。"
+  },
+  "composer_compareMaxModelsTrimmed": {
+    "message": "每次比较限制为 {{limit}} 个模型。使用前 {{limit}} 个选定的模型。"
+  },
+  "composer_compareMaxLabel": {
+    "message": "每次最大模型数"
+  },
+  "composer_compareMaxHelper": {
+    "message": "已选择 {{current}} / {{limit}}"
+  },
+  "composer_compareSelectedLabel": {
+    "message": "选为答案："
+  },
+  "composer_compareContinueHint": {
+    "message": "用所选模型继续此聊天。"
+  },
+  "composer_compareContinue": {
+    "message": "用此模型继续"
+  },
+  "composer_compareThreadShared": {
+    "message": "你（共享）"
+  },
+  "composer_compareBulkSplitSuccess": {
+    "message": "已创建 {{count}} 个聊天"
+  },
+  "composer_compareBulkSplitPartialFail": {
+    "message": "未能创建 {{count}} 个聊天"
+  },
+  "composer_validationCompareSelectModelsInline": {
+    "message": "至少选择一个模型用于对比模式。"
+  },
+  "speech_title": {
+    "message": "语音游乐场"
+  },
+  "speech_subtitle": {
+    "message": "在一个地方录音、编辑转写并合成语音。"
+  },
+  "speech_modeLabel": {
+    "message": "模式"
+  },
+  "speech_modeRoundTrip": {
+    "message": "往返"
+  },
+  "speech_modeSpeak": {
+    "message": "说话"
+  },
+  "speech_modeListen": {
+    "message": "聆听"
+  },
+  "speech_modeHint": {
+    "message": "会记住你在此设备上的上次模式。"
+  },
+  "speech_recordingWaveform": {
+    "message": "实时录音波形"
+  },
+  "speech_playbackWaveform": {
+    "message": "播放波形"
+  },
+  "speech_sendToTts": {
+    "message": "发送到 TTS"
+  },
+  "speech_sendHint": {
+    "message": "使用最新转写作为 TTS 草稿。"
+  },
+  "speech_download": {
+    "message": "下载"
+  },
+  "speech_downloadCurrent": {
+    "message": "下载当前片段"
+  },
+  "speech_downloadAll": {
+    "message": "下载所有片段"
+  },
+  "speech_segmentFormat": {
+    "message": "格式"
+  },
+  "speech_historyTitle": {
+    "message": "语音历史"
+  },
+  "speech_historyAll": {
+    "message": "全部"
+  },
+  "speech_historyStt": {
+    "message": "语音转文本"
+  },
+  "speech_historyTts": {
+    "message": "文本转语音"
+  },
+  "speech_historySearch": {
+    "message": "搜索转写"
+  },
+  "speech_historyRetentionHint": {
+    "message": "保留最近{{count}}条记录。使用“清除全部”删除所有内容。"
+  },
+  "speech_useInTts": {
+    "message": "用于 TTS"
+  },
+  "speech_copy": {
+    "message": "复制"
+  },
+  "speech_copySuccess": {
+    "message": "已复制到剪贴板"
+  },
+  "speech_copyError": {
+    "message": "复制转写失败。"
+  },
+  "speech_providerTag": {
+    "message": "提供方"
+  },
+  "speech_voiceTag": {
+    "message": "音色"
+  },
+  "speech_emptyHistory": {
+    "message": "开始录音或生成音频以在此查看历史记录。"
+  },
+  "speech_downloadDisabledBrowser": {
+    "message": "浏览器 TTS 无法生成可下载的音频。"
+  },
+  "speech_downloadDisabledEmpty": {
+    "message": "生成音频以启用下载。"
+  },
+  "speech_transcriptLock": {
+    "message": "锁定"
+  },
+  "speech_transcriptUnlock": {
+    "message": "解锁"
+  },
+  "speech_transcriptEditHint": {
+    "message": "此转写已开启编辑。"
+  },
+  "speech_transcriptLockedHint": {
+    "message": "已锁定为实时转写更新。"
+  },
+  "speech_transcriptRecordingHint": {
+    "message": "正在录音；转写已锁定。"
+  },
+  "actor_title": {
+    "message": "场景导演（Actor）"
+  },
+  "actor_help": {
+    "message": "为每个聊天配置场景上下文：角色、情绪、世界、目标和备注。"
+  },
+  "actor_addLabel": {
+    "message": "添加或移除要素以聚焦场景。"
+  },
+  "actor_user": {
+    "message": "用户"
+  },
+  "actor_char": {
+    "message": "角色"
+  },
+  "actor_world": {
+    "message": "世界"
+  },
+  "actor_newAspectPlaceholder": {
+    "message": "要素名称（例如：情绪、角色、地点）"
+  },
+  "actor_addButton": {
+    "message": "添加要素"
+  },
+  "actor_aspectPlaceholder": {
+    "message": "简要描述（可选）"
+  },
+  "actor_notes": {
+    "message": "场景备注"
+  },
+  "actor_notesHelp": {
+    "message": "发送给模型的可选备注。支持 Markdown 和 LaTeX。"
+  },
+  "actor_position": {
+    "message": "Actor 提示位置"
+  },
+  "actor_before": {
+    "message": "在主提示/故事之前"
+  },
+  "actor_after": {
+    "message": "在主提示/故事之后"
+  },
+  "actor_depth": {
+    "message": "在聊天中按深度"
+  },
+  "actor_depthLabel": {
+    "message": "深度（非系统消息）"
+  },
+  "actor_depthPlaceholder": {
+    "message": "0 = 聊天顶部"
+  },
+  "actor_depthHelp": {
+    "message": "仅当位置为“在聊天中按深度”时使用。从聊天顶部开始统计非系统消息。"
+  },
+  "actor_roleLabel": {
+    "message": "Actor 消息角色"
+  },
+  "actor_roleSystem": {
+    "message": "系统"
+  },
+  "actor_roleUser": {
+    "message": "用户"
+  },
+  "actor_roleAssistant": {
+    "message": "助手"
+  },
+  "actor_positionHelp": {
+    "message": "深度仅在位置为“在聊天中按深度”时使用。角色决定 Actor 以系统、用户或助手身份出现。"
+  },
+  "actor_preview": {
+    "message": "Actor 提示预览"
+  },
+  "actor_tokens": {
+    "message": "令牌：{{count}}"
+  },
+  "actor_previewEmpty": {
+    "message": "暂时没有可发送内容。"
+  },
+  "actor_offlineHintTitle": {
+    "message": "Actor 无法使用 World Books"
+  },
+  "actor_offlineHintBody": {
+    "message": "在设置中连接你的 tldw 服务器以在 Actor 要素中使用 World Books，或继续使用自由文本值。"
+  },
+  "actor_loreWorldBookMissing": {
+    "message": "未找到先前的 World Book 绑定；改用自由文本。"
+  },
+  "actor_loreEntryMissing": {
+    "message": "未找到先前的 World Book 条目；改用自由文本。"
+  },
+  "actor_sourceFree": {
+    "message": "自由文本"
+  },
+  "actor_sourceLore": {
+    "message": "World Book"
+  },
+  "actor_worldBookPlaceholder": {
+    "message": "World Book"
+  },
+  "actor_entryPlaceholder": {
+    "message": "条目"
+  },
+  "actor_loreValuePlaceholder": {
+    "message": "选择一个选项（可选）"
+  },
+  "actor_tokenLabel": {
+    "message": "令牌"
+  },
+  "actor_tokensTitle": {
+    "message": "Actor 词典令牌"
+  },
+  "actor_tokensHelp": {
+    "message": "在提示和系统消息中使用这些令牌。"
+  },
+  "actor_keyChangeTitle": {
+    "message": "更改 Actor 令牌键？"
+  },
+  "actor_keyChangeBody": {
+    "message": "这将把令牌从 {{old}} 更改为 {{next}}。使用旧令牌的提示不会自动更新。"
+  },
+  "actor_keyCollisionTitle": {
+    "message": "Actor 键已被使用"
+  },
+  "actor_keyCollisionBody": {
+    "message": "另一个要素已使用此键。键必须在每个聊天中唯一。"
+  },
+  "actor_copy": {
+    "message": "复制"
+  },
+  "actor_copied": {
+    "message": "已复制"
+  },
+  "actor_copySuccess": {
+    "message": "令牌已复制到剪贴板"
+  },
+  "actor_copyError": {
+    "message": "复制令牌失败"
+  },
+  "actor_notesPreviewTitle": {
+    "message": "场景备注预览"
+  },
+  "actor_notesPreviewToggle": {
+    "message": "显示 Markdown + LaTeX 预览"
+  },
+  "actor_aspectLimitWarningTitle": {
+    "message": "此聊天配置了许多要素"
+  },
+  "actor_aspectLimitWarningBody": {
+    "message": "你有 {{count}} 个要素（软限制 {{limit}}）。考虑精简以聚焦场景并节省令牌。"
+  },
+  "actor_tokenWarning": {
+    "message": "Actor 提示较长（{{count}} 令牌；软限制 {{limit}}）。考虑精简要素或备注以节省上下文。"
+  },
+  "actor_depthRangeHelp": {
+    "message": "深度必须在 0 到 999 之间；超过历史长度的值会被限制。"
+  },
+  "actor_presetLabel": {
+    "message": "预设"
+  },
+  "actor_presetPlaceholder": {
+    "message": "选择预设"
+  },
+  "actor_preset.sliceOfLife": {
+    "message": "日常"
+  },
+  "actor_preset.dungeonCrawl": {
+    "message": "地下城探索"
+  },
+  "actor_preset.romance": {
+    "message": "浪漫"
+  },
+  "actor_preset.workSession": {
+    "message": "工作会话"
+  },
+  "actor_applyPreset": {
+    "message": "应用"
+  },
+  "actor_resetChat": {
+    "message": "为此聊天重置"
+  },
+  "actor_saveAsCharacterDefault": {
+    "message": "保存为 {{name}} 的默认值"
+  },
+  "actor_applyCharacterDefault": {
+    "message": "应用 {{name}} 的默认值"
+  },
+  "actor_notesGmOnly": {
+    "message": "仅 GM：不要将备注发送给模型"
+  },
+  "actor_templateModeLabel": {
+    "message": "场景模板交互"
+  },
+  "actor_templateModeHelp": {
+    "message": "控制 Actor 与活动场景模板的交互方式。合并会保留两者；覆盖允许 Actor 替换重叠字段；忽略会在模板激活时跳过 Actor。"
+  },
+  "actor_templateMode.merge": {
+    "message": "与模板合并"
+  },
+  "actor_templateMode.override": {
+    "message": "覆盖模板"
+  },
+  "actor_templateMode.ignore": {
+    "message": "模板激活时忽略"
+  },
+  "actor_bladeAspectsTitle": {
+    "message": "要素"
+  },
+  "actor_bladeNotesTitle": {
+    "message": "场景备注"
+  },
+  "actor_bladePlacementTitle": {
+    "message": "位置与模板"
+  },
+  "actor_bladeTokensTitle": {
+    "message": "令牌与预览"
+  },
+  "actor_summaryAspectsEmpty": {
+    "message": "尚未配置要素。"
+  },
+  "actor_summaryAspectsCount": {
+    "message": "已配置 {{count}} 个要素。"
+  },
+  "actor_summaryNotesEmpty": {
+    "message": "尚无场景备注。"
+  },
+  "actor_summaryNotes": {
+    "message": "{{chars}} 个字符{{gmSuffix}}。"
+  },
+  "actor_summaryNotesGmOnly": {
+    "message": " · 仅 GM"
+  },
+  "actor_summaryPlacementBefore": {
+    "message": "在主提示/故事之前。"
+  },
+  "actor_summaryPlacementAfter": {
+    "message": "在主提示/故事之后。"
+  },
+  "actor_summaryPlacementDepth": {
+    "message": "深度 {{depth}} · 角色：{{role}}。"
+  },
+  "actor_summaryTokensEmpty": {
+    "message": "尚未定义令牌；请设置要素值。"
+  },
+  "actor_summaryTokensCount": {
+    "message": "{{tokens}} 个令牌 · 提示中约 {{estimate}} 个令牌。"
+  },
+  "actor_sceneTemplateActive": {
+    "message": "场景模板已激活：Actor 遵循模板交互设置。"
+  },
+  "composer_compareFeatureToggle": {
+    "message": "启用对比模式"
+  },
+  "composer_compareFeatureToggleHint": {
+    "message": "解锁实验性的多模型对比功能。"
+  },
+  "composer_compareDisabled": {
+    "message": "对比模式在设置中已禁用。"
+  },
+  "composer_compareChosenHint": {
+    "message": "继续使用所选答案或再次对比。"
+  },
+  "composer_compareChosenLabel": {
+    "message": "已选"
+  },
+  "composer_compareLatency": {
+    "message": "延迟"
+  },
+  "composer_compareHistoryPrefix": {
+    "message": "对比：{{title}}"
+  },
+  "composer_compareHistorySuffix": {
+    "message": "（来自对比）"
+  },
+  "composer_compareClusterLabel": {
+    "message": "多模型回答"
+  },
+  "composer_compareClusterCount": {
+    "message": "{{count}} 个模型"
+  },
+  "composer_compareBulkSplitHint": {
+    "message": "已选模型：{{count}}"
+  },
+  "composer_compareBulkSplit": {
+    "message": "将每个已选答案分别打开为独立聊天"
+  },
+  "composer_compareThreadLabel": {
+    "message": "按模型的对话"
+  },
+  "composer_compareThreadYou": {
+    "message": "你"
+  },
+  "composer_compareOpenFullChat": {
+    "message": "作为完整聊天打开"
+  },
+  "composer_compareSpawnedChat": {
+    "message": "打开分拆聊天"
+  },
+  "composer_compareCanonicalOn": {
+    "message": "标准"
+  },
+  "composer_compareCanonicalOff": {
+    "message": "标记为标准答案"
+  },
+  "composer_compareCanonicalLabel": {
+    "message": "标准答案"
+  },
+  "composer_compareFilterLabel": {
+    "message": "筛选模型"
+  },
+  "composer_compareFilterClear": {
+    "message": "显示全部"
+  },
+  "composer_compareFilterCount": {
+    "message": "显示 {{visible}} / {{total}}"
+  },
+  "composer_compareTokens": {
+    "message": "Token：{{count}}"
+  },
+  "feedback_prompt": {
+    "message": "有帮助吗？"
+  },
+  "feedback_thumbsUp": {
+    "message": "有帮助"
+  },
+  "feedback_thumbsDown": {
+    "message": "没帮助"
+  },
+  "feedback_more": {
+    "message": "更多反馈"
+  },
+  "feedback_thanks": {
+    "message": "感谢你的反馈"
+  },
+  "feedback_disabled": {
+    "message": "回复完成后可反馈。"
+  },
+  "feedback_unavailable": {
+    "message": "此消息不可反馈。"
+  },
+  "feedback_modalTitle": {
+    "message": "反馈"
+  },
+  "feedback_modalRatingLabel": {
+    "message": "你会如何评价这条回复？"
+  },
+  "feedback_modalIssuesLabel": {
+    "message": "问题是什么？（可多选）"
+  },
+  "feedback_modalNotesLabel": {
+    "message": "补充说明（可选）"
+  },
+  "feedback_modalSubmit": {
+    "message": "提交反馈"
+  },
+  "feedback_errorTitle": {
+    "message": "反馈失败"
+  },
+  "feedback_errorBody": {
+    "message": "无法提交反馈。"
+  },
+  "feedback_errorSource": {
+    "message": "无法提交来源反馈。"
+  },
+  "feedback_issues_incorrect": {
+    "message": "信息不正确"
+  },
+  "feedback_issues_notRelevant": {
+    "message": "与我的问题无关"
+  },
+  "feedback_issues_missingDetails": {
+    "message": "缺少重要细节"
+  },
+  "feedback_issues_badSources": {
+    "message": "来源无帮助"
+  },
+  "feedback_issues_tooVerbose": {
+    "message": "太啰嗦"
+  },
+  "feedback_issues_tooBrief": {
+    "message": "太简略"
+  },
+  "feedback_issues_other": {
+    "message": "其他"
+  },
+  "feedback_sourceHelpful": {
+    "message": "有帮助的来源"
+  },
+  "feedback_sourceUnhelpful": {
+    "message": "无帮助的来源"
+  },
+  "actor_uploadedFiles": {
+    "message": "已上传文件（{{count}}）"
+  },
+  "actor_fileRetrieval": {
+    "message": "文件检索"
+  },
+  "actor_fileStatusProcessed": {
+    "message": "已处理"
+  },
+  "actor_fileStatusProcessing": {
+    "message": "处理中..."
+  },
+  "documentGenerator_title": {
+    "message": "文档生成器"
+  },
+  "documentGenerator_unavailable": {
+    "message": "此服务器不支持文档生成。"
+  },
+  "documentGenerator_noConversation": {
+    "message": "请先开启一个服务器支持的聊天来生成文档。"
+  },
+  "documentGenerator_source": {
+    "message": "来源"
+  },
+  "documentGenerator_sourceId": {
+    "message": "会话 {{id}}"
+  },
+  "documentGenerator_sourceMissing": {
+    "message": "尚无活动会话。"
+  },
+  "documentGenerator_sourceMessageId": {
+    "message": "消息 {{id}}"
+  },
+  "documentGenerator_documentType": {
+    "message": "文档类型"
+  },
+  "documentGenerator_model": {
+    "message": "模型"
+  },
+  "documentGenerator_modelPlaceholder": {
+    "message": "模型 ID"
+  },
+  "documentGenerator_providerPlaceholder": {
+    "message": "提供商名称"
+  },
+  "documentGenerator_providerLabel": {
+    "message": "提供商：{{provider}}"
+  },
+  "documentGenerator_specificMessage": {
+    "message": "聚焦特定消息"
+  },
+  "documentGenerator_specificMessagePlaceholder": {
+    "message": "可选：粘贴消息片段以聚焦。"
+  },
+  "documentGenerator_customPrompt": {
+    "message": "自定义提示词"
+  },
+  "documentGenerator_customPromptPlaceholder": {
+    "message": "生成文档的可选说明。"
+  },
+  "documentGenerator_asyncGeneration": {
+    "message": "异步生成"
+  },
+  "documentGenerator_promptPresetTitle": {
+    "message": "提示词预设"
+  },
+  "documentGenerator_promptPresetHint": {
+    "message": "自定义该文档类型使用的系统/用户提示词。"
+  },
+  "documentGenerator_promptReload": {
+    "message": "从服务器重新加载"
+  },
+  "documentGenerator_systemPrompt": {
+    "message": "系统提示词"
+  },
+  "documentGenerator_userPrompt": {
+    "message": "用户提示词"
+  },
+  "documentGenerator_temperature": {
+    "message": "温度"
+  },
+  "documentGenerator_maxTokens": {
+    "message": "最大 token 数"
+  },
+  "documentGenerator_jobQueued": {
+    "message": "文档生成已排队。"
+  },
+  "documentGenerator_generated": {
+    "message": "文档已生成。"
+  },
+  "documentGenerator_deleteTitle": {
+    "message": "删除文档？"
+  },
+  "documentGenerator_deleteBody": {
+    "message": "这将永久删除生成的文档。"
+  },
+  "documentGenerator_jobCancelled": {
+    "message": "任务已取消。"
+  },
+  "documentGenerator_promptSaved": {
+    "message": "提示词预设已保存。"
+  },
+  "documentGenerator_documentsTitle": {
+    "message": "生成的文档"
+  },
+  "documentGenerator_loading": {
+    "message": "加载中…"
+  },
+  "documentGenerator_noDocuments": {
+    "message": "暂无文档。"
+  },
+  "documentGenerator_jobsTitle": {
+    "message": "生成任务"
+  },
+  "documentGenerator_progress": {
+    "message": "{{percent}}% 完成"
+  },
+  "documentGenerator_noContent": {
+    "message": "无可用内容。"
+  },
+  "documentGenerator_errors_missingModel": {
+    "message": "请先选择模型和提供商。"
+  },
+  "documentGenerator_types_summary": {
+    "message": "摘要"
+  },
+  "documentGenerator_types_timeline": {
+    "message": "时间线"
+  },
+  "documentGenerator_types_briefing": {
+    "message": "简报"
+  },
+  "documentGenerator_types_study_guide": {
+    "message": "学习指南"
+  },
+  "documentGenerator_types_q_and_a": {
+    "message": "问答"
+  },
+  "documentGenerator_types_meeting_notes": {
+    "message": "会议记录"
+  },
+  "composer_contextTabsEmpty": {
+    "message": "尚未选择标签页。"
+  },
+  "composer_contextFilesTitle": {
+    "message": "上下文中的文件"
+  },
+  "composer_contextFilesEmpty": {
+    "message": "尚未附加文件。"
+  },
+  "composer_addFile": {
+    "message": "添加文件"
+  },
+  "composer_contextTabsAvailable": {
+    "message": "打开的标签页"
+  },
+  "composer_noTabsFound": {
+    "message": "未找到可用的打开标签页。"
+  },
+  "errors_loadLocalHistoryPrefix": {
+    "message": "加载本地聊天记录失败"
+  },
+  "errors_loadLocalHistoryDefault": {
+    "message": "加载本地聊天记录时出错。"
+  },
+  "ttsClips_title": {
+    "message": "TTS clips"
+  },
+  "ttsClips_empty": {
+    "message": "Generate chat audio to save it here."
+  },
+  "ttsClips_clearAll": {
+    "message": "Clear all"
+  },
+  "ttsClips_clearConfirm": {
+    "message": "Clear all saved TTS clips?"
+  },
+  "ttsClips_deleteConfirm": {
+    "message": "Delete this clip?"
+  },
+  "ttsClips_download": {
+    "message": "Download"
+  },
+  "ttsClips_downloadAll": {
+    "message": "Download all segments"
+  },
+  "ttsClips_segmentsLabel": {
+    "message": "{{count}} segments"
+  },
+  "composer_modelSearchPlaceholder": {
+    "message": "Search models"
+  },
+  "composer_noModelsMatch": {
+    "message": "No models match your search."
+  },
+  "composer_favorites": {
+    "message": "Favorites"
+  },
+  "composer_favoriteAdd": {
+    "message": "Add to favorites"
+  },
+  "composer_favoriteRemove": {
+    "message": "Remove from favorites"
+  },
+  "composer_sort_favorites": {
+    "message": "Favorites"
+  },
+  "composer_sort_az": {
+    "message": "A-Z"
+  },
+  "composer_sort_provider": {
+    "message": "Provider"
+  },
+  "composer_sort_localFirst": {
+    "message": "Local-first"
+  },
+  "composer_mcpAriaUnavailable": {
+    "message": "MCP tools unavailable"
+  },
+  "composer_mcpAriaLabel": {
+    "message": "MCP 工具：{{choice}}，{{summary}}"
+  },
+  "composer_mcpConfigure": {
+    "message": "配置工具"
+  },
+  "composer_mcpSettingsTitle": {
+    "message": "MCP 工具设置"
+  },
+  "acp_workspace_selectSession": {
+    "message": "请选择一个会话以打开工作区终端。"
+  },
+  "acp_workspace_unavailable": {
+    "message": "此会话的工作区终端不可用。"
+  },
+  "acp_workspace_title": {
+    "message": "工作区终端"
+  }
+}

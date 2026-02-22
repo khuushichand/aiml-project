@@ -6,7 +6,6 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.legacy_tts]
 import os
 import platform
-import torch
 import asyncio
 RUN_TTS_LEGACY_INTEGRATION = os.getenv("RUN_TTS_LEGACY_INTEGRATION") == "1"
 
@@ -47,8 +46,6 @@ def check_higgs_model_exists():
 def get_compute_capability():
 
     """Detect compute capabilities"""
-    if torch.cuda.is_available():
-        return "cuda"
     return "cpu"
 
 #######################################################################################################################

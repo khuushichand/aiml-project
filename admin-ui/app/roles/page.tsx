@@ -15,7 +15,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput } from '@/components/ui/form';
-import { Shield, Plus, RefreshCw, Trash2, Lock, Settings } from 'lucide-react';
+import { Shield, Plus, Trash2, Lock, Settings } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
 import Link from 'next/link';
@@ -268,8 +268,8 @@ export default function RolesPage() {
                           </div>
                           <DialogFooter>
                             <Button type="button" variant="outline" onClick={() => setShowCreateRole(false)}>Cancel</Button>
-                            <Button type="submit" disabled={creatingRole}>
-                              {creatingRole ? 'Creating...' : 'Create Role'}
+                            <Button type="submit" loading={creatingRole} loadingText="Creating...">
+                              Create Role
                             </Button>
                           </DialogFooter>
                         </Form>
@@ -350,12 +350,10 @@ export default function RolesPage() {
                                         ? 'Deleting role'
                                         : 'Delete role'
                                   }
+                                  loading={isDeleting}
+                                  className={role.is_system ? 'text-muted-foreground' : 'text-red-500 hover:text-red-500'}
                                 >
-                                  {isDeleting ? (
-                                    <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
-                                  ) : (
-                                    <Trash2 className={`h-4 w-4 ${role.is_system ? 'text-muted' : 'text-red-500'}`} />
-                                  )}
+                                  <Trash2 className="h-4 w-4" />
                                 </Button>
                               </div>
                             </TableCell>
@@ -408,8 +406,8 @@ export default function RolesPage() {
                           </div>
                           <DialogFooter>
                             <Button type="button" variant="outline" onClick={() => setShowCreatePermission(false)}>Cancel</Button>
-                            <Button type="submit" disabled={creatingPermission}>
-                              {creatingPermission ? 'Creating...' : 'Create Permission'}
+                            <Button type="submit" loading={creatingPermission} loadingText="Creating...">
+                              Create Permission
                             </Button>
                           </DialogFooter>
                         </Form>
@@ -456,12 +454,10 @@ export default function RolesPage() {
                                 title={isDeleting ? 'Deleting permission' : 'Delete permission'}
                                 aria-label={isDeleting ? 'Deleting permission' : 'Delete permission'}
                                 disabled={isDeleting}
+                                loading={isDeleting}
+                                className="text-red-500 hover:text-red-500"
                               >
-                                {isDeleting ? (
-                                  <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-4 w-4 text-red-500" />
-                                )}
+                                <Trash2 className="h-4 w-4" />
                               </Button>
                             </TableCell>
                           </TableRow>

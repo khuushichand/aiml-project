@@ -45,7 +45,7 @@ def _db_params():
                 password = p.password or "TestPassword123!"
                 return host, port, user, password
         except Exception:
-            pass
+            _ = None
     host = os.getenv("TEST_DB_HOST", "localhost")
     port = int(os.getenv("TEST_DB_PORT", "5432"))
     user = os.getenv("TEST_DB_USER", "tldw_user")
@@ -744,10 +744,6 @@ class TestSecurity:
         assert "required role" in detail.lower()
         assert "admin" in detail.lower()
 
-    @pytest.mark.skipif(
-        get_settings().RATE_LIMIT_ENABLED == False,
-        reason="Rate limiting disabled"
-    )
     def test_rate_limiting(self, isolated_test_environment):
         """Test rate limiting"""
         client, db_name = isolated_test_environment

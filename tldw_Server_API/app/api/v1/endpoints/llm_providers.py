@@ -1,7 +1,9 @@
 # llm_providers.py
 import asyncio
+import hashlib
 import json
 import os
+import threading
 import time
 from functools import partial
 from typing import Any, Optional
@@ -949,7 +951,17 @@ def _default_model_metadata(provider: str, model: str) -> dict[str, Any]:
             "tool_use": False,
             "json_mode": False,
             "function_calling": False,
-            "streaming": provider in {"openai", "anthropic", "google", "mistral", "groq", "openrouter"},
+            "streaming": provider in {
+                "openai",
+                "anthropic",
+                "google",
+                "mistral",
+                "groq",
+                "openrouter",
+                "novita",
+                "poe",
+                "together",
+            },
             "thinking": False,
         },
         "modalities": {"input": ["text"], "output": ["text"]},
@@ -1061,6 +1073,21 @@ def parse_model_string(model_value: str) -> list[str]:
 LOCAL_MODEL_DISCOVERY_TIMEOUT = 3.0  # seconds
 LOCAL_MODEL_DISCOVERY_TTL = 300  # seconds
 _LOCAL_MODEL_CACHE: dict[str, tuple[float, list[str]]] = {}
+OPENROUTER_MODEL_DISCOVERY_TIMEOUT = 5.0  # seconds
+OPENROUTER_MODEL_DISCOVERY_TTL_DEFAULT = 600  # seconds
+_OPENROUTER_MODEL_CACHE: dict[str, tuple[float, list[str]]] = {}
+_OPENROUTER_MODEL_CACHE_LOCK = threading.Lock()
+
+
+def _openrouter_discovery_ttl_seconds() -> int:
+    raw = os.getenv("OPENROUTER_MODEL_DISCOVERY_TTL_SECONDS")
+    if raw is None:
+        return OPENROUTER_MODEL_DISCOVERY_TTL_DEFAULT
+    try:
+        parsed = int(str(raw).strip())
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
+        return OPENROUTER_MODEL_DISCOVERY_TTL_DEFAULT
+    return max(30, parsed)
 
 
 def _dedupe_preserve_order(values: list[str]) -> list[str]:
@@ -1146,6 +1173,89 @@ def _extract_models_from_response(payload: Any) -> list[str]:
     return _dedupe_preserve_order(models)
 
 
+def _resolve_openrouter_models_url() -> str:
+    base_url = (os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1").strip()
+    if not base_url:
+        base_url = "https://openrouter.ai/api/v1"
+    base_url = base_url.rstrip("/")
+    if base_url.lower().endswith("/models"):
+        base_url = base_url[: -len("/models")]
+    return f"{base_url}/models"
+
+
+def discover_openrouter_models(
+    api_key: Optional[str],
+    *,
+    force_refresh: bool = False,
+) -> list[str]:
+    """Best-effort discovery of OpenRouter model ids from /models.
+
+    Results are cached briefly to avoid repeated upstream calls. On discovery
+    failures, this function falls back to cached values when available.
+    """
+    resolved_key = (api_key or "").strip()
+    if not resolved_key:
+        return []
+
+    models_url = _resolve_openrouter_models_url()
+    key_digest = hashlib.sha1(resolved_key.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
+    cache_key = f"{models_url}|{key_digest}"
+    now = time.time()
+    ttl = _openrouter_discovery_ttl_seconds()
+
+    with _OPENROUTER_MODEL_CACHE_LOCK:
+        cached = _OPENROUTER_MODEL_CACHE.get(cache_key)
+    if cached and not force_refresh and (now - cached[0] < ttl):
+        return list(cached[1])
+
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {resolved_key}",
+    }
+    referer = (os.getenv("OPENROUTER_SITE_URL") or "").strip()
+    site_name = (os.getenv("OPENROUTER_SITE_NAME") or "").strip()
+    if referer:
+        headers["HTTP-Referer"] = referer
+    if site_name:
+        headers["X-Title"] = site_name
+
+    try:
+        resp = _http_fetch(
+            method="GET",
+            url=models_url,
+            headers=headers,
+            timeout=OPENROUTER_MODEL_DISCOVERY_TIMEOUT,
+            retry=_RetryPolicy(attempts=1),
+        )
+        try:
+            if resp.status_code >= 400:
+                logger.warning(
+                    f"[OpenRouter model discovery] {models_url} responded with {resp.status_code}"
+                )
+                return list(cached[1]) if cached else []
+            payload = resp.json()
+        finally:
+            close = getattr(resp, "close", None)
+            if callable(close):
+                close()
+
+        discovered = _extract_models_from_response(payload)
+        with _OPENROUTER_MODEL_CACHE_LOCK:
+            _OPENROUTER_MODEL_CACHE[cache_key] = (time.time(), list(discovered))
+
+        if discovered:
+            logger.info(
+                f"[OpenRouter model discovery] found {len(discovered)} models via {models_url}"
+            )
+        return discovered
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"[OpenRouter model discovery] {models_url} failed: {exc}")
+        return list(cached[1]) if cached else []
+    except Exception as exc:  # noqa: BLE001 - discovery must fail open
+        logger.debug(f"[OpenRouter model discovery] unexpected failure via {models_url}: {exc}")
+        return list(cached[1]) if cached else []
+
+
 def discover_models_from_endpoint(
     provider: str,
     endpoint_url: str,
@@ -1203,11 +1313,17 @@ def discover_models_from_endpoint(
         except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"[Model discovery] {provider}: error querying {url}: {exc}")
             continue
+        except Exception as exc:  # noqa: BLE001 - best-effort local discovery must fail open
+            logger.debug(f"[Model discovery] {provider}: unexpected error querying {url}: {exc}")
+            continue
 
     _LOCAL_MODEL_CACHE[cache_key] = (now, discovered)
     return discovered
 
-def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]:
+def get_configured_providers(
+    include_deprecated: bool = False,
+    refresh_openrouter: bool = False,
+) -> dict[str, Any]:
     """
     Get list of configured LLM providers with their models from the config file.
 
@@ -1316,6 +1432,27 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
                 'type': 'commercial',
                 'section': 'API'
             },
+            'novita': {
+                'display_name': 'Novita',
+                'api_key_field': 'novita_api_key',
+                'model_field': 'novita_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
+            'poe': {
+                'display_name': 'Poe',
+                'api_key_field': 'poe_api_key',
+                'model_field': 'poe_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
+            'together': {
+                'display_name': 'Together',
+                'api_key_field': 'together_api_key',
+                'model_field': 'together_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
             'moonshot': {
                 'display_name': 'Moonshot',
                 'api_key_field': 'moonshot_api_key',
@@ -1420,6 +1557,7 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
                 health_report = pm.get_health_report()
         except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
             health_report = {}
+        registry_capability_envelopes = _llm_registry_capability_envelopes()
 
         # Process each provider
         for provider_name, provider_info in provider_mappings.items():
@@ -1490,6 +1628,17 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
                     pricing_models = [m for m in pricing_models if 'embed' not in m.lower() and 'embedding' not in m.lower()]
                 except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
                     pricing_models = []
+
+                if provider_name == "openrouter" and is_configured and api_key_value:
+                    live_openrouter_models = discover_openrouter_models(
+                        api_key_value,
+                        force_refresh=refresh_openrouter,
+                    )
+                    if live_openrouter_models:
+                        pricing_models = _dedupe_preserve_order(
+                            live_openrouter_models + pricing_models
+                        )
+
                 if pricing_models:
                     # Preserve order: config models first, then pricing extras
                     seen = {m.strip() for m in models}
@@ -1556,14 +1705,18 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
                 provider_data['requires_api_key'] = provider_requires_api_key(provider_name)
                 # Start with defaults from static map
                 capabilities = dict(PROVIDER_CAPABILITIES.get(provider_name, {}))
+                envelope = registry_capability_envelopes.get(provider_name)
                 # Merge adapter-reported capabilities if available
-                try:
-                    reg = llm_adapter_registry.get_registry()
-                    reg_caps = reg.get_all_capabilities()
-                    if provider_name in reg_caps:
-                        capabilities.update(reg_caps[provider_name])
-                except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
-                    pass
+                if envelope:
+                    env_caps = envelope.get("capabilities")
+                    if isinstance(env_caps, dict):
+                        capabilities.update(env_caps)
+                    provider_data["availability"] = envelope.get("availability", "unknown")
+                    provider_data["capability_envelope"] = {
+                        "provider": provider_name,
+                        "availability": envelope.get("availability", "unknown"),
+                        "capabilities": env_caps if isinstance(env_caps, dict) else None,
+                    }
                 # Merge config-indicated streaming support as an override if provided
                 if 'supports_streaming' not in capabilities and 'supports_streaming' in provider_data:
                     capabilities['supports_streaming'] = provider_data['supports_streaming']
@@ -1603,12 +1756,19 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
         }
 
 
-async def get_configured_providers_async(include_deprecated: bool = False) -> dict[str, Any]:
+async def get_configured_providers_async(
+    include_deprecated: bool = False,
+    refresh_openrouter: bool = False,
+) -> dict[str, Any]:
     """Run provider discovery in a worker thread to avoid blocking the event loop."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
-        partial(get_configured_providers, include_deprecated=include_deprecated),
+        partial(
+            get_configured_providers,
+            include_deprecated=include_deprecated,
+            refresh_openrouter=refresh_openrouter,
+        ),
     )
 
 
@@ -1656,6 +1816,69 @@ def _normalize_modalities(value: Any) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(v).strip().lower() for v in value if v and str(v).strip()]
     return [str(value).strip().lower()]
+
+
+def _llm_registry_capability_envelopes() -> dict[str, dict[str, Any]]:
+    """
+    Return provider capability envelopes from the LLM adapter registry.
+
+    Preferred format is wrapper-level `list_capabilities()` entries:
+      {"provider": str, "availability": str, "capabilities": dict|None}
+
+    Falls back to legacy `get_all_capabilities()` (treated as enabled).
+    """
+    envelopes: dict[str, dict[str, Any]] = {}
+
+    try:
+        registry = llm_adapter_registry.get_registry()
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
+        return envelopes
+
+    try:
+        list_caps = getattr(registry, "list_capabilities", None)
+        if callable(list_caps):
+            try:
+                entries = list_caps(include_disabled=True)
+            except TypeError:
+                entries = list_caps()
+            if isinstance(entries, list):
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    provider_name = str(entry.get("provider") or "").strip()
+                    if not provider_name:
+                        continue
+                    availability = str(entry.get("availability") or "unknown").strip().lower() or "unknown"
+                    raw_caps = entry.get("capabilities")
+                    envelopes[provider_name] = {
+                        "provider": provider_name,
+                        "availability": availability,
+                        "capabilities": raw_caps if isinstance(raw_caps, dict) else None,
+                    }
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    if envelopes:
+        return envelopes
+
+    # Backward-compatible fallback for stubs exposing only get_all_capabilities().
+    try:
+        get_all = getattr(registry, "get_all_capabilities", None)
+        legacy_caps = get_all() if callable(get_all) else None
+        if isinstance(legacy_caps, dict):
+            for provider_name, caps in legacy_caps.items():
+                normalized_name = str(provider_name or "").strip()
+                if not normalized_name:
+                    continue
+                envelopes[normalized_name] = {
+                    "provider": normalized_name,
+                    "availability": "enabled",
+                    "capabilities": caps if isinstance(caps, dict) else None,
+                }
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    return envelopes
 
 
 def _model_matches_filters(
@@ -1771,6 +1994,13 @@ async def get_llm_providers(include_deprecated: bool = False):
     response_model=dict[str, Any])
 async def get_models_metadata(
     include_deprecated: bool = False,
+    refresh_openrouter: bool = Query(
+        False,
+        description=(
+            "When true, refresh OpenRouter model IDs from OpenRouter /models before"
+            " building the catalog response."
+        ),
+    ),
     model_type: Optional[list[str]] = Query(
         None,
         alias="type",
@@ -1789,7 +2019,10 @@ async def get_models_metadata(
         type_filters = _normalize_filter_values(model_type)
         input_filters = _normalize_filter_values(input_modality)
         output_filters = _normalize_filter_values(output_modality)
-        result = await get_configured_providers_async(include_deprecated=include_deprecated)
+        result = await get_configured_providers_async(
+            include_deprecated=include_deprecated,
+            refresh_openrouter=refresh_openrouter,
+        )
         result = apply_llm_provider_overrides_to_listing(result)
         flattened: list[dict[str, Any]] = []
         for provider in result.get('providers', []):

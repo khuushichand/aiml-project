@@ -11,12 +11,12 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_user(monkeypatch):
+def client_with_user(monkeypatch, tmp_path):
     async def override_user():
         return User(id=913, username="wluser", email=None, is_active=True)
 
     # Avoid TEST_MODE so RG policies are applied consistently.
-    base_dir = Path.cwd() / "Databases" / "test_user_dbs_rate_limits"
+    base_dir = tmp_path / "test_user_dbs_rate_limits"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     # Ensure TEST_MODE not set

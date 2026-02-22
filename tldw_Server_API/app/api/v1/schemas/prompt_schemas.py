@@ -54,6 +54,8 @@ class PromptUpdate(BaseModel):  # For partial updates if we add a PATCH endpoint
     system_prompt: Optional[str] = Field(None, max_length=20000)
     user_prompt: Optional[str] = Field(None, max_length=20000)
     keywords: Optional[list[str]] = None  # To update keywords
+    usage_count: Optional[int] = Field(None, ge=0)
+    last_used_at: Optional[datetime] = None
 
 
 class PromptResponse(PromptBase):
@@ -61,6 +63,8 @@ class PromptResponse(PromptBase):
     uuid: UUID
     last_modified: datetime
     version: int
+    usage_count: int = Field(0, ge=0, description="Number of times this prompt has been used.")
+    last_used_at: Optional[datetime] = Field(None, description="Timestamp of the most recent use.")
     keywords: list[str] = Field(default_factory=list, description="Keywords associated with the prompt.")
     deleted: bool = Field(..., description="Indicates if the prompt is soft-deleted.")
 
@@ -73,6 +77,8 @@ class PromptBriefResponse(BaseModel):
     name: str
     author: Optional[str]
     last_modified: datetime
+    usage_count: int = 0
+    last_used_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -228,3 +234,26 @@ class PromptCollectionCreateRequest(BaseModel):
     name: str
     description: Optional[str] = None
     prompt_ids: list[int] = Field(default_factory=list)
+
+
+class PromptCollectionCreateResponse(BaseModel):
+    collection_id: int
+
+
+class PromptCollectionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+    prompt_ids: Optional[list[int]] = None
+
+
+class PromptCollectionResponse(BaseModel):
+    collection_id: int
+    name: str
+    description: Optional[str] = None
+    prompt_ids: list[int] = Field(default_factory=list)
+
+
+class PromptCollectionListResponse(BaseModel):
+    collections: list[PromptCollectionResponse] = Field(default_factory=list)

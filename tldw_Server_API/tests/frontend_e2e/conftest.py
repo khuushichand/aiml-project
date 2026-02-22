@@ -87,7 +87,7 @@ def _print_server_log(label: str) -> None:
         try:
             print(log_path.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            _ = None
 
 
 def _find_repo_root() -> Path:

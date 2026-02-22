@@ -30,7 +30,7 @@ def _backdate_runtime(job_id: int, seconds: int):
         try:
             conn.close()
         except Exception:
-            pass
+            _ = None
 
 
 def _get_group(stats, domain, queue, job_type):

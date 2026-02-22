@@ -39,7 +39,7 @@ def mock_subprocess_run(monkeypatch):
                     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
                     Path(output_path).write_bytes(b"mock video content")
                 except Exception:
-                    pass
+                    _ = None
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
     monkeypatch.setattr(subprocess, "run", _mock_run)

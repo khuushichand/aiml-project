@@ -472,8 +472,8 @@ JWT_EXPIRATION_HOURS=24
 SESSION_ENCRYPTION_KEY=your-session-key
 
 # Rate Limiting
-RATE_LIMIT_ENABLED=true
-RATE_LIMIT_PER_MINUTE=30
+RG_ENABLED=true
+# Tune requests.rpm / requests.burst in Config_Files/resource_governor_policies.yaml
 
 # Audit Logging
 AUDIT_LOG_PATH=/var/log/tldw/audit

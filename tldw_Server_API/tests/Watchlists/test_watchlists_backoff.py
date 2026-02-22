@@ -37,7 +37,7 @@ async def test_backoff_defer_until_after_consecutive_304s(monkeypatch):
         if p.exists():
             p.unlink()
     except Exception:
-        pass
+        _ = None
 
     db = WatchlistsDatabase.for_user(user_id)
 

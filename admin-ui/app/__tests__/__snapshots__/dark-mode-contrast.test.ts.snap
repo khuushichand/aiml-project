@@ -1,0 +1,101 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`dark mode contrast tokens > keeps dark mode token values stable 1`] = `
+{
+  "accent": [
+    217.2,
+    32.6,
+    17.5,
+  ],
+  "accent-foreground": [
+    210,
+    40,
+    98,
+  ],
+  "background": [
+    222.2,
+    84,
+    4.9,
+  ],
+  "border": [
+    217.2,
+    32.6,
+    40,
+  ],
+  "card": [
+    222.2,
+    84,
+    4.9,
+  ],
+  "card-foreground": [
+    210,
+    40,
+    98,
+  ],
+  "chart-1": [
+    217.2,
+    91.2,
+    59.8,
+  ],
+  "chart-2": [
+    160,
+    84,
+    45,
+  ],
+  "destructive": [
+    0,
+    62.8,
+    30.6,
+  ],
+  "destructive-foreground": [
+    210,
+    40,
+    98,
+  ],
+  "foreground": [
+    210,
+    40,
+    98,
+  ],
+  "input": [
+    217.2,
+    32.6,
+    40,
+  ],
+  "muted": [
+    217.2,
+    32.6,
+    17.5,
+  ],
+  "muted-foreground": [
+    215,
+    20.2,
+    65.1,
+  ],
+  "primary": [
+    217.2,
+    91.2,
+    59.8,
+  ],
+  "primary-foreground": [
+    222.2,
+    47.4,
+    11.2,
+  ],
+  "ring": [
+    224.3,
+    76.3,
+    48,
+  ],
+  "secondary": [
+    217.2,
+    32.6,
+    17.5,
+  ],
+  "secondary-foreground": [
+    210,
+    40,
+    98,
+  ],
+}
+`;

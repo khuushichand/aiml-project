@@ -61,7 +61,7 @@ class TestRAGEvaluatorInit:
         assert evaluator.embedding_available is True
 
         # Test failed embedding check
-        mock_create_embedding.side_effect = Exception("API key not found")
+        mock_create_embedding.side_effect = RuntimeError("API key not found")
         evaluator2 = RAGEvaluator(
             embedding_provider="openai",
             embedding_model="text-embedding-3-small"
@@ -404,7 +404,7 @@ class TestErrorHandling:
     @patch('asyncio.to_thread', new_callable=AsyncMock)
     async def test_handle_llm_failure(self, mock_to_thread):
         """Test handling of LLM API failures."""
-        mock_to_thread.side_effect = Exception("LLM API error")
+        mock_to_thread.side_effect = RuntimeError("LLM API error")
 
         evaluator = RAGEvaluator()
 
@@ -430,7 +430,7 @@ class TestErrorHandling:
     @patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.create_embedding')
     async def test_handle_embedding_failure(self, mock_create_embedding):
         """Test handling of embedding API failures."""
-        mock_create_embedding.side_effect = Exception("Embedding API error")
+        mock_create_embedding.side_effect = RuntimeError("Embedding API error")
 
         evaluator = RAGEvaluator(
             embedding_provider="openai",

@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import normalize_payload, validate_payload
-from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import _safe_cast
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,

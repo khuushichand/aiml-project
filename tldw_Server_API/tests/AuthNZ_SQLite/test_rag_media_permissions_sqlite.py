@@ -9,7 +9,6 @@ def _base_env(tmp_path: Path):
     os.environ["AUTH_MODE"] = "multi_user"
     os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-rag-media-claims-12345678901234567890"
     os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path / 'users.db'}"
-    os.environ["RATE_LIMIT_ENABLED"] = "false"
     os.environ["VIRTUAL_KEYS_ENABLED"] = "false"
     os.environ["LLM_BUDGET_ENFORCE"] = "false"
 
@@ -142,7 +141,7 @@ async def test_rag_search_claims_with_api_key_sqlite(tmp_path, monkeypatch):
         try:
             await pool.close()
         except Exception:
-            pass
+            _ = None
         await reset_db_pool()
         reset_settings()
 
@@ -207,6 +206,6 @@ async def test_media_process_videos_requires_permission_sqlite(tmp_path):
         try:
             await pool.close()
         except Exception:
-            pass
+            _ = None
         await reset_db_pool()
         reset_settings()

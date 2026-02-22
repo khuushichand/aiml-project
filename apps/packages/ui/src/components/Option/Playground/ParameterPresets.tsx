@@ -66,13 +66,33 @@ const PRESETS: ParameterPreset[] = [
   }
 ]
 
+const PRESET_SETTING_LABELS: Record<string, string> = {
+  temperature: "Temperature",
+  topP: "Top P",
+  topK: "Top K",
+  frequencyPenalty: "Frequency penalty",
+  presencePenalty: "Presence penalty",
+  repeatPenalty: "Repeat penalty",
+  numPredict: "Max tokens",
+  jsonMode: "JSON mode"
+}
+
+const formatPresetSettingEntries = (settings: Partial<ChatModelSettings>) =>
+  Object.entries(settings)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => ({
+      key,
+      label: PRESET_SETTING_LABELS[key] || key,
+      value: String(value)
+    }))
+
 type Props = {
   compact?: boolean
   onChange?: (preset: PresetKey) => void
   className?: string
 }
 
-function detectCurrentPreset(settings: ChatModelSettings): PresetKey {
+export function detectCurrentPreset(settings: ChatModelSettings): PresetKey {
   const { temperature, topP, topK } = settings
 
   // Check if settings match any preset (with some tolerance)
@@ -100,6 +120,9 @@ function detectCurrentPreset(settings: ChatModelSettings): PresetKey {
 
   return "custom"
 }
+
+export const getPresetByKey = (key: PresetKey): ParameterPreset | undefined =>
+  PRESETS.find((preset) => preset.key === key)
 
 export const ParameterPresets: React.FC<Props> = ({
   compact = false,
@@ -142,9 +165,11 @@ export const ParameterPresets: React.FC<Props> = ({
             </div>
             {preset.key !== "custom" && (
               <div className="mt-2 space-y-0.5 text-[10px] text-text-muted">
-                <div>Temperature: {preset.settings.temperature}</div>
-                <div>Top P: {preset.settings.topP}</div>
-                <div>Top K: {preset.settings.topK}</div>
+                {formatPresetSettingEntries(preset.settings).map((entry) => (
+                  <div key={`${preset.key}-${entry.key}`}>
+                    {entry.label}: {entry.value}
+                  </div>
+                ))}
               </div>
             )}
           </div>

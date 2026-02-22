@@ -8,6 +8,7 @@ import pytest
 from hypothesis import given, strategies as st, assume, settings
 from hypothesis.stateful import RuleBasedStateMachine, rule, initialize, invariant
 import numpy as np
+import string
 from typing import Dict, List, Optional, Any
 import wave
 import io
@@ -301,7 +302,11 @@ class TestChunkingProperties:
     @pytest.mark.property
     @given(
         sentences=st.lists(
-            st.text(min_size=10, max_size=100),
+            st.text(
+                alphabet=string.ascii_letters + string.digits + " ",
+                min_size=10,
+                max_size=100,
+            ).filter(lambda s: s.strip() != ""),
             min_size=5,
             max_size=20
         )

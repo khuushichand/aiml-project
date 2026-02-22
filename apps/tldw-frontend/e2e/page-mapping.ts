@@ -122,6 +122,16 @@ export const PAGE_MAPPINGS: PageMapping[] = [
     checklistItems: CHECKLIST_TEMPLATES.chat
   },
   {
+    name: "Persona Chat",
+    category: "chat",
+    webuiPath: "/persona",
+    extensionOptionsPath: null,
+    extensionSidepanelPath: "/persona",
+    sharedComponent: "SidepanelPersona",
+    session: 1,
+    checklistItems: CHECKLIST_TEMPLATES.chat
+  },
+  {
     name: "TLDW Settings (Server Connection)",
     category: "settings",
     webuiPath: "/settings/tldw",

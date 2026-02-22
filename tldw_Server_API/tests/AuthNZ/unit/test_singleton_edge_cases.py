@@ -188,7 +188,7 @@ class TestTokenBlacklistPoolRecovery:
             try:
                 await blacklist.db_pool.close()
             except Exception:
-                pass  # May already be closed
+                _ = None  # May already be closed
 
         # Query should recover
         try:

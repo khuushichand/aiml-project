@@ -99,7 +99,7 @@ export const CronDisplay: React.FC<CronDisplayProps> = ({
 }) => {
   if (!expression) {
     return (
-      <span className="text-zinc-400 text-sm italic">
+      <span className="text-text-subtle text-sm italic">
         No schedule
       </span>
     )
@@ -110,14 +110,15 @@ export const CronDisplay: React.FC<CronDisplayProps> = ({
 
   const content = (
     <span className="flex items-center gap-1.5 text-sm">
-      {showIcon && <Clock className="h-3.5 w-3.5 text-zinc-400" />}
+      {showIcon && <Clock className="h-3.5 w-3.5 text-text-subtle" />}
       <span>{humanReadable}</span>
     </span>
   )
 
   if (showTooltip) {
+    const tooltipText = `Runs on this cadence. Advanced schedule expression: ${expression}`
     return (
-      <Tooltip title={`Cron: ${expression}`}>
+      <Tooltip title={tooltipText}>
         {content}
       </Tooltip>
     )

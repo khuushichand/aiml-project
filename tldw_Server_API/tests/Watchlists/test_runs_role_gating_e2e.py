@@ -83,11 +83,11 @@ def test_runs_endpoints_require_admin_when_enabled(monkeypatch):
     [
         lambda: User(
             id=972,
-            username="admin-by-role",
+            username="admin-by-permission",
             email="a1@example.com",
-            role="admin",
-            roles=[],
-            permissions=[],
+            role="user",
+            roles=["user"],
+            permissions=["system.configure"],
             is_admin=False,
             is_active=True,
         ),
@@ -103,12 +103,12 @@ def test_runs_endpoints_require_admin_when_enabled(monkeypatch):
         ),
         lambda: User(
             id=974,
-            username="admin-by-flag",
+            username="admin-by-wildcard-permission",
             email="a3@example.com",
             role="user",
             roles=[],
-            permissions=[],
-            is_admin=True,
+            permissions=["*"],
+            is_admin=False,
             is_active=True,
         ),
     ],
@@ -136,3 +136,30 @@ def test_runs_endpoints_allow_real_admin_shapes_when_enabled(monkeypatch, user_f
 
         details = client.get(f"/api/v1/watchlists/runs/{run_id}/details")
         assert details.status_code == 200, details.text
+
+
+def test_runs_endpoints_do_not_treat_role_column_as_admin_claim(monkeypatch):
+    base_dir = Path.cwd() / "Databases" / "test_user_dbs_runs_role_gating_role_column"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("WATCHLISTS_RUNS_REQUIRE_ADMIN", "1")
+
+    async def override_role_only_admin():
+        return User(
+            id=975,
+            username="role-only-admin",
+            email="roleonly@example.com",
+            role="admin",
+            roles=[],
+            permissions=[],
+            is_admin=False,
+            is_active=True,
+        )
+
+    app = _build_app(override_role_only_admin)
+    with TestClient(app) as client:
+        _create_run(client)
+        blocked = client.get("/api/v1/watchlists/runs")
+        assert blocked.status_code == 403, blocked.text
+        assert blocked.json().get("detail") == "watchlists_runs_admin_required"

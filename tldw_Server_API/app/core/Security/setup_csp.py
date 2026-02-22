@@ -11,6 +11,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from tldw_Server_API.app.core.testing import is_truthy
+
 _SCRIPT_TAG_RE = re.compile(rb"<script(\s[^>]*)?>", re.IGNORECASE)
 
 
@@ -93,7 +95,7 @@ class SetupCSPMiddleware(BaseHTTPMiddleware):
             # - Respect TLDW_SETUP_NO_EVAL first if present.
             no_eval_env = os.getenv("TLDW_SETUP_NO_EVAL")
             if no_eval_env is not None:
-                truthy = no_eval_env.strip().lower() in {"1", "true", "yes", "on", "y"}
+                truthy = is_truthy(no_eval_env)
                 allow_eval = not truthy
             else:
                 allow_eval = True
@@ -101,9 +103,9 @@ class SetupCSPMiddleware(BaseHTTPMiddleware):
                 "Content-Security-Policy",
                 _build_setup_csp(nonce, allow_inline_scripts=allow_inline_scripts, allow_eval=allow_eval),
             )
-        except Exception:
+        except Exception as csp_header_error:
             # Best-effort header set; return original response
-            pass
+            logger.debug("Setup CSP middleware failed to attach CSP header", exc_info=csp_header_error)
         return response
 
 

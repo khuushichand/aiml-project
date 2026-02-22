@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import http from "node:http"
 import { AddressInfo } from "node:net"
 import path from "path"
@@ -150,7 +151,7 @@ test.describe("Sidepanel chat smoke", () => {
     const { server, baseUrl } = await startChatMockServer()
 
     const { context, page, openSidepanel, extensionId } =
-      (await launchWithExtension(EXT_PATH, {
+      (await launchWithExtensionOrSkip(test, EXT_PATH, {
         seedConfig: {
           __tldw_first_run_complete: true,
           __tldw_allow_offline: true,

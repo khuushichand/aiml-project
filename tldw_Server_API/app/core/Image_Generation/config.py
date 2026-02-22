@@ -21,7 +21,18 @@ DEFAULT_SD_CPP_CFG_SCALE = 7.5
 DEFAULT_SD_CPP_SAMPLER = "euler_a"
 DEFAULT_SD_CPP_DEVICE = "auto"
 DEFAULT_SD_CPP_TIMEOUT_SECONDS = 120
+DEFAULT_SWARMUI_BASE_URL = "http://127.0.0.1:7801"
 DEFAULT_SWARMUI_TIMEOUT_SECONDS = 120
+DEFAULT_OPENROUTER_IMAGE_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_OPENROUTER_IMAGE_MODEL = "openai/gpt-image-1"
+DEFAULT_OPENROUTER_IMAGE_TIMEOUT_SECONDS = 120
+DEFAULT_NOVITA_IMAGE_BASE_URL = "https://api.novita.ai"
+DEFAULT_NOVITA_IMAGE_MODEL = "sd_xl_base_1.0.safetensors"
+DEFAULT_NOVITA_IMAGE_TIMEOUT_SECONDS = 180
+DEFAULT_NOVITA_IMAGE_POLL_INTERVAL_SECONDS = 2
+DEFAULT_TOGETHER_IMAGE_BASE_URL = "https://api.together.xyz/v1"
+DEFAULT_TOGETHER_IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell-Free"
+DEFAULT_TOGETHER_IMAGE_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -51,6 +62,22 @@ class ImageGenerationConfig:
     swarmui_swarm_token: str | None
     swarmui_allowed_extra_params: list[str]
     swarmui_timeout_seconds: int
+    openrouter_image_base_url: str | None
+    openrouter_image_api_key: str | None
+    openrouter_image_default_model: str | None
+    openrouter_image_allowed_extra_params: list[str]
+    openrouter_image_timeout_seconds: int
+    novita_image_base_url: str | None
+    novita_image_api_key: str | None
+    novita_image_default_model: str | None
+    novita_image_allowed_extra_params: list[str]
+    novita_image_timeout_seconds: int
+    novita_image_poll_interval_seconds: int
+    together_image_base_url: str | None
+    together_image_api_key: str | None
+    together_image_default_model: str | None
+    together_image_allowed_extra_params: list[str]
+    together_image_timeout_seconds: int
 
 
 _config_cache: ImageGenerationConfig | None = None
@@ -133,11 +160,48 @@ def get_image_generation_config(*, reload: bool = False) -> ImageGenerationConfi
         sd_cpp_default_sampler=_get_config_value(section, "sd_cpp_default_sampler") or DEFAULT_SD_CPP_SAMPLER,
         sd_cpp_device=_get_config_value(section, "sd_cpp_device") or DEFAULT_SD_CPP_DEVICE,
         sd_cpp_timeout_seconds=_coerce_int(section.get("sd_cpp_timeout_seconds"), DEFAULT_SD_CPP_TIMEOUT_SECONDS),
-        swarmui_base_url=_get_config_value(section, "swarmui_base_url"),
+        swarmui_base_url=_get_config_value(section, "swarmui_base_url") or DEFAULT_SWARMUI_BASE_URL,
         swarmui_default_model=_get_config_value(section, "swarmui_default_model"),
         swarmui_swarm_token=_get_config_value(section, "swarmui_swarm_token"),
         swarmui_allowed_extra_params=_parse_list(section.get("swarmui_allowed_extra_params")),
         swarmui_timeout_seconds=_coerce_int(section.get("swarmui_timeout_seconds"), DEFAULT_SWARMUI_TIMEOUT_SECONDS),
+        openrouter_image_base_url=_get_config_value(section, "openrouter_image_base_url")
+        or DEFAULT_OPENROUTER_IMAGE_BASE_URL,
+        openrouter_image_api_key=_get_config_value(section, "openrouter_image_api_key"),
+        openrouter_image_default_model=_get_config_value(section, "openrouter_image_default_model")
+        or DEFAULT_OPENROUTER_IMAGE_MODEL,
+        openrouter_image_allowed_extra_params=_parse_list(section.get("openrouter_image_allowed_extra_params")),
+        openrouter_image_timeout_seconds=_coerce_int(
+            section.get("openrouter_image_timeout_seconds"),
+            DEFAULT_OPENROUTER_IMAGE_TIMEOUT_SECONDS,
+        ),
+        novita_image_base_url=_get_config_value(section, "novita_image_base_url")
+        or DEFAULT_NOVITA_IMAGE_BASE_URL,
+        novita_image_api_key=_get_config_value(section, "novita_image_api_key"),
+        novita_image_default_model=_get_config_value(section, "novita_image_default_model")
+        or DEFAULT_NOVITA_IMAGE_MODEL,
+        novita_image_allowed_extra_params=_parse_list(section.get("novita_image_allowed_extra_params")),
+        novita_image_timeout_seconds=_coerce_int(
+            section.get("novita_image_timeout_seconds"),
+            DEFAULT_NOVITA_IMAGE_TIMEOUT_SECONDS,
+        ),
+        novita_image_poll_interval_seconds=max(
+            1,
+            _coerce_int(
+                section.get("novita_image_poll_interval_seconds"),
+                DEFAULT_NOVITA_IMAGE_POLL_INTERVAL_SECONDS,
+            ),
+        ),
+        together_image_base_url=_get_config_value(section, "together_image_base_url")
+        or DEFAULT_TOGETHER_IMAGE_BASE_URL,
+        together_image_api_key=_get_config_value(section, "together_image_api_key"),
+        together_image_default_model=_get_config_value(section, "together_image_default_model")
+        or DEFAULT_TOGETHER_IMAGE_MODEL,
+        together_image_allowed_extra_params=_parse_list(section.get("together_image_allowed_extra_params")),
+        together_image_timeout_seconds=_coerce_int(
+            section.get("together_image_timeout_seconds"),
+            DEFAULT_TOGETHER_IMAGE_TIMEOUT_SECONDS,
+        ),
     )
 
     _config_cache = config

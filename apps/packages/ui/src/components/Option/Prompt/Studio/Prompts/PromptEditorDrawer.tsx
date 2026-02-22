@@ -198,7 +198,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
               defaultValue: "Create Prompt"
             })
       }
-      width={640}
+      styles={{ wrapper: { width: 640 } }}
       destroyOnHidden
       footer={
         <div className="flex justify-end gap-2">
@@ -339,7 +339,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
                     <Alert
                       type="info"
                       showIcon
-                      message={t(
+                      title={t(
                         "managePrompts.studio.prompts.form.advancedInfo",
                         {
                           defaultValue:

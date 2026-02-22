@@ -1,6 +1,7 @@
 import { useMemo } from "react"
 import { Tooltip, message } from "antd"
 import {
+  CornerUpLeft,
   CopyIcon,
   DownloadIcon,
   Pin,
@@ -193,6 +194,26 @@ export const ArtifactsPanel = () => {
     window.URL.revokeObjectURL(url)
   }
 
+  const handleJumpToSource = () => {
+    const focusArtifactsTrigger = () => {
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("tldw:focus-artifacts-trigger"))
+      }, 0)
+    }
+    if (typeof document !== "undefined" && active?.id) {
+      const origin = document.getElementById(`artifact-origin-${active.id}`)
+      if (origin && typeof origin.scrollIntoView === "function") {
+        origin.scrollIntoView({ behavior: "smooth", block: "center" })
+        closeArtifact()
+        focusArtifactsTrigger()
+        return
+      }
+    }
+    closeArtifact()
+    window.dispatchEvent(new CustomEvent("tldw:scroll-to-latest"))
+    focusArtifactsTrigger()
+  }
+
   const handleSaveToDataTables = async () => {
     if (!active?.table) {
       message.error(t("dataTables:noTableToSave", "No table to save"))
@@ -260,7 +281,14 @@ export const ArtifactsPanel = () => {
           <Tooltip title={t("artifactsClose", "Close")}>
             <button
               type="button"
-              onClick={closeArtifact}
+              onClick={() => {
+                closeArtifact()
+                window.setTimeout(() => {
+                  window.dispatchEvent(
+                    new CustomEvent("tldw:focus-artifacts-trigger")
+                  )
+                }, 0)
+              }}
               className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               title={t("artifactsClose", "Close")}
             >
@@ -349,6 +377,18 @@ export const ArtifactsPanel = () => {
         )}
       </div>
       <div className="flex items-center gap-2 border-t border-border px-4 py-2">
+        <Tooltip title={t("artifactsJumpToSource", "Jump to source message")}>
+          <button
+            type="button"
+            data-testid="artifacts-jump-source"
+            onClick={handleJumpToSource}
+            className="inline-flex items-center gap-1 rounded-full border border-border bg-surface2 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-text hover:bg-surface"
+            title={t("artifactsJumpToSource", "Jump to source message")}
+          >
+            <CornerUpLeft className="h-3 w-3" />
+            <span>{t("artifactsJumpToSourceShort", "Jump to source")}</span>
+          </button>
+        </Tooltip>
         <Tooltip title={t("artifactsCopy", "Copy")}>
           <button
             type="button"

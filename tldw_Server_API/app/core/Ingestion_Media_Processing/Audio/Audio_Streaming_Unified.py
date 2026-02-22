@@ -35,6 +35,7 @@ from fastapi import WebSocketDisconnect
 from loguru import logger
 
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .Audio_Streaming_Parakeet import AudioBuffer, StreamingConfig
 
@@ -2193,6 +2194,9 @@ async def handle_unified_websocket(
     config: Optional[UnifiedStreamingConfig] = None,
     on_audio_seconds: Optional[Callable[[float, int], Awaitable[None]]] = None,
     on_heartbeat: Optional[Callable[[], Awaitable[None]]] = None,
+    on_stream_config_resolved: Optional[Callable[[dict[str, Any], UnifiedStreamingConfig], Awaitable[None]]] = None,
+    on_transcript_result: Optional[Callable[[dict[str, Any], str], Awaitable[None]]] = None,
+    on_full_transcript: Optional[Callable[[str, bool], Awaitable[None]]] = None,
 ):
     """
     Handle a WebSocket connection to perform unified real-time transcription across Parakeet, Canary, Whisper, and Qwen3-ASR models.
@@ -2204,6 +2208,9 @@ async def handle_unified_websocket(
         config (Optional[UnifiedStreamingConfig]): Optional initial streaming configuration; updated if a client config message is received.
         on_audio_seconds (Optional[Callable[[float, int], Awaitable[None]]]): Optional callback invoked before processing each audio chunk with two arguments: computed audio duration in seconds and the sample rate in Hz.
         on_heartbeat (Optional[Callable[[], Awaitable[None]]]): Optional callback invoked on each received audio message to refresh external TTLs (e.g., Redis-based heartbeats).
+        on_stream_config_resolved (Optional[Callable[[dict[str, Any], UnifiedStreamingConfig], Awaitable[None]]]): Optional callback invoked after config handling resolves, with raw config payload and resolved config object.
+        on_transcript_result (Optional[Callable[[dict[str, Any], str], Awaitable[None]]]): Optional callback invoked for each emitted partial/final transcript result, with the outgoing result payload and current full transcript snapshot.
+        on_full_transcript (Optional[Callable[[str, bool], Awaitable[None]]]): Optional callback invoked whenever the handler emits a full transcript (manual/auto commit).
     """
     logger.info("=== handle_unified_websocket STARTED ===")
 
@@ -2218,7 +2225,7 @@ async def handle_unified_websocket(
     stream = WebSocketStream(
         websocket,
         heartbeat_interval_s=None,  # use env default
-        compat_error_type=True,     # include error_type for rollout compatibility
+        compat_error_type=is_truthy(os.getenv("AUDIO_WS_COMPAT_ERROR_TYPE", "1")),
         close_on_done=True,
         idle_timeout_s=_idle_timeout,
         labels={"component": "audio", "endpoint": "audio_unified_ws"},
@@ -2244,12 +2251,15 @@ async def handle_unified_websocket(
     try:
         # Always wait for configuration message from client
         config_received = False
+        config_payload: dict[str, Any] = {}
         try:
             logger.info("Waiting for configuration message from client...")
             config_message = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)  # Increased timeout
             # Do not log raw payload contents (may include base64 audio); log metadata only
             logger.info(f"Received message (length={len(config_message)})")
             config_data = json.loads(config_message)
+            if isinstance(config_data, dict):
+                config_payload = config_data
             logger.info(f"Parsed config data type: {config_data.get('type')}")
 
             if config_data.get("type") == "config":
@@ -2272,8 +2282,7 @@ async def handle_unified_websocket(
                 config.enable_partial = config_data.get("enable_partial", True)
                 raw_vad = config_data.get("enable_vad", config.enable_vad)
                 if isinstance(raw_vad, str):
-                    normalized_vad = raw_vad.strip().lower()
-                    raw_vad = normalized_vad in {"1", "true", "yes", "on"}
+                    raw_vad = is_truthy(raw_vad)
                 elif raw_vad is not None and not isinstance(raw_vad, (bool, int)):
                     logger.debug(
                         f"Unexpected type for enable_vad in config: {type(raw_vad).__name__}; "
@@ -2405,6 +2414,12 @@ async def handle_unified_websocket(
 
         if not config_received:
             logger.warning(f"No valid config received. Proceeding with: model={config.model}, variant={config.model_variant}")
+
+        if on_stream_config_resolved is not None:
+            try:
+                await on_stream_config_resolved(config_payload, config)
+            except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
+                logger.debug(f"on_stream_config_resolved callback failed: {cb_exc}")
 
         # Create transcriber with config
         if transcriber is None:
@@ -2610,18 +2625,29 @@ async def handle_unified_websocket(
             """
             if transcriber is None:
                 return
-            _commit_received_at = float(commit_received_at or time.time())
             full_transcript = transcriber.get_full_transcript()
             _final_emit_at = time.time()
+            _eos_detected_at = _final_emit_at
+            try:
+                _commit_ts = float(commit_received_at) if commit_received_at is not None else None
+                if _commit_ts and _commit_ts > 0:
+                    _eos_detected_at = _commit_ts
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                _eos_detected_at = _final_emit_at
             payload = {
                 "type": "full_transcript",
                 "text": full_transcript,
                 "timestamp": _final_emit_at,
-                # Provide a voice-to-voice start timestamp clients can thread into downstream TTS
-                "voice_to_voice_start": _final_emit_at,
+                # EOS/turn-end anchor clients can thread into downstream TTS.
+                "voice_to_voice_start": _eos_detected_at,
             }
             if auto_commit:
                 payload["auto_commit"] = True
+            if on_full_transcript is not None:
+                try:
+                    await on_full_transcript(full_transcript, auto_commit)
+                except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
+                    logger.debug(f"on_full_transcript callback failed: {cb_exc}")
             await stream.send_json(payload)
             # Record STT finalization latency metric (commit → final emit)
             try:
@@ -2632,7 +2658,7 @@ async def handle_unified_websocket(
                 _variant = getattr(config, "model_variant", None) or "standard"
                 reg.observe(
                     "stt_final_latency_seconds",
-                    max(0.0, _final_emit_at - _commit_received_at),
+                    max(0.0, _final_emit_at - _eos_detected_at),
                     labels={"model": str(_model), "variant": str(_variant), "endpoint": "audio_unified_ws"},
                 )
             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
@@ -2768,6 +2794,16 @@ async def handle_unified_websocket(
                                         result.setdefault("speaker_label", speaker_info["speaker_label"])
                             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
                                 logger.exception("Diarization update failed: {}", diar_err)
+
+                        if on_transcript_result is not None:
+                            try:
+                                full_snapshot = transcriber.get_full_transcript() if transcriber else ""
+                            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                                full_snapshot = ""
+                            try:
+                                await on_transcript_result(result, full_snapshot)
+                            except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
+                                logger.debug(f"on_transcript_result callback failed: {cb_exc}")
 
                         await stream.send_json(result)
                         if insights_engine and result.get("is_final"):

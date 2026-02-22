@@ -19,6 +19,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Claims_Extraction.analyze_types import ClaimsAnalyzeCallable
 from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     ClaimsJobBudget,
     ClaimsJobContext,
@@ -27,67 +28,42 @@ from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
 )
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     estimate_claims_cost,
+    record_claims_fallback,
     record_claims_budget_exhausted,
+    record_claims_output_parse_event,
     record_claims_provider_request,
+    record_claims_response_format_selection,
     record_claims_throttle,
     should_throttle_claims_provider,
     suggest_claims_concurrency,
 )
-from tldw_Server_API.app.core.Claims_Extraction.span_alignment import find_text_span
+from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
+from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+    ClaimType,
+    Document,
+    MatchLevel,
+    SourceAuthority,
+    VerificationStatus,
+)
+from tldw_Server_API.app.core.Claims_Extraction.extractor_registry import (
+    extract_heuristic_claims_texts,
+    extract_ner_claims_texts,
+    run_async_claims_strategy,
+)
+from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
+    ClaimsOutputParseError,
+    ClaimsOutputSchemaError,
+    coerce_llm_response_text,
+    extract_claim_texts,
+    parse_claims_llm_output,
+    resolve_claims_response_format,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
+    resolve_claims_alignment_config as resolve_runtime_alignment_config,
+    resolve_claims_json_parse_mode as resolve_runtime_parse_mode,
+    resolve_claims_llm_config as resolve_runtime_llm_config,
+)
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
-
-# Prefer importing Document and verification types from RAG types for consistency
-try:
-    from tldw_Server_API.app.core.RAG.rag_service.types import (
-        ClaimType,
-        Document,
-        MatchLevel,
-        SourceAuthority,
-        VerificationStatus,
-    )
-except ImportError:
-    # Lightweight fallback types for non-RAG usage
-    from enum import Enum
-
-    class ClaimType(Enum):  # type: ignore
-        STATISTIC = "statistic"
-        COMPARATIVE = "comparative"
-        TEMPORAL = "temporal"
-        ATTRIBUTION = "attribution"
-        CAUSAL = "causal"
-        EXISTENCE = "existence"
-        RANKING = "ranking"
-        QUOTE = "quote"
-        GENERAL = "general"
-
-    class VerificationStatus(Enum):  # type: ignore
-        VERIFIED = "verified"
-        CITATION_NOT_FOUND = "citation_not_found"
-        MISQUOTED = "misquoted"
-        MISLEADING = "misleading"
-        HALLUCINATION = "hallucination"
-        UNVERIFIED = "unverified"
-        NUMERICAL_ERROR = "numerical_error"
-        REFUTED = "refuted"
-
-    class MatchLevel(Enum):  # type: ignore
-        EXACT = "exact"
-        PARAPHRASE = "paraphrase"
-        INTERPRETATION = "interpretation"
-
-    class SourceAuthority(Enum):  # type: ignore
-        PRIMARY = 5
-        GOVERNMENT = 4
-        PEER_REVIEWED = 3
-        INDUSTRY = 2
-        SECONDARY = 1
-
-    @dataclass
-    class Document:  # type: ignore
-        id: str
-        content: str
-        metadata: dict[str, Any] = field(default_factory=dict)
-        score: float = 0.0
 
 
 _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS = (
@@ -149,6 +125,7 @@ class ClaimVerification:
     @property
     def label(self) -> str:
         """Backward-compatible label property mapping status to supported/refuted/nei."""
+        contested_status = getattr(VerificationStatus, "CONTESTED", None)
         status_to_label = {
             VerificationStatus.VERIFIED: "supported",
             VerificationStatus.REFUTED: "refuted",
@@ -158,8 +135,9 @@ class ClaimVerification:
             VerificationStatus.HALLUCINATION: "refuted",
             VerificationStatus.UNVERIFIED: "nei",
             VerificationStatus.NUMERICAL_ERROR: "refuted",
-            VerificationStatus.CONTESTED: "contested",
         }
+        if contested_status is not None:
+            status_to_label[contested_status] = "contested"
         return status_to_label.get(self.status, "nei")
 
 
@@ -260,6 +238,36 @@ _GOV_PATTERNS = re.compile(r"\.gov\b|government|official\s+(?:data|statistics|re
 _PEER_REVIEWED_PATTERNS = re.compile(r"\bdoi\b|journal|peer[\-\s]?review|published\s+in", re.IGNORECASE)
 _PRIMARY_PATTERNS = re.compile(r"original\s+(?:research|study|data)|primary\s+source|first[\-\s]?hand", re.IGNORECASE)
 _INDUSTRY_PATTERNS = re.compile(r"whitepaper|industry\s+report|market\s+(?:research|analysis)", re.IGNORECASE)
+
+_CLAIMS_EXTRACT_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                },
+                "required": ["text"],
+                "additionalProperties": True,
+            },
+        },
+    },
+    "required": ["claims"],
+    "additionalProperties": True,
+}
+
+_CLAIMS_VERIFY_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string"},
+        "confidence": {"type": "number"},
+        "rationale": {"type": "string"},
+    },
+    "required": ["label"],
+    "additionalProperties": True,
+}
 
 
 def _extract_numbers_and_dates(text: str) -> dict[str, list[str]]:
@@ -518,7 +526,9 @@ def _find_offsets(doc_text: str, claim_text: str, snippet: str) -> tuple[int, in
     if snip.endswith("…"):
         snip = snip[:-1]
 
-    span = find_text_span(doc_text, ct, fallback_text=snip)
+    span = align_claim_span(doc_text, ct, mode="fuzzy", threshold=0.6)
+    if span is None and snip:
+        span = align_claim_span(doc_text, snip, mode="fuzzy", threshold=0.6)
     if span is not None:
         return span
 
@@ -526,46 +536,27 @@ def _find_offsets(doc_text: str, claim_text: str, snippet: str) -> tuple[int, in
 
 
 def _resolve_claims_llm_config() -> tuple[str, str | None, float]:
+    return resolve_runtime_llm_config(default_temperature=0.1)
+
+
+def _resolve_claims_json_parse_mode() -> str:
+    return resolve_runtime_parse_mode(default_mode="lenient")
+
+
+def _resolve_claims_alignment_config() -> tuple[str, float]:
+    return resolve_runtime_alignment_config(default_mode="fuzzy", default_threshold=0.75)
+
+
+def _claims_local_nli_enabled() -> bool:
     try:
         from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
     except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        _settings = {}
-
-    provider = None
-    model_override = None
-    temperature = 0.1
-    try:
-        provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        provider = None
-    try:
-        model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        model_override = None
-    try:
-        temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        temperature = 0.1
-
-    if provider is None:
-        try:
-            rag_cfg = _settings.get("RAG", {}) or {}
-            provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
-        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-            provider = None
-    if provider is None:
-        try:
-            provider = str(_settings.get("default_api", "openai")).strip() or "openai"
-        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-            provider = "openai"
-    if model_override is None:
-        try:
-            rag_cfg = _settings.get("RAG", {}) or {}
-            model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
-        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-            model_override = None
-
-    return provider or "openai", model_override, temperature
+        return False
+    value = _settings.get("CLAIMS_ENABLE_LOCAL_NLI", False)
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "on", "enabled"}
 
 
 async def _log_claims_llm_usage(
@@ -624,26 +615,17 @@ class HeuristicSentenceExtractor:
     async def extract(self, answer: str, max_claims: int = 25) -> list[Claim]:
         if not answer or not isinstance(answer, str):
             return []
-        # naive sentence split; keep manageable count
-        parts = re.split(r"(?<=[\.!?])\s+", answer.strip())
+        parts = extract_heuristic_claims_texts(answer, max_claims)
         claims: list[Claim] = []
-        for i, p in enumerate(parts):
-            t = p.strip()
-            if not t:
-                continue
-            # filter very short lines
-            if len(t) < 12:
-                continue
-            claims.append(Claim(id=f"c{i+1}", text=t, span=None))
-            if len(claims) >= max_claims:
-                break
+        for i, p in enumerate(parts[:max_claims]):
+            claims.append(Claim(id=f"c{i+1}", text=p.strip(), span=None))
         return claims
 
 
 class LLMBasedClaimExtractor:
     """Prompt an LLM to extract decontextualized atomic propositions as JSON."""
 
-    def __init__(self, analyze_fn: Any):
+    def __init__(self, analyze_fn: ClaimsAnalyzeCallable):
         self._analyze = analyze_fn
 
     async def extract(
@@ -674,6 +656,18 @@ class LLMBasedClaimExtractor:
             prompt = _tmpl.format(max_claims=max_claims, answer=answer)
 
         provider, model_override, temperature = _resolve_claims_llm_config()
+        parse_mode = _resolve_claims_json_parse_mode()
+        response_format = resolve_claims_response_format(
+            provider or "openai",
+            schema_name="claims_extraction",
+            json_schema=_CLAIMS_EXTRACT_RESPONSE_SCHEMA,
+        )
+        record_claims_response_format_selection(
+            provider=provider or "openai",
+            model=model_override or "",
+            mode="extract",
+            response_format=response_format,
+        )
         cost_estimate = estimate_claims_cost(
             provider=provider or "openai",
             model=model_override or "",
@@ -692,6 +686,12 @@ class LLMBasedClaimExtractor:
                 mode="extract",
                 reason=reason or "throttle",
             )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                reason=reason or "throttle",
+            )
             return await HeuristicSentenceExtractor().extract(answer, max_claims)
         if budget is not None:
             prompt_tokens = estimate_claims_tokens(prompt)
@@ -704,6 +704,12 @@ class LLMBasedClaimExtractor:
                 )
                 if budget.strict:
                     return []
+                record_claims_fallback(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="extract",
+                    reason=budget.exhausted_reason or "budget",
+                )
                 return await HeuristicSentenceExtractor().extract(answer, max_claims)
         try:
             start_time = time.time()
@@ -720,6 +726,7 @@ class LLMBasedClaimExtractor:
                 chunked_summarization=False,
                 chunk_options=None,
                 model_override=model_override,
+                response_format=response_format,
             )
             latency_s = time.time() - start_time
             record_claims_provider_request(
@@ -729,7 +736,7 @@ class LLMBasedClaimExtractor:
                 latency_s=latency_s,
                 estimated_cost=cost_estimate,
             )
-            text = raw if isinstance(raw, str) else str(raw)
+            text = coerce_llm_response_text(raw)
             if budget is not None:
                 budget.add_usage(tokens=estimate_claims_tokens(text))
             with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
@@ -744,29 +751,60 @@ class LLMBasedClaimExtractor:
                     status=200,
                     estimated=True,
                 )
-            # find JSON block (support fenced blocks)
-            jtxt = None
-            fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
-            for block in fence_json or []:
-                try:
-                    _ = json.loads(block)
-                    jtxt = block
-                    break
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    continue
-            if jtxt is None:
-                m = re.search(r"\{[\s\S]*\}\s*$", text)
-                jtxt = m.group(0) if m else text
-            data = json.loads(jtxt)
-            out: list[Claim] = []
-            for i, c in enumerate((data.get("claims") or [])[:max_claims]):
-                t = (c or {}).get("text")
-                if isinstance(t, str) and len(t.strip()) > 0:
-                    out.append(Claim(id=f"c{i+1}", text=t.strip()))
+            parsed = parse_claims_llm_output(
+                text,
+                parse_mode=parse_mode,
+                strip_think_tags=True,
+            )
+            claim_texts = extract_claim_texts(
+                parsed,
+                wrapper_key="claims",
+                parse_mode=parse_mode,
+                max_claims=max_claims,
+            )
+            out: list[Claim] = [Claim(id=f"c{i+1}", text=ct) for i, ct in enumerate(claim_texts[:max_claims])]
             if not out:
+                record_claims_output_parse_event(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="extract",
+                    parse_mode=parse_mode,
+                    outcome="empty",
+                    reason="no_claims",
+                )
+                record_claims_fallback(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="extract",
+                    reason="empty_claims",
+                )
                 logger.debug("LLM extractor returned no claims; falling back to heuristics")
                 return await HeuristicSentenceExtractor().extract(answer, max_claims)
+            record_claims_output_parse_event(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                parse_mode=parse_mode,
+                outcome="success",
+            )
             return out
+        except ClaimsOutputParseError as e:
+            record_claims_output_parse_event(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                parse_mode=parse_mode,
+                outcome="error",
+                reason=e.__class__.__name__,
+            )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                reason="parse_error",
+            )
+            logger.warning(f"Claim extraction JSON parse failed; falling back to heuristics: {e}")
+            return await HeuristicSentenceExtractor().extract(answer, max_claims)
         except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
             record_claims_provider_request(
                 provider=provider or "openai",
@@ -789,6 +827,12 @@ class LLMBasedClaimExtractor:
                     estimated=True,
                 )
             logger.warning(f"Claim extraction via LLM failed: {e}")
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                reason="provider_error",
+            )
             return await HeuristicSentenceExtractor().extract(answer, max_claims)
 
 
@@ -797,34 +841,44 @@ class LLMBasedClaimExtractor:
 class HybridClaimVerifier:
     """Verify with numeric/date checks, retrieve evidence, then LLM-judge entailment."""
 
-    def __init__(self, analyze_fn: Any, nli_model: str | None = None):
+    def __init__(self, analyze_fn: ClaimsAnalyzeCallable, nli_model: str | None = None):
         self._analyze = analyze_fn
         self._nli = None
         self._nli_lock = asyncio.Lock()
-        # Try to initialize local NLI model if available
-        try:
-            import os
-
-            from transformers import pipeline  # type: ignore
-            model_name = nli_model or os.environ.get("RAG_NLI_MODEL") or os.environ.get("RAG_NLI_MODEL_PATH") or "roberta-large-mnli"
-            def _load():
-                try:
-                    return pipeline("text-classification", model=model_name, return_all_scores=True)
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
-                    logger.warning(f"NLI model load failed ({model_name}): {e}.")
-                    return None
-            loop = asyncio.get_event_loop()
-            self._nli = loop.run_in_executor(None, _load)
-        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-            self._nli = None
+        self._nli_load_attempted = False
+        self._nli_model_name = nli_model
 
     async def _get_nli(self):
         async with self._nli_lock:
-            if asyncio.isfuture(self._nli) or hasattr(self._nli, "__await__"):
+            if self._nli is not None:
+                return self._nli
+            if not _claims_local_nli_enabled():
+                return None
+            if self._nli_load_attempted:
+                return None
+            self._nli_load_attempted = True
+
+            def _load():
                 try:
-                    self._nli = await self._nli  # type: ignore
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    self._nli = None
+                    import os
+                    from transformers import pipeline  # type: ignore
+
+                    model_name = (
+                        self._nli_model_name
+                        or os.environ.get("RAG_NLI_MODEL")
+                        or os.environ.get("RAG_NLI_MODEL_PATH")
+                        or "roberta-large-mnli"
+                    )
+                    return pipeline("text-classification", model=model_name, return_all_scores=True)
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
+                    logger.warning(f"NLI model load failed: {e}.")
+                    return None
+
+            try:
+                loop = asyncio.get_running_loop()
+                self._nli = await loop.run_in_executor(None, _load)
+            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
+                self._nli = None
             return self._nli
 
     @staticmethod
@@ -954,6 +1008,18 @@ class HybridClaimVerifier:
         confidence = 0.5
         rationale = None
         provider, model_override, temperature = _resolve_claims_llm_config()
+        parse_mode = _resolve_claims_json_parse_mode()
+        response_format = resolve_claims_response_format(
+            provider or "openai",
+            schema_name="claims_verification",
+            json_schema=_CLAIMS_VERIFY_RESPONSE_SCHEMA,
+        )
+        record_claims_response_format_selection(
+            provider=provider or "openai",
+            model=model_override or "",
+            mode="verify",
+            response_format=response_format,
+        )
         cost_estimate = estimate_claims_cost(
             provider=provider or "openai",
             model=model_override or "",
@@ -972,6 +1038,12 @@ class HybridClaimVerifier:
                 mode="verify",
                 reason=reason or "throttle",
             )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                reason=reason or "throttle",
+            )
             return ClaimVerification(
                 claim=claim,
                 status=VerificationStatus.UNVERIFIED,
@@ -984,6 +1056,12 @@ class HybridClaimVerifier:
             prompt_tokens = estimate_claims_tokens(judge_prompt)
             if not budget.reserve(cost_usd=cost_estimate, tokens=prompt_tokens):
                 record_claims_budget_exhausted(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="verify",
+                    reason=budget.exhausted_reason or "budget",
+                )
+                record_claims_fallback(
                     provider=provider or "openai",
                     model=model_override or "",
                     mode="verify",
@@ -1008,6 +1086,7 @@ class HybridClaimVerifier:
                 system,
                 temperature,
                 model_override=model_override,
+                response_format=response_format,
             )
             latency_s = time.time() - start_time
             record_claims_provider_request(
@@ -1017,7 +1096,7 @@ class HybridClaimVerifier:
                 latency_s=latency_s,
                 estimated_cost=cost_estimate,
             )
-            text = raw if isinstance(raw, str) else str(raw)
+            text = coerce_llm_response_text(raw)
             if budget is not None:
                 budget.add_usage(tokens=estimate_claims_tokens(text))
             with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
@@ -1032,25 +1111,41 @@ class HybridClaimVerifier:
                     status=200,
                     estimated=True,
                 )
-            # Parse fenced JSON if present
-            jtxt = None
-            fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
-            for block in fence_json or []:
-                try:
-                    _ = json.loads(block)
-                    jtxt = block
-                    break
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    continue
-            if jtxt is None:
-                m = re.search(r"\{[\s\S]*\}\s*$", text)
-                jtxt = m.group(0) if m else text
-            data = json.loads(jtxt)
+            data = parse_claims_llm_output(
+                text,
+                parse_mode=parse_mode,
+                strip_think_tags=True,
+            )
+            if not isinstance(data, dict):
+                raise ClaimsOutputSchemaError("Verifier response must be a JSON object.")
+            record_claims_output_parse_event(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                parse_mode=parse_mode,
+                outcome="success",
+            )
             lab = str(data.get("label", "nei")).lower().strip()
             if lab in {"supported", "refuted", "nei"}:
                 label = lab
             confidence = float(data.get("confidence", confidence))
             rationale = data.get("rationale")
+        except ClaimsOutputParseError as e:
+            record_claims_output_parse_event(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                parse_mode=parse_mode,
+                outcome="error",
+                reason=e.__class__.__name__,
+            )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                reason="parse_error",
+            )
+            logger.warning(f"LLM judge parse failed; defaulting to NEI: {e}")
         except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
             record_claims_provider_request(
                 provider=provider or "openai",
@@ -1072,6 +1167,12 @@ class HybridClaimVerifier:
                     status=500,
                     estimated=True,
                 )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                reason="provider_error",
+            )
             logger.warning(f"LLM judge failed; defaulting to NEI: {e}")
         # Check numeric precision for statistic claims
         numeric_match: bool | None = None
@@ -1152,11 +1253,127 @@ class HybridClaimVerifier:
 class ClaimsEngine:
     """High-level entry: extracts and verifies claims for a generated answer."""
 
-    def __init__(self, analyze_fn: Any):
+    def __init__(self, analyze_fn: ClaimsAnalyzeCallable):
         self.extractor_llm = LLMBasedClaimExtractor(analyze_fn)
         self.extractor_heur = HeuristicSentenceExtractor()
         self._analyze = analyze_fn
         self.verifier = HybridClaimVerifier(analyze_fn)
+
+    @staticmethod
+    def _build_claims_from_texts(
+        *,
+        source_text: str,
+        claim_texts: list[str],
+        max_claims: int,
+    ) -> list[Claim]:
+        alignment_mode, alignment_threshold = _resolve_claims_alignment_config()
+        claims: list[Claim] = []
+        for idx, claim_text in enumerate(claim_texts[:max_claims]):
+            cleaned = (claim_text or "").strip()
+            if not cleaned:
+                continue
+            span = align_claim_span(
+                source_text,
+                cleaned,
+                mode=alignment_mode,
+                threshold=alignment_threshold,
+            )
+            claims.append(Claim(id=f"c{idx+1}", text=cleaned, span=span))
+        return claims
+
+    async def _extract_aps_claim_texts(self, answer: str, max_claims: int) -> list[str]:
+        try:
+            from tldw_Server_API.app.core.Chunking.strategies.propositions import (
+                PropositionChunkingStrategy,
+            )
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"APS extractor unavailable: {exc}")
+            return []
+
+        provider, model_override, temperature = _resolve_claims_llm_config()
+        try:
+            strategy = PropositionChunkingStrategy(
+                language="en",
+                llm_call_func=self._analyze,
+                llm_config={
+                    "window_chars": 1200,
+                    "api_name": provider or "openai",
+                    "temp": temperature,
+                    "model_override": model_override,
+                },
+            )
+            prop_chunks = strategy.chunk(
+                text=answer,
+                max_size=1,
+                overlap=0,
+                engine="llm",
+                proposition_prompt_profile="gemma_aps",
+            )
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"APS extractor failed: {exc}")
+            return []
+
+        out: list[str] = []
+        for ptxt in (prop_chunks or [])[:max_claims]:
+            if isinstance(ptxt, str) and ptxt.strip():
+                out.append(ptxt.strip())
+        return out
+
+    async def _extract_claims_by_mode(
+        self,
+        *,
+        answer: str,
+        claim_extractor: str,
+        claims_max: int,
+        budget: ClaimsJobBudget | None,
+        job_context: ClaimsJobContext | None,
+    ) -> tuple[list[Claim], str]:
+        async def _llm_strategy(text: str, max_items: int, _language: str | None) -> list[str]:
+            claim_objs = await self.extractor_llm.extract(
+                text,
+                max_claims=max_items,
+                budget=budget,
+                job_context=job_context,
+            )
+            return [c.text for c in claim_objs if isinstance(c.text, str) and c.text.strip()]
+
+        async def _aps_strategy(text: str, max_items: int, _language: str | None) -> list[str]:
+            return await self._extract_aps_claim_texts(text, max_items)
+
+        strategy_map = {
+            "heuristic": extract_heuristic_claims_texts,
+            "ner": extract_ner_claims_texts,
+            "aps": _aps_strategy,
+            "llm": _llm_strategy,
+        }
+        requested = (claim_extractor or "auto").strip().lower()
+        fallback_mode = "llm" if requested in {"auto", "detect", "ner", "aps", "llm"} else "heuristic"
+
+        dispatch = await run_async_claims_strategy(
+            requested_mode=requested,
+            text=answer,
+            max_claims=claims_max,
+            strategy_map=strategy_map,
+            fallback_mode=fallback_mode,
+            catch_exceptions=_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS,
+        )
+
+        claims = self._build_claims_from_texts(
+            source_text=answer,
+            claim_texts=dispatch.claim_texts,
+            max_claims=claims_max,
+        )
+        mode = dispatch.mode
+        if claims:
+            return claims, mode
+
+        heur_claims = await self.extractor_heur.extract(answer, claims_max)
+        claims = self._build_claims_from_texts(
+            source_text=answer,
+            claim_texts=[c.text for c in heur_claims],
+            max_claims=claims_max,
+        )
+        return claims, "heuristic"
 
     async def run(
         self,
@@ -1185,144 +1402,13 @@ class ClaimsEngine:
                 _settings = {}
             budget = resolve_claims_job_budget(settings=_settings)
 
-        # choose extractor
-        claims: list[Claim] = []
-        extractor_mode = (claim_extractor or "auto").strip().lower()
-
-        if extractor_mode == "ner":
-            # NER-assisted sentence selection: keep sentences with named entities
-            try:
-                import spacy  # type: ignore
-                try:
-                    from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    _settings = {}
-                model_name = None
-                try:
-                    model_name = str(_settings.get("CLAIMS_LOCAL_NER_MODEL", "en_core_web_sm") or "en_core_web_sm")
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    model_name = "en_core_web_sm"
-
-                try:
-                    nlp = spacy.load(model_name)
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    nlp = spacy.blank("en")
-                    if not nlp.has_pipe("sentencizer"):
-                        nlp.add_pipe("sentencizer")
-
-                doc = nlp(answer)
-                sents_text: list[str] = []
-                for sent in getattr(doc, "sents", [doc]):
-                    has_ent = any(getattr(ent, "label_", "") for ent in getattr(sent, "ents", []))
-                    if has_ent:
-                        st = sent.text.strip()
-                        if len(st) >= 12:
-                            sents_text.append(st)
-                    if len(sents_text) >= claims_max:
-                        break
-                claims = [Claim(id=f"c{i+1}", text=t) for i, t in enumerate(sents_text[:claims_max])]
-                if not claims:
-                    # If no entities detected, fall back to LLM extractor
-                    claims = await self.extractor_llm.extract(
-                        answer,
-                        max_claims=claims_max,
-                        budget=budget,
-                        job_context=job_context,
-                    )
-            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"NER extractor unavailable/failed: {e}; falling back to LLM extractor")
-                claims = await self.extractor_llm.extract(
-                    answer,
-                    max_claims=claims_max,
-                    budget=budget,
-                    job_context=job_context,
-                )
-
-        elif extractor_mode == "aps":
-            # APS-style proposition extraction via PropositionChunkingStrategy (LLM engine, gemma_aps prompt)
-            try:
-                from tldw_Server_API.app.core.Chunking.strategies.propositions import (
-                    PropositionChunkingStrategy,
-                )
-
-                # Load provider/model/temp from config.txt with sensible fallbacks
-                try:
-                    from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    _settings = {}
-
-                provider = None
-                model_override = None
-                temperature = 0.2
-                try:
-                    provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    provider = None
-                try:
-                    model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    model_override = None
-                try:
-                    temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.2))
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    temperature = 0.2
-
-                # Fallbacks to RAG defaults then global default_api
-                if provider is None:
-                    try:
-                        rag_cfg = _settings.get("RAG", {}) or {}
-                        provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
-                    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                        provider = None
-                if provider is None:
-                    try:
-                        provider = str(_settings.get("default_api", "openai")).strip() or "openai"
-                    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                        provider = "openai"
-                if model_override is None:
-                    try:
-                        rag_cfg = _settings.get("RAG", {}) or {}
-                        model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
-                    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                        model_override = None
-
-                strategy = PropositionChunkingStrategy(
-                    language="en",
-                    llm_call_func=self._analyze,
-                    llm_config={
-                        "window_chars": 1200,
-                        "api_name": provider or "openai",
-                        "temp": temperature,
-                        "model_override": model_override,
-                    },
-                )
-                # Use max_size=1 so each proposition becomes its own unit
-                prop_chunks = strategy.chunk(
-                    text=answer,
-                    max_size=1,
-                    overlap=0,
-                    engine="llm",
-                    proposition_prompt_profile="gemma_aps",
-                )
-                for i, ptxt in enumerate((prop_chunks or [])[:claims_max]):
-                    if isinstance(ptxt, str) and ptxt.strip():
-                        claims.append(Claim(id=f"c{i+1}", text=ptxt.strip()))
-            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"APS extractor failed, falling back to LLM extractor: {e}")
-                claims = await self.extractor_llm.extract(
-                    answer,
-                    max_claims=claims_max,
-                    budget=budget,
-                    job_context=job_context,
-                )
-        else:
-            # default to LLM-based claim extraction (claimify/generic)
-            claims = await self.extractor_llm.extract(
-                answer,
-                max_claims=claims_max,
-                budget=budget,
-                job_context=job_context,
-            )
+        claims, extractor_mode = await self._extract_claims_by_mode(
+            answer=answer,
+            claim_extractor=claim_extractor,
+            claims_max=claims_max,
+            budget=budget,
+            job_context=job_context,
+        )
         verifications: list[ClaimVerification] = []
 
         # Initialize verifier once if a specific NLI model is requested
@@ -1472,64 +1558,13 @@ class ClaimsEngine:
                 _settings = {}
             budget = resolve_claims_job_budget(settings=_settings)
 
-        claims: list[Claim] = []
-        extractor_mode = (claim_extractor or "auto").strip().lower()
-
-        # Use existing extraction logic based on mode
-        if extractor_mode == "ner":
-            try:
-                import spacy
-                try:
-                    from tldw_Server_API.app.core.config import settings as _settings
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    _settings = {}
-                model_name = str(_settings.get("CLAIMS_LOCAL_NER_MODEL", "en_core_web_sm") or "en_core_web_sm")
-                try:
-                    nlp = spacy.load(model_name)
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    nlp = spacy.blank("en")
-                    if not nlp.has_pipe("sentencizer"):
-                        nlp.add_pipe("sentencizer")
-                doc = nlp(answer)
-                sents_text: list[str] = []
-                for sent in getattr(doc, "sents", [doc]):
-                    has_ent = any(getattr(ent, "label_", "") for ent in getattr(sent, "ents", []))
-                    if has_ent:
-                        st = sent.text.strip()
-                        if len(st) >= 12:
-                            sents_text.append(st)
-                    if len(sents_text) >= claims_max:
-                        break
-                claims = [Claim(id=f"c{i+1}", text=t) for i, t in enumerate(sents_text[:claims_max])]
-                if not claims:
-                    claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
-            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"NER extractor failed: {e}")
-                claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
-        elif extractor_mode == "aps":
-            try:
-                from tldw_Server_API.app.core.Chunking.strategies.propositions import PropositionChunkingStrategy
-                try:
-                    from tldw_Server_API.app.core.config import settings as _settings
-                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                    _settings = {}
-                provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or str(_settings.get("default_api", "openai")).strip()
-                model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
-                temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.2))
-                strategy = PropositionChunkingStrategy(
-                    language="en",
-                    llm_call_func=self._analyze,
-                    llm_config={"window_chars": 1200, "api_name": provider, "temp": temperature, "model_override": model_override},
-                )
-                prop_chunks = strategy.chunk(text=answer, max_size=1, overlap=0, engine="llm", proposition_prompt_profile="gemma_aps")
-                for i, ptxt in enumerate((prop_chunks or [])[:claims_max]):
-                    if isinstance(ptxt, str) and ptxt.strip():
-                        claims.append(Claim(id=f"c{i+1}", text=ptxt.strip()))
-            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"APS extractor failed: {e}")
-                claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
-        else:
-            claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
+        claims, extractor_mode = await self._extract_claims_by_mode(
+            answer=answer,
+            claim_extractor=claim_extractor,
+            claims_max=claims_max,
+            budget=budget,
+            job_context=job_context,
+        )
 
         # Classify all claims
         for claim in claims:

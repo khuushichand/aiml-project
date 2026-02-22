@@ -70,6 +70,24 @@ def _build_app_with_overrides(
 
     app.dependency_overrides[notes_graph_mod.get_request_user] = _fake_get_request_user
 
+    async def _allow_non_authz_dep() -> None:
+        # Claim tests isolate require_permissions behavior and bypass unrelated
+        # per-route token-scope/rate-limit enforcement dependencies.
+        return None
+
+    for route in app.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for dep in getattr(dependant, "dependencies", []):
+            call = getattr(dep, "call", None)
+            if call is None:
+                continue
+            if getattr(call, "_tldw_token_scope", False):
+                app.dependency_overrides[call] = _allow_non_authz_dep
+            if getattr(call, "_tldw_rate_limit_resource", None) is not None:
+                app.dependency_overrides[call] = _allow_non_authz_dep
+
     class _StubChaChaDB:
         def create_manual_note_edge(
             self,
@@ -96,6 +114,28 @@ def _build_app_with_overrides(
         def delete_manual_note_edge(self, *, user_id: str, edge_id: str) -> bool:
             _ = (user_id, edge_id)
             return True
+
+        # Graph query stubs needed by NoteGraphService
+        def count_user_notes(self, include_deleted=True):
+            return 0
+
+        def get_all_note_ids_for_graph(self, include_deleted=True, limit=500):
+            return []
+
+        def get_notes_batch(self, note_ids, include_deleted=True):
+            return []
+
+        def get_manual_edges_for_notes(self, user_id, note_ids):
+            return []
+
+        def get_note_tag_edges(self, note_ids):
+            return []
+
+        def count_notes_per_tag(self):
+            return {}
+
+        def get_note_source_info(self, note_ids):
+            return []
 
     async def _fake_get_chacha_db_for_user():
         return _StubChaChaDB()

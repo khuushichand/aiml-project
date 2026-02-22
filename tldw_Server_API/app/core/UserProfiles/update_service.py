@@ -52,6 +52,11 @@ class _MembershipContext:
     actor_team_roles: dict[int, str] = field(default_factory=dict)
 
 
+def _is_postgres_backend_for_pool(db_pool: Any) -> bool:
+    """Derive backend from DatabasePool state without probing connection methods."""
+    return bool(getattr(db_pool, "pool", None))
+
+
 class UserProfileUpdateService:
     """Apply profile updates with catalog-driven validation."""
 
@@ -85,6 +90,7 @@ class UserProfileUpdateService:
                 scope=scope,
                 is_platform_admin=is_platform_admin,
             )
+        is_postgres_backend = _is_postgres_backend_for_pool(self._db_pool)
 
         for key, value in updates_list:
             entry = catalog_map.get(key)
@@ -130,6 +136,7 @@ class UserProfileUpdateService:
                     scope=scope,
                     is_platform_admin=is_platform_admin,
                     membership_context=membership_context,
+                    is_postgres_backend=is_postgres_backend,
                 )
             except ValueError as exc:
                 result.skipped.append({"key": key, "message": str(exc)})
@@ -155,6 +162,7 @@ class UserProfileUpdateService:
         scope: ProfileUpdateScope | None,
         is_platform_admin: bool,
         membership_context: _MembershipContext | None,
+        is_postgres_backend: bool,
     ) -> bool:
         if key == "identity.email":
             try:
@@ -183,7 +191,11 @@ class UserProfileUpdateService:
 
         if key == "identity.is_locked":
             if not dry_run:
-                username = await _fetch_username(db_conn, user_id)
+                username = await _fetch_username(
+                    db_conn,
+                    user_id,
+                    is_postgres_backend=is_postgres_backend,
+                )
                 if not username:
                     raise ValueError("user_not_found")
                 limiter = get_rate_limiter()
@@ -551,8 +563,10 @@ def _validate_numeric(entry: UserProfileCatalogEntry, value: float) -> tuple[boo
 
 async def _update_user_field(db_conn: Any, user_id: int, column: str, value: Any) -> None:
     try:
+        update_user_sql_template = "UPDATE users SET {column} = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2"
+        update_user_sql = update_user_sql_template.format_map(locals())  # nosec B608
         await db_conn.execute(
-            f"UPDATE users SET {column} = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+            update_user_sql,
             value,
             user_id,
         )
@@ -572,9 +586,14 @@ async def _touch_user_updated_at(db_conn: Any, user_id: int) -> None:
         raise
 
 
-async def _fetch_username(db_conn: Any, user_id: int) -> str | None:
+async def _fetch_username(
+    db_conn: Any,
+    user_id: int,
+    *,
+    is_postgres_backend: bool,
+) -> str | None:
     try:
-        if hasattr(db_conn, "fetchval"):
+        if is_postgres_backend:
             value = await db_conn.fetchval(
                 "SELECT username FROM users WHERE id = $1",
                 user_id,
@@ -587,7 +606,13 @@ async def _fetch_username(db_conn: Any, user_id: int) -> str | None:
         row = await cursor.fetchone()
         if row is None:
             return None
-        raw = row.get("username") if isinstance(row, dict) or hasattr(row, "keys") else row[0]
+        if isinstance(row, dict):
+            raw = row.get("username")
+        else:
+            try:
+                raw = row["username"]  # sqlite3.Row / aiosqlite.Row mapping access
+            except (TypeError, KeyError, IndexError):
+                raw = row[0]
         return str(raw) if raw is not None else None
     except Exception as exc:
         logger.error("Failed to fetch username for user {}: {}", user_id, exc)

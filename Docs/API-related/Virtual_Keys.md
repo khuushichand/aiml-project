@@ -255,6 +255,7 @@ Enforcement
   - allowed_endpoints checked against logical endpoint IDs listed above.
   - allowed_methods/allowed_paths verified per request.
   - max_calls/max_runs apply as best-effort process-local caps.
+  - Voice-management routes (`audio.voices.*`) are counted under a separate `voice_call` counter type, isolated from the default `call` counter used by `audio.speech`.
 - LLM budgets on Virtual API keys (`budget_day_tokens`, etc.) continue to apply for LLM endpoints.
 
 ## Endpoint IDs and Paths (allowlists)
@@ -264,6 +265,12 @@ Use these logical IDs in `allowed_endpoints`. When you prefer path-based allowli
 - chat.completions → POST `/api/v1/chat/completions`
 - rag.search → POST `/api/v1/rag/search`
 - audio.speech → POST `/api/v1/audio/speech`
+- audio.voices.upload → POST `/api/v1/audio/voices/upload`
+- audio.voices.encode → POST `/api/v1/audio/voices/encode`
+- audio.voices.list → GET `/api/v1/audio/voices`
+- audio.voices.get → GET `/api/v1/audio/voices/{voice_id}`
+- audio.voices.delete → DELETE `/api/v1/audio/voices/{voice_id}`
+- audio.voices.preview → POST `/api/v1/audio/voices/{voice_id}/preview`
 - audio.transcriptions → POST `/api/v1/audio/transcriptions`
 - audio.translations → POST `/api/v1/audio/translations`
 - audio.stream.transcribe → WS `/api/v1/audio/stream/transcribe`

@@ -1,0 +1,74 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ManageTab stage3 undo controls > matches baseline snapshot for cards view with active selection 1`] = `
+<div
+  class="mb-2 flex items-center gap-3"
+  data-testid="flashcards-manage-selection-summary"
+>
+  <span
+    class="inline-flex items-center justify-center min-w-11 min-h-11"
+  >
+    <label
+      class="ant-checkbox-wrapper ant-checkbox-wrapper-checked css-var-root ant-checkbox-css-var css-dev-only-do-not-override-3uaqrl"
+    >
+      <span
+        class="ant-checkbox ant-wave-target css-dev-only-do-not-override-3uaqrl ant-checkbox-checked"
+      >
+        <input
+          aria-label="Select all cards on this page"
+          class="ant-checkbox-input"
+          type="checkbox"
+        />
+        <span
+          class="ant-checkbox-inner"
+        />
+      </span>
+    </label>
+  </span>
+  <span
+    class="ant-typography css-dev-only-do-not-override-3uaqrl css-var-root"
+  >
+    <span
+      class="flex items-center gap-2"
+    >
+      <span
+        class="ant-badge ant-badge-not-a-wrapper mr-1 css-dev-only-do-not-override-3uaqrl css-var-root"
+      >
+        <span
+          class="ant-scroll-number-custom-component flex items-center gap-1"
+          style="background-color: rgb(var(--color-success));"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-check size-3"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M20 6 9 17l-5-5"
+            />
+          </svg>
+          1
+        </span>
+      </span>
+      <span
+        class="text-text-muted flex items-center gap-1"
+      >
+        selected on this page
+      </span>
+      <button
+        class="text-text-muted hover:text-text text-sm"
+      >
+        Clear
+      </button>
+    </span>
+  </span>
+</div>
+`;

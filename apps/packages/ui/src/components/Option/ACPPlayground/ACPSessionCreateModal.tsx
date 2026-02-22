@@ -152,7 +152,7 @@ const CreationProgress: React.FC<CreationProgressProps> = ({ step, error }) => {
           className="mt-3"
           type="error"
           showIcon
-          message={error.message}
+          title={error.message}
           description={
             error.suggestions.length > 0 && (
               <ul className="mt-2 list-inside list-disc text-sm">
@@ -487,7 +487,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
         {/* Advanced Section - Collapsible */}
         <Collapse
           ghost
-          expandIconPosition="end"
+          expandIconPlacement="end"
           expandIcon={({ isActive }) => (
             <ChevronDown
               className={`h-4 w-4 transition-transform ${isActive ? "rotate-180" : ""}`}

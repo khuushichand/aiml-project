@@ -2,8 +2,11 @@
 """
 Rate limiting for character operations.
 
+**Phase 2 Deprecation Notice**:
 Resource Governor is the single enforcement path. Non-rate-limit guardrails
 live in character_limits.py and are wrapped here for compatibility.
+When RG is unavailable or disabled, the shim fails open with a deprecation
+warning. This shim will be removed in a future release.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import warnings
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -35,6 +39,7 @@ from tldw_Server_API.app.core.Character_Chat.character_limits import (
 from tldw_Server_API.app.core.Character_Chat.character_limits import (
     check_soft_message_limit as _check_soft_message_limit,
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode, is_truthy
 
 # Optional Resource Governor integration (gated by global RG_ENABLED/config)
 RG_IMPORT_EXCEPTIONS = (ImportError, AttributeError)
@@ -68,6 +73,22 @@ except RG_IMPORT_EXCEPTIONS:  # pragma: no cover - safe fallback when RG not ins
     PolicyReloadConfig = None  # type: ignore
     default_policy_loader = None  # type: ignore
     rg_enabled = None  # type: ignore
+
+_CHARACTER_DEPRECATION_WARNED = False
+
+
+def _emit_character_legacy_deprecation(context: str) -> None:
+    global _CHARACTER_DEPRECATION_WARNED
+    if _CHARACTER_DEPRECATION_WARNED:
+        return
+    _CHARACTER_DEPRECATION_WARNED = True
+    msg = (
+        "Character Chat legacy rate limiter is deprecated (Phase 2). "
+        f"Context: {context}. Enable RG_ENABLED=true for enforcement. "
+        "This shim will be removed in a future release."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
 
 
 class CharacterRateLimiter:
@@ -126,6 +147,7 @@ class CharacterRateLimiter:
             return True, 0
 
         if not _rg_character_enabled():
+            _emit_character_legacy_deprecation("rg_disabled")
             return True, 0
 
         if not _rg_character_enforce_requests():
@@ -138,6 +160,7 @@ class CharacterRateLimiter:
         )
         if rg_decision is None:
             _log_rg_character_fallback("rg_decision_unavailable")
+            _emit_character_legacy_deprecation("rg_decision_unavailable")
             return True, 0
 
         if not rg_decision.get("allowed", False):
@@ -286,7 +309,7 @@ def _rg_character_enforce_requests() -> bool:
     governs ingress routes.
     """
     val = os.getenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "0").strip().lower()
-    return val in {"1", "true", "yes", "on", "y"}
+    return is_truthy(val)
 
 
 async def _get_character_rg_governor():
@@ -385,12 +408,12 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
     global _rate_limiter
 
     # Honor TEST_MODE by returning permissive limits for guardrails.
-    test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}
+    test_mode = is_test_mode()
 
     # Security check: warn if TEST_MODE is enabled in what looks like production
     if test_mode:
         env_name = os.getenv("ENVIRONMENT", os.getenv("ENV", "")).lower()
-        prod_flag = os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+        prod_flag = env_flag_enabled("tldw_production")
         if env_name in ("production", "prod", "live") or prod_flag:
             logger.critical(
                 "TEST_MODE is enabled in a production environment! "
@@ -432,7 +455,7 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
             raw = os.getenv(name)
             if raw is not None:
                 s = str(raw).strip().lower()
-                if s in {"1", "true", "yes", "on"}:
+                if is_truthy(s):
                     return True
                 if s in {"0", "false", "no", "off"}:
                     return False
@@ -446,8 +469,6 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
         limits = get_character_limits()
         single_user_mode = bool(settings.get("SINGLE_USER_MODE", False))
         configured_enabled = settings.get("CHARACTER_RATE_LIMIT_ENABLED", None)
-        if configured_enabled is None:
-            configured_enabled = settings.get("RATE_LIMIT_ENABLED", None)
         default_enabled = not single_user_mode
         enabled_flag = _env_bool("CHARACTER_RATE_LIMIT_ENABLED", configured_enabled, default_enabled)
 

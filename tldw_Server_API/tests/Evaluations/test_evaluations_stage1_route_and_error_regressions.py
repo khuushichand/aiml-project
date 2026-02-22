@@ -27,14 +27,27 @@ def _build_eval_only_app(monkeypatch) -> FastAPI:
     return app
 
 
-def _reload_main_app(monkeypatch, *, minimal: bool):
+def _reload_main_app(
+    monkeypatch,
+    *,
+    minimal: bool,
+    routes_enable: str | None = "evaluations",
+    routes_disable: str | None = "research",
+):
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
     monkeypatch.setenv("MINIMAL_TEST_APP", "1" if minimal else "0")
 
-    # Ensure evaluations route toggles are consistent for reload-time gating.
-    monkeypatch.setenv("ROUTES_ENABLE", "evaluations")
-    monkeypatch.setenv("ROUTES_DISABLE", "research")
+    # Ensure route toggles are consistent for reload-time gating.
+    if routes_enable is None or not str(routes_enable).strip():
+        monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+    else:
+        monkeypatch.setenv("ROUTES_ENABLE", str(routes_enable))
+
+    if routes_disable is None or not str(routes_disable).strip():
+        monkeypatch.delenv("ROUTES_DISABLE", raising=False)
+    else:
+        monkeypatch.setenv("ROUTES_DISABLE", str(routes_disable))
 
     from tldw_Server_API.app.core import config as config_mod
 
@@ -43,6 +56,17 @@ def _reload_main_app(monkeypatch, *, minimal: bool):
     from tldw_Server_API.app import main as app_main
 
     return importlib.reload(app_main).app
+
+
+def _route_method_count(app: FastAPI, path: str, method: str) -> int:
+    method_upper = method.upper()
+    count = 0
+    for route in app.routes:
+        route_path = getattr(route, "path", None)
+        route_methods = getattr(route, "methods", set()) or set()
+        if route_path == path and method_upper in route_methods:
+            count += 1
+    return count
 
 
 def test_main_mounts_evaluations_routes_in_minimal_startup(monkeypatch):
@@ -59,6 +83,55 @@ def test_main_mounts_evaluations_routes_in_full_startup(monkeypatch):
     assert "/api/v1/evaluations/geval" in paths
     assert "/api/v1/evaluations/rag" in paths
     assert "/api/v1/evaluations/embeddings/abtest" in paths
+
+
+def test_main_omits_evaluations_routes_in_minimal_startup_when_disabled(monkeypatch):
+    app = _reload_main_app(
+        monkeypatch,
+        minimal=True,
+        routes_enable=None,
+        routes_disable="research,evaluations",
+    )
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+    assert "/api/v1/evaluations/geval" not in paths
+    assert "/api/v1/evaluations/rag" not in paths
+    assert "/api/v1/evaluations/embeddings/abtest" not in paths
+
+
+def test_main_registers_abtest_post_route_once_in_minimal_startup(monkeypatch):
+    app = _reload_main_app(monkeypatch, minimal=True)
+    count = _route_method_count(app, "/api/v1/evaluations/embeddings/abtest", "POST")
+    assert count == 1
+
+
+def test_main_registers_abtest_post_route_once_in_full_startup(monkeypatch):
+    app = _reload_main_app(monkeypatch, minimal=False)
+    count = _route_method_count(app, "/api/v1/evaluations/embeddings/abtest", "POST")
+    assert count == 1
+
+
+def test_main_has_no_duplicate_method_path_pairs_in_full_startup(monkeypatch):
+    app = _reload_main_app(monkeypatch, minimal=False)
+    seen: set[tuple[str, str]] = set()
+    duplicates: list[tuple[str, str]] = []
+    allowed_methods = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+    path_prefix = "/api/v1/evaluations/"
+
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None) or set()
+        if not path or not str(path).startswith(path_prefix):
+            continue
+        for method in methods:
+            if method not in allowed_methods:
+                continue
+            key = (method, path)
+            if key in seen:
+                duplicates.append(key)
+            else:
+                seen.add(key)
+
+    assert not duplicates
 
 
 def test_propositions_preserves_http_429_when_rate_limited(monkeypatch):
@@ -96,7 +169,7 @@ def test_history_preserves_http_403_for_non_admin_cross_user_request(monkeypatch
             return 0
 
     async def _principal_override():
-        return SimpleNamespace(is_admin=False, roles=[])
+        return SimpleNamespace(is_admin=False, roles=[], permissions=[])
 
     monkeypatch.setattr(
         eval_unified,

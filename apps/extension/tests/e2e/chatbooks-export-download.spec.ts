@@ -1,9 +1,8 @@
 import { test, expect } from "@playwright/test"
 import path from "path"
-import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
 import { forceConnected, waitForConnectionStore } from "./utils/connection"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
 test.describe("Chatbooks export download", () => {
   test("exports a chatbook and downloads the zip", async () => {
@@ -53,7 +52,8 @@ test.describe("Chatbooks export download", () => {
       promptId = created?.id ?? created?.uuid ?? created?.name ?? null
 
       const extPath = path.resolve("build/chrome-mv3")
-      const { context, page, extensionId, optionsUrl } = await launchWithExtension(
+      const { context, page, extensionId, optionsUrl } = await launchWithExtensionOrSkip(
+        test,
         extPath,
         {
           seedConfig: {

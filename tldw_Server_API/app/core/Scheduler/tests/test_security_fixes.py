@@ -6,7 +6,7 @@ import pytest
 import asyncio
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import tempfile
 
 from ..config import SchedulerConfig
@@ -44,6 +44,16 @@ class TestPathTraversalFixes:
             os.environ['SCHEDULER_BASE_PATH'] = str(symlink)
             config = SchedulerConfig()
 
+    def test_reject_symlink_parent_in_base_path(self, tmp_path):
+        """Test that paths traversing through symlink parents are rejected."""
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        symlink = tmp_path / "symlink"
+        symlink.symlink_to(real_dir)
+
+        with pytest.raises(ValueError, match="Base path cannot be a symlink"):
+            SchedulerConfig(base_path=symlink / "child", database_url=':memory:')
+
     def test_sqlite_path_validation(self):
         """Test that SQLite paths are validated."""
         with pytest.raises(ValueError, match="Directory traversal detected in database path"):
@@ -63,8 +73,10 @@ class TestPathTraversalFixes:
         """Test Unix path fallback when /var/lib is not writable."""
         with patch('platform.system', return_value='Linux'):
             with patch('os.access', return_value=False):
-                os.environ.pop('SCHEDULER_BASE_PATH', None)
-                config = SchedulerConfig()
+                config = SchedulerConfig(
+                    base_path=Path('/var/lib/scheduler-security-test'),
+                    database_url=':memory:',
+                )
                 # Should use home directory
                 assert '.local/share/scheduler' in str(config.base_path)
 
@@ -268,25 +280,29 @@ class TestSQLInjectionFixes:
 
         # Mock database pool
         mock_pool = MagicMock()
-        mock_pool.fetchone = MagicMock(return_value={'failure_count': 5, 'unique_ips': 2})
-        mock_pool.fetchall = MagicMock(return_value=[])
+        mock_pool.fetchone = AsyncMock(return_value={'failure_count': 5, 'unique_ips': 2})
+        mock_pool.fetchall = AsyncMock(return_value=[])
 
-        with patch('tldw_Server_API.app.core.AuthNZ.scheduler.get_db_pool', return_value=mock_pool):
+        with patch(
+            'tldw_Server_API.app.core.AuthNZ.scheduler.get_db_pool',
+            new=AsyncMock(return_value=mock_pool),
+        ):
             # Test PostgreSQL path
-            mock_pool.fetchval = True  # Indicate PostgreSQL
+            mock_pool.pool = object()  # Indicate PostgreSQL
             await scheduler._monitor_auth_failures()
 
             # Check that query used proper parameterization (ANY for arrays)
-            call_args = mock_pool.fetchone.call_args[0]
+            call_args = mock_pool.fetchone.await_args.args
             assert 'ANY($1)' in call_args[0]
             assert isinstance(call_args[1], list)  # Parameters should be a list
 
             # Test SQLite path
-            delattr(mock_pool, 'fetchval')  # Indicate SQLite
+            mock_pool.pool = None  # Indicate SQLite
+            mock_pool.fetchone.reset_mock()
             await scheduler._monitor_auth_failures()
 
             # Check that query used proper parameterization (? placeholders)
-            call_args = mock_pool.fetchone.call_args[0]
+            call_args = mock_pool.fetchone.await_args.args
             assert 'IN (?, ?, ?)' in call_args[0]
 
 

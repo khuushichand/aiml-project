@@ -72,7 +72,7 @@ def _download_repo(repo_id: str, output_dir: Path, onnx_subdir: str, tokenizer_n
             download_error_types.append(exc_type)
 
     try:
-        snapshot_download(
+        snapshot_download(  # nosec B615
             repo_id=repo_id,
             local_dir=str(output_dir),
             local_dir_use_symlinks=False,

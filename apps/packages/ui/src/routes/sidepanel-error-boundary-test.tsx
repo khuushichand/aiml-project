@@ -21,12 +21,12 @@ const SidepanelErrorBoundaryTest: FC = () => {
         setResetCount(prev => prev + 1)
       }}
     >
-      <div className="flex flex-col h-dvh bg-white dark:bg-surface">
-        <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex flex-col h-dvh bg-surface">
+        <div className="p-4 border-b border-border">
           <h1 className="text-lg font-semibold" data-testid="error-boundary-test-title">
             Error Boundary Test
           </h1>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-text-muted">
             Reset count: <span data-testid="reset-count">{resetCount}</span>
           </p>
         </div>

@@ -20,11 +20,19 @@ import {
   useCreateDeckMutation,
   useDebouncedFormField
 } from "../hooks"
+import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
+import {
+  FLASHCARD_FIELD_MAX_BYTES,
+  getFlashcardFieldLimitState,
+  getUtf8ByteLength
+} from "../utils/field-byte-limit"
 import type { FlashcardCreate, Deck } from "@/services/flashcards"
 
 const { Text } = Typography
+const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
+type FlashcardModelType = NonNullable<FlashcardCreate["model_type"]>
 
 interface PreviewProps {
   content?: string
@@ -64,12 +72,17 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
 
   // Form and state
   const [form] = Form.useForm<FlashcardCreate>()
+  const selectedModelType = Form.useWatch("model_type", form) as
+    | FlashcardModelType
+    | undefined
   const [showPreview, setShowPreview] = React.useState(false)
   const frontPreview = useDebouncedFormField(form, "front")
   const backPreview = useDebouncedFormField(form, "back")
   const extraPreview = useDebouncedFormField(form, "extra")
   const notesPreview = useDebouncedFormField(form, "notes")
   const tagsValue = useDebouncedFormField(form, "tags")
+  const frontValue = Form.useWatch("front", form) as string | undefined
+  const backValue = Form.useWatch("back", form) as string | undefined
 
   // Count how many advanced fields have values for the badge indicator
   const advancedFieldCount = React.useMemo(() => {
@@ -91,6 +104,60 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
 
   const createMutation = useCreateFlashcardMutation()
   const createDeckMutation = useCreateDeckMutation()
+  const isClozeTemplate = selectedModelType === "cloze"
+  const frontByteLength = getUtf8ByteLength(frontValue)
+  const backByteLength = getUtf8ByteLength(backValue)
+  const frontLimitState = getFlashcardFieldLimitState(frontByteLength)
+  const backLimitState = getFlashcardFieldLimitState(backByteLength)
+
+  const templateHelperText = React.useMemo(() => {
+    if (selectedModelType === "basic_reverse") {
+      return t("option:flashcards.templateReverseHelp", {
+        defaultValue:
+          "Choose Basic + Reverse when you want both directions (term -> meaning and meaning -> term)."
+      })
+    }
+    if (selectedModelType === "cloze") {
+      return t("option:flashcards.templateClozeHelp", {
+        defaultValue:
+          "Choose Cloze when you want to hide key words inside a sentence or paragraph."
+      })
+    }
+    return t("option:flashcards.templateBasicHelp", {
+      defaultValue:
+        "Choose Basic for direct question and answer cards (facts, definitions, short prompts)."
+    })
+  }, [selectedModelType, t])
+
+  const renderByteUsageHint = React.useCallback(
+    (field: "front" | "back", byteLength: number, state: "normal" | "warning" | "over") => {
+      const fieldLabel = t(`option:flashcards.${field}`, {
+        defaultValue: field === "front" ? "Front" : "Back"
+      })
+      const usageText = t("option:flashcards.fieldByteUsage", {
+        defaultValue: "{{field}}: {{used}} / {{max}} bytes",
+        field: fieldLabel,
+        used: byteLength,
+        max: FLASHCARD_FIELD_MAX_BYTES
+      })
+      if (state === "over") {
+        return t("option:flashcards.fieldByteOverLimit", {
+          defaultValue: "{{usage}}. Exceeds limit by {{over}} bytes.",
+          usage: usageText,
+          over: byteLength - FLASHCARD_FIELD_MAX_BYTES
+        })
+      }
+      if (state === "warning") {
+        return t("option:flashcards.fieldByteNearLimit", {
+          defaultValue: "{{usage}}. Approaching the {{max}}-byte limit.",
+          usage: usageText,
+          max: FLASHCARD_FIELD_MAX_BYTES
+        })
+      }
+      return usageText
+    },
+    [t]
+  )
 
   // Reset form when drawer opens
   React.useEffect(() => {
@@ -165,16 +232,16 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   return (
     <Drawer
       placement="right"
-      width={520}
+      styles={{ wrapper: { width: FLASHCARDS_DRAWER_WIDTH_PX } }}
       open={open}
       onClose={onClose}
       title={t("option:flashcards.createCard", { defaultValue: "Create Flashcard" })}
       footer={
-        <div className="flex justify-between">
-          <Button onClick={onClose}>
-            {t("common:cancel", { defaultValue: "Cancel" })}
-          </Button>
+        <div className="flex justify-end">
           <Space>
+            <Button onClick={onClose}>
+              {t("common:cancel", { defaultValue: "Cancel" })}
+            </Button>
             <Button
               onClick={handleCreateAndAddAnother}
               loading={createMutation.isPending}
@@ -203,8 +270,11 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
           reverse: false
         }}
       >
-        {/* Deck selector with inline creation */}
-        <div className="mb-4">
+        {/* Section: Organization */}
+        <div className="mb-6">
+          <h3 className="text-sm font-medium text-text-muted mb-3">
+            {t("option:flashcards.organization", { defaultValue: "Organization" })}
+          </h3>
           {!showInlineCreate ? (
             <Form.Item
               name="deck_id"
@@ -222,7 +292,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
                   label: d.name,
                   value: d.id
                 }))}
-                dropdownRender={(menu) => (
+                popupRender={(menu) => (
                   <>
                     {menu}
                     <Divider className="!my-2" />
@@ -280,38 +350,50 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
               </Button>
             </div>
           )}
-        </div>
 
-        {/* Card template */}
-        <Form.Item
-          name="model_type"
-          label={t("option:flashcards.modelType", {
-            defaultValue: "Card template"
-          })}
-        >
-          <Select
-            options={[
-              {
-                label: t("option:flashcards.templateBasic", {
-                  defaultValue: "Basic (Question - Answer)"
-                }),
-                value: "basic"
-              },
-              {
-                label: t("option:flashcards.templateReverse", {
-                  defaultValue: "Basic + Reverse (Both directions)"
-                }),
-                value: "basic_reverse"
-              },
-              {
-                label: t("option:flashcards.templateCloze", {
-                  defaultValue: "Cloze (Fill in the blank)"
-                }),
-                value: "cloze"
-              }
-            ]}
-          />
-        </Form.Item>
+          {/* Card template */}
+          <Form.Item
+            name="model_type"
+            label={t("option:flashcards.modelType", {
+              defaultValue: "Card template"
+            })}
+          >
+            <Select
+              options={[
+                {
+                  label: t("option:flashcards.templateBasic", {
+                    defaultValue: "Basic (Question - Answer)"
+                  }),
+                  value: "basic"
+                },
+                {
+                  label: t("option:flashcards.templateReverse", {
+                    defaultValue: "Basic + Reverse (Both directions)"
+                  }),
+                  value: "basic_reverse"
+                },
+                {
+                  label: t("option:flashcards.templateCloze", {
+                    defaultValue: "Cloze (Fill in the blank)"
+                  }),
+                  value: "cloze"
+                }
+              ]}
+            />
+          </Form.Item>
+          <Text type="secondary" className="block text-xs -mt-4 mb-3">
+            {templateHelperText}
+          </Text>
+          {isClozeTemplate && (
+            <Text type="secondary" className="block text-xs -mt-2 mb-3">
+              {t("option:flashcards.clozeSyntaxHelp", {
+                defaultValue:
+                  "Cloze syntax: add at least one deletion like {{syntax}} in Front text.",
+                syntax: "{{c1::answer}}"
+              })}
+            </Text>
+          )}
+        </div>
 
         {/* Hidden fields for API compatibility */}
         <Form.Item name="reverse" hidden>
@@ -321,52 +403,139 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
           <Input />
         </Form.Item>
 
-        {/* Front - required */}
-        <Form.Item
-          name="front"
-          label={t("option:flashcards.front", { defaultValue: "Front" })}
-          rules={[{ required: true }]}
-        >
-          <Input.TextArea
-            rows={3}
-            placeholder={t("option:flashcards.frontPlaceholder", {
-              defaultValue: "Question or prompt..."
-            })}
-          />
-        </Form.Item>
-        <Preview content={frontPreview} showPreview={showPreview} />
+        {/* Section: Content */}
+        <div className="mb-6">
+          <h3 className="text-sm font-medium text-text-muted mb-3">
+            {t("option:flashcards.content", { defaultValue: "Content" })}
+          </h3>
 
-        {/* Back - required */}
-        <Form.Item
-          name="back"
-          label={t("option:flashcards.back", { defaultValue: "Back" })}
-          rules={[{ required: true }]}
-        >
-          <Input.TextArea
-            rows={5}
-            placeholder={t("option:flashcards.backPlaceholder", {
-              defaultValue: "Answer..."
-            })}
-          />
-        </Form.Item>
-        <Preview content={backPreview} showPreview={showPreview} />
-
-        {/* Preview toggle and help text */}
-        <div className="flex items-center gap-4 mb-4">
-          <button
-            type="button"
-            className="text-xs text-primary hover:text-primaryStrong"
-            onClick={() => setShowPreview((v) => !v)}
+          {/* Front - required */}
+          <Form.Item
+            name="front"
+            label={t("option:flashcards.front", { defaultValue: "Front" })}
+            rules={[
+              {
+                required: true,
+                message: t("option:flashcards.frontRequired", {
+                  defaultValue: "Front is required."
+                })
+              },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (getFieldValue("model_type") !== "cloze") {
+                    return Promise.resolve()
+                  }
+                  const frontText = String(value ?? "")
+                  if (CLOZE_PATTERN.test(frontText)) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(
+                    new Error(
+                      t("option:flashcards.clozeValidationMessage", {
+                        defaultValue:
+                          "For Cloze cards, include at least one deletion like {{syntax}}.",
+                        syntax: "{{c1::answer}}"
+                      })
+                    )
+                  )
+                }
+              }),
+              {
+                validator(_, value) {
+                  const byteLength = getUtf8ByteLength(String(value ?? ""))
+                  if (byteLength <= FLASHCARD_FIELD_MAX_BYTES) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(
+                    new Error(
+                      t("option:flashcards.fieldByteValidation", {
+                        defaultValue: "{{field}} must be {{max}} bytes or fewer.",
+                        field: t("option:flashcards.front", { defaultValue: "Front" }),
+                        max: FLASHCARD_FIELD_MAX_BYTES
+                      })
+                    )
+                  )
+                }
+              }
+            ]}
           >
-            {showPreview
-              ? t("option:flashcards.hidePreview", { defaultValue: "Hide preview" })
-              : t("option:flashcards.showPreview", { defaultValue: "Show preview" })}
-          </button>
-          <Text type="secondary" className="text-xs">
-            {t("option:flashcards.markdownHint", {
-              defaultValue: "Supports Markdown and LaTeX"
-            })}
+            <Input.TextArea
+              rows={3}
+              placeholder={t("option:flashcards.frontPlaceholder", {
+                defaultValue: "Question or prompt..."
+              })}
+            />
+          </Form.Item>
+          <Text
+            type={frontLimitState === "over" ? "danger" : frontLimitState === "warning" ? "warning" : "secondary"}
+            className="block text-[11px] -mt-4 mb-3"
+          >
+            {renderByteUsageHint("front", frontByteLength, frontLimitState)}
           </Text>
+          <Preview content={frontPreview} showPreview={showPreview} />
+
+          {/* Back - required */}
+          <Form.Item
+            name="back"
+            label={t("option:flashcards.back", { defaultValue: "Back" })}
+            rules={[
+              {
+                required: true,
+                message: t("option:flashcards.backRequired", {
+                  defaultValue: "Back is required."
+                })
+              },
+              {
+                validator(_, value) {
+                  const byteLength = getUtf8ByteLength(String(value ?? ""))
+                  if (byteLength <= FLASHCARD_FIELD_MAX_BYTES) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(
+                    new Error(
+                      t("option:flashcards.fieldByteValidation", {
+                        defaultValue: "{{field}} must be {{max}} bytes or fewer.",
+                        field: t("option:flashcards.back", { defaultValue: "Back" }),
+                        max: FLASHCARD_FIELD_MAX_BYTES
+                      })
+                    )
+                  )
+                }
+              }
+            ]}
+          >
+            <Input.TextArea
+              rows={5}
+              placeholder={t("option:flashcards.backPlaceholder", {
+                defaultValue: "Answer..."
+              })}
+            />
+          </Form.Item>
+          <Text
+            type={backLimitState === "over" ? "danger" : backLimitState === "warning" ? "warning" : "secondary"}
+            className="block text-[11px] -mt-4 mb-3"
+          >
+            {renderByteUsageHint("back", backByteLength, backLimitState)}
+          </Text>
+          <Preview content={backPreview} showPreview={showPreview} />
+
+          {/* Preview toggle and help text */}
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              className="text-xs text-primary hover:text-primaryStrong"
+              onClick={() => setShowPreview((v) => !v)}
+            >
+              {showPreview
+                ? t("option:flashcards.hidePreview", { defaultValue: "Hide preview" })
+                : t("option:flashcards.showPreview", { defaultValue: "Show preview" })}
+            </button>
+            <Text type="secondary" className="text-xs">
+              {t("option:flashcards.markdownHint", {
+                defaultValue: "Supports Markdown and LaTeX"
+              })}
+            </Text>
+          </div>
         </div>
 
         {/* Advanced options - collapsed by default */}

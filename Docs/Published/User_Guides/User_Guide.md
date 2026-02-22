@@ -48,6 +48,9 @@ Top navigation groups features into tabs. Notable areas include:
   - Go to Chat → Chat Completions.
   - Select a provider/model and send prompts; streaming supported for many providers.
   - Use Characters and Conversations for persona-based chats and history.
+  - Roleplay quickstart: `Docs/User_Guides/Character_Roleplay_Quickstart.md`.
+  - Core roleplay guide: `Docs/User_Guides/Effective_Character_Roleplay_and_You.md`.
+  - Advanced roleplay guide: `Docs/User_Guides/Advanced_Character_Roleplay_Guide.md`.
 
 - Transcribe audio
   - Audio → Transcriptions: upload files for batch transcription.

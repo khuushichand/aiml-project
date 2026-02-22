@@ -55,6 +55,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestio
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.core.Utils.Utils import downloaded_files, get_project_root, logging, sanitize_filename
 
 
@@ -280,6 +281,25 @@ def _default_title_from_audio_path(audio_path: str | Path) -> str:
             return trimmed or stem
     return stem
 
+
+def _validate_downloaded_url_audio_file(downloaded_path: Path) -> None:
+    """
+    Apply upload-equivalent validation to URL-downloaded audio payloads.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (  # type: ignore  # noqa: E501
+        _validate_downloaded_url_file,
+    )
+
+    _validate_downloaded_url_file(
+        downloaded_path=downloaded_path,
+        processing_filename=downloaded_path.name,
+        media_type="audio",
+        form_data=None,
+        media_mod=None,
+        allowed_extensions=None,
+    )
+
+
 def download_audio_file(
     url: str,
     target_temp_dir: str,
@@ -480,6 +500,18 @@ def download_audio_file(
     except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Unexpected error downloading audio file from {url}: {type(e).__name__} - {e}", exc_info=True)
         raise AudioDownloadError(f"Unexpected download error for {url}: {type(e).__name__} - {str(e)}") from e
+    except Exception as e:
+        # Some HTTP client failures (for example httpx.ConnectError in
+        # restricted CI/network environments) are not covered by the noncritical
+        # tuple above. Normalize them to AudioDownloadError so per-item handling
+        # can continue without aborting the whole batch.
+        logging.error(
+            f"Unhandled download exception for {url}: {type(e).__name__} - {e}",
+            exc_info=True,
+        )
+        raise AudioDownloadError(
+            f"Unexpected download error for {url}: {type(e).__name__} - {e}"
+        ) from e
 
 
 def process_audio_files(
@@ -857,6 +889,9 @@ def process_audio_files(
                 if not current_audio_path or not Path(current_audio_path).exists():
                      raise RuntimeError("Audio file path is missing or invalid after download/copy check.")
 
+                if is_url:
+                    _validate_downloaded_url_audio_file(Path(current_audio_path))
+
                 # 2. Convert to WAV using the library function (skip if already WAV)
                 if Path(current_audio_path).suffix.lower() == '.wav':
                     update_progress(f"Input is already WAV; skipping conversion: {Path(current_audio_path).name}")
@@ -887,7 +922,7 @@ def process_audio_files(
                         err_msg = f"Audio conversion failed: {conv_err}"
                         update_progress(err_msg)
                         import os as _os_mod
-                        if ("PYTEST_CURRENT_TEST" in _os_mod.environ or _os_mod.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}) and Path(current_audio_path).suffix.lower() in {'.mp3', '.m4a'}:
+                        if ("PYTEST_CURRENT_TEST" in _os_mod.environ or env_flag_enabled("TESTING")) and Path(current_audio_path).suffix.lower() in {'.mp3', '.m4a'}:
                             item_result["status"] = "Success"
                             item_result.setdefault("warnings", [])
                             item_result["warnings"].append("Audio conversion unavailable in test; using placeholder transcript.")
@@ -966,7 +1001,7 @@ def process_audio_files(
                         update_progress("Warning: Transcription generated no segments.")
                         is_test_mode = (
                             "PYTEST_CURRENT_TEST" in os.environ
-                            or os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
+                            or env_flag_enabled("TESTING")
                         )
                         if is_test_mode:
                             # Keep test runs deterministic when silent or placeholder audio

@@ -55,6 +55,6 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                 )
                 level = "warning" if status >= 500 else "info"
                 log.log(level, f"HTTP {method} {path} -> {status} in {duration_ms}ms")
-            except Exception:
+            except Exception as log_error:
                 # Never fail a request due to logging
-                pass
+                logger.debug("Access log middleware failed to emit request log", exc_info=log_error)

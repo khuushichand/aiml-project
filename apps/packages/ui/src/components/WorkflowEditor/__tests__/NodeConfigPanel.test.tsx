@@ -129,4 +129,28 @@ describe("NodeConfigPanel selectors", () => {
     expect(await screen.findByText("GPT-4")).toBeInTheDocument()
     expect(await screen.findByText("GPT-4o Mini")).toBeInTheDocument()
   })
+
+  it("exposes aria labels for icon-only node actions", () => {
+    const schema: WorkflowStepSchema = {
+      type: "object",
+      properties: {
+        model: { type: "string" }
+      }
+    }
+    setupStore(schema)
+
+    vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
+      optionsByKey: {},
+      loadingByKey: {}
+    })
+
+    render(<NodeConfigPanel />)
+
+    expect(
+      screen.getByRole("button", { name: "Duplicate node" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Delete node" })
+    ).toBeInTheDocument()
+  })
 })

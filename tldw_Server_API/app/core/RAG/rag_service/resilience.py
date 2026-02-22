@@ -4,6 +4,10 @@ Error recovery and resilience mechanisms for the RAG service.
 
 This module provides circuit breakers, retry policies, fallback strategies,
 and health monitoring to ensure robust operation of the RAG pipeline.
+
+The core CircuitBreaker is delegated to the unified Infrastructure module;
+this file retains the RAG-specific domain orchestration (RetryPolicy,
+FallbackChain, HealthMonitor, ErrorRecoveryCoordinator).
 """
 
 import asyncio
@@ -18,14 +22,34 @@ from typing import Any, Callable, Optional, TypeVar, cast
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+    CircuitBreaker as _UnifiedCB,
+)
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+    CircuitBreakerConfig as _UnifiedCfg,
+)
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+    CircuitBreakerOpenError,
+)
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+    CircuitState as _UnifiedState,
+)
+
 T = TypeVar('T')
 
 
+# ---------------------------------------------------------------------------
+# Backward-compatible re-exports
+# ---------------------------------------------------------------------------
+
 class CircuitState(Enum):
-    """Circuit breaker states."""
-    CLOSED = "closed"      # Normal operation
-    OPEN = "open"          # Failing, reject requests
-    HALF_OPEN = "half_open"  # Testing recovery
+    """Circuit breaker states (backward-compatible string values)."""
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+
+CircuitOpenError = CircuitBreakerOpenError
 
 
 class HealthStatus(Enum):
@@ -38,12 +62,25 @@ class HealthStatus(Enum):
 
 @dataclass
 class CircuitBreakerConfig:
-    """Configuration for circuit breaker."""
-    failure_threshold: int = 5          # Failures before opening
-    success_threshold: int = 2           # Successes in half-open before closing
-    timeout: float = 60.0                # Seconds before trying half-open
-    window_size: int = 10                # Rolling window for tracking
-    failure_rate_threshold: float = 0.5  # Failure rate to open circuit
+    """Configuration for circuit breaker (backward-compatible with old API).
+
+    The ``timeout`` field maps to ``recovery_timeout`` in the unified config.
+    """
+    failure_threshold: int = 5
+    success_threshold: int = 2
+    timeout: float = 60.0
+    window_size: int = 10
+    failure_rate_threshold: float = 0.5
+
+    def _to_unified(self) -> _UnifiedCfg:
+        return _UnifiedCfg(
+            failure_threshold=self.failure_threshold,
+            success_threshold=self.success_threshold,
+            recovery_timeout=self.timeout,
+            window_size=self.window_size,
+            failure_rate_threshold=self.failure_rate_threshold,
+            category="rag",
+        )
 
 
 @dataclass
@@ -75,215 +112,132 @@ class ErrorContext:
             self.traceback = traceback.format_exc()
 
 
+# ---------------------------------------------------------------------------
+# CircuitBreaker — thin wrapper preserving old API
+# ---------------------------------------------------------------------------
+
 class CircuitBreaker:
-    """Circuit breaker implementation."""
+    """RAG circuit breaker wrapping the unified Infrastructure implementation.
+
+    Preserves the old public API (``call``, ``reset``, ``get_stats``,
+    ``state``, ``failure_count``, ``success_count``, ``on_*_callbacks``).
+    """
 
     def __init__(
         self,
         name: str,
         config: Optional[CircuitBreakerConfig] = None
     ):
-        """
-        Initialize circuit breaker.
-
-        Args:
-            name: Circuit breaker name
-            config: Circuit breaker configuration
-        """
         self.name = name
         self.config = config or CircuitBreakerConfig()
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.success_count = 0
-        self.last_failure_time: Optional[float] = None
-        self.last_state_change = time.time()
+        self._cb = _UnifiedCB(
+            name=f"rag_{name}",
+            config=self.config._to_unified(),
+        )
+        # Callbacks (preserved for API compat; no existing code populates them)
+        self.on_open_callbacks: list[Callable] = []
+        self.on_close_callbacks: list[Callable] = []
+        self.on_half_open_callbacks: list[Callable] = []
+        # Wire unified callbacks to dispatch old-style per-state callbacks
+        self._cb.on_state_change.append(self._dispatch_callback)
 
-        # Rolling window for tracking
-        self.call_results: deque[bool] = deque(maxlen=self.config.window_size)
+    # -- state property (returns old-style CircuitState enum) ----------------
 
-        # Callbacks
-        self.on_open_callbacks: list[Callable[[CircuitBreaker], None]] = []
-        self.on_close_callbacks: list[Callable[[CircuitBreaker], None]] = []
-        self.on_half_open_callbacks: list[Callable[[CircuitBreaker], None]] = []
+    @property
+    def state(self) -> CircuitState:
+        s = self._cb.state
+        if s == _UnifiedState.CLOSED:
+            return CircuitState.CLOSED
+        elif s == _UnifiedState.OPEN:
+            return CircuitState.OPEN
+        return CircuitState.HALF_OPEN
 
-    async def call(self, func: Callable, *args, **kwargs) -> Any:
-        """
-        Call function through circuit breaker.
+    @property
+    def failure_count(self) -> int:
+        return self._cb.failure_count
 
-        Args:
-            func: Function to call
-            *args: Function arguments
-            **kwargs: Function keyword arguments
+    @property
+    def success_count(self) -> int:
+        return self._cb.success_count
 
-        Returns:
-            Function result
+    @property
+    def last_failure_time(self) -> Optional[float]:
+        return self._cb.last_failure_time
 
-        Raises:
-            Exception: If circuit is open or function fails
-        """
-        # Check if circuit should transition
-        self._check_state()
+    @property
+    def last_state_change(self) -> float:
+        return self._cb.last_state_change_time
 
-        if self.state == CircuitState.OPEN:
-            raise CircuitOpenError(f"Circuit breaker '{self.name}' is open")
+    # -- callback dispatch ---------------------------------------------------
 
-        try:
-            # Execute function
-            if asyncio.iscoroutinefunction(func):
-                result = await func(*args, **kwargs)
-            else:
-                result = func(*args, **kwargs)
-
-            # Record success
-            self._record_success()
-            return result
-
-        except Exception:  # noqa: BLE001 - record failure for any exception before re-raising
-            # Record failure
-            self._record_failure()
-            raise
-
-    def _check_state(self):
-        """Check and update circuit state."""
-        current_time = time.time()
-
-        if self.state == CircuitState.OPEN:
-            # Check if timeout has passed
-            if self.last_failure_time and \
-               current_time - self.last_failure_time >= self.config.timeout:
-                self._transition_to_half_open()
-
-        elif self.state == CircuitState.HALF_OPEN:
-            # Check success threshold
-            if self.success_count >= self.config.success_threshold:
-                self._transition_to_closed()
-            elif self.failure_count >= 1:  # Single failure in half-open
-                self._transition_to_open()
-
-        elif self.state == CircuitState.CLOSED:
-            # Check failure threshold
-            if len(self.call_results) >= self.config.window_size:
-                failure_rate = sum(1 for r in self.call_results if not r) / len(self.call_results)
-                if failure_rate >= self.config.failure_rate_threshold:
-                    self._transition_to_open()
-
-    def _record_success(self):
-        """Record successful call."""
-        self.call_results.append(True)
-
-        if self.state == CircuitState.HALF_OPEN:
-            self.success_count += 1
-        elif self.state == CircuitState.CLOSED:
-            self.failure_count = max(0, self.failure_count - 1)
-
-    def _record_failure(self):
-        """Record failed call."""
-        self.call_results.append(False)
-        self.failure_count += 1
-        self.last_failure_time = time.time()
-
-        if self.state == CircuitState.HALF_OPEN or self.state == CircuitState.CLOSED and self.failure_count >= self.config.failure_threshold:
-            self._transition_to_open()
-
-    def _transition_to_open(self):
-        """Transition to open state."""
-        if self.state != CircuitState.OPEN:
-            self.state = CircuitState.OPEN
-            self.last_state_change = time.time()
-            logger.warning(f"Circuit breaker '{self.name}' opened")
-
-            for callback in self.on_open_callbacks:
+    def _dispatch_callback(self, breaker: Any, old_state: Any, new_state: Any) -> None:
+        """Dispatch unified callback to old-style per-state callbacks."""
+        if new_state == _UnifiedState.OPEN:
+            for cb in self.on_open_callbacks:
                 try:
-                    callback(self)
-                except Exception as e:  # noqa: BLE001 - callback best-effort
+                    cb(self)
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"Error in open callback: {e}")
-
-    def _transition_to_closed(self):
-        """Transition to closed state."""
-        if self.state != CircuitState.CLOSED:
-            self.state = CircuitState.CLOSED
-            self.failure_count = 0
-            self.success_count = 0
-            self.last_state_change = time.time()
-            logger.info(f"Circuit breaker '{self.name}' closed")
-
-            for callback in self.on_close_callbacks:
+        elif new_state == _UnifiedState.CLOSED:
+            for cb in self.on_close_callbacks:
                 try:
-                    callback(self)
-                except Exception as e:  # noqa: BLE001 - callback best-effort
+                    cb(self)
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"Error in close callback: {e}")
-
-    def _transition_to_half_open(self):
-        """Transition to half-open state."""
-        if self.state != CircuitState.HALF_OPEN:
-            self.state = CircuitState.HALF_OPEN
-            self.success_count = 0
-            self.failure_count = 0
-            self.last_state_change = time.time()
-            logger.info(f"Circuit breaker '{self.name}' half-open")
-
-            for callback in self.on_half_open_callbacks:
+        elif new_state == _UnifiedState.HALF_OPEN:
+            for cb in self.on_half_open_callbacks:
                 try:
-                    callback(self)
-                except Exception as e:  # noqa: BLE001 - callback best-effort
+                    cb(self)
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"Error in half-open callback: {e}")
+
+    # -- core API ------------------------------------------------------------
+
+    async def call(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
+        """Call function through circuit breaker (handles both sync and async)."""
+        if asyncio.iscoroutinefunction(func):
+            return await self._cb.call_async(func, *args, **kwargs)
+        else:
+            async def _wrap():
+                return await asyncio.to_thread(func, *args, **kwargs)
+            return await self._cb.call_async(_wrap)
 
     def reset(self):
         """Reset circuit breaker to closed state."""
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.success_count = 0
-        self.last_failure_time = None
-        self.call_results.clear()
+        self._cb.reset()
         logger.info(f"Circuit breaker '{self.name}' reset")
 
     def get_stats(self) -> dict[str, Any]:
-        """Get circuit breaker statistics."""
+        """Get circuit breaker statistics (backward-compatible format)."""
+        status = self._cb.get_status()
         return {
             "name": self.name,
             "state": self.state.value,
-            "failure_count": self.failure_count,
-            "success_count": self.success_count,
-            "call_history": list(self.call_results),
-            "failure_rate": sum(1 for r in self.call_results if not r) / len(self.call_results)
-                           if self.call_results else 0,
-            "last_failure_time": self.last_failure_time,
-            "last_state_change": self.last_state_change
+            "failure_count": status.get("failure_count", 0),
+            "success_count": status.get("success_count", 0),
+            "call_history": status.get("window", []),
+            "failure_rate": status.get("failure_rate", 0.0),
+            "last_failure_time": status.get("last_failure_time"),
+            "last_state_change": self._cb.last_state_change_time,
         }
 
+
+# ---------------------------------------------------------------------------
+# RetryPolicy
+# ---------------------------------------------------------------------------
 
 class RetryPolicy:
     """Retry policy with exponential backoff."""
 
     def __init__(self, config: Optional[RetryConfig] = None):
-        """
-        Initialize retry policy.
-
-        Args:
-            config: Retry configuration
-        """
         self.config = config or RetryConfig()
 
-    async def execute(self, func: Callable[..., T], *args, **kwargs) -> T:
-        """
-        Execute function with retry policy.
-
-        Args:
-            func: Function to execute
-            *args: Function arguments
-            **kwargs: Function keyword arguments
-
-        Returns:
-            Function result
-
-        Raises:
-            Exception: If all retries fail
-        """
+    async def execute(self, func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+        """Execute function with retry policy."""
         last_exception = None
 
         for attempt in range(1, self.config.max_attempts + 1):
             try:
-                # Execute function
                 if asyncio.iscoroutinefunction(func):
                     result = await func(*args, **kwargs)
                 else:
@@ -297,14 +251,12 @@ class RetryPolicy:
             except Exception as e:  # noqa: BLE001 - retry policy inspects all exceptions
                 last_exception = e
 
-                # Check if we should retry this exception
                 should_retry = self._should_retry(e)
 
                 if not should_retry or attempt == self.config.max_attempts:
                     logger.error(f"Retry failed after {attempt} attempts: {e}")
                     raise
 
-                # Calculate delay
                 delay = self._calculate_delay(attempt)
 
                 logger.warning(
@@ -320,12 +272,9 @@ class RetryPolicy:
 
     def _should_retry(self, exception: Exception) -> bool:
         """Check if exception should be retried."""
-        # Check dont_retry_on first
         for exc_type in self.config.dont_retry_on:
             if isinstance(exception, exc_type):
                 return False
-
-        # Check retry_on
         return any(isinstance(exception, exc_type) for exc_type in self.config.retry_on)
 
     def _calculate_delay(self, attempt: int) -> float:
@@ -334,18 +283,20 @@ class RetryPolicy:
         delay = min(delay, self.config.max_delay)
 
         if self.config.jitter:
-            # Add random jitter (±25%)
             jitter = delay * 0.25 * (2 * random.random() - 1)
             delay += jitter
 
         return max(0, delay)
 
 
+# ---------------------------------------------------------------------------
+# FallbackChain
+# ---------------------------------------------------------------------------
+
 class FallbackChain:
     """Chain of fallback strategies."""
 
     def __init__(self):
-        """Initialize fallback chain."""
         self.strategies: list[tuple[Callable[..., Any], Optional[Callable[[Exception], bool]]]] = []
 
     def add_strategy(
@@ -353,28 +304,11 @@ class FallbackChain:
         func: Callable,
         condition: Optional[Callable[[Exception], bool]] = None
     ):
-        """
-        Add fallback strategy.
-
-        Args:
-            func: Fallback function
-            condition: Condition to use this fallback
-        """
+        """Add fallback strategy."""
         self.strategies.append((func, condition))
 
-    async def execute(self, primary_func: Callable, *args, **kwargs) -> Any:
-        """
-        Execute with fallback chain.
-
-        Args:
-            primary_func: Primary function to try
-            *args: Function arguments
-            **kwargs: Function keyword arguments
-
-        Returns:
-            Result from successful function
-        """
-        # Try primary function
+    async def execute(self, primary_func: Callable, *args: Any, **kwargs: Any) -> Any:
+        """Execute with fallback chain."""
         try:
             if asyncio.iscoroutinefunction(primary_func):
                 return await primary_func(*args, **kwargs)
@@ -383,7 +317,6 @@ class FallbackChain:
         except Exception as primary_error:  # noqa: BLE001 - fallback chain best-effort
             logger.warning(f"Primary function failed: {primary_error}")
 
-            # Try fallback strategies
             for fallback_func, condition in self.strategies:
                 if condition is None or condition(primary_error):
                     try:
@@ -398,18 +331,20 @@ class FallbackChain:
                         logger.warning(f"Fallback failed: {fallback_error}")
                         continue
 
-            # All fallbacks failed
             logger.error("All fallback strategies failed")
             raise
 
+
+# ---------------------------------------------------------------------------
+# HealthMonitor
+# ---------------------------------------------------------------------------
 
 class HealthMonitor:
     """Monitor component health."""
 
     def __init__(self):
-        """Initialize health monitor."""
         self.components: dict[str, ComponentHealth] = {}
-        self.check_interval = 30  # seconds
+        self.check_interval = 30
         self.monitoring_task = None
 
     def register_component(
@@ -418,14 +353,7 @@ class HealthMonitor:
         health_check: Callable[[], bool],
         critical: bool = False
     ):
-        """
-        Register component for monitoring.
-
-        Args:
-            name: Component name
-            health_check: Function to check health
-            critical: Whether component is critical
-        """
+        """Register component for monitoring."""
         self.components[name] = ComponentHealth(
             name=name,
             health_check=health_check,
@@ -484,7 +412,6 @@ class HealthMonitor:
         if not self.components:
             return HealthStatus.UNKNOWN
 
-        # Check critical components first
         critical_unhealthy = any(
             c.critical and c.status != HealthStatus.HEALTHY
             for c in self.components.values()
@@ -493,7 +420,6 @@ class HealthMonitor:
         if critical_unhealthy:
             return HealthStatus.UNHEALTHY
 
-        # Check overall health
         statuses = [c.status for c in self.components.values()]
 
         if all(s == HealthStatus.HEALTHY for s in statuses):
@@ -530,11 +456,14 @@ class ComponentHealth:
                 self.status = HealthStatus.DEGRADED
 
 
+# ---------------------------------------------------------------------------
+# ErrorRecoveryCoordinator
+# ---------------------------------------------------------------------------
+
 class ErrorRecoveryCoordinator:
     """Coordinates error recovery across components."""
 
     def __init__(self):
-        """Initialize error recovery coordinator."""
         self.circuit_breakers: dict[str, CircuitBreaker] = {}
         self.retry_policies: dict[str, RetryPolicy] = {}
         self.fallback_chains: dict[str, FallbackChain] = {}
@@ -574,7 +503,6 @@ class ErrorRecoveryCoordinator:
         """Record an error for analysis."""
         self.error_history.append(error_context)
 
-        # Log based on error frequency
         recent_errors = [
             e for e in self.error_history
             if e.component == error_context.component and
@@ -608,12 +536,6 @@ class ErrorRecoveryCoordinator:
         }
 
 
-# Custom exceptions
-class CircuitOpenError(Exception):
-    """Raised when circuit breaker is open."""
-    pass
-
-
 # Global coordinator instance
 _coordinator: Optional[ErrorRecoveryCoordinator] = None
 
@@ -626,7 +548,9 @@ def get_coordinator() -> ErrorRecoveryCoordinator:
     return _coordinator
 
 
+# ---------------------------------------------------------------------------
 # Pipeline integration functions
+# ---------------------------------------------------------------------------
 
 async def with_circuit_breaker(
     context: Any,
@@ -636,7 +560,6 @@ async def with_circuit_breaker(
     """Wrap pipeline function with circuit breaker."""
     coordinator = get_coordinator()
 
-    # Get or create circuit breaker
     if component not in coordinator.circuit_breakers:
         config = CircuitBreakerConfig(
             failure_threshold=kwargs.get("failure_threshold", 5),
@@ -646,7 +569,6 @@ async def with_circuit_breaker(
 
     breaker = coordinator.circuit_breakers[component]
 
-    # Store breaker state in context
     context.metadata[f"circuit_breaker_{component}"] = breaker.state.value
 
     return context
@@ -660,7 +582,6 @@ async def with_retry(
     """Wrap pipeline function with retry policy."""
     coordinator = get_coordinator()
 
-    # Get or create retry policy
     if component not in coordinator.retry_policies:
         config = RetryConfig(
             max_attempts=kwargs.get("max_attempts", 3),
@@ -670,7 +591,6 @@ async def with_retry(
 
     policy = coordinator.retry_policies[component]
 
-    # Store retry info in context
     context.metadata[f"retry_policy_{component}"] = {
         "max_attempts": policy.config.max_attempts,
         "initial_delay": policy.config.initial_delay
@@ -688,17 +608,14 @@ async def with_fallback(
     """Add fallback strategy for pipeline function."""
     coordinator = get_coordinator()
 
-    # Get or create fallback chain
     if component not in coordinator.fallback_chains:
         coordinator.register_fallback_chain(component)
 
     chain = coordinator.fallback_chains[component]
 
-    # Add fallback if provided
     if fallback_func:
         chain.add_strategy(fallback_func)
 
-    # Store fallback info in context
     context.metadata[f"fallback_{component}"] = {
         "strategies_count": len(chain.strategies)
     }
@@ -715,7 +632,6 @@ async def check_component_health(
     """Check component health before proceeding."""
     coordinator = get_coordinator()
 
-    # Register component if not already
     if component not in coordinator.health_monitor.components:
         coordinator.health_monitor.register_component(
             component,
@@ -723,7 +639,6 @@ async def check_component_health(
             critical=kwargs.get("critical", False)
         )
 
-    # Check health
     try:
         if asyncio.iscoroutinefunction(health_check):
             is_healthy = await health_check()

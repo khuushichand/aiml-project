@@ -36,6 +36,7 @@ from tldw_Server_API.cli.commands.export import export_group
 from tldw_Server_API.cli.commands.health import health_group
 from tldw_Server_API.cli.commands.testing import test_group
 from tldw_Server_API.cli.commands.users import users_group
+from tldw_Server_API.cli.commands.watchlists import watchlists_group
 from tldw_Server_API.cli.commands.webhooks import webhook_group
 from tldw_Server_API.cli.utils.config import ConfigError, load_cli_config
 from tldw_Server_API.cli.utils.output import print_error, print_info
@@ -143,6 +144,7 @@ main.add_command(users_group, name='users')
 main.add_command(webhook_group, name='webhook')
 main.add_command(test_group, name='test')
 main.add_command(export_group, name='export')
+main.add_command(watchlists_group, name='watchlists')
 
 
 @main.command()
@@ -193,7 +195,7 @@ def completion(shell):
     from click_completion import get_completion_script
 
     try:
-        completion_script = get_completion_script(prog_name='tldw-evals', shell=shell)
+        completion_script = get_completion_script(prog_name='tldw-evals', shell=shell)  # nosec B604
         click.echo(completion_script)
     except Exception as e:
         print_error(f"Failed to generate completion script: {e}")

@@ -2,16 +2,20 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
   BarChart3,
+  Bot,
   Bug,
   Building2,
   Cpu,
   Database,
+  PlugZap,
   FileText,
   Flag,
   Gauge,
   AlertTriangle,
+  MessageSquare,
   Mic,
   ScrollText,
+  Server,
   Key,
   KeyRound,
   LayoutDashboard,
@@ -30,6 +34,7 @@ export type NavigationItem = {
   icon: LucideIcon;
   permission?: string;
   role?: string[];
+  keywords?: string[];
 };
 
 export type NavigationSection = {
@@ -37,29 +42,39 @@ export type NavigationSection = {
   items: NavigationItem[];
 };
 
+export type BreadcrumbItem = {
+  label: string;
+  href?: string;
+  current: boolean;
+};
+
 const navigationItems = {
-  dashboard: { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  users: { name: 'Users', href: '/users', icon: Users, permission: 'read:users' },
-  organizations: { name: 'Organizations', href: '/organizations', icon: Building2, permission: 'read:orgs' },
-  teams: { name: 'Teams', href: '/teams', icon: UserCog, permission: 'read:teams' },
-  rolesPermissions: { name: 'Roles & Permissions', href: '/roles', icon: Shield, role: ['admin', 'super_admin', 'owner'] },
-  apiKeys: { name: 'API Keys', href: '/api-keys', icon: Key, permission: 'read:api_keys' },
-  byok: { name: 'BYOK', href: '/byok', icon: KeyRound, role: ['admin', 'super_admin', 'owner'] },
-  providers: { name: 'LLM Providers', href: '/providers', icon: Cpu, permission: 'read:config' },
-  resourceGovernor: { name: 'Resource Governor', href: '/resource-governor', icon: Gauge, role: ['admin', 'super_admin', 'owner'] },
-  security: { name: 'Security', href: '/security', icon: ShieldAlert, role: ['admin', 'super_admin', 'owner'] },
-  auditLogs: { name: 'Audit Logs', href: '/audit', icon: FileText, permission: 'read:audit' },
-  monitoring: { name: 'Monitoring', href: '/monitoring', icon: Activity, role: ['admin', 'super_admin', 'owner'] },
-  jobs: { name: 'Jobs', href: '/jobs', icon: ListChecks, role: ['admin', 'super_admin', 'owner'] },
-  usage: { name: 'Usage', href: '/usage', icon: BarChart3, role: ['admin', 'super_admin', 'owner'] },
-  budgets: { name: 'Budgets', href: '/budgets', icon: Wallet, role: ['admin', 'super_admin', 'owner'] },
-  dataOps: { name: 'Data Ops', href: '/data-ops', icon: Database, role: ['admin', 'super_admin', 'owner'] },
-  logs: { name: 'Logs', href: '/logs', icon: ScrollText, role: ['admin', 'super_admin', 'owner'] },
-  flags: { name: 'Flags', href: '/flags', icon: Flag, role: ['admin', 'super_admin', 'owner'] },
-  incidents: { name: 'Incidents', href: '/incidents', icon: AlertTriangle, role: ['admin', 'super_admin', 'owner'] },
-  voiceCommands: { name: 'Voice Commands', href: '/voice-commands', icon: Mic, role: ['admin', 'super_admin', 'owner'] },
-  debug: { name: 'Debug', href: '/debug', icon: Bug, role: ['super_admin', 'owner'] },
-  configuration: { name: 'Configuration', href: '/config', icon: Settings, role: ['super_admin', 'owner'] },
+  dashboard: { name: 'Dashboard', href: '/', icon: LayoutDashboard, keywords: ['overview', 'home', 'stats'] },
+  users: { name: 'Users', href: '/users', icon: Users, permission: 'read:users', keywords: ['accounts', 'people'] },
+  organizations: { name: 'Organizations', href: '/organizations', icon: Building2, permission: 'read:orgs', keywords: ['orgs', 'tenants'] },
+  teams: { name: 'Teams', href: '/teams', icon: UserCog, permission: 'read:teams', keywords: ['groups'] },
+  rolesPermissions: { name: 'Roles & Permissions', href: '/roles', icon: Shield, role: ['admin', 'super_admin', 'owner'], keywords: ['rbac', 'authz'] },
+  apiKeys: { name: 'API Keys', href: '/api-keys', icon: Key, permission: 'read:api_keys', keywords: ['credentials', 'tokens'] },
+  byok: { name: 'BYOK', href: '/byok', icon: KeyRound, role: ['admin', 'super_admin', 'owner'], keywords: ['provider keys', 'bring your own key'] },
+  providers: { name: 'LLM Providers', href: '/providers', icon: Cpu, permission: 'read:config', keywords: ['models', 'inference'] },
+  resourceGovernor: { name: 'Resource Governor', href: '/resource-governor', icon: Gauge, role: ['admin', 'super_admin', 'owner'], keywords: ['limits', 'quotas', 'rate limits'] },
+  security: { name: 'Security', href: '/security', icon: ShieldAlert, role: ['admin', 'super_admin', 'owner'], keywords: ['risk', 'mfa', 'sessions'] },
+  auditLogs: { name: 'Audit Logs', href: '/audit', icon: FileText, permission: 'read:audit', keywords: ['audit', 'events', 'history'] },
+  monitoring: { name: 'Monitoring', href: '/monitoring', icon: Activity, role: ['admin', 'super_admin', 'owner'], keywords: ['health', 'alerts', 'metrics'] },
+  dependencies: { name: 'Dependencies', href: '/dependencies', icon: PlugZap, role: ['admin', 'super_admin', 'owner'], keywords: ['providers', 'connectivity', 'health checks'] },
+  jobs: { name: 'Jobs', href: '/jobs', icon: ListChecks, role: ['admin', 'super_admin', 'owner'], keywords: ['queue', 'workers', 'tasks'] },
+  usage: { name: 'Usage', href: '/usage', icon: BarChart3, role: ['admin', 'super_admin', 'owner'], keywords: ['analytics', 'consumption'] },
+  budgets: { name: 'Budgets', href: '/budgets', icon: Wallet, role: ['admin', 'super_admin', 'owner'], keywords: ['cost', 'spend'] },
+  dataOps: { name: 'Data Ops', href: '/data-ops', icon: Database, role: ['admin', 'super_admin', 'owner'], keywords: ['backup', 'retention', 'export'] },
+  logs: { name: 'Logs', href: '/logs', icon: ScrollText, role: ['admin', 'super_admin', 'owner'], keywords: ['system logs'] },
+  flags: { name: 'Flags', href: '/flags', icon: Flag, role: ['admin', 'super_admin', 'owner'], keywords: ['feature flags', 'maintenance'] },
+  incidents: { name: 'Incidents', href: '/incidents', icon: AlertTriangle, role: ['admin', 'super_admin', 'owner'], keywords: ['outages', 'response'] },
+  acpSessions: { name: 'ACP Sessions', href: '/acp-sessions', icon: MessageSquare, role: ['admin', 'super_admin', 'owner'], keywords: ['agent', 'chat', 'sessions', 'acp'] },
+  acpAgents: { name: 'ACP Agents', href: '/acp-agents', icon: Bot, role: ['admin', 'super_admin', 'owner'], keywords: ['agent', 'config', 'custom agents'] },
+  mcpServers: { name: 'MCP Servers', href: '/mcp-servers', icon: Server, role: ['admin', 'super_admin', 'owner'], keywords: ['mcp', 'tools', 'servers', 'model context protocol'] },
+  voiceCommands: { name: 'Voice Commands', href: '/voice-commands', icon: Mic, role: ['admin', 'super_admin', 'owner'], keywords: ['speech', 'commands'] },
+  debug: { name: 'Debug', href: '/debug', icon: Bug, role: ['super_admin', 'owner'], keywords: ['diagnostics'] },
+  configuration: { name: 'Configuration', href: '/config', icon: Settings, role: ['admin', 'super_admin', 'owner'], keywords: ['settings', 'system config'] },
 } satisfies Record<string, NavigationItem>;
 
 // Grouped navigation for sidebar sections
@@ -71,47 +86,177 @@ export const navigationSections: NavigationSection[] = [
     ],
   },
   {
-    title: 'Users & Access',
+    title: 'Identity & Access',
     items: [
       navigationItems.users,
       navigationItems.organizations,
       navigationItems.teams,
       navigationItems.rolesPermissions,
-    ],
-  },
-  {
-    title: 'API & Keys',
-    items: [
       navigationItems.apiKeys,
-      navigationItems.byok,
-      navigationItems.providers,
     ],
   },
   {
-    title: 'System',
+    title: 'AI & Models',
+    items: [
+      navigationItems.providers,
+      navigationItems.byok,
+      navigationItems.acpSessions,
+      navigationItems.acpAgents,
+      navigationItems.mcpServers,
+      navigationItems.voiceCommands,
+    ],
+  },
+  {
+    title: 'Operations',
     items: [
       navigationItems.monitoring,
+      navigationItems.dependencies,
+      navigationItems.incidents,
       navigationItems.jobs,
-      navigationItems.voiceCommands,
       navigationItems.auditLogs,
       navigationItems.logs,
-      navigationItems.incidents,
     ],
   },
   {
-    title: 'Configuration',
+    title: 'Governance',
     items: [
-      navigationItems.resourceGovernor,
       navigationItems.security,
-      navigationItems.dataOps,
-      navigationItems.usage,
+      navigationItems.resourceGovernor,
       navigationItems.budgets,
+      navigationItems.usage,
       navigationItems.flags,
+      navigationItems.dataOps,
+    ],
+  },
+  {
+    title: 'Advanced',
+    items: [
       navigationItems.configuration,
       navigationItems.debug,
     ],
   },
 ];
 
+export const matchesNavigationQuery = (
+  item: NavigationItem,
+  sectionTitle: string,
+  query: string
+): boolean => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  const searchableParts = [
+    item.name,
+    sectionTitle,
+    ...(item.keywords ?? []),
+  ];
+  return searchableParts.some((part) => part.toLowerCase().includes(normalizedQuery));
+};
+
 // Flat navigation list for backwards compatibility
 export const navigation: NavigationItem[] = navigationSections.flatMap((section) => section.items);
+
+const routeLabelOverrides: Record<string, string> = {
+  '/roles/matrix': 'Permission Matrix',
+  '/roles/compare': 'Role Comparison',
+};
+
+const staticRouteLabels: Record<string, string> = navigation.reduce<Record<string, string>>(
+  (accumulator, item) => ({
+    ...accumulator,
+    [item.href]: item.name,
+  }),
+  {
+    '/': 'Dashboard',
+    ...routeLabelOverrides,
+  }
+);
+
+const normalizePathname = (pathname: string): string => {
+  if (!pathname) return '/';
+  const withoutQuery = pathname.split('?')[0]?.split('#')[0] ?? '/';
+  const trimmed = withoutQuery.replace(/\/+$/, '');
+  return trimmed || '/';
+};
+
+const titleCase = (value: string): string =>
+  value
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+
+const humanizeSegment = (segment: string): string => {
+  const decoded = decodeURIComponent(segment);
+  return titleCase(decoded.replace(/[-_]+/g, ' '));
+};
+
+const resolveDynamicPathLabel = (segments: string[]): string | null => {
+  if (segments.length < 2) return null;
+  const [root, idOrSlug] = segments;
+  if (!idOrSlug) return null;
+
+  if (root === 'users') {
+    if (segments.length === 2) return `User ${decodeURIComponent(idOrSlug)}`;
+    if (segments.length === 3 && segments[2] === 'api-keys') return 'API Keys';
+  }
+  if (root === 'organizations' && segments.length === 2) {
+    return `Organization ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'teams' && segments.length === 2) {
+    return `Team ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'roles' && segments.length === 2) {
+    return `Role ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'voice-commands' && segments.length === 2) {
+    return `Command ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'acp-sessions' && segments.length === 2) {
+    return `Session ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'acp-agents' && segments.length === 2) {
+    return `Agent ${decodeURIComponent(idOrSlug)}`;
+  }
+  return null;
+};
+
+const resolveRouteLabel = (path: string): string => {
+  const normalized = normalizePathname(path);
+  const staticLabel = staticRouteLabels[normalized];
+  if (staticLabel) return staticLabel;
+
+  const segments = normalized.split('/').filter(Boolean);
+  const dynamicLabel = resolveDynamicPathLabel(segments);
+  if (dynamicLabel) return dynamicLabel;
+
+  const lastSegment = segments[segments.length - 1];
+  return lastSegment ? humanizeSegment(lastSegment) : 'Dashboard';
+};
+
+export const buildBreadcrumbs = (pathname: string): BreadcrumbItem[] => {
+  const normalized = normalizePathname(pathname);
+  if (normalized === '/') {
+    return [{ label: 'Dashboard', current: true }];
+  }
+
+  const segments = normalized.split('/').filter(Boolean);
+  const items: BreadcrumbItem[] = [{ label: 'Dashboard', href: '/', current: false }];
+
+  segments.forEach((_, index) => {
+    const href = `/${segments.slice(0, index + 1).join('/')}`;
+    const current = index === segments.length - 1;
+    items.push({
+      label: resolveRouteLabel(href),
+      href: current ? undefined : href,
+      current,
+    });
+  });
+
+  return items;
+};
+
+export const getPageTitleForPath = (pathname: string): string => {
+  const breadcrumbs = buildBreadcrumbs(pathname);
+  const currentLabel = breadcrumbs[breadcrumbs.length - 1]?.label || 'Dashboard';
+  return `${currentLabel} | Admin Dashboard`;
+};

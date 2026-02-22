@@ -58,7 +58,7 @@ def test_admin_update_org_watchlists_settings(monkeypatch, tmp_path, authnz_sche
             )
         except Exception:
             # Best-effort; not all test paths require request.state.auth
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override
@@ -158,7 +158,7 @@ def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path, authnz_sch
                 )
         except Exception:
             # Best-effort; not all test paths require request.state.auth
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override
@@ -220,7 +220,7 @@ def test_admin_watchlists_org_settings_404(monkeypatch, authnz_schema_ready_sync
             )
         except Exception:
             # Best-effort; not all test paths require request.state.auth
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override

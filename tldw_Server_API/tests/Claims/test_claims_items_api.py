@@ -63,7 +63,7 @@ def _principal_override(is_admin: bool):
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
         return principal
 
     return _override
@@ -95,7 +95,7 @@ def test_claims_item_get_and_update():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override(False)
     fastapi_app.dependency_overrides[get_request_user] = _override_user
@@ -146,7 +146,7 @@ def test_claims_list_all():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override(False)
     fastapi_app.dependency_overrides[get_request_user] = _override_user

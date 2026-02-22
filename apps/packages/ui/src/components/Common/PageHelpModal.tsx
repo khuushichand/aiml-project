@@ -15,7 +15,8 @@ import {
   Check,
   Play,
   RotateCcw,
-  Command
+  Command,
+  Lock
 } from "lucide-react"
 import { defaultShortcuts, formatShortcut } from "@/hooks/keyboard/useShortcutConfig"
 import { isMac } from "@/hooks/keyboard/useKeyboardShortcuts"
@@ -74,19 +75,37 @@ const TutorialList: React.FC<TutorialListProps> = ({
         const isCompleted = completedSet.has(tutorial.id)
         const Icon = tutorial.icon || GraduationCap
 
+        // Check if prerequisites are met
+        const unmetPrereqs = (tutorial.prerequisites ?? []).filter(
+          (prereqId) => !completedSet.has(prereqId)
+        )
+        const isLocked = unmetPrereqs.length > 0
+
         return (
           <div
             key={tutorial.id}
-            className="flex items-start gap-3 rounded-lg border border-border bg-surface2/50 p-3 hover:bg-surface2"
+            className={`flex items-start gap-3 rounded-lg border border-border p-3 ${
+              isLocked
+                ? "bg-surface2/30 opacity-70"
+                : "bg-surface2/50 hover:bg-surface2"
+            }`}
           >
             <div
               className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg ${
-                isCompleted
-                  ? "bg-success/10 text-success"
-                  : "bg-primary/10 text-primary"
+                isLocked
+                  ? "bg-surface2 text-text-subtle"
+                  : isCompleted
+                    ? "bg-success/10 text-success"
+                    : "bg-primary/10 text-primary"
               }`}
             >
-              {isCompleted ? <Check className="size-4" /> : <Icon className="size-4" />}
+              {isLocked ? (
+                <Lock className="size-4" />
+              ) : isCompleted ? (
+                <Check className="size-4" />
+              ) : (
+                <Icon className="size-4" />
+              )}
             </div>
 
             <div className="min-w-0 flex-1">
@@ -107,18 +126,30 @@ const TutorialList: React.FC<TutorialListProps> = ({
                 <span className="text-xs text-text-subtle">
                   {t("tutorials:steps", { count: tutorial.steps.length })}
                 </span>
+                {isLocked && (
+                  <span className="text-xs text-text-subtle">
+                    {t("tutorials:status.locked", "Complete basics first")}
+                  </span>
+                )}
               </div>
             </div>
 
             <button
               onClick={() => onStart(tutorial.id)}
-              className="shrink-0 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors hover:bg-surface2"
+              disabled={isLocked}
+              className="shrink-0 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
               style={{
-                backgroundColor: isCompleted ? undefined : "var(--color-primary)",
-                color: isCompleted ? "var(--color-text)" : "white"
+                backgroundColor:
+                  isLocked || isCompleted ? undefined : "var(--color-primary)",
+                color: isLocked || isCompleted ? "var(--color-text)" : "white"
               }}
             >
-              {isCompleted ? (
+              {isLocked ? (
+                <>
+                  <Lock className="size-3.5" />
+                  {t("tutorials:actions.locked", "Locked")}
+                </>
+              ) : isCompleted ? (
                 <>
                   <RotateCcw className="size-3.5" />
                   {t("tutorials:actions.replay", "Replay")}

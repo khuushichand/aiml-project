@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Shield, Lock, Save, Users, RefreshCw, Trash2, Check, X, Clock, Wrench } from 'lucide-react';
+import { ArrowLeft, Shield, Lock, Save, Users, Trash2, Check, X, Clock, Wrench } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { parseOptionalInt } from '@/lib/number';
 import {
@@ -615,9 +615,9 @@ export default function RoleDetailPage() {
                         <X className="mr-2 h-4 w-4" />
                         Cancel
                       </Button>
-                      <Button onClick={handleSaveRole} disabled={saving}>
+                      <Button onClick={handleSaveRole} disabled={saving} loading={saving} loadingText="Saving...">
                         <Save className="mr-2 h-4 w-4" />
-                        {saving ? 'Saving...' : 'Save'}
+                        Save
                       </Button>
                     </>
                   ) : (
@@ -830,8 +830,10 @@ export default function RoleDetailPage() {
                       <Button
                         onClick={handleSaveRateLimits}
                         disabled={rateLimitsSaving || role.is_system}
+                        loading={rateLimitsSaving}
+                        loadingText="Saving..."
                       >
-                        {rateLimitsSaving ? 'Saving...' : 'Save Rate Limits'}
+                        Save Rate Limits
                       </Button>
                       {hasRateLimits && (
                         <Button
@@ -936,6 +938,12 @@ export default function RoleDetailPage() {
                     </Button>
                     <Button
                       variant="outline"
+                      onClick={() => router.push('/roles/compare')}
+                    >
+                      Compare with...
+                    </Button>
+                    <Button
+                      variant="outline"
                       onClick={() => router.push('/roles')}
                     >
                       Manage All Roles
@@ -946,18 +954,11 @@ export default function RoleDetailPage() {
                         className="text-red-500 hover:text-red-600"
                         onClick={handleDeleteRole}
                         disabled={isDeletingRole}
+                        loading={isDeletingRole}
+                        loadingText="Deleting..."
                       >
-                        {isDeletingRole ? (
-                          <>
-                            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                            Deleting...
-                          </>
-                        ) : (
-                          <>
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Delete Role
-                          </>
-                        )}
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete Role
                       </Button>
                     )}
                   </div>

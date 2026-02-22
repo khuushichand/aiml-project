@@ -173,7 +173,7 @@ export const CreateEvaluationWizard: React.FC<CreateEvaluationWizardProps> = ({
             <Alert
               type="info"
               showIcon
-              message={t(
+              title={t(
                 "managePrompts.studio.evaluations.wizard.selectPromptInfo",
                 {
                   defaultValue:
@@ -221,7 +221,7 @@ export const CreateEvaluationWizard: React.FC<CreateEvaluationWizardProps> = ({
             <Alert
               type="info"
               showIcon
-              message={t(
+              title={t(
                 "managePrompts.studio.evaluations.wizard.selectTestCasesInfo",
                 {
                   defaultValue:
@@ -296,7 +296,7 @@ export const CreateEvaluationWizard: React.FC<CreateEvaluationWizardProps> = ({
             <Alert
               type="info"
               showIcon
-              message={t(
+              title={t(
                 "managePrompts.studio.evaluations.wizard.configureModelInfo",
                 {
                   defaultValue:
@@ -394,7 +394,7 @@ export const CreateEvaluationWizard: React.FC<CreateEvaluationWizardProps> = ({
             <Alert
               type="success"
               showIcon
-              message={t(
+              title={t(
                 "managePrompts.studio.evaluations.wizard.reviewInfo",
                 {
                   defaultValue: "Review your evaluation settings before running."

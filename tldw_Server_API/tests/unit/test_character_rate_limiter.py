@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as crl
+from tldw_Server_API.app.core import config as core_config
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import CharacterRateLimiter
 
 
@@ -115,3 +116,24 @@ def test_get_usage_stats_peeks_rg(monkeypatch):
 
     assert stats["requests"]["remaining"] == 7
     assert fake.peek_calls
+
+
+@pytest.mark.unit
+def test_get_character_rate_limiter_ignores_global_rate_limit_enabled(monkeypatch):
+    crl._rate_limiter = None
+    monkeypatch.delenv("CHARACTER_RATE_LIMIT_ENABLED", raising=False)
+    monkeypatch.setattr(crl, "is_test_mode", lambda: False)
+    monkeypatch.setattr(crl, "env_flag_enabled", lambda _name: False)
+    monkeypatch.setattr(
+        core_config,
+        "settings",
+        {
+            "SINGLE_USER_MODE": True,
+            "RATE_LIMIT_ENABLED": True,
+        },
+    )
+    try:
+        limiter = crl.get_character_rate_limiter()
+        assert limiter.enabled is False
+    finally:
+        crl._rate_limiter = None

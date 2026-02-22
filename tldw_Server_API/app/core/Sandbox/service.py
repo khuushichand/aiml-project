@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Metrics import observe_histogram
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .models import (
     RunPhase,
@@ -170,12 +171,22 @@ class SandboxService:
             store_mode = "unknown"
         # Whether we have active enforcement for egress allowlisting (Docker only for now)
         try:
-            env_enf = str(os.getenv("SANDBOX_EGRESS_ENFORCEMENT") or getattr(app_settings, "SANDBOX_EGRESS_ENFORCEMENT", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+            env_enf = is_truthy(
+                str(
+                    os.getenv("SANDBOX_EGRESS_ENFORCEMENT")
+                    or getattr(app_settings, "SANDBOX_EGRESS_ENFORCEMENT", "")
+                ).strip().lower()
+            )
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             env_enf = False
         egress_supported = bool(self.policy.cfg.egress_enforcement) or bool(env_enf)
         try:
-            env_gran = str(os.getenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT") or getattr(app_settings, "SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+            env_gran = is_truthy(
+                str(
+                    os.getenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT")
+                    or getattr(app_settings, "SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "")
+                ).strip().lower()
+            )
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             env_gran = False
         granular = bool(egress_supported and env_gran)
@@ -183,7 +194,7 @@ class SandboxService:
         try:
             env_exec = os.getenv("SANDBOX_ENABLE_EXECUTION")
             if env_exec is not None:
-                execute_enabled = str(env_exec).strip().lower() in {"1", "true", "yes", "on", "y"}
+                execute_enabled = is_truthy(env_exec)
             else:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
@@ -229,13 +240,23 @@ class SandboxService:
                 "interactive_supported": False,
                 # Only advertise allowlist support when explicit Firecracker enforcement is enabled
                 "egress_allowlist_supported": bool(
-                    str(os.getenv("SANDBOX_FIRECRACKER_EGRESS_ENFORCEMENT") or getattr(app_settings, "SANDBOX_FIRECRACKER_EGRESS_ENFORCEMENT", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+                    is_truthy(
+                        str(
+                            os.getenv("SANDBOX_FIRECRACKER_EGRESS_ENFORCEMENT")
+                            or getattr(app_settings, "SANDBOX_FIRECRACKER_EGRESS_ENFORCEMENT", "")
+                        ).strip().lower()
+                    )
                 ),
                 "store_mode": store_mode,
                 "notes": (
                     "Granular egress allowlist enforced via VM tap/bridge + host firewall (planned)"
                     if bool(
-                        str(os.getenv("SANDBOX_FIRECRACKER_EGRESS_GRANULAR_ENFORCEMENT") or getattr(app_settings, "SANDBOX_FIRECRACKER_EGRESS_GRANULAR_ENFORCEMENT", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+                        is_truthy(
+                            str(
+                                os.getenv("SANDBOX_FIRECRACKER_EGRESS_GRANULAR_ENFORCEMENT")
+                                or getattr(app_settings, "SANDBOX_FIRECRACKER_EGRESS_GRANULAR_ENFORCEMENT", "")
+                            ).strip().lower()
+                        )
                     )
                     else "Allowlist enforcement uses deny-all fallback currently; granular Firecracker egress isolation planned"
                 ),
@@ -406,7 +427,7 @@ class SandboxService:
         try:
             env_exec = os.getenv("SANDBOX_ENABLE_EXECUTION")
             if env_exec is not None:
-                execute_enabled = str(env_exec).strip().lower() in {"1", "true", "yes", "on", "y"}
+                execute_enabled = is_truthy(env_exec)
             else:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
@@ -415,12 +436,12 @@ class SandboxService:
             try:
                 env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
                 if env_bg is not None:
-                    background = str(env_bg).strip().lower() in {"1", "true", "yes", "on", "y"}
+                    background = is_truthy(env_bg)
                 else:
                     background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
                 # Force foreground when using Docker fake execution to satisfy tests
                 try:
-                    if str(os.getenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC") or "").strip().lower() in {"1", "true", "yes", "on", "y"}:
+                    if is_truthy(str(os.getenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC") or "").strip().lower()):
                         background = False
                 except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                     pass
@@ -518,7 +539,7 @@ class SandboxService:
             try:
                 env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
                 if env_bg is not None:
-                    background = str(env_bg).strip().lower() in {"1", "true", "yes", "on", "y"}
+                    background = is_truthy(env_bg)
                 else:
                     background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
                 if background:
@@ -593,7 +614,7 @@ class SandboxService:
             try:
                 env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
                 if env_bg is not None:
-                    background = str(env_bg).strip().lower() in {"1", "true", "yes", "on", "y"}
+                    background = is_truthy(env_bg)
                 else:
                     background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
                 if background:

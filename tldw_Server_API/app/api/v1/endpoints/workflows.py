@@ -76,10 +76,15 @@ from tldw_Server_API.app.core.exceptions import (
 from tldw_Server_API.app.core.http_client import RetryPolicy as _RetryPolicy
 from tldw_Server_API.app.core.http_client import afetch as _http_afetch
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
-from tldw_Server_API.app.core.Resource_Governance.daily_caps import check_daily_cap
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled,
+    is_explicit_pytest_runtime,
+    is_test_mode,
+    is_truthy,
+)
 from tldw_Server_API.app.core.Workflows import RunMode, WorkflowEngine, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
 from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
@@ -121,11 +126,57 @@ _WORKFLOWS_NONCRITICAL_EXCEPTIONS = (
 _WORKFLOWS_BACKFILL_CACHE: set[str] = set()
 _raw_cache_max = int(os.getenv("WORKFLOWS_BACKFILL_CACHE_MAX", "50000") or "50000")
 _WORKFLOWS_BACKFILL_CACHE_MAX = max(1, _raw_cache_max)
+_WORKFLOWS_QUOTA_RG_FALLBACK_LOGGED = False
+
+
+def _log_workflows_quota_rg_fallback_once(*, reason: str, policy_id: str) -> None:
+    global _WORKFLOWS_QUOTA_RG_FALLBACK_LOGGED
+    if _WORKFLOWS_QUOTA_RG_FALLBACK_LOGGED:
+        return
+    _WORKFLOWS_QUOTA_RG_FALLBACK_LOGGED = True
+    logger.error(
+        "Workflows daily-cap RG check unavailable; using diagnostics-only shim (no legacy fallback enforcement). "
+        "reason={} policy_id={}",
+        reason,
+        policy_id,
+    )
 
 
 def _utcnow_iso() -> str:
     import datetime as _dt
     return _dt.datetime.utcnow().isoformat()
+
+
+def _normalize_claim_values(raw: Any) -> list[str]:
+    values = raw if isinstance(raw, (list, tuple, set)) else ([raw] if raw is not None else [])
+    out: list[str] = []
+    for value in values:
+        text = str(value).strip().lower()
+        if text:
+            out.append(text)
+    return out
+
+
+def _is_workflows_admin_user(current_user: User) -> bool:
+    """
+    Resolve workflows admin authorization from explicit role/permission claims.
+
+    Legacy profile booleans/columns like ``is_admin`` are intentionally not
+    trusted for cross-user workflows access.
+    """
+    try:
+        if "admin" in _normalize_claim_values(getattr(current_user, "roles", [])):
+            return True
+        permission_values = _normalize_claim_values(getattr(current_user, "permissions", []))
+        if WORKFLOWS_ADMIN.lower() in permission_values:
+            return True
+        if "*" in permission_values:
+            return True
+        if "system.configure" in permission_values:
+            return True
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
+        return False
+    return False
 
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
@@ -824,7 +875,7 @@ async def _wait_for_run_completion(
             timeout_seconds = float(_env_override)
         else:
             # Trim timeouts under pytest/TEST_MODE to keep suites responsive
-            if os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+            if is_explicit_pytest_runtime() or is_test_mode():
                 timeout_seconds = min(timeout_seconds, 120.0)
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows endpoint: failed to adjust run timeout; using defaults: {e}")
@@ -872,14 +923,13 @@ async def _enforce_workflows_daily_cap(
     """
     Enforce workflows daily run caps via ResourceDailyLedger/RG.
 
-    Preference order:
-      1) workflows_runs.daily_cap from the active RG policy
-      2) Legacy WORKFLOWS_QUOTA_DAILY_PER_USER env as fallback alias
+    Daily cap source:
+      - workflows_runs.daily_cap from the active RG policy.
 
     Raises HTTPException(429) with legacy-compatible headers on denial.
     """
     try:
-        if os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}:
+        if env_flag_enabled("WORKFLOWS_DISABLE_QUOTAS"):
             return
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Workflows quota: WORKFLOWS_DISABLE_QUOTAS check failed: {}", exc)
@@ -926,20 +976,13 @@ async def _enforce_workflows_daily_cap(
         )
         daily_cap_policy = 0
 
-    daily_cap_env = 0
     if daily_cap_policy <= 0:
-        try:
-            daily_cap_env = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000") or 0)
-        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug(
-                "Workflows quota: WORKFLOWS_QUOTA_DAILY_PER_USER parsing failed: {}",
-                exc,
-            )
-            daily_cap_env = 0
-
-    daily_cap = daily_cap_policy if daily_cap_policy > 0 else daily_cap_env
-    if daily_cap <= 0:
+        _log_workflows_quota_rg_fallback_once(
+            reason="missing_rg_daily_cap_policy",
+            policy_id=policy_id,
+        )
         return
+    daily_cap = daily_cap_policy
 
     # One-time best-effort backfill of today's legacy counts into ledger.
     # Guarded by an in-memory per-(tenant, entity, date) key to avoid
@@ -972,52 +1015,45 @@ async def _enforce_workflows_daily_cap(
             exc,
         )
 
-    # Prefer governor check when the policy defines the cap (single-source RG).
-    if daily_cap_policy > 0:
-        try:
-            gov = getattr(request.app.state, "rg_governor", None)
-            if gov is not None:
-                dec = await gov.check(
-                    RGRequest(
-                        entity=entity,
-                        categories={workflows_ledger_category(): {"units": 1}},
-                        tags={"policy_id": policy_id, "endpoint": request.url.path},
-                    )
-                )
-                if not bool(getattr(dec, "allowed", False)):
-                    cats = (dec.details or {}).get("categories") or {}
-                    cat_det = cats.get(workflows_ledger_category()) or {}
-                    remaining = int(cat_det.get("daily_remaining") or cat_det.get("remaining") or 0)
-                    retry_after = int(getattr(dec, "retry_after", None) or cat_det.get("retry_after") or 1)
-                    reset_epoch = int(time.time()) + retry_after
-                    headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
-                    raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
-                return
-        except HTTPException:
-            raise
-        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
-            # Fall back to direct check below.
-            logger.debug(
-                "Workflows quota: governor check failed for entity={} policy_id={}: {}",
-                entity,
-                policy_id,
-                exc,
+    # RG is the single source of workflows daily-cap enforcement.
+    try:
+        gov = getattr(request.app.state, "rg_governor", None)
+        if gov is None:
+            _log_workflows_quota_rg_fallback_once(
+                reason="rg_governor_unavailable",
+                policy_id=policy_id,
             )
-
-    # Fallback direct check using computed cap (env alias).
-    allowed, ra, det = await check_daily_cap(
-        entity_scope=entity_scope,
-        entity_value=entity_value,
-        category=workflows_ledger_category(),
-        daily_cap=daily_cap,
-        units=1,
-    )
-    if not allowed:
-        remaining = int((det or {}).get("daily_remaining") or 0)
-        retry_after = int(ra or 1)
-        reset_epoch = int(time.time()) + retry_after
-        headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
-        raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+            return
+        dec = await gov.check(
+            RGRequest(
+                entity=entity,
+                categories={workflows_ledger_category(): {"units": 1}},
+                tags={"policy_id": policy_id, "endpoint": request.url.path},
+            )
+        )
+        if not bool(getattr(dec, "allowed", False)):
+            cats = (dec.details or {}).get("categories") or {}
+            cat_det = cats.get(workflows_ledger_category()) or {}
+            remaining = int(cat_det.get("daily_remaining") or cat_det.get("remaining") or 0)
+            retry_after = int(getattr(dec, "retry_after", None) or cat_det.get("retry_after") or 1)
+            reset_epoch = int(time.time()) + retry_after
+            headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
+            raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+        return
+    except HTTPException:
+        raise
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
+        _log_workflows_quota_rg_fallback_once(
+            reason=f"rg_check_failed:{type(exc).__name__}",
+            policy_id=policy_id,
+        )
+        logger.debug(
+            "Workflows quota: governor check failed for entity={} policy_id={}: {}",
+            entity,
+            policy_id,
+            exc,
+        )
+        return
 
 
 async def _record_workflow_run_usage(
@@ -1143,7 +1179,7 @@ async def create_new_version(
     d0 = db.get_definition(workflow_id)
     if not d0 or d0.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(d0.owner_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Workflow not found")
     try:
@@ -1200,7 +1236,7 @@ async def delete_definition(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if not d or d.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(d.owner_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Workflow not found")
     ok = db.soft_delete_definition(workflow_id)
@@ -1240,7 +1276,7 @@ async def workflows_auth_check(current_user: User = Depends(get_request_user)):
             "ok": True,
             "user_id": str(current_user.id),
             "username": getattr(current_user, "username", None),
-            "is_admin": bool(getattr(current_user, "is_admin", False)),
+            "is_admin": _is_workflows_admin_user(current_user),
             "tenant_id": getattr(current_user, "tenant_id", None),
         }
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
@@ -1292,10 +1328,12 @@ async def workflows_virtual_key(
     try:
         from datetime import datetime, timedelta
         svc = JWTService(settings)
+        role_claims = _normalize_claim_values(getattr(current_user, "roles", []))
+        token_role = role_claims[0] if role_claims else ("admin" if _is_workflows_admin_user(current_user) else "user")
         token = svc.create_virtual_access_token(
             user_id=user_id,
             username=str(getattr(current_user, "username", "user")),
-            role=(current_user.roles[0] if getattr(current_user, "roles", None) else ("admin" if getattr(current_user, "is_admin", False) else "user")),
+            role=token_role,
             scope=str(body.scope or "workflows"),
             ttl_minutes=int(body.ttl_minutes),
             schedule_id=(str(body.schedule_id) if body.schedule_id else None),
@@ -1338,7 +1376,7 @@ async def run_saved(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if d.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(d.owner_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Workflow not found")
     # Idempotency: reuse existing run if key matches
@@ -1384,7 +1422,7 @@ async def run_saved(
                 cfg = s0.get("config") or {}
                 fe = cfg.get("force_error")
                 if isinstance(fe, str):
-                    fe = fe.strip().lower() in {"1", "true", "yes", "on"}
+                    fe = is_truthy(fe)
                 tmpl = str(cfg.get("template", ""))
                 if fe or tmpl.strip().lower() == "bad":
                     # If an on_failure route is defined and refers to a valid step, let the engine handle it
@@ -1482,9 +1520,8 @@ async def run_saved(
     # In test environments, run the workflow inline to ensure deterministic completion
     try:
         _test_mode = (
-            os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            is_explicit_pytest_runtime()
+            or is_test_mode()
         )
         if _test_mode and run.status in {None, "", "queued"}:
             await engine.start_run(run_id, run_mode)
@@ -1592,7 +1629,7 @@ async def list_runs(
     audit_service=Depends(get_audit_service_for_user),
 ):
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     user_id = None
     if owner and is_admin:
         user_id = str(owner)
@@ -1954,7 +1991,7 @@ async def get_run(
             logger.debug(f"Workflows get_run: audit tenant_mismatch failed: {e}")
         raise HTTPException(status_code=404, detail="Run not found")
     # Owner or admin (if attribute available)
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         try:
             if audit_service:
@@ -2027,7 +2064,7 @@ async def get_run_events(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     # Normalize types to lower-case for consistency with UI filter chips
@@ -2117,7 +2154,7 @@ async def get_run_webhook_deliveries(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     events = db.get_events(run_id, types=["webhook_delivery"]) or []
@@ -2234,7 +2271,7 @@ async def replay_webhook_dlq(
 
     # Test-mode short-circuit
     import os as _os
-    if _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} and _os.getenv("WORKFLOWS_TEST_REPLAY_SUCCESS", "").lower() in {"1", "true", "yes", "on"}:
+    if is_test_mode() and is_truthy(_os.getenv("WORKFLOWS_TEST_REPLAY_SUCCESS", "")):
         try:
             db.delete_webhook_dlq(dlq_id=dlq_id)
         except sqlite3.Error as exc:
@@ -2389,7 +2426,7 @@ async def replay_webhook_dlq(
 
 
 def _artifact_validation_strict(validation_mode: Optional[str]) -> bool:
-    env_strict = str(os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}
+    env_strict = is_truthy(os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true"))
     run_val = str(validation_mode or "").lower()
     non_block = run_val == "non-block"
     return env_strict and not non_block
@@ -2421,7 +2458,7 @@ def _resolve_artifact_file_path(
         if _artifact_validation_strict(validation_mode):
             raise HTTPException(status_code=400, detail="Invalid artifact path scope")
         logger.warning(
-            "Workflows artifact path outside allowed roots; proceeding due to non-strict setting: %s",
+            'Workflows artifact path outside allowed roots; proceeding due to non-strict setting: {}',
             p,
         )
     return p
@@ -2444,7 +2481,7 @@ async def get_run_artifacts(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     arts = db.list_artifacts_for_run(run_id)
@@ -2483,7 +2520,7 @@ async def get_run_artifacts_manifest(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -2563,7 +2600,7 @@ async def verify_artifacts_batch(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -2669,7 +2706,7 @@ async def download_artifact(
         except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             pass
         raise HTTPException(status_code=404, detail="Artifact not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         try:
             if audit_service:
@@ -2716,7 +2753,7 @@ async def download_artifact(
                 # Respect validation mode override
                 run_val = getattr(run, 'validation_mode', None)
                 non_block = isinstance(run_val, str) and run_val.lower() == 'non-block'
-                if not non_block and str(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}:
+                if not non_block and is_truthy(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")):
                     raise HTTPException(status_code=409, detail="Artifact checksum mismatch")
                 else:
                     with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
@@ -2832,7 +2869,7 @@ async def download_run_artifacts_zip(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -2960,14 +2997,14 @@ async def control_run(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     engine = WorkflowEngine(db)
     # Admin impersonation audit trail (header opt-in)
     try:
         imp = str(request.headers.get("x-impersonate-user", "")).strip()
-        is_admin = bool(getattr(current_user, "is_admin", False))
+        is_admin = _is_workflows_admin_user(current_user)
         if imp and is_admin and str(imp) != str(current_user.id):
             db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "admin_impersonation", {"actor": str(current_user.id), "target_user_id": imp, "action": action})
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
@@ -3544,7 +3581,7 @@ async def get_workflows_config(
         v = os.getenv(name, "")
         if not v:
             return default
-        return v.lower() in {"1", "true", "yes", "y", "on"}
+        return is_truthy(v)
 
     backend_type = "sqlite"
     backend = get_content_backend_instance()
@@ -3562,10 +3599,9 @@ async def get_workflows_config(
             "type": backend_type,
         },
         "rate_limits": {
-            "disabled": _env_bool("WORKFLOWS_DISABLE_RATE_LIMITS", False),
+            "ingress_source": "rg_policy.route_map+requests",
             "quotas_disabled": _env_bool("WORKFLOWS_DISABLE_QUOTAS", False),
-            "quota_burst_per_min": int(os.getenv("WORKFLOWS_QUOTA_BURST_PER_MIN", "60") or 60),
-            "quota_daily_per_user": int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000") or 1000),
+            "quota_daily_cap_source": "rg_policy.workflows_runs.daily_cap",
         },
         "engine": {
             "tenant_concurrency": int(os.getenv("WORKFLOWS_TENANT_CONCURRENCY", "2") or 2),
@@ -3611,7 +3647,7 @@ async def retry_run(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     engine = WorkflowEngine(db)
@@ -3647,7 +3683,7 @@ async def get_definition(
     if d.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
     # Owner/admin check for definition read (tighten RBAC)
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(d.owner_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Workflow not found")
     try:
@@ -3689,7 +3725,7 @@ async def approve_step(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     step_run = db.get_latest_step_run(run_id=run_id, step_id=step_id)
     if not step_run:
         raise HTTPException(status_code=404, detail="Step run not found")
@@ -3756,7 +3792,7 @@ async def reject_step(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     step_run = db.get_latest_step_run(run_id=run_id, step_id=step_id)
     if not step_run:
         raise HTTPException(status_code=404, detail="Step run not found")

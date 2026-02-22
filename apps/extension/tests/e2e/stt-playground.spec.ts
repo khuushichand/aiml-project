@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 
 test.describe('STT Playground UX', () => {
   test('shows transcribing state after stop', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
 
     await context.addInitScript(() => {
       const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext

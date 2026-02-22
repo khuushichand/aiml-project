@@ -241,6 +241,22 @@ export const CurrentChatModelSettings = ({
     [updateSetting]
   )
 
+  const resetSystemPrompt = useCallback(async () => {
+    let nextValue = ""
+
+    if (selectedSystemPrompt) {
+      try {
+        const prompt = await getPromptById(selectedSystemPrompt)
+        nextValue = prompt?.content ?? ""
+      } catch (error) {
+        console.error("Failed to load selected system prompt for reset:", error)
+      }
+    }
+
+    form.setFieldValue("systemPrompt", nextValue)
+    savePrompt(nextValue)
+  }, [form, savePrompt, selectedSystemPrompt])
+
   const recomputeActorPreview = useCallback(() => {
     const values = form.getFieldsValue()
     const base = actorSettings ?? createDefaultActorSettings()
@@ -602,6 +618,7 @@ export const CurrentChatModelSettings = ({
             historyId={historyId}
             selectedSystemPrompt={selectedSystemPrompt}
             onSystemPromptChange={savePrompt}
+            onResetSystemPrompt={resetSystemPrompt}
             uploadedFiles={uploadedFiles}
             onRemoveFile={removeUploadedFile}
             serverChatId={serverChatId}
@@ -656,6 +673,7 @@ export const CurrentChatModelSettings = ({
       useDrawer,
       selectedSystemPrompt,
       savePrompt,
+      resetSystemPrompt,
       uploadedFiles,
       removeUploadedFile,
       serverChatId,
@@ -730,7 +748,7 @@ export const CurrentChatModelSettings = ({
         placement="right"
         open={open}
         onClose={() => setOpen(false)}
-        width={500}
+        size={500}
         title={t("currentChatModelSettings")}>
         {renderBody()}
       </Drawer>

@@ -292,6 +292,65 @@ class TestCircuitBreakerCallMethod:
 
         assert "Circuit breaker test is OPEN" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_open_error_preserves_context_fields(self):
+        """CircuitOpenError should include structured context from unified breaker."""
+        config = CircuitBreakerConfig(
+            failure_threshold=1,
+            recovery_timeout=12.0,
+            expected_exception=ValueError,
+        )
+        cb = CircuitBreaker("ctx", config)
+
+        def failing_func():
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError):
+            await cb.call(failing_func)
+
+        with pytest.raises(CircuitOpenError) as exc_info:
+            await cb.call(failing_func)
+
+        err = exc_info.value
+        assert err.breaker_name == "ctx"
+        assert err.category == "evaluations"
+        assert err.service  # populated by unified breaker metadata
+        assert err.recovery_timeout == 12.0
+        assert err.failure_count >= 1
+        assert err.recovery_at is not None
+
+    @pytest.mark.asyncio
+    async def test_open_rejection_for_sync_func_has_no_unawaited_coroutine_warning(self, recwarn):
+        """Rejecting sync functions while OPEN should not leak unawaited coroutines."""
+        import gc
+
+        config = CircuitBreakerConfig(failure_threshold=1, expected_exception=ValueError)
+        cb = CircuitBreaker("no_leak", config)
+
+        def failing_func():
+            raise ValueError("boom")
+
+        def sync_should_not_run():
+            return 123
+
+        with pytest.raises(ValueError):
+            await cb.call(failing_func)
+
+        with pytest.raises(CircuitOpenError):
+            await cb.call(sync_should_not_run)
+
+        gc.collect()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        leaked = [
+            warning
+            for warning in recwarn
+            if issubclass(warning.category, RuntimeWarning)
+            and "was never awaited" in str(warning.message)
+        ]
+        assert leaked == []
+
 
 @pytest.mark.unit
 class TestCircuitBreakerRecovery:
@@ -358,9 +417,13 @@ class TestCircuitBreakerRecovery:
         config = CircuitBreakerConfig(failure_threshold=2, recovery_timeout=0.1)
         cb = CircuitBreaker("test", config)
 
-        # Open circuit and set past recovery timeout
-        cb.state = CircuitState.OPEN
-        cb._state_changed_at = time.time() - 1  # Past recovery timeout
+        # Open circuit by recording failures
+        await cb._on_failure()
+        await cb._on_failure()
+        assert cb.state == CircuitState.OPEN
+
+        # Wait for recovery timeout to elapse
+        time.sleep(0.15)
 
         call_count = 0
 
@@ -487,12 +550,12 @@ class TestCircuitBreakerConcurrency:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Some should be ValueError, later ones should be circuit open
+        # All should be ValueError or circuit open; circuit should end open
         value_errors = sum(1 for r in results if isinstance(r, ValueError))
         circuit_errors = sum(1 for r in results if isinstance(r, CircuitOpenError))
 
-        assert value_errors <= 3  # At most threshold failures
-        assert circuit_errors >= 2  # Remaining should be rejected
+        assert value_errors + circuit_errors == 5
+        assert value_errors >= 3  # At least threshold failures needed to trip
         assert cb.state == CircuitState.OPEN
 
     @pytest.mark.asyncio

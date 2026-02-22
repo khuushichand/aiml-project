@@ -20,9 +20,9 @@ async def get_watchlists_db_for_user(
         # Defensive: ensure schema exists for this user's DB in test/minimal app contexts
         try:
             db.ensure_schema()
-        except Exception:
+        except Exception as schema_error:
             # Best-effort; creation may have already occurred or be gated by init
-            pass
+            logger.debug("Watchlists DB schema ensure failed in dependency setup", exc_info=schema_error)
         return db
     except Exception as e:
         logger.error(f"Failed to init Watchlists DB for user {current_user.id}: {e}")

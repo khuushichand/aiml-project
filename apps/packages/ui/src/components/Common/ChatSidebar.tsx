@@ -31,6 +31,7 @@ import {
   normalizeSidebarShortcutSelection,
   type SidebarShortcutAction
 } from "./ChatSidebar/shortcut-actions"
+import { isSidebarShortcutRouteActive } from "./ChatSidebar/shortcut-active"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
 import { NotesDockButton } from "@/components/Common/NotesDock"
 import { ModeToggle } from "@/components/Sidepanel/Chat/ModeToggle"
@@ -104,24 +105,51 @@ export function ChatSidebar({
     navigateWithLoading(item.path)
   }
 
-  const renderShortcutIcon = (item: SidebarShortcutAction) => (
-    <Tooltip title={t(item.labelKey, item.labelDefault)} placement="right">
-      <button
-        aria-label={t(item.labelKey, item.labelDefault)}
-        onClick={() => handleShortcutAction(item)}
-        className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text"
-      >
-        <item.icon className="size-4" />
-      </button>
-    </Tooltip>
+  const isShortcutRouteActive = React.useCallback(
+    (item: SidebarShortcutAction) =>
+      item.kind === "route" &&
+      isSidebarShortcutRouteActive(item.path, location.pathname),
+    [location.pathname]
   )
 
+  const renderShortcutIcon = (item: SidebarShortcutAction) => {
+    const isActive = isShortcutRouteActive(item)
+    return (
+      <Tooltip title={t(item.labelKey, item.labelDefault)} placement="right">
+        <button
+          aria-label={t(item.labelKey, item.labelDefault)}
+          aria-current={isActive ? "page" : undefined}
+          onClick={() => handleShortcutAction(item)}
+          data-testid={`chat-sidebar-shortcut-${item.id}`}
+          className={cn(
+            "p-2 rounded-lg",
+            focusRingClasses,
+            isActive
+              ? "border border-border bg-surface text-text"
+              : "text-text-muted hover:bg-surface hover:text-text"
+          )}
+        >
+          <item.icon className="size-4" />
+        </button>
+      </Tooltip>
+    )
+  }
+
   const renderSidebarShortcut = (item: SidebarShortcutAction) => {
+    const isActive = isShortcutRouteActive(item)
     return (
       <button
         key={item.id}
         onClick={() => handleShortcutAction(item)}
-        className="flex items-center gap-2 w-full px-2 py-2 rounded text-sm text-text-muted hover:bg-surface hover:text-text"
+        aria-current={isActive ? "page" : undefined}
+        data-testid={`chat-sidebar-shortcut-${item.id}`}
+        className={cn(
+          "flex items-center gap-2 w-full px-2 py-2 rounded text-sm",
+          focusRingClasses,
+          isActive
+            ? "border border-border bg-surface text-text"
+            : "text-text-muted hover:bg-surface hover:text-text"
+        )}
       >
         <item.icon className="size-4" />
         <span>{t(item.labelKey, item.labelDefault)}</span>
@@ -180,6 +208,12 @@ export function ChatSidebar({
       label: `${t("common:chatSidebar.tabs.folders", "Folders")}${folderConversationCount > 0 ? ` (${folderConversationCount})` : ""}`
     }
   ]
+  const settingsShortcutActive = isSidebarShortcutRouteActive(
+    "/settings",
+    location.pathname
+  )
+  const focusRingClasses =
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
   // Collapsed view - just icons
   if (collapsed) {
@@ -199,7 +233,10 @@ export function ChatSidebar({
             aria-label={t("common:chatSidebar.expand", "Expand sidebar")}
             data-testid="chat-sidebar-toggle"
             onClick={onToggleCollapse}
-            className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text"
+            className={cn(
+              "p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text",
+              focusRingClasses
+            )}
           >
             <ChevronRight className="size-4" />
           </button>
@@ -215,7 +252,10 @@ export function ChatSidebar({
             aria-label={t("common:chatSidebar.newChat", "New Chat")}
             data-testid="chat-sidebar-new-chat"
             onClick={handleNewChat}
-            className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-primary"
+            className={cn(
+              "p-2 rounded-lg text-text-muted hover:bg-surface hover:text-primary",
+              focusRingClasses
+            )}
           >
             <Plus className="size-4" />
           </button>
@@ -254,8 +294,16 @@ export function ChatSidebar({
         >
           <button
             aria-label={t("common:chatSidebar.settings", "Settings")}
+            aria-current={settingsShortcutActive ? "page" : undefined}
+            data-testid="chat-sidebar-settings"
             onClick={() => navigate("/settings")}
-            className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text"
+            className={cn(
+              "p-2 rounded-lg",
+              focusRingClasses,
+              settingsShortcutActive
+                ? "border border-border bg-surface text-text"
+                : "text-text-muted hover:bg-surface hover:text-text"
+            )}
           >
             <Settings className="size-4" />
           </button>
@@ -284,7 +332,10 @@ export function ChatSidebar({
               aria-label={t("common:chatSidebar.newChat", "New Chat")}
               data-testid="chat-sidebar-new-chat"
               onClick={handleNewChat}
-              className="p-2 rounded text-text-muted hover:bg-surface hover:text-primary"
+              className={cn(
+                "p-2 rounded text-text-muted hover:bg-surface hover:text-primary",
+                focusRingClasses
+              )}
             >
               <Plus className="size-4" />
             </button>
@@ -302,6 +353,7 @@ export function ChatSidebar({
                 onClick={() => setSelectionMode((prev) => !prev)}
                 className={cn(
                   "rounded p-2",
+                  focusRingClasses,
                   selectionMode
                     ? "bg-surface text-text"
                     : "text-text-muted hover:bg-surface hover:text-text"
@@ -324,7 +376,10 @@ export function ChatSidebar({
               aria-label={t("common:chatSidebar.collapse", "Collapse sidebar")}
               data-testid="chat-sidebar-toggle"
               onClick={onToggleCollapse}
-              className="p-2 rounded text-text-muted hover:bg-surface hover:text-text"
+              className={cn(
+                "p-2 rounded text-text-muted hover:bg-surface hover:text-text",
+                focusRingClasses
+              )}
             >
               <ChevronLeft className="size-4" />
             </button>
@@ -372,7 +427,10 @@ export function ChatSidebar({
         onClick={() => {
           void setShortcutsCollapsed(showShortcuts)
         }}
-        className="group flex w-full items-center justify-between px-3 py-2 text-left hover:bg-surface"
+        className={cn(
+          "group flex w-full items-center justify-between px-3 py-2 text-left hover:bg-surface",
+          focusRingClasses
+        )}
         title={t("common:chatSidebar.shortcuts", "Shortcuts")}
       >
         <span className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
@@ -425,7 +483,15 @@ export function ChatSidebar({
       <div className="border-t border-border px-3 py-2">
         <button
           onClick={() => navigate("/settings")}
-          className="flex items-center gap-2 w-full px-2 py-2 rounded text-sm text-text-muted hover:bg-surface hover:text-text"
+          aria-current={settingsShortcutActive ? "page" : undefined}
+          data-testid="chat-sidebar-settings"
+          className={cn(
+            "flex items-center gap-2 w-full px-2 py-2 rounded text-sm",
+            focusRingClasses,
+            settingsShortcutActive
+              ? "border border-border bg-surface text-text"
+              : "text-text-muted hover:bg-surface hover:text-text"
+          )}
         >
           <Settings className="size-4" />
           <span>{t("common:chatSidebar.settings", "Settings")}</span>

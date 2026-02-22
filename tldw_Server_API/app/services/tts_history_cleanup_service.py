@@ -15,6 +15,7 @@ from collections.abc import Iterable
 
 from loguru import logger
 
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
 )
@@ -40,6 +41,55 @@ _TTS_HISTORY_CLEANUP_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+
+
+def _normalize_value(val: str | int | None) -> str | None:
+    if val is None:
+        return None
+    text = str(val).strip()
+    if not text or text.lower() in {"none", "null", "nil"}:
+        return None
+    return text
+
+
+def _raw_setting(env_name: str, settings_attr: str, default: str | None = None) -> str | None:
+    env_val = _normalize_value(os.getenv(env_name))
+    if env_val is not None:
+        return env_val
+    settings_val = _normalize_value(getattr(settings, settings_attr, None))
+    if settings_val is not None:
+        return settings_val
+    return _normalize_value(default)
+
+
+def _int_setting(env_name: str, settings_attr: str, default: int) -> int:
+    raw = _raw_setting(env_name, settings_attr, str(default))
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        logger.debug(f"tts_history_cleanup: invalid {env_name} value {raw!r}: {exc}")
+        return default
+
+
+def _resolve_cleanup_settings() -> tuple[int, int, int]:
+    interval_hours = _int_setting(
+        "TTS_HISTORY_PURGE_INTERVAL_HOURS",
+        "TTS_HISTORY_PURGE_INTERVAL_HOURS",
+        24,
+    )
+    retention_days = _int_setting(
+        "TTS_HISTORY_RETENTION_DAYS",
+        "TTS_HISTORY_RETENTION_DAYS",
+        90,
+    )
+    max_rows = _int_setting(
+        "TTS_HISTORY_MAX_ROWS_PER_USER",
+        "TTS_HISTORY_MAX_ROWS_PER_USER",
+        10000,
+    )
+    return interval_hours, retention_days, max_rows
 
 
 def _enumerate_user_ids_from_fs() -> list[str]:
@@ -84,22 +134,7 @@ def _purge_with_db(db: MediaDatabase, user_ids: Iterable[str], retention_days: i
 
 
 async def run_tts_history_cleanup_loop(stop_event: asyncio.Event | None = None) -> None:
-    interval_hours_raw = os.getenv("TTS_HISTORY_PURGE_INTERVAL_HOURS", "24")
-    retention_days_raw = os.getenv("TTS_HISTORY_RETENTION_DAYS", "90")
-    max_rows_raw = os.getenv("TTS_HISTORY_MAX_ROWS_PER_USER", "10000")
-
-    try:
-        interval_hours = int(str(interval_hours_raw).strip())
-    except (TypeError, ValueError):
-        interval_hours = 24
-    try:
-        retention_days = int(str(retention_days_raw).strip())
-    except (TypeError, ValueError):
-        retention_days = 90
-    try:
-        max_rows = int(str(max_rows_raw).strip())
-    except (TypeError, ValueError):
-        max_rows = 10000
+    interval_hours, retention_days, max_rows = _resolve_cleanup_settings()
 
     if interval_hours <= 0 or (retention_days <= 0 and max_rows <= 0):
         logger.info("TTS history cleanup disabled by settings")

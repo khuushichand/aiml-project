@@ -36,7 +36,7 @@ const ConnectionProblemBanner: React.FC<ConnectionProblemBannerProps> = ({
 }) => {
   const composedTitle = badgeLabel ? (
     <span className="inline-flex items-center gap-2">
-      <span className="rounded-full bg-yellow-50 px-2 py-0.5 text-[11px] font-medium text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-200">
+      <span className="rounded-full bg-warn/10 px-2 py-0.5 text-[11px] font-medium text-warn">
         {badgeLabel}
       </span>
       <span>{title}</span>
@@ -64,7 +64,7 @@ const ConnectionProblemBanner: React.FC<ConnectionProblemBannerProps> = ({
             type="button"
             onClick={onRetry}
             disabled={retryDisabled}
-            className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-500 dark:text-blue-400 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:text-blue-600 dark:disabled:hover:text-blue-400"
+            className="inline-flex items-center gap-1 text-primary hover:text-primary disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:text-primary"
           >
             {retryActionLabel}
           </button>

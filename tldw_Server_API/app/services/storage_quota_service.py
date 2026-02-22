@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -63,6 +64,23 @@ class StorageQuotaService:
         self._initialized = True
         logger.info("StorageQuotaService initialized")
 
+    def _is_postgres_backend(self) -> bool:
+        """
+        Return True when the underlying DatabasePool is using PostgreSQL.
+
+        Backend detection should key off DatabasePool state rather than probing
+        connection method presence, which can be misleading with shimmed
+        connections.
+        """
+        if not self.db_pool:
+            return False
+        if getattr(self.db_pool, "pool", None):
+            return True
+        backend = getattr(self.db_pool, "backend", None)
+        if isinstance(backend, str):
+            return backend.strip().lower() in {"postgres", "postgresql", "pg"}
+        return False
+
     async def calculate_user_storage(
         self,
         user_id: int,
@@ -107,7 +125,7 @@ class StorageQuotaService:
         # Update database if requested
         if update_database:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if self._is_postgres_backend():
                     # PostgreSQL
                     await conn.execute(
                         "UPDATE users SET storage_used_mb = $1 WHERE id = $2",
@@ -246,7 +264,7 @@ class StorageQuotaService:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
+                if self._is_postgres_backend():
                     # PostgreSQL
                     result = await conn.fetchrow(
                         """
@@ -411,7 +429,7 @@ class StorageQuotaService:
             quota_mb = 100
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
+                if self._is_postgres_backend():
                     result = await conn.fetchrow(
                         """
                         UPDATE users
@@ -457,7 +475,7 @@ class StorageQuotaService:
             await self.initialize()
 
         async with self.db_pool.acquire() as conn:
-            if hasattr(conn, 'fetch'):
+            if self._is_postgres_backend():
                 # PostgreSQL
                 users = await conn.fetch(
                     """
@@ -551,6 +569,9 @@ class StorageQuotaService:
 
     async def shutdown(self):
         """Shutdown hook retained for compatibility."""
+        self._initialized = False
+        self.quota_cache.clear()
+        self.storage_cache.clear()
         logger.info("StorageQuotaService shutdown complete (no dedicated executor)")
 
     # =========================================================================
@@ -969,7 +990,7 @@ class StorageQuotaService:
 
         # Sum all non-deleted files for users in the org
         async with self.db_pool.acquire() as conn:
-            if hasattr(conn, "fetchval"):
+            if self._is_postgres_backend():
                 total_bytes = await conn.fetchval(
                     """
                     SELECT COALESCE(SUM(file_size_bytes), 0)
@@ -1005,7 +1026,7 @@ class StorageQuotaService:
 
         # Sum all non-deleted files for users in the team
         async with self.db_pool.acquire() as conn:
-            if hasattr(conn, "fetchval"):
+            if self._is_postgres_backend():
                 total_bytes = await conn.fetchval(
                     """
                     SELECT COALESCE(SUM(file_size_bytes), 0)
@@ -1061,6 +1082,21 @@ async def get_storage_service() -> StorageQuotaService:
         _storage_service = StorageQuotaService()
         await _storage_service.initialize()
     return _storage_service
+
+
+async def reset_storage_service() -> None:
+    """Reset module-level storage service singletons and release cached state."""
+    global _storage_service, _quota_service
+    candidates: list[StorageQuotaService] = []
+    if _storage_service is not None:
+        candidates.append(_storage_service)
+    if _quota_service is not None and _quota_service is not _storage_service:
+        candidates.append(_quota_service)
+    _storage_service = None
+    _quota_service = None
+    for service in candidates:
+        with contextlib.suppress(Exception):
+            await service.shutdown()
 
 
 #

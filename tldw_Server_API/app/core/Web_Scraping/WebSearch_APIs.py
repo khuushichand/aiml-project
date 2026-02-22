@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 import re
 import time
@@ -119,24 +120,35 @@ def _get_llm_timeouts() -> dict[str, float]:
     return {"llm": llm_to, "scrape": scrape_to}
 
 
-class _SimpleCircuitBreaker:
-    def __init__(self, fail_threshold: int = 3, reset_after_s: float = 30.0):
-        self.fail_threshold = int(fail_threshold)
-        self.reset_after_s = float(reset_after_s)
-        self.fail_count = 0
-        self.open_until = 0.0
+def _get_websearch_circuit_breaker(fail_threshold: int = 3, reset_after_s: float = 30.0):
+    """Return the shared WebSearch circuit breaker (singleton via registry)."""
+    from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+        CircuitBreakerConfig as _Cfg,
+    )
+    from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+        registry as _cb_registry,
+    )
+    return _cb_registry.get_or_create(
+        "websearch_llm",
+        config=_Cfg(
+            failure_threshold=int(fail_threshold),
+            recovery_timeout=float(reset_after_s),
+            half_open_max_calls=1,
+            success_threshold=1,
+            category="websearch",
+        ),
+    )
 
-    def allow(self) -> bool:
-        return time.time() >= self.open_until
 
-    def record_success(self):
-        self.fail_count = 0
-
-    def record_failure(self):
-        self.fail_count += 1
-        if self.fail_count >= self.fail_threshold:
-            self.open_until = time.time() + self.reset_after_s
-            self.fail_count = 0
+def _make_simple_circuit_breaker(fail_threshold: int = 3, reset_after_s: float = 30.0):
+    """Deprecated: use _get_websearch_circuit_breaker instead."""
+    import warnings
+    warnings.warn(
+        "_make_simple_circuit_breaker is deprecated, use _get_websearch_circuit_breaker",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _get_websearch_circuit_breaker(fail_threshold, reset_after_s)
 
 
 def _close_response(resp: Any) -> None:
@@ -152,6 +164,90 @@ def _truncate_text(value: str | None, max_len: int = 600) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 1].rstrip() + "..."
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return default
+        if normalized in {"1", "true", "yes", "on", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "n"}:
+            return False
+    return default
+
+
+def _map_searx_safesearch(value: Any) -> int:
+    """Normalize safesearch values to Searx levels (0=off, 1=moderate, 2=strict)."""
+    if value is None:
+        return 1
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)):
+        try:
+            return max(0, min(2, int(value)))
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            return 1
+
+    normalized = str(value).strip().lower()
+    mapping = {
+        "off": 0,
+        "false": 0,
+        "none": 0,
+        "disabled": 0,
+        "0": 0,
+        "moderate": 1,
+        "medium": 1,
+        "active": 1,
+        "on": 1,
+        "true": 1,
+        "1": 1,
+        "strict": 2,
+        "high": 2,
+        "2": 2,
+    }
+    return mapping.get(normalized, 1)
+
+
+def _sanitize_sub_questions(raw_values: Any) -> list[str]:
+    """Normalize model-generated sub-questions into a deduplicated list of non-empty strings."""
+    if isinstance(raw_values, str):
+        candidates = [raw_values]
+    elif isinstance(raw_values, (list, tuple, set)):
+        candidates = list(raw_values)
+    else:
+        return []
+
+    sanitized: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        text = ""
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            query_value = item.get("query")
+            if not isinstance(query_value, str):
+                query_value = item.get("text")
+            if isinstance(query_value, str):
+                text = query_value.strip()
+        else:
+            continue
+
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        sanitized.append(text)
+    return sanitized
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
 
@@ -292,10 +388,12 @@ def initialize_web_search_results_dict(search_params: dict) -> dict:
         "geolocation": search_params.get('geolocation'),
         "search_result_language": search_params.get('search_result_language'),
         "sort_results_by": search_params.get('sort_results_by'),
+        "google_domain": search_params.get('google_domain'),
         "results": [],
         "total_results_found": 0,
         "search_time": 0.0,
         "error": None,
+        "warnings": [],
         "processing_error": None
     }
 
@@ -344,13 +442,23 @@ def generate_and_search(question: str, search_params: dict) -> dict:
         sub_query_dict = analyze_question(question, api_endpoint)
 
     # Merge original question with sub-queries
-    sub_queries = sub_query_dict.get("sub_questions", [])
+    sub_queries = _sanitize_sub_questions(sub_query_dict.get("sub_questions", []))
+    question_key = question.strip().casefold()
+    sub_queries = [
+        sub_query
+        for sub_query in sub_queries
+        if sub_query.strip().casefold() != question_key
+    ]
+    sub_query_dict["sub_questions"] = sub_queries
+    sub_query_dict["search_queries"] = sub_queries
     logging.info(f"Sub-queries generated: {sub_queries}")
-    all_queries = [question] + sub_queries
+    all_queries = [question, *sub_queries]
 
     # 2. Initialize a single web_search_results_dict
     web_search_results_dict = initialize_web_search_results_dict(search_params)
     web_search_results_dict["search_query"] = question
+    observed_provider_errors: list[str] = []
+    deferred_provider_error_warnings: list[dict[str, str]] = []
 
     # 3. Perform searches and accumulate all raw results
     for idx, q in enumerate(all_queries):
@@ -377,6 +485,7 @@ def generate_and_search(question: str, search_params: dict) -> dict:
             geolocation=search_params.get('geolocation'),
             search_result_language=search_params.get('search_result_language'),
             sort_results_by=search_params.get('sort_results_by'),
+            google_domain=search_params.get('google_domain'),
             search_params=search_params,
         )
 
@@ -384,17 +493,64 @@ def generate_and_search(question: str, search_params: dict) -> dict:
         logging.debug(f"Raw results for query '{q}': {raw_results}")
 
         # Check for errors or invalid data
-        if not isinstance(raw_results, dict) or raw_results.get("processing_error"):
+        if not isinstance(raw_results, dict):
             logging.error(f"Error or invalid data returned for query '{q}': {raw_results}")
             continue
+        if raw_results.get("processing_error"):
+            processing_error = str(raw_results.get("processing_error")).strip()
+            if processing_error:
+                observed_provider_errors.append(processing_error)
+                deferred_provider_error_warnings.append(
+                    {
+                        "query": q,
+                        "phase": "provider",
+                        "message": processing_error,
+                    }
+                )
+            logging.error(f"Provider processing error for query '{q}': {raw_results}")
+            continue
 
-        logging.info(f"Search results found for query '{q}': {len(raw_results.get('results', []))}")
+        raw_warnings = raw_results.get("warnings")
+        if isinstance(raw_warnings, list) and raw_warnings:
+            web_search_results_dict["warnings"].extend(raw_warnings)
+        elif raw_warnings is not None:
+            web_search_results_dict["warnings"].append(raw_warnings)
+
+        raw_error = raw_results.get("error")
+        if raw_error is not None:
+            error_text = str(raw_error).strip()
+            if error_text:
+                observed_provider_errors.append(error_text)
+                deferred_provider_error_warnings.append(
+                    {
+                        "query": q,
+                        "phase": "provider",
+                        "message": error_text,
+                    }
+                )
+
+        raw_results_list = raw_results.get("results", [])
+        if not isinstance(raw_results_list, list):
+            raw_results_list = []
+
+        logging.info(f"Search results found for query '{q}': {len(raw_results_list)}")
 
         # Append results to the single web_search_results_dict
-        web_search_results_dict["results"].extend(raw_results["results"])
+        web_search_results_dict["results"].extend(raw_results_list)
         web_search_results_dict["total_results_found"] += raw_results.get("total_results_found", 0)
         web_search_results_dict["search_time"] += raw_results.get("search_time", 0.0)
         logging.info(f"Total results found so far: {len(web_search_results_dict['results'])}")
+
+    if deferred_provider_error_warnings:
+        web_search_results_dict["warnings"].extend(deferred_provider_error_warnings)
+
+    if web_search_results_dict["results"]:
+        web_search_results_dict["error"] = None
+    elif observed_provider_errors:
+        web_search_results_dict["error"] = observed_provider_errors[0]
+
+    if not web_search_results_dict["warnings"]:
+        web_search_results_dict.pop("warnings", None)
 
     return {
         "web_search_results_dict": web_search_results_dict,
@@ -514,7 +670,14 @@ def analyze_question(question: str, api_endpoint) -> dict:
                 try:
                     # Try to parse as JSON first
                     parsed_response = json.loads(response)
-                    sub_questions = parsed_response.get("sub_questions", [])
+                    if isinstance(parsed_response, list):
+                        sub_questions = _sanitize_sub_questions(parsed_response)
+                    elif isinstance(parsed_response, dict):
+                        sub_questions = _sanitize_sub_questions(
+                            parsed_response.get("sub_questions", parsed_response.get("search_queries", []))
+                        )
+                    else:
+                        sub_questions = []
                     if sub_questions:
                         logging.info("Successfully generated sub-questions from JSON")
                         break
@@ -522,7 +685,7 @@ def analyze_question(question: str, api_endpoint) -> dict:
                     # If JSON parsing fails, attempt a regex-based fallback
                     logging.warning("Failed to parse as JSON. Attempting regex extraction.")
                     matches = re.findall(r'"([^"]*)"', response)
-                    sub_questions = matches if matches else []
+                    sub_questions = _sanitize_sub_questions(matches)
                     if sub_questions:
                         logging.info("Successfully extracted sub-questions using regex")
                         break
@@ -532,7 +695,7 @@ def analyze_question(question: str, api_endpoint) -> dict:
 
     if not sub_questions:
         logging.error("Failed to extract sub-questions from API response after all attempts.")
-        sub_questions = [original_query]  # Fallback to the original query
+        sub_questions = []
 
     # Construct and return the result dictionary
     logging.info("Sub-questions generated successfully")
@@ -585,7 +748,7 @@ async def search_result_relevance(
     # Simple circuit breaker for LLM provider
     cfg = get_loaded_config()
     ws_section = cfg.get('Web-Scraping', {}) or {}
-    breaker = _SimpleCircuitBreaker(
+    breaker = _get_websearch_circuit_breaker(
         fail_threshold=int(ws_section.get('llm_cb_fail_threshold', 3) or 3),
         reset_after_s=float(ws_section.get('llm_cb_reset_after_s', 30) or 30.0),
     )
@@ -631,7 +794,7 @@ async def search_result_relevance(
                 await asyncio.sleep(jitter_ms / 1000.0)
 
             # Evaluate relevance with timeout and circuit breaker
-            if not breaker.allow():
+            if not breaker.can_attempt():
                 logging.warning("LLM circuit breaker open; skipping relevance evaluation")
                 continue
 
@@ -948,7 +1111,8 @@ def aggregate_results(
     # Aggregation Prompt #1
 
     # Aggregation Prompt #2
-    analyze_search_results_prompt_2 = f"""INITIAL_QUERY: Here are some sources {context_payload}. Read these carefully, as you will be asked a Query about them.
+    analyze_search_results_prompt_2 = (
+        """INITIAL_QUERY: Here are some sources {context_payload}. Read these carefully, as you will be asked a Query about them.
         # General Instructions
 
         Write an accurate, detailed, and comprehensive response to the user's query located at INITIAL_QUERY. Additional context is provided as "USER_INPUT" after specific questions. Your answer should be informed by the provided "Search results". Your answer must be precise, of high-quality, and written by an expert using an unbiased and journalistic tone. Your answer must be written in the same language as the query, even if language preference is different.
@@ -981,7 +1145,7 @@ def aggregate_results(
 
         ## Recent News
 
-        You need to concisely summarize recent news events based on the provided search results, grouping them by topics. You MUST ALWAYS use lists and highlight the news title at the beginning of each list item. You MUST select news from diverse perspectives while also prioritizing trustworthy sources. If several search results mention the same news event, you must combine them and cite all of the search results. Prioritize more recent events, ensuring to compare timestamps. You MUST NEVER start your answer with a heading of any kind.
+        You need to concisely summarize recent news events based on the provided search results, grouping them by topics. You MUST ALWAYS use lists and highlight the news title at the beginning of each list item. You MUST choose news from diverse perspectives while also prioritizing trustworthy sources. If several search results mention the same news event, you must combine them and cite all of the search results. Prioritize more recent events, ensuring to compare timestamps. You MUST NEVER start your answer with a heading of any kind.
 
         ## Weather
 
@@ -1029,7 +1193,12 @@ def aggregate_results(
         The current date is: {current_date}
 
         The user's query is: {question}
-        """
+        """.format(
+            context_payload=context_payload,
+            current_date=current_date,
+            question=question,
+        )  # nosec B608
+    )
 
     input_data = "Follow the above instructions."
     messages_payload = _build_messages(
@@ -1083,11 +1252,124 @@ def aggregate_results(
 
 #######################################################################################################################
 #
+# Discussion / Forum Search
+
+# Platform → domain mapping for site-restricted searches
+_DISCUSSION_PLATFORM_DOMAINS: dict[str, str] = {
+    "reddit": "reddit.com",
+    "stackoverflow": "stackoverflow.com",
+    "hackernews": "news.ycombinator.com",
+    "hn": "news.ycombinator.com",
+    "stackexchange": "stackexchange.com",
+    "quora": "quora.com",
+    "4chan": "boards.4chan.org",
+    "4channel": "boards.4channel.org",
+}
+
+
+async def search_discussions(
+    query: str,
+    platforms: list[str] | None = None,
+    max_results: int = 10,
+    search_engine: str = "duckduckgo",
+) -> list[dict[str, Any]]:
+    """Search discussion platforms for community knowledge and opinions.
+
+    Appends ``site:<domain>`` filters to the query and dispatches to
+    the existing ``perform_websearch`` / ``process_web_search_results``
+    infrastructure.
+
+    Args:
+        query: The search query.
+        platforms: Platform names to search (default: reddit, stackoverflow, hackernews).
+        max_results: Maximum total results to return.
+        search_engine: Web search engine to use (default: duckduckgo).
+
+    Returns:
+        List of result dicts with keys: title, url, content, source, platform.
+    """
+    if platforms is None:
+        platforms = ["reddit", "stackoverflow", "hackernews"]
+
+    # Build site: filter string
+    site_filters: list[str] = []
+    for platform in platforms:
+        domain = _DISCUSSION_PLATFORM_DOMAINS.get(platform.lower())
+        if domain:
+            site_filters.append(f"site:{domain}")
+
+    if not site_filters:
+        return []
+
+    # Combine into a single OR-joined filter
+    site_clause = " OR ".join(site_filters)
+    augmented_query = f"{query} ({site_clause})"
+
+    # Dispatch to existing web search (sync function, run in thread)
+    try:
+        raw_results = await asyncio.to_thread(
+            perform_websearch,
+            search_engine=search_engine,
+            search_query=augmented_query,
+            content_country="US",
+            search_lang="en",
+            output_lang="en",
+            result_count=max_results,
+        )
+
+        results_list: list[dict[str, Any]] = []
+        if isinstance(raw_results, dict):
+            existing_results = raw_results.get("results")
+            if isinstance(existing_results, list):
+                normalized_results = [item for item in existing_results if isinstance(item, dict)]
+                if normalized_results and any(
+                    ("url" in item) or ("content" in item) or ("snippet" in item)
+                    for item in normalized_results
+                ):
+                    results_list = normalized_results
+
+        if not results_list:
+            processed = process_web_search_results(raw_results, search_engine)
+            results_list = processed.get("results", [])
+
+        docs: list[dict[str, Any]] = []
+        for r in results_list[:max_results]:
+            url = r.get("url", "")
+            # Detect which platform the result came from
+            detected_platform = "unknown"
+            url_lower = url.lower()
+            for plat, domain in _DISCUSSION_PLATFORM_DOMAINS.items():
+                if domain in url_lower:
+                    detected_platform = plat
+                    break
+
+            docs.append({
+                "title": r.get("title", ""),
+                "url": url,
+                "content": str(r.get("content", r.get("snippet", "")))[:500],
+                "source": "discussion",
+                "platform": detected_platform,
+            })
+
+        return docs
+
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
+        logging.warning(f"Discussion search failed: {exc}")
+        return []
+
+
+#
+# End of Discussion / Forum Search
+#######################################################################################################################
+
+
+#######################################################################################################################
+#
 # Search Engine Functions
 
 # FIXME
 def perform_websearch(search_engine, search_query, content_country, search_lang, output_lang, result_count, date_range=None,
-                      safesearch=None, site_blacklist=None, exactTerms=None, excludeTerms=None, filter=None, geolocation=None, search_result_language=None, sort_results_by=None, search_params=None, site_whitelist=None):
+                      safesearch=None, site_blacklist=None, exactTerms=None, excludeTerms=None, filter=None, geolocation=None, search_result_language=None, sort_results_by=None, search_params=None, site_whitelist=None, google_domain=None):
     try:
         if search_engine.lower() == "baidu":
             web_search_results = search_web_baidu(search_query, None, None)
@@ -1127,6 +1409,16 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
         elif search_engine.lower() == "google":
             site_whitelist_list = site_whitelist if isinstance(site_whitelist, list) else None
             site_blacklist_list = site_blacklist if isinstance(site_blacklist, list) else None
+            site_whitelist_domains = (
+                [domain.strip() for domain in site_whitelist.split(",") if domain.strip()]
+                if isinstance(site_whitelist, str)
+                else None
+            )
+            site_blacklist_domains = (
+                [domain.strip() for domain in site_blacklist.split(",") if domain.strip()]
+                if isinstance(site_blacklist, str)
+                else None
+            )
             site_blacklist_value: str | None
             if site_blacklist_list:
                 site_blacklist_value = ",".join(site_blacklist_list)
@@ -1147,20 +1439,21 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 "search_result_language": search_result_language or "lang_en",  # Default value
                 "geolocation": geolocation or "us",  # Default value
                 "safesearch": safesearch or "off",  # Default value,
+                "google_domain": google_domain,
             }
 
             # Prefer include-domain filter when present; otherwise apply exclude-domain filter.
             if site_whitelist_list and len(site_whitelist_list) == 1:
                 google_args["siteSearch"] = site_whitelist_list[0]
                 google_args["siteSearchFilter"] = "i"
-            elif isinstance(site_whitelist, str) and site_whitelist:
-                google_args["siteSearch"] = site_whitelist
+            elif site_whitelist_domains and len(site_whitelist_domains) == 1:
+                google_args["siteSearch"] = site_whitelist_domains[0]
                 google_args["siteSearchFilter"] = "i"
             elif site_blacklist_list and len(site_blacklist_list) == 1:
                 google_args["siteSearch"] = site_blacklist_list[0]
                 google_args["siteSearchFilter"] = "e"
-            elif isinstance(site_blacklist, str) and site_blacklist:
-                google_args["siteSearch"] = site_blacklist
+            elif site_blacklist_domains and len(site_blacklist_domains) == 1:
+                google_args["siteSearch"] = site_blacklist_domains[0]
                 google_args["siteSearchFilter"] = "e"
 
             # Add optional parameters only if they are provided
@@ -1187,7 +1480,19 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = search_web_kagi(query=search_query, limit=result_count)
 
         elif search_engine.lower() == "serper":
-            web_search_results = search_web_serper()
+            web_search_results = search_web_serper(
+                search_query=search_query,
+                result_count=result_count,
+                content_country=content_country,
+                search_lang=search_lang,
+                output_lang=output_lang,
+                date_range=date_range,
+                safesearch=safesearch,
+                site_whitelist=site_whitelist,
+                site_blacklist=site_blacklist,
+                exactTerms=exactTerms,
+                excludeTerms=excludeTerms,
+            )
 
         elif search_engine.lower() == "tavily":
             web_search_results = search_web_tavily(
@@ -1214,12 +1519,19 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 date_range=date_range,
             )
 
+        elif search_engine.lower() == "4chan":
+            web_search_results = search_web_4chan(
+                search_query=search_query,
+                result_count=result_count,
+                search_params=search_params,
+            )
+
         elif search_engine.lower() == "searx":
             web_search_results = search_web_searx(
                 search_query,
                 language='auto',
                 time_range=date_range or '',
-                safesearch=0,
+                safesearch=_map_searx_safesearch(safesearch),
                 pageno=1,
                 categories='general',
                 searx_url=(search_params or {}).get('searx_url'),
@@ -1233,7 +1545,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             raise ValueError(f"{search_engine} provider not implemented")
 
         else:
-            return f"Error: Invalid Search Engine Name {search_engine}"
+            return {"processing_error": f"Error: Invalid Search Engine Name {search_engine}"}
 
         # Process the raw search results
         web_search_results_dict = process_web_search_results(web_search_results, search_engine)
@@ -1407,6 +1719,7 @@ def process_web_search_results(search_results: dict, search_engine: str) -> dict
         "geolocation": search_results.get("geolocation"),
         "search_result_language": search_results.get("search_result_language"),
         "sort_results_by": search_results.get("sort_results_by"),
+        "google_domain": search_results.get("google_domain"),
         "results": [],
         "total_results_found": search_results.get("total_results_found", 0),
         "search_time": search_results.get("search_time", 0.0),
@@ -1435,6 +1748,8 @@ def process_web_search_results(search_results: dict, search_engine: str) -> dict
             parse_exa_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "firecrawl":
             parse_firecrawl_results(search_results, web_search_results_dict)
+        elif search_engine.lower() == "4chan":
+            parse_4chan_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "searx":
             parse_searx_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "yandex":
@@ -1901,6 +2216,7 @@ def search_web_google(
     ui_language: str | None = None,
     search_result_language: str | None = None,
     safesearch: str | None = None,
+    google_domain: str | None = None,
     site_blacklist: str | None = None,
     siteSearch: str | None = None,
     siteSearchFilter: str | None = None,
@@ -1923,6 +2239,7 @@ def search_web_google(
     :param ui_language: Language of the user interface
     :param search_result_language: Language of search results
     :param safesearch: Safe search setting
+    :param google_domain: Google host/domain hint (e.g. "google.de")
     :param site_blacklist: Single Site to exclude from search
     :param siteSearch: Google CSE siteSearch parameter
     :param siteSearchFilter: Google CSE siteSearchFilter parameter (e=exclude, i=include)
@@ -1935,7 +2252,25 @@ def search_web_google(
         logging.info(f"Using search URL: {search_url}")
 
         # Initialize params dictionary
-        params: dict[str, Any] = {"q": search_query}
+        query_value = search_query
+        if site_blacklist:
+            raw_domains = [domain.strip() for domain in str(site_blacklist).split(",") if domain.strip()]
+            if len(raw_domains) > 1:
+                cleaned_domains: list[str] = []
+                for domain in raw_domains:
+                    normalized_domain = domain
+                    if normalized_domain.startswith("-site:"):
+                        normalized_domain = normalized_domain[len("-site:"):]
+                    elif normalized_domain.startswith("site:"):
+                        normalized_domain = normalized_domain[len("site:"):]
+                    normalized_domain = normalized_domain.strip()
+                    if normalized_domain:
+                        cleaned_domains.append(normalized_domain)
+                if cleaned_domains:
+                    query_value = " ".join(
+                        [search_query, *[f"-site:{domain}" for domain in cleaned_domains]]
+                    )
+        params: dict[str, Any] = {"q": query_value}
 
         # Handle c2coff
         if c2coff is None:
@@ -1986,6 +2321,8 @@ def search_web_google(
             safesearch = get_loaded_config()['search_engines']['google_safe_search']
         if safesearch:
             params["safe"] = safesearch
+        if google_domain:
+            params["googlehost"] = google_domain
         if siteSearch:
             params["siteSearch"] = siteSearch
         if siteSearchFilter:
@@ -2042,23 +2379,24 @@ def test_search_google():
     safesearch = "off"
     site_blacklist = None
     sort_results_by = None
-    result = search_web_google(search_query,
-                               google_search_api_key,
-                               google_search_engine_id,
-                               result_count,
-                               c2coff,
-                               results_origin_country,
-                               date_range,
-                               exactTerms,
-                               excludeTerms,
-                               filter,
-                               geolocation,
-                               ui_language,
-                               search_result_language,
-                               safesearch,
-                               site_blacklist,
-                               sort_results_by
-                               )
+    result = search_web_google(
+        search_query=search_query,
+        google_search_api_key=google_search_api_key,
+        google_search_engine_id=google_search_engine_id,
+        result_count=result_count,
+        c2coff=c2coff,
+        results_origin_country=results_origin_country,
+        date_range=date_range,
+        exactTerms=exactTerms,
+        excludeTerms=excludeTerms,
+        filter=filter,
+        geolocation=geolocation,
+        ui_language=ui_language,
+        search_result_language=search_result_language,
+        safesearch=safesearch,
+        site_blacklist=site_blacklist,
+        sort_results_by=sort_results_by,
+    )
     print(result)
     return result
 
@@ -2100,9 +2438,13 @@ def parse_google_results(raw_results: dict, output_dict: dict) -> None:
                 "excludeTerms": request.get("excludeTerms", None),
                 "filter": request.get("filter", None),
                 "geolocation": request.get("gl", None),
-                "search_result_language": request.get("hl", None),
+                # Google CSE uses "lr" for result language; retain "hl" as fallback.
+                "search_result_language": request.get("lr", request.get("hl", None)),
                 "sort_results_by": request.get("sort", None)
             })
+            google_host = request.get("googleHost") or request.get("googlehost")
+            if google_host:
+                output_dict["google_domain"] = google_host
 
         # Process search results
         if "items" in raw_results:
@@ -2185,7 +2527,7 @@ def search_web_kagi(query: str, limit: int = 10) -> dict:
         raise ValueError("API key is required.")
 
     headers = {"Authorization": f"Bot {kagi_api_key}"}
-    endpoint = f"{search_url}/search"
+    endpoint = search_url
     params = {"q": query, "limit": limit}
 
     # Enforce SSRF/egress policy
@@ -2429,23 +2771,187 @@ def test_parse_searx_results():
 ######################### Serper.dev Search #########################
 #
 # https://github.com/YassKhazzan/openperplex_backend_os/blob/main/sources_searcher.py
-def search_web_serper():
-    """Serper.dev provider stub with egress policy check."""
+def _map_serper_date_range(date_range: str | None) -> str | None:
+    if not date_range:
+        return None
+    value = str(date_range).strip().lower()
+    if not value:
+        return None
+    if value.startswith("qdr:"):
+        return value
+    mapping = {
+        "h": "qdr:h",
+        "d": "qdr:d",
+        "day": "qdr:d",
+        "w": "qdr:w",
+        "week": "qdr:w",
+        "m": "qdr:m",
+        "month": "qdr:m",
+        "y": "qdr:y",
+        "year": "qdr:y",
+    }
+    return mapping.get(value)
+
+
+def _as_list_or_empty(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    return []
+
+
+def _build_serper_query(
+    *,
+    search_query: str,
+    site_whitelist: list[str] | str | None,
+    site_blacklist: list[str] | str | None,
+    exact_terms: str | None,
+    exclude_terms: str | None,
+) -> str:
+    query_parts = [str(search_query or "").strip()]
+
+    if exact_terms and str(exact_terms).strip():
+        query_parts.append(f"\"{str(exact_terms).strip()}\"")
+
+    for domain in _as_list_or_empty(site_whitelist):
+        query_parts.append(f"site:{domain}")
+    for domain in _as_list_or_empty(site_blacklist):
+        query_parts.append(f"-site:{domain}")
+
+    if exclude_terms and str(exclude_terms).strip():
+        # Apply explicit negative terms as expected by web search syntax.
+        for term in str(exclude_terms).split():
+            cleaned = term.strip()
+            if cleaned:
+                query_parts.append(f"-{cleaned}")
+
+    return " ".join(part for part in query_parts if part).strip()
+
+
+def search_web_serper(
+    search_query: str,
+    result_count: int = 10,
+    content_country: str | None = None,
+    search_lang: str | None = None,
+    output_lang: str | None = None,
+    date_range: str | None = None,
+    safesearch: str | None = None,
+    site_whitelist: list[str] | str | None = None,
+    site_blacklist: list[str] | str | None = None,
+    exactTerms: str | None = None,
+    excludeTerms: str | None = None,
+    serper_api_key: str | None = None,
+    serper_api_url: str | None = None,
+):
+    """Query Serper.dev and return raw JSON results."""
+    cfg = get_loaded_config().get("search_engines", {})
+    if not serper_api_url:
+        serper_api_url = (
+            cfg.get("serper_search_api_url")
+            or os.getenv("SERPER_API_URL")
+            or os.getenv("SEARCH_ENGINE_API_URL_SERPER")
+            or "https://google.serper.dev/search"
+        )
+    if not serper_api_key:
+        serper_api_key = (
+            cfg.get("serper_search_api_key")
+            or os.getenv("SERPER_API_KEY")
+            or os.getenv("SEARCH_ENGINE_API_KEY_SERPER")
+        )
+    if not serper_api_key:
+        raise ValueError("Please provide a valid Serper API key")
+
+    query = _build_serper_query(
+        search_query=search_query,
+        site_whitelist=site_whitelist,
+        site_blacklist=site_blacklist,
+        exact_terms=exactTerms,
+        exclude_terms=excludeTerms,
+    )
+    if not query:
+        raise ValueError("search_query is required")
+
+    payload: dict[str, Any] = {
+        "q": query,
+        "num": int(result_count),
+        "gl": (content_country or "us").lower(),
+        "hl": (output_lang or search_lang or "en").lower(),
+        "safe": (safesearch or "off").lower(),
+    }
+    tbs = _map_serper_date_range(date_range)
+    if tbs:
+        payload["tbs"] = tbs
+
     try:
         from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        pol = evaluate_url_policy("https://google.serper.dev/search")
+        pol = evaluate_url_policy(serper_api_url)
         if not getattr(pol, 'allowed', False):
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
         raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
-    return {"error": "Serper provider not implemented"}
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-KEY": serper_api_key,
+    }
+
+    from tldw_Server_API.app.core.http_client import fetch_json
+    return fetch_json(method="POST", url=serper_api_url, headers=headers, json=payload, timeout=20.0)
 
 
 def test_search_serper():
     pass
 
 def parse_serper_results(serper_search_results, web_search_results_dict):
-    pass
+    try:
+        if "results" not in web_search_results_dict:
+            web_search_results_dict["results"] = []
+
+        if not isinstance(serper_search_results, dict):
+            web_search_results_dict["processing_error"] = "Error processing Serper results: invalid payload"
+            return
+
+        def _append_item(item: dict[str, Any]) -> None:
+            title = item.get("title", "")
+            url = item.get("link") or item.get("url") or ""
+            snippet = item.get("snippet") or item.get("description") or ""
+            published = item.get("date") or item.get("publishedDate") or item.get("published") or None
+            processed = {
+                "title": title,
+                "url": url,
+                "content": snippet,
+                "metadata": {
+                    "date_published": published,
+                    "author": item.get("author"),
+                    "source": extract_domain(url) if url else item.get("source"),
+                    "language": item.get("language"),
+                    "relevance_score": item.get("position") or item.get("rank") or item.get("score"),
+                    "snippet": snippet,
+                },
+            }
+            web_search_results_dict["results"].append(processed)
+
+        for item in serper_search_results.get("organic", []):
+            if isinstance(item, dict):
+                _append_item(item)
+
+        for item in serper_search_results.get("news", []):
+            if isinstance(item, dict):
+                _append_item(item)
+
+        answer_box = serper_search_results.get("answerBox")
+        if isinstance(answer_box, dict):
+            _append_item(answer_box)
+
+        knowledge_graph = serper_search_results.get("knowledgeGraph")
+        if isinstance(knowledge_graph, dict):
+            _append_item(knowledge_graph)
+
+        web_search_results_dict["total_results_found"] = len(web_search_results_dict["results"])
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as e:
+        web_search_results_dict["processing_error"] = f"Error processing Serper results: {e}"
 
 
 
@@ -2709,6 +3215,529 @@ def parse_firecrawl_results(firecrawl_search_results, web_search_results_dict):
 
 def test_parse_firecrawl_results():
     pass
+
+
+######################### 4chan Search #########################
+#
+# https://github.com/4chan/4chan-API
+def _normalize_4chan_boards(value: Any) -> list[str]:
+    tokens: list[str] = []
+    if isinstance(value, str):
+        tokens = [part.strip().lower() for part in re.split(r"[,\s]+", value) if part.strip()]
+    elif isinstance(value, list):
+        tokens = [str(part).strip().lower() for part in value if str(part).strip()]
+    else:
+        return []
+
+    board_pattern = re.compile(r"^[a-z0-9]{1,12}$")
+    out: list[str] = []
+    for token in tokens:
+        if board_pattern.match(token) and token not in out:
+            out.append(token)
+    return out
+
+
+def _clean_4chan_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = unescape(str(value))
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _score_4chan_match(query_terms: list[str], haystack: str, full_query: str) -> float:
+    text = haystack.lower()
+    score = 0.0
+    if not text:
+        return score
+
+    if full_query and full_query in text:
+        score += 3.0
+
+    for term in query_terms:
+        if term in text:
+            score += 1.0
+            repeats = max(0, text.count(term) - 1)
+            score += min(1.0, repeats * 0.2)
+
+    return score
+
+
+def _append_4chan_candidate(
+    *,
+    candidates: list[dict[str, Any]],
+    board: str,
+    thread: dict[str, Any],
+    query_terms: list[str],
+    query_text: str,
+    archived: bool,
+) -> None:
+    thread_no = thread.get("no")
+    if thread_no is None:
+        return
+
+    subject = _clean_4chan_text(thread.get("sub"))
+    comment = _clean_4chan_text(thread.get("com"))
+    semantic = _clean_4chan_text(thread.get("semantic_url"))
+    haystack = " ".join(part for part in [subject, semantic, comment] if part)
+    score = _score_4chan_match(query_terms, haystack, query_text)
+    if query_terms and score <= 0:
+        return
+
+    published_epoch = thread.get("time")
+    published_date = None
+    if isinstance(published_epoch, (int, float)):
+        try:
+            published_date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(published_epoch)))
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            published_date = None
+
+    thread_url = f"https://boards.4chan.org/{board}/thread/{thread_no}"
+    snippet = _truncate_text(comment or semantic or subject)
+    title = subject or f"/{board}/ Thread {thread_no}"
+
+    candidates.append(
+        {
+            "title": title,
+            "url": thread_url,
+            "content": snippet,
+            "publishedDate": published_date,
+            "author": _clean_4chan_text(thread.get("name")) or None,
+            "source": "4chan",
+            "board": board,
+            "thread_no": thread_no,
+            "replies": thread.get("replies"),
+            "images": thread.get("images"),
+            "archived": archived,
+            "score": round(score, 4),
+            "time_epoch": int(published_epoch) if isinstance(published_epoch, (int, float)) else 0,
+        }
+    )
+
+
+def _normalize_4chan_thread_no(value: Any) -> str:
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        try:
+            return str(int(value))
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.isdigit():
+        try:
+            return str(int(text))
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            return ""
+    return ""
+
+
+def _4chan_candidate_key(candidate: dict[str, Any]) -> tuple[str, str] | None:
+    board = str(candidate.get("board") or "").strip().lower()
+    if not board:
+        return None
+    thread_no = _normalize_4chan_thread_no(candidate.get("thread_no"))
+    if not thread_no:
+        return None
+    return board, thread_no
+
+
+def _is_4chan_placeholder_title(title: str) -> bool:
+    return bool(re.match(r"^/[a-z0-9]{1,12}/\s+thread\s+\d+$", title.strip().lower()))
+
+
+def _select_4chan_text(preferred: Any, secondary: Any) -> str:
+    preferred_text = str(preferred or "").strip()
+    secondary_text = str(secondary or "").strip()
+    if not preferred_text:
+        return secondary_text
+    if not secondary_text:
+        return preferred_text
+    if len(secondary_text) > len(preferred_text):
+        return secondary_text
+    return preferred_text
+
+
+def _select_4chan_title(preferred: Any, secondary: Any) -> str:
+    preferred_title = str(preferred or "").strip()
+    secondary_title = str(secondary or "").strip()
+    if not preferred_title:
+        return secondary_title
+    if not secondary_title:
+        return preferred_title
+    if _is_4chan_placeholder_title(preferred_title) and not _is_4chan_placeholder_title(secondary_title):
+        return secondary_title
+    if len(secondary_title) > len(preferred_title):
+        return secondary_title
+    return preferred_title
+
+
+def _to_int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
+def _merge_4chan_numeric(preferred: Any, secondary: Any) -> Any:
+    preferred_num = _to_int_or_none(preferred)
+    secondary_num = _to_int_or_none(secondary)
+    if preferred_num is None:
+        return secondary
+    if secondary_num is None:
+        return preferred
+    return max(preferred_num, secondary_num)
+
+
+def _merge_4chan_candidates(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    existing_archived = _coerce_bool(existing.get("archived"), default=False)
+    incoming_archived = _coerce_bool(incoming.get("archived"), default=False)
+
+    if existing_archived and not incoming_archived:
+        preferred = incoming
+        secondary = existing
+    else:
+        preferred = existing
+        secondary = incoming
+
+    merged = dict(preferred)
+    merged["title"] = _select_4chan_title(preferred.get("title"), secondary.get("title"))
+    merged["content"] = _select_4chan_text(preferred.get("content"), secondary.get("content"))
+
+    preferred_score = float(preferred.get("score") or 0.0)
+    secondary_score = float(secondary.get("score") or 0.0)
+    merged["score"] = round(max(preferred_score, secondary_score), 4)
+
+    preferred_time = int(preferred.get("time_epoch") or 0)
+    secondary_time = int(secondary.get("time_epoch") or 0)
+    if secondary_time > preferred_time:
+        merged["time_epoch"] = secondary_time
+        merged["publishedDate"] = secondary.get("publishedDate") or preferred.get("publishedDate")
+    else:
+        merged["time_epoch"] = preferred_time
+        merged["publishedDate"] = preferred.get("publishedDate") or secondary.get("publishedDate")
+
+    merged["author"] = preferred.get("author") or secondary.get("author")
+    merged["replies"] = _merge_4chan_numeric(preferred.get("replies"), secondary.get("replies"))
+    merged["images"] = _merge_4chan_numeric(preferred.get("images"), secondary.get("images"))
+
+    board = str(preferred.get("board") or secondary.get("board") or "").strip().lower()
+    if board:
+        merged["board"] = board
+
+    thread_no = _normalize_4chan_thread_no(preferred.get("thread_no") or secondary.get("thread_no"))
+    if thread_no:
+        try:
+            merged["thread_no"] = int(thread_no)
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            merged["thread_no"] = thread_no
+
+    if board and thread_no:
+        merged["url"] = f"https://boards.4chan.org/{board}/thread/{thread_no}"
+
+    merged["archived"] = existing_archived and incoming_archived
+    return merged
+
+
+def _dedupe_4chan_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    key_to_index: dict[tuple[str, str], int] = {}
+
+    for candidate in candidates:
+        key = _4chan_candidate_key(candidate)
+        if key is None:
+            deduped.append(candidate)
+            continue
+
+        existing_index = key_to_index.get(key)
+        if existing_index is None:
+            key_to_index[key] = len(deduped)
+            deduped.append(candidate)
+            continue
+
+        deduped[existing_index] = _merge_4chan_candidates(deduped[existing_index], candidate)
+
+    return deduped
+
+
+def search_web_4chan(
+    search_query: str,
+    result_count: int = 10,
+    search_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    query_text = str(search_query or "").strip().lower()
+    if not query_text:
+        raise ValueError("search_query is required")
+
+    cfg = get_loaded_config().get("search_engines", {})
+    boards_raw = (
+        (search_params or {}).get("boards")
+        or cfg.get("4chan_boards")
+        or cfg.get("fourchan_boards")
+        or os.getenv("FOURCHAN_BOARDS")
+        or os.getenv("FOURCHAN_DEFAULT_BOARDS")
+        or ["g", "tv", "pol"]
+    )
+    boards = _normalize_4chan_boards(boards_raw)
+    if not boards:
+        boards = ["g", "tv", "pol"]
+
+    max_threads_raw = (
+        (search_params or {}).get("max_threads_per_board")
+        or cfg.get("4chan_max_threads_per_board")
+        or cfg.get("fourchan_max_threads_per_board")
+        or 250
+    )
+    try:
+        max_threads_per_board = int(max_threads_raw)
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+        max_threads_per_board = 250
+    max_threads_per_board = max(1, min(max_threads_per_board, 1000))
+
+    try:
+        limit = int(result_count)
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+        limit = 10
+    limit = max(1, min(limit, 50))
+
+    include_archived_raw = (
+        (search_params or {}).get("include_archived")
+        if isinstance(search_params, dict)
+        else None
+    )
+    if include_archived_raw is None:
+        include_archived_raw = (
+            cfg.get("4chan_include_archived")
+            or cfg.get("fourchan_include_archived")
+            or os.getenv("FOURCHAN_INCLUDE_ARCHIVED")
+        )
+    include_archived = _coerce_bool(include_archived_raw, default=False)
+
+    max_archived_raw = (
+        (search_params or {}).get("max_archived_threads_per_board")
+        if isinstance(search_params, dict)
+        else None
+    )
+    if max_archived_raw is None:
+        max_archived_raw = (
+            cfg.get("4chan_max_archived_threads_per_board")
+            or cfg.get("fourchan_max_archived_threads_per_board")
+            or min(max_threads_per_board, 50)
+        )
+    try:
+        max_archived_threads_per_board = int(max_archived_raw)
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+        max_archived_threads_per_board = min(max_threads_per_board, 50)
+    max_archived_threads_per_board = max(1, min(max_archived_threads_per_board, 500))
+
+    query_terms = [t for t in re.findall(r"[a-z0-9]{2,}", query_text) if t]
+    if not query_terms and query_text:
+        query_terms = [query_text]
+
+    headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5")
+    from tldw_Server_API.app.core.http_client import fetch_json
+
+    candidates: list[dict[str, Any]] = []
+    board_warnings: list[dict[str, str]] = []
+    successful_boards: set[str] = set()
+
+    def _record_board_warning(board_name: str, phase: str, exc: Any) -> None:
+        message = _truncate_text(str(exc), max_len=240)
+        board_warnings.append(
+            {
+                "board": board_name,
+                "phase": phase,
+                "message": message,
+            }
+        )
+        logging.warning(f"4chan board '{board_name}' {phase} failed: {message}")
+
+    for board in boards:
+        catalog_url = f"https://a.4cdn.org/{board}/catalog.json"
+
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            pol = evaluate_url_policy(catalog_url)
+            if not getattr(pol, "allowed", False):
+                raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+            catalog_payload = fetch_json(method="GET", url=catalog_url, headers=headers, timeout=15.0)
+            pages = catalog_payload if isinstance(catalog_payload, list) else []
+            successful_boards.add(board)
+            scanned_threads = 0
+
+            for page in pages:
+                if scanned_threads >= max_threads_per_board:
+                    break
+                if not isinstance(page, dict):
+                    continue
+                threads = page.get("threads", [])
+                if not isinstance(threads, list):
+                    continue
+
+                for thread in threads:
+                    if scanned_threads >= max_threads_per_board:
+                        break
+                    scanned_threads += 1
+
+                    if not isinstance(thread, dict):
+                        continue
+
+                    _append_4chan_candidate(
+                        candidates=candidates,
+                        board=board,
+                        thread=thread,
+                        query_terms=query_terms,
+                        query_text=query_text,
+                        archived=False,
+                    )
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
+            _record_board_warning(board, "catalog", exc)
+
+        if include_archived:
+            archive_url = f"https://a.4cdn.org/{board}/archive.json"
+            try:
+                from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+                pol = evaluate_url_policy(archive_url)
+                if not getattr(pol, "allowed", False):
+                    raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+                archive_payload = fetch_json(method="GET", url=archive_url, headers=headers, timeout=15.0)
+                archive_ids = archive_payload if isinstance(archive_payload, list) else []
+                successful_boards.add(board)
+                archived_thread_ids = list(reversed(archive_ids))[:max_archived_threads_per_board]
+
+                for archived_thread_id in archived_thread_ids:
+                    thread_id = str(archived_thread_id).strip()
+                    if not thread_id.isdigit():
+                        continue
+
+                    thread_api_url = f"https://a.4cdn.org/{board}/thread/{thread_id}.json"
+                    try:
+                        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+                        pol = evaluate_url_policy(thread_api_url)
+                        if not getattr(pol, "allowed", False):
+                            continue
+                    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+                        continue
+
+                    try:
+                        thread_payload = fetch_json(method="GET", url=thread_api_url, headers=headers, timeout=15.0)
+                    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+                        continue
+
+                    posts = thread_payload.get("posts", []) if isinstance(thread_payload, dict) else []
+                    if not isinstance(posts, list) or not posts:
+                        continue
+
+                    op = next((post for post in posts if isinstance(post, dict)), None)
+                    if not op:
+                        continue
+                    op_data = dict(op)
+                    op_data.setdefault("no", int(thread_id))
+                    op_data.setdefault(
+                        "replies",
+                        max(0, len([post for post in posts if isinstance(post, dict)]) - 1),
+                    )
+                    op_data.setdefault(
+                        "images",
+                        sum(1 for post in posts if isinstance(post, dict) and post.get("tim") is not None),
+                    )
+                    op_data.setdefault("archived", 1)
+
+                    _append_4chan_candidate(
+                        candidates=candidates,
+                        board=board,
+                        thread=op_data,
+                        query_terms=query_terms,
+                        query_text=query_text,
+                        archived=True,
+                    )
+            except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
+                _record_board_warning(board, "archive", exc)
+
+    candidates = _dedupe_4chan_candidates(candidates)
+    candidates.sort(
+        key=lambda item: (
+            float(item.get("score") or 0.0),
+            int(item.get("time_epoch") or 0),
+        ),
+        reverse=True,
+    )
+
+    result: dict[str, Any] = {
+        "results": candidates[:limit],
+        "total_results_found": len(candidates),
+        "boards": boards,
+        "include_archived": include_archived,
+        "query": search_query,
+    }
+    if board_warnings:
+        result["warnings"] = board_warnings
+    if board_warnings and not successful_boards:
+        result["error"] = "4chan search failed for all requested boards."
+    return result
+
+
+def parse_4chan_results(fourchan_search_results, web_search_results_dict):
+    try:
+        if "results" not in web_search_results_dict:
+            web_search_results_dict["results"] = []
+
+        items = fourchan_search_results.get("results", []) if isinstance(fourchan_search_results, dict) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            title = item.get("title", "")
+            url = item.get("url", "")
+            content = item.get("content") or item.get("snippet") or ""
+            published = item.get("publishedDate") or item.get("published") or item.get("date")
+
+            processed = {
+                "title": title,
+                "url": url,
+                "content": content,
+                "metadata": {
+                    "date_published": published,
+                    "author": item.get("author"),
+                    "source": item.get("source") or (extract_domain(url) if url else "4chan"),
+                    "language": item.get("language"),
+                    "relevance_score": item.get("score"),
+                    "snippet": content,
+                    "board": item.get("board"),
+                    "thread_no": item.get("thread_no"),
+                    "replies": item.get("replies"),
+                    "images": item.get("images"),
+                    "archived": bool(item.get("archived", False)),
+                },
+            }
+            web_search_results_dict["results"].append(processed)
+
+        warnings = (
+            fourchan_search_results.get("warnings", [])
+            if isinstance(fourchan_search_results, dict)
+            else []
+        )
+        if isinstance(warnings, list) and warnings:
+            web_search_results_dict["warnings"] = warnings
+
+        web_search_results_dict["total_results_found"] = len(web_search_results_dict["results"])
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as e:
+        web_search_results_dict["processing_error"] = f"Error processing 4chan results: {e}"
 
 
 

@@ -12,6 +12,15 @@ def _set_jobs_db(monkeypatch, tmp_path):
     monkeypatch.delenv("JOBS_DB_URL", raising=False)
 
 
+def _fetch_job_queue(job_id: int) -> str | None:
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+    jm = JobManager()
+    row = jm.get_job(int(job_id)) or {}
+    queue = row.get("queue")
+    return str(queue) if queue is not None else None
+
+
 def test_media_ingest_jobs_submit_status_cancel(
     test_client,
     auth_headers,
@@ -134,3 +143,69 @@ def test_media_ingest_jobs_list_by_batch(
     assert list_body.get("batch_id") == batch_id
     listed_ids = {job["id"] for job in list_body.get("jobs", [])}
     assert listed_ids == job_ids
+
+
+def test_media_ingest_jobs_routes_audio_to_heavy_queue(
+    test_client,
+    auth_headers,
+    monkeypatch,
+    tmp_path,
+):
+    _set_jobs_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("MEDIA_INGEST_JOBS_DEFAULT_QUEUE", "default")
+    monkeypatch.setenv("MEDIA_INGEST_JOBS_HEAVY_QUEUE", "media-heavy")
+    monkeypatch.setenv("MEDIA_INGEST_JOBS_ROUTE_HEAVY", "true")
+    monkeypatch.setenv("JOBS_ALLOWED_QUEUES", "media-heavy")
+
+    resp = test_client.post(
+        "/api/v1/media/ingest/jobs",
+        data={
+            "media_type": "audio",
+            "urls": "https://example.com/audio-heavy.mp3",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body.get("jobs")
+    job_id = int(body["jobs"][0]["id"])
+    assert _fetch_job_queue(job_id) == "media-heavy"
+
+
+def test_media_ingest_jobs_routes_ocr_documents_to_heavy_queue_and_respects_disable_flag(
+    test_client,
+    auth_headers,
+    monkeypatch,
+    tmp_path,
+):
+    _set_jobs_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("MEDIA_INGEST_JOBS_DEFAULT_QUEUE", "default")
+    monkeypatch.setenv("MEDIA_INGEST_JOBS_HEAVY_QUEUE", "media-heavy")
+    monkeypatch.setenv("MEDIA_INGEST_JOBS_ROUTE_HEAVY", "true")
+    monkeypatch.setenv("JOBS_ALLOWED_QUEUES", "media-heavy")
+
+    heavy_resp = test_client.post(
+        "/api/v1/media/ingest/jobs",
+        data={
+            "media_type": "pdf",
+            "enable_ocr": "true",
+            "urls": "https://example.com/scanned-doc.pdf",
+        },
+        headers=auth_headers,
+    )
+    assert heavy_resp.status_code == 200, heavy_resp.text
+    heavy_job_id = int(heavy_resp.json()["jobs"][0]["id"])
+    assert _fetch_job_queue(heavy_job_id) == "media-heavy"
+
+    monkeypatch.setenv("MEDIA_INGEST_JOBS_ROUTE_HEAVY", "false")
+    default_resp = test_client.post(
+        "/api/v1/media/ingest/jobs",
+        data={
+            "media_type": "audio",
+            "urls": "https://example.com/audio-default.mp3",
+        },
+        headers=auth_headers,
+    )
+    assert default_resp.status_code == 200, default_resp.text
+    default_job_id = int(default_resp.json()["jobs"][0]["id"])
+    assert _fetch_job_queue(default_job_id) == "default"

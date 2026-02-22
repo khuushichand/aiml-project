@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -15,6 +16,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_truthy
 from ..models import RunPhase, RunSpec, RunStatus
 from ..streams import get_hub
 
@@ -37,16 +39,18 @@ _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS = (
     subprocess.SubprocessError,
 )
 
+_OWNER_EXEC_ONLY_FILE_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+
 
 def _truthy(v: str | None) -> bool:
-    return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+    return is_truthy(v)
 
 
 def lima_available() -> bool:
     """Check if limactl is available on the system."""
     env = os.getenv("TLDW_SANDBOX_LIMA_AVAILABLE")
     if env is not None:
-        return env.lower() in {"1", "true", "yes", "on"}
+        return _truthy(env)
     return shutil.which("limactl") is not None
 
 
@@ -557,10 +561,10 @@ cat > {status_path} <<EOF_STATUS
 EOF_STATUS
 sync {status_path} 2>/dev/null || true
 exit $exit_code
-"""
+        """
         entry = Path(workspace) / "entry.sh"
         entry.write_text(script, encoding="utf-8")
-        os.chmod(entry, 0o755)
+        os.chmod(entry, _OWNER_EXEC_ONLY_FILE_MODE)
 
     @staticmethod
     def _write_env_file(workspace: str, env: dict[str, str]) -> None:

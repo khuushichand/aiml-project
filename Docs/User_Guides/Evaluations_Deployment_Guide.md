@@ -72,9 +72,10 @@ export CORS_ORIGINS="https://yourdomain.com,https://app.yourdomain.com"
 ### 1. Rate Limiting
 
 ```bash
-# Configure rate limits
-export RATE_LIMIT_PER_MINUTE=30  # For evaluations
-export RATE_LIMIT_BURST=5        # Burst allowance
+# Configure evaluations rate limits via Resource Governor
+export RG_ENABLED=true
+export RG_EVALUATIONS_POLICY_ID=evals.default
+# Tune requests.rpm / requests.burst for evals.default in Config_Files/resource_governor_policies.yaml
 ```
 
 ### 2. Connection Pooling
@@ -318,7 +319,7 @@ sudo systemctl start tldw-evaluations
 |-------|----------|
 | "Authentication failed" | Check API_BEARER environment variable |
 | "Database locked" | Check file permissions and concurrent access |
-| "Rate limit exceeded" | Increase RATE_LIMIT_PER_MINUTE |
+| "Rate limit exceeded" | Increase `evals.default` `requests.rpm`/`requests.burst` in `resource_governor_policies.yaml` |
 | "Evaluation timeout" | Increase worker timeout settings |
 | "High memory usage" | Reduce MAX_CONCURRENT_EVALUATIONS |
 
@@ -370,7 +371,7 @@ For issues or questions:
 | JWT_SECRET_KEY | Yes* | - | JWT secret for multi-user mode |
 | OPENAI_API_KEY | No | - | OpenAI API key |
 | EVALUATIONS_DB_PATH | No | ./Databases/evaluations.db | Database path |
-| RATE_LIMIT_PER_MINUTE | No | 60 | Rate limit per minute |
+| RG_EVALUATIONS_POLICY_ID | No | evals.default | Resource Governor policy ID used for evaluations endpoints |
 | METRICS_ENABLED | No | false | Enable metrics collection |
 | LOG_LEVEL | No | INFO | Logging level |
 | FORCE_HTTPS | No | false | Force HTTPS connections |

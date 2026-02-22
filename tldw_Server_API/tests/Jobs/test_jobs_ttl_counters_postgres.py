@@ -80,7 +80,7 @@ def test_pg_ttl_cancel_updates_counters(monkeypatch):
                     break
             assert saw
         except Exception:
-            pass
+            _ = None
     conn = jm._connect()
     try:
         with jm._pg_cursor(conn) as cur:
@@ -134,7 +134,7 @@ def test_pg_ttl_fail_updates_counters(monkeypatch):
                         saw_runtime = True
             assert saw_age and saw_runtime
         except Exception:
-            pass
+            _ = None
     conn = jm._connect()
     try:
         with jm._pg_cursor(conn) as cur:

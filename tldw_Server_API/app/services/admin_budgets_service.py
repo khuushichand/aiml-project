@@ -12,7 +12,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     OrgBudgetListResponse,
     OrgBudgetUpdateRequest,
 )
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Billing.plan_limits import get_plan_limits
 
@@ -21,12 +21,14 @@ async def _emit_budget_audit_event(*args, **kwargs):
     """Dispatch audit events through the admin module to preserve test monkeypatch hooks."""
     try:
         from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
-
+    except Exception:
+        admin_mod = None
+    else:
         emit_fn = getattr(admin_mod, "emit_budget_audit_event", None)
         if callable(emit_fn):
+            # Important: do not swallow emit_fn exceptions. Tests intentionally
+            # monkeypatch this symbol and expect failures to block updates.
             return await emit_fn(*args, **kwargs)
-    except Exception:
-        pass
 
     from tldw_Server_API.app.services.budget_audit_service import emit_budget_audit_event
 
@@ -39,6 +41,24 @@ _BUDGET_KEYS = {
     "budget_day_tokens",
     "budget_month_tokens",
 }
+_PLATFORM_ADMIN_ROLES = frozenset({"admin", "owner", "super_admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | set[Any] | None) -> set[str]:
+    return {
+        str(value).strip().lower()
+        for value in (values or [])
+        if str(value).strip()
+    }
+
+
+def _principal_has_platform_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = _normalized_claim_values(principal.roles)
+    permissions = _normalized_claim_values(principal.permissions)
+    if roles & _PLATFORM_ADMIN_ROLES:
+        return True
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 def _parse_json_payload(raw: Any) -> dict[str, Any]:
@@ -386,7 +406,7 @@ async def upsert_budget(
 
     actor_role = None
     try:
-        if principal.is_admin:
+        if _principal_has_platform_admin_claims(principal):
             actor_role = "admin"
         elif principal.roles:
             actor_role = principal.roles[0]
@@ -682,17 +702,47 @@ def _build_nested_changes(
     return changes
 
 
-async def _fetchval(db, query: str, params: list[Any]) -> Any:
-    if hasattr(db, "fetchval"):
+def _is_db_pool_object(db: Any) -> bool:
+    return isinstance(db, DatabasePool)
+
+
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probing."""
+    if _is_db_pool_object(db):
+        return getattr(db, "pool", None) is not None
+
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    # SQLite shims in AuthNZ DatabasePool expose underlying aiosqlite connection as `_c`.
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    # Last-resort interface hint for test doubles and adapters.
+    return callable(getattr(db, "fetchrow", None))
+
+
+async def _fetchval(db, query: str, params: list[Any], *, pg: bool) -> Any:
+    if pg:
         return await db.fetchval(query, *params)
+    if _is_db_pool_object(db):
+        return await db.fetchval(query, params)
     cur = await db.execute(query, params)
     row = await cur.fetchone()
     return row[0] if row else None
 
 
-async def _fetchrow(db, query: str, params: list[Any]) -> dict[str, Any] | None:
-    if hasattr(db, "fetchrow"):
+async def _fetchrow(db, query: str, params: list[Any], *, pg: bool) -> dict[str, Any] | None:
+    if pg:
         row = await db.fetchrow(query, *params)
+        return dict(row) if row and not isinstance(row, dict) else row
+    if _is_db_pool_object(db):
+        row = await db.fetchrow(query, params)
         return dict(row) if row and not isinstance(row, dict) else row
     cur = await db.execute(query, params)
     row = await cur.fetchone()
@@ -703,9 +753,11 @@ async def _fetchrow(db, query: str, params: list[Any]) -> dict[str, Any] | None:
     return dict(row) if not isinstance(row, dict) else row
 
 
-async def _fetchrows(db, query: str, params: list[Any]) -> list[Any]:
-    if hasattr(db, "fetch"):
+async def _fetchrows(db, query: str, params: list[Any], *, pg: bool) -> list[Any]:
+    if pg:
         return await db.fetch(query, *params)
+    if _is_db_pool_object(db):
+        return await db.fetchall(query, params)
     cur = await db.execute(query, params)
     return await cur.fetchall()
 
@@ -718,7 +770,7 @@ async def list_org_budgets(
     limit: int,
 ) -> tuple[list[dict[str, Any]], int]:
     offset = (page - 1) * limit
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     if pg:
         try:
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg
@@ -742,8 +794,9 @@ async def list_org_budgets(
 
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    count_sql = f"SELECT COUNT(*) FROM organizations o{where_clause}"
-    total = int(await _fetchval(db, count_sql, params) or 0)
+    count_sql_template = "SELECT COUNT(*) FROM organizations o{where_clause}"
+    count_sql = count_sql_template.format_map(locals())  # nosec B608
+    total = int(await _fetchval(db, count_sql, params, pg=pg) or 0)
 
     if pg:
         limit_placeholder = f"${len(params) + 1}"
@@ -752,7 +805,7 @@ async def list_org_budgets(
         limit_placeholder = "?"
         offset_placeholder = "?"
 
-    sql = (
+    list_budgets_sql_template = (
         "SELECT o.id as org_id, o.name as org_name, o.slug as org_slug, "
         "os.custom_limits_json, os.updated_at, "
         "ob.budgets_json, ob.updated_at as budgets_updated_at, "
@@ -761,11 +814,12 @@ async def list_org_budgets(
         "LEFT JOIN org_subscriptions os ON os.org_id = o.id "
         "LEFT JOIN subscription_plans sp ON os.plan_id = sp.id "
         "LEFT JOIN org_budgets ob ON ob.org_id = o.id "
-        f"{where_clause} "
-        f"ORDER BY o.name ASC LIMIT {limit_placeholder} OFFSET {offset_placeholder}"
+        "{where_clause} "
+        "ORDER BY o.name ASC LIMIT {limit_placeholder} OFFSET {offset_placeholder}"
     )
+    sql = list_budgets_sql_template.format_map(locals())  # nosec B608
 
-    rows = await _fetchrows(db, sql, params + [limit, offset])
+    rows = await _fetchrows(db, sql, params + [limit, offset], pg=pg)
     items = []
     for row in rows:
         row_dict = dict(row) if not isinstance(row, dict) else row
@@ -780,7 +834,7 @@ async def upsert_org_budget(
     budget_updates: dict[str, Any] | None,
     clear_budgets: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     if pg:
         try:
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg
@@ -793,6 +847,7 @@ async def upsert_org_budget(
         db,
         "SELECT id, name, slug FROM organizations WHERE id = $1",
         [org_id],
+        pg=pg,
     )
     if not org_row:
         raise ValueError("org_not_found")
@@ -808,6 +863,7 @@ async def upsert_org_budget(
         WHERE os.org_id = $1
         """,
         [org_id],
+        pg=pg,
     )
 
     if not sub_row:
@@ -815,6 +871,7 @@ async def upsert_org_budget(
             db,
             "SELECT id, name, display_name, limits_json FROM subscription_plans WHERE name = $1",
             ["free"],
+            pg=pg,
         )
         if not plan_row:
             default_limits = get_plan_limits("free")
@@ -855,6 +912,7 @@ async def upsert_org_budget(
                 db,
                 "SELECT id, name, display_name, limits_json FROM subscription_plans WHERE name = $1",
                 ["free"],
+                pg=pg,
             )
         if not plan_row:
             raise ValueError("plan_not_found")
@@ -879,6 +937,7 @@ async def upsert_org_budget(
             WHERE os.org_id = $1
             """,
             [org_id],
+            pg=pg,
         )
 
     if not sub_row:
@@ -891,6 +950,7 @@ async def upsert_org_budget(
         db,
         "SELECT org_id, budgets_json, updated_at FROM org_budgets WHERE org_id = $1",
         [org_id],
+        pg=pg,
     )
     budgets_payload = _normalize_budget_payload(
         budget_row.get("budgets_json") if budget_row else None

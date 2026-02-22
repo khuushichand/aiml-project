@@ -17,15 +17,13 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import normalize_provider
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import list_registered_providers
+from tldw_Server_API.app.core.testing import is_test_mode
 
 _INVALID_TEST_KEY_PREFIXES = ("invalid-", "test-invalid-", "bad-key-", "dummy-invalid-")
 
 
 def _is_test_mode() -> bool:
-    return (
-        os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        or os.getenv("PYTEST_CURRENT_TEST") is not None
-    )
+    return is_test_mode() or os.getenv("PYTEST_CURRENT_TEST") is not None
 
 
 def is_obviously_invalid_key(api_key: str) -> bool:
@@ -49,8 +47,8 @@ def resolve_default_model_for_provider(provider: str) -> str | None:
         override = get_llm_provider_override(provider)
         if override and override.allowed_models:
             return override.allowed_models[0]
-    except Exception:
-        pass
+    except Exception as override_error:
+        _ = override_error  # continue with default model fallback
 
     normalized = (provider or "").replace(".", "_").replace("-", "_")
     env_key = f"DEFAULT_MODEL_{normalized.upper()}"

@@ -110,7 +110,7 @@ def test_media_rls_enforces_scope_postgres():
     try:
         bootstrap_db.close_connection()
     except Exception:
-        pass
+        _ = None
 
     backend = admin_backend
 
@@ -298,8 +298,8 @@ def test_media_rls_enforces_scope_postgres():
             try:
                 db.close_connection()
             except Exception:
-                pass
+                _ = None
         try:
             backend.close_all()
         except Exception:
-            pass
+            _ = None

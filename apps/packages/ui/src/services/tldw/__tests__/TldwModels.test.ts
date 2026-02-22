@@ -1,0 +1,142 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({
+  getConfig: vi.fn(),
+  initialize: vi.fn(),
+  getModels: vi.fn(),
+  storageGet: vi.fn(async () => null),
+  storageSet: vi.fn(async () => undefined)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getConfig: (...args: unknown[]) =>
+      (mocks.getConfig as (...args: unknown[]) => unknown)(...args),
+    initialize: (...args: unknown[]) =>
+      (mocks.initialize as (...args: unknown[]) => unknown)(...args),
+    getModels: (...args: unknown[]) =>
+      (mocks.getModels as (...args: unknown[]) => unknown)(...args)
+  }
+}))
+
+vi.mock("@/utils/safe-storage", () => ({
+  createSafeStorage: () => ({
+    get: (...args: unknown[]) =>
+      (mocks.storageGet as (...args: unknown[]) => unknown)(...args),
+    set: (...args: unknown[]) =>
+      (mocks.storageSet as (...args: unknown[]) => unknown)(...args)
+  })
+}))
+
+const importService = async () => import("@/services/tldw/TldwModels")
+
+describe("TldwModelsService caching", () => {
+  beforeEach(() => {
+    vi.resetModules()
+    mocks.getConfig.mockReset()
+    mocks.initialize.mockReset()
+    mocks.getModels.mockReset()
+    mocks.storageGet.mockReset()
+    mocks.storageSet.mockReset()
+
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "test-key"
+    })
+    mocks.initialize.mockResolvedValue(undefined)
+    mocks.storageGet.mockResolvedValue(null)
+    mocks.storageSet.mockResolvedValue(undefined)
+  })
+
+  it("dedupes concurrent in-flight model fetches", async () => {
+    vi.useFakeTimers()
+    mocks.getModels.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      return [
+        { id: "model-a", name: "Model A", provider: "openai", type: "chat" }
+      ]
+    })
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    const first = service.getModels(true)
+    const second = service.getModels(true)
+
+    await vi.advanceTimersByTimeAsync(26)
+
+    const [a, b] = await Promise.all([first, second])
+
+    expect(a).toHaveLength(1)
+    expect(b).toHaveLength(1)
+    expect(mocks.getModels).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+
+  it("resets cached models when server scope changes", async () => {
+    mocks.getModels
+      .mockResolvedValueOnce([
+        { id: "model-a", name: "Model A", provider: "openai", type: "chat" }
+      ])
+      .mockResolvedValueOnce([
+        { id: "model-b", name: "Model B", provider: "anthropic", type: "chat" }
+      ])
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    await service.getModels(true)
+
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8100",
+      authMode: "single-user",
+      apiKey: "test-key"
+    })
+
+    const next = await service.getModels()
+
+    expect(next[0]?.id).toBe("model-b")
+    expect(mocks.getModels).toHaveBeenCalledTimes(2)
+  })
+
+  it("forwards refreshOpenRouter flag when explicitly requested", async () => {
+    mocks.getModels.mockResolvedValue([
+      { id: "openrouter/model-a", name: "Model A", provider: "openrouter", type: "chat" }
+    ])
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    await service.getModels(true, { refreshOpenRouter: true })
+
+    expect(mocks.getModels).toHaveBeenCalledTimes(1)
+    expect(mocks.getModels).toHaveBeenCalledWith({ refreshOpenRouter: true })
+  })
+
+  it("ignores legacy cache entries without schema version and refetches models", async () => {
+    mocks.storageGet.mockResolvedValue({
+      timestamp: Date.now(),
+      scope: "http://127.0.0.1:8000|single-user|key|none",
+      models: [
+        {
+          id: "z-ai/glm-4.6",
+          name: "deepseek/deepseek-r1",
+          provider: "openrouter",
+          type: "chat"
+        }
+      ]
+    })
+    mocks.getModels.mockResolvedValue([
+      { id: "deepseek/deepseek-r1", name: "deepseek/deepseek-r1", provider: "openrouter", type: "chat" }
+    ])
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    const models = await service.getModels()
+
+    expect(mocks.getModels).toHaveBeenCalledTimes(1)
+    expect(models[0]?.id).toBe("deepseek/deepseek-r1")
+  })
+})

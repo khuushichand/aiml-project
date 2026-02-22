@@ -48,6 +48,17 @@ Top navigation groups features into tabs. Notable areas include:
   - Go to Chat → Chat Completions.
   - Select a provider/model and send prompts; streaming supported for many providers.
   - Use Characters and Conversations for persona-based chats and history.
+  - Use page tutorials to learn each workspace:
+    - press `?` to open Help → Tutorials on the current page, or
+    - open Quick Chat Helper → `Browse Guides` → `Tutorials for this page`.
+  - Use Quick Chat Helper `Docs Q&A` / `Browse Guides` for workflow discovery and documentation-style answers:
+    `Docs/User_Guides/Quick_Chat_Docs_Assistant_Guide.md`.
+  - You can edit the pre-written `Browse Guides` workflow cards from `Settings -> Chat behavior -> Quick Chat workflow cards`.
+  - Note: workflow cards are curated Q/A entries; per-page Tutorials are defined in the tutorial registry and are not edited from that settings JSON.
+  - In Characters → Recently deleted, restore availability follows the server restore window (`CHARACTERS_RESTORE_RETENTION_DAYS`, default `30` days).
+  - Roleplay quickstart: `Docs/User_Guides/Character_Roleplay_Quickstart.md`.
+  - Core roleplay guide: `Docs/User_Guides/Effective_Character_Roleplay_and_You.md`.
+  - Advanced roleplay guide: `Docs/User_Guides/Advanced_Character_Roleplay_Guide.md`.
 
 - Transcribe audio
   - Audio → Transcriptions: upload files for batch transcription.
@@ -71,6 +82,8 @@ Top navigation groups features into tabs. Notable areas include:
 - Bring Your Own Keys (BYOK)
   - Multi-user only: store per-user provider keys and optional org/team shared keys.
   - See `Docs/User_Guides/BYOK_User_Guide.md` for setup, endpoints, and policies.
+  - OpenAI OAuth first-time setup: `Docs/User_Guides/OpenAI_OAuth_First_Time_Setup.md`.
+  - Anthropic + Claude Code/Claude SDK setup: `Docs/User_Guides/Anthropic_ClaudeCode_ClaudeSDK_Setup.md`.
 
 ## Tips
 

@@ -22,7 +22,6 @@ router = APIRouter(
 _WEB_SCRAPING_ENDPOINT_EXCEPTIONS = (
     AttributeError,
     ConnectionError,
-    HTTPException,
     KeyError,
     LookupError,
     OSError,
@@ -129,12 +128,7 @@ async def shutdown_scraping_service(
     Shutdown the web scraping service gracefully.
 
     This stops all workers and cleans up resources.
-    Admin only endpoint.
     """
-    # Check if user is admin (add your admin check logic)
-    # if not current_user.is_admin:
-    #     raise HTTPException(status_code=403, detail="Admin access required")
-
     try:
         service = get_web_scraping_service()
         await service.shutdown()

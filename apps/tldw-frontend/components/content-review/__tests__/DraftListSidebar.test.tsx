@@ -32,7 +32,7 @@ describe('DraftListSidebar', () => {
     expect(screen.getByText('Source missing')).toBeInTheDocument();
 
     const selected = screen.getByRole('button', { name: /Draft Two/i });
-    expect(selected).toHaveClass('border-blue-500');
+    expect(selected).toHaveClass('border-primary');
   });
 
   it('calls onSelect with the draft id', () => {

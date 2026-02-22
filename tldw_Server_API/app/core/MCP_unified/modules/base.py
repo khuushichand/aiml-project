@@ -107,11 +107,26 @@ class BaseModule(ABC):
         self._health = ModuleHealth(status=HealthStatus.UNKNOWN)
         self._metrics = ModuleMetrics()
 
-        # Circuit breaker state
-        self._circuit_breaker_failures = 0
-        self._circuit_breaker_open_until = None
-        self._circuit_breaker_half_open = False
-        self._cb_current_timeout = config.circuit_breaker_timeout
+        # Circuit breaker (unified)
+        from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+            CircuitBreaker as _UnifiedCB,
+        )
+        from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+            CircuitBreakerConfig as _CBCfg,
+        )
+        self._circuit_breaker = _UnifiedCB(
+            name=f"mcp_{config.name}",
+            config=_CBCfg(
+                failure_threshold=config.circuit_breaker_threshold,
+                recovery_timeout=float(config.circuit_breaker_timeout),
+                backoff_factor=config.circuit_breaker_backoff_factor,
+                max_recovery_timeout=float(config.circuit_breaker_max_timeout),
+                half_open_max_calls=1,
+                success_threshold=1,
+                category="mcp",
+                service=config.name,
+            ),
+        )
 
         # Initialization state
         self._initialized = False
@@ -244,103 +259,62 @@ class BaseModule(ABC):
         return self._health
 
     def is_circuit_breaker_open(self) -> bool:
-        """Check if circuit breaker is open"""
-        if self._circuit_breaker_open_until:
-            now = datetime.utcnow()
-            if now < self._circuit_breaker_open_until:
-                return True
-            # Move to half-open state after timeout expires
-            self._circuit_breaker_open_until = None
-            self._circuit_breaker_half_open = True
-        return False
+        """Check if circuit breaker is open."""
+        return not self._circuit_breaker.can_attempt()
 
     def record_circuit_breaker_failure(self):
-        """Record a failure for circuit breaker"""
-        self._circuit_breaker_failures += 1
-        # If we are in half-open state, immediately reopen with backoff
-        if self._circuit_breaker_half_open:
-            self._circuit_breaker_half_open = False
-            self._circuit_breaker_open_until = datetime.utcnow() + timedelta(seconds=self._cb_current_timeout)
-            # Exponential backoff for next open window
-            self._cb_current_timeout = min(
-                int(max(1, self._cb_current_timeout * self.config.circuit_breaker_backoff_factor)),
-                int(max(self.config.circuit_breaker_timeout, self.config.circuit_breaker_max_timeout))
-            )
-            logger.warning(
-                f"Half-open probe failed; circuit breaker re-opened for module {self.name} "
-                f"until {self._circuit_breaker_open_until} (next timeout={self._cb_current_timeout}s)"
-            )
-            return
-
-        if self._circuit_breaker_failures >= self.config.circuit_breaker_threshold:
-            # Open breaker for current timeout value
-            self._circuit_breaker_open_until = datetime.utcnow() + timedelta(seconds=self._cb_current_timeout)
-            # Increase next timeout with backoff
-            self._cb_current_timeout = min(
-                int(max(1, self._cb_current_timeout * self.config.circuit_breaker_backoff_factor)),
-                int(max(self.config.circuit_breaker_timeout, self.config.circuit_breaker_max_timeout))
-            )
-            logger.warning(
-                f"Circuit breaker opened for module {self.name} until {self._circuit_breaker_open_until} "
-                f"(next timeout={self._cb_current_timeout}s)"
-            )
+        """Record a failure for circuit breaker."""
+        self._circuit_breaker.record_failure()
 
     def record_circuit_breaker_success(self):
-        """Record a success for circuit breaker"""
-        # On success, clear half-open and gradually heal failures
-        if self._circuit_breaker_half_open:
-            self._circuit_breaker_half_open = False
-            self._circuit_breaker_failures = 0
-            # Reset backoff timeout to baseline
-            self._cb_current_timeout = self.config.circuit_breaker_timeout
-        elif self._circuit_breaker_failures > 0:
-            self._circuit_breaker_failures -= 1
+        """Record a success for circuit breaker."""
+        self._circuit_breaker.record_success()
 
     async def execute_with_circuit_breaker(self, operation, *args, **kwargs):
-        """Execute an operation with circuit breaker protection"""
-        if self.is_circuit_breaker_open():
-            raise Exception(f"Circuit breaker is open for module {self.name}")
-        start_time = time.time()
-        acquired = False
-        try:
-            # Concurrency guard
-            if self._semaphore is not None:
-                await self._semaphore.acquire()
-                acquired = True
-            # Execute with timeout
-            result = await asyncio.wait_for(
-                operation(*args, **kwargs),
-                timeout=self.config.timeout_seconds
-            )
+        """Execute an operation with circuit breaker protection.
 
-            # Record success
+        Delegates to the unified breaker's ``call_async`` for correct
+        half-open probe slot management and exception-type filtering.
+        The semaphore concurrency guard and timeout wrapping are applied
+        as an inner wrapper around the operation.
+        """
+        from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+            CircuitBreakerOpenError,
+        )
+        start_time = time.time()
+
+        async def _guarded_operation():
+            acquired = False
+            try:
+                if self._semaphore is not None:
+                    await self._semaphore.acquire()
+                    acquired = True
+                return await asyncio.wait_for(
+                    operation(*args, **kwargs),
+                    timeout=self.config.timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Operation timeout in module {self.name}")
+                raise Exception(f"Operation timeout after {self.config.timeout_seconds}s") from None
+            finally:
+                if acquired:
+                    with contextlib.suppress(Exception):
+                        self._semaphore.release()
+
+        try:
+            result = await self._circuit_breaker.call_async(_guarded_operation)
             latency_ms = (time.time() - start_time) * 1000
             self._metrics.record_request(True, latency_ms)
-            self.record_circuit_breaker_success()
-
             return result
 
-        except asyncio.TimeoutError:
-            # Record failure
-            latency_ms = (time.time() - start_time) * 1000
-            self._metrics.record_request(False, latency_ms)
-            self.record_circuit_breaker_failure()
-
-            logger.error(f"Operation timeout in module {self.name}")
-            raise Exception(f"Operation timeout after {self.config.timeout_seconds}s") from None
+        except CircuitBreakerOpenError:
+            raise
 
         except Exception as e:
-            # Record failure
             latency_ms = (time.time() - start_time) * 1000
             self._metrics.record_request(False, latency_ms)
-            self.record_circuit_breaker_failure()
-
             logger.error(f"Operation failed in module {self.name}: {str(e)}")
             raise
-        finally:
-            if acquired:
-                with contextlib.suppress(Exception):
-                    self._semaphore.release()
 
     async def get_tool_def(self, tool_name: str) -> Optional[dict[str, Any]]:
         """Return a single tool definition, using cached tool list if available."""
@@ -350,8 +324,8 @@ class BaseModule(ABC):
             for tool in self._tools_cache:
                 if isinstance(tool, dict) and tool.get("name") == tool_name:
                     return tool
-        except Exception:
-            pass
+        except Exception as tool_lookup_error:
+            logger.debug("MCP module tool cache lookup failed", exc_info=tool_lookup_error)
         return None
 
     def get_metrics(self) -> ModuleMetrics:

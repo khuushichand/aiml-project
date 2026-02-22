@@ -115,7 +115,7 @@ class AuthNZTestBase(unittest.TestCase):
                                     (user_id,)
                                 )
                         except Exception:
-                            pass  # User might already be deleted
+                            _ = None  # User might already be deleted
             except Exception as e:
                 print(f"Warning: Failed to clean up test users: {e}")
 
@@ -673,6 +673,24 @@ class TestAuthDatabaseConfigDetection(unittest.TestCase):
         db_config = config.get_config()
         self.assertEqual(db_config.backend_type, BackendType.SQLITE)
         self.assertEqual(db_config.sqlite_path, ":memory:")
+
+    def test_sqlite_relative_dot_path_resolves_under_cwd(self):
+
+        """sqlite:///./... should resolve to a repo-local absolute path."""
+        self._set_env("AUTH_MODE", "single_user")
+        self._set_env("DATABASE_URL", "sqlite:///./Databases/users_authnz_relative_fix.db")
+        self._set_env("TLDW_USER_DB_BACKEND", None)
+        reset_settings()
+
+        config = AuthDatabaseConfig()
+        config.reset()
+
+        db_config = config.get_config()
+        expected = str((Path.cwd() / "Databases" / "users_authnz_relative_fix.db").resolve())
+
+        self.assertEqual(db_config.backend_type, BackendType.SQLITE)
+        self.assertEqual(db_config.sqlite_path, expected)
+        self.assertFalse(db_config.sqlite_path.startswith("/Databases/"))
 
     def test_reset_reflects_updated_database_url(self):
 

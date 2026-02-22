@@ -19,8 +19,9 @@ def _apply_test_env_defaults() -> None:
     - MINIMAL_TEST_APP: enable minimal app configuration for tests
     - TEST_MODE: activate test mode behaviors
     - OTEL_SDK_DISABLED: disable OpenTelemetry instrumentation
-    - ROUTES_DISABLE: ensure "research" and "evaluations" are disabled and
-      remove "notes" if present (parsed from comma/space-delimited values)
+    - ROUTES_DISABLE: ensure "research" is disabled and remove "notes" if
+      present (parsed from comma/space-delimited values).  Must match
+      ``tests/conftest.py`` which only disables "research", NOT "evaluations".
     - ROUTES_ENABLE: ensure "workflows" and "scheduler" are enabled (parsed
       from comma/space-delimited values)
     """
@@ -31,10 +32,10 @@ def _apply_test_env_defaults() -> None:
     existing_disable = os.getenv("ROUTES_DISABLE", "")
     disable_parts = [p for p in existing_disable.replace(" ", ",").split(",") if p]
     disable_lower = {p.lower() for p in disable_parts}
-    for key in ("research", "evaluations"):
-        if key not in disable_lower:
-            disable_parts.append(key)
-            disable_lower.add(key)
+    # Only disable "research" to match tests/conftest.py behaviour.
+    if "research" not in disable_lower:
+        disable_parts.append("research")
+        disable_lower.add("research")
     disable_parts = [p for p in disable_parts if p.lower() != "notes"]
     os.environ["ROUTES_DISABLE"] = ",".join(dict.fromkeys(disable_parts))
     logger.debug("Set ROUTES_DISABLE={}", os.environ["ROUTES_DISABLE"])

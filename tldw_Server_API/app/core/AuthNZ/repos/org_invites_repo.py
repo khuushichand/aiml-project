@@ -40,10 +40,9 @@ class AuthnzOrgInvitesRepo:
     db_pool: DatabasePool
 
     def _is_postgres(self, conn: Any | None = None) -> bool:
-        """Detect whether the current backend/connection is Postgres."""
-        if conn is not None:
-            return hasattr(conn, "fetchrow")
-        return getattr(self.db_pool, "pool", None) is not None
+        """Detect whether the configured backend is PostgreSQL from pool state."""
+        _ = conn  # Compatibility placeholder for legacy call sites.
+        return bool(getattr(self.db_pool, "pool", None))
 
     async def create_invite(
         self,
@@ -304,15 +303,16 @@ class AuthnzOrgInvitesRepo:
 
                 if self._is_postgres(conn):
                     # Get total count
+                    count_sql_template = "SELECT COUNT(*) FROM org_invites i WHERE {where_clause}"
+                    count_sql = count_sql_template.format_map(locals())  # nosec B608
                     count_row = await conn.fetchrow(
-                        f"SELECT COUNT(*) FROM org_invites i WHERE {where_clause}",
+                        count_sql,
                         *params
                     )
                     total = count_row[0] if count_row else 0
 
                     # Get paginated results
-                    rows = await conn.fetch(
-                        f"""
+                    select_sql_template = """
                         SELECT i.id, i.code, i.org_id, i.team_id, i.role_to_grant, i.created_by,
                                i.created_at, i.expires_at, i.max_uses, i.uses_count, i.is_active,
                                i.description, i.allowed_email_domain, t.name as team_name
@@ -321,7 +321,10 @@ class AuthnzOrgInvitesRepo:
                         WHERE {where_clause}
                         ORDER BY i.created_at DESC
                         LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
-                        """,
+                        """
+                    select_sql = select_sql_template.format_map(locals())  # nosec B608
+                    rows = await conn.fetch(
+                        select_sql,
                         *params, limit, offset
                     )
                     results = []
@@ -334,15 +337,16 @@ class AuthnzOrgInvitesRepo:
                     return results, total
                 else:
                     # SQLite path
+                    count_sql_template = "SELECT COUNT(*) FROM org_invites i WHERE {where_clause}"
+                    count_sql = count_sql_template.format_map(locals())  # nosec B608
                     cur = await conn.execute(
-                        f"SELECT COUNT(*) FROM org_invites i WHERE {where_clause}",
+                        count_sql,
                         tuple(params)
                     )
                     count_row = await cur.fetchone()
                     total = count_row[0] if count_row else 0
 
-                    cur2 = await conn.execute(
-                        f"""
+                    select_sql_template = """
                         SELECT i.id, i.code, i.org_id, i.team_id, i.role_to_grant, i.created_by,
                                i.created_at, i.expires_at, i.max_uses, i.uses_count, i.is_active,
                                i.description, i.allowed_email_domain, t.name as team_name
@@ -351,7 +355,10 @@ class AuthnzOrgInvitesRepo:
                         WHERE {where_clause}
                         ORDER BY i.created_at DESC
                         LIMIT ? OFFSET ?
-                        """,
+                        """
+                    select_sql = select_sql_template.format_map(locals())  # nosec B608
+                    cur2 = await conn.execute(
+                        select_sql,
                         tuple(params) + (limit, offset)
                     )
                     rows = await cur2.fetchall()

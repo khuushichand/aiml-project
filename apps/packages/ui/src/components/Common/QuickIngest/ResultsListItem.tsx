@@ -101,17 +101,18 @@ export const ResultsListItem: React.FC<ResultsListItemProps> = React.memo(
           <div className="flex items-center gap-2">
             <Tag color={outcomeColor}>{outcomeLabel}</Tag>
             <span>{item.type.toUpperCase()}</span>
+            {item.title ? (
+              <span className="text-text-subtle ml-1 truncate max-w-[400px]" title={item.title}>
+                · {item.title}
+              </span>
+            ) : null}
+            {hasMediaId ? (
+              <span className="text-text-muted ml-1 whitespace-nowrap">(ID: {String(mediaId)})</span>
+            ) : null}
           </div>
           <div className="text-xs text-text-subtle break-all">
             {item.url || item.fileName}
           </div>
-          {hasMediaId ? (
-            <div className="text-[11px] text-text-subtle">
-              {t("quickIngest.savedAsMedia", "Saved as media {{id}}", {
-                id: String(mediaId)
-              })}
-            </div>
-          ) : null}
           {item.error ? (
             <div className="text-xs text-danger">{item.error}</div>
           ) : null}

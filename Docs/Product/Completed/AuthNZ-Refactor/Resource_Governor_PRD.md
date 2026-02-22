@@ -217,6 +217,7 @@ class ResourceGovernor:
   - `RG_TRUSTED_PROXIES`: Comma-separated CIDRs for trusted reverse proxies; when unset, IP scope uses the direct remote address only.
   - `RG_METRICS_ENTITY_LABEL`: `true|false` (default `false`). If true, include hashed entity label in metrics; otherwise exclude to avoid high cardinality.
   - `RG_POLICY_STORE`: `file` | `db` (default `file`). In production, prefer `db` and use AuthNZ DB as SoT; in dev, `file` + env overrides.
+  - `RG_ROUTE_MAP_AUDIT`: `true|false` (default `true`). When enabled, the startup audit in `main.py` logs warnings for any HTTP routes not covered by the RG route map (`by_path` or `by_tag`). This is a Phase 1 validation tool used to identify policy gaps before enabling enforcement. Warnings are logged at `WARNING` level with the uncovered route path and method.
   - Test‑harness flags (diagnostics only):
     - `RG_TEST_FORCE_STUB_RATE`: `true|false` forces in‑process sliding‑window logic for requests/tokens in Redis backend. Useful to make burst/steady tests deterministic when real Redis timing or clock skew affects retry_after near window boundaries.
     - `RG_TEST_PURGE_LEASES_BEFORE_RESERVE`: `true|false` best‑effort purge of expired leases before reserve in tests to reduce flakiness.
@@ -379,12 +380,17 @@ Phase 7 — Cleanup & removal
 ## Deletions / Consolidation Targets
 
 - Replace and then delete (or shim):
-  - `tldw_Server_API/app/core/Chat/rate_limiter.py`
-  - `tldw_Server_API/app/core/MCP_unified/auth/rate_limiter.py`
-  - `tldw_Server_API/app/core/Embeddings/rate_limiter.py`
-  - `tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py` (convert to façade)
-  - `tldw_Server_API/app/core/Usage/audio_quota.py` (concurrency + check plumbing via governor; keep minutes DB ledger implementation)
-  - Plus: `AuthNZ` limiter, `Evaluations` limiter, `Character_Chat` limiter, `Web_Scraping` limiters, and Embeddings server decorator limiter
+  - `tldw_Server_API/app/core/Chat/rate_limiter.py` — slim to minimal shim; legacy `ConversationRateLimiter` diagnostics-only
+  - `tldw_Server_API/app/core/MCP_unified/auth/rate_limiter.py` — already a thin RG façade
+  - `tldw_Server_API/app/core/Embeddings/rate_limiter.py` — slim `UserRateLimiter`/`AsyncRateLimiter` to RG-only delegation
+  - `tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py` — already deleted
+  - `tldw_Server_API/app/core/RateLimiting/Rate_Limit.py` — already deleted
+  - `tldw_Server_API/app/core/Usage/audio_quota.py` — concurrency via governor; keep minutes DB ledger
+  - `tldw_Server_API/app/core/AuthNZ/rate_limiter.py` — **lockout tracking must be extracted to a dedicated module first** (see "AuthNZ lockout conflation" risk). Rate-limiting methods are already no-ops; `check_rate_limit_fallback` can be deprecated once RG ingress coverage is validated.
+  - `tldw_Server_API/app/core/Evaluations/user_rate_limiter.py` — **not in original list but must be addressed**. Tier-based rate limiting (FREE/BASIC/PREMIUM/ENTERPRISE) with SQLite backend, daily caps, and cost tracking. RG handles evaluations/tokens daily caps; cost caps remain legacy-only until cost estimator exists.
+  - `tldw_Server_API/app/core/Character_Chat/character_rate_limiter.py` — slim to RG-only delegation
+  - `tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py` — internal limiter as RG safety rail
+  - `tldw_Server_API/app/core/Embeddings/Embeddings_Server/Embeddings_Create.py::TokenBucketLimiter` — inline class; slim to RG delegation or remove
 
 - Remove custom per-file env parsing once policy merges into shared config.
 
@@ -670,14 +676,74 @@ Notes:
 - Idempotency on retries → require `op_id` for reserve/commit/refund; operations are idempotent per `op_id` and handle.
 - Minutes ledger edge cases → split usage across UTC day boundaries; define rounding rules; restrict retroactive commits or require `occurred_at`.
 - Env flag drift → standardize on `TLDW_TEST_MODE`; `RG_TEST_BYPASS` only overrides governor behavior with documented precedence.
+- Redis outage in production → `fallback_memory` is the default fail mode; `fail_closed` deployments risk 429-blocking all users on Redis outage. Operators should monitor `rg_decisions_total{backend=fallback}` and have runbook for switching to `fail_open` or `fallback_memory`.
+- Policy misconfiguration → an overly restrictive policy update could 429-block all users. Mitigated by optimistic concurrency on admin API and hot-reload (bad policy revert). No automated rollback mechanism; operators must use admin API to fix.
+- Performance impact → middleware adds latency to every request. Implementation is best-effort (never blocks on middleware failure). Target: < 1ms p99 overhead for memory backend; < 5ms for Redis.
+- Data loss on legacy removal → legacy limiters maintain state (buckets, counters). Removing them mid-flight could cause burst traffic if RG state doesn't match. Mitigated by shadow-mode exit criteria requiring parity validation.
+- AuthNZ lockout conflation → `AuthNZ/rate_limiter.py` contains account lockout tracking (brute-force protection) that is NOT rate limiting. Must be extracted to a dedicated module before legacy limiter can be retired.
 
-## Open Questions
+## Open Questions (Resolved)
 
-- Minutes generalization: the shared `ResourceDailyLedger` DAL now acts as the source of truth for audio minutes (with `audio_usage_daily` retained only as a compatibility/fallback ledger); v1.1 work focuses on extending the same ledger patterns to other daily quotas (for example, tokens-per-day, evaluations, or watchlists).
-- Cross-category budgets: do we want a global “cost units” budget that maps tokens/requests/minutes into a unified spend, and if so, which categories should feed into that budget in v1.1 (versus analytics-only usage)?
-- Tier/source of truth: adopt AuthNZ DB as the policy SoT in production with cache + hot-reload; keep env+YAML as dev overrides.
-- Multi-tenant isolation: do we introduce `tenant:{id}` as a first-class scope now?
+- **Minutes generalization** (Resolved v1.1): The shared `ResourceDailyLedger` DAL is the source of truth for audio minutes, tokens-per-day, evaluations-per-day, and workflows-runs-per-day. Legacy `audio_usage_daily` and `daily_usage` tables are retained only for cost tracking and upgrade backfill.
+- **Cross-category budgets** (Resolved v1.1): `cost_units.py` provides analytics-only cost-unit conversion mapping tokens/requests/minutes into a unified spend metric. Enforcement via cost budgets is deferred; the Evaluations module's `max_cost_per_day`/`max_cost_per_month` caps remain legacy-only until a stable cost estimator exists. Unified eval endpoints pass `estimated_cost=0.0`.
+- **Tier/source of truth** (Resolved v1.0): AuthNZ DB is the policy SoT in production via `RG_POLICY_STORE=db` with `AuthNZPolicyStore` + cache + hot-reload. Env + YAML are dev overrides. Precedence: DB → env → YAML → defaults.
+- **Multi-tenant isolation** (Resolved v1.0): `tenant:{id}` is a first-class scope in `tenant.py` with entity hashing for metrics. Policies can include `tenant` in their `scopes` list.
+- **Auth endpoint entity** (Resolved v1.0): The middleware uses `client_ip` as fallback entity when no auth context exists. Auth endpoints have dedicated policies (`authnz.default`, `authnz.forgot_password`, etc.) scoped to `[global, ip]`.
+- **Background worker limits** (Resolved v1.1): `Evaluations/user_rate_limiter.py` enforces RG limits on evaluation jobs (which can be background tasks). Workflow runs use RG `workflows_runs` daily caps. Audio stream/job concurrency is governor-backed.
 
+## Shadow-Mode Exit Criteria
+
+Before removing a legacy limiter (Phase 7 / retirement checklist), the following criteria must be met:
+
+1. **Coverage**: The route is mapped in `route_map` and enforced by `RGSimpleMiddleware` for `requests`. Endpoint-level reserve/commit covers `tokens`, `evaluations`, or other applicable categories.
+2. **Parity duration**: Shadow mismatches (`rg_shadow_decision_mismatch_total{module=...}`) are near-zero for at least one stable release (minimum 7 days under representative load).
+3. **Header compatibility**: 429 `Retry-After` and `X-RateLimit-*` headers match legacy semantics in both memory and Redis backends, validated by E2E tests.
+4. **Fail-mode validation**: `fail_open`, `fail_closed`, and `fallback_memory` behaviors are tested for the module.
+5. **Decision owner**: The module's tech lead or the RG owner signs off on the cutover.
+
+If mismatch rate exceeds 1% of total decisions for > 24 hours, investigate and resolve before proceeding with legacy removal.
+
+### Shadow Monitoring Tooling (Post-v1.1 Gap)
+
+The exit criteria above require "near-zero mismatches for >= 7 days under representative load", but no automated monitoring or alerting infrastructure currently exists to track this. The `rg_shadow_decision_mismatch_total` metric is emitted and unit-tested (counter increments are validated), but operators must manually query it. To close this gap:
+
+- **Minimum**: Add a Prometheus/Grafana alert rule that fires when `rate(rg_shadow_decision_mismatch_total[1h])` exceeds a configurable threshold (e.g., 1% of `rate(rg_decisions_total[1h])`) for any module label, sustained for > 1 hour.
+- **Recommended**: Create a dashboard panel per module showing the 7-day rolling mismatch rate alongside total RG decisions, with a visual marker at the 1% threshold.
+- **Stretch**: Add a `/api/v1/resource-governor/shadow-status` endpoint that returns per-module mismatch counts and a boolean `ready_for_cutover` flag based on the 7-day criteria.
+
+Until this tooling exists, operators should periodically query the mismatch metric manually before approving legacy limiter retirement.
+
+## Backward Compatibility for API Consumers
+
+- **429 response payloads**: RG-generated 429 responses include `{"error": "...", "retry_after": N, "policy_id": "..."}`. Legacy 429 payloads varied per module. During migration, modules preserve their existing error message format and add `rate_limit_source: "resource_governor"` as a discriminator.
+- **HTTP headers**: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `Retry-After` are emitted by `RGSimpleMiddleware` on all governed routes. Legacy headers (`X-RateLimit-Tier`, `X-RateLimit-Daily-*`, `X-RateLimit-Tokens-Remaining`, `X-RateLimit-Cost-Remaining`) are module-specific and only emitted by legacy code paths. Clients relying on module-specific headers should transition to the standard set.
+- **Breaking changes**: No 429 format regressions on governed routes. Legacy-format headers are emitted only on legacy code paths (RG disabled). This is a clean break for new deployments; existing deployments with `RG_ENABLED=false` retain full legacy behavior.
+
+## Additional Implementation Scope (Not in Original PRD)
+
+The following subsystems were built as part of the RG implementation but are not described above in the original PRD sections:
+
+- **Daily caps and ledger** (`daily_caps.py`, `ResourceDailyLedger`): Per-day enforcement for audio minutes, tokens, evaluations, and workflow runs.
+- **Cost units** (`cost_units.py`): Cross-category budget analytics mapping (not enforcement).
+- **Fail modes**: `fail_open`, `fail_closed`, `fallback_memory` per-policy and globally via `RG_REDIS_FAIL_MODE`.
+- **Tenant scoping** (`tenant.py`): Multi-tenant entity hashing for metrics cardinality control.
+- **Redis backend with Lua scripts** (`governor_redis.py`): Atomic multi-category reservations, ZSET-based leases, acceptance-window tracking.
+- **Policy admin API** (`policy_admin.py`): CRUD endpoints with optimistic concurrency via version field.
+- **Hot-reload** (`policy_loader.py`): File watcher and DB TTL-based cache refresh.
+- **Auth startup guards**: RG policies enforced in production via middleware auto-attachment.
+- **DB-backed policy store** (`authnz_policy_store.py`): PostgreSQL/SQLite policy store as alternative to YAML.
+- **Evaluations user rate limiter** (`user_rate_limiter.py`): Tier-based (FREE/BASIC/PREMIUM/ENTERPRISE/CUSTOM) rate limiting with SQLite backend, daily caps, cost tracking, and RG integration. This is a consolidation target alongside the other legacy limiters.
+
+### Cost Enforcement Timeline (Post-v1.1)
+
+Cost-unit enforcement via RG is currently deferred. The `cost_units.py` module provides analytics-only conversion mappings, and the Evaluations module's `max_cost_per_day` / `max_cost_per_month` caps remain legacy-only (unified eval endpoints pass `estimated_cost=0.0`). To move cost enforcement into RG:
+
+1. **Prerequisite**: A stable, per-provider cost estimator that can convert token counts and model IDs to cost units with acceptable accuracy. This does not exist today.
+2. **Implementation path**: Introduce an RG category (e.g., `cost_units`) with a daily ledger, similar to the existing `tokens` daily cap. The `cost_units.py` mapping would feed the estimator.
+3. **Migration**: Replace `max_cost_per_day` / `max_cost_per_month` in `Evaluations/user_rate_limiter.py` with RG daily-ledger-backed cost caps. The legacy SQLite `daily_usage` table would be retained for backfill during upgrade.
+4. **Decision needed**: Whether cost enforcement should be per-module (evals only) or cross-module (all LLM calls). Cross-module requires a unified cost tracking surface that does not yet exist.
+
+Until a cost estimator is available, treat cost caps as deprecated/legacy-only. No timeline is currently set for this work.
 
 ## Acceptance Criteria
 
@@ -726,6 +792,14 @@ Notes:
 - Web Scraping:
   - The enhanced web scraping `RateLimiter.acquire` in `tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py` consults the ResourceGovernor when global RG is enabled, reserving `RGRequest(entity="service:web_scraping", categories={"requests": {"units": 1}})` against a `web_scraping.default` (or overridden) policy; RG denials are modeled as backoff sleeps (`retry_after` seconds) rather than HTTP 429s, after which the in-memory per-second/minute/hour limits continue to apply.
   - The RG integration is validated by `test_rg_cutover_evals_authnz_character_web.py::test_web_scraping_rg_denies`, which asserts correct `entity`, `categories`, and tags for RG reservations while leaving the existing HTTP semantics of the research/web scraping endpoints unchanged.
+- Watchlists:
+  - Ingress enforcement is handled by `RGSimpleMiddleware` via `route_map.by_path` for `/api/v1/watchlists/*` and `by_tag` for `watchlists`, resolving to the `watchlists.default` policy (60 RPM, burst 1.0, scopes `[user, api_key, ip]`). The `ip` scope provides per-client throttling when API keys are shared.
+  - The `Watchlists/pipeline.py` module does not use RG directly; enforcement is purely at the endpoint/ingress level. Job run execution applies `rbac_rate_limit("watchlists.run")` from `auth_deps`.
+  - No legacy rate limiter exists for watchlists; RG is the sole enforcement path.
+- Prompt Studio:
+  - Ingress enforcement is handled by `RGSimpleMiddleware` via `route_map.by_path` for `/api/v1/prompt-studio*` and `/api/v1/prompts*`, and `by_tag` for `prompt-studio` and `prompts`, resolving to the `prompt_studio.default` policy (300 RPM, burst 2.0, scopes `[user, api_key]`). The high RPM is intentional so that most safety/abuse controls are handled by AuthNZ per-operation limits rather than RG.
+  - `prompt_studio_deps.py` implements a hybrid approach: when `rg_policy_id` is set by middleware (indicating RG ingress enforcement), the per-operation legacy limiter is bypassed to avoid double-enforcement. When RG is unavailable, per-operation AuthNZ fallback limits apply (e.g., `create_project: 10`, `optimize: 5`, `evaluate: 20`, `generate: 30`, `default: 100` RPM).
+  - Rate limiting is controlled by `PROMPT_STUDIO_ENABLE_RATE_LIMITING` (defaults to `True`).
 
 ## Appendix — Mapping table (initial examples)
 
@@ -752,6 +826,14 @@ Notes:
 - Evaluations/AuthNZ/Character Chat/Web Scraping
   - Before: bespoke.
   - After: move to governor with appropriate categories; keep per-feature knobs as policy inputs.
+
+- Watchlists
+  - Before: no dedicated rate limiter.
+  - After: `requests` via ingress middleware (`watchlists.default`, 60 RPM, scopes `[user, api_key, ip]`). RG is the sole enforcement path.
+
+- Prompt Studio
+  - Before: per-operation AuthNZ limits (`create_project: 10`, `optimize: 5`, `evaluate: 20`, `generate: 30`).
+  - After: `requests` via ingress middleware (`prompt_studio.default`, 300 RPM); per-operation AuthNZ fallback when RG unavailable.
 
 ## Implementation Plan (v1 Roadmap)
 

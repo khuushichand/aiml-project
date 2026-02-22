@@ -4,10 +4,11 @@ import asyncio
 import os
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 def _is_truthy(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(str(value or "").strip().lower())
 
 
 async def run_loop_lag_watchdog(stop_event: asyncio.Event | None = None) -> None:

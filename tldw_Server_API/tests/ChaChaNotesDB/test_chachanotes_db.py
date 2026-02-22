@@ -66,7 +66,7 @@ def db_instance(db_path, client_id):  # Add db_path and tmp_path back
                     try:
                         p.unlink(missing_ok=True)
                     except Exception:
-                        pass
+                        _ = None
 
 
 @pytest.fixture
@@ -272,6 +272,165 @@ class TestMessageMetadata:
         assert sorted_cards[0]["name"] == card_data1["name"]
         assert sorted_cards[1]["name"] == card_data2["name"]
 
+    def test_query_character_cards_filters_and_total(self, db_instance: CharactersRAGDB):
+        card_a = _create_sample_card_data("QueryA")
+        card_a["creator"] = "alpha"
+        card_a["tags"] = json.dumps(["common", "writer"])
+        card_b = _create_sample_card_data("QueryB")
+        card_b["creator"] = "beta"
+        card_b["tags"] = json.dumps(["common", "code"])
+        card_c = _create_sample_card_data("QueryC")
+        card_c["creator"] = "alpha"
+        card_c["tags"] = json.dumps(["research"])
+
+        card_a_id = db_instance.add_character_card(card_a)
+        card_b_id = db_instance.add_character_card(card_b)
+        card_c_id = db_instance.add_character_card(card_c)
+        assert card_a_id is not None
+        assert card_b_id is not None
+        assert card_c_id is not None
+
+        conv_id = db_instance.add_conversation(
+            {"character_id": card_a_id, "title": f"query-conv-{uuid.uuid4().hex[:4]}"}
+        )
+        assert conv_id is not None
+
+        creator_items, creator_total = db_instance.query_character_cards(
+            creator="alpha",
+            sort_by="name",
+            sort_order="asc",
+            limit=10,
+            offset=0,
+        )
+        creator_names = {item["name"] for item in creator_items}
+        assert creator_total >= 2
+        assert card_a["name"] in creator_names
+        assert card_c["name"] in creator_names
+        assert card_b["name"] not in creator_names
+
+        tag_items, _ = db_instance.query_character_cards(
+            tags=["common"],
+            match_all_tags=False,
+            sort_by="name",
+            sort_order="asc",
+            limit=10,
+            offset=0,
+        )
+        tag_names = {item["name"] for item in tag_items}
+        assert card_a["name"] in tag_names
+        assert card_b["name"] in tag_names
+        assert card_c["name"] not in tag_names
+
+        with_conv_items, _ = db_instance.query_character_cards(
+            has_conversations=True,
+            sort_by="name",
+            sort_order="asc",
+            limit=20,
+            offset=0,
+        )
+        with_conv_ids = {item["id"] for item in with_conv_items}
+        assert card_a_id in with_conv_ids
+        assert card_b_id not in with_conv_ids
+        assert card_c_id not in with_conv_ids
+
+        card_b_record = db_instance.get_character_card_by_id(card_b_id)
+        assert card_b_record is not None
+        soft_deleted = db_instance.soft_delete_character_card(
+            card_b_id,
+            int(card_b_record["version"])
+        )
+        assert soft_deleted is True
+
+        deleted_only_items, deleted_only_total = db_instance.query_character_cards(
+            deleted_only=True,
+            sort_by="name",
+            sort_order="asc",
+            limit=20,
+            offset=0,
+        )
+        deleted_only_ids = {item["id"] for item in deleted_only_items}
+        assert deleted_only_total >= 1
+        assert card_b_id in deleted_only_ids
+        assert card_a_id not in deleted_only_ids
+        assert card_c_id not in deleted_only_ids
+
+    def test_manage_character_tags_rename_merge_delete(self, db_instance: CharactersRAGDB):
+        rename_a = _create_sample_card_data("TagRenameA")
+        rename_a["tags"] = json.dumps(["legacy", "shared"])
+        rename_b = _create_sample_card_data("TagRenameB")
+        rename_b["tags"] = json.dumps(["legacy"])
+        rename_c = _create_sample_card_data("TagRenameC")
+        rename_c["tags"] = json.dumps(["shared"])
+
+        rename_a_id = db_instance.add_character_card(rename_a)
+        rename_b_id = db_instance.add_character_card(rename_b)
+        rename_c_id = db_instance.add_character_card(rename_c)
+        assert rename_a_id is not None
+        assert rename_b_id is not None
+        assert rename_c_id is not None
+
+        rename_result = db_instance.manage_character_tags(
+            operation="rename",
+            source_tag="legacy",
+            target_tag="modern",
+        )
+        assert rename_result["matched_count"] == 2
+        assert rename_result["updated_count"] == 2
+        assert rename_result["failed_count"] == 0
+        assert set(rename_result["updated_character_ids"]) == {rename_a_id, rename_b_id}
+
+        renamed_a = db_instance.get_character_card_by_id(rename_a_id)
+        renamed_b = db_instance.get_character_card_by_id(rename_b_id)
+        renamed_c = db_instance.get_character_card_by_id(rename_c_id)
+        assert renamed_a is not None
+        assert renamed_b is not None
+        assert renamed_c is not None
+        assert renamed_a["tags"] == ["modern", "shared"]
+        assert renamed_b["tags"] == ["modern"]
+        assert renamed_c["tags"] == ["shared"]
+
+        merge_result = db_instance.manage_character_tags(
+            operation="merge",
+            source_tag="modern",
+            target_tag="shared",
+        )
+        assert merge_result["matched_count"] == 2
+        assert merge_result["updated_count"] == 2
+        assert merge_result["failed_count"] == 0
+
+        merged_a = db_instance.get_character_card_by_id(rename_a_id)
+        merged_b = db_instance.get_character_card_by_id(rename_b_id)
+        assert merged_a is not None
+        assert merged_b is not None
+        assert merged_a["tags"] == ["shared"]
+        assert merged_b["tags"] == ["shared"]
+
+        delete_result = db_instance.manage_character_tags(
+            operation="delete",
+            source_tag="shared",
+        )
+        assert delete_result["matched_count"] >= 3
+        assert delete_result["updated_count"] >= 3
+        assert delete_result["failed_count"] == 0
+
+        deleted_a = db_instance.get_character_card_by_id(rename_a_id)
+        deleted_b = db_instance.get_character_card_by_id(rename_b_id)
+        deleted_c = db_instance.get_character_card_by_id(rename_c_id)
+        assert deleted_a is not None
+        assert deleted_b is not None
+        assert deleted_c is not None
+        assert deleted_a["tags"] == []
+        assert deleted_b["tags"] == []
+        assert deleted_c["tags"] == []
+
+    def test_manage_character_tags_requires_target_for_rename(self, db_instance: CharactersRAGDB):
+        with pytest.raises(InputError, match="target_tag is required"):
+            db_instance.manage_character_tags(
+                operation="rename",
+                source_tag="legacy",
+                target_tag="",
+            )
+
     def test_update_character_card(self, db_instance: CharactersRAGDB):
         card_data_initial = _create_sample_card_data("Update")
         card_id = db_instance.add_character_card(card_data_initial)
@@ -379,6 +538,42 @@ class TestMessageMetadata:
         # with its *current correct version* should also succeed.
         current_version_of_deleted_card = raw_retrieved_after_first_delete['version']  # This is 2
         assert db_instance.soft_delete_character_card(card_id, expected_version=current_version_of_deleted_card) is True
+
+    def test_restore_character_card_conflict_then_success(self, db_instance: CharactersRAGDB):
+        card_data = _create_sample_card_data("Restore")
+        card_id = db_instance.add_character_card(card_data)
+        assert card_id is not None
+
+        original = db_instance.get_character_card_by_id(card_id)
+        assert original is not None
+        original_version = int(original["version"])
+
+        deleted = db_instance.soft_delete_character_card(card_id, expected_version=original_version)
+        assert deleted is True
+
+        conn = db_instance.get_connection()
+        deleted_row = conn.execute(
+            "SELECT deleted, version FROM character_cards WHERE id = ?",
+            (card_id,),
+        ).fetchone()
+        assert deleted_row is not None
+        assert int(deleted_row["deleted"]) == 1
+        deleted_version = int(deleted_row["version"])
+        assert deleted_version == original_version + 1
+
+        with pytest.raises(ConflictError, match="version mismatch"):
+            db_instance.restore_character_card(card_id, expected_version=original_version)
+
+        restored = db_instance.restore_character_card(card_id, expected_version=deleted_version)
+        assert restored is True
+
+        restored_row = conn.execute(
+            "SELECT deleted, version FROM character_cards WHERE id = ?",
+            (card_id,),
+        ).fetchone()
+        assert restored_row is not None
+        assert int(restored_row["deleted"]) == 0
+        assert int(restored_row["version"]) == deleted_version + 1
 
     def test_search_character_cards(self, db_instance: CharactersRAGDB):
         card1_data = _create_sample_card_data("Searchable Alpha")

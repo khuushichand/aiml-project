@@ -20,6 +20,13 @@ from tldw_Server_API.app.services.workflows_scheduler import get_workflows_sched
 
 router = APIRouter(prefix="/api/v1/scheduler/workflows", tags=["scheduler", "workflows"])
 
+_ADMIN_RESCAN_SCOPE_DEP = require_token_scope(
+    "workflows",
+    require_if_present=True,
+    endpoint_id="scheduler.workflows.admin_rescan",
+)
+_ADMIN_RESCAN_PERMISSIONS_DEP = require_permissions(WORKFLOWS_ADMIN)
+
 
 class ScheduleCreateRequest(BaseModel):
     workflow_id: int | None = Field(None, description="Saved workflow ID; optional if definition snapshot is used")
@@ -83,6 +90,38 @@ class ScheduleResponse(BaseModel):
     last_status: str | None
 
 
+def _normalize_claim_values(raw: Any) -> list[str]:
+    values = raw if isinstance(raw, (list, tuple, set)) else ([raw] if raw is not None else [])
+    out: list[str] = []
+    for value in values:
+        text = str(value).strip().lower()
+        if text:
+            out.append(text)
+    return out
+
+
+def _is_scheduler_admin_user(current_user: User) -> bool:
+    """
+    Resolve scheduler admin authorization from explicit role/permission claims.
+
+    Legacy profile booleans/columns like ``is_admin`` are intentionally not
+    trusted for cross-user scheduler authorization paths.
+    """
+    try:
+        if "admin" in _normalize_claim_values(getattr(current_user, "roles", [])):
+            return True
+        permission_values = _normalize_claim_values(getattr(current_user, "permissions", []))
+        if WORKFLOWS_ADMIN.lower() in permission_values:
+            return True
+        if "*" in permission_values:
+            return True
+        if "system.configure" in permission_values:
+            return True
+    except Exception:
+        return False
+    return False
+
+
 @router.post(
     "",
     response_model=dict[str, str],
@@ -120,14 +159,8 @@ async def create_schedule(
     response_model=dict[str, Any],
     status_code=200,
     dependencies=[
-        Depends(
-            require_token_scope(
-                "workflows",
-                require_if_present=True,
-                endpoint_id="scheduler.workflows.admin_rescan",
-            )
-        ),
-        Depends(require_permissions(WORKFLOWS_ADMIN)),
+        Depends(_ADMIN_RESCAN_SCOPE_DEP),
+        Depends(_ADMIN_RESCAN_PERMISSIONS_DEP),
     ],
 )
 async def admin_rescan(
@@ -149,8 +182,8 @@ async def admin_rescan(
     jobs = 0
     try:
         jobs = len(svc._aps.get_jobs()) if getattr(svc, "_aps", None) else 0  # type: ignore[attr-defined]
-    except Exception:
-        pass
+    except Exception as jobs_count_error:
+        logger.debug("Failed to collect APScheduler job count after admin rescan", exc_info=jobs_count_error)
     return {"ok": True, "jobs": jobs}
 
 
@@ -167,7 +200,7 @@ async def list_schedules(
 ):
     svc = get_workflows_scheduler()
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     user_filter: str | None = None
     if owner:
         if not is_admin:
@@ -221,7 +254,7 @@ async def get_schedule(
     s = svc.get(schedule_id)
     if not s:
         raise HTTPException(status_code=404, detail="Not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
     import json
@@ -237,12 +270,12 @@ async def get_schedule(
             if nxt is not None:
                 try:
                     svc._get_db(int(s.user_id)).set_history(s.id, next_run_at=nxt.isoformat())  # type: ignore[attr-defined]
-                except Exception:
-                    pass
+                except Exception as persist_next_run_error:
+                    logger.debug("Failed to persist computed next_run_at for schedule {}", s.id, exc_info=persist_next_run_error)
                 # Refresh s to reflect persisted value
                 s = svc.get(schedule_id) or s
-        except Exception:
-            pass
+        except Exception as cron_parse_error:
+            logger.debug("Failed to compute next_run_at from crontab for schedule {}", s.id, exc_info=cron_parse_error)
     try:
         inputs = json.loads(s.inputs_json or "{}")
     except Exception:
@@ -283,7 +316,7 @@ async def update_schedule(
     s = svc.get(schedule_id)
     if not s:
         raise HTTPException(status_code=404, detail="Not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
     update: dict[str, Any] = {}
@@ -327,7 +360,7 @@ async def delete_schedule(
     s = svc.get(schedule_id)
     if not s:
         return {"ok": False}
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
     ok = svc.delete(schedule_id)
@@ -347,7 +380,7 @@ async def run_now(
     s = svc.get(schedule_id)
     if not s:
         raise HTTPException(status_code=404, detail="Not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
     # Submit immediate job to core Scheduler

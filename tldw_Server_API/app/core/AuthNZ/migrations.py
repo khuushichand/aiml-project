@@ -15,6 +15,8 @@ from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.DB_Management.migrations import Migration, MigrationManager
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+from tldw_Server_API.app.core.testing import is_truthy as _is_truthy
 
 _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -597,8 +599,8 @@ def migration_013_create_rbac_limits_and_usage(conn: sqlite3.Connection) -> None
     try:
         import os as _os
         _relax_fk = (
-            _os.getenv("DISABLE_USAGE_FOREIGN_KEYS", "").lower() in {"1", "true", "yes", "on"}
-            or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            _is_truthy(_os.getenv("DISABLE_USAGE_FOREIGN_KEYS", ""))
+            or _is_test_mode()
             or _os.getenv("PYTEST_CURRENT_TEST") is not None
         )
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
@@ -729,7 +731,9 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
 
     # Helper: get id by name
     def _id(table: str, key: str) -> int:
-        cur = conn.execute(f"SELECT id FROM {table} WHERE name = ?", (key,))
+        lookup_sql_template = "SELECT id FROM {table} WHERE name = ?"
+        lookup_sql = lookup_sql_template.format_map(locals())  # nosec B608
+        cur = conn.execute(lookup_sql, (key,))
         row = cur.fetchone()
         return row[0] if row else None
 
@@ -791,8 +795,8 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
     try:
         import os as _os
         _relax_fk = (
-            _os.getenv("DISABLE_USAGE_FOREIGN_KEYS", "").lower() in {"1", "true", "yes", "on"}
-            or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            _is_truthy(_os.getenv("DISABLE_USAGE_FOREIGN_KEYS", ""))
+            or _is_test_mode()
             or _os.getenv("PYTEST_CURRENT_TEST") is not None
         )
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
@@ -1269,6 +1273,68 @@ def migration_052_create_org_team_role_permissions(conn: sqlite3.Connection) -> 
 
     conn.commit()
     logger.info("Migration 052: Created org/team role permission tables and seeded defaults")
+
+
+def migration_053_create_byok_oauth_state(conn: sqlite3.Connection) -> None:
+    """Create byok_oauth_state table for BYOK OAuth authorize/callback state."""
+    logger.info("Migration 053: START byok_oauth_state table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS byok_oauth_state (
+            state TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            auth_session_id TEXT NOT NULL,
+            redirect_uri TEXT NOT NULL,
+            pkce_verifier_encrypted TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            consumed_at TIMESTAMP,
+            return_path TEXT,
+            PRIMARY KEY (state, user_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(byok_oauth_state)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE byok_oauth_state ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("provider", "provider TEXT")
+        add_col("auth_session_id", "auth_session_id TEXT")
+        add_col("redirect_uri", "redirect_uri TEXT")
+        add_col("pkce_verifier_encrypted", "pkce_verifier_encrypted TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("expires_at", "expires_at TIMESTAMP")
+        add_col("consumed_at", "consumed_at TIMESTAMP")
+        add_col("return_path", "return_path TEXT")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_oauth_state_provider_expires "
+        "ON byok_oauth_state(provider, expires_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_oauth_state_user_provider_consumed "
+        "ON byok_oauth_state(user_id, provider, consumed_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 053: Created byok_oauth_state table")
+
+
+def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
+    """Rollback migration 053 by dropping the byok_oauth_state table."""
+    conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
+    conn.commit()
+    logger.info("Rollback 053: Dropped byok_oauth_state table")
 
 
 def rollback_051_drop_storage_quotas_table(conn: sqlite3.Connection) -> None:
@@ -2105,7 +2171,7 @@ def migration_039_ensure_user_storage_columns(conn: sqlite3.Connection) -> None:
         conn.commit()
         logger.info("Migration 039: storage columns ensured on users table")
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error("Migration 039: failed to ensure storage columns: %s", exc)
+        logger.error("Migration 039: failed to ensure storage columns: {}", exc)
         raise
 
 
@@ -2165,7 +2231,7 @@ def migration_046_add_org_invite_allowlist_domain(conn: sqlite3.Connection) -> N
         conn.commit()
         logger.info("Migration 046: org_invites allowlist domain ensured")
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error("Migration 046: failed to add org_invites allowlist domain: %s", exc)
+        logger.error("Migration 046: failed to add org_invites allowlist domain: {}", exc)
         raise
 
 
@@ -2680,6 +2746,12 @@ def get_authnz_migrations() -> list[Migration]:
             52,
             "Create org/team role permission tables",
             migration_052_create_org_team_role_permissions,
+        ),
+        Migration(
+            53,
+            "Create BYOK OAuth state table",
+            migration_053_create_byok_oauth_state,
+            rollback_053_drop_byok_oauth_state,
         ),
     ]
 

@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import { launchWithExtension } from "./utils/extension"
 import { waitForConnectionStore, forceConnected } from "./utils/connection"
 
@@ -43,7 +44,7 @@ test.describe("Main + Sidepanel Regression", () => {
       process.env.TLDW_E2E_SERVER_URL || "http://127.0.0.1:8000"
     )
 
-    const { context, page, openSidepanel } = await launchWithExtension("", {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, "", {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true,

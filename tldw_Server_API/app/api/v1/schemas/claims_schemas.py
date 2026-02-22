@@ -23,6 +23,20 @@ class ClaimsSettingsResponse(BaseModel):
     claims_llm_provider: str = Field(..., description="LLM provider for claim extraction.")
     claims_llm_temperature: float = Field(..., description="LLM temperature for claim extraction.")
     claims_llm_model: str = Field(..., description="LLM model for claim extraction.")
+    claims_json_parse_mode: Literal["lenient", "strict"] = Field(
+        ...,
+        description="JSON parsing strictness for LLM claim outputs.",
+    )
+    claims_alignment_mode: Literal["off", "exact", "fuzzy"] = Field(
+        ...,
+        description="Span alignment mode for extracted claims.",
+    )
+    claims_alignment_threshold: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Fuzzy alignment threshold for extracted claim spans.",
+    )
     claims_rebuild_enabled: bool = Field(..., description="Enable periodic claims rebuild worker.")
     claims_rebuild_interval_sec: int = Field(..., description="Claims rebuild loop interval in seconds.")
     claims_rebuild_policy: str = Field(..., description="Claims rebuild policy.")
@@ -45,6 +59,9 @@ class ClaimsSettingsUpdate(BaseModel):
     claims_llm_provider: str | None = Field(default=None)
     claims_llm_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     claims_llm_model: str | None = Field(default=None)
+    claims_json_parse_mode: Literal["lenient", "strict"] | None = Field(default=None)
+    claims_alignment_mode: Literal["off", "exact", "fuzzy"] | None = Field(default=None)
+    claims_alignment_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     claims_rebuild_enabled: bool | None = Field(default=None)
     claims_rebuild_interval_sec: int | None = Field(default=None, ge=60, le=604800)
     claims_rebuild_policy: str | None = Field(default=None)

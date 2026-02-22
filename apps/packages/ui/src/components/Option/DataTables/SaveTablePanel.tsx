@@ -122,7 +122,7 @@ export const SaveTablePanel: React.FC = () => {
     return (
       <Alert
         type="warning"
-        message={t("dataTables:noTableToSave", "No table to save")}
+        title={t("dataTables:noTableToSave", "No table to save")}
         description={t(
           "dataTables:goBackToGenerate",
           "Go back to the previous step to generate a table first."
@@ -136,7 +136,7 @@ export const SaveTablePanel: React.FC = () => {
   if (saved) {
     return (
       <Result
-        icon={<CheckCircle className="h-16 w-16 text-green-500 mx-auto" />}
+        icon={<CheckCircle className="h-16 w-16 text-success mx-auto" />}
         title={t("dataTables:tableSaved", "Table Saved!")}
         subTitle={t(
           "dataTables:tableSavedDesc",
@@ -165,14 +165,14 @@ export const SaveTablePanel: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Table summary */}
-      <Card className="bg-zinc-50 dark:bg-zinc-800">
+      <Card className="bg-surface">
         <div className="flex items-start gap-4">
-          <Table2 className="h-10 w-10 text-blue-500 flex-shrink-0" />
+          <Table2 className="h-10 w-10 text-primary flex-shrink-0" />
           <div className="flex-1">
-            <h4 className="font-medium text-zinc-900 dark:text-zinc-100">
+            <h4 className="font-medium text-text">
               {t("dataTables:tableSummary", "Table Summary")}
             </h4>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+            <p className="text-sm text-text-muted mt-1">
               {generatedTable.row_count || generatedTable.rows?.length || 0}{" "}
               {t("dataTables:rows", "rows")} &bull;{" "}
               {generatedTable.columns?.length || 0}{" "}
@@ -187,7 +187,7 @@ export const SaveTablePanel: React.FC = () => {
       {/* Name and description */}
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+          <label className="block text-sm font-medium text-text mb-2">
             {t("dataTables:tableName", "Table Name")}
           </label>
           <Input
@@ -199,7 +199,7 @@ export const SaveTablePanel: React.FC = () => {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+          <label className="block text-sm font-medium text-text mb-2">
             {t("dataTables:tableDescription", "Description (optional)")}
           </label>
           <TextArea
@@ -228,7 +228,7 @@ export const SaveTablePanel: React.FC = () => {
 
         {/* Export options */}
         <div>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-2">
+          <p className="text-sm text-text-muted mb-2">
             {t("dataTables:orExport", "Or export directly:")}
           </p>
           <div className="flex gap-2">

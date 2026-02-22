@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -14,12 +15,18 @@ def backup_env(monkeypatch, tmp_path: Path):
 
 def test_restore_snapshot_sanitizes_db_name(backup_env: Path):
     db_path = backup_env / "db.sqlite"
-    db_path.write_text("original")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('original')")
+        conn.commit()
 
     backup_dir = backup_env / "backups"
     backup_dir.mkdir()
     backup_file = backup_dir / "test_backup.db"
-    backup_file.write_text("backup")
+    with sqlite3.connect(backup_file) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('backup')")
+        conn.commit()
 
     result = restore_single_db_backup(
         str(db_path),
@@ -31,3 +38,6 @@ def test_restore_snapshot_sanitizes_db_name(backup_env: Path):
 
     pre_restore = list(backup_dir.glob("evil_pre_restore_*.db"))
     assert pre_restore, "Expected sanitized pre-restore snapshot in backup dir"
+    with sqlite3.connect(pre_restore[0]) as conn:
+        rows = conn.execute("SELECT val FROM entries").fetchall()
+    assert rows == [("original",)]

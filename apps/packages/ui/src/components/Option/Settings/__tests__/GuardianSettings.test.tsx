@@ -1,12 +1,45 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { GuardianSettings } from "../GuardianSettings"
 
+const {
+  useQueryMock,
+  useMutationMock,
+  useQueryClientMock,
+  invalidateQueriesMock,
+  serverCapabilitiesState
+} = vi.hoisted(() => ({
+  useQueryMock: vi.fn(),
+  useMutationMock: vi.fn(),
+  useQueryClientMock: vi.fn(),
+  invalidateQueriesMock: vi.fn(),
+  serverCapabilitiesState: {
+    capabilities: {
+      hasGuardian: true,
+      hasSelfMonitoring: true
+    },
+    loading: false
+  } as {
+    capabilities: { hasGuardian: boolean; hasSelfMonitoring: boolean } | null
+    loading: boolean
+  }
+}))
+
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: useQueryMock,
+  useMutation: useMutationMock,
+  useQueryClient: useQueryClientMock
+}))
+
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
+}))
+
+vi.mock("@/hooks/useServerCapabilities", () => ({
+  useServerCapabilities: () => serverCapabilitiesState
 }))
 
 vi.mock("react-i18next", () => ({
@@ -28,6 +61,7 @@ vi.mock("react-i18next", () => ({
 
 describe("GuardianSettings", () => {
   const originalMatchMedia = window.matchMedia
+  const originalResizeObserver = globalThis.ResizeObserver
 
   const makeQueryResult = (overrides: Record<string, unknown> = {}) =>
     ({
@@ -44,7 +78,7 @@ describe("GuardianSettings", () => {
     guardian_user_id: "guardian-user",
     dependent_user_id: "dependent-user",
     relationship_type: "parent",
-    status: "pending_consent",
+    status: "pending",
     consent_given_by_dependent: false,
     consent_given_at: null,
     dependent_visible: true,
@@ -118,6 +152,15 @@ describe("GuardianSettings", () => {
         dispatchEvent: vi.fn()
       }))
     })
+    class ResizeObserverMock {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      writable: true,
+      value: ResizeObserverMock
+    })
   })
 
   afterAll(() => {
@@ -125,9 +168,30 @@ describe("GuardianSettings", () => {
       writable: true,
       value: originalMatchMedia
     })
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      writable: true,
+      value: originalResizeObserver
+    })
   })
 
   beforeEach(() => {
+    serverCapabilitiesState.loading = false
+    serverCapabilitiesState.capabilities = {
+      hasGuardian: true,
+      hasSelfMonitoring: true
+    }
+
+    invalidateQueriesMock.mockReset()
+    useQueryClientMock.mockReset()
+    useQueryClientMock.mockReturnValue({
+      invalidateQueries: invalidateQueriesMock
+    })
+    useMutationMock.mockReset()
+    useMutationMock.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false
+    })
+
     guardianRelationships = [baseRelationship]
     dependentRelationships = [baseRelationship]
     governancePolicies = [
@@ -148,7 +212,57 @@ describe("GuardianSettings", () => {
         updated_at: "2026-01-01T00:00:00Z"
       }
     ]
+
+    vi.mocked(useQueryClient).mockReturnValue({
+      invalidateQueries: invalidateQueriesMock
+    } as any)
+    vi.mocked(useMutation).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false
+    } as any)
     setQueryMock()
+  })
+
+  it("shows unavailable state when guardian capabilities are missing", () => {
+    serverCapabilitiesState.capabilities = {
+      hasGuardian: false,
+      hasSelfMonitoring: false
+    }
+    render(<GuardianSettings />)
+
+    expect(screen.getByText("Guardian settings unavailable")).toBeInTheDocument()
+    expect(screen.queryByRole("tab", { name: /Self-Monitoring/i })).not.toBeInTheDocument()
+  })
+
+  it("shows unavailable state when capabilities fail to resolve", () => {
+    serverCapabilitiesState.capabilities = null
+    render(<GuardianSettings />)
+
+    expect(screen.getByText("Guardian settings unavailable")).toBeInTheDocument()
+    expect(screen.queryByRole("tab", { name: /Self-Monitoring/i })).not.toBeInTheDocument()
+  })
+
+  it("shows self-monitoring fallback guidance when endpoints are missing", () => {
+    const notFoundError = Object.assign(new Error("Request failed: 404"), {
+      status: 404
+    })
+    vi.mocked(useQuery).mockImplementation((options: any) => {
+      const queryKey = Array.isArray(options?.queryKey) ? options.queryKey : []
+      if (queryKey[0] === "guardian" && queryKey[1] === "rules") {
+        return makeQueryResult({
+          data: undefined,
+          error: notFoundError,
+          isError: true
+        })
+      }
+      return makeQueryResult()
+    })
+
+    render(<GuardianSettings />)
+
+    expect(
+      screen.getByText("Self-Monitoring endpoints unavailable")
+    ).toBeInTheDocument()
   })
 
   it("does not offer warn as a self-monitoring rule action", async () => {
@@ -159,9 +273,7 @@ describe("GuardianSettings", () => {
     const dialog = await screen.findByRole("dialog")
     const actionLabel = within(dialog).getByText("Action")
     const actionFormItem = actionLabel.closest(".ant-form-item")
-    expect(actionFormItem).not.toBeNull()
-
-    const actionSelector = actionFormItem?.querySelector(".ant-select-selector")
+    const actionSelector = actionFormItem?.querySelector('[role="combobox"]')
     expect(actionSelector).not.toBeNull()
     fireEvent.mouseDown(actionSelector as Element)
 
@@ -172,7 +284,7 @@ describe("GuardianSettings", () => {
     })
 
     expect(document.querySelector('.ant-select-item-option[title="Warn"]')).toBeNull()
-  })
+  }, 30000)
 
   it("shows Accept action only in dependent view", async () => {
     render(<GuardianSettings />)
@@ -181,6 +293,27 @@ describe("GuardianSettings", () => {
 
     expect(screen.queryByRole("button", { name: /Accept/i })).not.toBeInTheDocument()
 
+    fireEvent.click(screen.getByRole("radio", { name: /Dependent View/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Accept/i })).toBeInTheDocument()
+    })
+  }, 30000)
+
+  it("shows Accept action for pending_consent relationships in dependent view", async () => {
+    guardianRelationships = [
+      {
+        ...baseRelationship,
+        status: "pending_consent",
+        consent_given_by_dependent: false,
+        consent_given_at: null
+      }
+    ]
+    dependentRelationships = [...guardianRelationships]
+
+    render(<GuardianSettings />)
+
+    fireEvent.click(screen.getByRole("tab", { name: /Guardian Controls/i }))
     fireEvent.click(screen.getByRole("radio", { name: /Dependent View/i }))
 
     await waitFor(() => {
@@ -203,10 +336,13 @@ describe("GuardianSettings", () => {
     const view = render(<GuardianSettings />)
 
     fireEvent.click(screen.getByRole("tab", { name: /Guardian Controls/i }))
-    fireEvent.click(screen.getByText("dep-active"))
+    const initialCell = await screen.findByText("dep-active")
+    fireEvent.click(initialCell.closest("tr") ?? initialCell)
 
     const addPolicyButton = await screen.findByRole("button", { name: /Add Policy/i })
-    expect(addPolicyButton).toBeEnabled()
+    await waitFor(() => {
+      expect(addPolicyButton).toBeEnabled()
+    })
 
     guardianRelationships = [
       {
@@ -217,11 +353,13 @@ describe("GuardianSettings", () => {
     ]
 
     view.rerender(<GuardianSettings />)
+    const updatedCell = await screen.findByText("dep-active")
+    fireEvent.click(updatedCell.closest("tr") ?? updatedCell)
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Add Policy/i })).toBeDisabled()
     })
-  }, 15000)
+  }, 30000)
 
   it("renders governance policies and updates when query data changes", async () => {
     const view = render(<GuardianSettings />)

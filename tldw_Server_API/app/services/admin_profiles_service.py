@@ -49,6 +49,8 @@ from tldw_Server_API.app.services import admin_scope_service
 
 REQUIRED_ADMIN_RANK = ROLE_HIERARCHY.get("admin", 3)
 REQUIRED_TEAM_ADMIN_RANK = ROLE_HIERARCHY.get("lead", 2)
+_PLATFORM_ADMIN_ROLES = frozenset({"admin", "owner", "super_admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _role_rank(role: str | None) -> int:
@@ -56,13 +58,30 @@ def _role_rank(role: str | None) -> int:
     return admin_scope_service.role_rank(role)
 
 
+def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | set[Any] | None) -> set[str]:
+    return {
+        str(value).strip().lower()
+        for value in (values or [])
+        if str(value).strip()
+    }
+
+
+def _principal_has_platform_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = _normalized_claim_values(principal.roles)
+    permissions = _normalized_claim_values(principal.permissions)
+    if roles & _PLATFORM_ADMIN_ROLES:
+        return True
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
 def _derive_profile_update_roles(principal: AuthPrincipal) -> set[str]:
     """Build the role set used for profile update enforcement."""
     roles = {str(role).strip().lower() for role in (principal.roles or []) if role}
-    if principal.is_admin or "admin" in roles:
+    has_platform_admin_claims = _principal_has_platform_admin_claims(principal)
+    if has_platform_admin_claims or "admin" in roles:
         roles.add("admin")
         roles.update({"org_admin", "team_admin"})
-    if admin_scope_service.is_platform_admin(principal):
+    if has_platform_admin_claims or admin_scope_service.is_platform_admin(principal):
         roles.add("platform_admin")
     return roles
 
@@ -82,8 +101,8 @@ def _get_bulk_confirm_threshold() -> int:
                 raw_cfg = config_parser.get(section, "bulkUpdateConfirmThreshold", fallback="").strip()
                 if raw_cfg:
                     return max(1, int(raw_cfg))
-    except Exception:
-        pass
+    except Exception as threshold_error:
+        logger.debug("Failed to load bulk-update threshold from config; using default", exc_info=threshold_error)
     return 1000
 
 
@@ -572,8 +591,8 @@ async def list_user_profiles(
                     page_size,
                     timeout_ms,
                 )
-    except Exception:
-        pass
+    except Exception as telemetry_error:
+        logger.debug("Bulk profile update telemetry failed; continuing", exc_info=telemetry_error)
 
     audit_metadata = {
         "filters": {
@@ -961,8 +980,8 @@ async def bulk_update_user_profiles(
                 total_targets,
                 labels={"dry_run": str(payload.dry_run).lower()},
             )
-    except Exception:
-        pass
+    except Exception as metrics_error:
+        logger.debug("Bulk profile update metrics emission failed; continuing", exc_info=metrics_error)
 
     response = UserProfileBulkUpdateResponse(
         total_targets=total_targets,

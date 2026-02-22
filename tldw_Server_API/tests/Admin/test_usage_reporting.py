@@ -9,11 +9,10 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 
 
-def _setup_env():
-
-
+def _setup_env(tmp_path):
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key"
+    os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path / 'users_test_usage_reporting.db'}"
     os.environ["USAGE_LOG_ENABLED"] = "true"
     # Exclude all paths from middleware usage logging to avoid NULL user_id rows
     # interfering with FK-constrained aggregation during this test.
@@ -102,14 +101,14 @@ async def _insert_usage_rows_sqlite():
 
 
 @pytest.mark.asyncio
-async def test_admin_usage_endpoints_sqlite_smoke(monkeypatch):
+async def test_admin_usage_endpoints_sqlite_smoke(monkeypatch, tmp_path):
     # Arrange environment and singletons
-    _setup_env()
+    _setup_env(tmp_path)
 
     # Reset AuthNZ singletons to pick up new env
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
-    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
     await reset_db_pool()
     reset_settings()

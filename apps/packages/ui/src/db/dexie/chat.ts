@@ -303,6 +303,21 @@ export class PageAssistDatabase {
     await db.messages.where('id').equals(message_id).modify({ content });
   }
 
+  async updateMessageMedia(
+    message_id: string,
+    updates: { images?: string[]; generationInfo?: any }
+  ) {
+    const patch: Record<string, unknown> = {}
+    if (Array.isArray(updates.images)) {
+      patch.images = updates.images
+    }
+    if (updates.generationInfo !== undefined) {
+      patch.generationInfo = updates.generationInfo
+    }
+    if (Object.keys(patch).length === 0) return
+    await db.messages.where("id").equals(message_id).modify(patch)
+  }
+
   async updateMessageDiscoSkillComment(
     message_id: string,
     discoSkillComment: Message["discoSkillComment"] | null
@@ -469,6 +484,10 @@ export class PageAssistDatabase {
   async addPrompt(prompt: Prompt) {
     const mergedKeywords = prompt.keywords ?? prompt.tags;
     const now = Date.now();
+    const normalizedUsageCount =
+      typeof prompt.usageCount === "number" && Number.isFinite(prompt.usageCount)
+        ? Math.max(0, Math.floor(prompt.usageCount))
+        : 0;
     const normalized: Prompt = {
       ...prompt,
       title: prompt.title || prompt.name,
@@ -476,6 +495,11 @@ export class PageAssistDatabase {
       tags: mergedKeywords ?? prompt.tags,
       keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags,
       deletedAt: null,
+      usageCount: normalizedUsageCount,
+      lastUsedAt:
+        typeof prompt.lastUsedAt === "number" && Number.isFinite(prompt.lastUsedAt)
+          ? prompt.lastUsedAt
+          : null,
       updatedAt: now
     };
     await db.prompts.add(normalized);
@@ -519,12 +543,32 @@ export class PageAssistDatabase {
 
   async updatePrompt(
     id: string,
-    updates: Partial<Prompt> & { title?: string; name?: string; content?: string; is_system?: boolean; tags?: string[]; keywords?: string[]; favorite?: boolean }
+    updates: Partial<Prompt> & {
+      title?: string
+      name?: string
+      content?: string
+      is_system?: boolean
+      tags?: string[]
+      keywords?: string[]
+      favorite?: boolean
+      usageCount?: number
+      lastUsedAt?: number | null
+    }
   ) {
     const existing = await db.prompts.get(id);
     if (!existing) return;
 
     const mergedKeywords = updates.keywords ?? updates.tags;
+    const resolvedUsageCount =
+      typeof updates.usageCount === "number" && Number.isFinite(updates.usageCount)
+        ? Math.max(0, Math.floor(updates.usageCount))
+        : existing.usageCount;
+    const resolvedLastUsedAt =
+      updates.lastUsedAt === undefined
+        ? existing.lastUsedAt
+        : typeof updates.lastUsedAt === "number" && Number.isFinite(updates.lastUsedAt)
+          ? updates.lastUsedAt
+          : null;
     const merged: Prompt = {
       ...existing,
       ...updates,
@@ -536,10 +580,34 @@ export class PageAssistDatabase {
       tags: mergedKeywords ?? existing.tags,
       keywords: mergedKeywords ?? existing.keywords ?? existing.tags,
       favorite:
-        typeof updates.favorite === "boolean" ? updates.favorite : existing.favorite
+        typeof updates.favorite === "boolean" ? updates.favorite : existing.favorite,
+      usageCount: resolvedUsageCount,
+      lastUsedAt: resolvedLastUsedAt
     };
 
     await db.prompts.put(merged);
+  }
+
+  async incrementPromptUsage(id: string) {
+    const existing = await db.prompts.get(id);
+    if (!existing || existing.deletedAt) return null;
+
+    const now = Date.now();
+    const currentUsageCount =
+      typeof existing.usageCount === "number" && Number.isFinite(existing.usageCount)
+        ? Math.max(0, Math.floor(existing.usageCount))
+        : 0;
+    const usageCount = currentUsageCount + 1;
+    const patch: Pick<Prompt, "usageCount" | "lastUsedAt" | "updatedAt"> = {
+      usageCount,
+      lastUsedAt: now,
+      updatedAt: now
+    };
+    await db.prompts.update(id, patch);
+    return {
+      usageCount,
+      lastUsedAt: now
+    };
   }
 
   async getPromptById(id: string): Promise<Prompt | undefined> {
@@ -682,32 +750,53 @@ export class PageAssistDatabase {
     // Normalize all prompts first
     const normalizedPrompts = data.map(prompt => {
       const mergedKeywords = prompt.keywords ?? prompt.tags;
+      const usageCount =
+        typeof prompt.usageCount === "number" && Number.isFinite(prompt.usageCount)
+          ? Math.max(0, Math.floor(prompt.usageCount))
+          : 0;
+      const lastUsedAt =
+        typeof prompt.lastUsedAt === "number" && Number.isFinite(prompt.lastUsedAt)
+          ? prompt.lastUsedAt
+          : null;
       return {
         ...prompt,
         title: prompt.title || prompt.name,
         name: prompt.name ?? prompt.title,
         tags: mergedKeywords ?? prompt.tags,
-        keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags
+        keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags,
+        usageCount,
+        lastUsedAt
       } as Prompt;
     });
+
+    let imported = 0;
+    let skipped = 0;
+    let failed = 0;
 
     // Use transaction for atomic batch operations
     await db.transaction('rw', db.prompts, async () => {
       if (replaceExisting) {
-        // Bulk put all prompts
+        // Replace mode should fully replace the existing prompt dataset.
+        await db.prompts.clear();
         await db.prompts.bulkPut(normalizedPrompts);
-      } else {
-        // Filter out existing prompts
-        const existingIds = new Set(
-          (await db.prompts.where('id').anyOf(normalizedPrompts.map(p => p.id)).toArray())
-            .map(p => p.id)
-        );
-        const newPrompts = normalizedPrompts.filter(p => !existingIds.has(p.id));
-        if (newPrompts.length > 0) {
-          await db.prompts.bulkPut(newPrompts);
-        }
+        imported = normalizedPrompts.length;
+        return;
       }
+
+      // Filter out existing prompts
+      const existingIds = new Set(
+        (await db.prompts.where('id').anyOf(normalizedPrompts.map(p => p.id)).toArray())
+          .map(p => p.id)
+      );
+      const newPrompts = normalizedPrompts.filter(p => !existingIds.has(p.id));
+      skipped = normalizedPrompts.length - newPrompts.length;
+      if (newPrompts.length > 0) {
+        await db.prompts.bulkPut(newPrompts);
+      }
+      imported = newPrompts.length;
     });
+
+    return { imported, skipped, failed };
   }
 
   async importSessionFilesV2(data: SessionFiles[], options: {

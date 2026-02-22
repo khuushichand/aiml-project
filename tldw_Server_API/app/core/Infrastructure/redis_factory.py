@@ -668,7 +668,7 @@ class _InMemoryRedisCore:
         }
 
     def script_load(self, script: str) -> str:
-        sha = hashlib.sha1(script.encode("utf-8")).hexdigest()
+        sha = hashlib.sha1(script.encode("utf-8"), usedforsecurity=False).hexdigest()
         self._scripts[sha] = script
         return sha
 

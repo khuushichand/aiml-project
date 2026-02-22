@@ -165,14 +165,14 @@ class SupertonicOnnxAdapter(TTSAdapter):
             )
             if asyncio.iscoroutine(register_result):
                 await register_result
-        except Exception:
-            pass
+        except Exception as registration_error:
+            logger.debug("Supertonic provider registration failed; continuing", exc_info=registration_error)
 
         # Sample rate from engine if available
         try:
             self.sample_rate = int(getattr(self._engine, "sample_rate", self.sample_rate))
         except Exception:
-            logger.debug("Supertonic: unable to read sample_rate from engine, using default %s", self.sample_rate)
+            logger.debug("Supertonic: unable to read sample_rate from engine, using default {}", self.sample_rate)
 
         self._voice_to_path, self._voice_infos = self._load_voice_mappings()
 
@@ -181,7 +181,7 @@ class SupertonicOnnxAdapter(TTSAdapter):
         self._initialized = True
         self._status = ProviderStatus.AVAILABLE
         logger.info(
-            "Supertonic adapter initialized (onnx_dir=%s, voices=%d, sample_rate=%s)",
+            'Supertonic adapter initialized (onnx_dir={}, voices={}, sample_rate={})',
             self.onnx_dir,
             len(self._voice_infos),
             self.sample_rate,
@@ -199,7 +199,7 @@ class SupertonicOnnxAdapter(TTSAdapter):
             if not path.exists():
                 if voice_id == self.default_voice:
                     missing_default = True
-                logger.warning("Supertonic voice style missing: voice_id=%s path=%s", voice_id, path)
+                logger.warning("Supertonic voice style missing: voice_id={} path={}", voice_id, path)
                 continue
             voice_map[voice_id] = path
             voices.append(
@@ -377,9 +377,9 @@ class SupertonicOnnxAdapter(TTSAdapter):
             end_idx = int(self.sample_rate * dur_val)
             if end_idx > 0:
                 arr = arr[:end_idx]
-        except Exception:
+        except Exception as trim_error:
             # If duration is unavailable, fall back to full array
-            pass
+            logger.debug("Supertonic audio trim by duration failed; using untrimmed audio", exc_info=trim_error)
         return arr
 
     def _build_stream(self, audio_bytes: bytes) -> AsyncGenerator[bytes, None]:

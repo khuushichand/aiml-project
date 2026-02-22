@@ -6,6 +6,7 @@ import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
@@ -19,6 +20,10 @@ import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, R
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
+import {
+  buildSyntheticMonitoringMetricsHistory,
+  normalizeMonitoringMetricsPayload,
+} from '@/lib/monitoring-metrics';
 
 interface SlaPolicy {
   id: string;
@@ -54,6 +59,13 @@ interface JobItem {
   started_at?: string | null;
   leased_until?: string | null;
   completed_at?: string | null;
+  parent_id?: number | string | null;
+  parent_job_id?: number | string | null;
+  parent_job_uuid?: string | null;
+  depends_on_job_uuid?: string | null;
+  depends_on?: unknown;
+  child_job_ids?: unknown;
+  child_job_uuids?: unknown;
 }
 
 interface JobDetail extends JobItem {
@@ -82,6 +94,76 @@ interface StaleGroup {
   count: number;
 }
 
+interface QueueDepthPoint {
+  timestamp: string;
+  label: string;
+  depth: number;
+}
+
+interface QueueThroughputSummary {
+  completedJobs24h: number;
+  jobsCompletedPerHour: number;
+  averageProcessingSeconds: number;
+}
+
+type JobRelationship = {
+  parent: JobItem;
+  child: JobItem;
+  source: 'parent_ref' | 'child_ref';
+};
+
+const QUEUE_DEPTH_METRIC_PATTERN = /^(queue_depth|jobs_queue_depth)(\{[^}]*\})?\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)$/;
+
+const parseTimestampMs = (value?: string | null): number | null => {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const parseQueueDepthFromMetricsText = (metricsText: string): number => {
+  if (!metricsText.trim()) return 0;
+  return metricsText
+    .split('\n')
+    .reduce((sum, line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return sum;
+      const match = trimmed.match(QUEUE_DEPTH_METRIC_PATTERN);
+      if (!match) return sum;
+      const value = Number.parseFloat(match[3]);
+      if (!Number.isFinite(value)) return sum;
+      return sum + Math.max(0, value);
+    }, 0);
+};
+
+const buildQueueThroughputSummary = (
+  jobs: JobItem[],
+  now: Date = new Date(),
+): QueueThroughputSummary => {
+  const windowEnd = now.getTime();
+  const windowStart = windowEnd - (24 * 60 * 60 * 1000);
+  let completedJobs24h = 0;
+  let totalProcessingSeconds = 0;
+  let durationSamples = 0;
+
+  jobs.forEach((job) => {
+    const completedAtMs = parseTimestampMs(job.completed_at);
+    if (completedAtMs === null || completedAtMs < windowStart || completedAtMs > windowEnd) {
+      return;
+    }
+    completedJobs24h += 1;
+    const startedAtMs = parseTimestampMs(job.started_at);
+    if (startedAtMs === null || startedAtMs > completedAtMs) return;
+    totalProcessingSeconds += (completedAtMs - startedAtMs) / 1000;
+    durationSamples += 1;
+  });
+
+  return {
+    completedJobs24h,
+    jobsCompletedPerHour: completedJobs24h / 24,
+    averageProcessingSeconds: durationSamples > 0 ? totalProcessingSeconds / durationSamples : 0,
+  };
+};
+
 const formatJobDateTime = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
 
@@ -107,12 +189,89 @@ const clampLimit = (value: string) => {
   return String(clamped);
 };
 
+const toRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : null;
+
+const toReference = (value: unknown): string | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(Math.trunc(value));
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+  return null;
+};
+
+const collectReferenceValues = (value: unknown, out: Set<string>) => {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    value.forEach((entry) => {
+      collectReferenceValues(entry, out);
+    });
+    return;
+  }
+  const direct = toReference(value);
+  if (direct) {
+    out.add(direct);
+    return;
+  }
+  const record = toRecord(value);
+  if (!record) return;
+  const idLike = toReference(record.id ?? record.job_id ?? record.uuid ?? record.job_uuid);
+  if (idLike) {
+    out.add(idLike);
+  }
+};
+
+const extractParentReferences = (job: Record<string, unknown>): string[] => {
+  const refs = new Set<string>();
+  [
+    job.parent_id,
+    job.parent_job_id,
+    job.parent_job_uuid,
+    job.depends_on_job_uuid,
+    job.depends_on,
+  ].forEach((candidate) => {
+    collectReferenceValues(candidate, refs);
+  });
+  const payload = toRecord(job.payload);
+  if (payload) {
+    [
+      payload.parent_id,
+      payload.parent_job_id,
+      payload.parent_job_uuid,
+      payload.depends_on_job_uuid,
+      payload.depends_on,
+    ].forEach((candidate) => {
+      collectReferenceValues(candidate, refs);
+    });
+  }
+  return [...refs];
+};
+
+const extractChildReferences = (job: Record<string, unknown>): string[] => {
+  const refs = new Set<string>();
+  [job.child_job_ids, job.child_job_uuids].forEach((candidate) => {
+    collectReferenceValues(candidate, refs);
+  });
+  const payload = toRecord(job.payload);
+  if (payload) {
+    [payload.child_job_ids, payload.child_job_uuids, payload.children].forEach((candidate) => {
+      collectReferenceValues(candidate, refs);
+    });
+  }
+  return [...refs];
+};
+
 export default function JobsPage() {
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [stats, setStats] = useState<QueueStats[]>([]);
   const [staleGroups, setStaleGroups] = useState<StaleGroup[]>([]);
+  const [queueDepthHistory, setQueueDepthHistory] = useState<QueueDepthPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [routesUnavailable, setRoutesUnavailable] = useState(false);
@@ -144,6 +303,15 @@ export default function JobsPage() {
     job_type: '',
     limit: '100',
   });
+  const clearJobFilters = useCallback(() => {
+    setFilters({
+      domain: '',
+      queue: '',
+      status: '',
+      job_type: '',
+      limit: '100',
+    });
+  }, []);
 
   const statsParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -184,11 +352,21 @@ export default function JobsPage() {
     setError('');
     setRoutesUnavailable(false);
 
-    const [statsResult, jobsResult, staleResult, slaResult] = await Promise.allSettled([
+    const queueHistoryEnd = new Date();
+    const queueHistoryStart = new Date(queueHistoryEnd.getTime() - (24 * 60 * 60 * 1000));
+    const queueHistoryParams = {
+      start: queueHistoryStart.toISOString(),
+      end: queueHistoryEnd.toISOString(),
+      granularity: '1h',
+    };
+
+    const [statsResult, jobsResult, staleResult, slaResult, queueHistoryResult, metricsTextResult] = await Promise.allSettled([
       api.getJobsStats(statsParams),
       api.getJobs(listParams),
       api.getJobsStale(statsParams),
       api.getJobSlaPolicies(),
+      api.getMonitoringMetrics(queueHistoryParams),
+      api.getMetricsText(),
     ]);
 
     const sawNotFound = [statsResult, jobsResult, staleResult].some(
@@ -230,6 +408,45 @@ export default function JobsPage() {
       );
     }
 
+    let nextQueueHistory: QueueDepthPoint[] = [];
+    if (queueHistoryResult.status === 'fulfilled') {
+      nextQueueHistory = normalizeMonitoringMetricsPayload(
+        queueHistoryResult.value,
+        queueHistoryParams.end,
+      ).map((point) => ({
+        timestamp: point.timestamp,
+        label: point.label,
+        depth: point.queueDepth,
+      }));
+    }
+
+    if (nextQueueHistory.length === 0 && metricsTextResult.status === 'fulfilled') {
+      const queueDepth = parseQueueDepthFromMetricsText(String(metricsTextResult.value ?? ''));
+      if (queueDepth > 0) {
+        const syntheticHistory = buildSyntheticMonitoringMetricsHistory(
+          {
+            cpu: 0,
+            memory: 0,
+            diskUsage: 0,
+            throughput: 0,
+            activeConnections: 0,
+            queueDepth,
+          },
+          {
+            ...queueHistoryParams,
+            rangeLabel: '24h',
+            expectedPoints: 25,
+          },
+        );
+        nextQueueHistory = syntheticHistory.map((point) => ({
+          timestamp: point.timestamp,
+          label: point.label,
+          depth: point.queueDepth,
+        }));
+      }
+    }
+    setQueueDepthHistory(nextQueueHistory);
+
     setSlaPoliciesLoading(false);
     setLoading(false);
   }, [listParams, statsParams]);
@@ -237,6 +454,103 @@ export default function JobsPage() {
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  const jobLookupByRef = useMemo(() => {
+    const lookup = new Map<string, JobItem>();
+    jobs.forEach((job) => {
+      lookup.set(String(job.id), job);
+      if (job.uuid) {
+        lookup.set(job.uuid, job);
+      }
+    });
+    return lookup;
+  }, [jobs]);
+
+  const dependencyRelationships = useMemo<JobRelationship[]>(() => {
+    const links: JobRelationship[] = [];
+    const seen = new Set<string>();
+
+    const addLink = (
+      parent: JobItem,
+      child: JobItem,
+      source: JobRelationship['source']
+    ) => {
+      if (parent.id === child.id) return;
+      const key = `${parent.id}->${child.id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      links.push({ parent, child, source });
+    };
+
+    jobs.forEach((job) => {
+      const record = job as unknown as Record<string, unknown>;
+      extractParentReferences(record).forEach((parentRef) => {
+        const parent = jobLookupByRef.get(parentRef);
+        if (parent) {
+          addLink(parent, job, 'parent_ref');
+        }
+      });
+      extractChildReferences(record).forEach((childRef) => {
+        const child = jobLookupByRef.get(childRef);
+        if (child) {
+          addLink(job, child, 'child_ref');
+        }
+      });
+    });
+
+    return links;
+  }, [jobLookupByRef, jobs]);
+
+  const selectedJobRelationships = useMemo(() => {
+    const empty = {
+      parentJobs: [] as JobItem[],
+      childJobs: [] as JobItem[],
+      unresolvedParentRefs: [] as string[],
+      unresolvedChildRefs: [] as string[],
+    };
+    if (!selectedJob) return empty;
+
+    const parentJobsById = new Map<number, JobItem>();
+    const childJobsById = new Map<number, JobItem>();
+
+    dependencyRelationships.forEach((relation) => {
+      if (relation.child.id === selectedJob.id) {
+        parentJobsById.set(relation.parent.id, relation.parent);
+      }
+      if (relation.parent.id === selectedJob.id) {
+        childJobsById.set(relation.child.id, relation.child);
+      }
+    });
+
+    const unresolvedParentRefs = new Set<string>();
+    const unresolvedChildRefs = new Set<string>();
+    const detailRecord = toRecord(jobDetail) ?? (selectedJob as unknown as Record<string, unknown>);
+
+    extractParentReferences(detailRecord).forEach((parentRef) => {
+      const match = jobLookupByRef.get(parentRef);
+      if (match) {
+        parentJobsById.set(match.id, match);
+      } else {
+        unresolvedParentRefs.add(parentRef);
+      }
+    });
+
+    extractChildReferences(detailRecord).forEach((childRef) => {
+      const match = jobLookupByRef.get(childRef);
+      if (match) {
+        childJobsById.set(match.id, match);
+      } else {
+        unresolvedChildRefs.add(childRef);
+      }
+    });
+
+    return {
+      parentJobs: [...parentJobsById.values()],
+      childJobs: [...childJobsById.values()],
+      unresolvedParentRefs: [...unresolvedParentRefs],
+      unresolvedChildRefs: [...unresolvedChildRefs],
+    };
+  }, [dependencyRelationships, jobDetail, jobLookupByRef, selectedJob]);
 
   const handleReset = () => {
     setFilters({
@@ -405,6 +719,54 @@ export default function JobsPage() {
     }
   };
 
+  const hasSelectedJobRelationships =
+    selectedJobRelationships.parentJobs.length > 0
+    || selectedJobRelationships.childJobs.length > 0
+    || selectedJobRelationships.unresolvedParentRefs.length > 0
+    || selectedJobRelationships.unresolvedChildRefs.length > 0;
+
+  const queueThroughputSummary = useMemo(
+    () => buildQueueThroughputSummary(jobs),
+    [jobs],
+  );
+  const queueTotals = useMemo(
+    () => stats.reduce(
+      (acc, row) => ({
+        queued: acc.queued + row.queued,
+        processing: acc.processing + row.processing,
+        quarantined: acc.quarantined + row.quarantined,
+      }),
+      { queued: 0, processing: 0, quarantined: 0 },
+    ),
+    [stats],
+  );
+
+  const queueDepthChartPoints = useMemo(
+    () => queueDepthHistory.slice(-25),
+    [queueDepthHistory],
+  );
+  const maxQueueDepth = useMemo(
+    () => Math.max(1, ...queueDepthChartPoints.map((point) => point.depth)),
+    [queueDepthChartPoints],
+  );
+  const queueDepthPeak = useMemo(
+    () => Math.max(0, ...queueDepthHistory.map((point) => point.depth)),
+    [queueDepthHistory],
+  );
+  const queueDepthCurrent = queueDepthHistory.length > 0
+    ? queueDepthHistory[queueDepthHistory.length - 1].depth
+    : 0;
+  const queueStatsLiveSummary = useMemo(() => {
+    if (loading) {
+      return 'Queue statistics loading.';
+    }
+    if (stats.length === 0) {
+      return 'No queue statistics available.';
+    }
+    return `Queue statistics updated. ${queueTotals.queued} queued, ${queueTotals.processing} processing, ` +
+      `${queueTotals.quarantined} quarantined. Current queue depth ${queueDepthCurrent.toFixed(0)}.`;
+  }, [loading, queueDepthCurrent, queueTotals.processing, queueTotals.queued, queueTotals.quarantined, stats.length]);
+
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
@@ -537,38 +899,46 @@ export default function JobsPage() {
                 <CardDescription>Current queue snapshot by domain/queue/type.</CardDescription>
               </CardHeader>
               <CardContent>
-                {loading ? (
-                  <div className="text-muted-foreground">Loading stats…</div>
-                ) : stats.length === 0 ? (
-                  <div className="text-muted-foreground">No queue stats available.</div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Domain</TableHead>
-                        <TableHead>Queue</TableHead>
-                        <TableHead>Job type</TableHead>
-                        <TableHead className="text-right">Queued</TableHead>
-                        <TableHead className="text-right">Scheduled</TableHead>
-                        <TableHead className="text-right">Processing</TableHead>
-                        <TableHead className="text-right">Quarantined</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {stats.map((row) => (
-                        <TableRow key={`${row.domain}-${row.queue}-${row.job_type}`}>
-                          <TableCell>{row.domain}</TableCell>
-                          <TableCell>{row.queue}</TableCell>
-                          <TableCell>{row.job_type}</TableCell>
-                          <TableCell className="text-right">{row.queued}</TableCell>
-                          <TableCell className="text-right">{row.scheduled}</TableCell>
-                          <TableCell className="text-right">{row.processing}</TableCell>
-                          <TableCell className="text-right">{row.quarantined}</TableCell>
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  data-testid="jobs-queue-stats-live-region"
+                >
+                  <p className="sr-only">{queueStatsLiveSummary}</p>
+                  {loading ? (
+                    <div className="text-muted-foreground">Loading stats…</div>
+                  ) : stats.length === 0 ? (
+                    <div className="text-muted-foreground">No queue stats available.</div>
+                  ) : (
+                    <Table caption={`Queue stats table with ${stats.length} rows.`}>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Domain</TableHead>
+                          <TableHead>Queue</TableHead>
+                          <TableHead>Job type</TableHead>
+                          <TableHead className="text-right">Queued</TableHead>
+                          <TableHead className="text-right">Scheduled</TableHead>
+                          <TableHead className="text-right">Processing</TableHead>
+                          <TableHead className="text-right">Quarantined</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
+                      </TableHeader>
+                      <TableBody>
+                        {stats.map((row) => (
+                          <TableRow key={`${row.domain}-${row.queue}-${row.job_type}`}>
+                            <TableCell>{row.domain}</TableCell>
+                            <TableCell>{row.queue}</TableCell>
+                            <TableCell>{row.job_type}</TableCell>
+                            <TableCell className="text-right">{row.queued}</TableCell>
+                            <TableCell className="text-right">{row.scheduled}</TableCell>
+                            <TableCell className="text-right">{row.processing}</TableCell>
+                            <TableCell className="text-right">{row.quarantined}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
               </CardContent>
             </Card>
 
@@ -597,6 +967,89 @@ export default function JobsPage() {
                     ))}
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2 mb-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Queue Depth (24h)</CardTitle>
+                <CardDescription>
+                  Time-series for queued and processing workload over the last 24 hours.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {loading ? (
+                  <div className="text-muted-foreground">Loading queue depth history…</div>
+                ) : queueDepthChartPoints.length === 0 ? (
+                  <div className="text-muted-foreground">Queue depth history unavailable.</div>
+                ) : (
+                  <div className="space-y-3">
+                    <div
+                      className="flex h-40 items-end gap-1 rounded-md border bg-muted/20 p-2"
+                      data-testid="queue-depth-chart"
+                    >
+                      {queueDepthChartPoints.map((point, index) => {
+                        const heightPercent = Math.max(4, (point.depth / maxQueueDepth) * 100);
+                        return (
+                          <div
+                            key={`${point.timestamp}-${index}`}
+                            className="flex-1 rounded-sm bg-primary/80"
+                            style={{ height: `${heightPercent}%` }}
+                            title={`${point.label}: ${point.depth.toFixed(0)}`}
+                            aria-label={`${point.label}: queue depth ${point.depth.toFixed(0)}`}
+                          />
+                        );
+                      })}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-3 text-sm">
+                      <div>
+                        <p className="text-muted-foreground">Current</p>
+                        <p className="font-semibold" data-testid="queue-depth-current">{queueDepthCurrent.toFixed(0)}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Peak</p>
+                        <p className="font-semibold" data-testid="queue-depth-peak">{queueDepthPeak.toFixed(0)}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Data points</p>
+                        <p className="font-semibold">{queueDepthChartPoints.length}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Queue Throughput (24h)</CardTitle>
+                <CardDescription>
+                  Completed jobs per hour and average processing time for recent completed work.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs uppercase text-muted-foreground">Jobs/Hour</p>
+                    <p className="text-xl font-semibold" data-testid="queue-throughput-jobs-per-hour">
+                      {queueThroughputSummary.jobsCompletedPerHour.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs uppercase text-muted-foreground">Avg Processing</p>
+                    <p className="text-xl font-semibold" data-testid="queue-throughput-avg-processing">
+                      {formatDurationDisplay(queueThroughputSummary.averageProcessingSeconds)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs uppercase text-muted-foreground">Completed (24h)</p>
+                    <p className="text-xl font-semibold" data-testid="queue-throughput-completed">
+                      {queueThroughputSummary.completedJobs24h}
+                    </p>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -693,8 +1146,8 @@ export default function JobsPage() {
                       />
                       <Label htmlFor="sla-enabled">Enabled</Label>
                     </div>
-                    <Button onClick={handleCreateSlaPolicy} disabled={slaFormSaving}>
-                      {slaFormSaving ? 'Creating...' : 'Create Policy'}
+                    <Button onClick={handleCreateSlaPolicy} disabled={slaFormSaving} loading={slaFormSaving} loadingText="Creating...">
+                      Create Policy
                     </Button>
                   </div>
                 </div>
@@ -712,7 +1165,7 @@ export default function JobsPage() {
                   No SLA policies configured. Create one to define processing time expectations.
                 </div>
               ) : (
-                <Table>
+                <Table caption={`SLA policies table with ${slaPolicies.length} rows.`}>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Name</TableHead>
@@ -746,6 +1199,60 @@ export default function JobsPage() {
             </CardContent>
           </Card>
 
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Job Dependencies</CardTitle>
+              <CardDescription>
+                Parent/child relationships detected in the currently loaded jobs.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="text-muted-foreground">Loading dependency graph…</div>
+              ) : dependencyRelationships.length === 0 ? (
+                <div className="text-muted-foreground">
+                  No related jobs found in the current result set.
+                </div>
+              ) : (
+                <Table caption={`Job dependency table with ${dependencyRelationships.length} rows.`}>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Parent</TableHead>
+                      <TableHead>Child</TableHead>
+                      <TableHead>Relationship</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {dependencyRelationships.map((relation) => (
+                      <TableRow
+                        key={`${relation.parent.id}-${relation.child.id}`}
+                        data-testid={`job-dependency-row-${relation.parent.id}-${relation.child.id}`}
+                      >
+                        <TableCell>
+                          Job {relation.parent.id}
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            {relation.parent.job_type}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          Job {relation.child.id}
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            {relation.child.job_type}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">
+                            {relation.source === 'parent_ref' ? 'Child references parent' : 'Parent lists child'}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>Recent jobs</CardTitle>
@@ -755,10 +1262,21 @@ export default function JobsPage() {
               {loading ? (
                 <div className="text-muted-foreground">Loading jobs…</div>
               ) : jobs.length === 0 ? (
-                <div className="text-muted-foreground">No jobs found.</div>
+                <EmptyState
+                  icon={Briefcase}
+                  title="No jobs found."
+                  description="Try broadening filters or refresh to load recent jobs."
+                  actions={[
+                    {
+                      label: 'Clear filters',
+                      onClick: clearJobFilters,
+                    },
+                  ]}
+                  className="py-8"
+                />
               ) : (
                 <>
-                  <Table>
+                  <Table caption={`Jobs table with ${jobs.length} rows.`}>
                     <TableHeader>
                       <TableRow>
                         <TableHead>ID</TableHead>
@@ -901,6 +1419,79 @@ export default function JobsPage() {
                     </div>
                   </div>
 
+                  {hasSelectedJobRelationships && (
+                    <div className="space-y-2" data-testid="job-related-jobs">
+                      <Label>Related Jobs</Label>
+                      <div className="rounded-md border p-3 text-sm">
+                        {selectedJobRelationships.parentJobs.length > 0 && (
+                          <div className="mb-3">
+                            <p className="mb-1 font-medium">Parent job(s)</p>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedJobRelationships.parentJobs.map((parentJob) => (
+                                <Button
+                                  key={`parent-${parentJob.id}`}
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    void handleOpenDetail(parentJob);
+                                  }}
+                                >
+                                  Job {parentJob.id}
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedJobRelationships.unresolvedParentRefs.length > 0 && (
+                          <div className="mb-3">
+                            <p className="mb-1 font-medium">Parent reference(s)</p>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedJobRelationships.unresolvedParentRefs.map((ref) => (
+                                <Badge key={`missing-parent-${ref}`} variant="outline">
+                                  {ref}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedJobRelationships.childJobs.length > 0 && (
+                          <div className="mb-3">
+                            <p className="mb-1 font-medium">Child job(s)</p>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedJobRelationships.childJobs.map((childJob) => (
+                                <Button
+                                  key={`child-${childJob.id}`}
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    void handleOpenDetail(childJob);
+                                  }}
+                                >
+                                  Job {childJob.id}
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedJobRelationships.unresolvedChildRefs.length > 0 && (
+                          <div>
+                            <p className="mb-1 font-medium">Child reference(s)</p>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedJobRelationships.unresolvedChildRefs.map((ref) => (
+                                <Badge key={`missing-child-${ref}`} variant="outline">
+                                  {ref}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {jobDetail.error_message && (
                     <Alert variant="destructive">
                       <AlertDescription>{jobDetail.error_message}</AlertDescription>
@@ -930,7 +1521,7 @@ export default function JobsPage() {
                         Attachments ({jobAttachments.length})
                       </Label>
                       <div className="rounded-md border">
-                        <Table>
+                        <Table caption={`Job attachments table with ${selectedJobAttachments.length} rows.`}>
                           <TableHeader>
                             <TableRow>
                               <TableHead>Name</TableHead>

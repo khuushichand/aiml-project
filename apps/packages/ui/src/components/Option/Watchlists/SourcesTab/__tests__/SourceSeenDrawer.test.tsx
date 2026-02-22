@@ -75,7 +75,9 @@ vi.mock("antd", () => {
       {children}
     </span>
   )
-  const Alert = ({ message: msg }: any) => <div data-testid="alert-error">{msg}</div>
+  const Alert = ({ message: msg, title }: any) => (
+    <div data-testid="alert-error">{title ?? msg}</div>
+  )
   const Space = ({ children }: any) => <>{children}</>
   const InputNumber = ({ value, onChange, ...rest }: any) => (
     <input
@@ -261,14 +263,19 @@ describe("SourceSeenDrawer", () => {
   })
 
   it("shows error state", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     mockState.getSourceSeenStatsMock.mockRejectedValue(new Error("Network error"))
-    render(
-      <SourceSeenDrawer open={true} onClose={vi.fn()} sourceId={42} />
-    )
-    await waitFor(() => {
-      expect(screen.getByTestId("alert-error")).toBeInTheDocument()
-      expect(screen.getByTestId("alert-error")).toHaveTextContent("Network error")
-    })
+    try {
+      render(
+        <SourceSeenDrawer open={true} onClose={vi.fn()} sourceId={42} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId("alert-error")).toBeInTheDocument()
+        expect(screen.getByTestId("alert-error")).toHaveTextContent("Network error")
+      })
+    } finally {
+      consoleErrorSpy.mockRestore()
+    }
   })
 
   it("does not show admin section for non-admin", async () => {

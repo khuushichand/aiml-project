@@ -246,7 +246,7 @@ overlap = 200
 
 # Contextual chunking (optional)
 enable_contextual_chunking = false
-contextual_llm_model = gpt-3.5-turbo
+contextual_llm_model = gpt-4o
 contextual_chunk_method = situate_context
 
 # Resource Management Settings

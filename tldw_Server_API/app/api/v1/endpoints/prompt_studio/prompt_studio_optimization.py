@@ -60,6 +60,7 @@ from tldw_Server_API.app.core.Logging.log_context import (
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_types import JobType
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter import PromptStudioJobsAdapter
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 _OPTIMIZATION_NONCRITICAL_EXCEPTIONS = (
@@ -367,7 +368,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             return env in {"dev", "development", "local", "debug"}
 
         def _flag(name: str, default: str = "false") -> bool:
-            return str(_os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(_os.getenv(name, default))
 
         _mcts_enabled = _flag("PROMPT_STUDIO_ENABLE_MCTS", "false") or (
             _flag("PROMPT_STUDIO_ENABLE_MCTS_CANARY", "true") and _is_dev_env()
@@ -398,6 +399,22 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
                 raise HTTPException(status_code=400, detail=f"{name} must be <= {le_f}")
             return fv
 
+        def _as_bool(name: str, value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)) and int(value) in {0, 1}:
+                return bool(int(value))
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "1", "yes", "y", "on"}:
+                    return True
+                if normalized in {"false", "0", "no", "n", "off"}:
+                    return False
+            raise HTTPException(
+                status_code=400,
+                detail=f"{name} must be a boolean (true/false)",
+            )
+
         sims = _get("mcts_simulations")
         if sims is not None:
             _as_int("mcts_simulations", sims, ge=1, le=200)
@@ -418,6 +435,14 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
         if sbin is not None:
             _as_float("score_dedup_bin", sbin, ge_f=0.01, le_f=0.5)
 
+        min_quality = _get("min_quality")
+        if min_quality is not None:
+            _as_float("min_quality", min_quality, ge_f=0.0, le_f=1.0)
+
+        feedback_enabled = _get("feedback_enabled")
+        if feedback_enabled is not None:
+            _as_bool("feedback_enabled", feedback_enabled)
+
         thr = _get("feedback_threshold")
         if thr is not None:
             _as_float("feedback_threshold", thr, ge_f=0.0, le_f=10.0)
@@ -434,11 +459,26 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
         if noimp is not None:
             _as_int("early_stop_no_improve", noimp, ge=1, le=50)
 
-        # Optional strings: scorer_model / rollout_model if provided must be non-empty strings
-        for name in ("scorer_model", "rollout_model"):
-            val = _get(name)
-            if val is not None and (not isinstance(val, str) or not val.strip()):
-                raise HTTPException(status_code=400, detail=f"{name} must be a non-empty string if provided")
+        ws_every = _get("ws_throttle_every")
+        if ws_every is not None:
+            _as_int("ws_throttle_every", ws_every, ge=1, le=200)
+
+        trace_top_k = _get("trace_top_k")
+        if trace_top_k is not None:
+            _as_int("trace_top_k", trace_top_k, ge=1, le=20)
+
+        scorer_model = _get("scorer_model")
+        if scorer_model is not None and (not isinstance(scorer_model, str) or not scorer_model.strip()):
+            raise HTTPException(status_code=400, detail="scorer_model must be a non-empty string if provided")
+
+        rollout_model = _get("rollout_model")
+        if rollout_model is not None:
+            if not isinstance(rollout_model, str) or not rollout_model.strip():
+                raise HTTPException(status_code=400, detail="rollout_model must be a non-empty string if provided")
+            raise HTTPException(
+                status_code=400,
+                detail="rollout_model is currently unsupported for optimizer_type='mcts'",
+            )
 
 # Compatibility: base POST returns job info directly
 @router.post("")
@@ -496,7 +536,7 @@ async def create_optimization_simple(
         trace_id=tp,
     )
     with log_context(request_id=req_id, traceparent=tp, ps_component="endpoint", ps_job_kind="optimization"):
-        logger.info("Created optimization job via simple endpoint: job_id=%s", job.get("id"))
+        logger.info("Created optimization job via simple endpoint: job_id={}", job.get("id"))
     job_id = str(job.get("uuid") or job.get("id"))
     return {"id": job_id, "status": job.get("status", "pending")}
 
@@ -663,8 +703,6 @@ async def create_optimization(
         user_id_str = str(user_context.get("user_id", "anonymous"))
         if idempotency_key:
             try:
-                # TODO(PS-IDEMPOTENCY-SCOPE): Once DB lookup scopes by user_id, we can rely on per-user separation
-                # for idempotency keys. For now, lookup by key remains global.
                 existing_id = db.lookup_idempotency("optimization", idempotency_key, user_id_str)
                 if existing_id:
                     with contextlib.suppress(_OPTIMIZATION_NONCRITICAL_EXCEPTIONS):
@@ -672,8 +710,15 @@ async def create_optimization(
                             "prompt_studio.idempotency.hit_total", labels={"entity_type": "optimization"}
                         )
                     existing_opt = db.get_optimization(existing_id)
-                    if existing_opt:
+                    if existing_opt and int(existing_opt.get("project_id") or -1) == int(project_id):
                         return StandardResponse(success=True, data={"optimization": existing_opt, "job_id": None})
+                    if existing_opt:
+                        logger.warning(
+                            "Ignoring idempotency hit with mismatched project for key {} (user {}, requested project {})",
+                            idempotency_key,
+                            user_id_str,
+                            project_id,
+                        )
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
                 pass
 
@@ -696,6 +741,11 @@ async def create_optimization(
             status="pending",
             client_id=db.client_id,
         )
+        if optimization_data.test_case_ids is not None:
+            optimization_record = db.update_optimization(
+                optimization_record["id"],
+                {"test_case_ids": optimization_data.test_case_ids},
+            )
 
         # Record idempotency mapping
         if idempotency_key and optimization_record.get("id"):
@@ -737,7 +787,7 @@ async def create_optimization(
         )
         with log_context(request_id=req_id, traceparent=tp, ps_component="endpoint", ps_job_kind="optimization"):
             logger.info(
-                "User %s created optimization %s",
+                'User {} created optimization {}',
                 user_context.get("user_id"),
                 optimization_record.get("id"),
             )
@@ -752,7 +802,7 @@ async def create_optimization(
     except DatabaseError as exc:
         logger.error(f"Database error creating optimization: {exc}")
         import os as _os
-        if _os.getenv("TEST_MODE", "").lower() == "true":
+        if is_test_mode():
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create optimization: {exc}",
@@ -1422,6 +1472,10 @@ async def compare_strategies(
                 status="pending",
                 client_id=db.client_id,
             )
+            optimization_record = db.update_optimization(
+                optimization_record["id"],
+                {"test_case_ids": request.test_case_ids or []},
+            )
             optimization_ids.append(optimization_record["id"])
 
             job_payload = {
@@ -1450,7 +1504,7 @@ async def compare_strategies(
             job_ids.append(str(job.get("uuid") or job.get("id")))
         with log_context(request_id=req_id, traceparent=tp, ps_component="endpoint", ps_job_kind="optimization"):
             logger.info(
-                "User %s created strategy comparison for prompt %s",
+                'User {} created strategy comparison for prompt {}',
                 user_context.get("user_id"),
                 request.prompt_id,
             )

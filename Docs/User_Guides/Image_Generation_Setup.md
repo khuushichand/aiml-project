@@ -88,6 +88,35 @@ sd_cpp_default_cfg_scale = 7.5
 sd_cpp_default_sampler = euler_a
 sd_cpp_device = auto
 sd_cpp_timeout_seconds = 120
+
+# SwarmUI defaults
+swarmui_base_url = http://127.0.0.1:7801
+swarmui_default_model =
+swarmui_swarm_token =
+swarmui_allowed_extra_params = []
+swarmui_timeout_seconds = 120
+
+# OpenRouter image defaults
+openrouter_image_base_url = https://openrouter.ai/api/v1
+openrouter_image_api_key =
+openrouter_image_default_model = openai/gpt-image-1
+openrouter_image_allowed_extra_params = []
+openrouter_image_timeout_seconds = 120
+
+# Novita image defaults
+novita_image_base_url = https://api.novita.ai
+novita_image_api_key =
+novita_image_default_model = sd_xl_base_1.0.safetensors
+novita_image_allowed_extra_params = []
+novita_image_timeout_seconds = 180
+novita_image_poll_interval_seconds = 2
+
+# Together image defaults
+together_image_base_url = https://api.together.xyz/v1
+together_image_api_key =
+together_image_default_model = black-forest-labs/FLUX.1-schnell-Free
+together_image_allowed_extra_params = []
+together_image_timeout_seconds = 120
 ```
 
 Notes:

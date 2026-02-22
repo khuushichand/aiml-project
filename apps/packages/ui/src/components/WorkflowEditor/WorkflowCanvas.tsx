@@ -13,6 +13,7 @@ import {
   MiniMap,
   ReactFlowProvider,
   useReactFlow,
+  type Connection,
   type OnConnect,
   type OnNodesChange,
   type OnEdgesChange,
@@ -23,11 +24,15 @@ import {
   type Node
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
+import { message } from "antd"
 
+import { getComputedTokens } from "@/themes/runtime-tokens"
 import type { WorkflowStepType, WorkflowNode, WorkflowNodeData } from "@/types/workflow-editor"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
 import { buildWorkflowNodeTypes } from "./nodes/WorkflowNode"
 import { getStepMetadata } from "./step-registry"
+import { isEditableEventTarget } from "./keyboard-shortcuts"
+import { validateWorkflowConnection } from "./connection-validation"
 
 interface WorkflowCanvasProps {
   className?: string
@@ -53,6 +58,8 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
   const setSelectedEdges = useWorkflowEditorStore((s) => s.setSelectedEdges)
   const setZoom = useWorkflowEditorStore((s) => s.setZoom)
   const setPanPosition = useWorkflowEditorStore((s) => s.setPanPosition)
+
+  const tokens = useMemo(() => getComputedTokens(), [])
 
   const nodeTypes = useMemo(() => {
     const registryTypes = Object.keys(stepRegistry || {})
@@ -96,9 +103,33 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
     [screenToFlowPosition, addNode]
   )
 
+  const isValidConnection = useCallback(
+    (connection: Connection) =>
+      validateWorkflowConnection(connection, nodes, stepRegistry).valid,
+    [nodes, stepRegistry]
+  )
+
+  const handleConnect: OnConnect = useCallback(
+    (connection) => {
+      const validation = validateWorkflowConnection(connection, nodes, stepRegistry)
+      if (!validation.valid) {
+        message.warning(
+          validation.reason || "Invalid connection. Check source and target ports."
+        )
+        return
+      }
+      onConnect(connection)
+    },
+    [nodes, stepRegistry, onConnect]
+  )
+
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isEditableEventTarget(e.target)) {
+        return
+      }
+
       // Delete selected nodes/edges
       if (e.key === "Delete" || e.key === "Backspace") {
         const selectedNodes = useWorkflowEditorStore.getState().selectedNodeIds
@@ -163,10 +194,16 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
   const nodeColor = useCallback((node: Node) => {
     const data = node.data as WorkflowNodeData
     const meta = getStepMetadata(data.stepType, stepRegistry)
+    // theme-exempt: workflow category colors
     const categoryColors: Record<string, string> = {
-      ai: "#a855f7",
-      data: "#3b82f6",
-      control: "#f97316",
+      ai: "#3b82f6",
+      search: "#3b82f6",
+      media: "#6366f1",
+      text: "#06b6d4",
+      research: "#8b5cf6",
+      audio: "#14b8a6",
+      video: "#10b981",
+      control: "#6366f1",
       io: "#22c55e",
       utility: "#6b7280"
     }
@@ -180,7 +217,8 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
         edges={edges}
         onNodesChange={onNodesChange as OnNodesChange<WorkflowNode>}
         onEdgesChange={onEdgesChange as OnEdgesChange}
-        onConnect={onConnect as OnConnect}
+        onConnect={handleConnect}
+        isValidConnection={isValidConnection}
         onSelectionChange={handleSelectionChange}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
@@ -204,24 +242,24 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
           animated: false,
           style: {
             strokeWidth: 2,
-            stroke: "#94a3b8"
+            stroke: tokens.border
           }
         }}
         connectionLineStyle={{
           strokeWidth: 2,
-          stroke: "#3b82f6"
+          stroke: tokens.primary
         }}
         proOptions={{
           hideAttribution: true
         }}
-        className="bg-gray-50 dark:bg-gray-900"
+        className="bg-bg"
       >
         {isGridVisible && (
           <Background
             variant={BackgroundVariant.Dots}
             gap={16}
             size={1}
-            color="#94a3b8"
+            color={tokens.muted}
             className="opacity-30"
           />
         )}
@@ -230,14 +268,14 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
           showZoom
           showFitView
           showInteractive={false}
-          className="!bg-white dark:!bg-gray-800 !border-gray-200 dark:!border-gray-700 !shadow-lg"
+          className="!bg-surface !border-border !shadow-lg"
         />
 
         {isMiniMapVisible && (
           <MiniMap
             nodeColor={nodeColor}
             maskColor="rgba(0, 0, 0, 0.1)"
-            className="!bg-white dark:!bg-gray-800 !border-gray-200 dark:!border-gray-700"
+            className="!bg-surface !border-border"
           />
         )}
       </ReactFlow>

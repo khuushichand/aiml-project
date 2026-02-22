@@ -68,7 +68,7 @@ def create_document_id(content: str, metadata: dict[str, Any]) -> str:
         Unique document ID
     """
     # Combine content hash with key metadata
-    hasher = hashlib.md5()
+    hasher = hashlib.md5(usedforsecurity=False)
     hasher.update(content.encode('utf-8'))
 
     # Add stable metadata to hash

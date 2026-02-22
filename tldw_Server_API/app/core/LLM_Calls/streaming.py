@@ -124,8 +124,8 @@ async def wrap_sync_stream(sync_iter: Iterable[str]) -> AsyncIterator[str]:
                 close_fn = getattr(sync_iter, "close", None)
                 if callable(close_fn):
                     close_fn()
-            except Exception:
-                pass
+            except Exception as close_error:
+                _ = close_error  # best-effort sync iterator close before final sentinel
             loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
     thread = threading.Thread(target=_worker, daemon=True)

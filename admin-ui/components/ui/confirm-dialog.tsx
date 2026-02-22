@@ -127,7 +127,9 @@ export function ConfirmProvider({ children }: ConfirmProviderProps) {
   );
 }
 
-// Standalone confirm dialog component for simpler use cases
+// Standalone confirm dialog component retained for compatibility.
+// Prefer useConfirm() via ConfirmProvider for all new code paths.
+/** @deprecated Use useConfirm() with ConfirmProvider instead. */
 interface ConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -141,6 +143,7 @@ interface ConfirmDialogProps {
   loading?: boolean;
 }
 
+/** @deprecated Use useConfirm() with ConfirmProvider instead. */
 export function ConfirmDialog({
   open,
   onOpenChange,
@@ -203,8 +206,10 @@ export function ConfirmDialog({
             variant={getButtonVariant()}
             onClick={handleConfirm}
             disabled={loading}
+            loading={loading}
+            loadingText="Please wait..."
           >
-            {loading ? 'Please wait...' : confirmText}
+            {confirmText}
           </Button>
         </DialogFooter>
       </DialogContent>

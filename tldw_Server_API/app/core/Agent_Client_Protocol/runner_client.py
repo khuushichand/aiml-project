@@ -60,6 +60,7 @@ class ACPRunnerClient:
         self._client.set_notification_handler(self._handle_notification)
         self._client.set_request_handler(self._handle_request)
         self._updates: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
+        self._session_owners: dict[str, int] = {}
         self._agent_capabilities: dict[str, Any] = {}
         # WebSocket registry per session
         self._ws_registry: dict[str, SessionWebSocketRegistry] = {}
@@ -110,6 +111,7 @@ class ACPRunnerClient:
         cwd: str,
         mcp_servers: list[dict[str, Any]] | None = None,
         agent_type: str | None = None,
+        user_id: int | None = None,
     ) -> str:
         params: dict[str, Any] = {"cwd": cwd}
         if mcp_servers:
@@ -121,6 +123,8 @@ class ACPRunnerClient:
         session_id = result.get("sessionId")
         if not session_id:
             raise ACPResponseError("Missing sessionId in response")
+        if user_id is not None:
+            self._session_owners[str(session_id)] = int(user_id)
         return session_id
 
     async def list_agents(self) -> dict[str, Any]:
@@ -143,6 +147,7 @@ class ACPRunnerClient:
     async def close_session(self, session_id: str) -> None:
         await self._client.call("_tldw/session/close", {"sessionId": session_id})
         self._updates.pop(session_id, None)
+        self._session_owners.pop(str(session_id), None)
 
     def pop_updates(self, session_id: str, limit: int = 100) -> list[dict[str, Any]]:
         updates = []
@@ -152,6 +157,16 @@ class ACPRunnerClient:
         for _ in range(min(limit, len(queue))):
             updates.append(queue.popleft())
         return updates
+
+    async def verify_session_access(self, session_id: str, user_id: int) -> bool:
+        """Verify that the given user owns the ACP session.
+
+        Returns False when the session is unknown or ownership does not match.
+        """
+        owner = self._session_owners.get(str(session_id))
+        if owner is None:
+            return False
+        return int(owner) == int(user_id)
 
     async def shutdown(self) -> None:
         await self._client.close()
@@ -246,11 +261,22 @@ class ACPRunnerClient:
     def _determine_permission_tier(self, tool_name: str) -> str:
         """Determine the permission tier for a tool based on its name.
 
-        This is a heuristic based on common patterns:
+        First consults admin-configured permission policies (if any).
+        Falls back to a heuristic based on common patterns:
         - Read operations: auto
         - Write operations: batch
         - Execute/delete operations: individual
         """
+        # Check admin-configured policies first (best-effort, sync)
+        try:
+            from tldw_Server_API.app.services.admin_acp_sessions_service import _store
+            if _store is not None:
+                policy_tier = _store.resolve_permission_tier(tool_name)
+                if policy_tier is not None:
+                    return policy_tier
+        except Exception as policy_error:
+            logger.debug("Runner client failed to resolve ACP policy tier from store", exc_info=policy_error)
+
         tool_lower = tool_name.lower()
 
         # Auto-approve tier (read-only)

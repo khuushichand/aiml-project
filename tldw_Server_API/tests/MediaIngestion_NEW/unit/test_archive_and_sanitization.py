@@ -1,7 +1,6 @@
-import os
 import tarfile
-import tempfile
 import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -104,3 +103,89 @@ def test_xml_sanitization_strips_comments_and_pi():
     low = cleaned.lower()
     assert "processing" not in low and "comment" not in low
     assert "child" in low and "ok" in low
+
+
+@pytest.mark.unit
+def test_email_html_body_is_sanitized_before_text_conversion():
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import (
+        Email_Processing_Lib as email_lib,
+    )
+
+    eml = (
+        b"From: A <a@example.com>\r\n"
+        b"To: B <b@example.com>\r\n"
+        b"Subject: HTML Body\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: text/html; charset=utf-8\r\n\r\n"
+        b"<html><body><script>alert('x')</script><p>Hello</p></body></html>"
+    )
+
+    result = email_lib.process_email_task(
+        file_bytes=eml,
+        filename="test.eml",
+        perform_chunking=False,
+        perform_analysis=False,
+    )
+
+    assert result.get("status") == "Success"
+    content = str(result.get("content") or "").lower()
+    assert "hello" in content
+    assert "alert" not in content
+    assert "script" not in content
+
+
+@pytest.mark.unit
+def test_email_archive_rejects_oversized_member(tmp_path: Path):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import (
+        Email_Processing_Lib as email_lib,
+    )
+
+    archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get("archive", {})
+    original_member_cap = archive_cfg.get("max_member_uncompressed_size_mb", 100)
+    try:
+        archive_cfg["max_member_uncompressed_size_mb"] = 1
+        large_body = b"x" * (2 * 1024 * 1024)
+        eml_payload = (
+            b"From: A <a@example.com>\r\n"
+            b"To: B <b@example.com>\r\n"
+            b"Subject: Big\r\n"
+            b"MIME-Version: 1.0\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+            + large_body
+        )
+        bio = BytesIO()
+        with zipfile.ZipFile(bio, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("big.eml", eml_payload)
+
+        results = email_lib.process_eml_archive_bytes(
+            file_bytes=bio.getvalue(),
+            archive_name="emails.zip",
+            perform_chunking=False,
+            perform_analysis=False,
+        )
+        assert results and results[0].get("status") == "Error"
+        assert "member exceeds uncompressed size limit" in str(
+            results[0].get("error", "")
+        ).lower()
+    finally:
+        archive_cfg["max_member_uncompressed_size_mb"] = original_member_cap
+
+
+@pytest.mark.unit
+def test_email_archive_rejects_unsafe_member_path():
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import (
+        Email_Processing_Lib as email_lib,
+    )
+
+    bio = BytesIO()
+    with zipfile.ZipFile(bio, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("../escape.eml", b"From: A <a@example.com>\r\n\r\nbody")
+
+    results = email_lib.process_eml_archive_bytes(
+        file_bytes=bio.getvalue(),
+        archive_name="emails.zip",
+        perform_chunking=False,
+        perform_analysis=False,
+    )
+    assert results and results[0].get("status") == "Error"
+    assert "unsafe member path" in str(results[0].get("error", "")).lower()

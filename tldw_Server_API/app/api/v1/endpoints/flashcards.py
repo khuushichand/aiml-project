@@ -4,7 +4,7 @@
 import json
 import os
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -15,11 +15,15 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.api.v1.schemas.flashcards import (
     Deck,
     DeckCreate,
+    FlashcardGenerateRequest,
+    FlashcardGenerateResponse,
+    FlashcardAnalyticsSummaryResponse,
     Flashcard,
     FlashcardCreate,
     FlashcardListResponse,
     FlashcardReviewRequest,
     FlashcardReviewResponse,
+    FlashcardResetSchedulingRequest,
     FlashcardsImportRequest,
     FlashcardTagsUpdate,
     FlashcardUpdate,
@@ -32,6 +36,11 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
 )
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
+from tldw_Server_API.app.core.Flashcards.apkg_importer import (
+    APKGImportError,
+    import_rows_from_apkg_bytes,
+)
+from tldw_Server_API.app.core.Workflows.adapters.content import run_flashcard_generate_adapter
 
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
 _FLASHCARDS_INT_PARSE_EXCEPTIONS: tuple[type[BaseException], ...] = (
@@ -49,6 +58,7 @@ _FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ValueError,
     json.JSONDecodeError,
 )
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _fetch_flashcard_or_404(card_uuid: str, db: CharactersRAGDB) -> dict:
@@ -93,9 +103,17 @@ def _normalize_flashcard_model_fields(
 
 def _require_flashcards_admin(principal: AuthPrincipal) -> None:
     """Raise 403 if the principal lacks flashcards admin permission."""
-    perms = set(principal.permissions or [])
-    roles = set(principal.roles or [])
-    if FLASHCARDS_ADMIN not in perms and "admin" not in roles and not principal.is_admin:
+    perms = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if FLASHCARDS_ADMIN.lower() not in perms and "admin" not in roles and not (perms & _ADMIN_CLAIM_PERMISSIONS):
         raise HTTPException(
             status_code=403,
             detail="Admin flashcards permission required for override",
@@ -275,6 +293,18 @@ def list_flashcards(
         logger.error(f"Failed to list flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to list flashcards") from e
 
+
+@router.get("/analytics/summary", response_model=FlashcardAnalyticsSummaryResponse)
+def get_flashcard_analytics_summary(
+    deck_id: Optional[int] = Query(None, ge=1),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        return db.get_flashcard_analytics_summary(deck_id=deck_id)
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to get flashcard analytics summary: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get flashcard analytics summary") from e
+
 ## (export endpoint moved earlier)
 
 ## Note: /export endpoint is defined above to avoid path shadowing by /{card_uuid}
@@ -288,7 +318,7 @@ def get_flashcard(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_db_fo
         raise HTTPException(status_code=500, detail="Failed to get flashcard") from e
 
 
-@router.patch("/{card_uuid}")
+@router.patch("/{card_uuid}", response_model=Flashcard)
 def update_flashcard(card_uuid: str, payload: FlashcardUpdate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
         data = payload.model_dump(exclude_unset=True)
@@ -379,7 +409,31 @@ def delete_flashcard(card_uuid: str, expected_version: int = Query(..., ge=1), d
         raise HTTPException(status_code=500, detail="Failed to delete flashcard") from e
 
 
-@router.put("/{card_uuid}/tags")
+@router.post("/{card_uuid}/reset-scheduling", response_model=Flashcard)
+def reset_flashcard_scheduling(
+    card_uuid: str,
+    payload: FlashcardResetSchedulingRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        ok = db.reset_flashcard_scheduling(
+            card_uuid,
+            expected_version=payload.expected_version,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Flashcard not found or not updated")
+        card = db.get_flashcard(card_uuid)
+        if not card:
+            raise HTTPException(status_code=404, detail="Flashcard not found")
+        return card
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to reset flashcard scheduling: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset flashcard scheduling") from e
+
+
+@router.put("/{card_uuid}/tags", response_model=Flashcard)
 def set_flashcard_tags(card_uuid: str, payload: FlashcardTagsUpdate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
         db.set_flashcard_tags(card_uuid, payload.tags)
@@ -758,6 +812,119 @@ async def import_flashcards_json(
         raise HTTPException(status_code=500, detail="Failed to import JSON flashcards") from e
 
 
+@router.post("/import/apkg")
+async def import_flashcards_apkg(
+    file: UploadFile = File(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    max_items: Optional[int] = Query(
+        None,
+        ge=1,
+        description="Admin override: max APKG notes to import (cannot exceed env cap)",
+    ),
+    max_field_length: Optional[int] = Query(
+        None,
+        ge=1,
+        description="Admin override: max APKG field length in bytes (cannot exceed env cap)",
+    ),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    try:
+        raw = await file.read()
+
+        def _int_env(name: str, default: int) -> int:
+            try:
+                return max(1, int(os.getenv(name, str(default))))
+            except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
+                return default
+
+        env_max_items = _int_env("FLASHCARDS_IMPORT_MAX_LINES", 10000)
+        env_max_field_length = _int_env("FLASHCARDS_IMPORT_MAX_FIELD_LENGTH", 8192)
+        if any(p is not None for p in (max_items, max_field_length)):
+            _require_flashcards_admin(principal)
+        effective_max_items = min(env_max_items, max_items) if max_items else env_max_items
+        effective_max_field_length = (
+            min(env_max_field_length, max_field_length)
+            if max_field_length
+            else env_max_field_length
+        )
+
+        rows, errors = import_rows_from_apkg_bytes(
+            raw,
+            max_notes=effective_max_items,
+            max_field_length=effective_max_field_length,
+        )
+
+        existing_decks = {
+            d.get("name"): d.get("id")
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False)
+        }
+        decks_cache: dict[str, int] = dict(existing_decks)
+        if "Default" not in decks_cache:
+            did = db.add_deck("Default", description=None)
+            decks_cache["Default"] = did
+            existing_decks["Default"] = did
+
+        created: list[dict[str, Any]] = []
+        for idx, row in enumerate(rows, start=1):
+            deck_name = str(row.get("deck_name") or "Default").strip() or "Default"
+            deck_id = decks_cache.get(deck_name)
+            if deck_id is None:
+                deck_id = db.add_deck(deck_name, description=None)
+                decks_cache[deck_name] = deck_id
+                existing_decks[deck_name] = deck_id
+
+            tags_value = row.get("tags")
+            if isinstance(tags_value, list):
+                tags_list = [str(tag).strip() for tag in tags_value if str(tag).strip()]
+            else:
+                tags_list = []
+
+            model_type = str(row.get("model_type") or "basic").lower()
+            if model_type not in ("basic", "basic_reverse", "cloze"):
+                errors.append(
+                    {
+                        "index": idx,
+                        "error": f"Unsupported model_type in APKG note: {model_type}",
+                    }
+                )
+                continue
+
+            is_cloze = bool(row.get("is_cloze")) or model_type == "cloze"
+            reverse = bool(row.get("reverse")) or model_type == "basic_reverse"
+            data: dict[str, Any] = {
+                "deck_id": deck_id,
+                "front": str(row.get("front") or ""),
+                "back": str(row.get("back") or ""),
+                "notes": row.get("notes"),
+                "extra": row.get("extra"),
+                "tags_json": json.dumps(tags_list) if tags_list else None,
+                "model_type": model_type,
+                "reverse": reverse,
+                "is_cloze": is_cloze,
+                "ef": float(row.get("ef") or 2.5),
+                "interval_days": int(row.get("interval_days") or 0),
+                "repetitions": int(row.get("repetitions") or 0),
+                "lapses": int(row.get("lapses") or 0),
+                "due_at": row.get("due_at"),
+            }
+            uuid = db.add_flashcard(data)
+            if tags_list:
+                db.set_flashcard_tags(uuid, tags_list)
+            created.append({"uuid": uuid, "deck_id": deck_id})
+
+        return {"imported": len(created), "items": created, "errors": errors}
+    except APKGImportError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to import APKG flashcards: {e}")
+        raise HTTPException(status_code=500, detail="Failed to import flashcards") from e
+    except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"APKG import failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to import APKG flashcards") from e
+
+
 @router.post("/review", response_model=FlashcardReviewResponse)
 def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
@@ -768,6 +935,77 @@ def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depe
     except CharactersRAGDBError as e:
         logger.error(f"Failed to review flashcard: {e}")
         raise HTTPException(status_code=500, detail="Failed to review flashcard") from e
+
+
+@router.post("/generate", response_model=FlashcardGenerateResponse)
+async def generate_flashcards(payload: FlashcardGenerateRequest):
+    """Generate flashcards from free text using the workflows flashcard_generate adapter."""
+    try:
+        result = await run_flashcard_generate_adapter(
+            {
+                "text": payload.text,
+                "num_cards": payload.num_cards,
+                "card_type": payload.card_type,
+                "difficulty": payload.difficulty,
+                "focus_topics": payload.focus_topics,
+                "provider": payload.provider,
+                "model": payload.model,
+            },
+            {},
+        )
+
+        if isinstance(result, dict) and result.get("__status__") == "cancelled":
+            raise HTTPException(status_code=499, detail="Generation cancelled")
+
+        error = result.get("error") if isinstance(result, dict) else None
+        if error:
+            raise HTTPException(status_code=400, detail=str(error))
+
+        raw_flashcards = result.get("flashcards") if isinstance(result, dict) else []
+        generated_cards: list[dict] = []
+        for raw in raw_flashcards or []:
+            if not isinstance(raw, dict):
+                continue
+            front = str(raw.get("front") or "").strip()
+            back = str(raw.get("back") or "").strip()
+            if not front or not back:
+                continue
+
+            tags_value = raw.get("tags")
+            if isinstance(tags_value, list):
+                tags = [str(tag).strip() for tag in tags_value if str(tag).strip()]
+            elif isinstance(tags_value, str):
+                tags = [token for token in tags_value.replace(",", " ").split() if token]
+            else:
+                tags = []
+
+            model_type = str(raw.get("model_type") or payload.card_type).lower()
+            if model_type not in ("basic", "basic_reverse", "cloze"):
+                model_type = payload.card_type
+
+            card = {
+                "front": front,
+                "back": back,
+                "tags": tags,
+                "model_type": model_type,
+            }
+            notes = raw.get("notes")
+            if isinstance(notes, str) and notes.strip():
+                card["notes"] = notes
+            extra = raw.get("extra")
+            if isinstance(extra, str) and extra.strip():
+                card["extra"] = extra
+            generated_cards.append(card)
+
+        return {
+            "flashcards": generated_cards,
+            "count": len(generated_cards),
+        }
+    except HTTPException:
+        raise
+    except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Flashcard generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate flashcards") from e
 
 
 @router.get("/export")

@@ -109,7 +109,7 @@ def test_evaluations_exact_match_workflow(page, server_url):
 
 @pytest.mark.e2e
 def test_evaluations_model_graded_external_workflow(page, server_url):
-    if os.getenv("TLDW_E2E_EXTERNAL_EVALS", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("TLDW_E2E_EXTERNAL_EVALS", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("External evals disabled; set TLDW_E2E_EXTERNAL_EVALS=1 to enable.")
     if not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set; skipping model-graded eval workflow.")

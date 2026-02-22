@@ -27,7 +27,7 @@ def test_http_file_size_limit_exceeded(monkeypatch, bypass_api_limits):
         try:
             print("DEBUG audio.transcriptions status=", resp.status_code, "body=", resp.text)
         except Exception:
-            pass
+            _ = None
         if resp.status_code == 404:
             pytest.skip("audio/transcriptions endpoint not mounted in this build")
         assert resp.status_code == 413
@@ -39,7 +39,6 @@ def test_http_concurrent_jobs_cap(monkeypatch, bypass_api_limits):
 
     """Forces can_start_job to reject to exercise 429 response path."""
     # Bypass ingress rate limits to let endpoint-level job cap surface
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep

@@ -66,7 +66,7 @@ def _resolve_templates_path(path_override: Path | str | None = None) -> Path:
 def _load_templates_from_path(path_str: str) -> list[dict[str, Any]]:
     path = Path(path_str)
     if not path.exists():
-        logger.debug("slides templates file not found: %s", path)
+        logger.debug("slides templates file not found: {}", path)
         return []
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))

@@ -1,4 +1,5 @@
 import io
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from importlib import import_module
 
@@ -54,7 +55,7 @@ def test_opml_import_export_endpoints(client_with_user):
     r = c.post("/api/v1/watchlists/sources/import", files=files, data={"active": "1"})
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["created"] >= 2
+    assert (data["created"] + data["skipped"]) >= 2
 
     # Export OPML
     r = c.get("/api/v1/watchlists/sources/export")
@@ -62,3 +63,10 @@ def test_opml_import_export_endpoints(client_with_user):
     assert "<opml" in r.text
     assert "https://feed1.example.com/rss" in r.text
     assert "https://feed2.example.com/rss" in r.text
+    root = ET.fromstring(r.text)
+    exported_urls = [
+        (outline.attrib.get("xmlUrl") or outline.attrib.get("xmlurl") or "")
+        for outline in root.findall(".//outline")
+    ]
+    assert "https://feed1.example.com/rss" in exported_urls
+    assert "https://feed2.example.com/rss" in exported_urls

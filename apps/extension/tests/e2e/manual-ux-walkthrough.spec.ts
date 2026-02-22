@@ -9,6 +9,7 @@
  */
 
 import { test, type Page } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import { launchWithExtension } from "./utils/extension"
 import path from "path"
 
@@ -66,7 +67,7 @@ async function waitForStableRoot(page: Page) {
 test.describe("Manual UX Walkthrough", () => {
 
   test("1. First-run experience - what does a new user see?", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH)
 
     try {
       // Listen for console errors
@@ -108,7 +109,7 @@ test.describe("Manual UX Walkthrough", () => {
   })
 
   test("2. Sidepanel first-run experience", async () => {
-    const { context, openSidepanel } = await launchWithExtension(TEST_EXT_PATH)
+    const { context, openSidepanel } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH)
 
     try {
       const sidepanel = await openSidepanel()
@@ -133,7 +134,7 @@ test.describe("Manual UX Walkthrough", () => {
   })
 
   test("3. Options page with server configured", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -160,7 +161,7 @@ test.describe("Manual UX Walkthrough", () => {
   })
 
   test("4. Sidepanel with server configured", async () => {
-    const { context, openSidepanel } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, openSidepanel } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -192,7 +193,7 @@ test.describe("Manual UX Walkthrough", () => {
   })
 
   test("5. Navigate through main sections", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -233,7 +234,7 @@ test.describe("Manual UX Walkthrough", () => {
   })
 
   test("6. Settings sub-pages", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -263,7 +264,7 @@ test.describe("Manual UX Walkthrough", () => {
   })
 
   test("7. Error state - unreachable server", async () => {
-    const { context, page, optionsUrl, openSidepanel } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl, openSidepanel } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: "http://localhost:9999",
         authMode: "single-user",
@@ -303,7 +304,7 @@ test.describe("Manual UX Walkthrough", () => {
   })
 
   test("8. Redesigned sidepanel - verify new layout", async () => {
-    const { context, openSidepanel } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, openSidepanel } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",

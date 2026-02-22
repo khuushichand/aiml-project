@@ -34,7 +34,7 @@ async def test_audio_ws_emits_ws_latency_metrics_on_commit():
                 _ = ws.receive_json()
             except Exception:
                 # If nothing arrives, this still validates that server attempted send_json
-                pass
+                _ = None
 
     after = reg.get_metric_stats("ws_send_latency_ms").get("count", 0)
     assert after >= before + 1

@@ -10,6 +10,7 @@ import {
   InputNumber,
   Skeleton,
   Space,
+  Switch,
   Typography
 } from "antd"
 import { useTranslation } from "react-i18next"
@@ -70,6 +71,8 @@ export const PromptStudioSettings: React.FC = () => {
     if (!defaultsQuery.data) return
     form.setFieldsValue({
       defaultProjectId: defaultsQuery.data.defaultProjectId ?? undefined,
+      autoSyncWorkspacePrompts:
+        defaultsQuery.data.autoSyncWorkspacePrompts !== false,
       executeProvider: defaultsQuery.data.executeProvider,
       executeModel: defaultsQuery.data.executeModel,
       executeTemperature: defaultsQuery.data.executeTemperature,
@@ -86,6 +89,7 @@ export const PromptStudioSettings: React.FC = () => {
     mutationFn: async (values: any) => {
       await setPromptStudioDefaults({
         defaultProjectId: values.defaultProjectId ?? null,
+        autoSyncWorkspacePrompts: values.autoSyncWorkspacePrompts !== false,
         executeProvider: values.executeProvider,
         executeModel: values.executeModel,
         executeTemperature: values.executeTemperature,
@@ -141,11 +145,11 @@ export const PromptStudioSettings: React.FC = () => {
       {capabilityQuery.isError && (
         <Alert
           type="error"
-          message={t("settings:promptStudio.probeError", "Unable to reach Prompt Studio")}
+          title={t("settings:promptStudio.probeError", "Unable to reach Prompt Studio")}
         />
       )}
 
-      <Space direction="vertical" size="large" className="w-full">
+      <Space orientation="vertical" size="large" className="w-full">
         <Card
           title={t("settings:promptStudio.statusCard", "Status")}
           extra={
@@ -180,7 +184,7 @@ export const PromptStudioSettings: React.FC = () => {
             <Alert
               className="mt-3"
               type="error"
-              message={t("settings:promptStudio.statusError", "Status endpoint unavailable")}
+              title={t("settings:promptStudio.statusError", "Status endpoint unavailable")}
               description={statusError}
             />
           )}
@@ -213,10 +217,20 @@ export const PromptStudioSettings: React.FC = () => {
                 evalModelName: "gpt-3.5-turbo",
                 evalTemperature: 0.2,
                 evalMaxTokens: 512,
+                autoSyncWorkspacePrompts: true,
                 pageSize: 10,
                 warnSeconds: 30
               }}>
               <div className="grid gap-4 md:grid-cols-2">
+                <Form.Item
+                  label={t(
+                    "settings:promptStudio.autoSyncWorkspacePrompts",
+                    "Auto-sync workspace prompts"
+                  )}
+                  name="autoSyncWorkspacePrompts"
+                  valuePropName="checked">
+                  <Switch />
+                </Form.Item>
                 <Form.Item
                   label={t("settings:promptStudio.defaultProject", "Default project ID")}
                   name="defaultProjectId">
@@ -303,7 +317,7 @@ export const PromptStudioSettings: React.FC = () => {
       {!capabilityReady && !capabilityQuery.isLoading && (
         <Alert
           type="info"
-          message={t(
+          title={t(
             "settings:promptStudio.unavailable",
             "Prompt Studio isn’t available on the server yet."
           )}

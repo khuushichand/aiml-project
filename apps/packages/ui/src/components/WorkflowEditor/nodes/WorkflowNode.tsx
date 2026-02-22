@@ -50,42 +50,67 @@ const STATUS_ICONS: Record<
 
 // Status colors
 const STATUS_COLORS: Record<StepExecutionStatus, string> = {
-  idle: "text-gray-400",
-  queued: "text-blue-400",
-  running: "text-blue-500 animate-spin",
-  success: "text-green-500",
-  failed: "text-red-500",
-  skipped: "text-gray-400",
-  waiting_human: "text-yellow-500 animate-pulse",
-  waiting_approval: "text-yellow-500 animate-pulse",
-  cancelled: "text-gray-500"
+  idle: "text-text-subtle",
+  queued: "text-primary",
+  running: "text-primary animate-spin",
+  success: "text-success",
+  failed: "text-danger",
+  skipped: "text-text-subtle",
+  waiting_human: "text-warn animate-pulse",
+  waiting_approval: "text-warn animate-pulse",
+  cancelled: "text-text-muted"
 }
 
-// Category colors for node borders/backgrounds
+// theme-exempt: workflow category colors
 const CATEGORY_STYLES: Record<string, { border: string; bg: string; header: string }> = {
   ai: {
-    border: "border-purple-500",
-    bg: "bg-purple-50 dark:bg-purple-950/30",
-    header: "bg-purple-500"
+    border: "border-primary",
+    bg: "bg-primary/10",
+    header: "bg-primary"
   },
-  data: {
-    border: "border-blue-500",
-    bg: "bg-blue-50 dark:bg-blue-950/30",
-    header: "bg-blue-500"
+  search: {
+    border: "border-primary",
+    bg: "bg-primary/10",
+    header: "bg-primary"
+  },
+  media: {
+    border: "border-indigo-500",
+    bg: "bg-indigo-50 dark:bg-indigo-950/30",
+    header: "bg-indigo-500"
+  },
+  text: {
+    border: "border-cyan-500",
+    bg: "bg-cyan-50 dark:bg-cyan-950/30",
+    header: "bg-cyan-500"
+  },
+  research: {
+    border: "border-violet-500",
+    bg: "bg-violet-50 dark:bg-violet-950/30",
+    header: "bg-violet-500"
+  },
+  audio: {
+    border: "border-teal-500",
+    bg: "bg-teal-50 dark:bg-teal-950/30",
+    header: "bg-teal-500"
+  },
+  video: {
+    border: "border-emerald-500",
+    bg: "bg-emerald-50 dark:bg-emerald-950/30",
+    header: "bg-emerald-500"
   },
   control: {
-    border: "border-orange-500",
-    bg: "bg-orange-50 dark:bg-orange-950/30",
-    header: "bg-orange-500"
+    border: "border-indigo-500",
+    bg: "bg-indigo-50 dark:bg-indigo-950/30",
+    header: "bg-indigo-500"
   },
   io: {
-    border: "border-green-500",
-    bg: "bg-green-50 dark:bg-green-950/30",
-    header: "bg-green-500"
+    border: "border-success",
+    bg: "bg-success/10",
+    header: "bg-success"
   },
   utility: {
     border: "border-gray-500",
-    bg: "bg-gray-50 dark:bg-gray-900/30",
+    bg: "bg-surface",
     header: "bg-gray-500"
   }
 }
@@ -127,10 +152,10 @@ export const WorkflowNode = memo(({ id, data, selected }: WorkflowNodeProps) => 
         transition-all duration-200
         ${styles.border}
         ${styles.bg}
-        ${selected ? "ring-2 ring-blue-400 ring-offset-2 dark:ring-offset-gray-900" : ""}
-        ${isRunning ? "ring-2 ring-blue-400 animate-pulse" : ""}
-        ${isWaiting ? "ring-2 ring-yellow-400" : ""}
-        ${hasError ? "ring-2 ring-red-400" : ""}
+        ${selected ? "ring-2 ring-primary ring-offset-2 ring-offset-bg" : ""}
+        ${isRunning ? "ring-2 ring-primary animate-pulse" : ""}
+        ${isWaiting ? "ring-2 ring-warn" : ""}
+        ${hasError ? "ring-2 ring-danger" : ""}
       `}
     >
       {/* Header */}
@@ -153,14 +178,14 @@ export const WorkflowNode = memo(({ id, data, selected }: WorkflowNodeProps) => 
       <div className="px-3 py-2">
         {/* Step type badge */}
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+          <span className="text-xs text-text-muted uppercase tracking-wide">
             {metadata?.label || data.stepType}
           </span>
         </div>
 
         {/* Streaming output preview (for prompt nodes) */}
         {executionState?.streamingOutput && (
-          <div className="mt-2 p-2 bg-gray-100 dark:bg-gray-800 rounded text-xs font-mono max-h-20 overflow-y-auto">
+          <div className="mt-2 p-2 bg-surface rounded text-xs font-mono max-h-20 overflow-y-auto">
             {executionState.streamingOutput.slice(-200)}
             {executionState.status === "running" && (
               <span className="animate-pulse">|</span>
@@ -170,7 +195,7 @@ export const WorkflowNode = memo(({ id, data, selected }: WorkflowNodeProps) => 
 
         {/* Error message */}
         {executionState?.error && (
-          <div className="mt-2 p-2 bg-red-100 dark:bg-red-900/30 rounded text-xs text-red-600 dark:text-red-400 flex items-start gap-1">
+          <div className="mt-2 p-2 bg-danger/10 rounded text-xs text-danger flex items-start gap-1">
             <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
             <span className="line-clamp-2">{executionState.error}</span>
           </div>
@@ -178,7 +203,7 @@ export const WorkflowNode = memo(({ id, data, selected }: WorkflowNodeProps) => 
 
         {/* Duration */}
         {executionState?.durationMs && (
-          <div className="mt-2 text-xs text-gray-400">
+          <div className="mt-2 text-xs text-text-subtle">
             {(executionState.durationMs / 1000).toFixed(2)}s
           </div>
         )}
@@ -192,7 +217,7 @@ export const WorkflowNode = memo(({ id, data, selected }: WorkflowNodeProps) => 
           position={Position.Left}
           id={input.id}
           className={`
-            !w-3 !h-3 !border-2 !border-white dark:!border-gray-800
+            !w-3 !h-3 !border-2 !border-surface
             ${PORT_COLORS[input.dataType] || PORT_COLORS.any}
           `}
           style={{
@@ -209,7 +234,7 @@ export const WorkflowNode = memo(({ id, data, selected }: WorkflowNodeProps) => 
           position={Position.Right}
           id={output.id}
           className={`
-            !w-3 !h-3 !border-2 !border-white dark:!border-gray-800
+            !w-3 !h-3 !border-2 !border-surface
             ${PORT_COLORS[output.dataType] || PORT_COLORS.any}
           `}
           style={{

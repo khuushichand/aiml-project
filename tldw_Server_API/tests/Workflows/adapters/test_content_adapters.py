@@ -1602,8 +1602,371 @@ class TestContentAdaptersRegistration:
             "newsletter_generate",
             "slides_generate",
             "diagram_generate",
+            "audio_briefing_compose",
         ]
 
         for adapter_name in content_adapters:
             spec = registry.get_spec(adapter_name)
             assert asyncio.iscoroutinefunction(spec.func), f"Adapter '{adapter_name}' is not async"
+
+
+# =============================================================================
+# Audio Briefing Compose Adapter Tests
+# =============================================================================
+
+
+class TestAudioBriefingComposeAdapter:
+    """Tests for run_audio_briefing_compose_adapter."""
+
+    @pytest.fixture
+    def sample_items(self):
+        return [
+            {"title": "AI Breakthrough", "summary": "New AI model achieves record performance", "url": "https://example.com/ai"},
+            {"title": "Climate Report", "summary": "Global temperatures continue to rise", "url": "https://example.com/climate"},
+            {"title": "Tech Merger", "summary": "Two major tech companies announce merger", "url": "https://example.com/tech"},
+        ]
+
+    @pytest.fixture
+    def mock_llm_response_multi_voice(self):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "[HOST]: Good morning, here is your daily briefing.\n"
+                            "[pause]\n"
+                            "[REPORTER]: In technology news, a new AI model has achieved record performance "
+                            "on standard benchmarks, marking a significant advancement.\n"
+                            "[HOST]: Moving on to environmental news.\n"
+                            "[REPORTER]: A new climate report shows that global temperatures continue to rise, "
+                            "with experts warning about the long-term consequences.\n"
+                            "[HOST]: And in business news.\n"
+                            "[REPORTER]: Two major technology companies have announced a merger that could "
+                            "reshape the industry landscape.\n"
+                            "[HOST]: That wraps up today's briefing. Thank you for listening."
+                        )
+                    }
+                }
+            ]
+        }
+
+    @pytest.fixture
+    def mock_llm_response_single_voice(self):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "Good morning. Here is your daily briefing. "
+                            "In technology news, a new AI model has achieved record performance. "
+                            "A new climate report shows rising temperatures. "
+                            "Two tech companies have announced a merger. "
+                            "That wraps up today's briefing."
+                        )
+                    }
+                }
+            ]
+        }
+
+    @pytest.mark.asyncio
+    async def test_compose_multi_voice_script(self, sample_items, mock_llm_response_multi_voice, base_context):
+        """Test multi-voice script composition with section parsing."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        config = {"items": sample_items, "target_audio_minutes": 5, "multi_voice": True}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            return_value=mock_llm_response_multi_voice,
+        ) as mock_llm:
+            result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert result.get("text")
+        assert result.get("script") == result["text"]
+        assert isinstance(result["sections"], list)
+        assert len(result["sections"]) > 0
+        assert result["word_count"] > 0
+        assert result["estimated_minutes"] > 0
+        assert "voice_assignments" in result
+
+        # Verify sections have voice markers
+        voices_used = {s["voice"] for s in result["sections"]}
+        assert "HOST" in voices_used
+        assert "REPORTER" in voices_used
+
+        # Verify LLM was called with correct params
+        mock_llm.assert_called_once()
+        call_kwargs = mock_llm.call_args[1]
+        assert call_kwargs["temperature"] == 0.5
+        assert "750" in call_kwargs["messages"][0]["content"]  # 5 * 150 = 750 words
+
+    @pytest.mark.asyncio
+    async def test_compose_single_voice_script(self, sample_items, mock_llm_response_single_voice, base_context):
+        """Test single-voice script produces no voice markers."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        config = {"items": sample_items, "multi_voice": False}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            return_value=mock_llm_response_single_voice,
+        ):
+            result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert result.get("text")
+        assert len(result["sections"]) == 1
+        assert result["sections"][0]["voice"] == "HOST"
+
+    @pytest.mark.asyncio
+    async def test_compose_voice_map_override(self, sample_items, mock_llm_response_multi_voice, base_context):
+        """Test custom voice map overrides defaults."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        custom_map = {"HOST": "am_michael", "REPORTER": "bf_isabella"}
+        config = {"items": sample_items, "voice_map": custom_map}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            return_value=mock_llm_response_multi_voice,
+        ):
+            result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert result["voice_assignments"]["HOST"] == "am_michael"
+        assert result["voice_assignments"]["REPORTER"] == "bf_isabella"
+
+    @pytest.mark.asyncio
+    async def test_compose_empty_items_error(self, base_context):
+        """Test empty items returns error."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        config = {"items": []}
+        result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert result.get("error") == "missing_items"
+        assert result["text"] == ""
+
+    @pytest.mark.asyncio
+    async def test_compose_items_from_prev(self, sample_items, mock_llm_response_multi_voice, base_context):
+        """Test items resolved from prev step output."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        config = {}
+        base_context["prev"] = {"results": sample_items}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            return_value=mock_llm_response_multi_voice,
+        ):
+            result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert result.get("text")
+        assert len(result["sections"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_compose_cancelled(self, base_context):
+        """Test cancellation handling."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        config = {"items": [{"title": "Test", "summary": "Test"}]}
+        base_context["is_cancelled"] = lambda: True
+
+        result = await run_audio_briefing_compose_adapter(config, base_context)
+        assert result.get("__status__") == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_compose_system_prompt_includes_word_count(self, sample_items, base_context):
+        """Test system prompt includes calculated target word count."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        mock_response = {"choices": [{"message": {"content": "[HOST]: Test script."}}]}
+        config = {"items": sample_items, "target_audio_minutes": 8}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_llm:
+            await run_audio_briefing_compose_adapter(config, base_context)
+
+        call_kwargs = mock_llm.call_args[1]
+        # 8 * 150 = 1200 words
+        assert "1200" in call_kwargs["system_message"]
+
+    @pytest.mark.asyncio
+    async def test_compose_system_prompt_includes_language_rule(self, sample_items, base_context):
+        """Test system prompt includes configured output language rule."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        mock_response = {"choices": [{"message": {"content": "[HOST]: Test script."}}]}
+        config = {"items": sample_items, "output_language": "es"}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_llm:
+            await run_audio_briefing_compose_adapter(config, base_context)
+
+        call_kwargs = mock_llm.call_args[1]
+        assert "Reply only in es." in call_kwargs["system_message"]
+
+    @pytest.mark.asyncio
+    async def test_compose_persona_pre_summarization_preserves_contract(
+        self, sample_items, mock_llm_response_multi_voice, base_context
+    ):
+        """Test persona pre-summarization runs per item and feeds compose prompt."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        persona_rewrites = [
+            {"choices": [{"message": {"content": "Persona summary one"}}]},
+            {"choices": [{"message": {"content": "Persona summary two"}}]},
+            {"choices": [{"message": {"content": "Persona summary three"}}]},
+        ]
+        config = {
+            "items": sample_items,
+            "persona_summarize": True,
+            "persona_id": "analyst",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        }
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            side_effect=persona_rewrites + [mock_llm_response_multi_voice],
+        ) as mock_llm:
+            result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert result.get("error") is None
+        assert mock_llm.await_count == 4
+        compose_call = mock_llm.call_args_list[-1][1]
+        assert "Persona summary one" in compose_call["messages"][0]["content"]
+        first_persona_call = mock_llm.call_args_list[0][1]
+        assert "analyst" in first_persona_call["system_message"]
+        assert "Title:" in first_persona_call["messages"][0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_compose_strips_reasoning_blocks(self, sample_items, base_context):
+        """Test reasoning blocks are stripped from final spoken script."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        mock_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "<think>internal chain of thought</think>\n"
+                            "[HOST]: Good morning.\n"
+                            "<reasoning>hidden notes</reasoning>\n"
+                            "[REPORTER]: Story details."
+                        )
+                    }
+                }
+            ]
+        }
+        config = {"items": sample_items, "multi_voice": True}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert result.get("error") is None
+        assert "<think>" not in result["text"].lower()
+        assert "<reasoning>" not in result["text"].lower()
+        assert len(result["sections"]) >= 2
+
+    @pytest.mark.asyncio
+    async def test_compose_llm_error_handled(self, sample_items, base_context):
+        """Test LLM errors are caught and returned gracefully."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        config = {"items": sample_items}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("LLM provider down"),
+        ):
+            result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert "error" in result
+        assert result["text"] == ""
+
+    @pytest.mark.asyncio
+    async def test_section_parsing_with_pause(self, base_context):
+        """Test section parsing handles [pause] markers."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import _parse_sections
+
+        script = (
+            "[HOST]: Welcome to the briefing.\n"
+            "[pause]\n"
+            "[REPORTER]: In breaking news today.\n"
+            "[HOST]: That's all for now."
+        )
+        sections = _parse_sections(script)
+
+        assert len(sections) >= 3
+        # [pause] itself should not create a section, it appears inline
+        voices = [s["voice"] for s in sections]
+        assert "HOST" in voices
+        assert "REPORTER" in voices
+
+    @pytest.mark.asyncio
+    async def test_default_voice_assignments(self):
+        """Test default voice assignments are correct."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            _DEFAULT_VOICE_MAP,
+            _resolve_voice_assignments,
+        )
+
+        sections = [
+            {"voice": "HOST", "text": "Hello"},
+            {"voice": "REPORTER", "text": "News"},
+        ]
+
+        assignments = _resolve_voice_assignments(sections, None)
+
+        assert assignments["HOST"] == _DEFAULT_VOICE_MAP["HOST"]
+        assert assignments["REPORTER"] == _DEFAULT_VOICE_MAP["REPORTER"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_voice_gets_fallback(self):
+        """Test unknown voice markers get HOST fallback."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import _resolve_voice_assignments
+
+        sections = [
+            {"voice": "HOST", "text": "Hello"},
+            {"voice": "UNKNOWN_SPEAKER", "text": "Something"},
+        ]
+
+        assignments = _resolve_voice_assignments(sections, None)
+        assert "UNKNOWN_SPEAKER" in assignments  # Should get a fallback

@@ -417,58 +417,73 @@ class ChatMetricsCollector:
         start_time = time.time()
         chunk_count = 0
         heartbeat_count = 0
+        span = None
+        try:
+            # Use a detached span here to avoid contextvars detach failures when
+            # async streaming generators close under cancellation/GeneratorExit.
+            span = self.tracer.start_span(
+                "streaming_response",
+                attributes={"conversation_id": conversation_id}
+            )
+        except Exception as e:
+            logger.debug(f"Unable to start streaming span for {conversation_id}: {e}")
 
-        with self.tracer.start_as_current_span(
-            "streaming_response",
-            attributes={"conversation_id": conversation_id}
-        ) as span:
+        with self._active_lock:
+            self.active_streams += 1
+
+        try:
+            # Provide tracking methods
+            class StreamTracker:
+                def add_chunk(self):
+                    nonlocal chunk_count
+                    chunk_count += 1
+
+                def add_heartbeat(self):
+                    nonlocal heartbeat_count
+                    heartbeat_count += 1
+                    collector.metrics.streaming_heartbeats.add(
+                        1,
+                        {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
+                    )
+
+                def timeout(self):
+                    collector.metrics.streaming_timeouts.add(
+                        1,
+                        {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
+                    )
+
+            collector = self
+            yield StreamTracker()
+
+        finally:
+            duration = time.time() - start_time
+
+            # Record metrics
+            self.metrics.streaming_duration.record(
+                duration,
+                {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
+            )
+            self.metrics.streaming_chunks.record(
+                chunk_count,
+                {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
+            )
+
             with self._active_lock:
-                self.active_streams += 1
+                self.active_streams = max(0, self.active_streams - 1)
 
-            try:
-                # Provide tracking methods
-                class StreamTracker:
-                    def add_chunk(self):
-                        nonlocal chunk_count
-                        chunk_count += 1
-
-                    def add_heartbeat(self):
-                        nonlocal heartbeat_count
-                        heartbeat_count += 1
-                        collector.metrics.streaming_heartbeats.add(
-                            1,
-                            {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
-                        )
-
-                    def timeout(self):
-                        collector.metrics.streaming_timeouts.add(
-                            1,
-                            {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
-                        )
-
-                collector = self
-                yield StreamTracker()
-
-            finally:
-                duration = time.time() - start_time
-
-                # Record metrics
-                self.metrics.streaming_duration.record(
-                    duration,
-                    {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
-                )
-                self.metrics.streaming_chunks.record(
-                    chunk_count,
-                    {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
-                )
-
-                with self._active_lock:
-                    self.active_streams = max(0, self.active_streams - 1)
-                span.set_attributes({
-                    "duration": duration,
-                    "chunks": chunk_count,
-                    "heartbeats": heartbeat_count
-                })
+            if span is not None:
+                try:
+                    span.set_attributes({
+                        "duration": duration,
+                        "chunks": chunk_count,
+                        "heartbeats": heartbeat_count
+                    })
+                except Exception as e:
+                    logger.debug(f"Unable to set streaming span attributes for {conversation_id}: {e}")
+                try:
+                    span.end()
+                except Exception as e:
+                    logger.debug(f"Unable to end streaming span for {conversation_id}: {e}")
 
     @asynccontextmanager
     async def track_database_operation(self, operation_type: str):
@@ -737,9 +752,9 @@ class ChatMetricsCollector:
                 f"Fallback success: requested={requested_provider}, selected={selected_provider}, "
                 f"streaming={streaming}, queued={queued}"
             )
-        except Exception:
+        except Exception as metrics_error:
             # Metrics must never break the flow
-            pass
+            logger.debug("Fallback metrics emission failed", exc_info=metrics_error)
 
     # ---------------- Moderation helpers ----------------
     def track_moderation_input(self, user_id: str, action: str, category: str = "default"):

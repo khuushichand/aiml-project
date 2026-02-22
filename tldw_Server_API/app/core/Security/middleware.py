@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.testing import is_truthy
 
 DEFAULT_CSP = (
     "default-src 'self'; "
@@ -73,7 +74,7 @@ def _env_flag(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return raw.lower() in {"1", "true", "yes", "on"}
+    return is_truthy(raw)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

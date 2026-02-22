@@ -8,11 +8,10 @@ from typing import Iterable
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import (
     get_openai_embeddings,
     get_openai_embeddings_batch,
-    chat_with_openai,
-    chat_with_openai_async,
-    chat_with_groq_async,
-    chat_with_openrouter_async,
-    chat_with_anthropic_async,
+)
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call,
+    perform_chat_api_call_async,
 )
 from tldw_Server_API.app.core.LLM_Calls.sse import sse_done
 
@@ -298,8 +297,9 @@ def test_chat_with_openai_logs_payload_metadata(monkeypatch):
     )
 
     with pytest.raises(ChatBadRequestError):
-        chat_with_openai(
-            [{"role": "user", "content": "hi"}],
+        perform_chat_api_call(
+            api_provider="openai",
+            messages=[{"role": "user", "content": "hi"}],
             api_key="key",
             model="gpt-4o-mini",
             streaming=False,
@@ -333,8 +333,9 @@ async def test_chat_with_openai_async_no_duplicate_done(monkeypatch):
         lambda *args, **kwargs: fake_client,
     )
 
-    stream = await chat_with_openai_async(
-        [{"role": "user", "content": "hi"}], api_key="key", model="gpt-4o-mini", streaming=True
+    stream = await perform_chat_api_call_async(
+        api_provider="openai",
+        messages=[{"role": "user", "content": "hi"}], api_key="key", model="gpt-4o-mini", streaming=True
     )
     chunks = [chunk async for chunk in stream]
 
@@ -355,8 +356,9 @@ async def test_chat_with_groq_async_no_duplicate_done(monkeypatch):
         lambda *args, **kwargs: fake_client,
     )
 
-    stream = await chat_with_groq_async(
-        [{"role": "user", "content": "hi"}], api_key="key", model="llama-3.3-70b-versatile", streaming=True
+    stream = await perform_chat_api_call_async(
+        api_provider="groq",
+        messages=[{"role": "user", "content": "hi"}], api_key="key", model="llama-3.3-70b-versatile", streaming=True
     )
     chunks = [chunk async for chunk in stream]
 
@@ -377,8 +379,9 @@ async def test_chat_with_openrouter_async_no_duplicate_done(monkeypatch):
         lambda *args, **kwargs: fake_client,
     )
 
-    stream = await chat_with_openrouter_async(
-        [{"role": "user", "content": "hi"}], api_key="key", model="mistralai/mistral-7b-instruct:free", streaming=True
+    stream = await perform_chat_api_call_async(
+        api_provider="openrouter",
+        messages=[{"role": "user", "content": "hi"}], api_key="key", model="mistralai/mistral-7b-instruct:free", streaming=True
     )
     chunks = [chunk async for chunk in stream]
 
@@ -412,8 +415,9 @@ async def test_chat_with_openai_async_retries_request_error(monkeypatch):
     )
 
     with pytest.raises(ChatProviderError):
-        stream = await chat_with_openai_async(
-            [{"role": "user", "content": "hi"}],
+        stream = await perform_chat_api_call_async(
+            api_provider="openai",
+            messages=[{"role": "user", "content": "hi"}],
             api_key="key",
             model="gpt-4o-mini",
             streaming=True,
@@ -445,8 +449,9 @@ async def test_chat_with_openai_async_non_streaming_exhausts_retries(monkeypatch
     )
 
     with pytest.raises(ChatProviderError):
-        await chat_with_openai_async(
-            [{"role": "user", "content": "hi"}],
+        await perform_chat_api_call_async(
+            api_provider="openai",
+            messages=[{"role": "user", "content": "hi"}],
             api_key="key",
             model="gpt-4o-mini",
             streaming=False,
@@ -468,8 +473,9 @@ async def test_chat_with_anthropic_async_stream_tool_calls(monkeypatch):
         lambda *args, **kwargs: fake_client,
     )
 
-    stream = await chat_with_anthropic_async(
-        [{"role": "user", "content": "Hi"}], api_key="key", model="claude-3-5-sonnet-latest", streaming=True
+    stream = await perform_chat_api_call_async(
+        api_provider="anthropic",
+        messages=[{"role": "user", "content": "Hi"}], api_key="key", model="claude-3-5-sonnet-latest", streaming=True
     )
     chunks = [chunk async for chunk in stream]
 

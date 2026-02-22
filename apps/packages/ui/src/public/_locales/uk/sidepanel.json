@@ -1,0 +1,464 @@
+{
+  "tooltip_embed": {
+    "message": "Може знадобитися кілька хвилин для вкладення сторінки у базу. Будь ласка, зачекайте..."
+  },
+  "tooltip_clear": {
+    "message": "Стерти історію чату"
+  },
+  "tooltip_history": {
+    "message": "Історія чату"
+  },
+  "tooltip_openwebui": {
+    "message": "Відкрити веб-інтерфейс"
+  },
+  "toolbar_ragSearch": {
+    "message": "RAG-пошук"
+  },
+  "errors_privateModeTitle": {
+    "message": "tldw Assistant не може зберегти дані"
+  },
+  "errors_privateModeDescription": {
+    "message": "Приватний режим Firefox не підтримує збереження історії чату. Тимчасовий чат увімкнено за замовчуванням. Скоро будуть покращення."
+  },
+  "connectionBanner_connecting": {
+    "message": "Підключення до вашого сервера tldw..."
+  },
+  "connectionBanner_authErrorTitle": {
+    "message": "Потрібна увага до API-ключа"
+  },
+  "connectionBanner_authErrorBody": {
+    "message": "Сервер доступний, але API-ключ неправильний або відсутній."
+  },
+  "connectionBanner_unreachableTitle": {
+    "message": "Не вдається підключитися до сервера tldw"
+  },
+  "connectionBanner_unreachableBody": {
+    "message": "Перевірте, що сервер запущено та доступний."
+  },
+  "connectionBanner_noUrlBody": {
+    "message": "Додайте URL сервера в Налаштуваннях, щоб почати."
+  },
+  "connectionBanner_disconnectedTitle": {
+    "message": "Немає підключення до сервера tldw"
+  },
+  "connectionBanner_disconnectedBody": {
+    "message": "Відкрийте Налаштування, щоб налаштувати підключення."
+  },
+  "connectionBanner_setupTitle": {
+    "message": "Завершіть налаштування, щоб почати чат"
+  },
+  "connectionBanner_setupBody": {
+    "message": "Завершіть майстер налаштування в Налаштуваннях, щоб підключитися."
+  },
+  "connectionBanner_openSettings": {
+    "message": "Відкрити Налаштування"
+  },
+  "temporaryBadge_title": {
+    "message": "Тимчасовий чат"
+  },
+  "temporaryBadge_label": {
+    "message": "Тимч."
+  },
+  "temporaryBadge_description": {
+    "message": "Цей чат не буде збережено. Повідомлення буде очищено під час закриття або початку нового чату."
+  },
+  "temporaryBadge_clickHint": {
+    "message": "Натисніть, щоб вимкнути"
+  },
+  "temporaryBadge_ariaLabel": {
+    "message": "Режим тимчасового чату активний. Натисніть, щоб перемкнути."
+  },
+  "temporaryBadge_indicatorTooltip": {
+    "message": "Повідомлення в цьому чаті не буде збережено"
+  },
+  "temporaryBadge_indicatorAria": {
+    "message": "Тимчасовий чат"
+  },
+  "header_ingest": {
+    "message": "Імпортувати"
+  },
+  "header_saveCurrent": {
+    "message": "Зберегти поточну сторінку на сервері"
+  },
+  "header_processLocal": {
+    "message": "Обробити поточну сторінку локально"
+  },
+  "header_viewProcessed": {
+    "message": "Переглянути оброблене"
+  },
+  "header_timeoutLabel": {
+    "message": "Тайм‑аут (с)"
+  },
+  "header_toggleSidebar": {
+    "message": "Перемкнути бічну панель / повний екран"
+  },
+  "header_shortcuts": {
+    "message": "Гарячі клавіші"
+  },
+  "header_showDebug": {
+    "message": "Показати налагодження потоку"
+  },
+  "header_hideDebug": {
+    "message": "Сховати налагодження потоку"
+  },
+  "header_moreOptionsAria": {
+    "message": "Більше опцій"
+  },
+  "header_moreOptionsTitle": {
+    "message": "Ingest та інше"
+  },
+  "header_openWebuiAria": {
+    "message": "Відкрити Web UI"
+  },
+  "header_newChatAria": {
+    "message": "Новий чат"
+  },
+  "header_tempChatAria": {
+    "message": "Перемкнути тимчасовий чат"
+  },
+  "header_clearHistoryAria": {
+    "message": "Очистити історію"
+  },
+  "header_openHistoryAria": {
+    "message": "Відкрити історію"
+  },
+  "header_openModelSettingsAria": {
+    "message": "Відкрити налаштування моделі"
+  },
+  "header_openSettingsAria": {
+    "message": "Відкрити налаштування"
+  },
+  "header_tempPill": {
+    "message": "Тимч."
+  },
+  "header_modesLabel": {
+    "message": "Відкрити режими у Web UI"
+  },
+  "header_modePlayground": {
+    "message": "Чат"
+  },
+  "header_modeReview": {
+    "message": "Огляд"
+  },
+  "header_modeMedia": {
+    "message": "Медіа"
+  },
+  "header_modeKnowledge": {
+    "message": "Знання"
+  },
+  "header_modeNotes": {
+    "message": "Нотатки"
+  },
+  "header_modePrompts": {
+    "message": "Запити"
+  },
+  "header_modeFlashcards": {
+    "message": "Флеш-картки"
+  },
+  "controlRow_saveMode": {
+    "message": "Режим збереження"
+  },
+  "controlRow_ephemeral": {
+    "message": "Тимчасовий"
+  },
+  "controlRow_searchSection": {
+    "message": "Пошук і візуальний аналіз"
+  },
+  "controlRow_webSearch": {
+    "message": "Пошук в інтернеті"
+  },
+  "controlRow_vision": {
+    "message": "Візуальний аналіз"
+  },
+  "controlRow_uploadImage": {
+    "message": "Завантажити зображення"
+  },
+  "controlRow_quickIngest": {
+    "message": "Швидко імпортувати сторінку"
+  },
+  "controlRow_openInFullUI": {
+    "message": "Відкрити у повному інтерфейсі"
+  },
+  "controlRow_modeChat": {
+    "message": "Чат"
+  },
+  "controlRow_modeMedia": {
+    "message": "Медіа"
+  },
+  "controlRow_modeNotes": {
+    "message": "Нотатки"
+  },
+  "controlRow_modeFlashcards": {
+    "message": "Флеш-картки"
+  },
+  "controlRow_ragSearch": {
+    "message": "RAG-пошук"
+  },
+  "controlRow_moreTools": {
+    "message": "Більше інструментів"
+  },
+  "composer_connectHint": {
+    "message": "Підключіться до свого сервера tldw у налаштуваннях, щоб надсилати повідомлення."
+  },
+  "composer_connectingPlaceholder": {
+    "message": "Підключення..."
+  },
+  "composer_disconnectedPlaceholder": {
+    "message": "Підключіться до свого сервера tldw у налаштуваннях, щоб надсилати повідомлення й переглядати медіа."
+  },
+  "notification_ingestSent": {
+    "message": "Надіслано на сервер tldw"
+  },
+  "notification_ingestSentDesc": {
+    "message": "Поточну сторінку надіслано для обробки."
+  },
+  "notification_processedLocal": {
+    "message": "Оброблено локально"
+  },
+  "notification_processedLocalDesc": {
+    "message": "Оброблений контент збережено локально в Налаштування > Оброблене."
+  },
+  "notification_transcriptionTitle": {
+    "message": "Транскрипція"
+  },
+  "notification_transcriptionSummaryTitle": {
+    "message": "Транскрипція + резюме"
+  },
+  "notification_transcriptionFallback": {
+    "message": "Транскрипцію завершено. Відкрийте Медіа у Web UI, щоб переглянути."
+  },
+  "notification_sourceLabel": {
+    "message": "Джерело"
+  },
+  "notification_transcriptLabel": {
+    "message": "Транскрипт"
+  },
+  "notification_summaryLabel": {
+    "message": "Резюме"
+  },
+  "saveStatus_ephemeral": {
+    "message": "Тимчасовий: не зберігається, очищується при закритті"
+  },
+  "saveStatus_local": {
+    "message": "Збережено локально в цьому браузері"
+  },
+  "saveStatus_server": {
+    "message": "Збережено на сервері"
+  },
+  "saveStatus_saveFailed": {
+    "message": "Не вдалося зберегти чат на сервері"
+  },
+  "saveStatus_saveFailedDescription": {
+    "message": "Тепер чат зберігається лише локально. Перевірте з'єднання та спробуйте ще раз."
+  },
+  "rag_searchPlaceholder": {
+    "message": "Пошук у базі знань…"
+  },
+  "rag_search": {
+    "message": "Пошук"
+  },
+  "rag_show": {
+    "message": "Показати RAG-пошук"
+  },
+  "rag_hide": {
+    "message": "Сховати RAG-пошук"
+  },
+  "rag_addTagPlaceholder": {
+    "message": "Додати тег (Enter)"
+  },
+  "rag_add": {
+    "message": "Додати"
+  },
+  "rag_noResults": {
+    "message": "Немає результатів"
+  },
+  "rag_timeout_message": {
+    "message": "Час очікування запиту минув."
+  },
+  "rag_timeout_increase": {
+    "message": "Збільшити тайм‑аут"
+  },
+  "rag_timeout_checkHealth": {
+    "message": "Перевірити стан сервера"
+  },
+  "rag_actions_insert": {
+    "message": "Вставити"
+  },
+  "rag_actions_ask": {
+    "message": "Запитати"
+  },
+  "rag_actions_open": {
+    "message": "Відкрити"
+  },
+  "rag_actions_copy": {
+    "message": "Копіювати"
+  },
+  "rag_hint_message": {
+    "message": "Шукайте у своїй базі знань і вставляйте результати у повідомлення."
+  },
+  "rag_hint_dismiss": {
+    "message": "Закрити"
+  },
+  "tabs_newChat": {
+    "message": "Новий чат"
+  },
+  "tabs_newTabAria": {
+    "message": "Нова вкладка чату"
+  },
+  "tabs_closeTabAria": {
+    "message": "Закрити вкладку чату"
+  },
+  "characterSelect_label": {
+    "message": "Персонаж"
+  },
+  "characterSelect_tooltip": {
+    "message": "Вибрати персонажа"
+  },
+  "characterSelect_search": {
+    "message": "Шукати персонажів..."
+  },
+  "characterSelect_noMatches": {
+    "message": "Немає збігів"
+  },
+  "characterSelect_noCharacters": {
+    "message": "Персонажів немає"
+  },
+  "characterSelect_none": {
+    "message": "Без персонажа"
+  },
+  "characterSelect_createNewCharacter": {
+    "message": "Створити нового персонажа+"
+  },
+  "characterSelect_importCharacter": {
+    "message": "Імпортувати персонажа"
+  },
+  "rag_attachedContext": {
+    "message": "Прикріплений контекст"
+  },
+  "rag_initialState": {
+    "message": "Немає результатів"
+  },
+  "characterSelect_favorites": {
+    "message": "Favorites"
+  },
+  "characterSelect_favoriteAdd": {
+    "message": "Add to favorites"
+  },
+  "characterSelect_favoriteRemove": {
+    "message": "Remove from favorites"
+  },
+  "characterSelect_sort_favorites": {
+    "message": "Favorites"
+  },
+  "characterSelect_sort_az": {
+    "message": "A-Z"
+  },
+  "knowledge_tabs_qaSearch": {
+    "message": "QA Search"
+  },
+  "knowledge_tabs_fileSearch": {
+    "message": "File Search"
+  },
+  "knowledge_tabs_label": {
+    "message": "Knowledge panel sections"
+  },
+  "knowledge_tabs_contextBadge": {
+    "message": "{{count}} items attached"
+  },
+  "qaSearch_searching": {
+    "message": "Searching knowledge base..."
+  },
+  "qaSearch_generatedAnswer": {
+    "message": "Generated Answer"
+  },
+  "qaSearch_cached": {
+    "message": "Cached"
+  },
+  "qaSearch_copyAnswer": {
+    "message": "Copy answer"
+  },
+  "qaSearch_copied": {
+    "message": "Copied"
+  },
+  "qaSearch_copy": {
+    "message": "Copy"
+  },
+  "qaSearch_insertAnswer": {
+    "message": "Insert answer"
+  },
+  "qaSearch_copyChunk": {
+    "message": "Copy chunk"
+  },
+  "qaSearch_insertChunk": {
+    "message": "Insert chunk"
+  },
+  "qaSearch_sourceChunks": {
+    "message": "Source Chunks ({{count}})"
+  },
+  "qaSearch_sourceChunksList": {
+    "message": "Source chunks"
+  },
+  "qaSearch_strategy_standard": {
+    "message": "Standard"
+  },
+  "qaSearch_strategy_agentic": {
+    "message": "Agentic"
+  },
+  "qaSearch_sort_label": {
+    "message": "Sort source chunks"
+  },
+  "qaSearch_sort_relevance": {
+    "message": "Relevance"
+  },
+  "qaSearch_sort_source": {
+    "message": "Source"
+  },
+  "fileSearch_filterByType": {
+    "message": "Filter by type"
+  },
+  "fileSearch_resultsList": {
+    "message": "File search results"
+  },
+  "fileSearch_attached": {
+    "message": "Attached"
+  },
+  "fileSearch_alreadyAttached": {
+    "message": "Already attached"
+  },
+  "fileSearch_attach": {
+    "message": "Attach"
+  },
+  "fileSearch_openExternal": {
+    "message": "Open"
+  },
+  "fileSearch_open": {
+    "message": "Open"
+  },
+  "fileSearch_mediaType_video": {
+    "message": "Video"
+  },
+  "fileSearch_mediaType_audio": {
+    "message": "Audio"
+  },
+  "fileSearch_mediaType_pdf": {
+    "message": "PDF"
+  },
+  "fileSearch_mediaType_article": {
+    "message": "Article"
+  },
+  "fileSearch_mediaType_note": {
+    "message": "Note"
+  },
+  "fileSearch_mediaType_document": {
+    "message": "Document"
+  },
+  "fileSearch_mediaType_epub": {
+    "message": "EPUB"
+  },
+  "fileSearch_mediaType_html": {
+    "message": "HTML"
+  },
+  "fileSearch_mediaType_xml": {
+    "message": "XML"
+  }
+}

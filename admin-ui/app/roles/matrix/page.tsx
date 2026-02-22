@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ArrowLeft, RefreshCw, Shield } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Shield, Save, X } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
 
@@ -20,8 +20,11 @@ export default function PermissionMatrixPage() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [rolePermissions, setRolePermissions] = useState<RolePermissionMap>({});
+  const [pendingChanges, setPendingChanges] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
 
   const loadData = useCallback(async () => {
     try {
@@ -57,6 +60,7 @@ export default function PermissionMatrixPage() {
       );
 
       setRolePermissions(permMap);
+      setPendingChanges({});
     } catch (err: unknown) {
       console.error('Failed to load data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load roles and permissions');
@@ -69,8 +73,120 @@ export default function PermissionMatrixPage() {
     loadData();
   }, [loadData]);
 
-  const hasPermission = (roleId: number, permissionId: number): boolean => {
+  useEffect(() => {
+    if (!success) return;
+    const timer = setTimeout(() => setSuccess(''), 2500);
+    return () => clearTimeout(timer);
+  }, [success]);
+
+  const getCellKey = (roleId: number, permissionId: number): string => `${roleId}:${permissionId}`;
+
+  const baseHasPermission = (roleId: number, permissionId: number): boolean => {
     return rolePermissions[roleId]?.has(permissionId) || false;
+  };
+
+  const hasPermission = (roleId: number, permissionId: number): boolean => {
+    const key = getCellKey(roleId, permissionId);
+    if (key in pendingChanges) {
+      return pendingChanges[key];
+    }
+    return baseHasPermission(roleId, permissionId);
+  };
+
+  const pendingChangeCount = useMemo(() => Object.keys(pendingChanges).length, [pendingChanges]);
+
+  const isDirtyCell = (roleId: number, permissionId: number): boolean => {
+    return getCellKey(roleId, permissionId) in pendingChanges;
+  };
+
+  const togglePermission = (role: Role, permissionId: number) => {
+    if (role.is_system || saving) return;
+
+    const roleId = role.id;
+    const key = getCellKey(roleId, permissionId);
+    const baseline = baseHasPermission(roleId, permissionId);
+    const nextValue = !hasPermission(roleId, permissionId);
+
+    setPendingChanges((prev) => {
+      if (nextValue === baseline) {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return {
+        ...prev,
+        [key]: nextValue,
+      };
+    });
+  };
+
+  const handleDiscardChanges = () => {
+    if (pendingChangeCount === 0) return;
+    setPendingChanges({});
+    setSuccess('Unsaved changes discarded.');
+  };
+
+  const handleSaveChanges = async () => {
+    const entries = Object.entries(pendingChanges);
+    if (entries.length === 0) return;
+
+    try {
+      setSaving(true);
+      setError('');
+
+      for (const [cellKey, shouldHavePermission] of entries) {
+        const [roleIdPart, permissionIdPart] = cellKey.split(':');
+        const roleId = Number(roleIdPart);
+        const permissionId = Number(permissionIdPart);
+        if (!Number.isFinite(roleId) || !Number.isFinite(permissionId)) {
+          continue;
+        }
+        const currentlyHasPermission = baseHasPermission(roleId, permissionId);
+        if (shouldHavePermission === currentlyHasPermission) {
+          continue;
+        }
+        if (shouldHavePermission) {
+          await api.assignPermissionToRole(String(roleId), String(permissionId));
+        } else {
+          await api.removePermissionFromRole(String(roleId), String(permissionId));
+        }
+      }
+
+      setRolePermissions((prev) => {
+        const next: RolePermissionMap = {};
+        Object.entries(prev).forEach(([roleId, permissionSet]) => {
+          next[Number(roleId)] = new Set(permissionSet);
+        });
+
+        entries.forEach(([cellKey, shouldHavePermission]) => {
+          const [roleIdPart, permissionIdPart] = cellKey.split(':');
+          const roleId = Number(roleIdPart);
+          const permissionId = Number(permissionIdPart);
+          if (!Number.isFinite(roleId) || !Number.isFinite(permissionId)) {
+            return;
+          }
+          if (!next[roleId]) {
+            next[roleId] = new Set();
+          }
+          if (shouldHavePermission) {
+            next[roleId].add(permissionId);
+          } else {
+            next[roleId].delete(permissionId);
+          }
+        });
+
+        return next;
+      });
+
+      setPendingChanges({});
+      setSuccess(`Saved ${entries.length} permission change${entries.length === 1 ? '' : 's'}.`);
+    } catch (err: unknown) {
+      console.error('Failed to save matrix changes:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save matrix changes');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -86,13 +202,46 @@ export default function PermissionMatrixPage() {
                 <div>
                   <h1 className="text-3xl font-bold">Permission Matrix</h1>
                   <p className="text-muted-foreground">
-                    Visual overview of role-permission assignments
+                    Multi-edit role-permission assignments with batch save
                   </p>
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={loadData} disabled={loading}>
-                  <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                <Button
+                  variant="outline"
+                  onClick={() => router.push('/roles/compare')}
+                >
+                  Compare Roles
+                </Button>
+                {pendingChangeCount > 0 && (
+                  <Button
+                    variant="outline"
+                    onClick={handleDiscardChanges}
+                    disabled={saving}
+                  >
+                    <X className="mr-2 h-4 w-4" />
+                    Discard ({pendingChangeCount})
+                  </Button>
+                )}
+                {pendingChangeCount > 0 && (
+                  <Button
+                    onClick={handleSaveChanges}
+                    disabled={saving}
+                    loading={saving}
+                    loadingText="Saving..."
+                  >
+                    <Save className="mr-2 h-4 w-4" />
+                    Save Changes
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  onClick={loadData}
+                  disabled={loading || saving}
+                  loading={loading}
+                  loadingText="Refreshing..."
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
                   Refresh
                 </Button>
               </div>
@@ -104,6 +253,14 @@ export default function PermissionMatrixPage() {
               </Alert>
             )}
 
+            {success && (
+              <Alert className="mb-6 bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800">
+                <AlertDescription className="text-green-800 dark:text-green-200">
+                  {success}
+                </AlertDescription>
+              </Alert>
+            )}
+
             {/* Info Card */}
             <Card className="mb-6">
               <CardContent className="pt-6">
@@ -112,10 +269,14 @@ export default function PermissionMatrixPage() {
                   <div>
                     <h3 className="font-semibold">Permission Matrix View</h3>
                     <p className="text-sm text-muted-foreground mt-1">
-                      This matrix shows which permissions are assigned to each role (read-only view).
-                      To modify permissions, use the individual role detail pages.
-                      System roles may have restricted editing capabilities.
+                      Toggle cells to stage permission grants/removals, then save all changes in one batch.
+                      Unsaved cells are highlighted. System roles remain read-only.
                     </p>
+                    {pendingChangeCount > 0 && (
+                      <p className="text-sm text-amber-700 dark:text-amber-300 mt-2 font-medium">
+                        {pendingChangeCount} unsaved change{pendingChangeCount === 1 ? '' : 's'}.
+                      </p>
+                    )}
                   </div>
                 </div>
               </CardContent>
@@ -170,10 +331,19 @@ export default function PermissionMatrixPage() {
                               </div>
                             </td>
                             {roles.map((role) => (
-                              <td key={`${role.id}-${perm.id}`} className="p-3 text-center border-b">
+                              <td
+                                key={`${role.id}-${perm.id}`}
+                                className={`p-3 text-center border-b ${
+                                  isDirtyCell(role.id, perm.id)
+                                    ? 'bg-amber-50 dark:bg-amber-900/20'
+                                    : ''
+                                }`}
+                              >
                                 <Checkbox
                                   checked={hasPermission(role.id, perm.id)}
-                                  disabled
+                                  onCheckedChange={() => togglePermission(role, perm.id)}
+                                  aria-label={`Toggle ${perm.name} for ${role.name}`}
+                                  disabled={role.is_system || saving}
                                   className="mx-auto"
                                 />
                               </td>
@@ -202,6 +372,10 @@ export default function PermissionMatrixPage() {
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary">System</Badge>
                     <span className="text-muted-foreground">System roles cannot be modified</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-3 w-3 rounded-sm bg-amber-200 dark:bg-amber-700" />
+                    <span className="text-muted-foreground">Unsaved matrix change</span>
                   </div>
                 </div>
               </CardContent>

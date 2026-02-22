@@ -1,7 +1,9 @@
-import React, { Suspense, useCallback, useEffect, useMemo } from "react"
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react"
 import {
   Button,
+  Checkbox,
   DatePicker,
+  Dropdown,
   Empty,
   Input,
   Modal,
@@ -10,13 +12,16 @@ import {
   Spin,
   message
 } from "antd"
+import type { MenuProps } from "antd"
 import type { Dayjs } from "dayjs"
 import dayjs from "dayjs"
-import { Plus, Search, Filter, Star, RefreshCw } from "lucide-react"
+import { Filter, Plus, RefreshCw, Search, Star, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { useCollectionsStore } from "@/store/collections"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
+import { useUndoNotification } from "@/hooks/useUndoNotification"
+import { useCollectionsStore } from "@/store/collections"
 import type { ReadingStatus } from "@/types/collections"
+import { normalizeBulkTags, getBulkFailureLines } from "./bulkActions"
 import { ReadingItemCard } from "./ReadingItemCard"
 import { ReadingItemDetail } from "./ReadingItemDetail"
 
@@ -39,9 +44,17 @@ const AddUrlModal = React.lazy(() =>
   import("./AddUrlModal").then((m) => ({ default: m.AddUrlModal }))
 )
 
+const normalizeReadingStatus = (value: unknown): ReadingStatus => {
+  if (value === "saved" || value === "reading" || value === "read" || value === "archived") {
+    return value
+  }
+  return "saved"
+}
+
 export const ReadingItemsList: React.FC = () => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
+  const { showUndoNotification } = useUndoNotification()
 
   // Store state
   const items = useCollectionsStore((s) => s.items)
@@ -85,7 +98,22 @@ export const ReadingItemsList: React.FC = () => {
   const removeItem = useCollectionsStore((s) => s.removeItem)
   const setAvailableTags = useCollectionsStore((s) => s.setAvailableTags)
 
-  const [deleteLoading, setDeleteLoading] = React.useState(false)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
+  const [bulkActionLoading, setBulkActionLoading] = useState(false)
+  const [tagModalOpen, setTagModalOpen] = useState(false)
+  const [tagActionMode, setTagActionMode] = useState<"add" | "remove">("add")
+  const [tagInput, setTagInput] = useState("")
+  const [outputModalOpen, setOutputModalOpen] = useState(false)
+  const [outputTemplateId, setOutputTemplateId] = useState<string | null>(null)
+  const [outputTitle, setOutputTitle] = useState("")
+  const [outputTemplates, setOutputTemplates] = useState<Array<{ label: string; value: string }>>([])
+  const [outputTemplatesLoading, setOutputTemplatesLoading] = useState(false)
+  const [outputGenerating, setOutputGenerating] = useState(false)
+
+  const selectedCount = selectedItemIds.length
+  const allPageSelected = items.length > 0 && selectedCount === items.length
 
   const buildSortParam = useCallback(() => {
     if (sortBy === "relevance") return "relevance"
@@ -148,6 +176,12 @@ export const ReadingItemsList: React.FC = () => {
   useEffect(() => {
     fetchItems()
   }, [fetchItems])
+
+  // Keep selection limited to the current page list.
+  useEffect(() => {
+    const pageIds = new Set(items.map((item) => item.id))
+    setSelectedItemIds((prev) => prev.filter((id) => pageIds.has(id)))
+  }, [items])
 
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -216,6 +250,466 @@ export const ReadingItemsList: React.FC = () => {
     }
   }, [api, deleteTargetId, deleteTargetType, removeItem, closeDeleteConfirm, t])
 
+  const applyBulkAction = useCallback(
+    async (
+      payload: {
+        action: "set_status" | "set_favorite" | "add_tags" | "remove_tags" | "replace_tags" | "delete"
+        status?: ReadingStatus
+        favorite?: boolean
+        tags?: string[]
+        hard?: boolean
+      },
+      actionLabel: string
+    ) => {
+      if (selectedItemIds.length === 0) {
+        message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
+        return false
+      }
+
+      setBulkActionLoading(true)
+      try {
+        const response = await api.bulkUpdateReadingItems({
+          item_ids: selectedItemIds,
+          ...payload
+        })
+
+        const succeededIds = new Set(
+          response.results
+            .filter((entry) => entry.success)
+            .map((entry) => entry.item_id)
+        )
+        if (succeededIds.size > 0) {
+          setSelectedItemIds((prev) => prev.filter((id) => !succeededIds.has(id)))
+          await fetchItems()
+        }
+
+        if (response.failed > 0) {
+          const failureLines = getBulkFailureLines(response)
+          Modal.info({
+            title: t("collections:reading.bulk.summaryTitle", "Bulk action summary"),
+            width: 620,
+            content: (
+              <div className="space-y-2">
+                <p>
+                  {t(
+                    "collections:reading.bulk.summaryBody",
+                    "{{action}} completed. {{succeeded}} succeeded, {{failed}} failed.",
+                    {
+                      action: actionLabel,
+                      succeeded: response.succeeded,
+                      failed: response.failed
+                    }
+                  )}
+                </p>
+                {failureLines.length > 0 && (
+                  <div className="max-h-52 overflow-auto rounded border border-border bg-bg p-2 text-xs">
+                    {failureLines.map((line) => (
+                      <div key={line}>{line}</div>
+                    ))}
+                    {response.failed > failureLines.length && (
+                      <div>
+                        {t("collections:reading.bulk.moreFailures", "+{{count}} more failures", {
+                          count: response.failed - failureLines.length
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })
+        } else {
+          message.success(
+            t("collections:reading.bulk.success", "{{action}} applied to {{count}} items", {
+              action: actionLabel,
+              count: response.succeeded
+            })
+          )
+        }
+        return true
+      } catch (error: any) {
+        message.error(error?.message || "Bulk action failed")
+        return false
+      } finally {
+        setBulkActionLoading(false)
+      }
+    },
+    [api, fetchItems, selectedItemIds, t]
+  )
+
+  const handleItemSelectionChange = useCallback((itemId: string, checked: boolean) => {
+    setSelectionMode(true)
+    setSelectedItemIds((prev) => {
+      if (checked) {
+        if (prev.includes(itemId)) return prev
+        return [...prev, itemId]
+      }
+      return prev.filter((id) => id !== itemId)
+    })
+  }, [])
+
+  const handleSelectionModeToggle = useCallback(() => {
+    if (selectionMode) {
+      setSelectionMode(false)
+      setSelectedItemIds([])
+      return
+    }
+    setSelectionMode(true)
+  }, [selectionMode])
+
+  const handleSelectAllToggle = useCallback(() => {
+    if (allPageSelected) {
+      setSelectedItemIds([])
+      return
+    }
+    setSelectionMode(true)
+    setSelectedItemIds(items.map((item) => item.id))
+  }, [allPageSelected, items])
+
+  const handleBulkStatus = useCallback(
+    async (status: ReadingStatus) => {
+      const statusLabel = t(`collections:status.${status}`, status)
+      await applyBulkAction(
+        { action: "set_status", status },
+        t("collections:reading.bulk.actions.setStatusLabel", "Set status: {{status}}", {
+          status: statusLabel
+        })
+      )
+    },
+    [applyBulkAction, t]
+  )
+
+  const handleBulkFavorite = useCallback(
+    async (favorite: boolean) => {
+      await applyBulkAction(
+        { action: "set_favorite", favorite },
+        favorite
+          ? t("collections:reading.bulk.actions.favoriteOn", "Mark favorite")
+          : t("collections:reading.bulk.actions.favoriteOff", "Unfavorite")
+      )
+    },
+    [applyBulkAction, t]
+  )
+
+  const openTagActionModal = useCallback(
+    (mode: "add" | "remove") => {
+      if (selectedItemIds.length === 0) {
+        message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
+        return
+      }
+      setTagActionMode(mode)
+      setTagInput("")
+      setTagModalOpen(true)
+    },
+    [selectedItemIds.length, t]
+  )
+
+  const handleTagActionConfirm = useCallback(async () => {
+    const tags = normalizeBulkTags(tagInput)
+    if (tags.length === 0) {
+      message.warning(t("collections:reading.bulk.tagsRequired", "Enter at least one tag"))
+      return
+    }
+    const action = tagActionMode === "add" ? "add_tags" : "remove_tags"
+    const label =
+      tagActionMode === "add"
+        ? t("collections:reading.bulk.actions.addTags", "Add tags")
+        : t("collections:reading.bulk.actions.removeTags", "Remove tags")
+    const ok = await applyBulkAction({ action, tags }, label)
+    if (ok) {
+      setTagModalOpen(false)
+      setTagInput("")
+    }
+  }, [applyBulkAction, tagActionMode, tagInput, t])
+
+  const restoreDeletedItems = useCallback(
+    async (statusByItemId: Record<string, ReadingStatus>) => {
+      const grouped = new Map<ReadingStatus, string[]>()
+      Object.entries(statusByItemId).forEach(([itemId, status]) => {
+        const normalizedStatus = normalizeReadingStatus(status)
+        const existing = grouped.get(normalizedStatus)
+        if (existing) {
+          existing.push(itemId)
+        } else {
+          grouped.set(normalizedStatus, [itemId])
+        }
+      })
+
+      let failed = 0
+      for (const [status, itemIds] of grouped.entries()) {
+        const response = await api.bulkUpdateReadingItems({
+          item_ids: itemIds,
+          action: "set_status",
+          status
+        })
+        failed += response.failed
+      }
+
+      await fetchItems()
+      if (failed > 0) {
+        throw new Error(`Failed to restore ${failed} items`)
+      }
+    },
+    [api, fetchItems]
+  )
+
+  const executeBulkDelete = useCallback(
+    async (hardDelete: boolean) => {
+      if (selectedItemIds.length === 0) {
+        message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
+        return
+      }
+
+      const previousStatusById = new Map<string, ReadingStatus>()
+      selectedItemIds.forEach((itemId) => {
+        const item = items.find((entry) => entry.id === itemId)
+        previousStatusById.set(itemId, normalizeReadingStatus(item?.status))
+      })
+
+      setBulkActionLoading(true)
+      try {
+        const response = await api.bulkUpdateReadingItems({
+          item_ids: selectedItemIds,
+          action: "delete",
+          hard: hardDelete
+        })
+
+        const succeededIds = new Set(
+          response.results
+            .filter((entry) => entry.success)
+            .map((entry) => entry.item_id)
+        )
+
+        if (succeededIds.size > 0) {
+          setSelectedItemIds((prev) => prev.filter((id) => !succeededIds.has(id)))
+          await fetchItems()
+        }
+
+        const actionLabel = hardDelete
+          ? t("collections:reading.bulk.actions.deletePermanent", "Delete permanently")
+          : t("collections:reading.bulk.actions.delete", "Delete")
+
+        if (response.failed > 0) {
+          const failureLines = getBulkFailureLines(response)
+          Modal.info({
+            title: t("collections:reading.bulk.summaryTitle", "Bulk action summary"),
+            width: 620,
+            content: (
+              <div className="space-y-2">
+                <p>
+                  {t(
+                    "collections:reading.bulk.summaryBody",
+                    "{{action}} completed. {{succeeded}} succeeded, {{failed}} failed.",
+                    {
+                      action: actionLabel,
+                      succeeded: response.succeeded,
+                      failed: response.failed
+                    }
+                  )}
+                </p>
+                {failureLines.length > 0 && (
+                  <div className="max-h-52 overflow-auto rounded border border-border bg-bg p-2 text-xs">
+                    {failureLines.map((line) => (
+                      <div key={line}>{line}</div>
+                    ))}
+                    {response.failed > failureLines.length && (
+                      <div>
+                        {t("collections:reading.bulk.moreFailures", "+{{count}} more failures", {
+                          count: response.failed - failureLines.length
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })
+        }
+
+        if (response.succeeded > 0 && hardDelete) {
+          message.success(
+            t(
+              "collections:reading.bulk.deletePermanentSuccess",
+              "Permanently deleted {{count}} items",
+              { count: response.succeeded }
+            )
+          )
+        }
+
+        if (response.succeeded > 0 && !hardDelete) {
+          const statusByItemId: Record<string, ReadingStatus> = {}
+          response.results
+            .filter((entry) => entry.success)
+            .forEach((entry) => {
+              statusByItemId[entry.item_id] = previousStatusById.get(entry.item_id) || "saved"
+            })
+
+          const restoredCount = Object.keys(statusByItemId).length
+          showUndoNotification({
+            title:
+              restoredCount === 1
+                ? t("collections:reading.bulk.deletedSingle", "Article deleted")
+                : t("collections:reading.bulk.deletedMulti", "{{count}} articles deleted", {
+                    count: restoredCount
+                  }),
+            description: t(
+              "collections:reading.bulk.deleteUndoHint",
+              "Moved to archived. Undo to restore previous statuses."
+            ),
+            onUndo: async () => {
+              await restoreDeletedItems(statusByItemId)
+            }
+          })
+        }
+      } catch (error: any) {
+        message.error(error?.message || "Bulk delete failed")
+      } finally {
+        setBulkActionLoading(false)
+      }
+    },
+    [api, fetchItems, items, restoreDeletedItems, selectedItemIds, showUndoNotification, t]
+  )
+
+  const handleBulkDelete = useCallback(() => {
+    if (selectedItemIds.length === 0) {
+      message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
+      return
+    }
+    Modal.confirm({
+      title: t("collections:reading.bulk.deleteTitle", "Delete selected articles"),
+      content: t(
+        "collections:reading.bulk.deleteSoftBody",
+        "Selected items will be moved to archived. You can undo this action."
+      ),
+      okText: t("common:delete", "Delete"),
+      okButtonProps: { danger: true, loading: bulkActionLoading },
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: async () => {
+        await executeBulkDelete(false)
+      }
+    })
+  }, [bulkActionLoading, executeBulkDelete, selectedItemIds.length, t])
+
+  const handleBulkHardDelete = useCallback(() => {
+    if (selectedItemIds.length === 0) {
+      message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
+      return
+    }
+    Modal.confirm({
+      title: t("collections:reading.bulk.deletePermanentTitle", "Delete selected articles permanently"),
+      content: t(
+        "collections:reading.bulk.deletePermanentBody",
+        "This permanently deletes selected items and cannot be undone. Continue?"
+      ),
+      okText: t("collections:reading.bulk.actions.deletePermanent", "Delete permanently"),
+      okButtonProps: { danger: true, loading: bulkActionLoading },
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: async () => {
+        await executeBulkDelete(true)
+      }
+    })
+  }, [bulkActionLoading, executeBulkDelete, selectedItemIds.length, t])
+
+  const openBulkOutputModal = useCallback(async () => {
+    if (selectedItemIds.length === 0) {
+      message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
+      return
+    }
+    setOutputModalOpen(true)
+    setOutputTemplateId(null)
+    setOutputTitle("")
+    setOutputTemplatesLoading(true)
+    try {
+      const response = await api.getOutputTemplates({ limit: 200, offset: 0 })
+      const options = (response.items || []).map((template: any) => ({
+        label: `${template.name} (${String(template.format || "").toUpperCase()})`,
+        value: String(template.id)
+      }))
+      setOutputTemplates(options)
+      if (options.length === 1) {
+        setOutputTemplateId(options[0].value)
+      }
+    } catch (error: any) {
+      message.error(error?.message || "Failed to load templates")
+      setOutputTemplates([])
+    } finally {
+      setOutputTemplatesLoading(false)
+    }
+  }, [api, selectedItemIds.length, t])
+
+  const handleGenerateBulkOutput = useCallback(async () => {
+    if (!outputTemplateId) {
+      message.warning(t("collections:reading.bulk.templateRequired", "Select a template"))
+      return
+    }
+    if (selectedItemIds.length === 0) {
+      message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
+      return
+    }
+    setOutputGenerating(true)
+    try {
+      const output = await api.generateOutput({
+        template_id: outputTemplateId,
+        item_ids: selectedItemIds,
+        title: outputTitle.trim() || undefined
+      })
+      setOutputModalOpen(false)
+      message.success(t("collections:reading.bulk.outputCreated", "Output generated"))
+      Modal.success({
+        title: t("collections:reading.bulk.outputSummaryTitle", "Output generation complete"),
+        content: (
+          <div className="space-y-1">
+            <div>
+              {t("collections:reading.bulk.outputSummaryBody", "Generated output #{{id}}.", {
+                id: output.id
+              })}
+            </div>
+            <div>
+              {t("collections:reading.bulk.outputSummaryCount", "Items used: {{count}}", {
+                count: selectedItemIds.length
+              })}
+            </div>
+          </div>
+        )
+      })
+    } catch (error: any) {
+      message.error(error?.message || "Failed to generate output")
+    } finally {
+      setOutputGenerating(false)
+    }
+  }, [api, outputTemplateId, outputTitle, selectedItemIds, t])
+
+  const bulkStatusMenuItems = useMemo<MenuProps["items"]>(() => {
+    return STATUS_OPTIONS
+      .filter((option) => option.value !== "all")
+      .map((option) => ({
+        key: option.value,
+        label: t(`collections:status.${option.value}`, option.label),
+        onClick: () => {
+          void handleBulkStatus(option.value as ReadingStatus)
+        }
+      }))
+  }, [handleBulkStatus, t])
+
+  const bulkFavoriteMenuItems = useMemo<MenuProps["items"]>(() => {
+    return [
+      {
+        key: "favorite",
+        label: t("collections:reading.bulk.actions.favoriteOn", "Mark favorite"),
+        onClick: () => {
+          void handleBulkFavorite(true)
+        }
+      },
+      {
+        key: "unfavorite",
+        label: t("collections:reading.bulk.actions.favoriteOff", "Unfavorite"),
+        onClick: () => {
+          void handleBulkFavorite(false)
+        }
+      }
+    ]
+  }, [handleBulkFavorite, t])
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
@@ -235,12 +729,17 @@ export const ReadingItemsList: React.FC = () => {
           >
             {t("common:refresh", "Refresh")}
           </Button>
+          <Button onClick={handleSelectionModeToggle}>
+            {selectionMode
+              ? t("collections:reading.bulk.exitSelection", "Exit selection")
+              : t("collections:reading.bulk.startSelection", "Select")}
+          </Button>
         </div>
 
         <div className="flex flex-1 items-center gap-2 sm:max-w-md">
           <Input
             placeholder={t("collections:reading.searchPlaceholder", "Search articles...")}
-            prefix={<Search className="h-4 w-4 text-gray-400" />}
+            prefix={<Search className="h-4 w-4 text-text-subtle" />}
             value={itemsSearch}
             onChange={handleSearchChange}
             allowClear
@@ -251,8 +750,8 @@ export const ReadingItemsList: React.FC = () => {
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-gray-500" />
-          <span className="text-sm text-gray-500">
+          <Filter className="h-4 w-4 text-text-muted" />
+          <span className="text-sm text-text-muted">
             {t("collections:reading.filters", "Filters")}:
           </span>
         </div>
@@ -304,7 +803,7 @@ export const ReadingItemsList: React.FC = () => {
         />
 
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-text-muted">
             {t("collections:reading.sortBy", "Sort")}:
           </span>
           <Select
@@ -339,6 +838,93 @@ export const ReadingItemsList: React.FC = () => {
         )}
       </div>
 
+      {/* Bulk action controls */}
+      {selectionMode && (
+        <div className="rounded-lg border border-border bg-bg p-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Checkbox
+              checked={allPageSelected}
+              indeterminate={selectedCount > 0 && !allPageSelected}
+              onChange={handleSelectAllToggle}
+            >
+              {t("collections:reading.bulk.selectAllPage", "Select all on this page")}
+            </Checkbox>
+            <span className="text-sm text-text-muted">
+              {t("collections:reading.bulk.selectedCount", "{{count}} selected", {
+                count: selectedCount
+              })}
+            </span>
+            <Button
+              size="small"
+              onClick={() => setSelectedItemIds([])}
+              disabled={selectedCount === 0 || bulkActionLoading}
+            >
+              {t("collections:reading.bulk.clearSelection", "Clear selection")}
+            </Button>
+          </div>
+
+          {selectedCount > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Dropdown menu={{ items: bulkStatusMenuItems }} trigger={["click"]}>
+                <Button size="small" loading={bulkActionLoading}>
+                  {t("collections:reading.bulk.actions.setStatus", "Set status")}
+                </Button>
+              </Dropdown>
+
+              <Dropdown menu={{ items: bulkFavoriteMenuItems }} trigger={["click"]}>
+                <Button size="small" loading={bulkActionLoading}>
+                  {t("collections:reading.bulk.actions.favorite", "Favorite")}
+                </Button>
+              </Dropdown>
+
+              <Button
+                size="small"
+                onClick={() => openTagActionModal("add")}
+                loading={bulkActionLoading}
+              >
+                {t("collections:reading.bulk.actions.addTags", "Add tags")}
+              </Button>
+
+              <Button
+                size="small"
+                onClick={() => openTagActionModal("remove")}
+                loading={bulkActionLoading}
+              >
+                {t("collections:reading.bulk.actions.removeTags", "Remove tags")}
+              </Button>
+
+              <Button
+                size="small"
+                onClick={openBulkOutputModal}
+                loading={bulkActionLoading || outputGenerating}
+              >
+                {t("collections:reading.bulk.actions.generateOutput", "Generate output")}
+              </Button>
+
+              <Button
+                danger
+                size="small"
+                icon={<Trash2 className="h-3 w-3" />}
+                onClick={handleBulkDelete}
+                loading={bulkActionLoading}
+              >
+                {t("collections:reading.bulk.actions.delete", "Delete")}
+              </Button>
+
+              <Button
+                danger
+                size="small"
+                type="text"
+                onClick={handleBulkHardDelete}
+                loading={bulkActionLoading}
+              >
+                {t("collections:reading.bulk.actions.deletePermanent", "Delete permanently")}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Items List */}
       {itemsLoading && items.length === 0 ? (
         <div className="flex items-center justify-center py-12">
@@ -369,7 +955,14 @@ export const ReadingItemsList: React.FC = () => {
       ) : (
         <div className="space-y-3">
           {items.map((item) => (
-            <ReadingItemCard key={item.id} item={item} onRefresh={fetchItems} />
+            <ReadingItemCard
+              key={item.id}
+              item={item}
+              onRefresh={fetchItems}
+              selectionMode={selectionMode}
+              selected={selectedItemIds.includes(item.id)}
+              onSelectionChange={(checked) => handleItemSelectionChange(item.id, checked)}
+            />
           ))}
         </div>
       )}
@@ -417,6 +1010,66 @@ export const ReadingItemsList: React.FC = () => {
             "Are you sure you want to delete this article? This action cannot be undone."
           )}
         </p>
+      </Modal>
+
+      <Modal
+        title={
+          tagActionMode === "add"
+            ? t("collections:reading.bulk.tagsModal.addTitle", "Add tags")
+            : t("collections:reading.bulk.tagsModal.removeTitle", "Remove tags")
+        }
+        open={tagModalOpen}
+        onCancel={() => setTagModalOpen(false)}
+        onOk={handleTagActionConfirm}
+        okText={
+          tagActionMode === "add"
+            ? t("collections:reading.bulk.actions.addTags", "Add tags")
+            : t("collections:reading.bulk.actions.removeTags", "Remove tags")
+        }
+        okButtonProps={{ loading: bulkActionLoading }}
+        cancelText={t("common:cancel", "Cancel")}
+      >
+        <Input
+          value={tagInput}
+          onChange={(e) => setTagInput(e.target.value)}
+          placeholder={t("collections:reading.bulk.tagsModal.placeholder", "tag1, tag2, tag3")}
+        />
+      </Modal>
+
+      <Modal
+        title={t("collections:reading.bulk.outputTitle", "Generate output for selected items")}
+        open={outputModalOpen}
+        onCancel={() => setOutputModalOpen(false)}
+        onOk={handleGenerateBulkOutput}
+        okText={t("collections:reading.bulk.actions.generateOutput", "Generate output")}
+        okButtonProps={{
+          loading: outputGenerating,
+          disabled: !outputTemplateId
+        }}
+        cancelText={t("common:cancel", "Cancel")}
+      >
+        <div className="space-y-3">
+          <Select
+            value={outputTemplateId || undefined}
+            onChange={(value) => setOutputTemplateId(value)}
+            options={outputTemplates}
+            loading={outputTemplatesLoading}
+            placeholder={t("collections:reading.bulk.templatePlaceholder", "Select a template")}
+            className="w-full"
+            showSearch
+            optionFilterProp="label"
+          />
+          <Input
+            value={outputTitle}
+            onChange={(e) => setOutputTitle(e.target.value)}
+            placeholder={t("collections:reading.bulk.outputNamePlaceholder", "Optional output title")}
+          />
+          <p className="text-xs text-text-muted">
+            {t("collections:reading.bulk.outputHint", "Selected items: {{count}}", {
+              count: selectedItemIds.length
+            })}
+          </p>
+        </div>
       </Modal>
     </div>
   )

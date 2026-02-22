@@ -11,6 +11,7 @@ from loguru import logger
 from tldw_Server_API.app.core.http_client import afetch
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 _JOBS_WEBHOOKS_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -29,11 +30,6 @@ _JOBS_WEBHOOKS_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
-
-
-def _truthy(v: str | None) -> bool:
-    return str(v or "").lower() in {"1","true","yes","y","on"}
-
 
 def _sign(secret: bytes, payload: bytes) -> str:
     return hmac.new(secret, payload, hashlib.sha256).hexdigest()
@@ -65,7 +61,7 @@ async def run_jobs_webhooks_worker(stop_event: asyncio.Event | None = None) -> N
     Body: JSON of {event, attrs, job}
     """
     url = os.getenv("JOBS_WEBHOOKS_URL")
-    if not (_truthy(os.getenv("JOBS_WEBHOOKS_ENABLED")) and url):
+    if not (env_flag_enabled("JOBS_WEBHOOKS_ENABLED") and url):
         logger.info("Jobs webhooks worker disabled")
         return
     secrets = [(s.strip()).encode("utf-8") for s in (os.getenv("JOBS_WEBHOOKS_SECRET_KEYS", "").split(",")) if s.strip()]
@@ -108,7 +104,7 @@ async def run_jobs_webhooks_worker(stop_event: asyncio.Event | None = None) -> N
         # to avoid cross-test interference with a shared global file.
         persisted_after = None
         try:
-            _is_test = _truthy(os.getenv("TEST_MODE"))
+            _is_test = is_test_mode()
             allow_resume = True
             if _is_test and not os.getenv("JOBS_WEBHOOKS_CURSOR_PATH"):
                 allow_resume = False
@@ -136,7 +132,7 @@ async def run_jobs_webhooks_worker(stop_event: asyncio.Event | None = None) -> N
             after_id = persisted_after
         logger.info("Starting Jobs webhooks worker")
         # Enforce egress policy per URL
-        _is_test = _truthy(os.getenv("TEST_MODE"))
+        _is_test = is_test_mode()
         if not _is_test:
             try:
                 from tldw_Server_API.app.core.Security.egress import evaluate_url_policy as _eval_policy

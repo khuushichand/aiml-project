@@ -123,9 +123,9 @@ def _run_install(
                         'kokoro_voices_json': str(voices_dir),
                     }
                 })
-        except Exception:
+        except Exception as exc:
             # Non-fatal; fallback to defaults
-            pass
+            print(f"[kokoro] Warning: failed to persist custom model paths; using defaults. ({exc})", file=sys.stderr)
 
         # Perform downloads / snapshotting
         im._install_kokoro(variants)

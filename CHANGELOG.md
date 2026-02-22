@@ -21,6 +21,214 @@ and this project adheres to Some kind of Versioning
 -
 
 
+## [0.1.21] 2026-02-X
+
+### Added
+- New security and regression tests for:
+  - Scheduler payload format/ref validation and legacy compatibility behavior.
+  - Web dedupe JSON persistence and controlled legacy migration.
+  - Placeholder-service guardrails and route isolation.
+  - Loguru formatting guardrail.
+- Operations runbook documenting secure defaults, compatibility flags, and migration steps.
+- Added a startup/CI route guard that fails fast when duplicate `(path, method)` routes are registered.
+- Added regression tests for duplicate-route detection, CORS guardrails, ULTRA_MINIMAL health routing, and OpenAPI CORS behavior.
+- Skills
+  - End-to-end Skills API workflow tests covering create, list/get, versioned update with supporting-file add/remove, execute preview, context payload, export, zip re-import, delete, and seed flows.
+  - Seed endpoint integration test coverage for idempotency (`overwrite=false`) and overwrite restoration (`overwrite=true`).
+  - Deterministic unit tests for built-in skill seeding: recursive directory copy (including nested files), no-overwrite preservation, and overwrite replacement behavior.
+- Admin Backup Bundles
+  - Added API contract coverage for admin bundle import error detail shapes:
+  - `restore_failed` responses must return structured `detail` objects (`error_code`, `message`, optional `rollback_failures`).
+  - Standard import validation failures (for example checksum mismatches) must continue returning string `detail`.
+- Web UI/Extension UX audit gating and regression coverage:
+  - Added Stage 2 route-contract smoke spec for audited navigation destinations.
+  - Added Stage 3 rendering-resilience smoke spec for max-depth, template-leak, and retry/timeout assertions.
+  - Added Stage 4 mobile-sidebar and accessibility smoke specs, plus Axe high-risk route matrix coverage.
+  - Added Stage 5 audited-route release gate smoke spec and `e2e:smoke:stage5` script.
+  - Added deterministic admin smoke fixture profile/route mocks to remove skip behavior and backend-state dependency.
+- UX gate process updates:
+  - Added PR checklist items for UX smoke gate, console-budget checks, and WebUI/extension parity validation.
+  - Added shared sanitized server-error message utility with correlation-ID log-hint support for user-facing error states.
+  - Added dedicated core route identity regression tests for `/`, `/setup`, and `/onboarding-test`.
+  - Added media route guard/boundary coverage for `media-multi` and `media-trash` paths.
+  - Added knowledge QA golden-layout and interaction guardrails to preserve high-quality search/history UX.
+  - Added workspace/playground positive-pattern guardrail tests (Data Tables, Evaluations, Chunking, Workspace desktop layout).
+  - Added explicit home theme-toggle control and associated unit/E2E coverage.
+- Claims extraction portability hardening (LangExtract-aligned):
+  - Centralized claims output parsing and response coercion with strict/lenient modes, fenced-JSON handling, wrapper-key normalization, and structured parse errors.
+  - Shared claims runtime configuration and analyze-callback typing modules reused across extraction, ingestion, adjudication, and service paths.
+  - New claims telemetry counters for structured output, parsing quality, and fallback/degradation:
+    - `claims_response_format_selected_total`
+    - `claims_output_parse_events_total`
+    - `claims_fallback_total`
+  - New claims monitoring dashboard JSON with parse/fallback ratio panels and response-format selection visibility.
+  - New claims regression coverage for response-format contracts, strict/lenient API behavior, fallback resilience, parse-failure telemetry, and config precedence.
+
+### Changed
+- Normalized Loguru formatting across tldw_Server_API/app from %-style placeholders to {} style.
+- Added CI/test guard to prevent reintroduction of %-style Loguru placeholders.
+- Sync client defaults now align with server routes (`/api/v1/sync/send` and `/api/v1/sync/get`) and support configurable auth headers (`Authorization` bearer and `X-API-KEY`).
+- Moved local LLM manager initialization out of import-time setup into lifespan startup, with lazy initialization behavior where applicable.
+- ULTRA_MINIMAL mode now uses control-plane health endpoints only (`/health`, `/ready`, `/health/ready`) to avoid duplicate route ownership.
+- Skills
+  - `SkillsService.seed_builtin_skills()` now copies full built-in skill directories recursively instead of recreating skills from `SKILL.md` only.
+  - Seed overwrite flow now force-syncs registry state and handles pre-existing soft-deleted rows before copy.
+- Admin Backup Bundles
+  - Admin bundle create/import concurrency control now uses an atomic non-blocking lock path to fail fast with `409 bundle_operation_in_progress` instead of race-prone check-then-acquire behavior.
+  - Bundle import disk-space preflight now checks all real write targets (system temp, upload temp location, and live DB target directories from manifest datasets).
+  - `retention_hours` is now enforced for bundle creation: expired bundles are pruned after create within the same bundle scope (`user_id` scoped, including global `None` scope).
+  - Bundle import success/dry-run payloads now consistently include `rollback_failures` for schema stability.
+- Circuit Breaker
+  - Unified admin circuit breaker endpoint: `GET /api/v1/admin/circuit-breakers` with RBAC protection (`admin` role + `system.logs` permission), deterministic sorting, and filters (`state`, `category`, `service`, `name_prefix`).
+  - Unified admin circuit breaker response contract with explicit `source` values: `memory`, `persistent`, and `mixed`.
+  - Cross-worker HALF_OPEN probe lease coordination in shared registry storage, including lease TTL, cleanup, and release-on-completion behavior.
+  - Optimistic-lock conflict observability metric: `circuit_breaker_persist_conflicts_total{category,service,operation,mutation}`.
+  - New endpoint test coverage for admin circuit breaker listing, filtering, and authorization behavior.
+  - Circuit breaker shared-state persistence now uses bounded merge/retry semantics on optimistic-lock conflicts to avoid dropping local mutations under contention.
+  - Circuit breaker operator documentation now includes new env knobs and tuning guidance:
+    - `CIRCUIT_BREAKER_REGISTRY_MODE`
+    - `CIRCUIT_BREAKER_REGISTRY_DB_PATH`
+    - `CIRCUIT_BREAKER_PERSIST_MAX_RETRIES`
+    - `CIRCUIT_BREAKER_HALF_OPEN_LEASE_TTL_SECONDS`
+  - Monitoring/admin docs now explicitly describe `source="mixed"` as expected when persistence is enabled for active in-process breakers.
+  - Circuit breaker unification PRD status updated to reflect implemented state and delivered hardening follow-on work.
+- Web UI/Extension parity:
+  - Shared `WebLayout` now defaults to collapsed rail on mobile (`<768px`) and opens navigation via header drawer toggle.
+  - Shared media-query initialization now reads `matchMedia` on first client render to prevent desktop-rail flash on mobile.
+  - Section 2 audited wrong-content routes now resolve to intended content or explicit “Coming Soon” placeholders instead of silent misrouting.
+  - Changed settings information architecture to be more navigable, searchable, and less badge-saturated, with tighter route-to-page mapping.
+  - Changed settings routing to restore/cover `/settings/ui`, `/settings/image-generation`, and `/settings/image-gen` behavior via proper wrappers/alias handling.
+  - Changed guardian settings behavior to show explicit unsupported-endpoint guidance instead of noisy repeated backend failures.
+  - Changed admin route behavior so admin sub-routes render route-specific content/placeholder contracts instead of collapsing to Server Admin.
+  - Changed admin diagnostics presentation to human-readable units for memory/byte and retry-window values.
+  - Changed admin error handling to sanitize implementation details and gate controls when prerequisites are missing.
+  - Changed chat disconnected-state messaging to remove redundancy and provide one clear user path.
+  - Changed chat agent empty-state/workspace affordances to clarify prerequisites and next steps.
+  - Changed chat mobile composer/toolbars to enforce 44x44 touch targets and improve control discoverability.
+  - Changed chat/persona language from jargon (`k=n`) to user-facing memory-result wording.
+  - Changed `/chat/settings` behavior to canonical redirect (`/chat/settings` -> `/settings/chat`) and aligned strict release-gate expectations.
+  - Changed audio route identity so `/tts`, `/stt`, and `/speech` have distinct intended surfaces.
+  - Changed TTS/STT/Speech loading lifecycle to include explicit timeout, actionable error states, and retry UX.
+  - Changed workspace/playground mobile copy and layout behavior, including Sources tab wording, chunking mobile order, and workflow-editor responsive drawer behavior.
+  - Changed workflow editor control semantics with improved labeling/aria clarity and consistent LLM casing.
+  - Changed flashcards/quiz/kanban/watchlists/documentation empty/content states for intent clarity and first-use correctness.
+  - Changed media/knowledge/characters/chatbooks error states to be recoverable, actionable, and sanitized.
+  - Changed core onboarding/layout behavior to improve mobile readability, hide sidebar where appropriate, and clarify ambiguous connection-status wording.
+- Accessibility and UX consistency:
+  - Standardized dismissible beta-badge behavior in shared settings navigation with persisted hide state (`tldw:settings:hide-beta-badges`).
+  - Added explicit labels/tooltips for previously icon-only controls in Document Workspace and Workflow Editor.
+- AntD/Markdown modernization:
+  - Migrated deprecated AntD usage in shared UI (`Drawer.width`, `Space.direction`, `Alert.message`, `Dropdown.Button`, and notification `message`) to current APIs.
+  - Aligned shared markdown dependency stack to ReactMarkdown v10 parity across WebUI and extension (`react-markdown`, `remark-gfm`, `remark-math`, `rehype-katex`).
+  - Updated shared markdown wrappers for ReactMarkdown v10 API compatibility (styling moved off direct `ReactMarkdown` `className` prop).
+- CI gating:
+  - Frontend UX gates workflow now runs the Stage 5 audited-route smoke gate before the broad all-pages smoke job.
+- Claims extraction/verification internals:
+  - Refactored claims engine, ingestion claims, adjudicator, and claims service to use shared runtime config and shared LLM response coercion helpers.
+  - Standardized provider `response_format` selection (`json_schema` when supported, `json_object` fallback) with graceful downgrade when unsupported.
+  - Extended claims monitoring docs and operations guidance (metrics catalog, parse/fallback alerts, runbook triage and tuning guidance).
+  - Tuned parse/fallback alert rules to use ratio + minimum-volume gates for mixed traffic profiles.
+  - Updated code documentation and published mirrors for claims parse mode, alignment mode, adaptive throttling, and monitoring behavior.
+
+### Removed
+- UI
+  - Removed `apps/tldw-frontend/pages/chat/settings.tsx` after replacing with server-side route redirect strategy.
+  - Removed duplicate chat disconnected guidance surfaces that previously showed overlapping connection messages.
+  - Removed user-visible unresolved template placeholder rendering across audited chat/audio/documentation surfaces.
+
+### Fixed
+- Auth/API: deprecated `PUT /api/v1/users/me` now returns `404 User not found` when the backing `users` row is missing, instead of returning a false-success profile payload.
+- Test isolation: hardened MediaDB2 `torch` stubs with minimal `Tensor`/`nn.Module` attributes so cross-suite pytest runs no longer fail during SciPy/NLTK import checks.
+- fix(audio-ws): make transcribe startup resilient to Nemo probe failures
+- Treat Nemo availability probe import errors as non-fatal in `websocket_transcribe`
+- Default to Whisper when Nemo probing cannot be resolved at runtime
+- Prevent WS startup aborts that caused downstream quota/metrics/concurrency test failures
+- Document the fail-safe fallback behavior in the audio streaming protocol docs
+- Hardening: Prompts/Sync/Workflows/Services
+  - Improved production safety and reliability across prompt collections, sync, workflow placeholders, and ephemeral processing.
+  - Documented /api/v1/prompts/collections/* as production-backed, user-scoped endpoints.
+  - Enforced and documented strict /api/v1/sync/send entity validation (Media, Keywords, MediaKeywords).
+  - Hardened sync error handling: internal failures stay 500; /api/v1/sync/get now fails closed on invalid sync rows instead of silently skipping.
+  - Confirmed workflow process_media placeholder kinds (ebook, xml, podcast) return explicit not_implemented.
+  - Added and documented ephemeral store controls (EPHEMERAL_STORE_TTL_SECONDS, EPHEMERAL_STORE_MAX_ENTRIES, EPHEMERAL_STORE_MAX_BYTES).
+  - Fixed XML placeholder temp-file lifecycle (always cleaned up) and preserved intended HTTP status behavior.
+  - Added regression tests for XML cleanup/error paths and rate-limiter type-hint/datetime integrity.
+- Fixed several backend reliability and API-behavior issues across Prompt DB lifecycle, sync processing, and service cleanup.
+  - Removed import-time async worker startup in prompts DB dependencies; worker lifecycle now starts safely under app runtime.
+  - Hardened /sync/send and /sync/get error handling:
+    - preserved HTTP exceptions instead of wrapping them into generic 500s,
+    - restored correct 400 classification for client validation errors (including disallowed sync entities),
+    - prevented silent partial /sync/get responses when invalid sync rows are encountered.
+  - Expanded sync conflict timestamp parsing to support ISO-8601 Z, fractional Z, +00 (line 0), and non-UTC offsets (normalized to UTC before LWW comparison).
+  - Fixed XML processing temp-file leak by ensuring cleanup on both success and failure paths.
+  - Removed deprecated FastAPI 422 fallback usage to eliminate import-time deprecation warnings in exception handling.
+  - Added regression coverage for all fixes, with targeted suite passing (69 passed).
+- Auth/API: deprecated `PUT /api/v1/users/me` no longer returns a false-success payload when the backing `users` row is missing; it now returns `404 User not found`.
+- Regression coverage: added legacy `/users/me` update tests for both missing-row (`404`) and successful update (`200`) paths.
+- Test stability: hardened MediaDB2 test `torch` stubs with minimal `Tensor`/`nn.Module` attributes to prevent cross-suite import failures during SciPy/NLTK initialization.
+- Security
+  - Hardened API key exposure paths:
+    - /api/v1/config/docs-info now always returns a safe placeholder key and api_key_configured status.
+    - Startup API key logging is masked by default (full key only when explicitly enabled).
+  - Hardened scheduler payload handling:
+    - External payload storage now uses safe JSON serialization by default.
+    - Added strict payload reference validation and payload header bounds checks.
+    - Disabled legacy pickle payload deserialization by default.
+  - Hardened web scraping dedupe persistence:
+    - Dedupe hashes now persist as JSON instead of pickle by default.
+    - Legacy pickle hash loading is disabled by default.
+  - Isolated placeholder processing services:
+    - Placeholder document/ebook/podcast/xml services are now blocked in production-like environments even if enabled.
+- Hardened deprecated `GET /api/v1/users/me` so missing-user fallback is only allowed in single-user mode; multi-user now correctly rejects missing backing users.
+- Prevented ephemeral-store “unusable key” behavior by rejecting payloads that exceed configured max-bytes before insertion.
+- Improved `/api/v1/sync/get` resilience: malformed sync rows are now logged and skipped while valid rows are still returned (partial success instead of full failure).
+- Added regression coverage for user fallback rules, sync client route/auth behavior, sync malformed-row handling, and ephemeral-store size-limit enforcement.
+- CORS now fails closed when enabled and `ALLOWED_ORIGINS` resolves to an explicit empty list (`[]`); a non-empty explicit origin list is required unless CORS is disabled.
+- Startup now rejects invalid CORS configuration when `ALLOWED_ORIGINS` includes `"*"` while credentials are enabled.
+- OpenAPI CORS handling no longer reflects disallowed origins.
+- `ALLOWED_ORIGINS=""` (empty string) now logs a warning and falls back to local default origins for backward compatibility.
+- Security hardening (Scheduler): fixed symlink-path validation bypass so base_path now rejects symlink ancestors (including symlink/child) instead of only direct symlink paths.
+- Regression coverage (Scheduler): updated test_security_fixes.py to match current backend detection (pool-based Postgres detection) and async DB mocks (AsyncMock + awaited call assertions).
+- Deprecation headers: replaced hardcoded fallback sunset dates with a shared UTC helper (build_deprecation_headers) used by auth, users, and legacy character-chat endpoints, with DEPRECATION_SUNSET_DAYS support and dynamic fallback computation.
+- WebSearch Module: improved reliability and diagnostics across aggregation, provider dispatch, and parsing. Aggregate mode now validates LLM configuration (returns `422` when missing and reuses `final_answer_llm` for relevance analysis when provided), Google now correctly handles `google_domain`/`googlehost`, result-language parsing (`lr` with `hl` fallback), and multi-domain blacklist behavior, Kagi endpoint construction and Searx safesearch mapping were corrected, subquery generation/parsing now sanitizes and deduplicates model output, and provider `processing_error` values are surfaced in response `error`/`warnings` instead of being silently dropped. Added regression coverage across unit and integration WebSearch paths.
+- Hardened chunked image handling to reject unsupported MIME types and invalid image payloads in large `data:` image paths.
+- Changed chunked image processing failure behavior from fail-open to fail-closed, preventing invalid bytes from being treated as valid images.
+- Fixed `run_cpu_bound_thread()` so keyword arguments are supported correctly via `functools.partial`.
+- Corrected `load_prompt()` semantics for markdown prompts: missing keys now return `None` instead of falling back to the first fenced block.
+- Removed `shell=True` usage in CUDA detection (`nvidia-smi` now called with direct subprocess args).
+- Added backward-compatible chat dictionary endpoint re-exports for legacy imports/tests.
+- Updated telemetry dummy span compatibility (`set_attributes`, broader `record_exception` signature).
+- Skills
+  - Fixed built-in seed behavior so supporting and nested files are preserved during seeding.
+  - Fixed overwrite seeding edge cases where soft-deleted registry rows could prevent seeded skills from being visible after overwrite.
+- Admin Backup Bundles
+  - Fixed restore failure error reporting so rollback diagnostics are no longer collapsed to generic `import_error` behavior.
+  - `restore_failed` import errors now preserve structured rollback context for API consumers.
+  - Endpoint import response now properly propagates `rollback_failures` from service results.
+  - Retention cleanup now safely skips unreadable/corrupt manifests without crashing bundle creation and keeps ZIP/sidecar cleanup consistent.
+- Circuit Breaker
+  - AuthNZ integration assertion for circuit breaker `source` is now environment-safe by accepting both `memory` and `mixed` (persistent mode).
+- Resolved web-mode extension API runtime failures by guarding `chrome.storage` access and preventing `chrome is not defined`/`chrome.storage` uncaught exceptions.
+- Removed unresolved `{{...}}` template leaks from shared UI labels/tooltips on audited routes.
+- Hardened shared timeout/retry flows for admin stats and STT/TTS catalog discovery to prevent permanent-loading states.
+- Removed temporary Stage 5 warning allowlist (`m5-react-defaultprops-warning`) after root-cause remediation.
+- Revalidated audited smoke quality gates after remediation:
+  - Stage 5 gate: `11 passed`
+  - Full all-pages smoke: `165 expected, 0 unexpected, 0 flaky`
+- UI
+  - Fixed catastrophic extension-shim/runtime overlay impact on audited routes by driving closeout to `withErrorOverlay: 0` and `withChromeRuntimeErrors: 0` in final smoke artifact.
+  - Fixed wrong-content navigation defects by closing route-contract expectations across audited settings/admin/connectors/profile/config destinations.
+  - Fixed audited navigation 404 regressions (Section 2 list) to zero for in-scope UX routes.
+  - Fixed unresolved template-variable leaks (`{{...}}`) across previously affected chat, audio, and documentation surfaces (`templateLeakRoutes: 0` at closeout).
+  - Fixed max-update-depth/infinite-rerender class regressions on critical routes (`maxDepthRoutes: 0`, `maxDepthEvents: 0` in closeout artifact).
+  - Fixed permanently-loading skeleton experiences on key admin/audio surfaces via timeout + error + retry state transitions.
+  - Fixed mobile interaction issues across prioritized flows (touch-target sizing, toolbar discoverability, responsive parity gaps).
+  - Fixed core route identity duplication so home/setup/onboarding-test have distinct purpose and route contracts.
+  - Fixed release-readiness reliability with passing gate suite reruns at closeout: Stage 5 (`12 passed`), Stage 6 (`6 passed`), Stage 7 (`4 passed`).
+  - Fixed program-level UX closure criteria by completing all nine UX implementation plans and finalizing the overarching oversight plan status to complete.
+- Restored `Docs/Design/rich_text_chat_rendering_v1_2026_02_15.md` after an unintended deletion in a prior docs commit.
+
+
 ## [0.1.20] 2026-02-07
 
 ### Added
@@ -84,6 +292,13 @@ and this project adheres to Some kind of Versioning
   - Lint only-changed target and script; large doc set added/updated (PRDs, guides).
   - FlashRank reranker model vendored under models/flashrank with unignore rules.
   - New env vars for ACP sandbox, TTS history, and RAG FlashRank cache/model selection.
+- Web Scraping Module
+  - Hardened legacy fallback contracts in web_scraping_service.py (line 46) and web_scraping_service.py (line 276).
+  - Added explicit fallback metadata (engine, fallback_context) in web_scraping_service.py (line 392) and web_scraping_service.py (line 497).
+  - Added predictable fallback max_pages cap for legacy URL Level/Sitemap in web_scraping_service.py (line 340).
+  - Preserved request max_pages pass-through in ingest orchestration in web_scraping_service.py (line 721) and web_scraping_service.py (line 772).
+  - Added fallback-focused tests in test_legacy_fallback_behavior.py (line 44).
+  - Fixed auth header fixture for friendly ingest crawl-flag tests in test_friendly_ingest_crawl_flags.py (line 19) by merging default headers and adding X-API-KEY.
 
 ### Removed
 

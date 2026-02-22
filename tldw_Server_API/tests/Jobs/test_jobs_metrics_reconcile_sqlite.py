@@ -42,4 +42,4 @@ def test_reconcile_group_cap(monkeypatch, tmp_path):
         try:
             conn.close()
         except Exception:
-            pass
+            _ = None

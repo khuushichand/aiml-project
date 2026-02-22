@@ -61,6 +61,10 @@ from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate
 from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_user
 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent, WebhookManager
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.testing import (
+    is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    is_test_mode as _is_test_mode,
+)
 
 # Non-critical exceptions for defensive guards and best-effort flows
 _EVALS_NONCRITICAL_EXCEPTIONS = (
@@ -136,10 +140,7 @@ def get_db_for_user(user_id: int):
 
 
 def _is_eval_test_mode() -> bool:
-    return (
-        os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        or os.getenv("PYTEST_CURRENT_TEST") is not None
-    )
+    return bool(_is_test_mode() or _is_explicit_pytest_runtime())
 
 
 def _normalize_eval_user_id(current_user: User) -> Optional[int]:
@@ -231,7 +232,7 @@ async def _resolve_and_validate_eval_provider(
     provider_key = provider_name.lower()
     raw_api_key = getattr(request, "api_key", None)
     if raw_api_key:
-        logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
+        logger.debug("Ignoring per-request api_key override for provider={}", provider_name)
     explicit_key = None
     provider_api_key = None
     byok_resolution: Optional[ResolvedByokCredentials] = None
@@ -806,7 +807,7 @@ async def evaluate_geval(
         import time as _time
         wm = _get_webhook_manager_for_user(current_user.id)
         start_event_id = f"geval_{int(_time.time())}_{webhook_user_id[:8]}"
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+        if _is_eval_test_mode():
             await wm.send_webhook(
                 user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
@@ -898,7 +899,7 @@ async def evaluate_geval(
                 )
 
         # Send webhook: evaluation completed (await in TEST_MODE)
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+        if _is_eval_test_mode():
             await wm.send_webhook(
                 user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
@@ -952,7 +953,7 @@ async def evaluate_geval(
         _detail = f"Evaluation failed: {sanitize_error_message(e, 'G-Eval evaluation')}"
         try:
             import os as _os
-            if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            if _is_eval_test_mode():
                 _detail = _detail + f" (debug: {str(e)})"
         except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
@@ -1010,7 +1011,7 @@ async def evaluate_rag(
         wm = _get_webhook_manager_for_user(current_user.id)
         import time as _time
         start_event_id = f"rag_{int(_time.time())}_{webhook_user_id[:8]}"
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+        if _is_eval_test_mode():
             await wm.send_webhook(
                 user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
@@ -1082,7 +1083,7 @@ async def evaluate_rag(
                 )
 
         # Send webhook: evaluation completed (await in TEST_MODE)
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+        if _is_eval_test_mode():
             await wm.send_webhook(
                 user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
@@ -1177,7 +1178,7 @@ async def evaluate_response_quality(
         wm = _get_webhook_manager_for_user(current_user.id)
         import time as _time
         start_event_id = f"response_quality_{int(_time.time())}_{webhook_user_id[:8]}"
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+        if _is_eval_test_mode():
             await wm.send_webhook(
                 user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
@@ -1249,7 +1250,7 @@ async def evaluate_response_quality(
                 format_compliance = None
 
         # Send webhook: evaluation completed (await in TEST_MODE)
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+        if _is_eval_test_mode():
             await wm.send_webhook(
                 user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
@@ -1420,7 +1421,7 @@ async def batch_evaluate(
                 provider_name = (eval_request.get("api_name") or "openai").strip() or "openai"
                 raw_api_key = eval_request.get("api_key")
                 if raw_api_key:
-                    logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
+                    logger.debug("Ignoring per-request api_key override for provider={}", provider_name)
             provider_key = provider_name.lower()
             provider_api_key = None
             byok_resolution = None
@@ -2073,7 +2074,17 @@ async def get_evaluation_history(
         if requested_user_id:
             allowed = _user_id_variants(stable_user_id)
             if requested_user_id not in allowed:
-                is_admin = bool(principal and (principal.is_admin or ("admin" in (principal.roles or []))))
+                roles = {
+                    str(role).strip().lower()
+                    for role in ((principal.roles if principal else []) or [])
+                    if str(role).strip()
+                }
+                permissions = {
+                    str(permission).strip().lower()
+                    for permission in ((principal.permissions if principal else []) or [])
+                    if str(permission).strip()
+                }
+                is_admin = bool("admin" in roles or ("*" in permissions) or ("system.configure" in permissions))
                 if not is_admin:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,

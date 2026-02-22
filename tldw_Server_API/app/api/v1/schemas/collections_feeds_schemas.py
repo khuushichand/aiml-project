@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, HttpUrl, validator
+from pydantic import BaseModel, HttpUrl, field_validator
 
 from tldw_Server_API.app.api.v1.schemas._compat import Field
 
@@ -19,9 +19,12 @@ class CollectionsFeedCreateRequest(BaseModel):
         description="Optional watchlists source settings (rss/history prefs, limits)",
     )
 
-    @validator("tags", pre=True, each_item=True)
-    def _strip_tags(cls, value: str) -> str:
-        return value.strip()
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _strip_tags(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        return [item.strip() if isinstance(item, str) else item for item in value]
 
 
 class CollectionsFeedUpdateRequest(BaseModel):
@@ -36,9 +39,12 @@ class CollectionsFeedUpdateRequest(BaseModel):
         description="Optional watchlists source settings (rss/history prefs, limits)",
     )
 
-    @validator("tags", pre=True, each_item=True)
-    def _strip_tags(cls, value: str) -> str:
-        return value.strip()
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _strip_tags(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        return [item.strip() if isinstance(item, str) else item for item in value]
 
 
 class CollectionsFeed(BaseModel):
@@ -56,6 +62,9 @@ class CollectionsFeed(BaseModel):
     defer_until: str | None = None
     status: str | None = None
     consec_not_modified: int | None = None
+    consec_errors: int | None = None
+    health_status: str | None = Field(default=None, description="Derived health: healthy, degraded, failing, disabled")
+    promoted_at: str | None = Field(default=None, description="When schedule was auto-promoted from hourly to daily")
     created_at: str | None = None
     updated_at: str | None = None
     job_id: int | None = None

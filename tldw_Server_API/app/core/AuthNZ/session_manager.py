@@ -32,6 +32,7 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from jose import jwt as jose_jwt
+from jose.exceptions import JWSError, JWTError
 from loguru import logger
 from redis import asyncio as redis_async
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -54,6 +55,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRe
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 
 _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -74,6 +76,8 @@ _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     UnicodeDecodeError,
     json.JSONDecodeError,
+    JWTError,
+    JWSError,
     RedisError,
     RedisConnectionError,
     InvalidSessionError,
@@ -143,13 +147,12 @@ class SessionManager:
                 self.redis_client = None
 
         # Schedule session cleanup (disable in tests or when explicitly requested)
-        _truthy = {"1", "true", "yes", "on", "y"}
         disable_sched = False
         try:
-            if str(os.getenv("AUTHNZ_SCHEDULER_DISABLED", "")).strip().lower() in _truthy:
+            if is_truthy(str(os.getenv("AUTHNZ_SCHEDULER_DISABLED", "")).strip().lower()):
                 disable_sched = True
             # In general test mode, default to disabled unless explicitly overridden
-            if (str(os.getenv("TEST_MODE", "")).strip().lower() in _truthy or str(os.getenv("TLDW_TEST_MODE", "")).strip().lower() in _truthy) and str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower() not in _truthy:
+            if is_test_mode() and not is_truthy(str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower()):
                 disable_sched = True
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             pass
@@ -306,9 +309,7 @@ class SessionManager:
                     except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"Session key: failed resolving API key path: {_e}")
                     try:
-                        preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
-                        preferred_root_path = Path(preferred_root) if preferred_root else Path.cwd()
-                        pp = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
+                        pp = self._resolve_project_root_key_path()
                         if pp and preferred_path and pp != preferred_path:
                             other_candidates.append(pp)
                     except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
@@ -322,7 +323,7 @@ class SessionManager:
 
                     if persisted_key:
                         logger.warning(
-                            "Session key: preferred path invalid and persistence failed; using alternate persisted key from %s",
+                            'Session key: preferred path invalid and persistence failed; using alternate persisted key from {}',
                             str(self._persisted_key_path),
                         )
                         _append(persisted_key)
@@ -331,8 +332,7 @@ class SessionManager:
                         # to keep the service functional, then attempt to persist to an alternate
                         # safe location (or repair the invalid file) best-effort.
                         logger.warning(
-                            "Session key: persistence failed at preferred path %s and no alternate persisted key found; "
-                            "proceeding with in-memory key and attempting repair.",
+                            'Session key: persistence failed at preferred path {} and no alternate persisted key found; proceeding with in-memory key and attempting repair.',
                             str(preferred_path),
                         )
                         _append(generated)
@@ -346,9 +346,7 @@ class SessionManager:
                         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                             logger.debug(f"Session key: could not resolve API key path for alternate persistence: {_e}")
                         try:
-                            preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
-                            preferred_root_path = Path(preferred_root) if preferred_root else Path.cwd()
-                            pp = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
+                            pp = self._resolve_project_root_key_path()
                             if pp and (not preferred_path or pp != preferred_path):
                                 alt_candidates.append(pp)
                         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
@@ -438,7 +436,7 @@ class SessionManager:
             _append(derived)
 
         if not key_bytes:
-            test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            test_mode = is_test_mode()
             pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
             if test_mode or pytest_active:
                 logger.warning("Generating temporary session encryption key for test context.")
@@ -662,14 +660,14 @@ class SessionManager:
     def _load_persisted_session_key(self) -> Optional[bytes]:
         """Load persisted session encryption key if available.
 
-        Preferred location (default): PROJECT_ROOT/Config_Files/session_encryption.key
-        Back-compat fallback: tldw_Server_API/Config_Files/session_encryption.key
+        Preferred location (default): tldw_Server_API/Config_Files/session_encryption.key
+        Back-compat fallback: PROJECT_ROOT/Config_Files/session_encryption.key
 
-        You can override the preference to use the API component path first by setting
-        environment variable SESSION_KEY_STORAGE=api (keeps tests/backwards-compat default otherwise).
+        Legacy behavior can be forced by setting SESSION_KEY_STORAGE=project (or
+        compatible aliases), which makes PROJECT_ROOT/Config_Files primary again.
         """
         # Build candidate paths honoring optional override
-        prefer_api_path = str(os.getenv("SESSION_KEY_STORAGE", "")).strip().lower() in {"api", "tldw", "tldw_api", "tldw_server_api"}
+        prefer_api_path = self._session_key_storage_mode() == "api"
         candidate_paths: list[Path] = []
         primary_path: Optional[Path] = None
         api_path: Optional[Path] = None
@@ -680,9 +678,7 @@ class SessionManager:
             logger.debug(f"failed to resolve persisted API key path: {e}")
             api_path = None
         try:
-            preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
-            preferred_root_path = Path(preferred_root) if preferred_root else Path.cwd()
-            primary_path = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
+            primary_path = self._resolve_project_root_key_path()
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"failed to construct primary session_encryption.key path: {e}")
             primary_path = None
@@ -742,33 +738,43 @@ class SessionManager:
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return None
 
+    def _resolve_project_root_key_path(self) -> Optional[Path]:
+        """Return the PROJECT_ROOT/Config_Files path for legacy compatibility."""
+        try:
+            project_root = core_settings.get("PROJECT_ROOT") if core_settings else None
+            if not project_root:
+                return None
+            return (Path(project_root) / "Config_Files" / "session_encryption.key").resolve()
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    def _session_key_storage_mode(self) -> str:
+        """Resolve session key storage mode (`api` default, `project` legacy)."""
+        raw = str(os.getenv("SESSION_KEY_STORAGE", "")).strip().lower()
+        if raw in {"project", "project_root", "root", "repo", "legacy"}:
+            return "project"
+        return "api"
+
     def _resolve_persisted_key_path(self) -> Optional[Path]:
         """Determine filesystem location for persisted session key.
 
-        By default, prefer the project root's Config_Files directory if available via
-        core_settings["PROJECT_ROOT"], otherwise fall back to the API component directory
-        (tldw_Server_API/Config_Files).
+        By default, persist under the API component directory
+        (tldw_Server_API/Config_Files). This avoids creating root-level Config_Files
+        directories in deployments where PROJECT_ROOT points at the repository root.
 
-        Set environment variable SESSION_KEY_STORAGE=api to always use the API component
-        path (tldw_Server_API/Config_Files) for persistence.
+        Set environment variable SESSION_KEY_STORAGE=project (legacy aliases are
+        supported) to force PROJECT_ROOT/Config_Files/session_encryption.key.
         """
-        prefer_api_path = str(os.getenv("SESSION_KEY_STORAGE", "")).strip().lower() in {"api", "tldw", "tldw_api", "tldw_server_api"}
-        if prefer_api_path:
+        if self._session_key_storage_mode() == "api":
             path = self._resolve_api_key_path()
             if path is not None:
                 return path
-        # Try PROJECT_ROOT first (tests patch this to a tmp dir) when not overridden
-        try:
-            project_root = None
-            if core_settings:
-                project_root = core_settings.get("PROJECT_ROOT")
-            if project_root:
-                return (Path(project_root) / "Config_Files" / "session_encryption.key").resolve()
-        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-            pass
-
-        # Fallback to API component path
-        return self._resolve_api_key_path()
+        else:
+            path = self._resolve_project_root_key_path()
+            if path is not None:
+                return path
+        # Fallback to whichever location is still resolvable.
+        return self._resolve_project_root_key_path() or self._resolve_api_key_path()
 
     def _is_valid_key_content(self, content: str) -> bool:
         try:
@@ -807,7 +813,7 @@ class SessionManager:
     def _maybe_migrate_key_to_api_path(self, source_primary: Path, dest_api: Path) -> None:
         """If a valid key exists at project root but not at API path, copy it over.
 
-        Preconditions: This runs only when SESSION_KEY_STORAGE=api is set.
+        Preconditions: This runs only when API storage mode is active.
         """
         try:
             # If API path already has a valid key, nothing to do
@@ -1208,7 +1214,7 @@ class SessionManager:
                     cache_normalize_required = True
                 except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as normalize_exc:
                     logger.warning(
-                        "Failed to normalize session token hash for session %s: %s",
+                        'Failed to normalize session token hash for session {}: {}',
                         session_data.get("id"),
                         normalize_exc,
                     )

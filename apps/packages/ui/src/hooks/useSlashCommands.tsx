@@ -2,6 +2,8 @@ import React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { isRecoverableAuthConfigError } from "@/services/auth-errors"
+import { useConnectionStore } from "@/store/connection"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useStorage } from "@plasmohq/storage/hook"
 
@@ -194,6 +196,7 @@ export const useSlashCommands = ({
 }: UseSlashCommandsOptions): UseSlashCommandsResult => {
   const { t } = useTranslation(["common", "sidepanel"])
   const isOnline = useServerOnline()
+  const checkConnection = useConnectionStore((state) => state.checkOnce)
   const [imageBackendDefault] = useStorage("imageBackendDefault", "")
   const imageBackendDefaultTrimmed = React.useMemo(
     () => (imageBackendDefault || "").trim(),
@@ -203,16 +206,25 @@ export const useSlashCommands = ({
   const { data: serverPayload } = useQuery({
     queryKey: ["tldw:chat:slashCommands"],
     queryFn: async (): Promise<ServerCommandsResponse | null> => {
-      const payload = (await tldwClient.listChatCommands()) as unknown
-      const normalized = normalizeServerCommandsPayload(payload)
-      if (!normalized && payload != null) {
-        console.warn("Unable to parse slash commands response:", payload)
+      try {
+        const payload = (await tldwClient.listChatCommands()) as unknown
+        const normalized = normalizeServerCommandsPayload(payload)
+        if (!normalized && payload != null) {
+          console.warn("Unable to parse slash commands response:", payload)
+        }
+        return normalized
+      } catch (error) {
+        if (isRecoverableAuthConfigError(error)) {
+          void checkConnection().catch(() => null)
+          return null
+        }
+        throw error
       }
-      return normalized
     },
     enabled: isOnline,
     staleTime: 60_000,
-    retry: 2
+    retry: (failureCount, error) =>
+      !isRecoverableAuthConfigError(error) && failureCount < 2
   })
 
   const fallbackMeta = React.useMemo<Record<string, SlashCommandMeta>>(

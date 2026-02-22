@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,27 @@ def _is_swarmui_configured(cfg, enabled: bool) -> bool:
     return bool(getattr(cfg, "swarmui_base_url", None))
 
 
+def _is_openrouter_configured(cfg, enabled: bool) -> bool:
+    if not enabled:
+        return False
+    api_key = (getattr(cfg, "openrouter_image_api_key", None) or os.getenv("OPENROUTER_API_KEY") or "").strip()
+    return bool(api_key)
+
+
+def _is_novita_configured(cfg, enabled: bool) -> bool:
+    if not enabled:
+        return False
+    api_key = (getattr(cfg, "novita_image_api_key", None) or os.getenv("NOVITA_API_KEY") or "").strip()
+    return bool(api_key)
+
+
+def _is_together_configured(cfg, enabled: bool) -> bool:
+    if not enabled:
+        return False
+    api_key = (getattr(cfg, "together_image_api_key", None) or os.getenv("TOGETHER_API_KEY") or "").strip()
+    return bool(api_key)
+
+
 def _resolve_supported_formats(name: str) -> list[str] | None:
     registry = get_registry()
     try:
@@ -78,13 +100,31 @@ def list_image_models_for_catalog() -> list[dict[str, Any]]:
             try:
                 is_configured = _is_sd_cpp_configured(cfg, enabled)
             except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Image backend config check failed for %s: %s", name, exc)
+                logger.debug("Image backend config check failed for {}: {}", name, exc)
                 is_configured = False
         if name == "swarmui":
             try:
                 is_configured = _is_swarmui_configured(cfg, enabled)
             except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Image backend config check failed for %s: %s", name, exc)
+                logger.debug("Image backend config check failed for {}: {}", name, exc)
+                is_configured = False
+        if name == "openrouter":
+            try:
+                is_configured = _is_openrouter_configured(cfg, enabled)
+            except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("Image backend config check failed for {}: {}", name, exc)
+                is_configured = False
+        if name == "novita":
+            try:
+                is_configured = _is_novita_configured(cfg, enabled)
+            except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("Image backend config check failed for {}: {}", name, exc)
+                is_configured = False
+        if name == "together":
+            try:
+                is_configured = _is_together_configured(cfg, enabled)
+            except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("Image backend config check failed for {}: {}", name, exc)
                 is_configured = False
 
         entry: dict[str, Any] = {

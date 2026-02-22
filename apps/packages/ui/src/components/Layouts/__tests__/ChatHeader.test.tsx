@@ -25,7 +25,17 @@ vi.mock("../HeaderShortcuts", () => ({
   )
 }))
 
-const t = ((key: string, fallback?: string) => fallback || key) as unknown as TFunction
+const t = ((
+  key: string,
+  fallback?: string,
+  values?: Record<string, unknown>
+) => {
+  const base = fallback || key
+  if (!values) return base
+  return Object.entries(values).reduce((acc, [name, value]) => {
+    return acc.replaceAll(`{{${name}}}`, String(value))
+  }, base)
+}) as unknown as TFunction
 
 const createProps = (overrides: Partial<React.ComponentProps<typeof ChatHeader>> = {}) => ({
   t,
@@ -41,7 +51,13 @@ const createProps = (overrides: Partial<React.ComponentProps<typeof ChatHeader>>
   onOpenCommandPalette: vi.fn(),
   onOpenShortcutsModal: vi.fn(),
   onOpenSettings: vi.fn(),
+  onToggleTheme: vi.fn(),
+  themeMode: "dark" as const,
   onClearChat: vi.fn(),
+  onStartSavedChat: vi.fn(),
+  onStartTemporaryChat: vi.fn(),
+  onStartCharacterChat: vi.fn(),
+  activeCharacterName: null,
   shortcutsExpanded: false,
   onToggleShortcuts: vi.fn(),
   commandKeyLabel: "Ctrl+",
@@ -80,6 +96,109 @@ describe("ChatHeader shortcut toggle", () => {
     expect(screen.getByTestId("header-shortcuts")).toHaveAttribute(
       "data-expanded",
       "true"
+    )
+  })
+
+  it("applies focus-visible ring classes to key header controls", () => {
+    const props = createProps()
+    render(<ChatHeader {...props} />)
+
+    const controls = [
+      screen.getByRole("button", { name: "Collapse sidebar" }),
+      screen.getByRole("button", { name: "Show shortcuts" }),
+      screen.getByRole("button", { name: "New saved chat" }),
+      screen.getByRole("button", { name: "Temporary chat (not saved)" }),
+      screen.getByRole("button", { name: "Character chat" }),
+      screen.getByRole("button", { name: "Open settings" }),
+      screen.getByRole("button", { name: "Switch to light theme" }),
+      screen.getByRole("button", { name: "Show keyboard shortcuts" })
+    ]
+
+    for (const control of controls) {
+      expect(control.className).toContain("focus-visible:ring-2")
+      expect(control.className).toContain("focus-visible:ring-focus")
+      expect(control.className).toContain("focus-visible:ring-offset-2")
+      expect(control.className).toContain("focus-visible:ring-offset-bg")
+    }
+  })
+
+  it("shows a theme toggle control and triggers toggle callback", () => {
+    const props = createProps({ themeMode: "light" })
+    render(<ChatHeader {...props} />)
+
+    const toggleButton = screen.getByRole("button", {
+      name: "Switch to dark theme"
+    })
+    fireEvent.click(toggleButton)
+
+    expect(props.onToggleTheme).toHaveBeenCalledTimes(1)
+  })
+
+  it("routes chat mode actions to the dedicated callbacks", () => {
+    const props = createProps()
+    render(<ChatHeader {...props} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "New saved chat" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Temporary chat (not saved)" })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Character chat" }))
+
+    expect(props.onStartSavedChat).toHaveBeenCalledTimes(1)
+    expect(props.onStartTemporaryChat).toHaveBeenCalledTimes(1)
+    expect(props.onStartCharacterChat).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows mode badges for temporary and active character", () => {
+    const props = createProps({
+      temporaryChat: true,
+      activeCharacterName: "Rin"
+    })
+    render(<ChatHeader {...props} />)
+
+    expect(screen.getByText("Temporary")).toBeInTheDocument()
+    expect(screen.getByText("Character: Rin")).toBeInTheDocument()
+  })
+
+  it("hides session mode badge when not on chat route", () => {
+    const props = createProps({
+      showSessionModeBadge: false,
+      temporaryChat: false,
+      activeCharacterName: "Rin"
+    })
+    render(<ChatHeader {...props} />)
+
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument()
+    expect(screen.queryByText("Character: Rin")).not.toBeInTheDocument()
+  })
+
+  it("hides chat title when chat title display is disabled", () => {
+    const props = createProps({
+      showChatTitle: false,
+      chatTitle: "Chat title"
+    })
+    render(<ChatHeader {...props} />)
+
+    expect(screen.queryByText("Chat title")).not.toBeInTheDocument()
+  })
+
+  it("shows share controls and status when provided", () => {
+    const onOpenShareModal = vi.fn()
+    const props = createProps({
+      onOpenShareModal,
+      shareStatusLabel: "2 active link(s)"
+    })
+    render(<ChatHeader {...props} />)
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Share conversation (2 active link(s))"
+      })
+    )
+
+    expect(onOpenShareModal).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId("chat-header-share-status")).toHaveTextContent(
+      "2 active link(s)"
     )
   })
 })

@@ -53,4 +53,4 @@ def test_batch_message_counts_and_keywords():
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None

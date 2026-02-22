@@ -531,6 +531,64 @@ _CREATE_BILLING_TABLES = [
         (),
     ),
     ("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+            id SERIAL PRIMARY KEY,
+            stripe_event_id TEXT UNIQUE NOT NULL,
+            event_type TEXT NOT NULL,
+            event_data JSONB NOT NULL,
+            status TEXT DEFAULT 'pending',
+            processed_at TIMESTAMPTZ,
+            error_message TEXT,
+            retry_count INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS payment_history (
+            id SERIAL PRIMARY KEY,
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            stripe_invoice_id TEXT,
+            stripe_payment_intent_id TEXT,
+            amount_cents INTEGER NOT NULL,
+            currency TEXT DEFAULT 'usd',
+            status TEXT NOT NULL,
+            description TEXT,
+            invoice_pdf_url TEXT,
+            receipt_url TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS billing_audit_log (
+            id SERIAL PRIMARY KEY,
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            action TEXT NOT NULL,
+            details TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)", ()),
 ]
 
 
@@ -686,6 +744,49 @@ _CREATE_ORG_PROVIDER_SECRETS = [
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP WITH TIME ZONE", ()),
     ("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_scope ON org_provider_secrets(scope_type, scope_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_provider ON org_provider_secrets(provider)", ()),
+]
+
+_CREATE_BYOK_OAUTH_STATE = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS byok_oauth_state (
+            state TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            auth_session_id TEXT NOT NULL,
+            redirect_uri TEXT NOT NULL,
+            pkce_verifier_encrypted TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            consumed_at TIMESTAMP WITH TIME ZONE,
+            return_path TEXT,
+            PRIMARY KEY (state, user_id)
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS provider TEXT", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS auth_session_id TEXT", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS redirect_uri TEXT", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS pkce_verifier_encrypted TEXT", ()),
+    (
+        "ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS created_at "
+        "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP",
+        (),
+    ),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMP WITH TIME ZONE", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS return_path TEXT", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_oauth_state_provider_expires "
+        "ON byok_oauth_state(provider, expires_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_oauth_state_user_provider_consumed "
+        "ON byok_oauth_state(user_id, provider, consumed_at)",
+        (),
+    ),
 ]
 
 _CREATE_LLM_PROVIDER_OVERRIDES = [
@@ -955,6 +1056,56 @@ _CREATE_VK_COUNTERS = [
             PRIMARY KEY (api_key_id, counter_type)
         )
         """,
+        (),
+    ),
+]
+
+
+_CREATE_GENERATED_FILES_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS generated_files (
+            id SERIAL PRIMARY KEY,
+            uuid TEXT UNIQUE NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
+            team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+            filename TEXT NOT NULL,
+            original_filename TEXT,
+            storage_path TEXT NOT NULL,
+            mime_type TEXT,
+            file_size_bytes BIGINT NOT NULL DEFAULT 0,
+            checksum TEXT,
+            file_category TEXT NOT NULL,
+            source_feature TEXT NOT NULL,
+            source_ref TEXT,
+            folder_tag TEXT,
+            tags JSONB,
+            is_transient BOOLEAN DEFAULT FALSE,
+            expires_at TIMESTAMP,
+            retention_policy TEXT DEFAULT 'user_default',
+            is_deleted BOOLEAN DEFAULT FALSE,
+            deleted_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            accessed_at TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_user_id ON generated_files(user_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_org_id ON generated_files(org_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_team_id ON generated_files(team_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_uuid ON generated_files(uuid)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_category ON generated_files(file_category)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_source_feature ON generated_files(source_feature)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_folder_tag ON generated_files(folder_tag)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_is_deleted ON generated_files(is_deleted)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_expires_at ON generated_files(expires_at)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_created_at ON generated_files(created_at)", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_user_category "
+        "ON generated_files(user_id, file_category, is_deleted)",
         (),
     ),
 ]
@@ -1434,7 +1585,11 @@ async def ensure_billing_tables_pg(
             except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG budgets normalize skipped/failed: {exc}")
 
-        logger.info("Ensured PostgreSQL billing tables (subscription_plans, org_subscriptions)")
+        logger.info(
+            "Ensured PostgreSQL billing tables "
+            "(subscription_plans, org_subscriptions, org_budgets, "
+            "stripe_webhook_events, payment_history, billing_audit_log)"
+        )
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL billing tables: {exc}")
@@ -1560,6 +1715,32 @@ async def ensure_org_provider_secrets_pg(pool: DatabasePool | None = None) -> bo
         return False
 
 
+async def ensure_byok_oauth_state_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure byok_oauth_state table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        # Ensure users table exists before FK-backed BYOK OAuth state table.
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"ensure_byok_oauth_state_pg: core table ensure skipped/failed: {exc}")
+
+        for sql, params in _CREATE_BYOK_OAUTH_STATE:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure byok_oauth_state DDL failed: {exc}")
+
+        logger.info("Ensured PostgreSQL byok_oauth_state table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL byok_oauth_state table: {exc}")
+        return False
+
+
 async def ensure_llm_provider_overrides_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure llm_provider_overrides table exists for PostgreSQL backends."""
     try:
@@ -1599,6 +1780,28 @@ async def ensure_usage_tables_pg(pool: DatabasePool | None = None) -> bool:
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL usage tables: {exc}")
+        return False
+
+
+async def ensure_generated_files_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure generated_files table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before generated_files failed: {exc}")
+        for sql, params in _CREATE_GENERATED_FILES_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure generated_files DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL generated_files table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL generated_files table: {exc}")
         return False
 
 

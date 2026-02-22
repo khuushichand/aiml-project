@@ -31,8 +31,8 @@ def finalize_stream(response: Optional[Any], done_already: bool = False) -> Iter
         try:
             if response is not None:
                 response.close()
-        except Exception:
-            pass
+        except Exception as response_close_error:
+            logger.debug("SSE finalize_stream failed to close response", exc_info=response_close_error)
 
 
 def sse_data(payload: dict[str, Any]) -> str:

@@ -22,6 +22,10 @@ class AuthnzTokenBlacklistRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres_backend(self) -> bool:
+        """Return True when the underlying DatabasePool is using PostgreSQL."""
+        return bool(getattr(self.db_pool, "pool", None))
+
     async def ensure_schema(self) -> None:
         """
         Ensure the ``token_blacklist`` table and key indexes exist.
@@ -71,7 +75,7 @@ class AuthnzTokenBlacklistRepo:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if self.db_pool.pool:
+                if self._is_postgres_backend():
                     for sql in ddl_postgres:
                         await conn.execute(sql)
                 else:
@@ -103,7 +107,7 @@ class AuthnzTokenBlacklistRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     exp = _strip_tzinfo(expires_at)
                     await conn.execute(
                         """
@@ -194,7 +198,7 @@ class AuthnzTokenBlacklistRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     now_param = _strip_tzinfo(now)
                     row = await conn.fetchrow(
                         """
@@ -233,7 +237,7 @@ class AuthnzTokenBlacklistRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     now_param = _strip_tzinfo(now)
                     rows = await conn.fetch(
                         "DELETE FROM token_blacklist WHERE expires_at < $1 RETURNING id",
@@ -272,7 +276,7 @@ class AuthnzTokenBlacklistRepo:
             async with self.db_pool.acquire() as conn:
                 now_param = _strip_tzinfo(now)
                 if user_id:
-                    if hasattr(conn, "fetchrow"):
+                    if self._is_postgres_backend():
                         row = await conn.fetchrow(
                             """
                             SELECT
@@ -303,7 +307,7 @@ class AuthnzTokenBlacklistRepo:
                         )
                         row = await cursor.fetchone()
                 else:
-                    if hasattr(conn, "fetchrow"):
+                    if self._is_postgres_backend():
                         row = await conn.fetchrow(
                             """
                             SELECT

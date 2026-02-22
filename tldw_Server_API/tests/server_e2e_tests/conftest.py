@@ -99,7 +99,7 @@ def _print_server_log(label: str) -> None:
         try:
             print(log_path.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture(scope="session")

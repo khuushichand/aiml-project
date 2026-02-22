@@ -87,4 +87,4 @@ def test_artifact_traversal_rejected_under_uvicorn() -> None:
             th.join(timeout=2)
         except Exception as e:
             # Swallow shutdown errors to avoid masking test results
-            pass
+            _ = None

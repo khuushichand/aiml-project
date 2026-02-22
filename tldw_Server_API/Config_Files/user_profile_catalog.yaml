@@ -64,6 +64,15 @@ entries:
     sensitivity: public
     ui: select
 
+  - key: preferences.chat.default_character_id
+    label: Default Character
+    description: Default character preselected for new chats.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: text
+
   - key: preferences.chat.temperature
     label: Chat Temperature
     description: Default sampling temperature for chat.

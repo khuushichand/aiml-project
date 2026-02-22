@@ -1,0 +1,53 @@
+[
+  {
+    "name": "from_filter",
+    "query": "from:sender1@bench.example",
+    "notes": "Sender participant filter"
+  },
+  {
+    "name": "recipient_filter",
+    "query": "to:recipient1@bench.example",
+    "notes": "Recipient participant filter"
+  },
+  {
+    "name": "subject_filter",
+    "query": "subject:Quarterly",
+    "notes": "Subject-only term"
+  },
+  {
+    "name": "label_filter",
+    "query": "label:Inbox",
+    "notes": "Label filter"
+  },
+  {
+    "name": "has_attachment",
+    "query": "has:attachment",
+    "notes": "Attachment existence filter"
+  },
+  {
+    "name": "date_after",
+    "query": "after:2025-01-01",
+    "notes": "Absolute date lower bound"
+  },
+  {
+    "name": "date_before",
+    "query": "before:2030-01-01",
+    "notes": "Absolute date upper bound"
+  },
+  {
+    "name": "text_negated_label",
+    "query": "benchmark -label:Alerts",
+    "notes": "Free text and unary negation"
+  },
+  {
+    "name": "or_case",
+    "query": "from:sender1@bench.example OR subject:Incident",
+    "notes": "Explicit OR behavior"
+  },
+  {
+    "name": "relative_time",
+    "query": "newer_than:90d",
+    "notes": "Relative time operator"
+  }
+]
+

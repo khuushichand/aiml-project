@@ -55,5 +55,5 @@ def workflows_dual_backend_db(
             try:
                 backend.get_pool().close_all()
             except Exception:
-                pass
+                _ = None
         # No explicit drop; pg_database_config fixture cleans up the temp DB

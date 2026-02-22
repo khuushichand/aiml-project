@@ -11,7 +11,11 @@ def test_aggregate_results_schema(monkeypatch):
     def fake_chat_api_call(**kwargs):
         return "This is a synthesized final answer."
 
+    def fake_summarize(**kwargs):
+        return "Chunk summary."
+
     monkeypatch.setattr(ws, "chat_api_call", lambda *args, **kwargs: fake_chat_api_call(**kwargs))
+    monkeypatch.setattr(ws, "summarize", lambda *args, **kwargs: fake_summarize(**kwargs))
 
     relevant_results = {
         "0": {"content": "Snippet 1", "reasoning": "Relevant due to match"},

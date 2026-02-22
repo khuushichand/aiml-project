@@ -76,7 +76,7 @@ def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done(monkeypatch):
                     svc.db.set_abtest_status(test_id, "completed", stats_json={"progress": {"phase": 1.0}})
                 except Exception:
                     # Do not fail the test from the helper thread
-                    pass
+                    _ = None
 
             t = threading.Thread(target=_complete_later, daemon=True)
             t.start()
@@ -107,9 +107,9 @@ def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done(monkeypatch):
                 os.environ["AUTH_MODE"] = prev_auth_mode
             reset_settings()
         except Exception:
-            pass
+            _ = None
 
         try:
             os.unlink(eval_db_path)
         except Exception:
-            pass
+            _ = None

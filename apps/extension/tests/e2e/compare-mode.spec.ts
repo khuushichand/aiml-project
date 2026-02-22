@@ -1,7 +1,6 @@
 import { expect, test } from "@playwright/test"
-import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 import { setSelectedModel, waitForConnectionStore } from "./utils/connection"
 import { FEATURE_FLAG_KEYS, withFeatures } from "./utils/feature-flags"
 
@@ -13,18 +12,29 @@ test.describe("Compare mode", () => {
       ? serverUrl
       : `http://${serverUrl}`
 
-    const modelsResponse = await fetch(
-      `${normalizedServerUrl}/api/v1/llm/models/metadata`,
-      {
-        headers: { "x-api-key": apiKey }
-      }
-    )
+    let modelsResponse: Response | null = null
+    try {
+      modelsResponse = await fetch(
+        `${normalizedServerUrl}/api/v1/llm/models/metadata`,
+        {
+          headers: { "x-api-key": apiKey }
+        }
+      )
+    } catch (error) {
+      test.skip(
+        true,
+        `Compare mode preflight unreachable in this environment: ${String(error)}`
+      )
+      return
+    }
+    if (!modelsResponse) return
     if (!modelsResponse.ok) {
       const body = await modelsResponse.text().catch(() => "")
       test.skip(
         true,
         `Compare mode preflight failed: ${modelsResponse.status} ${modelsResponse.statusText} ${body}`
       )
+      return
     }
     const modelsPayload = await modelsResponse.json().catch(() => [])
     const modelsList = Array.isArray(modelsPayload)
@@ -39,7 +49,7 @@ test.describe("Compare mode", () => {
       test.skip(true, "Need at least 2 models to run compare workflow.")
     }
 
-    const { context, page, extensionId } = await launchWithExtension("", {
+    const { context, page, extensionId } = await launchWithExtensionOrSkip(test, "", {
       seedConfig: withFeatures([FEATURE_FLAG_KEYS.COMPARE_MODE], {
         tldwConfig: {
           serverUrl: normalizedServerUrl,

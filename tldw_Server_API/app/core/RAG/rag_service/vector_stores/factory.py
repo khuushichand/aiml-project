@@ -71,15 +71,6 @@ class VectorStoreFactory:
 
         return adapter
 
-
-class UnsupportedVectorStoreError(ValueError):
-    """Raised when a requested vector store type is not supported."""
-
-    def __init__(self, store_type: VectorStoreType, available: str) -> None:
-        super().__init__(
-            f"Unsupported vector store type: {store_type}. Available types: {available}"
-        )
-
     @classmethod
     def register_adapter(
         cls,
@@ -171,6 +162,15 @@ class UnsupportedVectorStoreError(ValueError):
         )
 
         return cls.create_adapter(config, initialize=False)
+
+
+class UnsupportedVectorStoreError(ValueError):
+    """Raised when a requested vector store type is not supported."""
+
+    def __init__(self, store_type: VectorStoreType, available: str) -> None:
+        super().__init__(
+            f"Unsupported vector store type: {store_type}. Available types: {available}"
+        )
 
 
 def create_from_settings_for_user(settings: dict, user_id: str = "0") -> Optional[VectorStoreAdapter]:

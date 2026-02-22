@@ -1,7 +1,14 @@
 import React, { useEffect, useState, useRef } from "react"
 import { Tag, Image, Tooltip, Collapse, Avatar, Modal, message } from "antd"
 import { LoadingStatus } from "./ActionInfo"
-import { StopCircle as StopCircleIcon } from "lucide-react"
+import {
+  AlertTriangle,
+  CheckCircle2,
+  RotateCcw,
+  Smile,
+  StopCircle as StopCircleIcon,
+  Trash2
+} from "lucide-react"
 import { EditMessageForm } from "./EditMessageForm"
 import { useTranslation } from "react-i18next"
 import { useTTS, type TtsClipMeta } from "@/hooks/useTTS"
@@ -33,6 +40,7 @@ import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useStoreMessageOption } from "@/store/option"
 import type { MessageVariant } from "@/store/option"
+import { useStoreChatModelSettings } from "@/store/model"
 import { EDIT_MESSAGE_EVENT } from "@/utils/timeline-actions"
 import type { Character } from "@/types/character"
 import { useDiscoSkills } from "@/hooks/useDiscoSkills"
@@ -43,26 +51,57 @@ import {
   buildSkillPrompt,
   createSkillComment
 } from "@/utils/disco-skill-check"
+import {
+  detectCharacterMood,
+  normalizeCharacterMoodLabel,
+  resolveCharacterBaseAvatarUrl,
+  resolveCharacterMoodImageUrl
+} from "@/utils/character-mood"
 import { useStoreMessage } from "@/store"
 import { updateMessageDiscoSkillComment } from "@/db/dexie/helpers"
 import type { MessageSteeringMode } from "@/types/message-steering"
+import {
+  resolveAvatarColumnAlignment,
+  resolveMessageRenderSide
+} from "./message-layout"
+import { formatCost } from "@/utils/model-pricing"
+import {
+  resolveMessageCostUsd,
+  resolveMessageUsage
+} from "./message-usage"
+import { resolvePlaygroundMessageShortcutAction } from "./playground-message-shortcuts"
+import {
+  buildQuickMessageActionPrompt,
+  type QuickMessageAction
+} from "./quick-message-actions"
+import { resolveFallbackAudit } from "./routing-fallback-audit"
+import {
+  IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
+  resolveImageGenerationMetadata,
+  type ImageGenerationRequestSnapshot
+} from "@/utils/image-generation-chat"
 
 const Markdown = React.lazy(() => import("../../Common/Markdown"))
 
 const ErrorBubble: React.FC<{
   payload: ChatErrorPayload
   toggleLabels: { show: string; hide: string }
-}> = ({ payload, toggleLabels }) => {
+  recoveryActions?: Array<{
+    id: string
+    label: string
+    onClick: () => void
+  }>
+}> = ({ payload, toggleLabels, recoveryActions = [] }) => {
   const [showDetails, setShowDetails] = React.useState(false)
 
   return (
     <div
       role="alert"
       aria-live="assertive"
-      className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-700 dark:bg-red-900/30 dark:text-red-100">
+      className="rounded-md border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
       <p className="font-semibold">{payload.summary}</p>
       {payload.hint && (
-        <p className="mt-1 text-xs text-red-900 dark:text-red-100">
+        <p className="mt-1 text-xs text-danger">
           {payload.hint}
         </p>
       )}
@@ -71,14 +110,32 @@ const ErrorBubble: React.FC<{
           type="button"
           onClick={() => setShowDetails((prev) => !prev)}
           title={showDetails ? toggleLabels.hide : toggleLabels.show}
-          className="mt-2 text-xs font-medium text-red-800 underline hover:text-red-700 dark:text-red-200 dark:hover:text-red-100">
+          className="mt-2 text-xs font-medium text-danger underline hover:text-danger">
           {showDetails ? toggleLabels.hide : toggleLabels.show}
         </button>
       )}
       {showDetails && payload.detail && (
-        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-red-100/70 p-2 text-xs text-red-900 dark:bg-red-900/40 dark:text-red-100">
+        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-danger/10 p-2 text-xs text-danger">
           {payload.detail}
         </pre>
+      )}
+      {recoveryActions.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="sr-only">
+            Recommended next actions:{" "}
+            {recoveryActions.map((action) => action.label).join(", ")}
+          </span>
+          {recoveryActions.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              onClick={action.onClick}
+              className="rounded border border-danger/40 bg-surface px-2 py-1 text-[11px] font-medium text-danger transition hover:bg-danger/10"
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   )
@@ -113,6 +170,9 @@ type Props = {
   modelImage?: string
   modelName?: string
   onContinue?: () => void
+  onRunSteeredContinue?: (
+    mode: Exclude<MessageSteeringMode, "none">
+  ) => void
   documents?: ChatDocuments
   actionInfo?: string | null
   onNewBranch?: () => void
@@ -123,6 +183,7 @@ type Props = {
   messageId?: string
   feedbackQuery?: string | null
   searchQuery?: string
+  searchMatch?: "active" | "match" | null
   isEmbedding?: boolean
   createdAt?: number | string
   variants?: MessageVariant[]
@@ -142,18 +203,58 @@ type Props = {
   historyId?: string
   conversationInstanceId: string
   onDeleteMessage?: () => void
+  suppressDeleteSuccessToast?: boolean
+  onSaveToWorkspaceNotes?: (payload: {
+    message: string
+    isBot: boolean
+    name: string
+    messageId?: string
+    createdAt?: number | string
+  }) => void
   onTogglePinned?: () => void
   pinned?: boolean
   characterIdentity?: Character | null
   characterIdentityEnabled?: boolean
+  speakerCharacterId?: number | null
+  speakerCharacterName?: string
+  moodLabel?: string | null
+  moodConfidence?: number | null
+  moodTopic?: string | null
   messageSteeringMode?: MessageSteeringMode
   onMessageSteeringModeChange?: (mode: MessageSteeringMode) => void
   messageSteeringForceNarrate?: boolean
   onMessageSteeringForceNarrateChange?: (enabled: boolean) => void
   onClearMessageSteering?: () => void
+  onRegenerateImage?: (payload: {
+    messageId?: string
+    imageIndex: number
+    imageUrl: string
+    request: ImageGenerationRequestSnapshot | null
+  }) => void | Promise<void>
+  onDeleteImage?: (payload: {
+    messageId?: string
+    imageIndex: number
+    imageUrl: string
+  }) => void
+  onSelectImageVariant?: (payload: {
+    messageId?: string
+    variantIndex: number
+  }) => void
+  onKeepImageVariant?: (payload: {
+    messageId?: string
+    variantIndex: number
+  }) => void
+  onDeleteImageVariant?: (payload: {
+    messageId?: string
+    variantIndex: number
+  }) => void
+  onDeleteAllImageVariants?: (payload: {
+    messageId?: string
+  }) => void
 }
 
 export const PlaygroundMessage = (props: Props) => {
+  const articleRef = useRef<HTMLElement | null>(null)
   const [isBtnPressed, setIsBtnPressed] = React.useState(false)
   const [editMode, setEditMode] = React.useState(false)
   const [checkWideMode] = useStorage("checkWideMode", false)
@@ -171,12 +272,28 @@ export const PlaygroundMessage = (props: Props) => {
   const [userTextSize] = useStorage("chatUserTextSize", "md")
   const [assistantTextSize] = useStorage("chatAssistantTextSize", "md")
   const [userDisplayName] = useStorage("chatUserDisplayName", "")
+  const [showCharacterPortraits] = useStorage("chatShowCharacterPortraits", true)
+  const [showMoodBadge] = useStorage("chatShowMoodBadge", true)
+  const moodConfidenceDefault =
+    Boolean(props.characterIdentityEnabled) && Boolean(props.characterIdentity?.id)
+  const [showMoodConfidence] = useStorage(
+    "chatShowMoodConfidence",
+    moodConfidenceDefault
+  )
+  const [userPersonaImage] = useStorage("chatUserPersonaImage", "")
   const [ttsProvider] = useStorage("ttsProvider", "browser")
   const { t } = useTranslation(["common", "playground"])
   const { capabilities } = useServerCapabilities()
   const uiMode = useUiModeStore((state) => state.mode)
   const isProMode = uiMode === "pro"
   const setReplyTarget = useStoreMessageOption((state) => state.setReplyTarget)
+  const ragPinnedResults = useStoreMessageOption((state) => state.ragPinnedResults)
+  const apiProviderOverride = useStoreChatModelSettings(
+    (state) => state.apiProvider
+  )
+  const updateChatModelSetting = useStoreChatModelSettings(
+    (state) => state.updateSetting
+  )
   const { cancel, isSpeaking, speak } = useTTS()
   const { healthState: audioHealthState, voicesAvailable } =
     useTldwAudioStatus({
@@ -184,9 +301,13 @@ export const PlaygroundMessage = (props: Props) => {
     })
   const [isFeedbackOpen, setIsFeedbackOpen] = React.useState(false)
   const [isAvatarPreviewOpen, setIsAvatarPreviewOpen] = React.useState(false)
+  const [compareVariantIndex, setCompareVariantIndex] = React.useState<
+    number | null
+  >(null)
   const [savingKnowledge, setSavingKnowledge] = React.useState<
     "note" | "flashcard" | null
   >(null)
+  const responseDwellSentKeyRef = useRef<string | null>(null)
 
   // Disco Skills state
   const {
@@ -236,6 +357,25 @@ export const PlaygroundMessage = (props: Props) => {
     .filter(Boolean)
     .join("\n")
   }, [errorPayload])
+  const messageUsage = React.useMemo(
+    () => resolveMessageUsage(props.generationInfo),
+    [props.generationInfo]
+  )
+  const messageCostUsd = React.useMemo(
+    () => resolveMessageCostUsd(props.generationInfo),
+    [props.generationInfo]
+  )
+  const showUsageMetadata =
+    isProMode && props.isBot && messageUsage.totalTokens > 0
+  const interruptedGeneration = Boolean(
+    (props.generationInfo as Record<string, unknown> | undefined)?.interrupted
+  )
+  const interruptionReason = React.useMemo(() => {
+    const raw = (props.generationInfo as Record<string, unknown> | undefined)
+      ?.interruptionReason
+    if (typeof raw !== "string" || raw.trim().length === 0) return null
+    return raw.trim()
+  }, [props.generationInfo])
   const messageTimestamp = React.useMemo(() => {
     const info = props.generationInfo as
       | { created_at?: string | number; createdAt?: string | number; timestamp?: string | number }
@@ -256,6 +396,175 @@ export const PlaygroundMessage = (props: Props) => {
       minute: "2-digit"
     })
   }, [props.createdAt, props.generationInfo])
+  const fallbackAudit = React.useMemo(
+    () => resolveFallbackAudit(props.generationInfo),
+    [props.generationInfo]
+  )
+  const fallbackAuditPolicyLabel = React.useMemo(() => {
+    if (!fallbackAudit) return null
+    if (fallbackAudit.policy === "auto") {
+      return t("playground:routing.policyAuto", "Auto fallback")
+    }
+    if (fallbackAudit.policy === "pinned") {
+      return t("playground:routing.policyPinned", "Provider pinned")
+    }
+    return t("playground:routing.policyGeneric", "Routing")
+  }, [fallbackAudit, t])
+  const fallbackAuditPathLabel = React.useMemo(() => {
+    if (!fallbackAudit) return null
+    if (
+      fallbackAudit.fallbackApplied &&
+      fallbackAudit.requestedTarget &&
+      fallbackAudit.resolvedTarget
+    ) {
+      return `${fallbackAudit.requestedTarget} → ${fallbackAudit.resolvedTarget}`
+    }
+    return fallbackAudit.resolvedTarget || fallbackAudit.requestedTarget
+  }, [fallbackAudit])
+  const imageGenerationMetadata = React.useMemo(
+    () => resolveImageGenerationMetadata(props.generationInfo),
+    [props.generationInfo]
+  )
+  const canRegenerateImage =
+    props.isBot &&
+    Boolean(props.onRegenerateImage) &&
+    Boolean(imageGenerationMetadata?.request)
+  const showInlineImageActions = canRegenerateImage || Boolean(props.onDeleteImage)
+  const isImageGenerationAssistantEvent =
+    props.isBot &&
+    Boolean(imageGenerationMetadata?.request) &&
+    (!props.message_type ||
+      props.message_type === IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE)
+  const imageGenerationEventSummary = React.useMemo(() => {
+    if (!imageGenerationMetadata?.request) return null
+
+    const request = imageGenerationMetadata.request
+    const chips: string[] = [
+      String(
+        t("playground:imageGeneration.eventBackend", "Backend: {{value}}", {
+          value: request.backend
+        } as any)
+      )
+    ]
+
+    if (request.model) {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventModel", "Model: {{value}}", {
+            value: request.model
+          } as any)
+        )
+      )
+    }
+    if (typeof request.width === "number" && typeof request.height === "number") {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventSize", "Size: {{width}}x{{height}}", {
+            width: request.width,
+            height: request.height
+          } as any)
+        )
+      )
+    }
+    if (request.format) {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventFormat", "Format: {{value}}", {
+            value: request.format.toUpperCase()
+          } as any)
+        )
+      )
+    }
+    if (typeof request.steps === "number") {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventSteps", "Steps: {{value}}", {
+            value: request.steps
+          } as any)
+        )
+      )
+    }
+    if (typeof request.cfgScale === "number") {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventCfg", "CFG: {{value}}", {
+            value: request.cfgScale
+          } as any)
+        )
+      )
+    }
+    if (typeof request.seed === "number") {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventSeed", "Seed: {{value}}", {
+            value: request.seed
+          } as any)
+        )
+      )
+    }
+    if (request.sampler) {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventSampler", "Sampler: {{value}}", {
+            value: request.sampler
+          } as any)
+        )
+      )
+    }
+
+    const sourceLabel =
+      imageGenerationMetadata.source === "slash-command"
+        ? String(
+            t("playground:imageGeneration.eventSourceSlash", "Slash command")
+          )
+        : imageGenerationMetadata.source === "message-regen"
+          ? String(
+              t("playground:imageGeneration.eventSourceRegen", "Regenerated")
+            )
+          : imageGenerationMetadata.source === "generate-modal"
+            ? String(
+                t("playground:imageGeneration.eventSourceModal", "Generate menu")
+              )
+            : null
+
+    const refineLabel = imageGenerationMetadata.refine
+      ? String(
+          t(
+            "playground:imageGeneration.eventRefined",
+            "Refined with {{model}} ({{ms}} ms)",
+            {
+              model: imageGenerationMetadata.refine.model,
+              ms: imageGenerationMetadata.refine.latencyMs
+            } as any
+          )
+        )
+      : null
+    const syncLabel = imageGenerationMetadata.sync
+      ? imageGenerationMetadata.sync.mode === "off"
+        ? String(t("playground:imageGeneration.eventSyncOff", "Local only"))
+        : imageGenerationMetadata.sync.status === "synced"
+          ? String(
+              t("playground:imageGeneration.eventSyncOn", "Mirrored to server")
+            )
+          : imageGenerationMetadata.sync.status === "failed"
+            ? String(
+                t("playground:imageGeneration.eventSyncFailed", "Mirror failed")
+              )
+            : String(
+                t("playground:imageGeneration.eventSyncPending", "Mirroring...")
+              )
+      : null
+    const syncStatus = imageGenerationMetadata.sync?.status ?? null
+
+    return {
+      prompt: request.prompt,
+      chips,
+      sourceLabel,
+      refineLabel,
+      syncLabel,
+      syncStatus
+    }
+  }, [imageGenerationMetadata, t])
   const variantCount = props.variants?.length ?? 0
   const resolvedVariantIndex = (() => {
     const fallback =
@@ -267,6 +576,59 @@ export const PlaygroundMessage = (props: Props) => {
     if (variantCount <= 0) return 0
     return Math.max(0, Math.min(fallback, variantCount - 1))
   })()
+  const imageVariantEntries = React.useMemo(() => {
+    const variants = Array.isArray(props.variants) ? props.variants : []
+    if (variants.length === 0) {
+      const baseImages = Array.isArray(props.images)
+        ? props.images.filter((image) => typeof image === "string" && image.length > 0)
+        : []
+      if (baseImages.length === 0) return []
+      return [
+        {
+          index: 0,
+          preview: baseImages[0],
+          images: baseImages
+        }
+      ]
+    }
+    return variants
+      .map((variant, index) => {
+        const images = Array.isArray(variant?.images)
+          ? variant.images.filter((image) => typeof image === "string" && image.length > 0)
+          : []
+        if (images.length === 0) return null
+        return {
+          index,
+          preview: images[0],
+          images
+        }
+      })
+      .filter((entry): entry is { index: number; preview: string; images: string[] } =>
+        Boolean(entry)
+      )
+  }, [props.images, props.variants])
+  const activeVariantPreview = React.useMemo(() => {
+    if (imageVariantEntries.length === 0) return null
+    return (
+      imageVariantEntries.find((entry) => entry.index === resolvedVariantIndex) ||
+      imageVariantEntries[0]
+    )
+  }, [imageVariantEntries, resolvedVariantIndex])
+  const compareVariantPreview = React.useMemo(() => {
+    if (compareVariantIndex == null) return null
+    return (
+      imageVariantEntries.find((entry) => entry.index === compareVariantIndex) || null
+    )
+  }, [compareVariantIndex, imageVariantEntries])
+  React.useEffect(() => {
+    if (compareVariantIndex == null) return
+    const compareStillValid = imageVariantEntries.some(
+      (entry) => entry.index === compareVariantIndex
+    )
+    if (!compareStillValid || compareVariantIndex === resolvedVariantIndex) {
+      setCompareVariantIndex(null)
+    }
+  }, [compareVariantIndex, imageVariantEntries, resolvedVariantIndex])
   const showVariantPager = props.isBot && variantCount > 1
   const canSwipePrev =
     showVariantPager && Boolean(props.onSwipePrev) && resolvedVariantIndex > 0
@@ -274,13 +636,95 @@ export const PlaygroundMessage = (props: Props) => {
     showVariantPager &&
     Boolean(props.onSwipeNext) &&
     resolvedVariantIndex < variantCount - 1
+  const hasMessageKeyboardShortcuts =
+    (canSwipePrev || canSwipeNext) ||
+    Boolean(props.onNewBranch) ||
+    Boolean(props.isBot && props.onRegenerate)
+  const handleMessageShortcut = React.useCallback(
+    (event: React.KeyboardEvent<HTMLElement>) => {
+      const action = resolvePlaygroundMessageShortcutAction(event.nativeEvent)
+      if (!action) return
+
+      if (action === "variant_prev") {
+        if (!canSwipePrev || !props.onSwipePrev) return
+        event.preventDefault()
+        props.onSwipePrev()
+        articleRef.current?.focus()
+        return
+      }
+      if (action === "variant_next") {
+        if (!canSwipeNext || !props.onSwipeNext) return
+        event.preventDefault()
+        props.onSwipeNext()
+        articleRef.current?.focus()
+        return
+      }
+      if (action === "new_branch") {
+        if (!props.onNewBranch) return
+        event.preventDefault()
+        props.onNewBranch()
+        articleRef.current?.focus()
+        return
+      }
+      if (action === "regenerate") {
+        if (!props.isBot || !props.onRegenerate) return
+        event.preventDefault()
+        props.onRegenerate()
+        articleRef.current?.focus()
+      }
+    },
+    [
+      canSwipeNext,
+      canSwipePrev,
+      props.isBot,
+      props.onNewBranch,
+      props.onRegenerate,
+      props.onSwipeNext,
+      props.onSwipePrev
+    ]
+  )
   const resolvedRole = props.role ?? (props.isBot ? "assistant" : "user")
   const isSystemMessage = resolvedRole === "system"
+  const speakerMatchesCharacterIdentity =
+    props.speakerCharacterId == null ||
+    !props.characterIdentity?.id ||
+    String(props.speakerCharacterId) === String(props.characterIdentity.id)
   const shouldUseCharacterIdentity =
     props.isBot &&
     Boolean(props.characterIdentityEnabled) &&
-    Boolean(props.characterIdentity?.id)
-  const characterAvatar = props.characterIdentity?.avatar_url || ""
+    Boolean(props.characterIdentity?.id) &&
+    speakerMatchesCharacterIdentity
+  const explicitMoodLabel = normalizeCharacterMoodLabel(props.moodLabel)
+  const inferredMoodLabel = React.useMemo(() => {
+    if (!props.isBot || isSystemMessage) return null
+    return detectCharacterMood({ assistantText: props.message }).label
+  }, [isSystemMessage, props.isBot, props.message])
+  const resolvedMoodLabel = explicitMoodLabel || inferredMoodLabel
+  const moodBadgeLabel = React.useMemo(() => {
+    if (!resolvedMoodLabel) return null
+    const normalizedMood = resolvedMoodLabel.replace(/_/g, " ")
+    if (
+      showMoodConfidence &&
+      typeof props.moodConfidence === "number" &&
+      Number.isFinite(props.moodConfidence)
+    ) {
+      const percent = Math.max(0, Math.min(100, Math.round(props.moodConfidence * 100)))
+      return t("playground:message.moodLabelConfidence", "Mood: {{mood}} ({{confidence}}%)", {
+        mood: normalizedMood,
+        confidence: percent
+      })
+    }
+    return t("playground:message.moodLabel", "Mood: {{mood}}", {
+      mood: normalizedMood
+    })
+  }, [props.moodConfidence, resolvedMoodLabel, showMoodConfidence, t])
+  const baseCharacterAvatar = resolveCharacterBaseAvatarUrl(
+    props.characterIdentity
+  )
+  const moodCharacterAvatar = shouldUseCharacterIdentity
+    ? resolveCharacterMoodImageUrl(props.characterIdentity, resolvedMoodLabel)
+    : ""
+  const characterAvatar = moodCharacterAvatar || baseCharacterAvatar
   const resolvedModelImage =
     shouldUseCharacterIdentity && characterAvatar
       ? characterAvatar
@@ -289,6 +733,44 @@ export const PlaygroundMessage = (props: Props) => {
     shouldUseCharacterIdentity && props.characterIdentity?.name
       ? props.characterIdentity.name
       : props.modelName || props.name
+  const resolvedUserPersonaImage = React.useMemo(() => {
+    const raw =
+      typeof userPersonaImage === "string" ? userPersonaImage.trim() : ""
+    if (!raw) return ""
+    if (
+      raw.startsWith("data:image/") ||
+      raw.startsWith("http://") ||
+      raw.startsWith("https://")
+    ) {
+      return raw
+    }
+    return ""
+  }, [userPersonaImage])
+  const portraitImage = isSystemMessage
+    ? ""
+    : props.isBot
+      ? resolvedModelImage || ""
+      : resolvedUserPersonaImage
+  const messageRenderSide = resolveMessageRenderSide({
+    isBot: props.isBot,
+    isSystemMessage
+  })
+  const portraitSide: "left" | "right" = messageRenderSide
+  const shouldShowPortrait =
+    Boolean(showCharacterPortraits) && Boolean(portraitImage)
+  const shouldShowAvatarColumn = !shouldShowPortrait
+  const avatarColumnAlignmentClass = resolveAvatarColumnAlignment(
+    messageRenderSide
+  )
+  const userAvatarNode = props.userAvatar ? (
+    props.userAvatar
+  ) : resolvedUserPersonaImage ? (
+    <Avatar
+      src={resolvedUserPersonaImage}
+      alt={userDisplayName.trim() || t("common:you", "You")}
+      className="size-8"
+    />
+  ) : null
   const shouldPreviewAvatar =
     shouldUseCharacterIdentity && Boolean(characterAvatar)
   const ttsClipMeta = React.useMemo<TtsClipMeta>(
@@ -376,11 +858,14 @@ export const PlaygroundMessage = (props: Props) => {
   const canSaveToNotes = canSaveKnowledge && Boolean(capabilities?.hasNotes)
   const canSaveToFlashcards =
     canSaveKnowledge && Boolean(capabilities?.hasFlashcards)
+  const canSaveToWorkspaceNotes =
+    Boolean(props.onSaveToWorkspaceNotes) &&
+    Boolean((errorFriendlyText || props.message || "").trim()) &&
+    !errorPayload
   const canGenerateDocument =
     Boolean(capabilities?.hasChatDocuments) &&
     Boolean(props.serverChatId) &&
     props.isBot &&
-    !props.temporaryChat &&
     !errorPayload
   const replyId = props.messageId ?? props.serverMessageId ?? null
   const canReply =
@@ -403,7 +888,13 @@ export const PlaygroundMessage = (props: Props) => {
     [t]
   )
 
-  const { trackCopy, trackSourcesExpanded, trackSourceClick } =
+  const {
+    trackCopy,
+    trackSourcesExpanded,
+    trackSourceClick,
+    trackCitationUsed,
+    trackDwellTime
+  } =
     useImplicitFeedback({
       conversationId: props.serverChatId ?? null,
       messageId: props.serverMessageId ?? null,
@@ -411,6 +902,32 @@ export const PlaygroundMessage = (props: Props) => {
       sources: props.sources ?? [],
       enabled: feedbackImplicitAvailable
     })
+
+  useEffect(() => {
+    const dwellMessageKey = props.serverMessageId ?? null
+    if (!dwellMessageKey) return
+    if (!props.isBot || !isLastMessage) return
+    if (props.isStreaming || props.isProcessing) return
+    if (!feedbackImplicitAvailable) return
+    if (responseDwellSentKeyRef.current === dwellMessageKey) return
+
+    const timeout = window.setTimeout(() => {
+      trackDwellTime(3000)
+      responseDwellSentKeyRef.current = dwellMessageKey
+    }, 3000)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [
+    feedbackImplicitAvailable,
+    isLastMessage,
+    props.isBot,
+    props.isProcessing,
+    props.isStreaming,
+    props.serverMessageId,
+    trackDwellTime
+  ])
 
   const handleReply = React.useCallback(() => {
     if (!replyId) return
@@ -454,6 +971,30 @@ export const PlaygroundMessage = (props: Props) => {
       })
     )
   }, [errorFriendlyText, props.message, props.serverChatId, props.serverMessageId])
+
+  const handleSaveToWorkspaceNotes = React.useCallback(() => {
+    const snippet = (errorFriendlyText || props.message || "").trim()
+    if (!snippet || !props.onSaveToWorkspaceNotes) return
+    props.onSaveToWorkspaceNotes({
+      message: snippet,
+      isBot: props.isBot,
+      name: props.name,
+      messageId: props.messageId || props.serverMessageId || undefined,
+      createdAt:
+        typeof props.createdAt === "number" || typeof props.createdAt === "string"
+          ? props.createdAt
+          : undefined
+    })
+  }, [
+    errorFriendlyText,
+    props.createdAt,
+    props.isBot,
+    props.message,
+    props.messageId,
+    props.name,
+    props.onSaveToWorkspaceNotes,
+    props.serverMessageId
+  ])
 
   const handleSaveKnowledge = async (makeFlashcard: boolean) => {
     if (!props.serverChatId || !props.serverMessageId) return
@@ -559,6 +1100,8 @@ export const PlaygroundMessage = (props: Props) => {
     Boolean(errorPayload) ||
     !feedbackExplicitAvailable ||
     isActiveResponse
+  const showFeedbackControls =
+    resolvedRole !== "user" && Boolean(props.serverMessageId)
   const feedbackDisabledReason =
     !canSubmit || Boolean(errorPayload) || !feedbackExplicitAvailable
       ? t(
@@ -627,7 +1170,9 @@ export const PlaygroundMessage = (props: Props) => {
       onOk: async () => {
         try {
           await props.onDeleteMessage?.()
-          message.success(t("common:deleted", "Deleted"))
+          if (!props.suppressDeleteSuccessToast) {
+            message.success(t("common:deleted", "Deleted"))
+          }
         } catch (err) {
           console.error("Failed to delete message:", err)
           const fallback = t("common:deleteFailed", "Delete failed")
@@ -636,7 +1181,257 @@ export const PlaygroundMessage = (props: Props) => {
         }
       }
     })
-  }, [props.onDeleteMessage, t])
+  }, [props.onDeleteMessage, props.suppressDeleteSuccessToast, t])
+  const handleOpenModelSettings = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    window.dispatchEvent(new CustomEvent("tldw:open-model-settings"))
+  }, [])
+  const handleOpenKnowledgePanel = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    window.dispatchEvent(
+      new CustomEvent("tldw:open-knowledge-panel", {
+        detail: { tab: "search" }
+      })
+    )
+  }, [])
+  const pinnedSourceKeySet = React.useMemo(() => {
+    const set = new Set<string>()
+    for (const entry of ragPinnedResults || []) {
+      const parts = [
+        entry?.url,
+        entry?.source,
+        entry?.title
+      ]
+        .map((value) =>
+          typeof value === "string" ? value.trim().toLowerCase() : ""
+        )
+        .filter((value) => value.length > 0)
+      for (const value of parts) {
+        set.add(value)
+      }
+    }
+    return set
+  }, [ragPinnedResults])
+  const resolveSourcePinnedState = React.useCallback(
+    (source: any): "active" | "inactive" | null => {
+      if (!pinnedSourceKeySet.size) return null
+      const sourceKeys = [
+        source?.url,
+        source?.name,
+        source?.metadata?.source,
+        source?.metadata?.title
+      ]
+        .map((value) =>
+          typeof value === "string" ? value.trim().toLowerCase() : ""
+        )
+        .filter((value) => value.length > 0)
+      if (sourceKeys.length === 0) return "inactive"
+      const matches = sourceKeys.some((value) => pinnedSourceKeySet.has(value))
+      return matches ? "active" : "inactive"
+    },
+    [pinnedSourceKeySet]
+  )
+  const buildSourceReference = React.useCallback(
+    (source: any, index: number): string => {
+      const sourceLabel =
+        source?.name ||
+        source?.metadata?.title ||
+        source?.metadata?.source ||
+        source?.url ||
+        t("common:sourceLabel", "Source")
+      return `[${index + 1}] ${String(sourceLabel).trim()}`
+    },
+    [t]
+  )
+  const buildFollowUpPrompt = React.useCallback(
+    (sources: any[]) => {
+      const references = sources
+        .map((source, index) => buildSourceReference(source, index))
+        .join("\n")
+      return [
+        t(
+          "playground:sources.askWithTemplateHeader",
+          "Use these sources in your next answer:"
+        ),
+        references,
+        "",
+        t(
+          "playground:sources.askWithTemplateQuestion",
+          "Question:"
+        )
+      ]
+        .filter(Boolean)
+        .join("\n")
+    },
+    [buildSourceReference, t]
+  )
+  const handleAskWithSources = React.useCallback(
+    (sources: any[]) => {
+      if (typeof window === "undefined" || !Array.isArray(sources) || sources.length === 0) {
+        return
+      }
+      const prompt = buildFollowUpPrompt(sources)
+      window.dispatchEvent(
+        new CustomEvent("tldw:set-composer-message", {
+          detail: { message: prompt }
+        })
+      )
+      window.dispatchEvent(new CustomEvent("tldw:open-knowledge-panel", {
+        detail: { tab: "search" }
+      }))
+      window.dispatchEvent(new CustomEvent("tldw:focus-composer"))
+    },
+    [buildFollowUpPrompt]
+  )
+  const handleQuickMessageAction = React.useCallback(
+    (action: QuickMessageAction) => {
+      if (typeof window === "undefined") return
+      const content = (errorFriendlyText || props.message || "").trim()
+      if (!content) return
+
+      const lineage =
+        props.serverMessageId ||
+        props.messageId ||
+        `index:${props.currentMessageIndex + 1}`
+      const sourceReferences = (props.sources || []).map((source, index) =>
+        buildSourceReference(source, index)
+      )
+      const prompt = buildQuickMessageActionPrompt({
+        action,
+        message: content,
+        lineage,
+        sourceReferences
+      })
+
+      window.dispatchEvent(
+        new CustomEvent("tldw:set-composer-message", {
+          detail: { message: prompt }
+        })
+      )
+      window.dispatchEvent(new CustomEvent("tldw:focus-composer"))
+    },
+    [
+      buildSourceReference,
+      errorFriendlyText,
+      props.currentMessageIndex,
+      props.message,
+      props.messageId,
+      props.serverMessageId,
+      props.sources
+    ]
+  )
+  const handleEnableProviderFallback = React.useCallback(() => {
+    updateChatModelSetting("apiProvider", undefined)
+    message.info(
+      apiProviderOverride
+        ? t(
+            "playground:errorRecovery.fallbackClearedProvider",
+            "Provider override cleared. Retrying with fallback routing."
+          )
+        : t(
+            "playground:errorRecovery.fallbackRetrying",
+            "Retrying with provider fallback policy."
+          )
+    )
+    props.onRegenerate()
+  }, [apiProviderOverride, props.onRegenerate, t, updateChatModelSetting])
+  const errorRecoveryActions = React.useMemo(() => {
+    if (!errorPayload) return []
+    const actions: Array<{ id: string; label: string; onClick: () => void }> = [
+      {
+        id: "retry",
+        label: t(
+          "playground:errorRecovery.retrySameModel",
+          "Retry same model"
+        ),
+        onClick: () => props.onRegenerate()
+      },
+      {
+        id: "switch",
+        label: t(
+          "playground:errorRecovery.switchModel",
+          "Switch model"
+        ),
+        onClick: handleOpenModelSettings
+      },
+      {
+        id: "fallback",
+        label: t(
+          "playground:errorRecovery.tryProviderFallback",
+          "Try provider fallback"
+        ),
+        onClick: handleEnableProviderFallback
+      }
+    ]
+    if (props.onContinue && !props.hideContinue) {
+      actions.push({
+        id: "continue",
+        label: t(
+          "playground:errorRecovery.continueFromPartial",
+          "Continue from partial"
+        ),
+        onClick: props.onContinue
+      })
+    }
+    return actions
+  }, [
+    errorPayload,
+    handleEnableProviderFallback,
+    handleOpenModelSettings,
+    props.hideContinue,
+    props.onContinue,
+    props.onRegenerate,
+    t
+  ])
+  const interruptionRecoveryActions = React.useMemo(() => {
+    if (!interruptedGeneration || errorPayload) return []
+    const actions: Array<{ id: string; label: string; onClick: () => void }> = [
+      {
+        id: "retry",
+        label: t(
+          "playground:errorRecovery.retrySameModel",
+          "Retry same model"
+        ),
+        onClick: () => props.onRegenerate()
+      },
+      {
+        id: "switch",
+        label: t(
+          "playground:errorRecovery.switchModel",
+          "Switch model"
+        ),
+        onClick: handleOpenModelSettings
+      },
+      {
+        id: "fallback",
+        label: t(
+          "playground:errorRecovery.tryProviderFallback",
+          "Try provider fallback"
+        ),
+        onClick: handleEnableProviderFallback
+      }
+    ]
+    if (props.onContinue && !props.hideContinue) {
+      actions.push({
+        id: "continue",
+        label: t(
+          "playground:errorRecovery.continueFromPartial",
+          "Continue from partial"
+        ),
+        onClick: props.onContinue
+      })
+    }
+    return actions
+  }, [
+    errorPayload,
+    handleEnableProviderFallback,
+    handleOpenModelSettings,
+    interruptedGeneration,
+    props.hideContinue,
+    props.onContinue,
+    props.onRegenerate,
+    t
+  ])
 
   const actionRowVisibility = isProMode
     ? "flex"
@@ -847,6 +1642,10 @@ export const PlaygroundMessage = (props: Props) => {
   ])
 
   const compareLabel = t("playground:composer.compareTag", "Compare")
+  const compareSelectedLabel = t(
+    "playground:composer.compareSelectedTag",
+    "Compared"
+  )
   const systemLabel = t("playground:systemPrompt", "System prompt")
   const messageRole = isSystemMessage
     ? "system"
@@ -866,7 +1665,12 @@ export const PlaygroundMessage = (props: Props) => {
     total: props.totalMessages
   }) as string
 
-  if (isUserChatBubble && !props.isBot) {
+  if (
+    isUserChatBubble &&
+    !props.isBot &&
+    !isSystemMessage &&
+    !showCharacterPortraits
+  ) {
     return (
       <PlaygroundUserMessageBubble
         {...props}
@@ -887,19 +1691,93 @@ export const PlaygroundMessage = (props: Props) => {
     : props.isBot
       ? `flex flex-col rounded-2xl border border-border/50 bg-surface/60 shadow-sm border-l-2 border-l-primary/20 ${messageSpacing}`
       : `flex flex-col rounded-2xl border border-border/50 bg-surface2/60 shadow-sm ${messageSpacing}`
+  const portraitPanel = shouldShowPortrait ? (
+    <button
+      type="button"
+      onClick={() => setIsAvatarPreviewOpen(true)}
+      className="relative hidden h-40 w-28 shrink-0 overflow-hidden rounded-2xl border border-border/60 bg-surface/30 shadow-sm transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-focus sm:block md:h-52 md:w-36"
+      aria-label={t("playground:previewCharacterAvatar", {
+        defaultValue: "Preview character avatar"
+      }) as string}
+    >
+      <img
+        src={portraitImage}
+        alt={
+          props.isBot
+            ? resolvedModelName || props.name
+            : userDisplayName.trim() || t("common:you", "You")
+        }
+        className="h-full w-full object-cover"
+        loading="lazy"
+      />
+      <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-transparent" />
+    </button>
+  ) : null
+  const avatarColumn = shouldShowAvatarColumn ? (
+    <div className={`w-8 flex flex-col relative ${avatarColumnAlignmentClass}`}>
+      {props.isBot ? (
+        !resolvedModelImage ? (
+          <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
+            <div className="absolute h-8 w-8 rounded-full bg-gradient-to-r from-green-300 to-purple-400"></div>
+          </div>
+        ) : shouldPreviewAvatar ? (
+          <button
+            type="button"
+            onClick={() => setIsAvatarPreviewOpen(true)}
+            className="rounded-full focus:outline-none focus:ring-2 focus:ring-focus"
+            aria-label={t("playground:previewCharacterAvatar", {
+              defaultValue: "Preview character avatar"
+            }) as string}
+          >
+            <Avatar
+              src={resolvedModelImage}
+              alt={resolvedModelName || props.name}
+              className="size-8"
+            />
+          </button>
+        ) : (
+          <Avatar
+            src={resolvedModelImage}
+            alt={resolvedModelName || props.name}
+            className="size-8"
+          />
+        )
+      ) : isSystemMessage ? (
+        <div className="relative h-7 w-7 p-1 rounded-sm text-warn flex items-center justify-center text-opacity-100">
+          <div className="absolute h-8 w-8 rounded-full border border-warn/40 bg-warn/10"></div>
+        </div>
+      ) : !userAvatarNode ? (
+        <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
+          <div className="absolute h-8 w-8 rounded-full from-primary/60 to-primary bg-gradient-to-r"></div>
+        </div>
+      ) : (
+        userAvatarNode
+      )}
+    </div>
+  ) : null
   return (
     <article
+      ref={articleRef}
       data-testid="chat-message"
       data-role={messageRole}
       data-message-type={props.message_type}
       data-index={props.currentMessageIndex}
       data-message-id={props.messageId}
       data-server-message-id={props.serverMessageId}
+      data-search-match={props.searchMatch || undefined}
       aria-label={messageAriaLabel}
       aria-busy={props.isStreaming && isLastMessage ? true : undefined}
+      tabIndex={hasMessageKeyboardShortcuts ? 0 : undefined}
+      onKeyDown={hasMessageKeyboardShortcuts ? handleMessageShortcut : undefined}
       className={`group relative flex w-full max-w-3xl flex-col items-end justify-center text-text ${
         isProMode ? "pb-3 md:px-5" : "pb-2 md:px-4"
-      } ${checkWideMode ? "max-w-none" : ""}`}>
+      } ${checkWideMode ? "max-w-none" : ""} ${
+        props.searchMatch === "active"
+          ? "rounded-lg ring-2 ring-primary/60 ring-offset-2 ring-offset-bg"
+          : props.searchMatch === "match"
+            ? "rounded-lg ring-1 ring-primary/35 ring-offset-1 ring-offset-bg"
+            : ""
+      }`}>
       {/* Inline stop button while streaming on the latest assistant message */}
       {props.isBot && (props.isStreaming || props.isProcessing) && isLastMessage && props.onStopStreaming && (
         <div className="absolute right-2 top-0 z-10">
@@ -921,64 +1799,9 @@ export const PlaygroundMessage = (props: Props) => {
         className={`flex flex-row m-auto w-full ${
           isProMode ? "gap-4 md:gap-6 my-2" : "gap-3 md:gap-4 my-1.5"
         }`}>
-        <div className="w-8 flex flex-col relative items-end">
-          {props.isBot ? (
-            !resolvedModelImage ? (
-              <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
-                <div className="absolute h-8 w-8 rounded-full bg-gradient-to-r from-green-300 to-purple-400"></div>
-              </div>
-            ) : shouldPreviewAvatar ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setIsAvatarPreviewOpen(true)}
-                  className="rounded-full focus:outline-none focus:ring-2 focus:ring-focus"
-                  aria-label={t("playground:previewCharacterAvatar", {
-                    defaultValue: "Preview character avatar"
-                  }) as string}
-                >
-                  <Avatar
-                    src={resolvedModelImage}
-                    alt={resolvedModelName || props.name}
-                    className="size-8"
-                  />
-                </button>
-                {isAvatarPreviewOpen && (
-                  <Modal
-                    open
-                    onCancel={() => setIsAvatarPreviewOpen(false)}
-                    footer={null}
-                    centered
-                  >
-                    <Image
-                      src={resolvedModelImage}
-                      alt={resolvedModelName || props.name}
-                      preview={false}
-                      className="w-full"
-                    />
-                  </Modal>
-                )}
-              </>
-            ) : (
-              <Avatar
-                src={resolvedModelImage}
-                alt={resolvedModelName || props.name}
-                className="size-8"
-              />
-            )
-          ) : isSystemMessage ? (
-            <div className="relative h-7 w-7 p-1 rounded-sm text-warn flex items-center justify-center text-opacity-100">
-              <div className="absolute h-8 w-8 rounded-full border border-warn/40 bg-warn/10"></div>
-            </div>
-          ) : !props.userAvatar ? (
-            <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
-              <div className="absolute h-8 w-8 rounded-full from-blue-400 to-blue-600 bg-gradient-to-r"></div>
-            </div>
-          ) : (
-            props.userAvatar
-          )}
-        </div>
-        <div className="flex w-[calc(100%-50px)] flex-col gap-2 lg:w-[calc(100%-115px)]">
+        {portraitSide === "left" ? portraitPanel : null}
+        {portraitSide === "left" ? avatarColumn : null}
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className={messageCardClass}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -1003,6 +1826,15 @@ export const PlaygroundMessage = (props: Props) => {
                     • {messageTimestamp}
                   </span>
                 )}
+                {props.isBot && !isSystemMessage && showMoodBadge && moodBadgeLabel && (
+                  <span
+                    data-testid="message-mood-indicator"
+                    className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent"
+                  >
+                    <Smile className="h-3 w-3" aria-hidden="true" />
+                    <span>{moodBadgeLabel}</span>
+                  </span>
+                )}
                 {props?.message_type && (
                   <Tag
                     className="!m-0"
@@ -1016,29 +1848,45 @@ export const PlaygroundMessage = (props: Props) => {
                       <button
                         type="button"
                         onClick={props.onToggleCompareSelect}
-                        aria-label={compareLabel}
-                        aria-pressed={props.compareSelected}
-                        title={compareLabel}
-                        className={`rounded-full px-2 py-1 text-xs font-medium border transition ${
+                        aria-label={
                           props.compareSelected
-                            ? "bg-blue-600 text-white border-blue-600"
-                            : "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700"
+                            ? compareSelectedLabel
+                            : compareLabel
+                        }
+                        aria-pressed={props.compareSelected}
+                        title={
+                          props.compareSelected
+                            ? compareSelectedLabel
+                            : compareLabel
+                        }
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium border transition ${
+                          props.compareSelected
+                            ? "bg-primary text-white border-primary"
+                            : "bg-primary/10 text-primary border-primary/30"
                         }`}
                       >
-                        {compareLabel}
+                        {props.compareSelected && (
+                          <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                        )}
+                        {props.compareSelected
+                          ? compareSelectedLabel
+                          : compareLabel}
                       </button>
                     ) : (
-                      <span className="rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+                        <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
                         {compareLabel}
                       </span>
                     )}
                     {props.compareError && (
-                      <span className="rounded-full bg-red-50 px-2 py-1 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-200">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-danger/10 px-2 py-1 text-xs font-medium text-danger">
+                        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
                         {t("error.label", "Error")}
                       </span>
                     )}
                     {props.compareChosen && (
-                      <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-1 text-xs font-medium text-success">
+                        <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
                         {t(
                           "playground:composer.compareChosenLabel",
                           "Chosen"
@@ -1060,14 +1908,305 @@ export const PlaygroundMessage = (props: Props) => {
               actionInfo={props.actionInfo}
             />
           )}
-          {isProMode && props.isBot && props.generationInfo?.usage && (
+          {showUsageMetadata && (
             <div className="text-xs text-text-muted tabular-nums">
-              {props.generationInfo.usage.prompt_tokens ?? 0}{" "}
+              {messageUsage.promptTokens}{" "}
               {t("playground:tokens.prompt", "prompt")} +{" "}
-              {props.generationInfo.usage.completion_tokens ?? 0}{" "}
+              {messageUsage.completionTokens}{" "}
               {t("playground:tokens.completion", "completion")} ={" "}
-              {props.generationInfo.usage.total_tokens ?? 0}{" "}
+              {messageUsage.totalTokens}{" "}
               {t("playground:tokens.total", "tokens")}
+              {messageCostUsd != null && (
+                <>
+                  {" "}
+                  • {formatCost(messageCostUsd)}
+                </>
+              )}
+            </div>
+          )}
+          {props.isBot && !isSystemMessage && fallbackAudit && (
+            <div
+              data-testid="message-fallback-audit"
+              className="text-[11px] text-text-muted"
+            >
+              {fallbackAuditPolicyLabel}
+              {fallbackAuditPathLabel ? ` • ${fallbackAuditPathLabel}` : ""}
+              {typeof fallbackAudit.attempts === "number" &&
+              fallbackAudit.attempts > 1
+                ? ` • ${t("playground:routing.attempts", "{{count}} attempts", {
+                    count: fallbackAudit.attempts
+                  } as any)}`
+                : ""}
+              {fallbackAudit.reason ? ` • ${fallbackAudit.reason}` : ""}
+            </div>
+          )}
+          {isImageGenerationAssistantEvent && imageGenerationEventSummary && (
+            <div
+              data-testid="playground-image-event-card"
+              className="rounded-md border border-primary/25 bg-primary/5 px-3 py-2 text-xs text-text"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-primaryStrong">
+                  {t(
+                    "playground:imageGeneration.eventTitle",
+                    "Image artifact event"
+                  )}
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {imageGenerationEventSummary.sourceLabel && (
+                    <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong">
+                      {imageGenerationEventSummary.sourceLabel}
+                    </span>
+                  )}
+                  {imageGenerationEventSummary.syncLabel && (
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                        imageGenerationEventSummary.syncStatus === "failed"
+                          ? "border-danger/40 bg-danger/10 text-danger"
+                          : imageGenerationEventSummary.syncStatus === "synced"
+                            ? "border-success/40 bg-success/10 text-success"
+                            : "border-primary/30 bg-surface text-primaryStrong"
+                      }`}
+                    >
+                      {imageGenerationEventSummary.syncLabel}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <p
+                data-testid="playground-image-event-prompt"
+                className="mt-2 whitespace-pre-wrap text-sm text-text"
+              >
+                {imageGenerationEventSummary.prompt}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {imageGenerationEventSummary.chips.map((chip, index) => (
+                  <span
+                    key={`img-event-chip-${index}-${chip}`}
+                    className="rounded-full border border-border/70 bg-surface px-2 py-0.5 text-[11px] text-text-muted"
+                  >
+                    {chip}
+                  </span>
+                ))}
+              </div>
+              {imageGenerationEventSummary.refineLabel && (
+                <div className="mt-2 text-[11px] text-text-muted">
+                  {imageGenerationEventSummary.refineLabel}
+                </div>
+              )}
+              {imageVariantEntries.length > 1 && (
+                <div
+                  data-testid="playground-image-variant-strip"
+                  className="mt-3 rounded-md border border-border/70 bg-surface/50 p-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className="font-medium text-text-muted">
+                      {String(
+                        t(
+                          "playground:imageGeneration.eventVariants",
+                          "Variants {{current}}/{{total}}",
+                          {
+                            current: resolvedVariantIndex + 1,
+                            total: imageVariantEntries.length
+                          } as any
+                        )
+                      )}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {props.onKeepImageVariant && (
+                        <button
+                          type="button"
+                          data-testid="playground-image-variant-keep-active"
+                          className="rounded border border-success/35 bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success hover:bg-success/15"
+                          onClick={() =>
+                            props.onKeepImageVariant?.({
+                              messageId: props.messageId,
+                              variantIndex: resolvedVariantIndex
+                            })
+                          }
+                        >
+                          {t(
+                            "playground:imageGeneration.keepActiveVariant",
+                            "Keep active"
+                          )}
+                        </button>
+                      )}
+                      {props.onDeleteAllImageVariants && (
+                        <button
+                          type="button"
+                          data-testid="playground-image-variant-delete-all"
+                          className="rounded border border-danger/35 bg-danger/10 px-2 py-0.5 text-[11px] font-medium text-danger hover:bg-danger/15"
+                          onClick={() =>
+                            props.onDeleteAllImageVariants?.({
+                              messageId: props.messageId
+                            })
+                          }
+                        >
+                          {t("playground:imageGeneration.deleteAllVariants", "Delete all")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-start gap-2">
+                    {imageVariantEntries.map((entry) => {
+                      const isActive = entry.index === resolvedVariantIndex
+                      const isCompared = compareVariantIndex === entry.index
+                      return (
+                        <div
+                          key={`image-variant-${entry.index}`}
+                          className={`rounded border p-1 ${
+                            isActive
+                              ? "border-primary/60 bg-primary/10"
+                              : "border-border/70 bg-surface"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            data-testid={`playground-image-variant-select-${entry.index}`}
+                            className="flex flex-col items-center gap-1"
+                            onClick={() =>
+                              props.onSelectImageVariant?.({
+                                messageId: props.messageId,
+                                variantIndex: entry.index
+                              })
+                            }
+                          >
+                            <img
+                              src={entry.preview}
+                              alt={t(
+                                "playground:imageGeneration.variantPreview",
+                                "Variant {{index}} preview",
+                                { index: entry.index + 1 } as any
+                              ) as string}
+                              className="h-12 w-12 rounded object-cover"
+                              loading="lazy"
+                            />
+                            <span className="text-[10px] text-text-muted">
+                              {String(
+                                t("playground:imageGeneration.variantLabel", "V{{index}}", {
+                                  index: entry.index + 1
+                                } as any)
+                              )}
+                            </span>
+                          </button>
+                          <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+                            {!isActive && (
+                              <button
+                                type="button"
+                                data-testid={`playground-image-variant-compare-${entry.index}`}
+                                className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-muted hover:bg-surface2"
+                                onClick={() =>
+                                  setCompareVariantIndex((prev) =>
+                                    prev === entry.index ? null : entry.index
+                                  )
+                                }
+                              >
+                                {isCompared
+                                  ? t(
+                                      "playground:imageGeneration.hideCompareVariant",
+                                      "Hide compare"
+                                    )
+                                  : t(
+                                      "playground:imageGeneration.compareVariant",
+                                      "Compare"
+                                    )}
+                              </button>
+                            )}
+                            {props.onDeleteImageVariant && (
+                              <button
+                                type="button"
+                                data-testid={`playground-image-variant-delete-${entry.index}`}
+                                className="rounded border border-danger/35 px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger/10"
+                                onClick={() =>
+                                  props.onDeleteImageVariant?.({
+                                    messageId: props.messageId,
+                                    variantIndex: entry.index
+                                  })
+                                }
+                              >
+                                {t("common:delete", "Delete")}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {activeVariantPreview && compareVariantPreview && (
+                    <div
+                      data-testid="playground-image-variant-compare-preview"
+                      className="mt-2 grid gap-2 sm:grid-cols-2"
+                    >
+                      <div className="rounded border border-border/70 bg-surface p-2">
+                        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-text-muted">
+                          {t("playground:imageGeneration.activeVariant", "Active")}
+                        </p>
+                        <img
+                          src={activeVariantPreview.preview}
+                          alt={t(
+                            "playground:imageGeneration.activeVariant",
+                            "Active"
+                          ) as string}
+                          className="h-28 w-full rounded object-cover"
+                          loading="lazy"
+                        />
+                      </div>
+                      <div className="rounded border border-border/70 bg-surface p-2">
+                        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-text-muted">
+                          {t("playground:imageGeneration.compareVariant", "Compare")}
+                        </p>
+                        <img
+                          src={compareVariantPreview.preview}
+                          alt={t(
+                            "playground:imageGeneration.compareVariant",
+                            "Compare"
+                          ) as string}
+                          className="h-28 w-full rounded object-cover"
+                          loading="lazy"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {interruptedGeneration && !errorPayload && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="rounded-md border border-warn/30 bg-warn/10 p-2 text-xs text-warn">
+              <p className="font-medium">
+                {t(
+                  "playground:errorRecovery.interruptedSummary",
+                  "Generation was interrupted. You can retry, switch model, or continue from the partial response."
+                )}
+              </p>
+              {interruptionReason && (
+                <p className="mt-1 opacity-90">{interruptionReason}</p>
+              )}
+              {interruptionRecoveryActions.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className="sr-only">
+                    Recommended next actions:{" "}
+                    {interruptionRecoveryActions
+                      .map((action) => action.label)
+                      .join(", ")}
+                  </span>
+                  {interruptionRecoveryActions.map((action) => (
+                    <button
+                      key={action.id}
+                      type="button"
+                      onClick={action.onClick}
+                      className="rounded border border-warn/40 bg-surface px-2 py-1 text-[11px] font-medium text-warn transition hover:bg-warn/10"
+                    >
+                      {action.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           <div className="flex flex-grow flex-col">
@@ -1086,14 +2225,23 @@ export const PlaygroundMessage = (props: Props) => {
                         "Hide technical details"
                       ) as string
                     }}
+                    recoveryActions={errorRecoveryActions}
                   />
                 ) : renderGreetingMarkdown ? (
-                  <Markdown
-                    message={props.message}
-                    className={`${MARKDOWN_BASE_CLASSES} ${assistantTextClass}`}
-                    searchQuery={props.searchQuery}
-                    codeBlockVariant="compact"
-                  />
+                  <React.Suspense
+                    fallback={
+                      <p
+                        className={`text-body text-text-muted ${assistantTextClass}`}>
+                        {t("loading.content")}
+                      </p>
+                    }>
+                    <Markdown
+                      message={props.message}
+                      className={`${MARKDOWN_BASE_CLASSES} ${assistantTextClass}`}
+                      searchQuery={props.searchQuery}
+                      codeBlockVariant="compact"
+                    />
+                  </React.Suspense>
                 ) : (
                   <>
                     {parseReasoning(props.message).map((e, i) => {
@@ -1127,6 +2275,7 @@ export const PlaygroundMessage = (props: Props) => {
                             message={e.content}
                             className={`${MARKDOWN_BASE_CLASSES} ${assistantTextClass}`}
                             searchQuery={props.searchQuery}
+                            codeBlockVariant="github"
                           />
                         </React.Suspense>
                       )
@@ -1158,17 +2307,69 @@ export const PlaygroundMessage = (props: Props) => {
           {/* images if available */}
           {props.images &&
             props.images.filter((img) => img.length > 0).length > 0 && (
-              <div>
+              <div className="mt-2 flex flex-wrap gap-3">
                 {props.images
                   .filter((image) => image.length > 0)
                   .map((image, index) => (
-                    <Image
-                      key={index}
-                      src={image}
-                      alt="Uploaded Image"
-                      width={180}
-                      className="rounded-md relative"
-                    />
+                    <div key={index} className="group relative">
+                      <Image
+                        src={image}
+                        alt="Uploaded Image"
+                        width={180}
+                        className="rounded-md relative"
+                      />
+                      {showInlineImageActions && (
+                        <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-full border border-border/70 bg-surface/90 px-1 py-1 opacity-0 shadow-sm transition group-hover:opacity-100 group-focus-within:opacity-100">
+                          {canRegenerateImage && (
+                            <button
+                              type="button"
+                              className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition hover:bg-surface2 hover:text-text"
+                              aria-label={t(
+                                "playground:imageGeneration.regenerateImage",
+                                "Regenerate image"
+                              ) as string}
+                              title={t(
+                                "playground:imageGeneration.regenerateImage",
+                                "Regenerate image"
+                              ) as string}
+                              onClick={() => {
+                                void props.onRegenerateImage?.({
+                                  messageId: props.messageId,
+                                  imageIndex: index,
+                                  imageUrl: image,
+                                  request: imageGenerationMetadata?.request ?? null
+                                })
+                              }}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                          {props.onDeleteImage && (
+                            <button
+                              type="button"
+                              className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition hover:bg-danger/10 hover:text-danger"
+                              aria-label={t(
+                                "playground:imageGeneration.deleteImage",
+                                "Delete image"
+                              ) as string}
+                              title={t(
+                                "playground:imageGeneration.deleteImage",
+                                "Delete image"
+                              ) as string}
+                              onClick={() => {
+                                props.onDeleteImage?.({
+                                  messageId: props.messageId,
+                                  imageIndex: index,
+                                  imageUrl: image
+                                })
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   ))}
               </div>
             )}
@@ -1197,6 +2398,8 @@ export const PlaygroundMessage = (props: Props) => {
               onCopy={handleCopy}
               canReply={canReply}
               onReply={handleReply}
+              canSaveToWorkspaceNotes={canSaveToWorkspaceNotes}
+              onSaveToWorkspaceNotes={handleSaveToWorkspaceNotes}
               canSaveToNotes={canSaveToNotes}
               canSaveToFlashcards={canSaveToFlashcards}
               canGenerateDocument={canGenerateDocument}
@@ -1211,6 +2414,7 @@ export const PlaygroundMessage = (props: Props) => {
               temporaryChat={props.temporaryChat}
               hideContinue={props.hideContinue}
               onContinue={props.onContinue}
+              onRunSteeredContinue={props.onRunSteeredContinue}
               messageSteeringMode={props.messageSteeringMode}
               onMessageSteeringModeChange={props.onMessageSteeringModeChange}
               messageSteeringForceNarrate={props.messageSteeringForceNarrate}
@@ -1220,6 +2424,7 @@ export const PlaygroundMessage = (props: Props) => {
               onClearMessageSteering={props.onClearMessageSteering}
               onEdit={() => setEditMode(true)}
               editMode={editMode}
+              showFeedbackControls={showFeedbackControls}
               feedbackSelected={thumb}
               feedbackDisabled={feedbackDisabled}
               feedbackDisabledReason={feedbackDisabledReason}
@@ -1232,6 +2437,9 @@ export const PlaygroundMessage = (props: Props) => {
               canPin={Boolean(props.serverMessageId)}
               isPinned={Boolean(props.pinned)}
               onTogglePinned={props.onTogglePinned}
+              onQuickMessageAction={
+                props.isBot ? handleQuickMessageAction : undefined
+              }
             />
           )}
 
@@ -1242,7 +2450,7 @@ export const PlaygroundMessage = (props: Props) => {
                 {props.documents.map((doc, index) => (
                   <div
                     key={index}
-                    className="inline-flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-lg text-sm border border-blue-200 dark:border-blue-800">
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-primary/10 text-primary rounded-lg text-sm border border-primary/30">
                     <FileIcon className="h-4 w-4" />
                     <div className="flex flex-col">
                       <span className="font-medium">{doc.filename || "Unknown file"}</span>
@@ -1301,16 +2509,48 @@ export const PlaygroundMessage = (props: Props) => {
                   ),
                   children: (
                     <div className="mb-3 flex flex-col gap-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface2 px-2 py-1 text-[11px] text-text-muted">
+                        <span>
+                          {t(
+                            "playground:sources.citationWorkflowHint",
+                            "Inspect source rationale, then seed a follow-up from selected citations."
+                          )}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleAskWithSources(props.sources || [])}
+                            className="rounded border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-text-subtle hover:bg-surface2 hover:text-text"
+                          >
+                            {t(
+                              "playground:sources.askWithSources",
+                              "Ask with these sources"
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleOpenKnowledgePanel}
+                            className="rounded border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-text-subtle hover:bg-surface2 hover:text-text"
+                          >
+                            {t(
+                              "playground:sources.openKnowledgePanel",
+                              "Open Search & Context"
+                            )}
+                          </button>
+                        </div>
+                      </div>
                       {props?.sources?.map((source, index) => {
                         const sourceKey = getSourceFeedbackKey(source, index)
                         const selected =
                           sourceFeedback?.[sourceKey]?.thumb ?? null
+                        const pinnedState = resolveSourcePinnedState(source)
                         return (
                           <SourceFeedback
                             key={sourceKey}
                             source={source}
                             sourceKey={sourceKey}
                             sourceIndex={index}
+                            pinnedState={pinnedState}
                             selected={selected}
                             disabled={feedbackDisabled || isFeedbackSubmitting}
                             onRate={(key, payload, thumb) =>
@@ -1320,8 +2560,20 @@ export const PlaygroundMessage = (props: Props) => {
                                 thumb
                               })
                             }
+                            onAskWithSource={(payload) =>
+                              handleAskWithSources([payload])
+                            }
+                            onOpenKnowledgePanel={handleOpenKnowledgePanel}
                             onSourceClick={props.onSourceClick}
                             onTrackClick={trackSourceClick}
+                            onTrackCitation={trackCitationUsed}
+                            onTrackDwell={(
+                              sourcePayload,
+                              dwellMs,
+                              sourceIndex
+                            ) =>
+                              trackDwellTime(dwellMs, sourcePayload, sourceIndex)
+                            }
                           />
                         )
                       })}
@@ -1333,9 +2585,30 @@ export const PlaygroundMessage = (props: Props) => {
           )}
           </div>
         </div>
+        {portraitSide === "right" ? avatarColumn : null}
+        {portraitSide === "right" ? portraitPanel : null}
       </div>
+      {isAvatarPreviewOpen && portraitImage && (
+        <Modal
+          open
+          onCancel={() => setIsAvatarPreviewOpen(false)}
+          footer={null}
+          centered
+        >
+          <Image
+            src={portraitImage}
+            alt={
+              props.isBot
+                ? resolvedModelName || props.name
+                : userDisplayName.trim() || t("common:you", "You")
+            }
+            preview={false}
+            className="w-full"
+          />
+        </Modal>
+      )}
       {/* </div> */}
-      {props.isBot && (
+      {showFeedbackControls && (
         <FeedbackModal
           open={isFeedbackOpen}
           onClose={() => setIsFeedbackOpen(false)}

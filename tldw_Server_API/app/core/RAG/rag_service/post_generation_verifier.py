@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 if TYPE_CHECKING:
     from .claims import ClaimsEngine as ClaimsEngineType
@@ -138,7 +139,7 @@ class PostGenerationVerifier:
         if use_advanced_rewrites is None:
             try:
                 env_val = os.getenv("RAG_ADAPTIVE_ADVANCED_REWRITES", "true").strip().lower()
-                self._adv = env_val in {"1", "true", "yes", "on"}
+                self._adv = is_truthy(env_val)
             except Exception:  # noqa: BLE001 - env parsing best-effort
                 self._adv = True
         else:
@@ -155,6 +156,7 @@ class PostGenerationVerifier:
         character_db_path: str | None = None,
         user_id: str | None = None,
         generation_model: str | None = None,
+        generation_provider: str | None = None,
         existing_claims: list[dict[str, Any]] | None = None,
         existing_summary: dict[str, Any] | None = None,
         search_mode: str = "hybrid",
@@ -279,8 +281,8 @@ class PostGenerationVerifier:
         try:
             from tldw_Server_API.app.core.Claims_Extraction.monitoring import record_postcheck_metrics
             record_postcheck_metrics(total, unsupported)
-        except Exception:  # noqa: BLE001 - metrics best-effort
-            pass
+        except Exception as metrics_error:  # noqa: BLE001 - metrics best-effort
+            logger.debug("Post-generation verifier metrics recording failed", exc_info=metrics_error)
 
         # Decide if we should attempt a repair
         if ratio <= self._threshold or self._max_retries <= 0:
@@ -326,8 +328,8 @@ class PostGenerationVerifier:
                                     expanded = await expand_fn(query, strategies=["acronym", "synonym", "domain"])  # light expansion
                                     if isinstance(expanded, list):
                                         candidate_queries.extend([q for q in expanded if isinstance(q, str) and q.strip()])
-                            except Exception:  # noqa: BLE001 - expansion best-effort
-                                pass
+                            except Exception as expansion_error:  # noqa: BLE001 - expansion best-effort
+                                logger.debug("Adaptive fix query expansion failed; continuing", exc_info=expansion_error)
                             # Optional HyDE vector for the base query
                             hyde_vector = None
                             try:
@@ -370,7 +372,10 @@ class PostGenerationVerifier:
             try:
                 if AnswerGenerator is not None:
                     gen_cls = AnswerGenerator
-                    gen = gen_cls(model=generation_model)
+                    gen = gen_cls(
+                        model=generation_model,
+                        provider=generation_provider,
+                    )
                     context = "\n\n".join([getattr(d, 'content', '') for d in new_docs[:5]])
                     maybe = await gen.generate(query=query, context=context, prompt_template=None, max_tokens=500)
                     new_answer = maybe.get("answer") if isinstance(maybe, dict) else str(maybe)
@@ -444,8 +449,8 @@ class PostGenerationVerifier:
             outcome.new_answer = new_answer
             try:
                 increment_counter("rag_adaptive_fix_success_total", 1)
-            except Exception:  # noqa: BLE001 - metrics best-effort
-                pass
+            except Exception as metrics_error:  # noqa: BLE001 - metrics best-effort
+                logger.debug("Post-generation adaptive-fix success metric failed", exc_info=metrics_error)
             observe_histogram("rag_postcheck_duration_seconds", time.time() - start_ts, labels={"outcome": "fixed"})
         else:
             observe_histogram("rag_postcheck_duration_seconds", time.time() - start_ts, labels={"outcome": "unfixed"})

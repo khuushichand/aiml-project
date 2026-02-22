@@ -8,6 +8,7 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import { useDemoMode } from "@/context/demo-mode"
 import { WorldBooksManager } from "./Manager"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { useLayoutUiStore } from "@/store/layout-ui"
 
 export const WorldBooksWorkspace: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
@@ -15,6 +16,12 @@ export const WorldBooksWorkspace: React.FC = () => {
   const isOnline = useServerOnline()
   const { demoEnabled } = useDemoMode()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
+  const chatSidebarCollapsed = useLayoutUiStore(
+    (state) => state.chatSidebarCollapsed
+  )
+  const pageShellMaxWidthClassName = chatSidebarCollapsed
+    ? "max-w-none"
+    : "max-w-5xl"
 
   if (!isOnline) {
     return demoEnabled ? (
@@ -119,7 +126,10 @@ export const WorldBooksWorkspace: React.FC = () => {
   }
 
   return (
-    <PageShell className="space-y-4">
+    <PageShell
+      className="space-y-4"
+      maxWidthClassName={pageShellMaxWidthClassName}
+    >
       <div className="space-y-1">
         <h1 className="text-lg font-semibold text-text">
           {t("option:header.modeWorldBooks", "World Books")}

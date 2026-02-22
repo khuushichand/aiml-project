@@ -35,10 +35,17 @@ import aiofiles
 import aiofiles.os
 from loguru import logger
 
-from tldw_Server_API.app.core.config import settings as core_settings
+from tldw_Server_API.app.core.config import load_comprehensive_config, settings as core_settings
+from tldw_Server_API.app.core.testing import is_truthy
 
 from ..DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ..DB_Management.db_path_utils import DatabasePaths
+from ..Templating.template_renderer import (
+    TemplateContext,
+    TemplateEnv,
+    options_from_env,
+)
+from ..Templating.template_renderer import render as render_template
 
 # Legacy job queue shim removed; using in-process task registry
 from .chatbook_models import (
@@ -91,6 +98,8 @@ _CHATBOOK_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     asyncio.CancelledError,
 )
 
+_CHATBOOK_TEMPLATE_MODES = {"pass_through", "render_on_export", "render_on_import"}
+
 try:  # Prompts database is optional in some deployments
     from ..DB_Management.Prompts_DB import PromptsDatabase  # type: ignore
 except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive guard for stripped builds
@@ -111,6 +120,11 @@ try:
     from ..DB_Management.Evaluations_DB import EvaluationsDatabase  # type: ignore
 except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     EvaluationsDatabase = None  # type: ignore
+
+try:
+    from ..Embeddings.ChromaDB_Library import ChromaDBManager  # type: ignore
+except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
+    ChromaDBManager = None  # type: ignore
 
 
 class ChatbookService:
@@ -274,6 +288,126 @@ class ChatbookService:
         return None
 
     @staticmethod
+    def _truthy_env(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return is_truthy(str(raw))
+
+    @classmethod
+    def _chat_dict_templates_enabled(cls) -> bool:
+        """Return whether dictionary templating is globally enabled."""
+        if cls._truthy_env("CHAT_DICT_TEMPLATES_ENABLED", False):
+            return True
+        try:
+            cp = load_comprehensive_config()
+            if cp and cp.has_section("Chat-Templating"):
+                raw = cp.get("Chat-Templating", "enable_templates", fallback="false")
+                return is_truthy(str(raw))
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+            pass
+        return False
+
+    @classmethod
+    def _default_chatbook_template_metadata(cls) -> dict[str, Any]:
+        """Build default manifest template metadata from environment settings."""
+        mode = str(os.getenv("CHATBOOKS_TEMPLATE_MODE", "pass_through")).strip().lower()
+        if mode not in _CHATBOOK_TEMPLATE_MODES:
+            mode = "pass_through"
+
+        template_defaults: dict[str, Any] = {}
+        raw_defaults = os.getenv("CHATBOOKS_TEMPLATE_DEFAULTS_JSON", "").strip()
+        if raw_defaults:
+            try:
+                parsed = json.loads(raw_defaults)
+                if isinstance(parsed, dict):
+                    template_defaults = parsed
+            except json.JSONDecodeError:
+                logger.warning("CHATBOOKS_TEMPLATE_DEFAULTS_JSON is invalid JSON; ignoring")
+
+        timezone_value = str(
+            os.getenv("CHATBOOKS_TEMPLATE_TIMEZONE")
+            or os.getenv("TEMPLATE_DEFAULT_TZ")
+            or "UTC"
+        ).strip() or "UTC"
+        locale_raw = os.getenv("CHATBOOKS_TEMPLATE_LOCALE") or os.getenv("TEMPLATE_DEFAULT_LOCALE")
+        locale_value = str(locale_raw).strip() if locale_raw is not None else ""
+
+        metadata: dict[str, Any] = {"template_mode": mode}
+        if template_defaults:
+            metadata["template_defaults"] = template_defaults
+        if timezone_value:
+            metadata["template_timezone"] = timezone_value
+        if locale_value:
+            metadata["template_locale"] = locale_value
+        return metadata
+
+    @staticmethod
+    def _resolve_template_settings(manifest: ChatbookManifest) -> dict[str, Any]:
+        metadata = dict((manifest.metadata or {}))
+        mode = str(metadata.get("template_mode", "pass_through")).strip().lower()
+        if mode not in _CHATBOOK_TEMPLATE_MODES:
+            mode = "pass_through"
+
+        defaults = metadata.get("template_defaults")
+        if not isinstance(defaults, dict):
+            defaults = {}
+
+        timezone_value = str(
+            metadata.get("template_timezone")
+            or os.getenv("TEMPLATE_DEFAULT_TZ")
+            or "UTC"
+        ).strip() or "UTC"
+        locale_raw = metadata.get("template_locale") or os.getenv("TEMPLATE_DEFAULT_LOCALE")
+        locale_value = str(locale_raw).strip() if locale_raw is not None else ""
+
+        return {
+            "mode": mode,
+            "defaults": defaults,
+            "timezone": timezone_value,
+            "locale": locale_value or None,
+        }
+
+    @staticmethod
+    def _should_render_for_stage(template_mode: str, stage: str) -> bool:
+        stage_norm = str(stage).strip().lower()
+        mode_norm = str(template_mode).strip().lower()
+        return (
+            (stage_norm == "export" and mode_norm == "render_on_export")
+            or (stage_norm == "import" and mode_norm == "render_on_import")
+        )
+
+    def _render_chatbook_text(
+        self,
+        text: Any,
+        *,
+        template_settings: dict[str, Any],
+        stage: str,
+        metrics_source: str = "chatbook",
+        require_dict_templates_enabled: bool = False,
+    ) -> Any:
+        """Render text according to manifest template settings and stage."""
+        if not isinstance(text, str) or "{{" not in text:
+            return text
+        if not self._should_render_for_stage(str(template_settings.get("mode", "pass_through")), stage):
+            return text
+        if require_dict_templates_enabled and not self._chat_dict_templates_enabled():
+            return text
+
+        env = TemplateEnv(
+            timezone=str(template_settings.get("timezone") or "UTC"),
+            locale=template_settings.get("locale"),
+        )
+        extra = dict(template_settings.get("defaults") or {})
+        extra.setdefault("_metrics_source", metrics_source)
+        ctx = TemplateContext(
+            user={"id": self.user_id, "display_name": self.user_id},
+            env=env,
+            extra=extra,
+        )
+        return render_template(text, ctx, options_from_env())
+
+    @staticmethod
     def _build_export_filename(name: str, timestamp: str) -> str:
         """Build a safe, length-limited export filename."""
         safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in name)
@@ -319,6 +453,7 @@ class ChatbookService:
         self._prompts_db: PromptsDatabase | None = None
         self._media_db: MediaDatabase | None = None
         self._evaluations_db: EvaluationsDatabase | None = None
+        self._chroma_manager: ChromaDBManager | None = None
 
         # Secure user-specific directory under the configured user DB base.
         user_id_value = self.user_id_int if self.user_id_int is not None else self.user_id
@@ -501,6 +636,24 @@ class ChatbookService:
             self._note_todo("Evaluations export/import initialization failed; inspect logs for details.")
             self._evaluations_db = None
         return self._evaluations_db
+
+    def _get_chroma_manager(self) -> ChromaDBManager | None:
+        """Lazily initialize and cache the ChromaDB manager for embedding export."""
+        if ChromaDBManager is None:
+            self._note_todo("Embedding export requires ChromaDBManager; skipping.")
+            return None
+        if self._chroma_manager is not None:
+            return self._chroma_manager
+        try:
+            cfg = core_settings.get("EMBEDDING_CONFIG", {}).copy()
+            cfg["USER_DB_BASE_DIR"] = str(DatabasePaths.get_user_db_base_dir())
+            self._chroma_manager = ChromaDBManager(
+                user_id=self.user_id, user_embedding_config=cfg
+            )
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"ChromaDB init failed for chatbooks: {exc}")
+            self._chroma_manager = None
+        return self._chroma_manager
 
     @staticmethod
     def _normalize_datetime(value: Any) -> Any:
@@ -1232,6 +1385,157 @@ class ChatbookService:
                 except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e3:
                     logger.warning(f"Connection close failed after transaction: error={e3}")
 
+    async def continue_chatbook_export(
+        self,
+        export_id: str,
+        continuations: list[dict[str, Any]],
+        name: str | None = None,
+        async_mode: bool = False,
+        request_id: str | None = None,
+    ) -> tuple[bool, str, str | None]:
+        """
+        Continue a truncated export by producing a linked chatbook with continuation data.
+
+        Args:
+            export_id: Original export's export_id from manifest.
+            continuations: Continuation tokens from the original manifest's truncation metadata.
+            name: Override name for the continuation chatbook.
+            async_mode: Whether to run asynchronously (not yet supported for continuation).
+            request_id: Optional request ID for tracing.
+
+        Returns:
+            Tuple of (success, message, file_path).
+        """
+        if async_mode:
+            return False, "Async continuation exports are not yet supported", None
+
+        work_dir: Path | None = None
+        output_path: Path | None = None
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            work_dir = self.temp_dir / f"continue_{timestamp}_{uuid4().hex[:8]}"
+            work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+            # Determine sequence number from export_id, keeping the base stable
+            base_id = export_id.split("_cont_")[0]
+            seq = 1
+            if "_cont_" in export_id:
+                try:
+                    seq = int(export_id.rsplit("_cont_", 1)[-1]) + 1
+                except (TypeError, ValueError):
+                    seq = 1
+            cont_export_id = f"{base_id}_cont_{seq}"
+
+            cont_name = name or f"Continuation of {export_id}"
+            manifest = ChatbookManifest(
+                version=ChatbookVersion.V1,
+                name=cont_name,
+                description=f"Continuation export linked to {export_id}",
+                user_id=hashlib.sha256(self.user_id.encode()).hexdigest()[:16],
+                export_id=cont_export_id,
+                metadata={"continues_export_id": export_id},
+            )
+            manifest.binary_limits = self._get_binary_limits_bytes()
+            content = ChatbookContent()
+
+            evals_db = self._get_evaluations_db()
+
+            raw_max_rows = os.getenv("CHATBOOKS_EVAL_EXPORT_MAX_ROWS", "200")
+            try:
+                max_rows = int(raw_max_rows)
+            except (TypeError, ValueError):
+                max_rows = 200
+
+            eval_dir = work_dir / "content" / "evaluations"
+            eval_dir.mkdir(parents=True, exist_ok=True)
+
+            for token in continuations:
+                eval_id = token.get("evaluation_id")
+                after = token.get("continuation_token")
+                if not eval_id or not after:
+                    logger.debug(f"Skipping invalid continuation token: {token}")
+                    continue
+                if evals_db is None:
+                    self._note_todo("Continuation requires EvaluationsDatabase; skipping.")
+                    continue
+
+                try:
+                    runs, has_more = evals_db.list_runs(
+                        eval_id=str(eval_id), limit=max_rows,
+                        after=str(after), return_has_more=True
+                    )
+                    runs_payload = [self._normalize_evaluation_run(run) for run in runs]
+
+                    eval_data: dict[str, Any] = {
+                        "evaluation_id": str(eval_id),
+                        "continued_from": str(after),
+                        "runs": runs_payload,
+                    }
+
+                    if has_more:
+                        eval_data["truncated"] = True
+                        eval_data["max_rows"] = max_rows
+                        truncation = manifest.truncation.setdefault("evaluations", {})
+                        truncation["truncated"] = True
+                        truncation["max_rows"] = max_rows
+                        truncation["exported_count"] = truncation.get("exported_count", 0) + len(runs_payload)
+                        if runs_payload:
+                            last_run_id = runs_payload[-1].get("id")
+                            if last_run_id:
+                                new_continuations = truncation.setdefault("continuations", [])
+                                new_continuations.append({
+                                    "evaluation_id": str(eval_id),
+                                    "run_id": str(last_run_id),
+                                    "continuation_token": str(last_run_id)
+                                })
+
+                    eval_file = eval_dir / f"evaluation_{eval_id}_cont.json"
+                    with open(eval_file, "w", encoding="utf-8") as ef:
+                        json.dump(eval_data, ef, indent=2, ensure_ascii=False)
+                    content.evaluations[str(eval_id)] = eval_data
+                    manifest.content_items.append(ContentItem(
+                        id=str(eval_id),
+                        type=ContentType.EVALUATION,
+                        title=f"Evaluation {eval_id} (continuation)",
+                        file_path=f"content/evaluations/{eval_file.name}"
+                    ))
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
+                    logger.debug(f"Failed to continue evaluation {eval_id}: {exc}")
+
+            manifest.total_evaluations = len(content.evaluations)
+
+            # Write manifest
+            manifest_path = work_dir / "manifest.json"
+            async with aiofiles.open(manifest_path, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False))
+
+            # Create archive
+            output_filename = self._build_export_filename(cont_name, timestamp)
+            output_path = self.export_dir / output_filename
+            await self._create_zip_archive_async(work_dir, output_path)
+
+            manifest.total_size_bytes = output_path.stat().st_size
+            async with aiofiles.open(manifest_path, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False))
+            await self._create_zip_archive_async(work_dir, output_path)
+
+            return True, "Continuation chatbook created successfully", str(output_path)
+
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error creating continuation chatbook: {e}")
+            if output_path and output_path.exists():
+                try:
+                    await asyncio.to_thread(output_path.unlink)
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+                    pass
+            return False, f"Error creating continuation chatbook: {e}", None
+        finally:
+            if work_dir and work_dir.exists():
+                try:
+                    await asyncio.to_thread(shutil.rmtree, work_dir)
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+                    pass
+
     async def _create_chatbook_sync_wrapper(
         self,
         name: str,
@@ -1272,7 +1576,8 @@ class ChatbookService:
                 media_quality=media_quality,
                 tags=tags or [],
                 categories=categories or [],
-                export_id=str(uuid4())
+                export_id=str(uuid4()),
+                metadata=self._default_chatbook_template_metadata(),
             )
             manifest.binary_limits = self._get_binary_limits_bytes()
 
@@ -1331,8 +1636,9 @@ class ChatbookService:
                 )
 
             if ContentType.EMBEDDING in content_selections:
-                self._note_todo(
-                    "Explicit embedding exports are pending; embeddings are currently derived from media when include_embeddings=true."
+                self._collect_embeddings(
+                    content_selections[ContentType.EMBEDDING],
+                    work_dir, manifest, content
                 )
 
             if include_generated_content and ContentType.GENERATED_DOCUMENT in content_selections:
@@ -2501,6 +2807,161 @@ class ChatbookService:
             logger.error(f"Error cleaning up expired exports: {e}")
             return 0
 
+    def cleanup_import_orphans(
+        self,
+        age_threshold_hours: int = 24,
+        batch_size: int = 100,
+    ) -> int:
+        """Clean up orphaned import files from failed, cancelled, or stale jobs.
+
+        Handles three scenarios:
+        1. Failed/cancelled jobs whose archive files still exist on disk.
+        2. Jobs stuck in pending/validating for longer than *age_threshold_hours*.
+        3. Files in import_dir/temp_dir with no corresponding job record.
+
+        Args:
+            age_threshold_hours: Only process jobs/files older than this many hours.
+            batch_size: Number of jobs to process per batch.
+
+        Returns:
+            Number of orphaned files deleted.
+        """
+        try:
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None)
+            cutoff -= timedelta(hours=age_threshold_hours)
+            cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S.%f")
+            deleted_count = 0
+            no_progress_batches = 0
+
+            # --- Phase 1: clean files for terminal-state jobs ---
+            terminal_statuses = (
+                ImportStatus.FAILED.value,
+                ImportStatus.CANCELLED.value,
+                ImportStatus.COMPLETED.value,
+            )
+            for status_val in terminal_statuses:
+                offset = 0
+                while True:
+                    cursor = self.db.execute_query(
+                        "SELECT job_id, chatbook_path FROM import_jobs "
+                        "WHERE user_id = ? AND status = ? AND created_at < ? "
+                        "LIMIT ? OFFSET ?",
+                        (self.user_id, status_val, cutoff_str, batch_size, offset),
+                    )
+                    results = self._fetch_results(cursor)
+                    if not results:
+                        break
+                    for row in results:
+                        if isinstance(row, dict):
+                            chatbook_path = row.get("chatbook_path")
+                        else:
+                            chatbook_path = row[1] if len(row) > 1 else None
+
+                        if chatbook_path:
+                            deleted_count += self._try_delete_import_file(chatbook_path)
+
+                    offset += len(results)
+                    if len(results) < batch_size:
+                        break
+
+            # --- Phase 2: mark stale pending/validating jobs as failed ---
+            stale_statuses = (
+                ImportStatus.PENDING.value,
+                ImportStatus.VALIDATING.value,
+            )
+            for status_val in stale_statuses:
+                cursor = self.db.execute_query(
+                    "SELECT job_id, chatbook_path FROM import_jobs "
+                    "WHERE user_id = ? AND status = ? AND created_at < ? "
+                    "LIMIT ?",
+                    (self.user_id, status_val, cutoff_str, batch_size),
+                )
+                results = self._fetch_results(cursor)
+                for row in (results or []):
+                    if isinstance(row, dict):
+                        job_id = row.get("job_id")
+                        chatbook_path = row.get("chatbook_path")
+                    else:
+                        job_id = row[0] if row else None
+                        chatbook_path = row[1] if len(row) > 1 else None
+
+                    if chatbook_path:
+                        deleted_count += self._try_delete_import_file(chatbook_path)
+
+                    if job_id:
+                        try:
+                            self.db.execute_query(
+                                "UPDATE import_jobs SET status = ?, error_message = ? "
+                                "WHERE job_id = ?",
+                                (
+                                    ImportStatus.FAILED.value,
+                                    "Marked failed by orphan cleanup (stale job)",
+                                    job_id,
+                                ),
+                                commit=True,
+                            )
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+                            logger.warning(f"Failed to mark stale import job {job_id} as failed: {e}")
+
+            # --- Phase 3: scan import_dir and temp_dir for untracked files ---
+            for scan_dir in (self.import_dir, self.temp_dir):
+                try:
+                    resolved_base = Path(scan_dir).resolve()
+                    if not resolved_base.is_dir():
+                        continue
+                    for entry in resolved_base.iterdir():
+                        if not entry.is_file():
+                            continue
+                        try:
+                            file_age = datetime.fromtimestamp(
+                                entry.stat().st_mtime, tz=timezone.utc
+                            ).replace(tzinfo=None)
+                            if file_age > cutoff:
+                                continue  # too recent
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+                            continue
+
+                        # Check if any job references this file
+                        cursor = self.db.execute_query(
+                            "SELECT 1 FROM import_jobs WHERE user_id = ? AND chatbook_path = ? LIMIT 1",
+                            (self.user_id, str(entry)),
+                        )
+                        refs = self._fetch_results(cursor)
+                        if not refs:
+                            # No job references this file — orphan
+                            try:
+                                entry.unlink()
+                                deleted_count += 1
+                                logger.debug(f"Removed orphaned import file: {entry}")
+                            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+                                logger.warning(f"Failed to remove orphaned import file {entry}: {e}")
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+                    logger.warning(f"Error scanning {scan_dir} for orphaned imports: {e}")
+
+            return deleted_count
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error cleaning up import orphans: {e}")
+            return 0
+
+    def _try_delete_import_file(self, file_path_str: str) -> int:
+        """Try to delete an import archive file. Returns 1 if deleted, 0 otherwise."""
+        try:
+            file_path = Path(file_path_str).resolve()
+            # Validate path is within expected directories
+            import_base = Path(self.import_dir).resolve()
+            temp_base = Path(self.temp_dir).resolve()
+            in_import = os.path.commonpath([str(file_path), str(import_base)]) == str(import_base)
+            in_temp = os.path.commonpath([str(file_path), str(temp_base)]) == str(temp_base)
+            if not (in_import or in_temp):
+                logger.warning(f"Refusing to delete import file outside expected dirs: {file_path}")
+                return 0
+            if file_path.exists() and file_path.is_file():
+                file_path.unlink()
+                return 1
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            logger.warning(f"Failed to delete import file {file_path_str}: {e}")
+        return 0
+
     def _collect_prompts(
         self,
         prompt_ids: list[str],
@@ -2566,9 +3027,27 @@ class ChatbookService:
         if media_db is None:
             logger.debug("Skipping media export because media DB is unavailable.")
             return
+
+        # Apply media item cap if configured
+        raw_max_items = os.getenv("CHATBOOKS_MEDIA_EXPORT_MAX_ITEMS", "0")
+        try:
+            max_media_items = int(raw_max_items)
+        except (TypeError, ValueError):
+            max_media_items = 0
+        total_media_count = len(media_ids)
+        if max_media_items > 0 and total_media_count > max_media_items:
+            media_ids = media_ids[:max_media_items]
+            truncation = manifest.truncation.setdefault("media", {})
+            truncation["truncated"] = True
+            truncation["max_items"] = max_media_items
+            truncation["exported_count"] = max_media_items
+            truncation["total_count"] = total_media_count
+
         media_dir = work_dir / "content" / "media"
         media_dir.mkdir(parents=True, exist_ok=True)
         embeddings_dir: Path | None = None
+        binary_limits = manifest.binary_limits or {}
+        emb_limit = self._resolve_binary_limit(binary_limits, "embeddings", "media_embeddings")
 
         if include_media:
             self._note_todo("Binary media asset export is not yet implemented; exporting metadata only.")
@@ -2612,28 +3091,47 @@ class ChatbookService:
                 elif isinstance(vector_blob, bytearray):
                     vector_blob = bytes(vector_blob)
                 if isinstance(vector_blob, (bytes, bytearray)):
-                    embeddings_dir = embeddings_dir or (work_dir / "content" / "embeddings")
-                    embeddings_dir.mkdir(parents=True, exist_ok=True)
                     embedding_id = f"media:{media_id}"
-                    vector_payload = {
-                        "id": embedding_id,
-                        "source": {
-                            "media_id": media_id,
-                            "media_uuid": normalized.get("uuid")
-                        },
-                        "encoding": "base64",
-                        "vector": base64.b64encode(vector_blob).decode("ascii")
-                    }
-                    embed_file = embeddings_dir / f"embedding_media_{media_id}.json"
-                    with open(embed_file, "w", encoding="utf-8") as ef:
-                        json.dump(vector_payload, ef, indent=2, ensure_ascii=False)
-                    content.embeddings[embedding_id] = vector_payload
-                    manifest.content_items.append(ContentItem(
-                        id=embedding_id,
-                        type=ContentType.EMBEDDING,
-                        title=f"Embedding for media {normalized.get('title', media_id)}",
-                        file_path=f"content/embeddings/{embed_file.name}"
-                    ))
+                    # Check binary limit before bundling
+                    if emb_limit is not None and len(vector_blob) > emb_limit:
+                        stub = {
+                            "id": embedding_id,
+                            "source": {
+                                "media_id": media_id,
+                                "media_uuid": normalized.get("uuid")
+                            },
+                            "bundled": False,
+                            "size_bytes": len(vector_blob)
+                        }
+                        content.embeddings[embedding_id] = stub
+                        manifest.content_items.append(ContentItem(
+                            id=embedding_id,
+                            type=ContentType.EMBEDDING,
+                            title=f"Embedding for media {normalized.get('title', media_id)}",
+                            metadata={"bundled": False, "size_bytes": len(vector_blob)}
+                        ))
+                    else:
+                        embeddings_dir = embeddings_dir or (work_dir / "content" / "embeddings")
+                        embeddings_dir.mkdir(parents=True, exist_ok=True)
+                        vector_payload = {
+                            "id": embedding_id,
+                            "source": {
+                                "media_id": media_id,
+                                "media_uuid": normalized.get("uuid")
+                            },
+                            "encoding": "base64",
+                            "vector": base64.b64encode(vector_blob).decode("ascii")
+                        }
+                        embed_file = embeddings_dir / f"embedding_media_{media_id}.json"
+                        with open(embed_file, "w", encoding="utf-8") as ef:
+                            json.dump(vector_payload, ef, indent=2, ensure_ascii=False)
+                        content.embeddings[embedding_id] = vector_payload
+                        manifest.content_items.append(ContentItem(
+                            id=embedding_id,
+                            type=ContentType.EMBEDDING,
+                            title=f"Embedding for media {normalized.get('title', media_id)}",
+                            file_path=f"content/embeddings/{embed_file.name}"
+                        ))
                 else:
                     self._note_todo("Encountered non-binary media vector embedding; skipping serialization.")
 
@@ -2652,6 +3150,155 @@ class ChatbookService:
 
         if include_embeddings and not content.embeddings:
             self._note_todo("Embeddings export requested but no vector data found in media records.")
+
+    def _collect_embeddings(
+        self,
+        embedding_ids: list[str],
+        work_dir: Path,
+        manifest: ChatbookManifest,
+        content: ChatbookContent
+    ) -> None:
+        """Collect ChromaDB collection-level embeddings for export."""
+        chroma = self._get_chroma_manager()
+        if chroma is None:
+            logger.debug("Skipping embedding export because ChromaDB is unavailable.")
+            return
+
+        embeddings_dir = work_dir / "content" / "embeddings"
+        embeddings_dir.mkdir(parents=True, exist_ok=True)
+
+        raw_max_chunks = os.getenv("CHATBOOKS_EMBEDDING_EXPORT_MAX_CHUNKS", "10000")
+        try:
+            max_chunks_per_collection = int(raw_max_chunks)
+        except (TypeError, ValueError):
+            max_chunks_per_collection = 10000
+
+        binary_limits = manifest.binary_limits or {}
+        emb_limit = self._resolve_binary_limit(binary_limits, "embeddings", "collection_embeddings")
+
+        # Determine which collections to export
+        try:
+            if embedding_ids:
+                collections = []
+                for name in embedding_ids:
+                    try:
+                        col = chroma.get_collection(collection_name=name)
+                        collections.append(col)
+                    except (KeyError, RuntimeError):
+                        logger.debug(f"Collection '{name}' not found; skipping.")
+            else:
+                collections = list(chroma.list_collections())
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Failed to list ChromaDB collections for export: {exc}")
+            self._note_todo("ChromaDB collection listing failed; inspect logs.")
+            return
+
+        for collection in collections:
+            try:
+                col_name = collection.name
+                col_metadata = collection.metadata or {}
+                source_hash = hashlib.sha256(
+                    json.dumps(col_metadata, sort_keys=True).encode("utf-8")
+                ).hexdigest()
+
+                total_count = collection.count()
+                chunks: list[dict[str, Any]] = []
+                offset = 0
+                page_size = 1000
+                truncated = False
+
+                while True:
+                    result = collection.get(
+                        limit=page_size, offset=offset,
+                        include=["documents", "metadatas", "embeddings"]
+                    )
+                    ids = result.get("ids", [])
+                    if not ids:
+                        break
+                    documents = result.get("documents", [])
+                    metadatas = result.get("metadatas", [])
+                    embeddings_data = result.get("embeddings", [])
+
+                    for i, chunk_id in enumerate(ids):
+                        if max_chunks_per_collection > 0 and len(chunks) >= max_chunks_per_collection:
+                            truncated = True
+                            break
+                        chunk: dict[str, Any] = {"id": chunk_id}
+                        if documents and i < len(documents):
+                            chunk["document"] = documents[i]
+                        if metadatas and i < len(metadatas):
+                            chunk["metadata"] = metadatas[i]
+                        if embeddings_data and i < len(embeddings_data):
+                            chunk["embedding"] = embeddings_data[i]
+                        chunks.append(chunk)
+
+                    if truncated or len(ids) < page_size:
+                        break
+                    offset += len(ids)
+
+                collection_data = {
+                    "embedding_set_id": col_name,
+                    "source_hash": source_hash,
+                    "collection_metadata": col_metadata,
+                    "item_count": total_count,
+                    "truncated": truncated,
+                    "chunks": chunks
+                }
+
+                # Check binary limit on serialized size
+                serialized = json.dumps(collection_data, ensure_ascii=False)
+                serialized_size = len(serialized.encode("utf-8"))
+                if emb_limit is not None and serialized_size > emb_limit:
+                    stub = {
+                        "embedding_set_id": col_name,
+                        "source_hash": source_hash,
+                        "collection_metadata": col_metadata,
+                        "item_count": total_count,
+                        "bundled": False,
+                        "size_bytes": serialized_size
+                    }
+                    content.embeddings[f"collection:{col_name}"] = stub
+                    manifest.content_items.append(ContentItem(
+                        id=f"collection:{col_name}",
+                        type=ContentType.EMBEDDING,
+                        title=f"Embedding collection {col_name}",
+                        metadata={"bundled": False, "size_bytes": serialized_size}
+                    ))
+                    trunc = manifest.truncation.setdefault("embeddings", {})
+                    trunc["truncated"] = True
+                    trunc.setdefault("binary_limited_collections", [])
+                    if col_name not in trunc["binary_limited_collections"]:
+                        trunc["binary_limited_collections"].append(col_name)
+                    trunc["total_count"] = trunc.get("total_count", 0) + total_count
+                    continue
+
+                safe_name = col_name.replace("/", "_").replace("\\", "_")
+                embed_file = embeddings_dir / f"collection_{safe_name}.json"
+                with open(embed_file, "w", encoding="utf-8") as ef:
+                    ef.write(serialized)
+
+                content.embeddings[f"collection:{col_name}"] = collection_data
+                manifest.content_items.append(ContentItem(
+                    id=f"collection:{col_name}",
+                    type=ContentType.EMBEDDING,
+                    title=f"Embedding collection {col_name}",
+                    file_path=f"content/embeddings/{embed_file.name}",
+                    metadata={"source_hash": source_hash, "item_count": total_count}
+                ))
+
+                if truncated:
+                    trunc = manifest.truncation.setdefault("embeddings", {})
+                    trunc["truncated"] = True
+                    trunc["max_chunks_per_collection"] = max_chunks_per_collection
+                    col_ids = trunc.setdefault("collection_ids", [])
+                    if col_name not in col_ids:
+                        col_ids.append(col_name)
+                    trunc["exported_count"] = trunc.get("exported_count", 0) + len(chunks)
+                    trunc["total_count"] = trunc.get("total_count", 0) + total_count
+
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"Failed to export collection '{collection.name}': {exc}")
+                self._note_todo(f"Embedding collection export failed for '{collection.name}'; inspect logs.")
 
     def _collect_evaluations(
         self,
@@ -2696,6 +3343,8 @@ class ChatbookService:
                     truncation = manifest.truncation.setdefault("evaluations", {})
                     truncation["truncated"] = True
                     truncation["max_rows"] = max_rows
+                    truncation["exported_count"] = truncation.get("exported_count", 0) + len(runs_payload)
+                    # total_count not knowable without a separate count query; omit
                     if runs_payload:
                         last_run_id = runs_payload[-1].get("id")
                         if last_run_id:
@@ -2754,6 +3403,7 @@ class ChatbookService:
                     truncation = manifest.truncation.setdefault("conversations", {})
                     truncation["truncated"] = True
                     truncation["max_messages"] = max_messages
+                    truncation["exported_count"] = truncation.get("exported_count", 0) + len(messages or [])
                     conv_ids = truncation.setdefault("conversation_ids", [])
                     if str(conv_id) not in conv_ids:
                         conv_ids.append(str(conv_id))
@@ -2851,7 +3501,7 @@ class ChatbookService:
                     # Extract citations from RAG context if available
                     try:
                         rag_context = self.db.get_message_rag_context(msg['id'])
-                        if rag_context:
+                        if isinstance(rag_context, dict) and rag_context:
                             # Include retrieved documents as citations
                             retrieved_docs = rag_context.get('retrieved_documents', [])
                             for doc in retrieved_docs:
@@ -2930,6 +3580,8 @@ class ChatbookService:
         """Collect notes for export."""
         notes_dir = work_dir / "content" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
+        template_settings = self._resolve_template_settings(manifest)
+
         def _yaml_scalar(value: Any) -> str:
             """Render a safe YAML scalar for frontmatter."""
             text = "" if value is None else str(value)
@@ -2952,11 +3604,24 @@ class ChatbookService:
                 if not note:
                     continue
 
+                rendered_title = self._render_chatbook_text(
+                    note.get("title", ""),
+                    template_settings=template_settings,
+                    stage="export",
+                    metrics_source="chatbook",
+                )
+                rendered_content = self._render_chatbook_text(
+                    note.get("content", ""),
+                    template_settings=template_settings,
+                    stage="export",
+                    metrics_source="chatbook",
+                )
+
                 # Create note data
                 note_data = {
                     "id": note['id'],
-                    "title": note['title'],
-                    "content": note['content'],
+                    "title": rendered_title,
+                    "content": rendered_content,
                     "created_at": note['created_at'].isoformat() if hasattr(note['created_at'], 'isoformat') else note['created_at']
                 }
 
@@ -2966,10 +3631,10 @@ class ChatbookService:
                     # Write frontmatter
                     f.write("---\n")
                     f.write(f"id: {note['id']}\n")
-                    f.write(f"title: {_yaml_scalar(note['title'])}\n")
+                    f.write(f"title: {_yaml_scalar(note_data['title'])}\n")
                     f.write(f"created_at: {note_data['created_at']}\n")
                     f.write("---\n\n")
-                    f.write(note['content'])
+                    f.write(str(note_data['content']))
 
                 # Add to content
                 content.notes[note_id] = note_data
@@ -2978,7 +3643,7 @@ class ChatbookService:
                 manifest.content_items.append(ContentItem(
                     id=note_id,
                     type=ContentType.NOTE,
-                    title=note['title'],
+                    title=str(note_data['title']),
                     file_path=f"content/notes/note_{note_id}.md"
                 ))
 
@@ -3075,6 +3740,7 @@ class ChatbookService:
         """Collect chat dictionaries for export."""
         dict_dir = work_dir / "content" / "dictionaries"
         dict_dir.mkdir(parents=True, exist_ok=True)
+        template_settings = self._resolve_template_settings(manifest)
 
         # Import the dictionary service
         from ..Character_Chat.chat_dictionary import ChatDictionaryService
@@ -3091,6 +3757,41 @@ class ChatbookService:
                     dict_data.setdefault("description", dict_meta.get("description"))
                     dict_data["id"] = dict_meta.get("id", dict_id)
                     dict_data["is_active"] = dict_meta.get("is_active", True)
+
+                dict_data["name"] = self._render_chatbook_text(
+                    dict_data.get("name", "Unnamed"),
+                    template_settings=template_settings,
+                    stage="export",
+                    metrics_source="chatbook",
+                )
+                dict_data["description"] = self._render_chatbook_text(
+                    dict_data.get("description", ""),
+                    template_settings=template_settings,
+                    stage="export",
+                    metrics_source="chatbook",
+                )
+
+                entries = dict_data.get("entries")
+                if isinstance(entries, list):
+                    for entry in entries:
+                        if not isinstance(entry, dict):
+                            continue
+                        if "replacement" in entry:
+                            entry["replacement"] = self._render_chatbook_text(
+                                entry.get("replacement"),
+                                template_settings=template_settings,
+                                stage="export",
+                                metrics_source="dict",
+                                require_dict_templates_enabled=True,
+                            )
+                        if "content" in entry:
+                            entry["content"] = self._render_chatbook_text(
+                                entry.get("content"),
+                                template_settings=template_settings,
+                                stage="export",
+                                metrics_source="dict",
+                                require_dict_templates_enabled=True,
+                            )
 
                 # Convert datetime objects to strings for JSON serialization
                 dict_data_serializable = self._convert_datetimes(dict_data)
@@ -3326,6 +4027,8 @@ class ChatbookService:
     ):
         """Import notes from chatbook."""
         notes_dir = extract_dir / "content" / "notes"
+        template_settings = self._resolve_template_settings(manifest)
+
         def _parse_yaml_scalar(text: str) -> str:
             if not text:
                 return ""
@@ -3384,6 +4087,19 @@ class ChatbookService:
                         except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             note_title = _extract_title_frontmatter(frontmatter, note_title)
                         note_content = parts[2].strip()
+
+                note_title = self._render_chatbook_text(
+                    note_title,
+                    template_settings=template_settings,
+                    stage="import",
+                    metrics_source="chatbook",
+                )
+                note_content = self._render_chatbook_text(
+                    note_content,
+                    template_settings=template_settings,
+                    stage="import",
+                    metrics_source="chatbook",
+                )
 
                 if prefix_imported:
                     note_title = f"[Imported] {note_title}"
@@ -3546,6 +4262,8 @@ class ChatbookService:
     ):
         """Import chat dictionaries from chatbook."""
         dict_dir = extract_dir / "content" / "dictionaries"
+        template_settings = self._resolve_template_settings(manifest)
+        strict_dict_import = self._truthy_env("CHATBOOKS_IMPORT_DICT_STRICT", False)
 
         # Import the dictionary service
         from ..Character_Chat.chat_dictionary import ChatDictionaryService
@@ -3567,12 +4285,59 @@ class ChatbookService:
 
                 # Handle import with conflict resolution
                 dict_name = dict_data.get('name', 'Unnamed')
+                dict_name = self._render_chatbook_text(
+                    dict_name,
+                    template_settings=template_settings,
+                    stage="import",
+                    metrics_source="chatbook",
+                )
+                dict_data['name'] = dict_name
+                dict_data['description'] = self._render_chatbook_text(
+                    dict_data.get('description', ''),
+                    template_settings=template_settings,
+                    stage="import",
+                    metrics_source="chatbook",
+                )
+
+                entries = dict_data.get('entries')
+                if isinstance(entries, list):
+                    for entry in entries:
+                        if not isinstance(entry, dict):
+                            continue
+                        if "replacement" in entry:
+                            entry["replacement"] = self._render_chatbook_text(
+                                entry.get("replacement"),
+                                template_settings=template_settings,
+                                stage="import",
+                                metrics_source="dict",
+                                require_dict_templates_enabled=True,
+                            )
+                        if "content" in entry:
+                            entry["content"] = self._render_chatbook_text(
+                                entry.get("content"),
+                                template_settings=template_settings,
+                                stage="import",
+                                metrics_source="dict",
+                                require_dict_templates_enabled=True,
+                            )
+
                 if prefix_imported:
                     dict_name = f"[Imported] {dict_name}"
                     dict_data['name'] = dict_name
 
                 # Check for existing dictionary
-                existing = dict_service.get_dictionary_by_name(dict_name)
+                existing = None
+                get_dictionary = getattr(dict_service, "get_dictionary", None)
+                if callable(get_dictionary):
+                    try:
+                        existing = get_dictionary(name=dict_name)
+                    except TypeError:
+                        # Compatibility with legacy service/test doubles that only accept positional args.
+                        existing = get_dictionary(dict_name)
+                if existing is None:
+                    get_dictionary_by_name = getattr(dict_service, "get_dictionary_by_name", None)
+                    if callable(get_dictionary_by_name):
+                        existing = get_dictionary_by_name(dict_name)
                 if existing and conflict_resolution == ConflictResolution.SKIP:
                     status.skipped_items += 1
                     continue
@@ -3582,6 +4347,9 @@ class ChatbookService:
 
                 # Validate dictionary entries (structure + regex/template lint)
                 try:
+                    from ..Chat.validate_dictionary import (
+                        FATAL_ERROR_CODES as _FATAL_ERROR_CODES,
+                    )
                     from ..Chat.validate_dictionary import validate_dictionary as _validate_dict
 
                     # Normalize entries for validator shape
@@ -3610,15 +4378,21 @@ class ChatbookService:
 
                     vres = _validate_dict({'name': dict_name, 'entries': norm_entries}, schema_version=1, strict=False)
                     if vres.errors:
-                        # Accumulate warning summary; optionally enforce strict rejection
                         codes = sorted({err.get('code', 'unknown') for err in vres.errors})
-                        status.warnings.append(
-                            f"Dictionary '{dict_name}' validation found errors: {', '.join(codes)}"
-                        )
-                        if os.getenv('CHATBOOKS_IMPORT_DICT_STRICT', '').strip().lower() in {'1','true','yes','on'}:
-                            status.failed_items += 1
-                            # Skip importing this dictionary entirely
-                            continue
+                        fatal_codes = sorted({c for c in codes if c in _FATAL_ERROR_CODES})
+                        non_fatal_codes = sorted({c for c in codes if c not in _FATAL_ERROR_CODES})
+                        if fatal_codes:
+                            status.warnings.append(
+                                f"Dictionary '{dict_name}' validation fatal errors: {', '.join(fatal_codes)}"
+                            )
+                            if strict_dict_import:
+                                status.skipped_items += 1
+                                # Skip importing this dictionary entirely.
+                                continue
+                        if non_fatal_codes:
+                            status.warnings.append(
+                                f"Dictionary '{dict_name}' validation non-fatal errors: {', '.join(non_fatal_codes)}"
+                            )
                     if vres.warnings:
                         wc = sorted({w.get('code', 'warn') for w in vres.warnings})
                         status.warnings.append(
@@ -3632,10 +4406,12 @@ class ChatbookService:
                 new_dict_id = dict_service.create_dictionary(
                     dict_name,
                     dict_data.get('description', ''),
-                    dict_data.get('is_active', True)
                 )
 
                 if new_dict_id:
+                    if not bool(dict_data.get('is_active', True)):
+                        with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
+                            dict_service.update_dictionary(dictionary_id=int(new_dict_id), is_active=False)
                     # Import entries
                     for entry in dict_data.get('entries', []):
                         # Support both legacy and current export shapes

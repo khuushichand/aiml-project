@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Annotated, Any
@@ -54,6 +55,7 @@ router = APIRouter()
 MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 _job_manager_lock = threading.Lock()
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 _ADMIN_DEPS = [
     Depends(require_roles("admin")),
@@ -81,6 +83,22 @@ _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+
+
+def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 def _path_is_within(path: Path, base_dir: Path) -> bool:
@@ -228,7 +246,7 @@ async def submit_audio_job(
         job_type = "audio_download" if (req.url and req.url.strip()) else "audio_convert"
         if job_type == "audio_download":
             payload["url"] = req.url.strip()
-            payload["temp_dir"] = os.getenv("AUDIO_JOBS_TEMP", "/tmp")
+            payload["temp_dir"] = os.getenv("AUDIO_JOBS_TEMP", tempfile.gettempdir())
         else:
             payload["local_path"] = req.local_path.strip()
 
@@ -298,7 +316,7 @@ async def get_audio_job(
             raise HTTPException(status_code=404, detail="Job not found")
         # Owner/admin check
         owner = str(d.get("owner_user_id") or "")
-        is_admin = principal.is_admin
+        is_admin = _principal_has_admin_claims(principal)
         if not (is_admin or owner == str(current_user.id)):
             raise HTTPException(status_code=403, detail="Not authorized for this job")
         return AudioJob(**{k: d.get(k) for k in _AUDIO_JOB_FIELD_MAP})
@@ -431,7 +449,7 @@ async def list_audio_jobs_admin(
 ):
     try:
         logger.info(
-            "Admin list audio jobs: status_filter=%s, owner_user_id=%s, limit=%s",
+            'Admin list audio jobs: status_filter={}, owner_user_id={}, limit={}',
             status_filter,
             owner_user_id,
             limit,
@@ -472,7 +490,7 @@ async def summarize_audio_jobs_admin(
 ):
     try:
         logger.info(
-            "Admin summarize audio jobs by status: owner_user_id=%s",
+            'Admin summarize audio jobs by status: owner_user_id={}',
             owner_user_id,
         )
         by_status = jm.summarize_by_status(
@@ -546,7 +564,7 @@ async def owner_processing_summary(
 ):
     try:
         logger.info(
-            "Admin owner processing summary: owner_user_id=%s",
+            'Admin owner processing summary: owner_user_id={}',
             owner_user_id,
         )
         # Count processing jobs for this owner using JobManager APIs.

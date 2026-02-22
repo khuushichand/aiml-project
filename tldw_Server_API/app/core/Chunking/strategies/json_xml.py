@@ -19,6 +19,7 @@ from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 def _get_chunking_bool(key: str, default: bool) -> bool:
     try:
         import os
+        from tldw_Server_API.app.core.testing import is_truthy
         v = os.getenv(key.upper())
         if v is None:
             from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -26,7 +27,7 @@ def _get_chunking_bool(key: str, default: bool) -> bool:
             if hasattr(cp, 'has_section') and cp.has_section('Chunking'):
                 v = cp.get('Chunking', key, fallback=str(default))
         s = str(v).strip().lower() if v is not None else str(default).lower()
-        return s in ("1", "true", "yes", "on", "y")
+        return is_truthy(s)
     except (ImportError, AttributeError, KeyError, ValueError) as e:
         logger.debug(f"_get_chunking_bool: config lookup failed for '{key}', using default={default}: {e}")
         return default
@@ -586,7 +587,10 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
                 # Stable reference id based on metadata payload
                 try:
                     import hashlib as _hash
-                    meta_ref_id = _hash.sha1(json.dumps(meta_payload, sort_keys=True).encode('utf-8')).hexdigest()[:12]
+                    meta_ref_id = _hash.sha1(
+                        json.dumps(meta_payload, sort_keys=True).encode('utf-8'),
+                        usedforsecurity=False,
+                    ).hexdigest()[:12]
                 except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to generate metadata reference hash: {e}")
                     meta_ref_id = 'meta'
@@ -616,7 +620,10 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
             if preserve_metadata and single_ref and meta_payload:
                 try:
                     import hashlib as _hash
-                    meta_ref_id = _hash.sha1(json.dumps(meta_payload, sort_keys=True).encode('utf-8')).hexdigest()[:12]
+                    meta_ref_id = _hash.sha1(
+                        json.dumps(meta_payload, sort_keys=True).encode('utf-8'),
+                        usedforsecurity=False,
+                    ).hexdigest()[:12]
                 except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to generate metadata reference hash: {e}")
                     meta_ref_id = 'meta'
@@ -769,24 +776,9 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                     logger.error(f"Blocked potential XXE attack: {e}")
                     raise InvalidInputError(f"XML contains forbidden constructs (potential XXE attack): {e}") from None
             except ImportError:
-                # Fall back to standard library with security measures
-                # Create parser with entity resolution disabled
-                parser = ET.XMLParser()
-                parser.entity = {}  # Clear entity definitions
-                parser.default = lambda x: None  # Ignore undefined entities
-
-                # Pre-check for dangerous XML constructs
-                if _contains_unsafe_xml_decls(text):
-                    raise InvalidInputError(
-                        "XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration. "
-                        "These are not allowed for security reasons."
-                    ) from None
-
-                # External references are only dangerous when used in DTD/ENTITY constructs.
-                # Since we already reject any DTD/ENTITY declarations above, allow URLs in text nodes.
-
-                root = ET.fromstring(text, parser=parser)
-                logger.debug("Using standard xml.etree with security checks")
+                raise InvalidInputError(
+                    "Secure XML parsing requires the 'defusedxml' package."
+                ) from None
         except ParseError as e:
             logger.error(f"Invalid XML data: {e}")
             raise InvalidInputError(f"Invalid XML data: {e}") from e
@@ -851,18 +843,9 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                     logger.error(f"Blocked potential XXE attack: {e}")
                     raise InvalidInputError(f"XML contains forbidden constructs (potential XXE attack): {e}") from None
             except ImportError:
-                parser = ET.XMLParser()
-                parser.entity = {}
-                parser.default = lambda x: None
-
-                if _contains_unsafe_xml_decls(text):
-                    raise InvalidInputError(
-                        "XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration. "
-                        "These are not allowed for security reasons."
-                    ) from None
-
-                root = ET.fromstring(text, parser=parser)
-                logger.debug("Using standard xml.etree with security checks")
+                raise InvalidInputError(
+                    "Secure XML parsing requires the 'defusedxml' package."
+                ) from None
         except ParseError as e:
             logger.error(f"Invalid XML data: {e}")
             raise InvalidInputError(f"Invalid XML data: {e}") from e

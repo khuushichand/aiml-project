@@ -9,7 +9,6 @@ This module centralizes:
 
 import contextlib
 import os
-import warnings
 from typing import Any, Optional
 
 from fastapi import Depends, Header, HTTPException, Request, Response, status
@@ -35,6 +34,8 @@ from tldw_Server_API.app.core.exceptions import InactiveUserError
 from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 
 security = HTTPBearer(auto_error=False)
+_EVALS_LEGACY_RATE_LIMIT_SHIM_LOGGED = False
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _env_truthy(name: str, default: str = "") -> bool:
@@ -281,10 +282,21 @@ def require_eval_permissions(*permissions: str):
     perms = [str(p) for p in permissions if str(p).strip()]
 
     async def _checker(current_user: User = Depends(get_eval_request_user)) -> User:  # noqa: B008
-        if getattr(current_user, "is_admin", False):
+        role_values = {
+            str(role).strip().lower()
+            for role in (getattr(current_user, "roles", []) or [])
+            if str(role).strip()
+        }
+        if "admin" in role_values:
             return current_user
-        user_perms = set(getattr(current_user, "permissions", []) or [])
-        missing = [p for p in perms if p not in user_perms]
+        user_perm_values = {
+            str(perm).strip().lower()
+            for perm in (getattr(current_user, "permissions", []) or [])
+            if str(perm).strip()
+        }
+        if "*" in user_perm_values or "system.configure" in user_perm_values:
+            return current_user
+        missing = [p for p in perms if p.lower() not in user_perm_values]
         if missing:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -299,9 +311,11 @@ async def check_evaluation_rate_limit(
     request: Request,
     rate_limiter = Depends(get_rate_limiter_dep),
 ):
-    """Simple IP/path based limiter for high-level guarding (per-minute)."""
+    """Diagnostics-only shim; RG ingress is the sole enforcer."""
+    _ = rate_limiter
+
     # If ResourceGovernor ingress has already governed this route, avoid
-    # double-enforcement via legacy AuthNZ rate limiter.
+    # any additional per-operation limiter logic.
     try:
         policy_id = getattr(request.state, "rg_policy_id", None)
         if policy_id:
@@ -313,26 +327,16 @@ async def check_evaluation_rate_limit(
         # request.state may not exist in some test scenarios
         pass
 
-    client_ip = request.client.host if request.client else "unknown"
-    path = request.url.path
-    if "batch" in path:
-        limit = 5
-        endpoint_type = "eval_batch"
-    elif "/runs" in path:
-        limit = 10
-        endpoint_type = "eval_run"
-    else:
-        limit = 60
-        endpoint_type = "eval_standard"
-    allowed, metadata = await rate_limiter.check_rate_limit(client_ip, endpoint_type, limit=limit, window_minutes=1)
-    if not allowed:
-        retry_after = metadata.get("retry_after", 60)
-        logger.warning(f"Rate limit exceeded for {client_ip} on {endpoint_type}")
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded. Retry after {retry_after} seconds",
-            headers={"Retry-After": str(retry_after)},
+    global _EVALS_LEGACY_RATE_LIMIT_SHIM_LOGGED
+    if not _EVALS_LEGACY_RATE_LIMIT_SHIM_LOGGED:
+        _EVALS_LEGACY_RATE_LIMIT_SHIM_LOGGED = True
+        path = getattr(getattr(request, "url", None), "path", "unknown")
+        logger.warning(
+            "Evaluations legacy path rate limiter is retired; allowing request via diagnostics-only shim. "
+            "path={}",
+            path,
         )
+    return
 
 
 async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, meta: Optional[dict[str, Any]] = None) -> None:
@@ -362,8 +366,8 @@ async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, m
         reset_val = int(meta.get("reset_seconds") or 60) if isinstance(meta, dict) else 60
         response.headers["RateLimit-Reset"] = str(reset_val)
         response.headers["X-RateLimit-Reset"] = str(reset_val)
-    except Exception:
-        pass
+    except Exception as rate_limit_header_error:
+        logger.debug("Failed to populate rate limit response headers", exc_info=rate_limit_header_error)
 
 
 def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
@@ -371,7 +375,7 @@ def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
     Claim-first enforcement for heavy evaluations admin operations.
 
     When EVALS_HEAVY_ADMIN_ONLY is disabled, this is a no-op. Otherwise,
-    require an admin-style principal (is_admin or role 'admin') for heavy
+    require an admin-style principal (role/permission claims) for heavy
     evaluations flows.
 
     Args:
@@ -388,42 +392,22 @@ def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required for heavy evaluations",
         )
-    is_admin_flag = bool(
-        principal.is_admin
-        or ("admin" in (principal.roles or []))
-    )
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    is_admin_flag = bool(("admin" in roles) or (permissions & _ADMIN_CLAIM_PERMISSIONS))
     if not is_admin_flag:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required for heavy evaluations",
         )
-
-
-def require_admin(user: User) -> None:
-    """
-    Legacy user-dict gate for heavy evaluations (compatibility shim).
-
-    New code and HTTP routes should prefer the claim-first
-    `enforce_heavy_evaluations_admin(AuthPrincipal)` helper together with
-    `require_roles` / `require_permissions`. This function is kept only
-    for tests and for any remaining legacy callsites that have not yet
-    been migrated.
-    """
-    warnings.warn(
-        "evaluations_auth.require_admin is deprecated; use enforce_heavy_evaluations_admin(principal) "
-        "with claim-first dependencies instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
-        return
-    is_admin_flag = bool(
-        getattr(user, "is_admin", False)
-        or getattr(user, "role", None) == "admin"
-        or ("admin" in (getattr(user, "roles", None) or []))
-    )
-    if not user or not is_admin_flag:
-        raise HTTPException(status_code=403, detail="Admin privileges required for heavy evaluations")
 
 
 __all__ = [
@@ -432,6 +416,5 @@ __all__ = [
     "create_error_response",
     "check_evaluation_rate_limit",
     "_apply_rate_limit_headers",
-    "require_admin",
     "enforce_heavy_evaluations_admin",
 ]

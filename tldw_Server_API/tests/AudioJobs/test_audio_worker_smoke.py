@@ -73,7 +73,7 @@ async def test_audio_worker_pipeline_smoke_skip_if_missing():
             try:
                 os.remove(tmp_path)
             except Exception:
-                pass
+                _ = None
 
 
 @pytest.mark.asyncio
@@ -165,6 +165,84 @@ async def test_audio_worker_transcribe_normalizes_segments_and_text_tuple(monkey
     finally:
         stop.set()
         await asyncio.wait_for(task, timeout=2.0)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_audio_worker_download_error_does_not_crash_worker(monkeypatch, tmp_path):
+    """
+    A DownloadError raised during the audio_download stage should be handled as
+    a job failure/retry path without crashing the worker task.
+    """
+    jobs_db_path = tmp_path / "jobs_download_error.db"
+    monkeypatch.setenv("JOBS_DB_PATH", str(jobs_db_path))
+
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+    jm = JobManager()
+
+    import tldw_Server_API.app.services.audio_jobs_worker as worker
+
+    async def _fake_get_limits_for_user(user_id: int):
+        return {"daily_minutes": 30.0, "concurrent_streams": 1, "concurrent_jobs": 0, "max_file_size_mb": 25}
+
+    async def _fake_can_start_job(user_id: int):
+        return True, ""
+
+    async def _fake_increment_jobs_started(user_id: int):
+        return None
+
+    async def _fake_finish_job(user_id: int):
+        return None
+
+    monkeypatch.setattr(worker, "get_limits_for_user", _fake_get_limits_for_user, raising=True)
+    monkeypatch.setattr(worker, "can_start_job", _fake_can_start_job, raising=True)
+    monkeypatch.setattr(worker, "increment_jobs_started", _fake_increment_jobs_started, raising=True)
+    monkeypatch.setattr(worker, "finish_job", _fake_finish_job, raising=True)
+
+    from tldw_Server_API.app.core.exceptions import DownloadError
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files as audio_files
+
+    def _fake_download_audio_file(*args, **kwargs):
+        raise DownloadError("Download failed with status 404")
+
+    monkeypatch.setattr(audio_files, "download_audio_file", _fake_download_audio_file, raising=True)
+
+    row = jm.create_job(
+        domain="audio",
+        queue="default",
+        job_type="audio_download",
+        payload={"url": "https://example.invalid/missing.mp3", "temp_dir": str(tmp_path)},
+        owner_user_id="1",
+    )
+    job_id = int(row["id"])
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(worker.run_audio_jobs_worker(stop))
+    try:
+        saw_retry_increment = False
+        for _ in range(80):
+            await asyncio.sleep(0.05)
+            if task.done():
+                exc = task.exception()
+                pytest.fail(f"audio worker crashed unexpectedly: {exc!r}")
+            job_state = jm.get_job(job_id) or {}
+            if int(job_state.get("retry_count") or 0) >= 1:
+                saw_retry_increment = True
+                break
+
+        assert saw_retry_increment, "audio_download job did not record a retry after DownloadError"
+
+        stop.set()
+        await asyncio.wait_for(task, timeout=2.0)
+
+        job_state = jm.get_job(job_id) or {}
+        err_text = str(job_state.get("last_error") or job_state.get("error_message") or "")
+        assert "404" in err_text
+    finally:
+        if not task.done():
+            stop.set()
+            await asyncio.wait_for(task, timeout=2.0)
 
 
 @pytest.mark.asyncio

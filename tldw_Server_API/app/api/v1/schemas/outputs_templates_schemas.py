@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, model_validator
 
 TemplateType = Literal[
     "newsletter_markdown",
@@ -27,16 +27,17 @@ class OutputTemplateCreate(BaseModel):
     is_default: bool = False
     metadata: dict[str, Any] | None = Field(default=None, description="Arbitrary template metadata. For tts, supports keys tts_default_model, tts_default_voice, tts_default_speed.")
 
-    @validator("format")
-    def validate_format_matches_type(cls, v: TemplateFormat, values: dict[str, object]):  # type: ignore[override]
-        t = values.get("type")
+    @model_validator(mode="after")
+    def validate_format_matches_type(self) -> "OutputTemplateCreate":
+        t = self.type
+        v = self.format
         if t in ("newsletter_markdown", "briefing_markdown", "mece_markdown") and v != "md":
             raise ValueError("Markdown-type templates must use format 'md'.")
         if t == "newsletter_html" and v != "html":
             raise ValueError("newsletter_html templates must use format 'html'.")
         if t == "tts_audio" and v != "mp3":
             raise ValueError("tts_audio templates must use format 'mp3'.")
-        return v
+        return self
 
 
 class OutputTemplateUpdate(BaseModel):
@@ -88,14 +89,12 @@ class TemplatePreviewRequest(BaseModel):
         description="Inline context for preview. Example: { 'items': [...], 'date': '...', 'job': {...} }",
     )
 
-    @validator("item_ids")
-    def validate_sources(cls, v, values):  # type: ignore[override]
+    @model_validator(mode="after")
+    def validate_sources(self) -> "TemplatePreviewRequest":
         # Allow inline data to satisfy preview requirements
-        data = values.get("data")
-        run_id = values.get("run_id")
-        if not v and not run_id and not data:
+        if not self.item_ids and not self.run_id and not self.data:
             raise ValueError("Provide item_ids, run_id, or inline data for preview.")
-        return v
+        return self
 
 
 class TemplatePreviewResponse(BaseModel):

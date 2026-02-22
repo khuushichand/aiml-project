@@ -31,10 +31,7 @@ from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
     db_export_prompt_keywords_to_csv,
     db_export_prompts_formatted,  # Using the standalone function from interop
 )
-
-#
-# DB Mgmt
-from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 #from tldw_Server_API.app.core.DB_Management.DB_Manager import DBManager
 #
@@ -160,7 +157,23 @@ async def _resolve_prompts_auth_user(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication token",
             )
-        return None
+        # Preserve claim-first authorization semantics in downstream checks by
+        # returning a synthetic admin-style User rather than branching on mode.
+        try:
+            user_id = int(getattr(get_auth_settings(), "SINGLE_USER_FIXED_ID", 1))
+        except _PROMPTS_LOOKUP_EXCEPTIONS:
+            user_id = 1
+        return User(
+            id=user_id,
+            username="single_user",
+            role="admin",
+            is_active=True,
+            is_verified=True,
+            is_superuser=True,
+            roles=["admin"],
+            permissions=["*"],
+            is_admin=True,
+        )
 
     if request is None:
         raise HTTPException(
@@ -204,6 +217,31 @@ async def _resolve_prompts_auth_user(
 
     return user
 
+
+def _is_prompts_admin_user(user: Optional[User]) -> bool:
+    if user is None:
+        return False
+    try:
+        roles = {
+            str(role).strip().lower()
+            for role in (getattr(user, "roles", []) or [])
+            if str(role).strip()
+        }
+        permissions = {
+            str(perm).strip().lower()
+            for perm in (getattr(user, "permissions", []) or [])
+            if str(perm).strip()
+        }
+        if "admin" in roles:
+            return True
+        if "*" in permissions:
+            return True
+        if "system.configure" in permissions:
+            return True
+    except _PROMPTS_LOOKUP_EXCEPTIONS:
+        return False
+    return False
+
 async def verify_prompts_auth(
     request: Request,
     Token: Optional[str] = Header(None, alias="Token"),
@@ -223,12 +261,7 @@ async def verify_prompts_auth(
         Authorization=Authorization,
     )
 
-    if _is_single_user_auth_mode():
-        return True
-
-    roles = getattr(user, "roles", []) or []
-    is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
-    if not is_admin:
+    if not _is_prompts_admin_user(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. Required role(s): admin",
@@ -252,17 +285,12 @@ async def verify_prompts_user(
         x_api_key=x_api_key,
         Authorization=Authorization,
     )
-    if _is_single_user_auth_mode():
-        return True
-    require_admin = os.getenv("PROMPTS_REQUIRE_ADMIN", "").strip().lower() in {"1", "true", "yes", "on"}
-    if require_admin:
-        roles = getattr(user, "roles", []) or []
-        is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
-        if not is_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. Required role(s): admin",
-            )
+    require_admin = env_flag_enabled("PROMPTS_REQUIRE_ADMIN")
+    if require_admin and not _is_prompts_admin_user(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Required role(s): admin",
+        )
     return True
 
 @router.get(
@@ -791,6 +819,7 @@ async def bulk_update_prompt_keywords(
 @router.post(
     "/create",
     summary="Create a prompt (legacy payload)",
+    status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(verify_prompts_user)]
 )
 async def legacy_create_prompt(
@@ -896,6 +925,111 @@ async def create_prompt(
         # Avoid leaking the raw 'msg' variable if it was a NameError
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
+
+# === Collection Endpoints ===
+
+# NOTE:
+# Keep these static `/collections*` routes above the dynamic `/{prompt_identifier}`
+# route declarations below. FastAPI matches in declaration order; moving the dynamic
+# route above these will cause `/collections` to be interpreted as a prompt identifier.
+
+@router.post(
+    "/collections/create",
+    response_model=schemas.PromptCollectionCreateResponse,
+    summary="Create a prompt collection",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def create_collection(
+    payload: schemas.PromptCollectionCreateRequest = Body(...),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
+):
+    try:
+        created = db.create_prompt_collection(
+            name=payload.name,
+            description=payload.description,
+            prompt_ids=payload.prompt_ids or [],
+        )
+        return schemas.PromptCollectionCreateResponse(collection_id=created["collection_id"])
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error(f"Database error creating prompt collection '{payload.name}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
+
+
+@router.get(
+    "/collections",
+    response_model=schemas.PromptCollectionListResponse,
+    summary="List prompt collections",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def list_collections(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
+):
+    try:
+        items = db.list_prompt_collections(limit=limit, offset=offset)
+        return schemas.PromptCollectionListResponse(
+            collections=[schemas.PromptCollectionResponse(**item) for item in items]
+        )
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error("Database error listing prompt collections: {}", e, exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
+
+
+@router.put(
+    "/collections/{collection_id}",
+    response_model=schemas.PromptCollectionResponse,
+    summary="Update a prompt collection",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def update_collection(
+    collection_id: int,
+    payload: schemas.PromptCollectionUpdateRequest = Body(...),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
+):
+    try:
+        item = db.update_prompt_collection(
+            collection_id,
+            name=payload.name,
+            description=payload.description,
+            prompt_ids=payload.prompt_ids,
+        )
+        if not item:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        return schemas.PromptCollectionResponse(**item)
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error(f"Database error updating prompt collection '{collection_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
+
+
+@router.get(
+    "/collections/{collection_id}",
+    response_model=schemas.PromptCollectionResponse,
+    summary="Get a prompt collection",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def get_collection(
+    collection_id: int,
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
+):
+    try:
+        item = db.get_prompt_collection_by_id(collection_id)
+        if not item:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        return schemas.PromptCollectionResponse(**item)
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error(f"Database error fetching prompt collection '{collection_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
+
+
 @router.get(
     "/",
     response_model=schemas.PaginatedPromptsResponse,
@@ -912,7 +1046,10 @@ async def list_all_prompts(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
     include_deleted: bool = Query(False, description="Include soft-deleted prompts"),
-    sort_by: str = Query("last_modified", description="Sort by: last_modified, name, author, id"),
+    sort_by: str = Query(
+        "last_modified",
+        description="Sort by: last_modified, name, author, id, usage_count, last_used_at",
+    ),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
@@ -1036,6 +1173,42 @@ async def update_prompt(
                             detail="An unexpected error occurred during prompt update.") from e
 
 
+@router.post(
+    "/{prompt_identifier}/use",
+    response_model=schemas.PromptResponse,
+    summary="Record prompt usage",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def record_prompt_usage(
+    prompt_identifier: Union[int, str],
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
+):
+    try:
+        processed_identifier: Union[int, str] = prompt_identifier
+        with contextlib.suppress(ValueError):
+            processed_identifier = int(prompt_identifier)
+
+        updated_prompt = db.record_prompt_usage(processed_identifier)
+        if not updated_prompt:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Prompt not found.",
+            )
+        if "deleted" not in updated_prompt and hasattr(schemas.PromptResponse, "deleted"):
+            updated_prompt["deleted"] = False
+        return schemas.PromptResponse(**updated_prompt)
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error(
+            f"Database error recording prompt usage for '{prompt_identifier}': {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
+
+
 @router.delete(
     "/{prompt_identifier}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -1125,57 +1298,6 @@ async def restore_prompt_version(
     except DatabaseError as e:
         logger.error(f"Database error restoring prompt '{prompt_identifier}' version {version}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
-
-
-# === Collection Endpoints (minimal, in-memory for tests) ===
-
-_collections_store_key = "prompt_collections"
-
-def _get_collections_store():
-    store = ephemeral_storage.get_data(_collections_store_key)
-    if store is None:
-        store = {"next_id": 1, "items": {}}
-        ephemeral_storage._store[_collections_store_key] = store  # simple internal set
-    return store
-
-
-@router.post(
-    "/collections/create",
-    summary="Create a prompt collection (minimal)",
-    dependencies=[Depends(verify_prompts_auth)]
-)
-async def create_collection(
-    payload: schemas.PromptCollectionCreateRequest = Body(...),
-):
-    name = payload.name
-    description = payload.description
-    prompt_ids = payload.prompt_ids or []
-    store = _get_collections_store()
-    cid = store["next_id"]
-    store["next_id"] += 1
-    store["items"][cid] = {
-        "collection_id": cid,
-        "name": name,
-        "description": description,
-        "prompt_ids": prompt_ids,
-    }
-    return {"collection_id": cid}
-
-
-@router.get(
-    "/collections/{collection_id}",
-    summary="Get a prompt collection (minimal)",
-    dependencies=[Depends(verify_prompts_auth)]
-)
-async def get_collection(
-    collection_id: int,
-):
-    store = _get_collections_store()
-    item = store["items"].get(collection_id)
-    if not item:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
-    return item
-
 
 #
 # End of prompts.py

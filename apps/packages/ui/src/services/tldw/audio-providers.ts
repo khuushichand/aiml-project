@@ -28,7 +28,13 @@ export type TldwTtsProvidersInfo = {
   voices: Record<string, TldwTtsVoiceInfo[]>
 }
 
-export const fetchTtsProviders = async (): Promise<TldwTtsProvidersInfo | null> => {
+type FetchTtsProvidersOptions = {
+  throwOnError?: boolean
+}
+
+export const fetchTtsProviders = async (
+  options?: FetchTtsProvidersOptions
+): Promise<TldwTtsProvidersInfo | null> => {
   try {
     const res = await bgRequestClient<any>({
       path: "/api/v1/audio/providers",
@@ -74,7 +80,10 @@ export const fetchTtsProviders = async (): Promise<TldwTtsProvidersInfo | null> 
     }
 
     return { providers, voices }
-  } catch {
+  } catch (error) {
+    if (options?.throwOnError) {
+      throw error
+    }
     return null
   }
 }

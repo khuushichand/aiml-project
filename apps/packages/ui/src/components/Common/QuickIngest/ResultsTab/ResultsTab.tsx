@@ -16,6 +16,8 @@ type ResultsTabProps = {
       done: number
       pct: number
       elapsedLabel?: string | null
+      state?: "running" | "failed" | "complete" | "ready"
+      error?: string | null
     }
     filters: {
       value: ResultsFilter
@@ -29,6 +31,7 @@ type ResultsTabProps = {
     reviewBatchId?: string | null
     processOnly: boolean
     mediaIdFromPayload: (payload: unknown) => string | number | null
+    titleFromPayload: (payload: unknown) => string | null
   }
   actions: {
     retryFailedUrls: () => void

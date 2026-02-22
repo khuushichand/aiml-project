@@ -260,7 +260,7 @@ def _hash_embed(text: str, dim: int = 2048) -> np.ndarray:
     if not text:
         return v
     for tok in re.findall(r"[A-Za-z0-9_-]{2,}", text.lower()):
-        h = int(hashlib.md5(tok.encode('utf-8')).hexdigest(), 16)
+        h = int(hashlib.md5(tok.encode('utf-8'), usedforsecurity=False).hexdigest(), 16)
         idx = h % dim
         v[idx] += 1.0
     # L2 normalize
@@ -765,6 +765,7 @@ async def agentic_rag_pipeline(
     # generation config passthrough
     enable_generation: bool = True,
     generation_model: str | None = None,
+    generation_provider: str | None = None,
     generation_prompt: str | None = None,
     max_generation_tokens: int = 500,
     # misc
@@ -1105,7 +1106,10 @@ async def agentic_rag_pipeline(
     if enable_generation:
         try:
             from .generation import AnswerGenerator
-            gen = AnswerGenerator(model=generation_model)
+            gen = AnswerGenerator(
+                model=generation_model,
+                provider=generation_provider,
+            )
             ctx = chunk_text
             gen_out = await gen.generate(
                 query=query,
@@ -1235,6 +1239,7 @@ async def agentic_rag_pipeline(
                     character_db_path=character_db_path,
                     user_id="rag_agentic",
                     generation_model=generation_model,
+                    generation_provider=generation_provider,
                     existing_claims=None,
                     existing_summary=None,
                     search_mode=search_mode,

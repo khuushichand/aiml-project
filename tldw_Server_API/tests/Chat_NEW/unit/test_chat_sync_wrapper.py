@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from tldw_Server_API.app.core.Chat import chat_orchestrator
+from tldw_Server_API.app.core.exceptions import SyncCallInEventLoopError
 
 
 @pytest.mark.asyncio
@@ -78,6 +79,27 @@ def test_chat_wrapper_async_only_flag_blocks_sync(monkeypatch):
         )
 
 
+def test_chat_wrapper_async_only_flag_blocks_sync_for_single_letter_y(monkeypatch):
+    """CHAT_COMMANDS_ASYNC_ONLY should also accept single-letter truthy values."""
+
+    monkeypatch.setenv("CHAT_COMMANDS_ASYNC_ONLY", "y")
+
+    with pytest.raises(RuntimeError, match="CHAT_COMMANDS_ASYNC_ONLY"):
+        chat_orchestrator.chat(
+            message="blocked-y",
+            history=[],
+            media_content=None,
+            selected_parts=[],
+            api_endpoint="openai",
+            api_key=None,
+            custom_prompt=None,
+            temperature=0.2,
+            system_message=None,
+            streaming=False,
+            chatdict_entries=None,
+        )
+
+
 @pytest.mark.asyncio
 async def test_chat_wrapper_returns_future_in_running_loop(monkeypatch):
     """chat() should return an awaitable when invoked inside a running loop."""
@@ -115,9 +137,32 @@ async def test_chat_wrapper_strict_mode_raises_in_running_loop(monkeypatch):
 
     monkeypatch.setenv("CHAT_SYNC_IN_EVENT_LOOP_STRICT", "1")
 
-    with pytest.raises(RuntimeError, match="CHAT_SYNC_IN_EVENT_LOOP_STRICT"):
+    with pytest.raises(SyncCallInEventLoopError, match="running event loop"):
         chat_orchestrator.chat(
             message="inside-loop",
+            history=[],
+            media_content=None,
+            selected_parts=[],
+            api_endpoint="openai",
+            api_key=None,
+            custom_prompt=None,
+            temperature=0.2,
+            system_message=None,
+            streaming=False,
+            chatdict_entries=None,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_chat_wrapper_strict_mode_raises_in_running_loop_for_single_letter_y(monkeypatch):
+    """CHAT_SYNC_IN_EVENT_LOOP_STRICT should accept single-letter truthy values."""
+
+    monkeypatch.setenv("CHAT_SYNC_IN_EVENT_LOOP_STRICT", "y")
+
+    with pytest.raises(SyncCallInEventLoopError, match="running event loop"):
+        chat_orchestrator.chat(
+            message="inside-loop-y",
             history=[],
             media_content=None,
             selected_parts=[],

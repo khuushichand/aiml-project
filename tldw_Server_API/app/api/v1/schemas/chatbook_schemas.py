@@ -14,51 +14,19 @@ from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# Enums
-
-class ChatbookVersion(str, Enum):
-    """Chatbook format versions (semantic)."""
-    V1 = "1.0.0"
-    V1_LEGACY = "1.0"  # Backwards compatibility with early chatbooks
-    V2 = "2.0.0"  # Future version
-
-
-class ContentType(str, Enum):
-    """Types of content that can be included in a chatbook."""
-    CONVERSATION = "conversation"
-    NOTE = "note"
-    CHARACTER = "character"
-    MEDIA = "media"
-    EMBEDDING = "embedding"
-    PROMPT = "prompt"
-    EVALUATION = "evaluation"
-    WORLD_BOOK = "world_book"
-    DICTIONARY = "dictionary"
-    GENERATED_DOCUMENT = "generated_document"
-
-
-class ExportStatus(str, Enum):
-    """Status of export job."""
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-    EXPIRED = "expired"
-
-
-class ImportStatus(str, Enum):
-    """Status of import job."""
-    PENDING = "pending"
-    VALIDATING = "validating"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+# Import shared enums from the canonical models module to avoid divergence.
+# ConflictResolution is intentionally redefined here to constrain API input
+# to only the currently-supported strategies (skip, rename).
+from tldw_Server_API.app.core.Chatbooks.chatbook_models import (
+    ChatbookVersion,
+    ContentType,
+    ExportStatus,
+    ImportStatus,
+)
 
 
 class ConflictResolution(str, Enum):
-    """How to handle conflicts during import."""
+    """How to handle conflicts during import (API-constrained subset)."""
     SKIP = "skip"          # Skip conflicting items
     RENAME = "rename"      # Rename imported items
 
@@ -378,6 +346,17 @@ class RemoveJobResponse(BaseModel):
     success: bool
     message: str
     job_id: str
+
+
+class ContinueExportRequest(BaseModel):
+    """Request to continue a truncated chatbook export (e.g. evaluation runs)."""
+    export_id: str = Field(..., description="Export ID from the original chatbook manifest")
+    continuations: list[dict[str, Any]] = Field(
+        ...,
+        description="Continuation tokens from the original manifest's truncation metadata"
+    )
+    name: Optional[str] = Field(None, max_length=255, description="Override name for continuation chatbook")
+    async_mode: bool = Field(False, description="Run as background job")
 
 
 # Error Responses

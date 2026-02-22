@@ -1,8 +1,8 @@
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pytest
 
-from tldw_Server_API.app.core.AuthNZ.exceptions import RateLimitError
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 
 
@@ -42,9 +42,6 @@ class _StubPool:
 @pytest.mark.asyncio
 async def test_rate_limiter_bootstraps_postgres_schema():
     settings = SimpleNamespace(
-        RATE_LIMIT_ENABLED=True,
-        RATE_LIMIT_PER_MINUTE=60,
-        RATE_LIMIT_BURST=10,
         SERVICE_ACCOUNT_RATE_LIMIT=60,
         REDIS_URL=None,
     )
@@ -62,9 +59,6 @@ async def test_rate_limiter_bootstraps_postgres_schema():
 @pytest.mark.asyncio
 async def test_rate_limiter_legacy_rate_checks_are_intentional_noops():
     settings = SimpleNamespace(
-        RATE_LIMIT_ENABLED=True,
-        RATE_LIMIT_PER_MINUTE=60,
-        RATE_LIMIT_BURST=10,
         SERVICE_ACCOUNT_RATE_LIMIT=60,
         REDIS_URL=None,
     )
@@ -90,87 +84,16 @@ async def test_rate_limiter_legacy_rate_checks_are_intentional_noops():
 
 
 @pytest.mark.asyncio
-async def test_rate_limiter_fallback_enforces_limit():
+async def test_rate_limiter_no_longer_exposes_fallback_api():
     settings = SimpleNamespace(
-        RATE_LIMIT_ENABLED=True,
-        RATE_LIMIT_PER_MINUTE=60,
-        RATE_LIMIT_BURST=10,
         SERVICE_ACCOUNT_RATE_LIMIT=60,
         REDIS_URL=None,
     )
     limiter = RateLimiter(db_pool=object(), settings=settings)
-    limiter._initialized = True
-
-    class _Repo:
-        async def increment_rate_limit_window(self, *, identifier, endpoint, window_start):
-            return 2
-
-    limiter._get_rate_limits_repo = lambda: _Repo()  # type: ignore[method-assign]
-
-    allowed, meta = await limiter.check_rate_limit_fallback(
-        identifier="ip:203.0.113.11",
-        endpoint="auth:authnz.forgot_password",
-        limit=1,
-        window_minutes=1,
-        fail_open=False,
-    )
-    assert allowed is False
-    assert meta.get("rate_limit_source") == "authnz_fallback_db"
-    assert int(meta.get("retry_after", 0)) >= 1
+    assert not hasattr(limiter, "check_rate_limit_fallback")
 
 
-@pytest.mark.asyncio
-async def test_rate_limiter_fallback_can_fail_open_on_backend_error():
-    settings = SimpleNamespace(
-        RATE_LIMIT_ENABLED=True,
-        RATE_LIMIT_PER_MINUTE=60,
-        RATE_LIMIT_BURST=10,
-        SERVICE_ACCOUNT_RATE_LIMIT=60,
-        REDIS_URL=None,
-    )
-    limiter = RateLimiter(db_pool=object(), settings=settings)
-    limiter._initialized = True
-
-    class _Repo:
-        async def increment_rate_limit_window(self, *, identifier, endpoint, window_start):
-            raise RuntimeError("db unavailable")
-
-    limiter._get_rate_limits_repo = lambda: _Repo()  # type: ignore[method-assign]
-
-    allowed, meta = await limiter.check_rate_limit_fallback(
-        identifier="ip:203.0.113.12",
-        endpoint="auth:authnz.magic_link.request",
-        limit=10,
-        window_minutes=1,
-        fail_open=True,
-    )
-    assert allowed is True
-    assert meta.get("error") == "fallback_limiter_unavailable"
-
-
-@pytest.mark.asyncio
-async def test_rate_limiter_fallback_can_fail_closed_on_backend_error():
-    settings = SimpleNamespace(
-        RATE_LIMIT_ENABLED=True,
-        RATE_LIMIT_PER_MINUTE=60,
-        RATE_LIMIT_BURST=10,
-        SERVICE_ACCOUNT_RATE_LIMIT=60,
-        REDIS_URL=None,
-    )
-    limiter = RateLimiter(db_pool=object(), settings=settings)
-    limiter._initialized = True
-
-    class _Repo:
-        async def increment_rate_limit_window(self, *, identifier, endpoint, window_start):
-            raise RuntimeError("db unavailable")
-
-    limiter._get_rate_limits_repo = lambda: _Repo()  # type: ignore[method-assign]
-
-    with pytest.raises(RateLimitError):
-        await limiter.check_rate_limit_fallback(
-            identifier="ip:203.0.113.13",
-            endpoint="auth:authnz.magic_link.email",
-            limit=3,
-            window_minutes=10,
-            fail_open=False,
-        )
+def test_rate_limiter_check_lockout_type_hints_resolve():
+    """Regression: keep datetime imports aligned with check_lockout annotation."""
+    hints = get_type_hints(RateLimiter.check_lockout)
+    assert "return" in hints

@@ -24,10 +24,10 @@ interface CardDetailPanelProps {
 }
 
 const PRIORITY_OPTIONS = [
-  { value: "low", label: "Low", color: "#3b82f6" },
-  { value: "medium", label: "Medium", color: "#eab308" },
-  { value: "high", label: "High", color: "#f97316" },
-  { value: "urgent", label: "Urgent", color: "#ef4444" }
+  { value: "low", label: "Low", color: "rgb(var(--color-primary))" },
+  { value: "medium", label: "Medium", color: "rgb(var(--color-warn))" },
+  { value: "high", label: "High", color: "rgb(var(--color-warn))" },
+  { value: "urgent", label: "Urgent", color: "rgb(var(--color-danger))" }
 ]
 
 export const CardDetailPanel = ({
@@ -134,7 +134,7 @@ export const CardDetailPanel = ({
       }
       open={open}
       onClose={onClose}
-      width={400}
+      size={400}
       footer={
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
@@ -243,7 +243,7 @@ export const CardDetailPanel = ({
           </div>
 
           {/* Metadata (read-only info) */}
-          <div className="pt-4 border-t text-xs text-gray-500 space-y-1">
+          <div className="pt-4 border-t text-xs text-text-muted space-y-1">
             <div>Created: {new Date(card.created_at).toLocaleString()}</div>
             <div>Updated: {new Date(card.updated_at).toLocaleString()}</div>
             <div>ID: {card.id}</div>

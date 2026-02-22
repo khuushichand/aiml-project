@@ -8,7 +8,7 @@ class _FakePgConn:
     def __init__(self):
         self.calls = []
 
-    # Presence of fetchval indicates Postgres path for update_user
+    # Postgres path should call fetchval in create flows and execute with $N placeholders.
     async def fetchval(self, *args, **kwargs):  # pragma: no cover - not used here
         return None
 
@@ -42,8 +42,9 @@ class _FakeTx:
 
 
 class _FakePool:
-    def __init__(self, conn):
+    def __init__(self, conn, *, postgres: bool = False):
         self._conn = conn
+        self.pool = object() if postgres else None
 
     def transaction(self):
 
@@ -53,7 +54,7 @@ class _FakePool:
 @pytest.mark.asyncio
 async def test_update_user_postgres_detects_and_uses_dollar_placeholders(monkeypatch):
     fake_conn = _FakePgConn()
-    users = UsersDB(db_pool=_FakePool(fake_conn))
+    users = UsersDB(db_pool=_FakePool(fake_conn, postgres=True))
     users._initialized = True  # bypass initialize
 
     async def _fake_get_user_by_id(self, user_id: int):

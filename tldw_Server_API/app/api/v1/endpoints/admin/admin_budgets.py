@@ -9,6 +9,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     OrgBudgetItem,
     OrgBudgetListResponse,
+    OrgBudgetSelfUpdateRequest,
     OrgBudgetUpdateRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
@@ -43,6 +44,27 @@ async def admin_upsert_budget(
 ) -> OrgBudgetItem:
     return await admin_budgets_service.upsert_budget(
         payload=payload,
+        request=request,
+        principal=principal,
+        db=db,
+    )
+
+
+@router.put("/budgets/{org_id}", response_model=OrgBudgetItem)
+async def admin_update_budget_by_org_id(
+    org_id: int,
+    payload: OrgBudgetSelfUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> OrgBudgetItem:
+    update_payload = OrgBudgetUpdateRequest(
+        org_id=org_id,
+        budgets=payload.budgets,
+        clear_budgets=payload.clear_budgets,
+    )
+    return await admin_budgets_service.upsert_budget(
+        payload=update_payload,
         request=request,
         principal=principal,
         db=db,

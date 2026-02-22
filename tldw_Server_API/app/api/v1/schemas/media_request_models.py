@@ -94,6 +94,14 @@ class SearchRequest(BaseModel):
     fields: list[str] = ["title", "content"]
     exact_phrase: Optional[str] = None
     media_types: Optional[list[str]] = None
+    email_query_mode: Optional[Literal["legacy", "operators"]] = Field(
+        None,
+        description=(
+            "Optional email search mode. Use 'operators' with media_types=['email'] "
+            "to delegate /media/search to the email operator planner. "
+            "Use 'legacy' to force legacy planner behavior even when server default delegation is enabled."
+        ),
+    )
     date_range: Optional[dict[str, datetime]] = None
     must_have: Optional[list[str]] = None
     must_not_have: Optional[list[str]] = None
@@ -686,7 +694,11 @@ class WebScrapingRequest(BaseModel):
     scrape_method: str  # "individual", "sitemap", "url_level", "recursive_scraping"
     url_input: str
     url_level: Optional[int] = None
-    max_pages: int = 10
+    max_pages: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional crawl page cap. When omitted, service config default is used.",
+    )
     max_depth: int = 3
     summarize_checkbox: bool = False
     custom_prompt: Optional[str] = None
@@ -714,7 +726,11 @@ class IngestWebContentRequest(BaseModel):
     # Advanced scraping selection
     scrape_method: ScrapeMethod = ScrapeMethod.INDIVIDUAL
     url_level: Optional[int] = 2
-    max_pages: Optional[int] = 10
+    max_pages: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional crawl page cap. When omitted, service config default is used.",
+    )
     max_depth: Optional[int] = 3
 
     # Summarization / analysis fields

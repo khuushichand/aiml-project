@@ -384,6 +384,18 @@ class UserFeedbackStore:
             """,
             "CREATE INDEX IF NOT EXISTS idx_feedback_conv ON conversation_feedback(conversation_id)",
             "CREATE INDEX IF NOT EXISTS idx_feedback_created ON conversation_feedback(created_at)",
+            """
+            CREATE TABLE IF NOT EXISTS feedback_idempotency (
+                dedupe_key TEXT PRIMARY KEY,
+                feedback_id TEXT,
+                issues TEXT NOT NULL DEFAULT '[]',
+                user_notes TEXT,
+                pending INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_feedback_idempotency_created ON feedback_idempotency(created_at)",
         )
 
         statements_postgres = (
@@ -408,6 +420,18 @@ class UserFeedbackStore:
             """,
             "CREATE INDEX IF NOT EXISTS idx_feedback_conv ON conversation_feedback(conversation_id)",
             "CREATE INDEX IF NOT EXISTS idx_feedback_created ON conversation_feedback(created_at)",
+            """
+            CREATE TABLE IF NOT EXISTS feedback_idempotency (
+                dedupe_key TEXT PRIMARY KEY,
+                feedback_id TEXT,
+                issues TEXT NOT NULL DEFAULT '[]',
+                user_notes TEXT,
+                pending BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_feedback_idempotency_created ON feedback_idempotency(created_at)",
         )
 
         statements = statements_sqlite if self.db.backend_type == BackendType.SQLITE else statements_postgres
@@ -416,8 +440,26 @@ class UserFeedbackStore:
             with self.db.transaction() as conn:
                 for statement in statements:
                     conn.execute(statement)
+                self._ensure_issues_column(conn)
         except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Failed to initialize feedback schema: {exc}", exc_info=True)
+
+    def _ensure_issues_column(self, conn: Any) -> None:
+        """Backfill `issues` on pre-existing schemas created before this field existed."""
+        if self.db.backend_type == BackendType.POSTGRESQL:
+            conn.execute(
+                "ALTER TABLE conversation_feedback "
+                "ADD COLUMN IF NOT EXISTS issues TEXT"
+            )
+            return
+
+        try:
+            conn.execute("ALTER TABLE conversation_feedback ADD COLUMN issues TEXT")
+        except Exception as exc:  # noqa: BLE001 - backend adapters expose varied DB exceptions
+            message = str(exc).lower()
+            if "duplicate column name" in message or "already exists" in message:
+                return
+            raise
 
     async def add_feedback(
         self,
@@ -437,7 +479,7 @@ class UserFeedbackStore:
         Returns:
             Feedback ID
         """
-        feedback_id = f"fb_{int(time.time() * 1000)}_{hashlib.md5(query.encode()).hexdigest()[:8]}"
+        feedback_id = f"fb_{int(time.time() * 1000)}_{hashlib.md5(query.encode(), usedforsecurity=False).hexdigest()[:8]}"
 
         helpful_value: Optional[bool]
         helpful_value = None if helpful is None else bool(helpful)
@@ -476,6 +518,202 @@ class UserFeedbackStore:
         else:
             logger.info(f"Added feedback {feedback_id} for conversation {conversation_id}")
             return feedback_id
+
+    def _idempotency_row_to_dict(self, row: Any, cursor: Any) -> dict[str, Any]:
+        if isinstance(row, dict):
+            return row
+        if hasattr(row, "keys"):
+            return dict(row)
+        columns = [col[0] for col in getattr(cursor, "description", [])] if cursor else []
+        return {columns[idx]: row[idx] for idx in range(min(len(columns), len(row)))}
+
+    def _decode_issues(self, raw: Any) -> list[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, list):
+            return [str(item) for item in raw if str(item).strip()]
+        if isinstance(raw, str):
+            try:
+                decoded = json.loads(raw)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return []
+            if isinstance(decoded, list):
+                return [str(item) for item in decoded if str(item).strip()]
+            return []
+        return []
+
+    @staticmethod
+    def _merge_issue_lists(existing: list[str], incoming: list[str]) -> list[str]:
+        merged: list[str] = []
+        seen = set()
+        for item in existing + incoming:
+            text = str(item).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            merged.append(text)
+        return merged
+
+    async def claim_idempotency(
+        self,
+        dedupe_key: str,
+        issues: Optional[list[str]],
+        user_notes: Optional[str],
+        *,
+        ttl_seconds: int = 300,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Atomically claim an idempotency key, returning existing record on conflict."""
+        normalized_issues = self._merge_issue_lists([], issues or [])
+        issues_payload = json.dumps(normalized_issues)
+        ttl = max(int(ttl_seconds), 1)
+
+        if self.db.backend_type == BackendType.SQLITE:
+            cleanup_sql = (
+                "DELETE FROM feedback_idempotency "
+                "WHERE datetime(created_at) < datetime('now', ?)"
+            )
+            cleanup_params: tuple[Any, ...] = (f"-{ttl} seconds",)
+            insert_sql = (
+                "INSERT OR IGNORE INTO feedback_idempotency "
+                "(dedupe_key, feedback_id, issues, user_notes, pending, created_at, updated_at) "
+                "VALUES (?, NULL, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+            select_sql = (
+                "SELECT feedback_id, issues, user_notes, pending, created_at "
+                "FROM feedback_idempotency WHERE dedupe_key = ?"
+            )
+        else:
+            cleanup_sql = (
+                "DELETE FROM feedback_idempotency "
+                "WHERE created_at < (CURRENT_TIMESTAMP - (INTERVAL '1 second' * %s))"
+            )
+            cleanup_params = (ttl,)
+            insert_sql = (
+                "INSERT INTO feedback_idempotency "
+                "(dedupe_key, feedback_id, issues, user_notes, pending, created_at, updated_at) "
+                "VALUES (%s, NULL, %s, %s, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (dedupe_key) DO NOTHING"
+            )
+            select_sql = (
+                "SELECT feedback_id, issues, user_notes, pending, created_at "
+                "FROM feedback_idempotency WHERE dedupe_key = %s"
+            )
+
+        with self.db.transaction() as conn:
+            conn.execute(cleanup_sql, cleanup_params)
+            cursor = conn.execute(insert_sql, (dedupe_key, issues_payload, user_notes))
+            inserted = bool(getattr(cursor, "rowcount", 0))
+
+            row_cursor = conn.execute(select_sql, (dedupe_key,))
+            row = row_cursor.fetchone()
+
+        if row:
+            record = self._idempotency_row_to_dict(row, row_cursor)
+            return inserted, {
+                "feedback_id": record.get("feedback_id"),
+                "issues": self._decode_issues(record.get("issues")),
+                "user_notes": record.get("user_notes"),
+                "pending": bool(record.get("pending")),
+            }
+
+        # Fallback for very unusual adapter behavior where SELECT returns no row.
+        return inserted, {
+            "feedback_id": None,
+            "issues": normalized_issues,
+            "user_notes": user_notes,
+            "pending": True,
+        }
+
+    async def update_idempotency(
+        self,
+        dedupe_key: str,
+        issues: list[str],
+        user_notes: Optional[str],
+    ) -> None:
+        normalized_issues = self._merge_issue_lists([], issues)
+        issues_payload = json.dumps(normalized_issues)
+        if self.db.backend_type == BackendType.SQLITE:
+            update_sql = (
+                "UPDATE feedback_idempotency "
+                "SET issues = ?, user_notes = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE dedupe_key = ?"
+            )
+        else:
+            update_sql = (
+                "UPDATE feedback_idempotency "
+                "SET issues = %s, user_notes = %s, updated_at = CURRENT_TIMESTAMP "
+                "WHERE dedupe_key = %s"
+            )
+
+        with self.db.transaction() as conn:
+            conn.execute(update_sql, (issues_payload, user_notes, dedupe_key))
+
+    async def clear_idempotency(self, dedupe_key: str) -> None:
+        if self.db.backend_type == BackendType.SQLITE:
+            delete_sql = "DELETE FROM feedback_idempotency WHERE dedupe_key = ?"
+        else:
+            delete_sql = "DELETE FROM feedback_idempotency WHERE dedupe_key = %s"
+
+        with self.db.transaction() as conn:
+            conn.execute(delete_sql, (dedupe_key,))
+
+    async def finalize_idempotency(
+        self,
+        dedupe_key: str,
+        feedback_id: Optional[str],
+        fallback_issues: list[str],
+        fallback_user_notes: Optional[str],
+    ) -> tuple[list[str], Optional[str], bool]:
+        """Finalize an idempotency record and return merged payload state."""
+        if self.db.backend_type == BackendType.SQLITE:
+            select_sql = (
+                "SELECT feedback_id, issues, user_notes, pending "
+                "FROM feedback_idempotency WHERE dedupe_key = ?"
+            )
+            update_sql = (
+                "UPDATE feedback_idempotency "
+                "SET feedback_id = ?, issues = ?, user_notes = ?, pending = 0, updated_at = CURRENT_TIMESTAMP "
+                "WHERE dedupe_key = ?"
+            )
+        else:
+            select_sql = (
+                "SELECT feedback_id, issues, user_notes, pending "
+                "FROM feedback_idempotency WHERE dedupe_key = %s FOR UPDATE"
+            )
+            update_sql = (
+                "UPDATE feedback_idempotency "
+                "SET feedback_id = %s, issues = %s, user_notes = %s, pending = FALSE, updated_at = CURRENT_TIMESTAMP "
+                "WHERE dedupe_key = %s"
+            )
+
+        with self.db.transaction() as conn:
+            cursor = conn.execute(select_sql, (dedupe_key,))
+            row = cursor.fetchone()
+            if not row:
+                return fallback_issues, fallback_user_notes, False
+
+            record = self._idempotency_row_to_dict(row, cursor)
+            record_issues = self._decode_issues(record.get("issues"))
+            merged_issues = self._merge_issue_lists(fallback_issues, record_issues)
+            merged_user_notes = (
+                record.get("user_notes")
+                if record.get("user_notes") is not None
+                else fallback_user_notes
+            )
+            has_pending_merge = (
+                merged_issues != fallback_issues or merged_user_notes != fallback_user_notes
+            )
+
+            conn.execute(
+                update_sql,
+                (
+                    feedback_id,
+                    json.dumps(merged_issues),
+                    merged_user_notes,
+                    dedupe_key,
+                ),
+            )
+            return merged_issues, merged_user_notes, has_pending_merge
 
     async def merge_feedback_update(
         self,
@@ -581,6 +819,43 @@ class UserFeedbackStore:
         else:
             return feedback
         return []
+
+    async def get_feedback_by_id(self, feedback_id: str) -> Optional[dict[str, Any]]:
+        """Get a single feedback record by its id."""
+        select_sql = "SELECT * FROM conversation_feedback WHERE id = %s"
+        if self.db.backend_type == BackendType.SQLITE:
+            select_sql = select_sql.replace('%s', '?')
+
+        try:
+            cursor = self.db.execute_query(select_sql, (feedback_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            fb = dict(row)
+            fb["document_ids"] = json.loads(fb["document_ids"]) if fb.get("document_ids") else []
+            fb["chunk_ids"] = json.loads(fb["chunk_ids"]) if fb.get("chunk_ids") else []
+            fb["issues"] = json.loads(fb["issues"]) if fb.get("issues") else []
+            helpful_value = fb.get("helpful")
+            fb["helpful"] = None if helpful_value is None else bool(helpful_value)
+            return fb
+        except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.error(f"Failed to get feedback by id: {exc}")
+            return None
+
+    async def delete_feedback(self, feedback_id: str) -> bool:
+        """Delete a feedback record by id. Returns True if a row was deleted."""
+        delete_sql = "DELETE FROM conversation_feedback WHERE id = %s"
+        if self.db.backend_type == BackendType.SQLITE:
+            delete_sql = delete_sql.replace('%s', '?')
+
+        try:
+            with self.db.transaction() as conn:
+                cursor = conn.execute(delete_sql, (feedback_id,))
+                deleted = getattr(cursor, "rowcount", 0) or 0
+                return deleted > 0
+        except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.error(f"Failed to delete feedback {feedback_id}: {exc}")
+            raise
 
 
 class UnifiedFeedbackSystem:

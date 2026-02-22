@@ -265,7 +265,7 @@ const SelectStep: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <Spin size="large" />
-        <p className="mt-4 text-textMuted">
+        <p className="mt-4 text-text-muted">
           {t("workflows:analyzeBook.reading", "Reading book file...")}
         </p>
       </div>
@@ -279,11 +279,11 @@ const SelectStep: React.FC = () => {
           type="success"
           showIcon
           icon={<CheckCircle className="h-4 w-4" />}
-          message={t("workflows:analyzeBook.bookSelected", "Book selected")}
+          title={t("workflows:analyzeBook.bookSelected", "Book selected")}
           description={
             <div className="mt-2">
               <p className="font-medium">{bookInfo.title}</p>
-              <p className="text-xs text-textMuted flex items-center gap-1 mt-1">
+              <p className="text-xs text-text-muted flex items-center gap-1 mt-1">
                 <FileText className="h-3 w-3" />
                 {bookInfo.fileType.toUpperCase()} -{" "}
                 {bookInfo.content.length.toLocaleString()} characters
@@ -316,7 +316,7 @@ const SelectStep: React.FC = () => {
           className="border-dashed"
         >
           <p className="ant-upload-drag-icon">
-            <UploadIcon className="h-12 w-12 mx-auto text-textMuted" />
+            <UploadIcon className="h-12 w-12 mx-auto text-text-muted" />
           </p>
           <p className="ant-upload-text">
             {t(
@@ -324,7 +324,7 @@ const SelectStep: React.FC = () => {
               "Click or drag file to upload"
             )}
           </p>
-          <p className="ant-upload-hint text-xs text-textMuted">
+          <p className="ant-upload-hint text-xs text-text-muted">
             {t(
               "workflows:analyzeBook.supportedFormats",
               "Supports PDF, EPUB, TXT, MD, DOC, DOCX"
@@ -452,7 +452,7 @@ const ChunkingStep: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <Spin size="large" />
-        <p className="mt-4 text-textMuted">
+        <p className="mt-4 text-text-muted">
           {t("workflows:analyzeBook.detecting", "Detecting chapters...")}
         </p>
       </div>
@@ -468,7 +468,7 @@ const ChunkingStep: React.FC = () => {
         <h3 className="text-sm font-medium text-text">
           {t("workflows:analyzeBook.chapterDetection", "Chapter Detection")}
         </h3>
-        <span className="text-xs text-textMuted">
+        <span className="text-xs text-text-muted">
           {t("workflows:analyzeBook.foundChapters", "Found {{count}} chapters", {
             count: chapters.length
           })}
@@ -480,7 +480,7 @@ const ChunkingStep: React.FC = () => {
           type="warning"
           showIcon
           icon={<AlertTriangle className="h-4 w-4" />}
-          message={t(
+          title={t(
             "workflows:analyzeBook.chunkingWarning",
             "{{count}} chapters may need review",
             { count: warningCount }
@@ -499,7 +499,7 @@ const ChunkingStep: React.FC = () => {
       </div>
 
       <div className="border-t border-border pt-4">
-        <label className="text-xs font-medium text-textMuted block mb-2">
+        <label className="text-xs font-medium text-text-muted block mb-2">
           {t("workflows:analyzeBook.chapterPattern", "Chapter Pattern (RegEx)")}
         </label>
         <div className="flex gap-2">
@@ -525,15 +525,15 @@ const ChapterCard: React.FC<{ chapter: Chapter }> = ({ chapter }) => {
   const { t } = useTranslation(["workflows"])
 
   const statusColors = {
-    clean: "border-l-green-500",
-    warning: "border-l-yellow-500",
-    error: "border-l-red-500"
+    clean: "border-l-success",
+    warning: "border-l-warn",
+    error: "border-l-danger"
   }
 
   const statusIcons = {
-    clean: <CheckCircle className="h-4 w-4 text-green-500" />,
-    warning: <AlertTriangle className="h-4 w-4 text-yellow-500" />,
-    error: <AlertTriangle className="h-4 w-4 text-red-500" />
+    clean: <CheckCircle className="h-4 w-4 text-success" />,
+    warning: <AlertTriangle className="h-4 w-4 text-warn" />,
+    error: <AlertTriangle className="h-4 w-4 text-danger" />
   }
 
   return (
@@ -548,15 +548,15 @@ const ChapterCard: React.FC<{ chapter: Chapter }> = ({ chapter }) => {
             Chapter {chapter.number}: {chapter.title}
           </span>
         </div>
-        <span className="text-xs text-textMuted">
+        <span className="text-xs text-text-muted">
           {chapter.wordCount.toLocaleString()}w
         </span>
       </div>
-      <p className="text-xs text-textMuted mt-2 line-clamp-2">
+      <p className="text-xs text-text-muted mt-2 line-clamp-2">
         {chapter.preview}
       </p>
       {chapter.status === "warning" && (
-        <p className="text-xs text-yellow-600 mt-1">
+        <p className="text-xs text-warn mt-1">
           {chapter.wordCount < 100
             ? t("workflows:analyzeBook.tooShort", "Too short - may be incomplete")
             : t("workflows:analyzeBook.tooLong", "Very long - consider splitting")}
@@ -662,7 +662,7 @@ const ConfigureStep: React.FC = () => {
           onChange={(e) => setPreset(e.target.value)}
           className="w-full"
         >
-          <Space direction="vertical" className="w-full">
+          <Space orientation="vertical" className="w-full">
             {presetOptions.map((option) => (
               <Radio
                 key={option.value}
@@ -671,7 +671,7 @@ const ConfigureStep: React.FC = () => {
               >
                 <div>
                   <span className="font-medium">{option.label}</span>
-                  <p className="text-xs text-textMuted mt-0.5">
+                  <p className="text-xs text-text-muted mt-0.5">
                     {option.description}
                   </p>
                 </div>
@@ -683,7 +683,7 @@ const ConfigureStep: React.FC = () => {
 
       {preset === "custom" && (
         <div>
-          <label className="text-xs font-medium text-textMuted block mb-2">
+          <label className="text-xs font-medium text-text-muted block mb-2">
             {t("workflows:analyzeBook.customPrompt", "Custom Analysis Prompt")}
           </label>
           <TextArea
@@ -892,9 +892,9 @@ const ProcessStep: React.FC = () => {
         percent={progress}
         className="w-64 mt-6"
         status="active"
-        strokeColor={{ from: "#108ee9", to: "#87d068" }}
+        strokeColor={{ from: "rgb(var(--color-primary))", to: "rgb(var(--color-success))" }}
       />
-      <p className="mt-4 text-textMuted">
+      <p className="mt-4 text-text-muted">
         {config?.scope === "per-chapter"
           ? t(
               "workflows:analyzeBook.analyzingChapter",
@@ -984,7 +984,7 @@ const ReviewStep: React.FC = () => {
   if (!analysis) {
     return (
       <div className="flex items-center justify-center py-12">
-        <p className="text-textMuted">
+        <p className="text-text-muted">
           {t("workflows:analyzeBook.noAnalysis", "No analysis available")}
         </p>
       </div>
@@ -997,7 +997,7 @@ const ReviewStep: React.FC = () => {
         type="success"
         showIcon
         icon={<CheckCircle className="h-4 w-4" />}
-        message={t(
+        title={t(
           "workflows:analyzeBook.analysisComplete",
           "Analysis Complete"
         )}

@@ -1,6 +1,7 @@
 import { lazy, type ComponentType, type ReactNode } from "react"
 import OptionLayout from "~/components/Layouts/Layout"
 import { SettingsLayout } from "~/components/Layouts/SettingsOptionLayout"
+import { RouteErrorBoundary } from "@/components/Common/RouteErrorBoundary"
 
 type SettingsRouteProps = {
   children: ReactNode
@@ -8,7 +9,9 @@ type SettingsRouteProps = {
 
 export const SettingsRoute = ({ children }: SettingsRouteProps) => (
   <OptionLayout hideHeader>
-    <SettingsLayout>{children}</SettingsLayout>
+    <RouteErrorBoundary routeId="settings" routeLabel="Settings">
+      <SettingsLayout>{children}</SettingsLayout>
+    </RouteErrorBoundary>
   </OptionLayout>
 )
 
@@ -17,11 +20,11 @@ type SettingsModule = {
   [key: string]: ComponentType | undefined
 }
 
-export const createSettingsRoute = (
+export function createSettingsRoute(
   loader: () => Promise<SettingsModule>,
   exportName: string = "default"
-) =>
-  lazy(async () => {
+) {
+  return lazy(async () => {
     const module = await loader()
     const Page =
       exportName === "default" ? module.default : module[exportName]
@@ -38,3 +41,4 @@ export const createSettingsRoute = (
 
     return { default: Wrapped }
   })
+}

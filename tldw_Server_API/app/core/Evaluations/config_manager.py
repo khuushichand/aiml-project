@@ -178,7 +178,7 @@ class EvaluationsConfigManager:
             # Calculate file hash to detect changes
             with open(self.config_path, 'rb') as f:
                 content = f.read()
-                new_hash = hashlib.md5(content).hexdigest()
+                new_hash = hashlib.md5(content, usedforsecurity=False).hexdigest()
 
             # Skip if file hasn't changed
             if self._config_hash == new_hash:
@@ -300,7 +300,7 @@ class EvaluationsConfigManager:
                     # Check if file has been modified
                     with open(self.config_path, 'rb') as f:
                         content = f.read()
-                        current_hash = hashlib.md5(content).hexdigest()
+                        current_hash = hashlib.md5(content, usedforsecurity=False).hexdigest()
 
                     if current_hash != self._config_hash:
                         logger.info("Configuration file changed, reloading...")

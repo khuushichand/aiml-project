@@ -378,6 +378,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
       >
         <button
           type="button"
+          data-testid="agent-workspace-selector"
           className={`flex items-center gap-2 rounded-lg bg-surface2 px-3 py-2 transition-colors hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 ${className} ${isSelecting ? "opacity-70 cursor-wait" : ""}`}
           aria-label={selectedWorkspace?.name || t("selectWorkspace", "Select Workspace")}
           aria-haspopup="menu"

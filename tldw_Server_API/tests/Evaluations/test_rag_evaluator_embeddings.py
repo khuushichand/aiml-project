@@ -39,7 +39,7 @@ class TestRAGEvaluatorEmbeddings:
     async def test_evaluator_initialization_fallback(self):
         """Test that RAGEvaluator falls back gracefully when embeddings fail."""
         with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.create_embedding') as mock_create:
-            mock_create.side_effect = Exception("API key not found")
+            mock_create.side_effect = RuntimeError("API key not found")
 
             evaluator = RAGEvaluator()
 
@@ -82,7 +82,7 @@ class TestRAGEvaluatorEmbeddings:
         evaluator.embedding_available = True  # Initially available
 
         # Make embeddings fail
-        mock_create_embedding.side_effect = Exception("Embedding service unavailable")
+        mock_create_embedding.side_effect = RuntimeError("Embedding service unavailable")
 
         with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread') as mock_thread:
             mock_thread.return_value = "4"  # LLM returns score of 4
@@ -104,7 +104,7 @@ class TestRAGEvaluatorEmbeddings:
         evaluator.embedding_available = False  # Force LLM path
 
         with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread') as mock_thread:
-            mock_thread.side_effect = Exception("LLM API error")
+            mock_thread.side_effect = RuntimeError("LLM API error")
 
             with pytest.raises(ValueError) as exc_info:
                 await evaluator._evaluate_answer_similarity(

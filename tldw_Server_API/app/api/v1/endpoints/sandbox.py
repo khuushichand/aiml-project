@@ -74,6 +74,11 @@ from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import (
+    is_explicit_pytest_runtime,
+    is_test_mode,
+    is_truthy,
+)
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
 
 _SANDBOX_NONCRITICAL_EXCEPTIONS = (
@@ -146,13 +151,21 @@ _service = SandboxService()
 
 def _is_admin_user(user: User) -> bool:
     try:
-        if bool(getattr(user, "is_admin", False)):
+        roles = {
+            str(role).strip().lower()
+            for role in (getattr(user, "roles", []) or [])
+            if str(role).strip()
+        }
+        permissions = {
+            str(perm).strip().lower()
+            for perm in (getattr(user, "permissions", []) or [])
+            if str(perm).strip()
+        }
+        if "admin" in roles:
             return True
-    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-        pass
-    try:
-        roles = getattr(user, "roles", None)
-        if roles and "admin" in roles:
+        if "*" in permissions:
+            return True
+        if "system.configure" in permissions:
             return True
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         pass
@@ -232,9 +245,10 @@ async def _resolve_sandbox_ws_user_id(
             primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
             if primary_key:
                 allowed_keys.add(primary_key)
-            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-            if test_key:
-                allowed_keys.add(test_key)
+            if is_explicit_pytest_runtime():
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if test_key:
+                    allowed_keys.add(test_key)
             if api_key in allowed_keys and is_single_user_ip_allowed(client_ip, settings):
                 return int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
             raise HTTPException(status_code=401, detail="invalid_api_key")
@@ -445,7 +459,7 @@ async def create_session(
                     rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     rt = str(rt_attr) if rt_attr is not None else "unknown"
-            logger.exception("RuntimeUnavailable error occurred on sandbox session creation: %s", str(e))
+            logger.exception("RuntimeUnavailable error occurred on sandbox session creation: {}", str(e))
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",
@@ -1110,7 +1124,7 @@ async def start_run(
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             signed_env = None
         if signed_env is not None:
-            signed_flag = str(signed_env).strip().lower() in {"1","true","yes","on","y"}
+            signed_flag = is_truthy(signed_env)
         else:
             signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
         secret_env = None
@@ -1404,7 +1418,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     try:
         signed_env = os.getenv("SANDBOX_WS_SIGNED_URLS")
         if signed_env is not None:
-            signed_flag = str(signed_env).strip().lower() in {"1", "true", "yes", "on", "y"}
+            signed_flag = is_truthy(signed_env)
         else:
             signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -1443,9 +1457,9 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             test_mode = False
         with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-            test_mode = test_mode or str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+            test_mode = test_mode or is_test_mode()
         try:
-            allow_untracked = str(os.getenv("SANDBOX_WS_ALLOW_UNTRACKED_RUNS", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+            allow_untracked = is_truthy(os.getenv("SANDBOX_WS_ALLOW_UNTRACKED_RUNS", ""))
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             allow_untracked = False
         if test_mode or allow_untracked:
@@ -1537,7 +1551,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     # the client immediately receives non-heartbeat messages.
     try:
         _synth_env = os.getenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS")
-        synth_enabled = str(_synth_env).strip().lower() in {"1", "true", "yes", "on", "y"}
+        synth_enabled = is_truthy(_synth_env)
         if synth_enabled:
             st = _service.get_run(run_id)
             try:

@@ -20,23 +20,23 @@ const PRESETS: PresetConfig[] = [
   {
     name: "fast",
     label: "Fast",
-    description: "Quick results, FTS only",
+    description: "Fastest - text matching only",
     icon: Zap,
-    color: "text-yellow-500",
+    color: "text-warn",
   },
   {
     name: "balanced",
     label: "Balanced",
-    description: "Hybrid search + reranking",
+    description: "Recommended - combines text and meaning",
     icon: Scale,
-    color: "text-blue-500",
+    color: "text-primary",
   },
   {
     name: "thorough",
     label: "Thorough",
-    description: "Deep search + verification",
+    description: "Most thorough - includes fact-checking",
     icon: Brain,
-    color: "text-purple-500",
+    color: "text-accent",
   },
   {
     name: "custom",
@@ -53,7 +53,7 @@ const RESEARCH_PRESET: PresetConfig = {
   label: "Research",
   description: "Max verification + citations",
   icon: Beaker,
-  color: "text-green-500",
+  color: "text-success",
 }
 
 export function PresetSelector() {
@@ -165,23 +165,22 @@ export function PresetSelector() {
 function PresetDetails({ preset }: { preset: RagPresetName }) {
   const details = {
     fast: [
-      "Search: Full-text only",
-      "Top-K: 5 results",
-      "Reranking: Disabled",
-      "Max tokens: 300",
+      "Uses keyword text matching only",
+      "Returns a smaller set of sources quickly",
+      "Skips extra ranking steps for speed",
+      "Generates shorter answers",
     ],
     balanced: [
-      "Search: Hybrid (FTS + Vector)",
-      "Top-K: 10 results",
-      "Reranking: FlashRank",
-      "Max tokens: 800",
+      "Combines keyword and semantic search",
+      "Returns a medium number of sources",
+      "Applies ranking for better relevance",
+      "Generates medium-length answers",
     ],
     thorough: [
-      "Search: Hybrid (0.7 vector weight)",
-      "Top-K: 20 results",
-      "Reranking: Two-tier",
-      "Claims verification: Enabled",
-      "Post-verification: Enabled",
+      "Searches broadly across more sources",
+      "Runs stronger ranking and verification checks",
+      "Optimized for accuracy over speed",
+      "Can take noticeably longer to complete",
     ],
     custom: [
       "Using your custom settings",

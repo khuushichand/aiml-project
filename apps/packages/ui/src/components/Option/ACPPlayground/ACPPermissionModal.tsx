@@ -9,29 +9,23 @@ import {
   Clock,
   Wrench,
 } from "lucide-react"
-import { useACPSessionsStore } from "@/store/acp-sessions"
-import { useACPSession } from "@/hooks/useACPSession"
 import { UI_CONFIG } from "@/services/acp/constants"
 import type { ACPPendingPermission, ACPPermissionTier } from "@/services/acp/types"
 
-export const ACPPermissionModal: React.FC = () => {
+interface ACPPermissionModalProps {
+  pendingPermissions: ACPPendingPermission[]
+  approvePermission: (requestId: string, batchApproveTier?: ACPPermissionTier) => void
+  denyPermission: (requestId: string) => void
+}
+
+export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
+  pendingPermissions,
+  approvePermission,
+  denyPermission,
+}) => {
   const { t } = useTranslation(["playground", "common"])
 
   const [batchApprove, setBatchApprove] = useState(false)
-
-  // Store
-  const activeSessionId = useACPSessionsStore((s) => s.activeSessionId)
-  const activeSession = useACPSessionsStore((s) =>
-    s.activeSessionId ? s.getSession(s.activeSessionId) : undefined
-  )
-
-  // WebSocket connection
-  const { approvePermission, denyPermission } = useACPSession({
-    sessionId: activeSessionId ?? undefined,
-    autoConnect: false, // Already connected from chat panel
-  })
-
-  const pendingPermissions = activeSession?.pendingPermissions || []
   const currentPermission = pendingPermissions[0]
 
   if (!currentPermission) {
@@ -156,7 +150,13 @@ export const ACPPermissionModal: React.FC = () => {
           <Progress
             percent={progressPercent}
             showInfo={false}
-            strokeColor={progressPercent < 20 ? "#ef4444" : progressPercent < 50 ? "#f59e0b" : "#22c55e"}
+            strokeColor={
+              progressPercent < 20
+                ? "rgb(var(--color-danger))"
+                : progressPercent < 50
+                  ? "rgb(var(--color-warn))"
+                  : "rgb(var(--color-success))"
+            }
             size="small"
           />
         </div>

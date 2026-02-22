@@ -21,6 +21,10 @@ class AuthnzRateLimitsRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres_backend(self) -> bool:
+        """Return True when the underlying DatabasePool is using PostgreSQL."""
+        return bool(getattr(self.db_pool, "pool", None))
+
     async def ensure_schema(self) -> None:
         """
         Ensure the AuthNZ rate-limiter tables exist for the configured backend.
@@ -92,7 +96,7 @@ class AuthnzRateLimitsRepo:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if self.db_pool.pool:
+                if self._is_postgres_backend():
                     for sql in ddl_postgres:
                         await conn.execute(sql)
                 else:
@@ -100,9 +104,9 @@ class AuthnzRateLimitsRepo:
                         await conn.execute(sql)
                     try:
                         await conn.commit()
-                    except Exception:
+                    except Exception as commit_error:
                         # aiosqlite transaction manager may commit outside; ignore
-                        pass
+                        logger.debug("Rate limits repo explicit commit failed; transaction manager likely committed", exc_info=commit_error)
         except Exception as exc:
             logger.error(f"AuthnzRateLimitsRepo.ensure_schema failed: {exc}")
             raise
@@ -118,7 +122,7 @@ class AuthnzRateLimitsRepo:
         not report an accurate rowcount).
         """
         try:
-            if self.db_pool.pool:
+            if self._is_postgres_backend():
                 rows = await self.db_pool.fetch(
                     """
                     DELETE FROM rate_limits
@@ -165,7 +169,7 @@ class AuthnzRateLimitsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     result = await conn.fetchval(
                         """
                         INSERT INTO rate_limits (identifier, endpoint, request_count, window_start)
@@ -227,7 +231,7 @@ class AuthnzRateLimitsRepo:
         Fetch the ``request_count`` for a specific rate-limit bucket.
         """
         try:
-            if self.db_pool.pool:
+            if self._is_postgres_backend():
                 value = await self.db_pool.fetchval(
                     """
                     SELECT request_count
@@ -266,7 +270,7 @@ class AuthnzRateLimitsRepo:
         Return a tuple of distinct endpoints seen for an identifier in ``rate_limits``.
         """
         try:
-            if self.db_pool.pool:
+            if self._is_postgres_backend():
                 rows = await self.db_pool.fetch(
                     "SELECT DISTINCT endpoint FROM rate_limits WHERE identifier = $1",
                     identifier,
@@ -300,7 +304,7 @@ class AuthnzRateLimitsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 deleted = 0
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     if endpoint:
                         result = await conn.execute(
                             """
@@ -381,7 +385,7 @@ class AuthnzRateLimitsRepo:
         """
         try:
             # SQLite stores window_start as TEXT; Postgres uses TIMESTAMPTZ.
-            is_postgres = bool(getattr(self.db_pool, "pool", None))
+            is_postgres = self._is_postgres_backend()
             cutoff_param: Any = cutoff if is_postgres else cutoff.isoformat()
 
             rows_raw = await self.db_pool.fetch(
@@ -457,7 +461,7 @@ class AuthnzRateLimitsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     # PostgreSQL - use ON CONFLICT with window-reset semantics
                     result = await conn.fetchrow(
                         """
@@ -531,7 +535,7 @@ class AuthnzRateLimitsRepo:
                 if is_locked:
                     lockout_expires = now + timedelta(minutes=lockout_duration_minutes)
                     reason = f"Too many failed {attempt_type} attempts"
-                    if hasattr(conn, "fetchrow"):
+                    if self._is_postgres_backend():
                         await conn.execute(
                             """
                             INSERT INTO account_lockouts (identifier, locked_until, reason)
@@ -575,7 +579,7 @@ class AuthnzRateLimitsRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     row = await conn.fetchrow(
                         """
                         SELECT locked_until
@@ -631,7 +635,7 @@ class AuthnzRateLimitsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     await conn.execute(
                         """
                         DELETE FROM failed_attempts

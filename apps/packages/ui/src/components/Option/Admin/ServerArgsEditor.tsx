@@ -143,7 +143,7 @@ export const ServerArgsEditor: React.FC<ServerArgsEditorProps> = ({
           {jsonError && (
             <Alert
               type="error"
-              message={jsonError}
+              title={jsonError}
               className="mt-2"
               showIcon
             />

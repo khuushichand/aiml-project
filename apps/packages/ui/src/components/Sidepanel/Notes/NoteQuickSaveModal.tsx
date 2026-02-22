@@ -1,5 +1,5 @@
 import React from "react"
-import { Input, Modal, Space, Typography } from "antd"
+import { Button, Input, Modal, Space, Typography } from "antd"
 
 type NoteQuickSaveModalProps = {
   open: boolean
@@ -17,10 +17,12 @@ type NoteQuickSaveModalProps = {
   sourceLabel?: string
   helperText?: string
   titleRequiredText?: string
+  generateFlashcardsText?: string
   onTitleChange: (value: string) => void
   onContentChange: (value: string) => void
   onCancel: () => void
   onSave: () => void
+  onGenerateFlashcards?: () => void
 }
 
 const NoteQuickSaveModal: React.FC<NoteQuickSaveModalProps> = ({
@@ -39,24 +41,48 @@ const NoteQuickSaveModal: React.FC<NoteQuickSaveModalProps> = ({
   sourceLabel,
   helperText,
   titleRequiredText,
+  generateFlashcardsText,
   onTitleChange,
   onContentChange,
   onCancel,
-  onSave
+  onSave,
+  onGenerateFlashcards
 }) => {
   return (
     <Modal
       centered
       open={open}
       title={modalTitle || "Save to Notes"}
-      okText={saveText || "Save"}
-      cancelText={cancelText || "Cancel"}
       onCancel={onCancel}
-      onOk={onSave}
-      okButtonProps={{ loading, disabled: loading }}
+      footer={[
+        <Button key="cancel" onClick={onCancel}>
+          {cancelText || "Cancel"}
+        </Button>,
+        ...(onGenerateFlashcards
+          ? [
+              <Button
+                key="generate-flashcards"
+                onClick={onGenerateFlashcards}
+                disabled={loading || !content.trim()}
+                data-testid="note-quick-save-generate-flashcards"
+              >
+                {generateFlashcardsText || "Generate flashcards"}
+              </Button>
+            ]
+          : []),
+        <Button
+          key="save"
+          type="primary"
+          onClick={onSave}
+          loading={loading}
+          disabled={loading}
+        >
+          {saveText || "Save"}
+        </Button>
+      ]}
       maskClosable={false}
     >
-      <Space direction="vertical" size="middle" className="w-full">
+      <Space orientation="vertical" size="middle" className="w-full">
         <div className="space-y-1">
           <div className="flex items-center justify-between gap-2">
             <Typography.Text strong>

@@ -1,33 +1,22 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_rate_limit,
-    get_auth_principal,
+    require_roles,
 )
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.services import admin_personalization_service
 
 router = APIRouter()
 
-
-def _require_admin(principal: AuthPrincipal) -> None:
-    if not (principal.is_admin or ("admin" in (principal.roles or []))):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
-
-
 @router.post(
     "/personalization/consolidate",
     response_model=dict,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
 )
 async def trigger_personalization_consolidation(
     user_id: str | None = Query(None, description="User ID to consolidate; defaults to single-user id"),
-    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> dict:
     """
     Trigger personalization consolidation (admin scope).
@@ -39,18 +28,14 @@ async def trigger_personalization_consolidation(
     Returns:
         Consolidation trigger result payload.
     """
-    _require_admin(principal)
     return await admin_personalization_service.trigger_consolidation(user_id=user_id)
 
 
 @router.get(
     "/personalization/status",
     response_model=dict,
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
 )
-async def get_personalization_status(
-    principal: AuthPrincipal = Depends(get_auth_principal),
-) -> dict:
+async def get_personalization_status() -> dict:
     """Return personalization consolidation status (admin scope)."""
-    _require_admin(principal)
     return await admin_personalization_service.get_status()

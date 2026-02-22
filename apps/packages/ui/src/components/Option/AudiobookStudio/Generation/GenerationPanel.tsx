@@ -133,7 +133,7 @@ export const GenerationPanel: React.FC = () => {
           type="warning"
           showIcon
           icon={<AlertCircle className="h-4 w-4" />}
-          message={t(
+          title={t(
             "audiobook:generation.browserWarningTitle",
             "Browser TTS cannot export audio"
           )}
@@ -323,14 +323,14 @@ export const GenerationPanel: React.FC = () => {
               <Text>
                 {t("audiobook:generation.completed", "Completed:")}
               </Text>
-              <Text strong className="text-green-600">
+              <Text strong className="text-success">
                 {completedCount}/{chapters.length}
               </Text>
             </div>
             {errorCount > 0 && (
               <div className="flex items-center gap-2">
                 <Text>{t("audiobook:generation.errors", "Errors:")}</Text>
-                <Text strong className="text-red-500">
+                <Text strong className="text-danger">
                   {errorCount}
                 </Text>
               </div>
@@ -346,7 +346,7 @@ export const GenerationPanel: React.FC = () => {
           <Progress
             percent={progress}
             status={isGenerating ? "active" : errorCount > 0 ? "exception" : "normal"}
-            strokeColor={errorCount > 0 ? undefined : { from: "#108ee9", to: "#87d068" }}
+            strokeColor={errorCount > 0 ? undefined : { from: "rgb(var(--color-primary))", to: "rgb(var(--color-success))" }}
           />
 
           {isGenerating && currentIndex >= 0 && (
@@ -396,7 +396,7 @@ export const GenerationPanel: React.FC = () => {
               type="success"
               showIcon
               icon={<Check className="h-4 w-4" />}
-              message={t(
+              title={t(
                 "audiobook:generation.allComplete",
                 "All chapters generated successfully!"
               )}

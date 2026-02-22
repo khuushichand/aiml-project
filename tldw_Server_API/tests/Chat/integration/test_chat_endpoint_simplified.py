@@ -8,7 +8,9 @@ from fastapi import status
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAuthenticationError
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
@@ -165,6 +167,80 @@ def test_chat_completion_invalid_model(authenticated_client, mock_chacha_db, set
         assert response.status_code >= 400
 
 
+def test_chat_completion_explicit_model_unavailable_returns_400(
+    authenticated_client, mock_chacha_db, setup_dependencies, monkeypatch
+):
+    """Explicit unavailable models should fail fast with a 400 response."""
+    monkeypatch.setenv("CHAT_ENFORCE_STRICT_MODEL_SELECTION", "1")
+
+    request_data = ChatCompletionRequest(
+        model="missing-model-123",
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+    )
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.is_model_known_for_provider",
+            return_value=False,
+        ),
+    ):
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        detail = response.json().get("detail", {})
+        assert detail.get("error_code") == "model_not_available"
+        assert detail.get("provider") == "openai"
+        assert detail.get("model") == "missing-model-123"
+        mock_llm.assert_not_called()
+
+
+def test_chat_completion_disables_provider_fallback_for_explicit_model(
+    authenticated_client, mock_chacha_db, setup_dependencies, monkeypatch
+):
+    """Strict explicit model selection should disable provider fallback for the request."""
+    monkeypatch.setenv("CHAT_ENFORCE_STRICT_MODEL_SELECTION", "1")
+
+    request_data = ChatCompletionRequest(
+        model="gpt-4o-mini",
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_execute_non_stream_call(**kwargs):
+        captured["selected_provider"] = kwargs.get("selected_provider")
+        captured["enable_provider_fallback"] = kwargs.get("enable_provider_fallback")
+        return {
+            "id": "chatcmpl-test",
+            "choices": [
+                {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+            ],
+        }
+
+    provider_manager = MagicMock()
+    provider_manager.circuit_breakers = {}
+    provider_manager.get_available_provider = MagicMock(return_value="anthropic")
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.execute_non_stream_call", side_effect=fake_execute_non_stream_call),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.get_provider_manager", return_value=provider_manager),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.is_model_known_for_provider",
+            return_value=True,
+        ),
+    ):
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+        assert response.status_code == status.HTTP_200_OK
+        assert captured.get("selected_provider") == "openai"
+        assert captured.get("enable_provider_fallback") is False
+        provider_manager.get_available_provider.assert_not_called()
+
+
 def test_chat_completion_revalidates_default_model(authenticated_client, mock_chacha_db, setup_dependencies):
     """Ensure default model selection is revalidated against provider overrides."""
 
@@ -227,6 +303,97 @@ def test_chat_completion_default_model_tracks_model(authenticated_client, mock_c
 
         assert response.status_code == status.HTTP_200_OK
         assert captured.get("model") == "default-model"
+
+
+def test_chat_completion_openai_oauth_auth_failure_retries_once(
+    authenticated_client,
+    mock_chacha_db,
+    setup_dependencies,
+):
+    request_data = ChatCompletionRequest(
+        model="gpt-4o-mini",
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+    )
+    forced_refresh_flags: list[bool] = []
+
+    async def _resolve_byok(provider: str, *_args, **kwargs):
+        forced = bool(kwargs.get("force_oauth_refresh", False))
+        forced_refresh_flags.append(forced)
+        api_key = "oauth-refreshed-key" if forced else "oauth-initial-key"
+        return ResolvedByokCredentials(
+            provider=provider,
+            api_key=api_key,
+            app_config=None,
+            credential_fields={},
+            source="user",
+            allowlisted=True,
+            auth_source="oauth",
+        )
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.resolve_byok_credentials", side_effect=_resolve_byok),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+    ):
+        mock_llm.side_effect = [
+            ChatAuthenticationError("expired oauth access token", provider="openai"),
+            {
+                "id": "chatcmpl-test",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "Recovered after refresh"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        ]
+
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+    assert response.status_code == status.HTTP_200_OK
+    assert mock_llm.call_count == 2
+    assert forced_refresh_flags[:2] == [False, True]
+
+
+def test_chat_completion_openai_oauth_reconnect_required_after_second_auth_failure(
+    authenticated_client,
+    mock_chacha_db,
+    setup_dependencies,
+):
+    request_data = ChatCompletionRequest(
+        model="gpt-4o-mini",
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+    )
+
+    async def _resolve_byok(provider: str, *_args, **kwargs):
+        forced = bool(kwargs.get("force_oauth_refresh", False))
+        api_key = "oauth-refreshed-key" if forced else "oauth-initial-key"
+        return ResolvedByokCredentials(
+            provider=provider,
+            api_key=api_key,
+            app_config=None,
+            credential_fields={},
+            source="user",
+            allowlisted=True,
+            auth_source="oauth",
+        )
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.resolve_byok_credentials", side_effect=_resolve_byok),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+    ):
+        mock_llm.side_effect = [
+            ChatAuthenticationError("expired oauth access token", provider="openai"),
+            ChatAuthenticationError("oauth refresh token revoked", provider="openai"),
+        ]
+
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    detail = response.json().get("detail", {})
+    assert detail.get("error_code") == "oauth_reconnect_required"
+    assert detail.get("reconnect_required") is True
 
 
 def test_chat_completion_with_conversation_history(authenticated_client, mock_chacha_db, setup_dependencies):

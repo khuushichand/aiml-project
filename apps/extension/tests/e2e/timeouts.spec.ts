@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 import http from 'node:http'
@@ -104,7 +105,7 @@ test.describe('Timeouts', () => {
     const url = `http://127.0.0.1:${addr.port}`
 
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
     await page.goto(optionsUrl + '#/settings/tldw', {
       waitUntil: 'domcontentloaded'
     })
@@ -136,7 +137,7 @@ test.describe('Timeouts', () => {
     const url = `http://127.0.0.1:${addr.port}`
 
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Seed tldwConfig with a short chat stream idle timeout
     await page.evaluate(

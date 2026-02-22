@@ -14,8 +14,8 @@ Remaining Items:
 - Post-GA enhancements: collaborative chatbooks, delta exports, scheduled backups, analytics dashboards, third-party packaging.
 
 - **Document Owner:** tldw_server core team (product + backend)
-- **Last Updated:** 2025-12-29
-- **Status:** In progress (v1 metadata-complete exports live; v2 large-binary bundling planned)
+- **Last Updated:** 2026-02-08
+- **Status:** In progress (v1 exports complete; import framework complete for core types; import content parity, advanced conflict resolution, and v2 bundling planned)
 
 ---
 
@@ -110,6 +110,8 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 
    For content types not listed or where safe merging is ambiguous, `merge` behaves like `rename` by default (the imported entity is created with a new identifier and provenance).
 
+   > **v1 GA simplification (2026-02-08):** The full per-type merge semantics described above require a revision system in ChaChaNotes that does not currently exist for notes, characters, or prompts. For v1 GA, `merge` will behave as "append-only union with `rename` fallback on ambiguity" across all content types. Full revision-based merge semantics are deferred to post-GA. See `Docs/Product/Chatbooks_IMPLEMENTATION_PLAN.md` Stage 3c for details.
+
    **Conflict strategies (high level)**
 
    - `skip`: When a conflict is detected for a given identity key, the existing entity is left unchanged and the conflicting imported entity is omitted, with a per-item warning recorded in job results.
@@ -134,16 +136,16 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 5. **Validation & Quotas**
    - ChatbookValidator applies file integrity checks, path sanitization, zip bomb protection, metadata bounds, and conflict detection.
    - For chat dictionaries embedded in chatbooks, the Chat dictionary validator (see `Docs/Product/Chatbook-Tools-PRD.md`) is invoked during `/api/v1/chatbooks/import` to perform schema, regex, and template validation. Its findings are surfaced via per-item warnings/errors in job results, and when `CHATBOOKS_IMPORT_DICT_STRICT=true`, dictionaries with fatal validation errors are skipped rather than imported while the rest of the chatbook continues to process.
-   - QuotaManager enforces tier-based storage usage, daily operation limits, concurrent job caps, and per-file size caps. Errors are actionable and localized. Operators can further disable or restrict specific export/import content types (for example, evaluations or embeddings) via configuration/policy flags to meet local compliance requirements.
+   - QuotaManager enforces tier-based storage usage, daily operation limits, concurrent job caps, and per-file size caps. Errors are actionable and localized. Operators can further disable or restrict specific export/import content types (for example, evaluations or embeddings) via `CHATBOOKS_DISABLED_EXPORT_TYPES` and `CHATBOOKS_DISABLED_IMPORT_TYPES` environment variables (comma-separated content type names). Disabled types are rejected with a 400 error and actionable message when requested via API, and excluded from default "all types" exports/imports. This applies independently to export and import (an operator can disable embedding export but allow embedding import, or vice versa).
    - Per content-type binary size limits define what qualifies as a small/attached binary for bundling in v1; these limits are enforced during export and recorded in the manifest to make bundling decisions auditable.
    - Missing or inconsistent references (for example, manifests referring to media or embeddings that are not present in the archive) are treated as validation errors and surfaced as per-item failures in job results rather than being silently dropped.
    - Evaluation exports respect a configurable per-run row cap (`CHATBOOKS_EVAL_EXPORT_MAX_ROWS`, default 200). When truncation occurs, both manifest entries and API responses flag `truncated: true` and record the applied `max_rows`, and the export returns continuation data so clients can resume the same chatbook export rather than generating multiple chatbooks.
-   - Rate limiting (default 5 exports/minute and 5 imports/minute per user) via RG ingress policies; configurable overrides for privileged roles and service accounts.
+   - Rate limiting (default 5 exports/minute and 5 imports/minute per user) enforced via slowapi decorators on the export/import endpoints, consistent with the existing rate limiting infrastructure used across the API. The term "RG ingress policies" refers to the Resource Governor configuration that manages these per-endpoint rate limits; configurable overrides for privileged roles and service accounts are applied through the same mechanism.
 
 ## 8. Non-Functional Requirements
 
 - **Security:** Reject malicious archives (zip bombs, traversal). Never expose absolute filesystem paths. Avoid logging sensitive data.
-- **Reliability:** Async jobs recover from restarts (idempotent writes, lease renewal). Cleanup keeps storage bounded. Imports use a best-effort strategy with per-item status; partial failures are surfaced in job results instead of being silently dropped or rolled back wholesale.
+- **Reliability:** Async jobs recover from restarts (idempotent writes, lease renewal). Cleanup keeps storage bounded. Imports use a best-effort strategy with per-item status; partial failures are surfaced in job results instead of being silently dropped or rolled back wholesale. **Error recovery:** Partially-written export ZIPs from crashed jobs are left as orphaned temp files until the cleanup service removes them (the cleanup service must handle orphaned temp files under `chatbooks/temp/`, not just expired archives). Mid-import failures do not resume; the user must re-trigger the import, which is safe due to conflict strategies (`skip` prevents duplicates). The cleanup service scope includes: expired archives, metadata for `deleted` jobs, and orphaned temp files from failed/crashed export/import jobs.
 - **Performance:** Sync exports limited to manageable payloads (<128 MB default). Async exports stream ZIP creation to prevent memory spikes. As a target SLO on a representative production profile (for example, 4 vCPU, SSD-backed storage, and local network), imports handle 10k+ items under 5 minutes using streaming I/O.
 - **Observability:** Structured Loguru logs with job context; audit trail entries for compliance. Health endpoint reflects storage readiness. Metrics hooks (post-GA) capture throughput/failures (for example, `chatbooks_exports_total`, `chatbooks_imports_failed_total`, `chatbooks_export_bytes_total`).
 - **Extensibility:** Adding content types requires updates to enums, schemas, service aggregators, and tests; manifest versioning ensures backward compatibility.
@@ -156,6 +158,8 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 - Authentication & authorization (user id, tier) for scoping quotas and access.
 - Unified audit service for compliance logging.
 - Environment configuration: `CHATBOOKS_*`, `USER_DB_BASE_DIR` (defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/` under the project root; override via environment variable or `Config_Files/config.txt`), job tuning variables.
+
+> **Multi-tenant scope note (2026-02-08):** The PRD weaves org/team/user hierarchy throughout (job listing, cleanup, import ownership, cross-scope audit), but the current implementation is single-user scoped. Multi-tenant scoping cross-cuts Stages 3b, 4, and 5 of the implementation plan and depends on the AuthNZ org/team hierarchy being stable. This is tracked as a post-GA cross-cutting concern in the implementation plan rather than being spread implicitly across multiple stages.
 
 ## 10. Success Metrics
 
@@ -182,16 +186,25 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 
 ## 13. Open Questions
 
+> **Note (2026-02-08):** These questions have been open since Dec 2025. Dispositions added below to unblock implementation planning.
+
 1. How should import warnings (renamed items, partial merges) be surfaced in the WebUI beyond basic job logs (for example, toasts vs detail views vs inline diffs)?
+   > **Disposition:** Deferred to WebUI team. The API surfaces per-item warnings in job results; WebUI presentation is a frontend concern. Backend work is not blocked.
+
 2. Do we need checksum verification across instances for compliance workflows, and if so, at what granularity (per-file vs per-chatbook)?
+   > **Disposition:** Yes, per-file SHA-256 checksums should be recorded in the manifest for each bundled file. This is straightforward to implement during export (hash each file as it's written to the ZIP) and verify during import. Per-chatbook checksum (over the entire ZIP) is a nice-to-have but not required for v1 GA since per-file checksums provide sufficient integrity guarantees.
+
 3. For optional client-provided encryption (password-protected archives), what UX/API and key management approach do we want, given that server-managed Chatbooks encryption is out of scope?
+   > **Disposition:** Explicitly deferred to Stage 7 of the implementation plan. No design work needed until post-GA.
 
 
 ## 14. Next Steps
 
 1. Circulate this PRD for stakeholder review (backend, security, product).
-2. Update the document’s “Last Updated” date and publish to internal knowledge base once approved.
-3. Track open questions as backlog issues and prioritize for upcoming sprints.
+2. ~~Update the document's "Last Updated" date and publish to internal knowledge base once approved.~~ (Done 2026-02-08)
+3. ~~Track open questions as backlog issues and prioritize for upcoming sprints.~~ (Dispositions added 2026-02-08; see Section 13)
+4. Split `chatbook_service.py` (~6000+ lines) into export and import service modules before adding remaining import content-type handlers.
+5. Implement GA-blocking items per the implementation plan priority table: import parity for prompts/media, `overwrite` conflict strategy, and explicit warnings for unsupported import types.
 
 ## 15. Implementation Status & TODOs
 
@@ -206,3 +219,11 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 - Evaluation run export is currently capped using `CHATBOOKS_EVAL_EXPORT_MAX_ROWS` (default 200 rows per run); add resumable export support with continuation tokens that append to the same chatbook archive rather than creating multiple chatbooks.
 - Conversation citation metadata is stubbed until upstream storage lands; revisit once citations are persisted in ChaChaNotes.
 - Import flows for prompts, media, evaluations, and derived embeddings need parity with the new export surface (conflict handling, quota application, validation).
+- **Import silent-skip issue (2026-02-08):** The import endpoint currently silently sets unsupported content types to `false` rather than returning a warning. Users uploading a chatbook expecting full import get partial results without a clear indication that certain types were skipped. This should be fixed to return explicit per-type warnings in the job results.
+- **Evaluation continuation token complexity (2026-02-08):** The "continuation tokens that append to the same chatbook archive" requirement involves reopening and appending to a streaming ZIP and updating the manifest in-place — substantially more complex than the single bullet point suggests. A simpler v1 alternative: linked chatbook exports (separate ZIPs with a shared `export_id`) rather than same-ZIP appending. See implementation plan Stage 2 notes.
+
+**What's been built incrementally alongside Stage 1 (updated 2026-02-08):**
+- Import framework: `POST /api/v1/chatbooks/import` and `POST /api/v1/chatbooks/preview` endpoints work for conversations, notes, characters, world books, dictionaries. `skip` and `rename` conflict strategies are functional. ChatbookValidator and QuotaManager are wired in.
+- Cleanup: `POST /api/v1/chatbooks/cleanup` endpoint and `chatbooks_cleanup_service.py` scheduled service work. `expired` state transitions function correctly.
+- Observability: `GET /api/v1/chatbooks/health` endpoint (storage checks), counter metrics, and signed URL support are operational.
+- See `Docs/Product/Chatbooks_IMPLEMENTATION_PLAN.md` for full status tracking with done/remaining checklists per stage.

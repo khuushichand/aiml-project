@@ -87,10 +87,15 @@ class TestChatDictionaryService:
         mock_conn.execute.assert_called()
 
         # Check the SQL contains the right values
-        call_args = mock_conn.execute.call_args[0]
-        assert "INSERT INTO chat_dictionaries" in call_args[0]
-        assert "Test Dictionary" in call_args[1]
-        assert "A test dictionary" in call_args[1]
+        calls = mock_conn.execute.call_args_list
+        insert_call = None
+        for current_call in calls:
+            if "INSERT INTO chat_dictionaries" in current_call[0][0]:
+                insert_call = current_call
+                break
+        assert insert_call is not None
+        assert "Test Dictionary" in insert_call[0][1]
+        assert "A test dictionary" in insert_call[0][1]
 
     def test_get_dictionary(self, service, mock_db):
         """Test retrieving a dictionary with its entries."""
@@ -150,10 +155,15 @@ class TestChatDictionaryService:
         mock_conn.execute.assert_called()
 
         # Check the SQL
-        call_args = mock_conn.execute.call_args[0]
-        assert "INSERT INTO dictionary_entries" in call_args[0]
-        assert "test" in call_args[1]
-        assert "replaced" in call_args[1]
+        calls = mock_conn.execute.call_args_list
+        insert_call = None
+        for current_call in calls:
+            if "INSERT INTO dictionary_entries" in current_call[0][0]:
+                insert_call = current_call
+                break
+        assert insert_call is not None
+        assert "test" in insert_call[0][1]
+        assert "replaced" in insert_call[0][1]
 
     def test_process_text_literal_replacement(self, service, mock_db):
         """Test processing text with literal string replacement."""
@@ -253,6 +263,7 @@ class TestChatDictionaryService:
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.rowcount = 1  # Indicate successful deletion
+        mock_cursor.fetchone.return_value = {"id": 1, "deleted": 0}
 
         result = service.delete_dictionary(1)
 
@@ -387,9 +398,14 @@ Description: Test import
         mock_conn.execute.assert_called()
 
         # Check SQL contains the update
-        call_args = mock_conn.execute.call_args[0]
-        assert "UPDATE chat_dictionaries SET" in call_args[0]
-        assert "is_active = ?" in call_args[0]
+        calls = mock_conn.execute.call_args_list
+        update_call = None
+        for current_call in calls:
+            sql = current_call[0][0]
+            if "UPDATE chat_dictionaries SET" in sql and "is_active = ?" in sql:
+                update_call = current_call
+                break
+        assert update_call is not None
 
     def test_get_statistics(self, service, mock_db):
         """Test getting dictionary statistics."""

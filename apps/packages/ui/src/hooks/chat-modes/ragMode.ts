@@ -16,12 +16,14 @@ import { coerceBooleanOrNull } from "@/services/settings/registry"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { ActorSettings } from "@/types/actor"
 import { maybeInjectActorMessage } from "@/utils/actor"
+import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import type { ChatModelSettings } from "@/store/model"
 import type { SaveMessageData, SaveMessageErrorData } from "@/types/chat-modes"
 import {
   runChatPipeline,
   type ChatModeDefinition
 } from "./chatModePipeline"
+import { appendSystemPromptSuffix } from "@/utils/output-formatting-guide"
 
 const RAG_STRING_ARRAY_KEYS = new Set([
   "sources",
@@ -35,6 +37,7 @@ const RAG_STRING_ARRAY_KEYS = new Set([
 const RAG_NUMBER_ARRAY_KEYS = new Set(["include_media_ids", "include_note_ids"])
 const RAG_NULLABLE_STRING_KEYS = new Set([
   "generation_model",
+  "generation_provider",
   "generation_prompt",
   "user_id",
   "session_id"
@@ -188,6 +191,7 @@ type RagModeParams = {
   ragEnableCitations: boolean
   ragSources: string[]
   ragAdvancedOptions?: Record<string, unknown>
+  systemPromptAppendix?: string
   actorSettings?: ActorSettings
   clusterId?: string
   userMessageType?: string
@@ -234,6 +238,10 @@ const ragModeDefinition: ChatModeDefinition<RagModeParams> = {
     let query = ctx.message
     const { ragPrompt: systemPrompt, ragQuestionPrompt: questionPrompt } =
       await promptForRag()
+    const resolvedSystemPrompt = appendSystemPromptSuffix(
+      systemPrompt,
+      ctx.systemPromptAppendix
+    )
     const contextMessages = ctx.isRegenerate
       ? ctx.messages
       : [
@@ -302,6 +310,17 @@ const ragModeDefinition: ChatModeDefinition<RagModeParams> = {
       // Delete false flags so the backend can apply its default behavior.
       if (ctx.ragEnableGeneration) {
         ragOptions.enable_generation = true
+        const selectedGenerationModel = ctx.selectedModel?.trim()
+        if (selectedGenerationModel) {
+          ragOptions.generation_model = selectedGenerationModel
+        }
+        const selectedGenerationProvider = await resolveApiProviderForModel({
+          modelId: selectedGenerationModel,
+          explicitProvider: ctx.currentChatModelSettings?.apiProvider
+        })
+        if (selectedGenerationProvider) {
+          ragOptions.generation_provider = selectedGenerationProvider
+        }
       } else {
         delete ragOptions.enable_generation
       }
@@ -349,7 +368,7 @@ const ragModeDefinition: ChatModeDefinition<RagModeParams> = {
     const humanMessage = await humanMessageFormatter({
       content: [
         {
-          text: systemPrompt
+          text: resolvedSystemPrompt
             .replace("{context}", context)
             .replace("{question}", ctx.message),
           type: "text"

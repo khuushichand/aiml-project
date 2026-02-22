@@ -191,7 +191,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/evaluations/ \
               {"strategy": ["flashrank", "cross_encoder"], "top_k": [10]}
             ],
             "rag": {
-              "model": ["gpt-4o-mini"],
+              "model": ["gpt-4o"],
               "max_tokens": [300]
             },
             "aggregation_weights": {"rag_overall": 1.0, "retrieval_diversity": 0.1}
@@ -230,7 +230,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/evaluations/rag/pipeline/presets \
           "chunking": {"include_siblings": true},
           "retriever": {"search_mode": "hybrid", "hybrid_alpha": 0.7, "top_k": 12},
           "reranker": {"strategy": "cross_encoder", "top_k": 10},
-          "rag": {"model": "gpt-4o-mini", "max_tokens": 300}
+          "rag": {"model": "gpt-4o", "max_tokens": 300}
         }
       }'
 ```
@@ -278,6 +278,7 @@ print(r.json())
 ---
 
 See also:
-- RAG API Guide: `Docs/Published/API-related/RAG-API-Guide.md`
-- Evaluations API (Unified): `Docs/Published/API-related/Evaluations_API_Unified_Reference.md`
+- RAG Evals Playbook: `Docs/User_Guides/RAG_Evals_Playbook.md`
+- RAG API Guide: `Docs/API-related/RAG-API-Guide.md`
+- Evaluations API (Unified): `Docs/API-related/Evaluations_API_Unified_Reference.md`
 - RAG Deployment/Production guides under User Guides

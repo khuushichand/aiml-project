@@ -143,6 +143,8 @@ https://tongyi-agent.github.io/blog/introducing-tongyi-deep-research/
 https://arxiv.org/abs/2509.13313
 https://arxiv.org/html/2505.24575v1
 https://github.com/OpenGVLab/GenExam
+https://huggingface.co/blog/community-evals
+https://inspect.aisi.org.uk/
 
 
 

@@ -155,6 +155,7 @@ export type RagSettings = {
   enable_generation: boolean
   strict_extractive: boolean
   generation_model: string | null
+  generation_provider: string | null
   generation_prompt: string | null
   max_generation_tokens: number
   enable_abstention: boolean
@@ -354,6 +355,7 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   enable_generation: true,
   strict_extractive: false,
   generation_model: null,
+  generation_provider: null,
   generation_prompt: null,
   max_generation_tokens: 800,
   enable_abstention: true,
@@ -512,6 +514,7 @@ export const buildRagSearchRequest = (settings: RagSettings) => {
     query,
     timeout_seconds,
     generation_model,
+    generation_provider,
     generation_prompt,
     user_id,
     session_id,
@@ -525,6 +528,7 @@ export const buildRagSearchRequest = (settings: RagSettings) => {
     options[key] = value
   }
   if (generation_model) options.generation_model = generation_model
+  if (generation_provider) options.generation_provider = generation_provider
   if (generation_prompt) options.generation_prompt = generation_prompt
   if (user_id) options.user_id = user_id
   if (session_id) options.session_id = session_id

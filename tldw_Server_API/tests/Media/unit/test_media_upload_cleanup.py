@@ -26,7 +26,7 @@ class DummyUploadFile:
         try:
             self._bio.close()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture

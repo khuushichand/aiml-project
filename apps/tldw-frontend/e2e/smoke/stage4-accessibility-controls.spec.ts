@@ -1,0 +1,77 @@
+import { test, expect, seedAuth } from "./smoke.setup"
+
+const LOAD_TIMEOUT = 30_000
+
+test.describe("Stage 4 accessibility controls", () => {
+  test("document workspace pane toggles expose explicit accessible labels", async ({
+    page
+  }) => {
+    await seedAuth(page)
+
+    await page.goto("/document-workspace", {
+      waitUntil: "domcontentloaded",
+      timeout: LOAD_TIMEOUT
+    })
+    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+
+    const leftToggle = page.getByTestId("document-workspace-toggle-left")
+    const rightToggle = page.getByTestId("document-workspace-toggle-right")
+
+    await expect(leftToggle).toBeVisible({ timeout: LOAD_TIMEOUT })
+    await expect(leftToggle).toHaveAccessibleName(/(expand|collapse) sidebar/i)
+    await expect(rightToggle).toBeVisible({ timeout: LOAD_TIMEOUT })
+    await expect(rightToggle).toHaveAccessibleName(/(expand|collapse) chat panel/i)
+
+    const leftLabelBefore = await leftToggle.getAttribute("aria-label")
+    await leftToggle.click()
+    const leftLabelAfter = await leftToggle.getAttribute("aria-label")
+    expect(leftLabelAfter).not.toBe(leftLabelBefore)
+
+    const rightLabelBefore = await rightToggle.getAttribute("aria-label")
+    await rightToggle.click()
+    const rightLabelAfter = await rightToggle.getAttribute("aria-label")
+    expect(rightLabelAfter).not.toBe(rightLabelBefore)
+  })
+
+  test("settings beta badge dismissal persists across reloads", async ({
+    page
+  }) => {
+    await seedAuth(page)
+    await page.addInitScript(() => {
+      try {
+        const resetKey = "__tldw_stage4_beta_badge_reset_done"
+        if (sessionStorage.getItem(resetKey) === "1") {
+          return
+        }
+        localStorage.removeItem("tldw:settings:hide-beta-badges")
+        sessionStorage.setItem(resetKey, "1")
+      } catch {}
+    })
+
+    await page.goto("/settings", {
+      waitUntil: "domcontentloaded",
+      timeout: LOAD_TIMEOUT
+    })
+    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+
+    const badges = page.locator('[data-testid="settings-navigation"] .ant-tag')
+    const toggle = page.getByTestId("settings-beta-badges-toggle")
+
+    await expect(toggle).toBeVisible({ timeout: LOAD_TIMEOUT })
+    await expect(toggle).toHaveText(/hide beta badges/i)
+    await expect(badges.first()).toBeVisible({ timeout: LOAD_TIMEOUT })
+
+    await toggle.click()
+    await expect(toggle).toHaveText(/show beta badges/i)
+    await expect(badges).toHaveCount(0)
+
+    await page.reload({ waitUntil: "domcontentloaded", timeout: LOAD_TIMEOUT })
+    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await expect(toggle).toHaveText(/show beta badges/i)
+    await expect(badges).toHaveCount(0)
+
+    await toggle.click()
+    await expect(toggle).toHaveText(/hide beta badges/i)
+    await expect(badges.first()).toBeVisible({ timeout: LOAD_TIMEOUT })
+  })
+})

@@ -39,7 +39,7 @@ def _principal_override_admin():
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
         return principal
 
     return _override
@@ -92,7 +92,7 @@ def test_claims_alerts_migrate_legacy_configs():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override_admin()
     fastapi_app.dependency_overrides[get_request_user] = _override_user

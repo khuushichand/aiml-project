@@ -5,6 +5,22 @@
 
 import { createWithEqualityFn } from "zustand/traditional"
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware"
+import type { ChatHistory, Message } from "@/store/option"
+import {
+  WORKSPACE_STORAGE_CHANNEL_NAME,
+  WORKSPACE_STORAGE_KEY,
+  WORKSPACE_STORAGE_QUOTA_EVENT,
+  isWorkspaceBroadcastSyncEnabled,
+  type WorkspaceBroadcastUpdateMessage,
+  type WorkspaceStorageQuotaEventDetail
+} from "@/store/workspace-events"
+import {
+  WORKSPACE_EXPORT_BUNDLE_FORMAT,
+  WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION,
+  type WorkspaceBundleChatSession,
+  type WorkspaceBundleSnapshot,
+  type WorkspaceExportBundle
+} from "@/store/workspace-bundle"
 import type {
   AddSourceModalState,
   AddSourceTab,
@@ -16,20 +32,98 @@ import type {
   WorkspaceConfig,
   WorkspaceNote,
   WorkspaceSource,
+  WorkspaceSourceStatus,
   WorkspaceSourceType
 } from "@/types/workspace"
 import { DEFAULT_AUDIO_SETTINGS, DEFAULT_WORKSPACE_NOTE } from "@/types/workspace"
+import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = "tldw-workspace"
 const generateWorkspaceId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID()
   }
   return Math.random().toString(36).slice(2)
+}
+
+let workspaceBroadcastChannel: BroadcastChannel | null = null
+
+const isQuotaExceededError = (error: unknown): boolean => {
+  if (!error) return false
+
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    return (
+      error.name === "QuotaExceededError" ||
+      error.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      error.code === 22 ||
+      error.code === 1014
+    )
+  }
+
+  const candidate = error as {
+    name?: string
+    code?: number
+    message?: string
+  }
+  return (
+    candidate.name === "QuotaExceededError" ||
+    candidate.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+    candidate.code === 22 ||
+    candidate.code === 1014 ||
+    /quota/i.test(candidate.message || "")
+  )
+}
+
+const emitWorkspaceQuotaExceeded = (key: string, error: unknown): void => {
+  if (typeof window === "undefined") return
+
+  const reason =
+    error instanceof Error
+      ? error.message
+      : "Workspace data exceeded local storage quota."
+  const detail: WorkspaceStorageQuotaEventDetail = { key, reason }
+  window.dispatchEvent(
+    new CustomEvent<WorkspaceStorageQuotaEventDetail>(
+      WORKSPACE_STORAGE_QUOTA_EVENT,
+      { detail }
+    )
+  )
+}
+
+const getWorkspaceBroadcastChannel = (): BroadcastChannel | null => {
+  if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") {
+    return null
+  }
+
+  if (!workspaceBroadcastChannel) {
+    workspaceBroadcastChannel = new BroadcastChannel(
+      WORKSPACE_STORAGE_CHANNEL_NAME
+    )
+  }
+
+  return workspaceBroadcastChannel
+}
+
+const broadcastWorkspaceStorageUpdate = (key: string): void => {
+  if (!isWorkspaceBroadcastSyncEnabled()) return
+
+  const channel = getWorkspaceBroadcastChannel()
+  if (!channel) return
+
+  const payload: WorkspaceBroadcastUpdateMessage = {
+    type: "workspace-storage-updated",
+    key,
+    updatedAt: Date.now()
+  }
+
+  try {
+    channel.postMessage(payload)
+  } catch (error) {
+    console.warn("Workspace broadcast sync unavailable", error)
+  }
 }
 
 /**
@@ -42,48 +136,29 @@ const createMemoryStorage = (): StateStorage => ({
 })
 
 /**
- * Date fields that need to be revived from ISO strings
+ * Custom storage adapter for localStorage with SSR-safe fallback.
+ * Date revival is handled in `onRehydrateStorage`.
  */
-const DATE_FIELDS = new Set([
-  "workspaceCreatedAt",
-  "addedAt",
-  "createdAt",
-  "completedAt"
-])
-
-/**
- * Custom JSON parse reviver that converts ISO date strings back to Date objects
- */
-const dateReviver = (key: string, value: unknown): unknown => {
-  if (DATE_FIELDS.has(key) && typeof value === "string") {
-    const date = new Date(value)
-    return isNaN(date.getTime()) ? value : date
-  }
-  return value
-}
-
-/**
- * Custom storage that handles Date serialization/deserialization
- */
-const createWorkspaceStorage = (): StateStorage => {
+export const createWorkspaceStorage = (): StateStorage => {
   if (typeof window === "undefined") {
     return createMemoryStorage()
   }
 
   return {
     getItem: (name: string): string | null => {
-      const value = localStorage.getItem(name)
-      if (!value) return null
-      try {
-        // Parse with date reviver
-        const parsed = JSON.parse(value, dateReviver)
-        return JSON.stringify(parsed)
-      } catch {
-        return value
-      }
+      return localStorage.getItem(name)
     },
     setItem: (name: string, value: string): void => {
-      localStorage.setItem(name, value)
+      try {
+        localStorage.setItem(name, value)
+        broadcastWorkspaceStorageUpdate(name)
+      } catch (error) {
+        if (isQuotaExceededError(error)) {
+          emitWorkspaceQuotaExceeded(name, error)
+          return
+        }
+        throw error
+      }
     },
     removeItem: (name: string): void => {
       localStorage.removeItem(name)
@@ -100,12 +175,14 @@ interface WorkspaceIdentityState {
   workspaceName: string
   workspaceTag: string // Format: "workspace:<slug>"
   workspaceCreatedAt: Date | null
+  workspaceChatReferenceId: string
 }
 
 interface SourcesState {
   sources: WorkspaceSource[]
   selectedSourceIds: string[]
   sourceSearchQuery: string
+  sourceFocusTarget: { sourceId: string; token: number } | null
   sourcesLoading: boolean
   sourcesError: string | null
 }
@@ -119,12 +196,15 @@ interface StudioState {
 }
 
 interface UIState {
+  storeHydrated: boolean
   leftPaneCollapsed: boolean
   rightPaneCollapsed: boolean
   addSourceModalOpen: boolean
   addSourceModalTab: AddSourceTab
   addSourceProcessing: boolean
   addSourceError: string | null
+  chatFocusTarget: { messageId: string; token: number } | null
+  noteFocusTarget: { field: "title" | "content"; token: number } | null
 }
 
 interface AudioSettingsState {
@@ -133,6 +213,66 @@ interface AudioSettingsState {
 
 interface WorkspaceListState {
   savedWorkspaces: SavedWorkspace[]
+  archivedWorkspaces: SavedWorkspace[]
+}
+
+interface WorkspaceSnapshot {
+  workspaceId: string
+  workspaceName: string
+  workspaceTag: string
+  workspaceCreatedAt: Date | null
+  workspaceChatReferenceId: string
+  sources: WorkspaceSource[]
+  selectedSourceIds: string[]
+  generatedArtifacts: GeneratedArtifact[]
+  notes: string
+  currentNote: WorkspaceNote
+  leftPaneCollapsed: boolean
+  rightPaneCollapsed: boolean
+  audioSettings: AudioGenerationSettings
+}
+
+interface WorkspaceSnapshotsState {
+  workspaceSnapshots: Record<string, WorkspaceSnapshot>
+}
+
+export interface WorkspaceChatSession {
+  messages: Message[]
+  history: ChatHistory
+  historyId: string | null
+  serverChatId: string | null
+}
+
+interface WorkspaceChatSessionsState {
+  workspaceChatSessions: Record<string, WorkspaceChatSession>
+}
+
+export interface WorkspaceUndoSnapshot {
+  workspaceId: string
+  workspaceName: string
+  workspaceTag: string
+  workspaceCreatedAt: Date | null
+  workspaceChatReferenceId: string
+  sources: WorkspaceSource[]
+  selectedSourceIds: string[]
+  generatedArtifacts: GeneratedArtifact[]
+  notes: string
+  currentNote: WorkspaceNote
+  leftPaneCollapsed: boolean
+  rightPaneCollapsed: boolean
+  audioSettings: AudioGenerationSettings
+  savedWorkspaces: SavedWorkspace[]
+  archivedWorkspaces: SavedWorkspace[]
+  workspaceSnapshots: Record<string, WorkspaceSnapshot>
+  workspaceChatSessions: Record<string, WorkspaceChatSession>
+}
+
+type CaptureNoteMode = "append" | "replace"
+
+interface CaptureToNoteInput {
+  title?: string
+  content: string
+  mode?: CaptureNoteMode
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -154,13 +294,31 @@ interface SourcesActions {
   ) => WorkspaceSource[]
   removeSource: (id: string) => void
   removeSources: (ids: string[]) => void
+  reorderSource: (sourceId: string, targetIndex: number) => void
   toggleSourceSelection: (id: string) => void
   selectAllSources: () => void
   deselectAllSources: () => void
   setSelectedSourceIds: (ids: string[]) => void
   setSourceSearchQuery: (query: string) => void
+  setSourceStatusById: (
+    sourceId: string,
+    status: WorkspaceSourceStatus,
+    statusMessage?: string
+  ) => void
+  setSourceStatusByMediaId: (
+    mediaId: number,
+    status: WorkspaceSourceStatus,
+    statusMessage?: string
+  ) => void
+  focusSourceById: (id: string) => boolean
+  focusSourceByMediaId: (mediaId: number) => boolean
+  clearSourceFocusTarget: () => void
   setSourcesLoading: (loading: boolean) => void
   setSourcesError: (error: string | null) => void
+  restoreSource: (
+    source: WorkspaceSource,
+    options?: { index?: number; select?: boolean }
+  ) => void
   getSelectedSources: () => WorkspaceSource[]
   getSelectedMediaIds: () => number[]
 }
@@ -175,6 +333,10 @@ interface StudioActions {
     updates?: Partial<GeneratedArtifact>
   ) => void
   removeArtifact: (id: string) => void
+  restoreArtifact: (
+    artifact: GeneratedArtifact,
+    options?: { index?: number }
+  ) => void
   clearArtifacts: () => void
   setNotes: (notes: string) => void
   setIsGeneratingOutput: (
@@ -187,6 +349,7 @@ interface StudioActions {
   updateNoteTitle: (title: string) => void
   updateNoteKeywords: (keywords: string[]) => void
   clearCurrentNote: () => void
+  captureToCurrentNote: (input: CaptureToNoteInput) => void
   loadNote: (note: { id: number; title: string; content: string; keywords?: string[]; version?: number }) => void
 }
 
@@ -200,6 +363,10 @@ interface UIActions {
   setAddSourceModalTab: (tab: AddSourceTab) => void
   setAddSourceProcessing: (processing: boolean) => void
   setAddSourceError: (error: string | null) => void
+  focusChatMessageById: (messageId: string) => boolean
+  clearChatFocusTarget: () => void
+  focusWorkspaceNote: (field?: "title" | "content") => void
+  clearNoteFocusTarget: () => void
 }
 
 interface AudioSettingsActions {
@@ -210,14 +377,40 @@ interface AudioSettingsActions {
 interface WorkspaceListActions {
   /** Save current workspace state to the saved workspaces list */
   saveCurrentWorkspace: () => void
+  /** Export a workspace snapshot bundle (defaults to current workspace) */
+  exportWorkspaceBundle: (id?: string) => WorkspaceExportBundle | null
+  /** Import a workspace snapshot bundle and switch to it */
+  importWorkspaceBundle: (bundle: WorkspaceExportBundle) => string | null
   /** Switch to a different workspace by ID */
   switchWorkspace: (id: string) => void
   /** Create a new workspace (optionally with a name), saving current first */
   createNewWorkspace: (name?: string) => void
+  /** Duplicate a workspace (defaults to current) and switch to the duplicate */
+  duplicateWorkspace: (id?: string) => string | null
+  /** Archive a workspace from active saved list */
+  archiveWorkspace: (id: string) => void
+  /** Restore a workspace from archive back into saved list */
+  restoreArchivedWorkspace: (id: string) => void
   /** Delete a workspace from the saved list */
   deleteWorkspace: (id: string) => void
   /** Get the list of saved workspaces sorted by last accessed */
   getSavedWorkspaces: () => SavedWorkspace[]
+  /** Get archived workspaces sorted by last accessed */
+  getArchivedWorkspaces: () => SavedWorkspace[]
+  /** Save chat session state for a workspace */
+  saveWorkspaceChatSession: (
+    workspaceId: string,
+    session: WorkspaceChatSession
+  ) => void
+  /** Retrieve chat session state for a workspace */
+  getWorkspaceChatSession: (workspaceId: string) => WorkspaceChatSession | null
+  /** Clear chat session state for a workspace */
+  clearWorkspaceChatSession: (workspaceId: string) => void
+}
+
+interface UndoActions {
+  captureUndoSnapshot: () => WorkspaceUndoSnapshot
+  restoreUndoSnapshot: (snapshot: WorkspaceUndoSnapshot) => void
 }
 
 interface ResetActions {
@@ -236,12 +429,15 @@ export type WorkspaceState = WorkspaceIdentityState &
   UIState &
   AudioSettingsState &
   WorkspaceListState &
+  WorkspaceSnapshotsState &
+  WorkspaceChatSessionsState &
   WorkspaceIdentityActions &
   SourcesActions &
   StudioActions &
   UIActions &
   AudioSettingsActions &
   WorkspaceListActions &
+  UndoActions &
   ResetActions
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -260,13 +456,15 @@ const initialIdentityState: WorkspaceIdentityState = {
   workspaceId: "",
   workspaceName: "",
   workspaceTag: "",
-  workspaceCreatedAt: null
+  workspaceCreatedAt: null,
+  workspaceChatReferenceId: ""
 }
 
 const initialSourcesState: SourcesState = {
   sources: [],
   selectedSourceIds: [],
   sourceSearchQuery: "",
+  sourceFocusTarget: null,
   sourcesLoading: false,
   sourcesError: null
 }
@@ -280,12 +478,15 @@ const initialStudioState: StudioState = {
 }
 
 const initialUIState: UIState = {
+  storeHydrated: false,
   leftPaneCollapsed: false,
   rightPaneCollapsed: false,
   addSourceModalOpen: false,
   addSourceModalTab: "upload",
   addSourceProcessing: false,
-  addSourceError: null
+  addSourceError: null,
+  chatFocusTarget: null,
+  noteFocusTarget: null
 }
 
 const initialAudioSettingsState: AudioSettingsState = {
@@ -293,7 +494,16 @@ const initialAudioSettingsState: AudioSettingsState = {
 }
 
 const initialWorkspaceListState: WorkspaceListState = {
-  savedWorkspaces: []
+  savedWorkspaces: [],
+  archivedWorkspaces: []
+}
+
+const initialWorkspaceSnapshotsState: WorkspaceSnapshotsState = {
+  workspaceSnapshots: {}
+}
+
+const initialWorkspaceChatSessionsState: WorkspaceChatSessionsState = {
+  workspaceChatSessions: {}
 }
 
 const initialState = {
@@ -302,7 +512,9 @@ const initialState = {
   ...initialStudioState,
   ...initialUIState,
   ...initialAudioSettingsState,
-  ...initialWorkspaceListState
+  ...initialWorkspaceListState,
+  ...initialWorkspaceSnapshotsState,
+  ...initialWorkspaceChatSessionsState
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,6 +527,7 @@ interface PersistedWorkspaceState {
   workspaceName: string
   workspaceTag: string
   workspaceCreatedAt: Date | null
+  workspaceChatReferenceId: string
 
   // Sources (without transient state)
   sources: WorkspaceSource[]
@@ -334,6 +547,391 @@ interface PersistedWorkspaceState {
 
   // Saved workspaces list
   savedWorkspaces: SavedWorkspace[]
+  archivedWorkspaces: SavedWorkspace[]
+
+  // Workspace snapshots keyed by workspace ID
+  workspaceSnapshots: Record<string, WorkspaceSnapshot>
+
+  // Workspace chat sessions keyed by workspace ID
+  workspaceChatSessions: Record<string, WorkspaceChatSession>
+}
+
+const MAX_SAVED_WORKSPACES = 10
+const MAX_ARCHIVED_WORKSPACES = 50
+const INTERRUPTED_GENERATION_ERROR_MESSAGE =
+  "Generation was interrupted. Click regenerate to try again."
+
+const cloneWorkspaceValue = <T>(value: T): T => {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value)
+  }
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+const sanitizeArtifactsForPersistence = (
+  artifacts: GeneratedArtifact[]
+): GeneratedArtifact[] =>
+  artifacts.map((artifact) => ({
+    ...artifact,
+    audioUrl: undefined
+  }))
+
+const reviveDateOrNull = (value: Date | string | null | undefined): Date | null => {
+  if (!value) return null
+  if (value instanceof Date) return value
+  if (typeof value === "string") {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+  return null
+}
+
+const reviveDateOrUndefined = (
+  value: Date | string | null | undefined
+): Date | undefined => {
+  const revived = reviveDateOrNull(value)
+  return revived ?? undefined
+}
+
+const reviveSources = (sources: WorkspaceSource[]): WorkspaceSource[] =>
+  sources.map((source) => ({
+    ...source,
+    status: source.status || "ready",
+    statusMessage: source.statusMessage || undefined,
+    addedAt: reviveDateOrNull(source.addedAt) || new Date(),
+    sourceCreatedAt: reviveDateOrUndefined(source.sourceCreatedAt)
+  }))
+
+const getWorkspaceSourceStatus = (
+  source: WorkspaceSource
+): WorkspaceSourceStatus => source.status || "ready"
+
+const reviveArtifacts = (artifacts: GeneratedArtifact[]): GeneratedArtifact[] =>
+  artifacts.map((artifact) => {
+    const revivedArtifact: GeneratedArtifact = {
+      ...artifact,
+      createdAt: reviveDateOrNull(artifact.createdAt) || new Date(),
+      completedAt: reviveDateOrUndefined(artifact.completedAt)
+    }
+
+    if (revivedArtifact.status !== "generating") {
+      return revivedArtifact
+    }
+
+    return {
+      ...revivedArtifact,
+      status: "failed",
+      completedAt: revivedArtifact.completedAt || new Date(),
+      errorMessage:
+        revivedArtifact.errorMessage || INTERRUPTED_GENERATION_ERROR_MESSAGE
+    }
+  })
+
+const reviveSavedWorkspace = (workspace: SavedWorkspace): SavedWorkspace => ({
+  ...workspace,
+  createdAt: reviveDateOrNull(workspace.createdAt) || new Date(),
+  lastAccessedAt: reviveDateOrNull(workspace.lastAccessedAt) || new Date()
+})
+
+const reviveWorkspaceSnapshot = (
+  workspaceId: string,
+  snapshot: WorkspaceSnapshot
+): WorkspaceSnapshot => {
+  const createdAt = reviveDateOrNull(snapshot.workspaceCreatedAt)
+  return {
+    ...snapshot,
+    workspaceId: snapshot.workspaceId || workspaceId,
+    workspaceCreatedAt: createdAt,
+    workspaceChatReferenceId:
+      snapshot.workspaceChatReferenceId ||
+      snapshot.workspaceId ||
+      workspaceId,
+    sources: reviveSources(snapshot.sources || []),
+    selectedSourceIds: snapshot.selectedSourceIds || [],
+    generatedArtifacts: reviveArtifacts(snapshot.generatedArtifacts || []),
+    currentNote: snapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
+    audioSettings: snapshot.audioSettings || { ...DEFAULT_AUDIO_SETTINGS }
+  }
+}
+
+const createEmptyWorkspaceSnapshot = ({
+  id,
+  name,
+  tag,
+  createdAt
+}: {
+  id: string
+  name: string
+  tag: string
+  createdAt: Date
+}): WorkspaceSnapshot => ({
+  workspaceId: id,
+  workspaceName: name,
+  workspaceTag: tag,
+  workspaceCreatedAt: createdAt,
+  workspaceChatReferenceId: id,
+  sources: [],
+  selectedSourceIds: [],
+  generatedArtifacts: [],
+  notes: "",
+  currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+  leftPaneCollapsed: false,
+  rightPaneCollapsed: false,
+  audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+})
+
+const applyWorkspaceSnapshot = (
+  snapshot: WorkspaceSnapshot
+): Pick<
+  WorkspaceState,
+  | "workspaceId"
+  | "workspaceName"
+  | "workspaceTag"
+  | "workspaceCreatedAt"
+  | "workspaceChatReferenceId"
+  | "sources"
+  | "selectedSourceIds"
+  | "generatedArtifacts"
+  | "notes"
+  | "currentNote"
+  | "leftPaneCollapsed"
+  | "rightPaneCollapsed"
+  | "audioSettings"
+> => ({
+  workspaceId: snapshot.workspaceId,
+  workspaceName: snapshot.workspaceName,
+  workspaceTag: snapshot.workspaceTag,
+  workspaceCreatedAt: snapshot.workspaceCreatedAt,
+  workspaceChatReferenceId: snapshot.workspaceChatReferenceId,
+  sources: snapshot.sources.map((source) => ({ ...source })),
+  selectedSourceIds: [...snapshot.selectedSourceIds],
+  generatedArtifacts: snapshot.generatedArtifacts.map((artifact) => ({
+    ...artifact
+  })),
+  notes: snapshot.notes,
+  currentNote: { ...snapshot.currentNote },
+  leftPaneCollapsed: snapshot.leftPaneCollapsed,
+  rightPaneCollapsed: snapshot.rightPaneCollapsed,
+  audioSettings: { ...snapshot.audioSettings }
+})
+
+const buildWorkspaceSnapshot = (state: WorkspaceState): WorkspaceSnapshot => ({
+  workspaceId: state.workspaceId,
+  workspaceName: state.workspaceName || "Untitled Workspace",
+  workspaceTag: state.workspaceTag,
+  workspaceCreatedAt: state.workspaceCreatedAt,
+  workspaceChatReferenceId: state.workspaceChatReferenceId || state.workspaceId,
+  sources: state.sources.map((source) => ({ ...source })),
+  selectedSourceIds: [...state.selectedSourceIds],
+  generatedArtifacts: state.generatedArtifacts.map((artifact) => ({
+    ...artifact
+  })),
+  notes: state.notes,
+  currentNote: { ...state.currentNote },
+  leftPaneCollapsed: state.leftPaneCollapsed,
+  rightPaneCollapsed: state.rightPaneCollapsed,
+  audioSettings: { ...state.audioSettings }
+})
+
+const buildWorkspaceBundleSnapshot = (
+  snapshot: WorkspaceSnapshot
+): WorkspaceBundleSnapshot => ({
+  workspaceName: snapshot.workspaceName,
+  workspaceTag: snapshot.workspaceTag,
+  workspaceCreatedAt: snapshot.workspaceCreatedAt,
+  sources: snapshot.sources.map((source) => ({ ...source })),
+  selectedSourceIds: [...snapshot.selectedSourceIds],
+  generatedArtifacts: snapshot.generatedArtifacts.map((artifact) => ({
+    ...artifact
+  })),
+  notes: snapshot.notes,
+  currentNote: { ...snapshot.currentNote },
+  leftPaneCollapsed: snapshot.leftPaneCollapsed,
+  rightPaneCollapsed: snapshot.rightPaneCollapsed,
+  audioSettings: { ...snapshot.audioSettings }
+})
+
+const cloneWorkspaceBundleChatSession = (
+  session: WorkspaceBundleChatSession
+): WorkspaceBundleChatSession => ({
+  messages: Array.isArray(session.messages)
+    ? session.messages.map((message) => ({ ...message }))
+    : [],
+  history: Array.isArray(session.history)
+    ? session.history.map((entry) => ({ ...entry }))
+    : [],
+  historyId: typeof session.historyId === "string" ? session.historyId : null,
+  serverChatId:
+    typeof session.serverChatId === "string" ? session.serverChatId : null
+})
+
+const hydrateWorkspaceBundleSnapshot = (
+  snapshot: WorkspaceBundleSnapshot,
+  workspaceId: string,
+  workspaceName: string,
+  workspaceTag: string
+): WorkspaceSnapshot => {
+  const revivedSources = reviveSources(snapshot.sources || [])
+  const sourceIdSet = new Set(revivedSources.map((source) => source.id))
+  const selectedSourceIds = (snapshot.selectedSourceIds || []).filter((id) =>
+    sourceIdSet.has(id)
+  )
+
+  return {
+    workspaceId,
+    workspaceName,
+    workspaceTag,
+    workspaceCreatedAt: new Date(),
+    workspaceChatReferenceId: workspaceId,
+    sources: revivedSources,
+    selectedSourceIds,
+    generatedArtifacts: reviveArtifacts(snapshot.generatedArtifacts || []),
+    notes: typeof snapshot.notes === "string" ? snapshot.notes : "",
+    currentNote: snapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
+    leftPaneCollapsed: Boolean(snapshot.leftPaneCollapsed),
+    rightPaneCollapsed: Boolean(snapshot.rightPaneCollapsed),
+    audioSettings: snapshot.audioSettings || { ...DEFAULT_AUDIO_SETTINGS }
+  }
+}
+
+const buildWorkspaceUndoSnapshot = (
+  state: WorkspaceState
+): WorkspaceUndoSnapshot => {
+  const nextSnapshots = { ...state.workspaceSnapshots }
+  if (state.workspaceId) {
+    nextSnapshots[state.workspaceId] = buildWorkspaceSnapshot(state)
+  }
+
+  const snapshot: WorkspaceUndoSnapshot = {
+    workspaceId: state.workspaceId,
+    workspaceName: state.workspaceName,
+    workspaceTag: state.workspaceTag,
+    workspaceCreatedAt: state.workspaceCreatedAt,
+    workspaceChatReferenceId:
+      state.workspaceChatReferenceId || state.workspaceId,
+    sources: state.sources,
+    selectedSourceIds: state.selectedSourceIds,
+    generatedArtifacts: state.generatedArtifacts,
+    notes: state.notes,
+    currentNote: state.currentNote,
+    leftPaneCollapsed: state.leftPaneCollapsed,
+    rightPaneCollapsed: state.rightPaneCollapsed,
+    audioSettings: state.audioSettings,
+    savedWorkspaces: state.savedWorkspaces,
+    archivedWorkspaces: state.archivedWorkspaces,
+    workspaceSnapshots: nextSnapshots,
+    workspaceChatSessions: state.workspaceChatSessions
+  }
+
+  return cloneWorkspaceValue(snapshot)
+}
+
+const createSavedWorkspaceEntry = (
+  snapshot: WorkspaceSnapshot,
+  lastAccessedAt: Date = new Date()
+): SavedWorkspace => ({
+  id: snapshot.workspaceId,
+  name: snapshot.workspaceName || "Untitled Workspace",
+  tag: snapshot.workspaceTag,
+  createdAt: snapshot.workspaceCreatedAt || new Date(),
+  lastAccessedAt,
+  sourceCount: snapshot.sources.length
+})
+
+const upsertSavedWorkspace = (
+  workspaces: SavedWorkspace[],
+  workspace: SavedWorkspace
+): SavedWorkspace[] =>
+  [workspace, ...workspaces.filter((w) => w.id !== workspace.id)].slice(
+    0,
+    MAX_SAVED_WORKSPACES
+  )
+
+const upsertArchivedWorkspace = (
+  workspaces: SavedWorkspace[],
+  workspace: SavedWorkspace
+): SavedWorkspace[] =>
+  [workspace, ...workspaces.filter((w) => w.id !== workspace.id)].slice(
+    0,
+    MAX_ARCHIVED_WORKSPACES
+  )
+
+const sortByLastAccessedDesc = (workspaces: SavedWorkspace[]): SavedWorkspace[] =>
+  [...workspaces].sort(
+    (a, b) =>
+      new Date(b.lastAccessedAt).getTime() - new Date(a.lastAccessedAt).getTime()
+  )
+
+const cloneWorkspaceChatSession = (
+  session: WorkspaceChatSession
+): WorkspaceChatSession => ({
+  messages: session.messages.map((message) => ({ ...message })),
+  history: session.history.map((entry) => ({ ...entry })),
+  historyId: session.historyId,
+  serverChatId: session.serverChatId
+})
+
+const createFallbackWorkspaceSnapshot = (): WorkspaceSnapshot => {
+  const replacementId = generateWorkspaceId()
+  const replacementName = "New Research"
+  const replacementTag = `workspace:${createSlug(replacementName) || replacementId.slice(0, 8)}`
+  return createEmptyWorkspaceSnapshot({
+    id: replacementId,
+    name: replacementName,
+    tag: replacementTag,
+    createdAt: new Date()
+  })
+}
+
+const duplicateWorkspaceSnapshot = (
+  snapshot: WorkspaceSnapshot
+): WorkspaceSnapshot => {
+  const duplicateId = generateWorkspaceId()
+  const duplicateName = `${snapshot.workspaceName} (Copy)`
+  const duplicateTag = `workspace:${createSlug(duplicateName) || duplicateId.slice(0, 8)}`
+  const sourceIdMap = new Map<string, string>()
+
+  const duplicatedSources = snapshot.sources.map((source) => {
+    const nextSourceId = generateWorkspaceId()
+    sourceIdMap.set(source.id, nextSourceId)
+    return {
+      ...source,
+      id: nextSourceId,
+      addedAt: reviveDateOrNull(source.addedAt) || new Date()
+    }
+  })
+
+  const duplicatedSelectedSourceIds = snapshot.selectedSourceIds
+    .map((sourceId) => sourceIdMap.get(sourceId))
+    .filter((sourceId): sourceId is string => Boolean(sourceId))
+
+  const duplicatedArtifacts = snapshot.generatedArtifacts.map((artifact) => ({
+    ...artifact,
+    id: generateWorkspaceId(),
+    createdAt: reviveDateOrNull(artifact.createdAt) || new Date(),
+    completedAt: reviveDateOrUndefined(artifact.completedAt)
+  }))
+
+  return {
+    workspaceId: duplicateId,
+    workspaceName: duplicateName,
+    workspaceTag: duplicateTag,
+    workspaceCreatedAt: new Date(),
+    workspaceChatReferenceId: duplicateId,
+    sources: duplicatedSources,
+    selectedSourceIds: duplicatedSelectedSourceIds,
+    generatedArtifacts: duplicatedArtifacts,
+    notes: snapshot.notes,
+    currentNote: {
+      ...snapshot.currentNote,
+      id: undefined,
+      version: undefined,
+      isDirty: false
+    },
+    leftPaneCollapsed: snapshot.leftPaneCollapsed,
+    rightPaneCollapsed: snapshot.rightPaneCollapsed,
+    audioSettings: { ...snapshot.audioSettings }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -352,28 +950,102 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     initializeWorkspace: (name = "New Research") => {
       const id = generateWorkspaceId()
       const slug = createSlug(name) || id.slice(0, 8)
-      set({
-        workspaceId: id,
-        workspaceName: name,
-        workspaceTag: `workspace:${slug}`,
-        workspaceCreatedAt: new Date()
+      const createdAt = new Date()
+      const tag = `workspace:${slug}`
+      const snapshot = createEmptyWorkspaceSnapshot({
+        id,
+        name,
+        tag,
+        createdAt
       })
+
+      set((state) => ({
+        ...applyWorkspaceSnapshot(snapshot),
+        savedWorkspaces: upsertSavedWorkspace(
+          state.savedWorkspaces,
+          createSavedWorkspaceEntry(snapshot, createdAt)
+        ),
+        archivedWorkspaces: state.archivedWorkspaces.filter(
+          (workspace) => workspace.id !== id
+        ),
+        workspaceSnapshots: {
+          ...state.workspaceSnapshots,
+          [id]: snapshot
+        }
+      }))
     },
 
     setWorkspaceName: (name) => {
-      const slug = createSlug(name) || get().workspaceId.slice(0, 8)
-      set({
-        workspaceName: name,
-        workspaceTag: `workspace:${slug}`
+      set((state) => {
+        const fallbackId = state.workspaceId || ""
+        const slug = createSlug(name) || fallbackId.slice(0, 8)
+        const nextTag = `workspace:${slug}`
+
+        if (!state.workspaceId) {
+          return {
+            workspaceName: name,
+            workspaceTag: nextTag
+          }
+        }
+
+        const updatedSnapshot: WorkspaceSnapshot = {
+          ...buildWorkspaceSnapshot(state),
+          workspaceName: name,
+          workspaceTag: nextTag
+        }
+
+        return {
+          workspaceName: name,
+          workspaceTag: nextTag,
+          savedWorkspaces: state.savedWorkspaces.map((workspace) =>
+            workspace.id === state.workspaceId
+              ? { ...workspace, name, tag: nextTag }
+              : workspace
+          ),
+          workspaceSnapshots: {
+            ...state.workspaceSnapshots,
+            [state.workspaceId]: updatedSnapshot
+          }
+        }
       })
     },
 
     loadWorkspace: (config) => {
-      set({
-        workspaceId: config.id,
-        workspaceName: config.name,
-        workspaceTag: config.tag,
-        workspaceCreatedAt: config.createdAt
+      set((state) => {
+        const existing = state.workspaceSnapshots[config.id]
+        const snapshot =
+          existing ??
+          createEmptyWorkspaceSnapshot({
+            id: config.id,
+            name: config.name,
+            tag: config.tag,
+            createdAt: config.createdAt
+          })
+
+        const hydratedSnapshot: WorkspaceSnapshot = {
+          ...snapshot,
+          workspaceId: config.id,
+          workspaceName: config.name,
+          workspaceTag: config.tag,
+          workspaceCreatedAt: config.createdAt,
+          workspaceChatReferenceId:
+            snapshot.workspaceChatReferenceId || config.id
+        }
+
+        return {
+          ...applyWorkspaceSnapshot(hydratedSnapshot),
+          savedWorkspaces: upsertSavedWorkspace(
+            state.savedWorkspaces,
+            createSavedWorkspaceEntry(hydratedSnapshot)
+          ),
+          archivedWorkspaces: state.archivedWorkspaces.filter(
+            (workspace) => workspace.id !== config.id
+          ),
+          workspaceSnapshots: {
+            ...state.workspaceSnapshots,
+            [config.id]: hydratedSnapshot
+          }
+        }
       })
     },
 
@@ -384,6 +1056,8 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     addSource: (sourceData) => {
       const source: WorkspaceSource = {
         ...sourceData,
+        status: sourceData.status || "ready",
+        statusMessage: sourceData.statusMessage || undefined,
         id: generateWorkspaceId(),
         addedAt: new Date()
       }
@@ -400,6 +1074,8 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     addSources: (sourcesData) => {
       const newSources: WorkspaceSource[] = sourcesData.map((s) => ({
         ...s,
+        status: s.status || "ready",
+        statusMessage: s.statusMessage || undefined,
         id: generateWorkspaceId(),
         addedAt: new Date()
       }))
@@ -431,8 +1107,34 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         }
       }),
 
+    reorderSource: (sourceId, targetIndex) =>
+      set((state) => {
+        const currentIndex = state.sources.findIndex(
+          (source) => source.id === sourceId
+        )
+        if (currentIndex < 0) return state
+
+        const boundedTargetIndex = Math.max(
+          0,
+          Math.min(targetIndex, state.sources.length - 1)
+        )
+        if (boundedTargetIndex === currentIndex) return state
+
+        const reorderedSources = [...state.sources]
+        const [movedSource] = reorderedSources.splice(currentIndex, 1)
+        reorderedSources.splice(boundedTargetIndex, 0, movedSource)
+
+        return {
+          sources: reorderedSources
+        }
+      }),
+
     toggleSourceSelection: (id) =>
       set((state) => {
+        const source = state.sources.find((entry) => entry.id === id)
+        if (!source || getWorkspaceSourceStatus(source) !== "ready") {
+          return state
+        }
         const isSelected = state.selectedSourceIds.includes(id)
         return {
           selectedSourceIds: isSelected
@@ -443,30 +1145,155 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
     selectAllSources: () =>
       set((state) => ({
-        selectedSourceIds: state.sources.map((s) => s.id)
+        selectedSourceIds: state.sources
+          .filter((source) => getWorkspaceSourceStatus(source) === "ready")
+          .map((source) => source.id)
       })),
 
     deselectAllSources: () => set({ selectedSourceIds: [] }),
 
-    setSelectedSourceIds: (ids) => set({ selectedSourceIds: ids }),
+    setSelectedSourceIds: (ids) =>
+      set((state) => {
+        const readySourceIds = new Set(
+          state.sources
+            .filter((source) => getWorkspaceSourceStatus(source) === "ready")
+            .map((source) => source.id)
+        )
+        return {
+          selectedSourceIds: ids.filter((id) => readySourceIds.has(id))
+        }
+      }),
 
     setSourceSearchQuery: (query) => set({ sourceSearchQuery: query }),
+
+    setSourceStatusById: (sourceId, status, statusMessage) =>
+      set((state) => {
+        const nextSources = state.sources.map((source) =>
+          source.id === sourceId
+            ? {
+                ...source,
+                status,
+                statusMessage: statusMessage || undefined
+              }
+            : source
+        )
+        return {
+          sources: nextSources,
+          selectedSourceIds:
+            status === "ready"
+              ? state.selectedSourceIds
+              : state.selectedSourceIds.filter((id) => id !== sourceId)
+        }
+      }),
+
+    setSourceStatusByMediaId: (mediaId, status, statusMessage) =>
+      set((state) => {
+        const targetSource = state.sources.find(
+          (source) => source.mediaId === mediaId
+        )
+        if (!targetSource) return state
+
+        const nextSources = state.sources.map((source) =>
+          source.mediaId === mediaId
+            ? {
+                ...source,
+                status,
+                statusMessage: statusMessage || undefined
+              }
+            : source
+        )
+        return {
+          sources: nextSources,
+          selectedSourceIds:
+            status === "ready"
+              ? state.selectedSourceIds
+              : state.selectedSourceIds.filter((id) => id !== targetSource.id)
+        }
+      }),
+
+    focusSourceById: (id) => {
+      const state = get()
+      const sourceExists = state.sources.some((source) => source.id === id)
+      if (!sourceExists) return false
+
+      set((current) => ({
+        sourceFocusTarget: {
+          sourceId: id,
+          token: (current.sourceFocusTarget?.token ?? 0) + 1
+        }
+      }))
+      return true
+    },
+
+    focusSourceByMediaId: (mediaId) => {
+      const state = get()
+      const source = state.sources.find((entry) => entry.mediaId === mediaId)
+      if (!source) return false
+
+      set((current) => ({
+        sourceFocusTarget: {
+          sourceId: source.id,
+          token: (current.sourceFocusTarget?.token ?? 0) + 1
+        }
+      }))
+      return true
+    },
+
+    clearSourceFocusTarget: () => set({ sourceFocusTarget: null }),
 
     setSourcesLoading: (loading) => set({ sourcesLoading: loading }),
 
     setSourcesError: (error) => set({ sourcesError: error }),
 
+    restoreSource: (source, options) =>
+      set((state) => {
+        const sourceExists = state.sources.some(
+          (entry) => entry.id === source.id || entry.mediaId === source.mediaId
+        )
+        if (sourceExists) {
+          return state
+        }
+
+        const nextSources = [...state.sources]
+        const insertionIndex = Math.min(
+          Math.max(options?.index ?? nextSources.length, 0),
+          nextSources.length
+        )
+        nextSources.splice(insertionIndex, 0, {
+          ...source,
+          addedAt: reviveDateOrNull(source.addedAt) || new Date()
+        })
+
+        const shouldSelect =
+          options?.select === true &&
+          getWorkspaceSourceStatus(source) === "ready"
+
+        return {
+          sources: nextSources,
+          selectedSourceIds: shouldSelect
+            ? [...new Set([...state.selectedSourceIds, source.id])]
+            : state.selectedSourceIds
+        }
+      }),
+
     getSelectedSources: () => {
       const state = get()
       const selectedSet = new Set(state.selectedSourceIds)
-      return state.sources.filter((s) => selectedSet.has(s.id))
+      return state.sources.filter(
+        (source) =>
+          selectedSet.has(source.id) && getWorkspaceSourceStatus(source) === "ready"
+      )
     },
 
     getSelectedMediaIds: () => {
       const state = get()
       const selectedSet = new Set(state.selectedSourceIds)
       return state.sources
-        .filter((s) => selectedSet.has(s.id))
+        .filter(
+          (source) =>
+            selectedSet.has(source.id) &&
+            getWorkspaceSourceStatus(source) === "ready"
+        )
         .map((s) => s.mediaId)
     },
 
@@ -505,6 +1332,26 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         generatedArtifacts: state.generatedArtifacts.filter((a) => a.id !== id)
       })),
 
+    restoreArtifact: (artifact, options) =>
+      set((state) => {
+        if (state.generatedArtifacts.some((entry) => entry.id === artifact.id)) {
+          return state
+        }
+
+        const nextArtifacts = [...state.generatedArtifacts]
+        const insertionIndex = Math.min(
+          Math.max(options?.index ?? nextArtifacts.length, 0),
+          nextArtifacts.length
+        )
+        nextArtifacts.splice(insertionIndex, 0, {
+          ...artifact,
+          createdAt: reviveDateOrNull(artifact.createdAt) || new Date(),
+          completedAt: reviveDateOrUndefined(artifact.completedAt)
+        })
+
+        return { generatedArtifacts: nextArtifacts }
+      }),
+
     clearArtifacts: () => set({ generatedArtifacts: [] }),
 
     setNotes: (notes) => set({ notes }),
@@ -536,6 +1383,35 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
     clearCurrentNote: () =>
       set({ currentNote: { ...DEFAULT_WORKSPACE_NOTE } }),
+
+    captureToCurrentNote: ({ title, content, mode = "append" }) =>
+      set((state) => {
+        const trimmedContent = content.trim()
+        if (!trimmedContent) return state
+
+        const cleanedTitle = (title || "").trim().slice(0, 120)
+        const heading = cleanedTitle ? `## ${cleanedTitle}\n\n` : ""
+        const captureBlock = `${heading}${trimmedContent}`
+        const existingContent = state.currentNote.content.trim()
+        const resolvedMode: CaptureNoteMode =
+          mode === "replace" ? "replace" : "append"
+
+        const nextContent =
+          resolvedMode === "replace" || existingContent.length === 0
+            ? captureBlock
+            : `${existingContent}\n\n---\n\n${captureBlock}`
+        const nextTitle =
+          state.currentNote.title.trim() || cleanedTitle || state.currentNote.title
+
+        return {
+          currentNote: {
+            ...state.currentNote,
+            title: nextTitle,
+            content: nextContent,
+            isDirty: true
+          }
+        }
+      }),
 
     loadNote: (note) =>
       set({
@@ -585,6 +1461,30 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
     setAddSourceError: (error) => set({ addSourceError: error }),
 
+    focusChatMessageById: (messageId) => {
+      const normalizedMessageId = messageId.trim()
+      if (!normalizedMessageId) return false
+      set((state) => ({
+        chatFocusTarget: {
+          messageId: normalizedMessageId,
+          token: (state.chatFocusTarget?.token ?? 0) + 1
+        }
+      }))
+      return true
+    },
+
+    clearChatFocusTarget: () => set({ chatFocusTarget: null }),
+
+    focusWorkspaceNote: (field = "content") =>
+      set((state) => ({
+        noteFocusTarget: {
+          field,
+          token: (state.noteFocusTarget?.token ?? 0) + 1
+        }
+      })),
+
+    clearNoteFocusTarget: () => set({ noteFocusTarget: null }),
+
     // ─────────────────────────────────────────────────────────────────────────
     // Audio Settings Actions
     // ─────────────────────────────────────────────────────────────────────────
@@ -606,119 +1506,560 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
       // Don't save if workspace has no ID (uninitialized)
       if (!state.workspaceId) return
 
-      const savedWorkspace: SavedWorkspace = {
-        id: state.workspaceId,
-        name: state.workspaceName || "Untitled Workspace",
-        tag: state.workspaceTag,
-        createdAt: state.workspaceCreatedAt || new Date(),
-        lastAccessedAt: new Date(),
-        sourceCount: state.sources.length
-      }
+      const snapshot = buildWorkspaceSnapshot(state)
+      const savedWorkspace = createSavedWorkspaceEntry(snapshot)
 
       set((s) => {
-        // Remove existing entry for this workspace if it exists
-        const filtered = s.savedWorkspaces.filter((w) => w.id !== savedWorkspace.id)
-        // Add at the beginning (most recent)
         return {
-          savedWorkspaces: [savedWorkspace, ...filtered].slice(0, 10) // Keep max 10 workspaces
+          savedWorkspaces: upsertSavedWorkspace(
+            s.savedWorkspaces,
+            savedWorkspace
+          ),
+          archivedWorkspaces: s.archivedWorkspaces.filter(
+            (workspace) => workspace.id !== savedWorkspace.id
+          ),
+          workspaceSnapshots: {
+            ...s.workspaceSnapshots,
+            [snapshot.workspaceId]: snapshot
+          }
         }
       })
+    },
+
+    exportWorkspaceBundle: (id) => {
+      const state = get()
+      const targetWorkspaceId = id || state.workspaceId
+      if (!targetWorkspaceId) return null
+
+      const snapshot =
+        targetWorkspaceId === state.workspaceId
+          ? buildWorkspaceSnapshot(state)
+          : state.workspaceSnapshots[targetWorkspaceId]
+      if (!snapshot) return null
+
+      const savedWorkspace =
+        state.savedWorkspaces.find((workspace) => workspace.id === targetWorkspaceId) ||
+        state.archivedWorkspaces.find(
+          (workspace) => workspace.id === targetWorkspaceId
+        ) ||
+        null
+
+      const chatSession = state.workspaceChatSessions[targetWorkspaceId]
+
+      return {
+        format: WORKSPACE_EXPORT_BUNDLE_FORMAT,
+        schemaVersion: WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION,
+        exportedAt: new Date().toISOString(),
+        workspace: {
+          name: snapshot.workspaceName || savedWorkspace?.name || "Untitled Workspace",
+          tag: snapshot.workspaceTag || savedWorkspace?.tag || "",
+          createdAt:
+            snapshot.workspaceCreatedAt ||
+            savedWorkspace?.createdAt ||
+            null,
+          snapshot: buildWorkspaceBundleSnapshot(snapshot),
+          ...(chatSession
+            ? {
+                chatSession: cloneWorkspaceBundleChatSession({
+                  messages: chatSession.messages,
+                  history: chatSession.history,
+                  historyId: chatSession.historyId,
+                  serverChatId: chatSession.serverChatId
+                })
+              }
+            : {})
+        }
+      }
+    },
+
+    importWorkspaceBundle: (bundle) => {
+      if (
+        bundle.format !== WORKSPACE_EXPORT_BUNDLE_FORMAT ||
+        bundle.schemaVersion !== WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION
+      ) {
+        return null
+      }
+
+      const snapshotPayload = bundle.workspace?.snapshot
+      if (!snapshotPayload) return null
+
+      const state = get()
+      const now = new Date()
+      const currentSnapshot = state.workspaceId
+        ? buildWorkspaceSnapshot(state)
+        : null
+
+      const baseName =
+        (typeof snapshotPayload.workspaceName === "string" &&
+        snapshotPayload.workspaceName.trim()
+          ? snapshotPayload.workspaceName.trim()
+          : typeof bundle.workspace?.name === "string"
+            ? bundle.workspace.name.trim()
+            : "") || "Imported Workspace"
+      const importedName = `${baseName} (Imported)`
+      const importedId = generateWorkspaceId()
+      const importedSlug = createSlug(importedName) || importedId.slice(0, 8)
+      const importedTag = `workspace:${importedSlug}`
+
+      const importedSnapshot = hydrateWorkspaceBundleSnapshot(
+        snapshotPayload,
+        importedId,
+        importedName,
+        importedTag
+      )
+
+      const nextSnapshots: Record<string, WorkspaceSnapshot> = {
+        ...state.workspaceSnapshots,
+        [importedSnapshot.workspaceId]: importedSnapshot
+      }
+      let nextSavedWorkspaces = state.savedWorkspaces
+
+      if (currentSnapshot?.workspaceId) {
+        nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
+        nextSavedWorkspaces = upsertSavedWorkspace(
+          nextSavedWorkspaces,
+          createSavedWorkspaceEntry(currentSnapshot, now)
+        )
+      }
+
+      nextSavedWorkspaces = upsertSavedWorkspace(
+        nextSavedWorkspaces,
+        createSavedWorkspaceEntry(importedSnapshot, now)
+      )
+
+      const importedChatSession =
+        bundle.workspace?.chatSession &&
+        cloneWorkspaceBundleChatSession(bundle.workspace.chatSession)
+      const nextWorkspaceChatSessions = importedChatSession
+        ? {
+            ...state.workspaceChatSessions,
+            [importedSnapshot.workspaceId]: {
+              messages: importedChatSession.messages,
+              history: importedChatSession.history,
+              historyId: importedChatSession.historyId,
+              serverChatId: importedChatSession.serverChatId
+            }
+          }
+        : state.workspaceChatSessions
+
+      set({
+        ...applyWorkspaceSnapshot(importedSnapshot),
+        savedWorkspaces: nextSavedWorkspaces,
+        archivedWorkspaces: state.archivedWorkspaces.filter(
+          (workspace) => workspace.id !== importedSnapshot.workspaceId
+        ),
+        workspaceSnapshots: nextSnapshots,
+        workspaceChatSessions: nextWorkspaceChatSessions
+      })
+
+      return importedSnapshot.workspaceId
     },
 
     switchWorkspace: (id) => {
       const state = get()
-      const targetWorkspace = state.savedWorkspaces.find((w) => w.id === id)
-      if (!targetWorkspace) return
+      const targetWorkspace =
+        state.savedWorkspaces.find((workspace) => workspace.id === id) || null
+      const targetSnapshotFromState = state.workspaceSnapshots[id]
+      if (!targetWorkspace && !targetSnapshotFromState) return
 
-      // Save current workspace first (if it has an ID)
-      if (state.workspaceId) {
-        const currentSaved: SavedWorkspace = {
-          id: state.workspaceId,
-          name: state.workspaceName || "Untitled Workspace",
-          tag: state.workspaceTag,
-          createdAt: state.workspaceCreatedAt || new Date(),
-          lastAccessedAt: new Date(),
-          sourceCount: state.sources.length
-        }
-
-        set((s) => {
-          const filtered = s.savedWorkspaces.filter((w) => w.id !== currentSaved.id)
-          return {
-            savedWorkspaces: [currentSaved, ...filtered].slice(0, 10)
-          }
+      const now = new Date()
+      const currentSnapshot = state.workspaceId
+        ? buildWorkspaceSnapshot(state)
+        : null
+      const targetSnapshot =
+        targetSnapshotFromState ||
+        createEmptyWorkspaceSnapshot({
+          id,
+          name: targetWorkspace?.name || "Untitled Workspace",
+          tag: targetWorkspace?.tag || `workspace:${id.slice(0, 8)}`,
+          createdAt: targetWorkspace?.createdAt || now
         })
+
+      const nextSnapshots: Record<string, WorkspaceSnapshot> = {
+        ...state.workspaceSnapshots,
+        [targetSnapshot.workspaceId]: targetSnapshot
       }
 
-      // Load workspace from localStorage (the store persists all state under a single key)
-      // For now, we just update the workspace identity and clear other state
-      // A full implementation would need separate storage per workspace
-      set({
-        workspaceId: targetWorkspace.id,
-        workspaceName: targetWorkspace.name,
-        workspaceTag: targetWorkspace.tag,
-        workspaceCreatedAt: targetWorkspace.createdAt,
-        // Reset workspace-specific state (sources, artifacts, notes)
-        // In a full implementation, these would be loaded from workspace-specific storage
-        ...initialSourcesState,
-        ...initialStudioState
-      })
-
-      // Update last accessed time
-      set((s) => ({
-        savedWorkspaces: s.savedWorkspaces.map((w) =>
-          w.id === id ? { ...w, lastAccessedAt: new Date() } : w
+      let nextSavedWorkspaces = state.savedWorkspaces
+      if (currentSnapshot?.workspaceId) {
+        nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
+        nextSavedWorkspaces = upsertSavedWorkspace(
+          nextSavedWorkspaces,
+          createSavedWorkspaceEntry(currentSnapshot, now)
         )
-      }))
+      }
+
+      nextSavedWorkspaces = upsertSavedWorkspace(
+        nextSavedWorkspaces,
+        createSavedWorkspaceEntry(targetSnapshot, now)
+      )
+
+      set({
+        ...applyWorkspaceSnapshot(targetSnapshot),
+        savedWorkspaces: nextSavedWorkspaces,
+        archivedWorkspaces: state.archivedWorkspaces.filter(
+          (workspace) => workspace.id !== targetSnapshot.workspaceId
+        ),
+        workspaceSnapshots: nextSnapshots
+      })
     },
 
     createNewWorkspace: (name = "New Research") => {
       const state = get()
-
-      // Save current workspace first (if it has an ID)
-      if (state.workspaceId) {
-        const currentSaved: SavedWorkspace = {
-          id: state.workspaceId,
-          name: state.workspaceName || "Untitled Workspace",
-          tag: state.workspaceTag,
-          createdAt: state.workspaceCreatedAt || new Date(),
-          lastAccessedAt: new Date(),
-          sourceCount: state.sources.length
-        }
-
-        set((s) => {
-          const filtered = s.savedWorkspaces.filter((w) => w.id !== currentSaved.id)
-          return {
-            savedWorkspaces: [currentSaved, ...filtered].slice(0, 10)
-          }
-        })
-      }
-
-      // Create new workspace
       const newId = generateWorkspaceId()
       const slug = createSlug(name) || newId.slice(0, 8)
+      const createdAt = new Date()
+      const tag = `workspace:${slug}`
+
+      const newWorkspaceSnapshot = createEmptyWorkspaceSnapshot({
+        id: newId,
+        name,
+        tag,
+        createdAt
+      })
+      const currentSnapshot = state.workspaceId
+        ? buildWorkspaceSnapshot(state)
+        : null
+
+      const nextSnapshots: Record<string, WorkspaceSnapshot> = {
+        ...state.workspaceSnapshots,
+        [newId]: newWorkspaceSnapshot
+      }
+      let nextSavedWorkspaces = state.savedWorkspaces
+
+      if (currentSnapshot?.workspaceId) {
+        nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
+        nextSavedWorkspaces = upsertSavedWorkspace(
+          nextSavedWorkspaces,
+          createSavedWorkspaceEntry(currentSnapshot, createdAt)
+        )
+      }
+
+      nextSavedWorkspaces = upsertSavedWorkspace(
+        nextSavedWorkspaces,
+        createSavedWorkspaceEntry(newWorkspaceSnapshot, createdAt)
+      )
 
       set({
-        workspaceId: newId,
-        workspaceName: name,
-        workspaceTag: `workspace:${slug}`,
-        workspaceCreatedAt: new Date(),
-        // Reset workspace-specific state
+        ...applyWorkspaceSnapshot(newWorkspaceSnapshot),
         ...initialSourcesState,
-        ...initialStudioState
+        ...initialStudioState,
+        savedWorkspaces: nextSavedWorkspaces,
+        archivedWorkspaces: state.archivedWorkspaces.filter(
+          (workspace) => workspace.id !== newWorkspaceSnapshot.workspaceId
+        ),
+        workspaceSnapshots: nextSnapshots
+      })
+    },
+
+    duplicateWorkspace: (id) => {
+      const state = get()
+      const sourceWorkspaceId = id || state.workspaceId
+      if (!sourceWorkspaceId) return null
+
+      const currentSnapshot = state.workspaceId
+        ? buildWorkspaceSnapshot(state)
+        : null
+      const sourceSnapshot =
+        sourceWorkspaceId === state.workspaceId
+          ? currentSnapshot
+          : state.workspaceSnapshots[sourceWorkspaceId]
+      if (!sourceSnapshot) return null
+
+      const duplicatedSnapshot = duplicateWorkspaceSnapshot(sourceSnapshot)
+      const now = new Date()
+      const nextSnapshots: Record<string, WorkspaceSnapshot> = {
+        ...state.workspaceSnapshots,
+        [duplicatedSnapshot.workspaceId]: duplicatedSnapshot
+      }
+      let nextSavedWorkspaces = state.savedWorkspaces
+
+      if (currentSnapshot?.workspaceId) {
+        nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
+        nextSavedWorkspaces = upsertSavedWorkspace(
+          nextSavedWorkspaces,
+          createSavedWorkspaceEntry(currentSnapshot, now)
+        )
+      }
+
+      nextSavedWorkspaces = upsertSavedWorkspace(
+        nextSavedWorkspaces,
+        createSavedWorkspaceEntry(duplicatedSnapshot, now)
+      )
+
+      set({
+        ...applyWorkspaceSnapshot(duplicatedSnapshot),
+        savedWorkspaces: nextSavedWorkspaces,
+        archivedWorkspaces: state.archivedWorkspaces.filter(
+          (workspace) => workspace.id !== duplicatedSnapshot.workspaceId
+        ),
+        workspaceSnapshots: nextSnapshots
+      })
+
+      return duplicatedSnapshot.workspaceId
+    },
+
+    archiveWorkspace: (id) => {
+      set((state) => {
+        const now = new Date()
+        const currentSnapshot = state.workspaceId
+          ? buildWorkspaceSnapshot(state)
+          : null
+        const snapshotToArchive =
+          id === state.workspaceId
+            ? currentSnapshot
+            : state.workspaceSnapshots[id]
+        const savedEntry =
+          state.savedWorkspaces.find((workspace) => workspace.id === id) ||
+          state.archivedWorkspaces.find((workspace) => workspace.id === id) ||
+          (snapshotToArchive
+            ? createSavedWorkspaceEntry(snapshotToArchive, now)
+            : null)
+
+        if (!savedEntry) {
+          return state
+        }
+
+        const nextSnapshots = { ...state.workspaceSnapshots }
+        if (snapshotToArchive) {
+          nextSnapshots[id] = snapshotToArchive
+        }
+
+        const nextSavedWorkspaces = state.savedWorkspaces.filter(
+          (workspace) => workspace.id !== id
+        )
+        const nextArchivedWorkspaces = upsertArchivedWorkspace(
+          state.archivedWorkspaces,
+          {
+            ...savedEntry,
+            lastAccessedAt: now,
+            sourceCount: snapshotToArchive
+              ? snapshotToArchive.sources.length
+              : savedEntry.sourceCount
+          }
+        )
+
+        if (state.workspaceId !== id) {
+          return {
+            savedWorkspaces: nextSavedWorkspaces,
+            archivedWorkspaces: nextArchivedWorkspaces,
+            workspaceSnapshots: nextSnapshots
+          }
+        }
+
+        if (nextSavedWorkspaces.length > 0) {
+          const fallbackWorkspace = nextSavedWorkspaces[0]
+          const fallbackSnapshot =
+            nextSnapshots[fallbackWorkspace.id] ||
+            createEmptyWorkspaceSnapshot({
+              id: fallbackWorkspace.id,
+              name: fallbackWorkspace.name,
+              tag: fallbackWorkspace.tag,
+              createdAt: fallbackWorkspace.createdAt
+            })
+
+          return {
+            ...applyWorkspaceSnapshot(fallbackSnapshot),
+            savedWorkspaces: upsertSavedWorkspace(
+              nextSavedWorkspaces,
+              createSavedWorkspaceEntry(fallbackSnapshot, now)
+            ),
+            archivedWorkspaces: nextArchivedWorkspaces,
+            workspaceSnapshots: {
+              ...nextSnapshots,
+              [fallbackSnapshot.workspaceId]: fallbackSnapshot
+            }
+          }
+        }
+
+        const replacementSnapshot = createFallbackWorkspaceSnapshot()
+        return {
+          ...applyWorkspaceSnapshot(replacementSnapshot),
+          savedWorkspaces: [createSavedWorkspaceEntry(replacementSnapshot, now)],
+          archivedWorkspaces: nextArchivedWorkspaces,
+          workspaceSnapshots: {
+            ...nextSnapshots,
+            [replacementSnapshot.workspaceId]: replacementSnapshot
+          }
+        }
+      })
+    },
+
+    restoreArchivedWorkspace: (id) => {
+      set((state) => {
+        const archivedWorkspace = state.archivedWorkspaces.find(
+          (workspace) => workspace.id === id
+        )
+        if (!archivedWorkspace) {
+          return state
+        }
+
+        const snapshot =
+          state.workspaceSnapshots[id] ||
+          createEmptyWorkspaceSnapshot({
+            id: archivedWorkspace.id,
+            name: archivedWorkspace.name,
+            tag: archivedWorkspace.tag,
+            createdAt: archivedWorkspace.createdAt
+          })
+        const now = new Date()
+
+        return {
+          savedWorkspaces: upsertSavedWorkspace(
+            state.savedWorkspaces,
+            createSavedWorkspaceEntry(snapshot, now)
+          ),
+          archivedWorkspaces: state.archivedWorkspaces.filter(
+            (workspace) => workspace.id !== id
+          ),
+          workspaceSnapshots: {
+            ...state.workspaceSnapshots,
+            [snapshot.workspaceId]: snapshot
+          }
+        }
       })
     },
 
     deleteWorkspace: (id) => {
-      set((state) => ({
-        savedWorkspaces: state.savedWorkspaces.filter((w) => w.id !== id)
-      }))
+      set((state) => {
+        const nextSavedWorkspaces = state.savedWorkspaces.filter(
+          (workspace) => workspace.id !== id
+        )
+        const nextArchivedWorkspaces = state.archivedWorkspaces.filter(
+          (workspace) => workspace.id !== id
+        )
+        const { [id]: _removedWorkspace, ...remainingSnapshots } =
+          state.workspaceSnapshots
+        const { [id]: _removedChatSession, ...remainingChatSessions } =
+          state.workspaceChatSessions
+
+        if (state.workspaceId !== id) {
+          return {
+            savedWorkspaces: nextSavedWorkspaces,
+            archivedWorkspaces: nextArchivedWorkspaces,
+            workspaceSnapshots: remainingSnapshots,
+            workspaceChatSessions: remainingChatSessions
+          }
+        }
+
+        if (nextSavedWorkspaces.length > 0) {
+          const fallbackWorkspace = nextSavedWorkspaces[0]
+          const fallbackSnapshot =
+            remainingSnapshots[fallbackWorkspace.id] ||
+            createEmptyWorkspaceSnapshot({
+              id: fallbackWorkspace.id,
+              name: fallbackWorkspace.name,
+              tag: fallbackWorkspace.tag,
+              createdAt: fallbackWorkspace.createdAt
+            })
+
+          return {
+            ...applyWorkspaceSnapshot(fallbackSnapshot),
+            savedWorkspaces: upsertSavedWorkspace(
+              nextSavedWorkspaces,
+              createSavedWorkspaceEntry(fallbackSnapshot, new Date())
+            ),
+            archivedWorkspaces: nextArchivedWorkspaces,
+            workspaceSnapshots: {
+              ...remainingSnapshots,
+              [fallbackSnapshot.workspaceId]: fallbackSnapshot
+            },
+            workspaceChatSessions: remainingChatSessions
+          }
+        }
+
+        const replacementSnapshot = createFallbackWorkspaceSnapshot()
+
+        return {
+          ...applyWorkspaceSnapshot(replacementSnapshot),
+          savedWorkspaces: [createSavedWorkspaceEntry(replacementSnapshot)],
+          archivedWorkspaces: nextArchivedWorkspaces,
+          workspaceSnapshots: {
+            ...remainingSnapshots,
+            [replacementSnapshot.workspaceId]: replacementSnapshot
+          },
+          workspaceChatSessions: remainingChatSessions
+        }
+      })
     },
 
     getSavedWorkspaces: () => {
       const state = get()
-      return [...state.savedWorkspaces].sort(
-        (a, b) => new Date(b.lastAccessedAt).getTime() - new Date(a.lastAccessedAt).getTime()
-      )
+      return sortByLastAccessedDesc(state.savedWorkspaces)
+    },
+
+    getArchivedWorkspaces: () => {
+      const state = get()
+      return sortByLastAccessedDesc(state.archivedWorkspaces)
+    },
+
+    saveWorkspaceChatSession: (workspaceId, session) => {
+      if (!workspaceId) return
+      set((state) => ({
+        workspaceChatSessions: {
+          ...state.workspaceChatSessions,
+          [workspaceId]: cloneWorkspaceChatSession(session)
+        }
+      }))
+    },
+
+    getWorkspaceChatSession: (workspaceId) => {
+      const state = get()
+      const session = state.workspaceChatSessions[workspaceId]
+      return session ? cloneWorkspaceChatSession(session) : null
+    },
+
+    clearWorkspaceChatSession: (workspaceId) => {
+      if (!workspaceId) return
+      set((state) => {
+        const { [workspaceId]: _removedSession, ...remainingSessions } =
+          state.workspaceChatSessions
+        return {
+          workspaceChatSessions: remainingSessions
+        }
+      })
+    },
+
+    captureUndoSnapshot: () => {
+      const state = get()
+      return buildWorkspaceUndoSnapshot(state)
+    },
+
+    restoreUndoSnapshot: (snapshot) => {
+      const clonedSnapshot = cloneWorkspaceValue(snapshot)
+      set({
+        workspaceId: clonedSnapshot.workspaceId,
+        workspaceName: clonedSnapshot.workspaceName,
+        workspaceTag: clonedSnapshot.workspaceTag,
+        workspaceCreatedAt: reviveDateOrNull(clonedSnapshot.workspaceCreatedAt),
+        workspaceChatReferenceId:
+          clonedSnapshot.workspaceChatReferenceId ||
+          clonedSnapshot.workspaceId,
+        sources: reviveSources(clonedSnapshot.sources || []),
+        selectedSourceIds: clonedSnapshot.selectedSourceIds || [],
+        generatedArtifacts: reviveArtifacts(clonedSnapshot.generatedArtifacts || []),
+        notes: clonedSnapshot.notes || "",
+        currentNote: clonedSnapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
+        leftPaneCollapsed: Boolean(clonedSnapshot.leftPaneCollapsed),
+        rightPaneCollapsed: Boolean(clonedSnapshot.rightPaneCollapsed),
+        audioSettings:
+          clonedSnapshot.audioSettings || { ...DEFAULT_AUDIO_SETTINGS },
+        savedWorkspaces: (clonedSnapshot.savedWorkspaces || []).map(
+          reviveSavedWorkspace
+        ),
+        archivedWorkspaces: (clonedSnapshot.archivedWorkspaces || []).map(
+          reviveSavedWorkspace
+        ),
+        workspaceSnapshots: Object.fromEntries(
+          Object.entries(clonedSnapshot.workspaceSnapshots || {}).map(
+            ([workspaceId, workspaceSnapshot]) => [
+              workspaceId,
+              reviveWorkspaceSnapshot(workspaceId, workspaceSnapshot)
+            ]
+          )
+        ),
+        workspaceChatSessions: clonedSnapshot.workspaceChatSessions || {}
+      })
     },
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -738,88 +2079,145 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
       })
     }),
     {
-      name: STORAGE_KEY,
+      name: WORKSPACE_STORAGE_KEY,
       storage: createJSONStorage(() => createWorkspaceStorage()),
       // Only persist essential state, not transient UI state
-      partialize: (state): PersistedWorkspaceState => ({
-        // Workspace identity
-        workspaceId: state.workspaceId,
-        workspaceName: state.workspaceName,
-        workspaceTag: state.workspaceTag,
-        workspaceCreatedAt: state.workspaceCreatedAt,
+      partialize: (state): PersistedWorkspaceState => {
+        const nextSnapshots = { ...state.workspaceSnapshots }
+        if (state.workspaceId) {
+          nextSnapshots[state.workspaceId] = buildWorkspaceSnapshot(state)
+        }
 
-        // Sources
-        sources: state.sources,
-        selectedSourceIds: state.selectedSourceIds,
+        const persistedSnapshots: Record<string, WorkspaceSnapshot> = {}
+        for (const [workspaceId, snapshot] of Object.entries(nextSnapshots)) {
+          persistedSnapshots[workspaceId] = {
+            ...snapshot,
+            generatedArtifacts: sanitizeArtifactsForPersistence(
+              snapshot.generatedArtifacts
+            )
+          }
+        }
 
-        // Studio outputs (note: audioUrl blobs won't survive reload, but text content will)
-        generatedArtifacts: state.generatedArtifacts.map((artifact) => ({
-          ...artifact,
-          // Clear audioUrl since blob URLs don't persist across sessions
-          audioUrl: undefined
-        })),
-        notes: state.notes,
-        currentNote: state.currentNote,
+        return {
+          // Workspace identity
+          workspaceId: state.workspaceId,
+          workspaceName: state.workspaceName,
+          workspaceTag: state.workspaceTag,
+          workspaceCreatedAt: state.workspaceCreatedAt,
+          workspaceChatReferenceId:
+            state.workspaceChatReferenceId || state.workspaceId,
 
-        // Pane preferences
-        leftPaneCollapsed: state.leftPaneCollapsed,
-        rightPaneCollapsed: state.rightPaneCollapsed,
+          // Sources
+          sources: state.sources,
+          selectedSourceIds: state.selectedSourceIds,
 
-        // Audio generation settings
-        audioSettings: state.audioSettings,
+          // Studio outputs (note: audioUrl blobs won't survive reload, but text content will)
+          generatedArtifacts: sanitizeArtifactsForPersistence(
+            state.generatedArtifacts
+          ),
+          notes: state.notes,
+          currentNote: state.currentNote,
 
-        // Saved workspaces list
-        savedWorkspaces: state.savedWorkspaces
-      }),
+          // Pane preferences
+          leftPaneCollapsed: state.leftPaneCollapsed,
+          rightPaneCollapsed: state.rightPaneCollapsed,
+
+          // Audio generation settings
+          audioSettings: state.audioSettings,
+
+          // Saved workspaces list
+          savedWorkspaces: state.savedWorkspaces,
+          archivedWorkspaces: state.archivedWorkspaces,
+
+          // Workspace snapshots
+          workspaceSnapshots: persistedSnapshots,
+
+          // Workspace chat sessions
+          workspaceChatSessions: state.workspaceChatSessions
+        }
+      },
       // Rehydrate dates properly and handle migration
       onRehydrateStorage: () => (state) => {
         if (state) {
           // Ensure dates are Date objects after rehydration
-          if (state.workspaceCreatedAt && typeof state.workspaceCreatedAt === "string") {
-            state.workspaceCreatedAt = new Date(state.workspaceCreatedAt)
+          state.workspaceCreatedAt = reviveDateOrNull(state.workspaceCreatedAt)
+          state.sources = reviveSources(state.sources || [])
+          const readySourceIds = new Set(
+            state.sources
+              .filter((source) => getWorkspaceSourceStatus(source) === "ready")
+              .map((source) => source.id)
+          )
+          state.selectedSourceIds = (state.selectedSourceIds || []).filter((id) =>
+            readySourceIds.has(id)
+          )
+          const persistedArtifacts = state.generatedArtifacts || []
+          const interruptedArtifactCount = persistedArtifacts.filter(
+            (artifact) =>
+              (artifact?.status || "").toString().toLowerCase() === "generating"
+          ).length
+          state.generatedArtifacts = reviveArtifacts(persistedArtifacts)
+          if (interruptedArtifactCount > 0) {
+            void trackWorkspacePlaygroundTelemetry({
+              type: "artifact_rehydrated_failed",
+              workspace_id: state.workspaceId || null,
+              interrupted_count: interruptedArtifactCount
+            })
           }
-          state.sources = state.sources.map((source) => ({
-            ...source,
-            addedAt:
-              typeof source.addedAt === "string"
-                ? new Date(source.addedAt)
-                : source.addedAt
-          }))
-          state.generatedArtifacts = state.generatedArtifacts.map((artifact) => ({
-            ...artifact,
-            createdAt:
-              typeof artifact.createdAt === "string"
-                ? new Date(artifact.createdAt)
-                : artifact.createdAt,
-            completedAt:
-              artifact.completedAt && typeof artifact.completedAt === "string"
-                ? new Date(artifact.completedAt)
-                : artifact.completedAt
-          }))
-          // Migration: ensure audioSettings exists (for users with older persisted state)
+
+          // Migration: ensure optional fields exist
           if (!state.audioSettings) {
             state.audioSettings = { ...DEFAULT_AUDIO_SETTINGS }
           }
-          // Migration: ensure currentNote exists (for users with older persisted state)
           if (!state.currentNote) {
             state.currentNote = { ...DEFAULT_WORKSPACE_NOTE }
           }
-          // Migration: ensure savedWorkspaces exists and dates are properly converted
-          if (!state.savedWorkspaces) {
-            state.savedWorkspaces = []
-          } else {
-            state.savedWorkspaces = state.savedWorkspaces.map((workspace) => ({
-              ...workspace,
-              createdAt:
-                typeof workspace.createdAt === "string"
-                  ? new Date(workspace.createdAt)
-                  : workspace.createdAt,
-              lastAccessedAt:
-                typeof workspace.lastAccessedAt === "string"
-                  ? new Date(workspace.lastAccessedAt)
-                  : workspace.lastAccessedAt
-            }))
+          if (!state.workspaceChatReferenceId) {
+            state.workspaceChatReferenceId = state.workspaceId || ""
           }
+
+          // Migration: ensure savedWorkspaces exists and dates are properly converted
+          state.savedWorkspaces = (state.savedWorkspaces || []).map(
+            reviveSavedWorkspace
+          )
+          state.archivedWorkspaces = (state.archivedWorkspaces || []).map(
+            reviveSavedWorkspace
+          )
+
+          // Migration: ensure workspace snapshots exist and are hydrated
+          const rawSnapshots = state.workspaceSnapshots || {}
+          const hydratedSnapshots: Record<string, WorkspaceSnapshot> = {}
+          for (const [workspaceId, snapshot] of Object.entries(rawSnapshots)) {
+            hydratedSnapshots[workspaceId] = reviveWorkspaceSnapshot(
+              workspaceId,
+              snapshot
+            )
+          }
+          state.workspaceSnapshots = hydratedSnapshots
+          state.workspaceChatSessions = state.workspaceChatSessions || {}
+
+          // Ensure active workspace snapshot exists and use it as canonical source
+          if (state.workspaceId) {
+            const activeSnapshot =
+              state.workspaceSnapshots[state.workspaceId] ||
+              createEmptyWorkspaceSnapshot({
+                id: state.workspaceId,
+                name: state.workspaceName || "Untitled Workspace",
+                tag:
+                  state.workspaceTag ||
+                  `workspace:${state.workspaceId.slice(0, 8)}`,
+                createdAt: state.workspaceCreatedAt || new Date()
+              })
+
+            state.workspaceSnapshots[state.workspaceId] = activeSnapshot
+            Object.assign(state, applyWorkspaceSnapshot(activeSnapshot))
+
+            state.savedWorkspaces = upsertSavedWorkspace(
+              state.savedWorkspaces,
+              createSavedWorkspaceEntry(activeSnapshot)
+            )
+          }
+
+          state.storeHydrated = true
         }
       }
     }

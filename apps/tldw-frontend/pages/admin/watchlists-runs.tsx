@@ -1,14 +1,13 @@
-import dynamic from "next/dynamic"
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
-export default dynamic(async () => {
-  const { useRouter } = await import("next/router")
-  const { useEffect } = await import("react")
-  const Page = () => {
-    const router = useRouter()
-    useEffect(() => {
-      void router.replace("/admin/server")
-    }, [router])
-    return null
-  }
-  return { default: Page }
-}, { ssr: false })
+export default function AdminWatchlistsRunsRedirectPage() {
+  return (
+    <RoutePlaceholder
+      title="Watchlist Runs Admin Is Coming Soon"
+      description="Administrative run-level visibility for watchlists will be available on this route."
+      plannedPath="/admin/watchlists-runs"
+      primaryCtaHref="/watchlists"
+      primaryCtaLabel="Open Watchlists"
+    />
+  );
+}

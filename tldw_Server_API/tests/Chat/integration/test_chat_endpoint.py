@@ -18,7 +18,7 @@ try:
     if _env_path.exists():
         load_dotenv(dotenv_path=str(_env_path), override=False)
 except Exception:
-    pass
+    _ = None
 
 # Import your FastAPI app instance
 from tldw_Server_API.app.main import app
@@ -80,7 +80,7 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
             if api_key:
                 headers["X-API-KEY"] = api_key
     except Exception:
-        pass
+        _ = None
 
     headers["X-CSRF-Token"] = getattr(client, "csrf_token", "")
 

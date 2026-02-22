@@ -48,19 +48,19 @@ class HFTableTransformerBackend(VLMBackend):
         if self._loaded:
             return
         from transformers import AutoImageProcessor
-        self._processor = AutoImageProcessor.from_pretrained(self._model_name, revision=self._revision)
+        self._processor = AutoImageProcessor.from_pretrained(self._model_name, revision=self._revision)  # nosec B615
 
         # Prefer the specific TableTransformerForObjectDetection class when available
         try:
             from transformers import TableTransformerForObjectDetection  # type: ignore
 
-            self._model = TableTransformerForObjectDetection.from_pretrained(
+            self._model = TableTransformerForObjectDetection.from_pretrained(  # nosec B615
                 self._model_name, revision=self._revision
             )
         except (ImportError, OSError, RuntimeError, TypeError, ValueError):
             from transformers import AutoModelForObjectDetection  # fallback
 
-            self._model = AutoModelForObjectDetection.from_pretrained(
+            self._model = AutoModelForObjectDetection.from_pretrained(  # nosec B615
                 self._model_name, revision=self._revision
             )
 

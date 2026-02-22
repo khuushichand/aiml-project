@@ -12,15 +12,17 @@ from sqlite3 import Error as SQLiteError
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user, get_db_transaction
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, get_db_transaction
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ToolCatalogCreateRequest,
     ToolCatalogEntryCreateRequest,
     ToolCatalogEntryResponse,
     ToolCatalogResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_members, list_team_members
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.exceptions import ToolCatalogConflictError
+from tldw_Server_API.app.services import admin_tool_catalog_service
 
 router = APIRouter(prefix="", tags=["mcp-catalogs-scope"])
 _CATALOG_NONCRITICAL_EXCEPTIONS = (
@@ -34,6 +36,8 @@ _CATALOG_NONCRITICAL_EXCEPTIONS = (
     ValueError,
 )
 _CATALOG_MEMBER_PARSE_EXCEPTIONS = (AttributeError, TypeError, ValueError)
+_CATALOG_PAGE_SIZE = 1000
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _is_manager(role: str | None) -> bool:
@@ -43,14 +47,32 @@ def _is_manager(role: str | None) -> bool:
     return r in {"owner", "admin", "lead"}
 
 
-async def _require_org_manager(user: dict, org_id: int) -> None:
+def _is_admin_principal(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
+async def _require_org_manager(principal: AuthPrincipal, org_id: int) -> None:
     # Admin bypass
-    if str(user.get("role", "")).lower() == "admin":
+    if _is_admin_principal(principal):
         return
+    if principal.user_id is None:
+        raise HTTPException(status_code=403, detail="Org manager role required")
     # Check org membership
     try:
         members = await list_org_members(org_id=org_id, limit=1000, offset=0)
-        uid = int(user.get("id"))
+        uid = int(principal.user_id)
         for m in members:
             try:
                 if int(m.get("user_id")) == uid and _is_manager(m.get("role")):
@@ -62,13 +84,15 @@ async def _require_org_manager(user: dict, org_id: int) -> None:
     raise HTTPException(status_code=403, detail="Org manager role required")
 
 
-async def _require_team_manager(user: dict, team_id: int) -> None:
+async def _require_team_manager(principal: AuthPrincipal, team_id: int) -> None:
     # Admin bypass
-    if str(user.get("role", "")).lower() == "admin":
+    if _is_admin_principal(principal):
         return
+    if principal.user_id is None:
+        raise HTTPException(status_code=403, detail="Team manager role required")
     try:
         members = await list_team_members(team_id)
-        uid = int(user.get("id"))
+        uid = int(principal.user_id)
         for m in members:
             try:
                 if int(m.get("user_id")) == uid and _is_manager(m.get("role")):
@@ -78,6 +102,48 @@ async def _require_team_manager(user: dict, team_id: int) -> None:
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Team manager check failed: {e}")
     raise HTTPException(status_code=403, detail="Team manager role required")
+
+
+async def _list_scoped_catalogs(
+    db,
+    *,
+    org_id: int | None = None,
+    team_id: int | None = None,
+) -> list[dict]:
+    """List all catalogs for a given scope via paged service queries."""
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        batch = await admin_tool_catalog_service.list_tool_catalogs(
+            db,
+            org_id=org_id,
+            team_id=team_id,
+            limit=_CATALOG_PAGE_SIZE,
+            offset=offset,
+        )
+        rows.extend(batch)
+        if len(batch) < _CATALOG_PAGE_SIZE:
+            break
+        offset += _CATALOG_PAGE_SIZE
+    return rows
+
+
+async def _get_scoped_catalog(
+    db,
+    *,
+    catalog_id: int,
+    org_id: int | None = None,
+    team_id: int | None = None,
+) -> dict | None:
+    """Fetch catalog by id and ensure it belongs to the requested scope."""
+    catalog = await admin_tool_catalog_service.get_tool_catalog(db, catalog_id)
+    if not catalog:
+        return None
+    if org_id is not None and int(catalog.get("org_id") or -1) != int(org_id):
+        return None
+    if team_id is not None and int(catalog.get("team_id") or -1) != int(team_id):
+        return None
+    return catalog
 
 
 @router.get(
@@ -92,29 +158,13 @@ async def _require_team_manager(user: dict, team_id: int) -> None:
 )
 async def list_org_tool_catalogs(
     org_id: int,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> list[ToolCatalogResponse]:
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at FROM tool_catalogs WHERE org_id = $1 ORDER BY created_at DESC",
-                org_id,
-            )
-            return [ToolCatalogResponse(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute(
-                "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at FROM tool_catalogs WHERE org_id = ? ORDER BY created_at DESC",
-                (org_id,),
-            )
-            rows = await cur.fetchall()
-            return [
-                ToolCatalogResponse(
-                    id=r[0], name=r[1], description=r[2], org_id=r[3], team_id=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
-                ) for r in rows
-            ]
+        rows = await _list_scoped_catalogs(db, org_id=org_id)
+        return [ToolCatalogResponse(**r) for r in rows]
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list org tool catalogs: {e}")
         raise HTTPException(status_code=500, detail="Failed to list org tool catalogs") from e
@@ -134,50 +184,26 @@ async def list_org_tool_catalogs(
 async def create_org_tool_catalog(
     org_id: int,
     payload: ToolCatalogCreateRequest,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> ToolCatalogResponse:
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     # Force scope to org
     name = payload.name.strip()
     desc = payload.description
     is_active = bool(payload.is_active if payload.is_active is not None else True)
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            await db.execute(
-                """
-                INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active)
-                VALUES ($1, $2, $3, NULL, $4) ON CONFLICT (name, org_id, team_id) DO NOTHING
-                """,
-                name, desc, org_id, is_active,
-            )
-            row = await db.fetchrow(
-                "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at FROM tool_catalogs WHERE name = $1 AND org_id = $2 AND team_id IS NULL",
-                name, org_id,
-            )
-            if not row:
-                raise HTTPException(status_code=409, detail="Catalog already exists")
-            return ToolCatalogResponse(**dict(row))
-        else:
-            cur = await db.execute(
-                "SELECT id FROM tool_catalogs WHERE name = ? AND org_id = ? AND team_id IS NULL",
-                (name, org_id),
-            )
-            if await cur.fetchone():
-                raise HTTPException(status_code=409, detail="Catalog already exists")
-            await db.execute(
-                "INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active) VALUES (?, ?, ?, NULL, ?)",
-                (name, desc, org_id, 1 if is_active else 0),
-            )
-            cur2 = await db.execute(
-                "SELECT id, name, description, org_id, team_id, is_active, created_at, updated_at FROM tool_catalogs WHERE name = ? AND org_id = ? AND team_id IS NULL",
-                (name, org_id),
-            )
-            r = await cur2.fetchone()
-            return ToolCatalogResponse(
-                id=r[0], name=r[1], description=r[2], org_id=r[3], team_id=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
-            )
+        row = await admin_tool_catalog_service.create_tool_catalog(
+            db,
+            name=name,
+            description=desc,
+            org_id=org_id,
+            team_id=None,
+            is_active=is_active,
+        )
+        return ToolCatalogResponse(**row)
+    except ToolCatalogConflictError as exc:
+        raise HTTPException(status_code=409, detail="Catalog already exists") from exc
     except HTTPException:
         raise
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
@@ -197,29 +223,13 @@ async def create_org_tool_catalog(
 )
 async def list_team_tool_catalogs(
     team_id: int,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> list[ToolCatalogResponse]:
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at FROM tool_catalogs WHERE team_id = $1 ORDER BY created_at DESC",
-                team_id,
-            )
-            return [ToolCatalogResponse(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute(
-                "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at FROM tool_catalogs WHERE team_id = ? ORDER BY created_at DESC",
-                (team_id,),
-            )
-            rows = await cur.fetchall()
-            return [
-                ToolCatalogResponse(
-                    id=r[0], name=r[1], description=r[2], org_id=r[3], team_id=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
-                ) for r in rows
-            ]
+        rows = await _list_scoped_catalogs(db, team_id=team_id)
+        return [ToolCatalogResponse(**r) for r in rows]
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list team tool catalogs: {e}")
         raise HTTPException(status_code=500, detail="Failed to list team tool catalogs") from e
@@ -239,46 +249,25 @@ async def list_team_tool_catalogs(
 async def create_team_tool_catalog(
     team_id: int,
     payload: ToolCatalogCreateRequest,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> ToolCatalogResponse:
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     name = payload.name.strip()
     desc = payload.description
     is_active = bool(payload.is_active if payload.is_active is not None else True)
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            await db.execute(
-                "INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active) VALUES ($1, $2, NULL, $3, $4) ON CONFLICT (name, org_id, team_id) DO NOTHING",
-                name, desc, team_id, is_active,
-            )
-            row = await db.fetchrow(
-                "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at FROM tool_catalogs WHERE name = $1 AND team_id = $2",
-                name, team_id,
-            )
-            if not row:
-                raise HTTPException(status_code=409, detail="Catalog already exists")
-            return ToolCatalogResponse(**dict(row))
-        else:
-            cur = await db.execute(
-                "SELECT id FROM tool_catalogs WHERE name = ? AND team_id = ?",
-                (name, team_id),
-            )
-            if await cur.fetchone():
-                raise HTTPException(status_code=409, detail="Catalog already exists")
-            await db.execute(
-                "INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active) VALUES (?, ?, NULL, ?, ?)",
-                (name, desc, team_id, 1 if is_active else 0),
-            )
-            cur2 = await db.execute(
-                "SELECT id, name, description, org_id, team_id, is_active, created_at, updated_at FROM tool_catalogs WHERE name = ? AND team_id = ?",
-                (name, team_id),
-            )
-            r = await cur2.fetchone()
-            return ToolCatalogResponse(
-                id=r[0], name=r[1], description=r[2], org_id=r[3], team_id=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
-            )
+        row = await admin_tool_catalog_service.create_tool_catalog(
+            db,
+            name=name,
+            description=desc,
+            org_id=None,
+            team_id=team_id,
+            is_active=is_active,
+        )
+        return ToolCatalogResponse(**row)
+    except ToolCatalogConflictError as exc:
+        raise HTTPException(status_code=409, detail="Catalog already exists") from exc
     except HTTPException:
         raise
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
@@ -297,36 +286,26 @@ async def create_team_tool_catalog(
         "Scope: Fails with 404 if the catalog is not owned by the specified org."
     ),
 )
-async def add_org_catalog_entry(org_id: int, catalog_id: int, payload: ToolCatalogEntryCreateRequest, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
-    await _require_org_manager(user, org_id)
+async def add_org_catalog_entry(org_id: int, catalog_id: int, payload: ToolCatalogEntryCreateRequest, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
+    await _require_org_manager(principal, org_id)
     # Confirm catalog scope
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        owner = await db.fetchrow("SELECT id FROM tool_catalogs WHERE id = $1 AND org_id = $2", catalog_id, org_id)
-    else:
-        cur = await db.execute("SELECT id FROM tool_catalogs WHERE id = ? AND org_id = ?", (catalog_id, org_id))
-        owner = await cur.fetchone()
+    owner = await _get_scoped_catalog(db, catalog_id=catalog_id, org_id=org_id)
     if not owner:
         raise HTTPException(status_code=404, detail="Catalog not found in org")
     # Upsert entry
     tool = payload.tool_name.strip()
     module_id = payload.module_id.strip() if payload.module_id else None
-    if is_pg:
-        await db.execute(
-            "INSERT INTO tool_catalog_entries (catalog_id, tool_name, module_id) VALUES ($1, $2, $3) ON CONFLICT (catalog_id, tool_name) DO NOTHING",
-            catalog_id, tool, module_id,
+    try:
+        row = await admin_tool_catalog_service.add_tool_catalog_entry(
+            db,
+            catalog_id,
+            tool,
+            module_id,
         )
-        row = await db.fetchrow("SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2", catalog_id, tool)
-        return ToolCatalogEntryResponse(**dict(row)) if row else ToolCatalogEntryResponse(catalog_id=catalog_id, tool_name=tool, module_id=module_id)
-    else:
-        cur = await db.execute("SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?", (catalog_id, tool))
-        r = await cur.fetchone()
-        if not r:
-            await db.execute("INSERT OR IGNORE INTO tool_catalog_entries (catalog_id, tool_name, module_id) VALUES (?, ?, ?)", (catalog_id, tool, module_id))
-            await db.commit()
-            cur2 = await db.execute("SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?", (catalog_id, tool))
-            r = await cur2.fetchone()
-        return ToolCatalogEntryResponse(catalog_id=r[0], tool_name=r[1], module_id=r[2]) if r else ToolCatalogEntryResponse(catalog_id=catalog_id, tool_name=tool, module_id=module_id)
+        return ToolCatalogEntryResponse(**row)
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Failed to add org tool catalog entry: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add tool catalog entry") from e
 
 
 @router.post(
@@ -340,34 +319,24 @@ async def add_org_catalog_entry(org_id: int, catalog_id: int, payload: ToolCatal
         "Scope: Fails with 404 if the catalog is not owned by the specified team."
     ),
 )
-async def add_team_catalog_entry(team_id: int, catalog_id: int, payload: ToolCatalogEntryCreateRequest, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
-    await _require_team_manager(user, team_id)
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        owner = await db.fetchrow("SELECT id FROM tool_catalogs WHERE id = $1 AND team_id = $2", catalog_id, team_id)
-    else:
-        cur = await db.execute("SELECT id FROM tool_catalogs WHERE id = ? AND team_id = ?", (catalog_id, team_id))
-        owner = await cur.fetchone()
+async def add_team_catalog_entry(team_id: int, catalog_id: int, payload: ToolCatalogEntryCreateRequest, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
+    await _require_team_manager(principal, team_id)
+    owner = await _get_scoped_catalog(db, catalog_id=catalog_id, team_id=team_id)
     if not owner:
         raise HTTPException(status_code=404, detail="Catalog not found in team")
     tool = payload.tool_name.strip()
     module_id = payload.module_id.strip() if payload.module_id else None
-    if is_pg:
-        await db.execute(
-            "INSERT INTO tool_catalog_entries (catalog_id, tool_name, module_id) VALUES ($1, $2, $3) ON CONFLICT (catalog_id, tool_name) DO NOTHING",
-            catalog_id, tool, module_id,
+    try:
+        row = await admin_tool_catalog_service.add_tool_catalog_entry(
+            db,
+            catalog_id,
+            tool,
+            module_id,
         )
-        row = await db.fetchrow("SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2", catalog_id, tool)
-        return ToolCatalogEntryResponse(**dict(row)) if row else ToolCatalogEntryResponse(catalog_id=catalog_id, tool_name=tool, module_id=module_id)
-    else:
-        cur = await db.execute("SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?", (catalog_id, tool))
-        r = await cur.fetchone()
-        if not r:
-            await db.execute("INSERT OR IGNORE INTO tool_catalog_entries (catalog_id, tool_name, module_id) VALUES (?, ?, ?)", (catalog_id, tool, module_id))
-            await db.commit()
-            cur2 = await db.execute("SELECT catalog_id, tool_name, module_id FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?", (catalog_id, tool))
-            r = await cur2.fetchone()
-        return ToolCatalogEntryResponse(catalog_id=r[0], tool_name=r[1], module_id=r[2]) if r else ToolCatalogEntryResponse(catalog_id=catalog_id, tool_name=tool, module_id=module_id)
+        return ToolCatalogEntryResponse(**row)
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Failed to add team tool catalog entry: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add tool catalog entry") from e
 
 
 @router.delete(
@@ -379,26 +348,17 @@ async def add_team_catalog_entry(team_id: int, catalog_id: int, payload: ToolCat
         "Scope: Returns 404 if the catalog does not belong to the specified org."
     ),
 )
-async def delete_org_tool_catalog(org_id: int, catalog_id: int, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> dict:
+async def delete_org_tool_catalog(org_id: int, catalog_id: int, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> dict:
     """Delete an org-scoped tool catalog (entries cascade).
 
     Requires the requester to be an org manager (owner/admin/lead) or global admin.
     """
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     try:
-        is_pg = await is_postgres_backend()
-        # Ensure catalog belongs to org
-        if is_pg:
-            owner = await db.fetchrow("SELECT id FROM tool_catalogs WHERE id = $1 AND org_id = $2", catalog_id, org_id)
-            if not owner:
-                raise HTTPException(status_code=404, detail="Catalog not found in org")
-            await db.execute("DELETE FROM tool_catalogs WHERE id = $1", catalog_id)
-        else:
-            cur = await db.execute("SELECT id FROM tool_catalogs WHERE id = ? AND org_id = ?", (catalog_id, org_id))
-            if not await cur.fetchone():
-                raise HTTPException(status_code=404, detail="Catalog not found in org")
-            await db.execute("DELETE FROM tool_catalogs WHERE id = ?", (catalog_id,))
-            await db.commit()
+        owner = await _get_scoped_catalog(db, catalog_id=catalog_id, org_id=org_id)
+        if not owner:
+            raise HTTPException(status_code=404, detail="Catalog not found in org")
+        await admin_tool_catalog_service.delete_tool_catalog(db, catalog_id)
         return {"message": "Catalog deleted", "id": catalog_id, "scope": {"org_id": org_id}}
     except HTTPException:
         raise
@@ -416,29 +376,21 @@ async def delete_org_tool_catalog(org_id: int, catalog_id: int, user: dict = Dep
         "Scope: Returns 404 if the catalog does not belong to the specified org."
     ),
 )
-async def delete_org_catalog_entry(org_id: int, catalog_id: int, tool_name: str, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> dict:
+async def delete_org_catalog_entry(org_id: int, catalog_id: int, tool_name: str, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> dict:
     """Remove a tool entry from an org-scoped catalog.
 
     Requires the requester to be an org manager (owner/admin/lead) or global admin.
     """
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     try:
-        is_pg = await is_postgres_backend()
-        # Verify scope
-        if is_pg:
-            owner = await db.fetchrow("SELECT id FROM tool_catalogs WHERE id = $1 AND org_id = $2", catalog_id, org_id)
-            if not owner:
-                raise HTTPException(status_code=404, detail="Catalog not found in org")
-            await db.execute("DELETE FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2", catalog_id, tool_name)
-        else:
-            cur = await db.execute("SELECT id FROM tool_catalogs WHERE id = ? AND org_id = ?", (catalog_id, org_id))
-            if not await cur.fetchone():
-                raise HTTPException(status_code=404, detail="Catalog not found in org")
-            await db.execute(
-                "DELETE FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?",
-                (catalog_id, tool_name),
-            )
-            await db.commit()
+        owner = await _get_scoped_catalog(db, catalog_id=catalog_id, org_id=org_id)
+        if not owner:
+            raise HTTPException(status_code=404, detail="Catalog not found in org")
+        await admin_tool_catalog_service.delete_tool_catalog_entry(
+            db,
+            catalog_id,
+            tool_name,
+        )
         return {"message": "Entry deleted", "catalog_id": catalog_id, "tool_name": tool_name, "scope": {"org_id": org_id}}
     except HTTPException:
         raise
@@ -456,25 +408,17 @@ async def delete_org_catalog_entry(org_id: int, catalog_id: int, tool_name: str,
         "Scope: Returns 404 if the catalog does not belong to the specified team."
     ),
 )
-async def delete_team_tool_catalog(team_id: int, catalog_id: int, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> dict:
+async def delete_team_tool_catalog(team_id: int, catalog_id: int, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> dict:
     """Delete a team-scoped tool catalog (entries cascade).
 
     Requires the requester to be a team manager (owner/admin/lead) or global admin.
     """
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            owner = await db.fetchrow("SELECT id FROM tool_catalogs WHERE id = $1 AND team_id = $2", catalog_id, team_id)
-            if not owner:
-                raise HTTPException(status_code=404, detail="Catalog not found in team")
-            await db.execute("DELETE FROM tool_catalogs WHERE id = $1", catalog_id)
-        else:
-            cur = await db.execute("SELECT id FROM tool_catalogs WHERE id = ? AND team_id = ?", (catalog_id, team_id))
-            if not await cur.fetchone():
-                raise HTTPException(status_code=404, detail="Catalog not found in team")
-            await db.execute("DELETE FROM tool_catalogs WHERE id = ?", (catalog_id,))
-            await db.commit()
+        owner = await _get_scoped_catalog(db, catalog_id=catalog_id, team_id=team_id)
+        if not owner:
+            raise HTTPException(status_code=404, detail="Catalog not found in team")
+        await admin_tool_catalog_service.delete_tool_catalog(db, catalog_id)
         return {"message": "Catalog deleted", "id": catalog_id, "scope": {"team_id": team_id}}
     except HTTPException:
         raise
@@ -492,28 +436,21 @@ async def delete_team_tool_catalog(team_id: int, catalog_id: int, user: dict = D
         "Scope: Returns 404 if the catalog does not belong to the specified team."
     ),
 )
-async def delete_team_catalog_entry(team_id: int, catalog_id: int, tool_name: str, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> dict:
+async def delete_team_catalog_entry(team_id: int, catalog_id: int, tool_name: str, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> dict:
     """Remove a tool entry from a team-scoped catalog.
 
     Requires the requester to be a team manager (owner/admin/lead) or global admin.
     """
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            owner = await db.fetchrow("SELECT id FROM tool_catalogs WHERE id = $1 AND team_id = $2", catalog_id, team_id)
-            if not owner:
-                raise HTTPException(status_code=404, detail="Catalog not found in team")
-            await db.execute("DELETE FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2", catalog_id, tool_name)
-        else:
-            cur = await db.execute("SELECT id FROM tool_catalogs WHERE id = ? AND team_id = ?", (catalog_id, team_id))
-            if not await cur.fetchone():
-                raise HTTPException(status_code=404, detail="Catalog not found in team")
-            await db.execute(
-                "DELETE FROM tool_catalog_entries WHERE catalog_id = ? AND tool_name = ?",
-                (catalog_id, tool_name),
-            )
-            await db.commit()
+        owner = await _get_scoped_catalog(db, catalog_id=catalog_id, team_id=team_id)
+        if not owner:
+            raise HTTPException(status_code=404, detail="Catalog not found in team")
+        await admin_tool_catalog_service.delete_tool_catalog_entry(
+            db,
+            catalog_id,
+            tool_name,
+        )
         return {"message": "Entry deleted", "catalog_id": catalog_id, "tool_name": tool_name, "scope": {"team_id": team_id}}
     except HTTPException:
         raise

@@ -1,0 +1,1 @@
+export const FLASHCARDS_DRAWER_WIDTH_PX = 520

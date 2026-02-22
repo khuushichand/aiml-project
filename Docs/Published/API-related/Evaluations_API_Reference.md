@@ -951,7 +951,7 @@ groq_model = mixtral-8x7b-32768
 ```
 
 ### Supported LLM Providers
-- OpenAI (GPT-3.5, GPT-4, etc.)
+- OpenAI (GPT-4o family, etc.)
 - Anthropic (Claude models)
 - Google (Gemini models)
 - Groq (Mixtral, Llama, etc.)

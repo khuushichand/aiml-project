@@ -28,7 +28,7 @@ def configure_local_egress(url: str) -> None:
         logger.error("Failed to parse egress URL; url={url!r} exc={exc!r}", url=url, exc=exc)
         return
     host = (parsed.hostname or "").lower()
-    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
+    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":  # nosec B104
         if "WORKFLOWS_EGRESS_BLOCK_PRIVATE" not in os.environ:
             logger.info(
                 "Applying local egress override; host={host} scheme={scheme}",

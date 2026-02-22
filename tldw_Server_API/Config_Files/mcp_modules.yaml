@@ -35,6 +35,16 @@ modules:
     max_concurrent: 8
     settings: {}
 
+  - id: external_federation
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.external_federation_module:ExternalFederationModule
+    enabled: false
+    name: External Federation
+    version: "0.1.0"
+    department: system
+    max_concurrent: 8
+    settings:
+      external_servers_config_path: tldw_Server_API/Config_Files/mcp_external_servers.yaml
+
   - id: notes
     class: tldw_Server_API.app.core.MCP_unified.modules.implementations.notes_module:NotesModule
     enabled: true

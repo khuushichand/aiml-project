@@ -49,6 +49,9 @@ type PromptStudioState = {
   isPromptEditorOpen: boolean
   setPromptEditorOpen: (open: boolean) => void
 
+  isExecutePlaygroundOpen: boolean
+  setExecutePlaygroundOpen: (open: boolean) => void
+
   isTestCaseModalOpen: boolean
   setTestCaseModalOpen: (open: boolean) => void
 
@@ -82,6 +85,7 @@ const initialState = {
   wizardStep: "selectPrompt" as WizardStep,
   isProjectModalOpen: false,
   isPromptEditorOpen: false,
+  isExecutePlaygroundOpen: false,
   isTestCaseModalOpen: false,
   isEvaluationWizardOpen: false,
   isOptimizationWizardOpen: false,
@@ -100,6 +104,7 @@ export const usePromptStudioStore = create<PromptStudioState>((set) => ({
       selectedProjectId,
       // Reset dependent selections when project changes
       selectedPromptId: null,
+      isExecutePlaygroundOpen: false,
       selectedTestCaseIds: [],
       selectedEvaluationId: null,
       selectedOptimizationId: null
@@ -132,6 +137,9 @@ export const usePromptStudioStore = create<PromptStudioState>((set) => ({
   setProjectModalOpen: (isProjectModalOpen) => set({ isProjectModalOpen }),
 
   setPromptEditorOpen: (isPromptEditorOpen) => set({ isPromptEditorOpen }),
+
+  setExecutePlaygroundOpen: (isExecutePlaygroundOpen) =>
+    set({ isExecutePlaygroundOpen }),
 
   setTestCaseModalOpen: (isTestCaseModalOpen) => set({ isTestCaseModalOpen }),
 

@@ -1,32 +1,58 @@
 """
 weather_providers.py
 
-Stage 4 stub weather provider abstraction.
-
-Provides a simple interface with a NoKey client that always returns
-an "unavailable" message. This allows command router tests to mock
-and future providers to plug in.
+Weather provider abstraction for slash commands and template integrations.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+_WEATHER_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    httpx.HTTPError,
+)
+
+# Test seam for controlled outbound behavior without patching httpx directly.
+http_client_factory = httpx.Client
 
 
 @dataclass
 class WeatherResult:
     ok: bool
     summary: str
-    metadata: dict
+    metadata: dict[str, Any]
 
 
 class WeatherClient:
-    def get_current(self, location: str | None = None, lat: float | None = None, lon: float | None = None) -> WeatherResult:
+    def get_current(
+        self,
+        location: str | None = None,
+        lat: float | None = None,
+        lon: float | None = None,
+    ) -> WeatherResult:
         raise NotImplementedError
 
 
 class NoKeyWeatherClient(WeatherClient):
-    def get_current(self, location: str | None = None, lat: float | None = None, lon: float | None = None) -> WeatherResult:
+    def get_current(
+        self,
+        location: str | None = None,
+        lat: float | None = None,
+        lon: float | None = None,
+    ) -> WeatherResult:
         loc = location or (f"{lat},{lon}" if lat is not None and lon is not None else "your area")
         return WeatherResult(
             ok=False,
@@ -35,6 +61,149 @@ class NoKeyWeatherClient(WeatherClient):
         )
 
 
+class OpenWeatherClient(WeatherClient):
+    _BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        timeout_seconds: float = 1.5,
+        units: str = "metric",
+        lang: str = "en",
+    ):
+        self.api_key = api_key
+        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self.units = units if units in {"metric", "imperial"} else "metric"
+        self.lang = (lang or "en").strip() or "en"
+
+    def _temp_unit(self) -> str:
+        return "F" if self.units == "imperial" else "C"
+
+    def _build_params(
+        self,
+        *,
+        location: str | None,
+        lat: float | None,
+        lon: float | None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "appid": self.api_key,
+            "units": self.units,
+            "lang": self.lang,
+        }
+        if lat is not None and lon is not None:
+            params["lat"] = lat
+            params["lon"] = lon
+        elif location:
+            params["q"] = location
+        return params
+
+    def _parse_summary(self, data: dict[str, Any], location_hint: str | None) -> tuple[str, dict[str, Any]]:
+        weather_desc = ""
+        weather = data.get("weather")
+        if isinstance(weather, list) and weather:
+            first = weather[0]
+            if isinstance(first, dict):
+                weather_desc = str(first.get("description", "") or "")
+
+        main = data.get("main") if isinstance(data.get("main"), dict) else {}
+        temp = main.get("temp")
+        try:
+            temp_f = float(temp)
+            temp_str = f"{round(temp_f)}°{self._temp_unit()}"
+        except (TypeError, ValueError):
+            temp_str = "unknown"
+
+        name = str(data.get("name") or "").strip()
+        country = ""
+        sys_val = data.get("sys")
+        if isinstance(sys_val, dict):
+            country = str(sys_val.get("country") or "").strip()
+
+        loc = ", ".join([x for x in [name, country] if x]) if (name or country) else (location_hint or "your area")
+        cond = weather_desc or "conditions unavailable"
+        summary = f"Weather for {loc}: {temp_str}, {cond}."
+        metadata = {
+            "provider": "openweather",
+            "location": loc,
+            "temperature": temp,
+            "units": self.units,
+            "description": weather_desc,
+        }
+        return summary, metadata
+
+    def get_current(
+        self,
+        location: str | None = None,
+        lat: float | None = None,
+        lon: float | None = None,
+    ) -> WeatherResult:
+        params = self._build_params(location=location, lat=lat, lon=lon)
+        if "q" not in params and ("lat" not in params or "lon" not in params):
+            return WeatherResult(
+                ok=False,
+                summary="Weather information is unavailable for your area.",
+                metadata={"provider": "openweather", "error": "missing_location"},
+            )
+
+        try:
+            with http_client_factory(timeout=self.timeout_seconds) as client:
+                response = client.get(self._BASE_URL, params=params)
+            if response.status_code >= 400:
+                return WeatherResult(
+                    ok=False,
+                    summary=f"Weather information is unavailable for {location or 'your area'}.",
+                    metadata={
+                        "provider": "openweather",
+                        "error": "http_error",
+                        "status_code": response.status_code,
+                    },
+                )
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError("Unexpected weather provider payload")
+            summary, metadata = self._parse_summary(data, location_hint=location)
+            return WeatherResult(ok=True, summary=summary, metadata=metadata)
+        except _WEATHER_NONCRITICAL_EXCEPTIONS as exc:
+            return WeatherResult(
+                ok=False,
+                summary=f"Weather information is unavailable for {location or 'your area'}.",
+                metadata={"provider": "openweather", "error": "exception", "details": str(exc)},
+            )
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(str(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _str_env(name: str, default: str = "") -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip()
+
+
 def get_weather_client() -> WeatherClient:
-    # Stage 4: always return NoKey client; future stages may branch on env/API keys
+    provider = _str_env("WEATHER_PROVIDER", "openweather").lower()
+    api_key = _str_env("OPENWEATHER_API_KEY", "")
+    units = _str_env("WEATHER_UNITS", "metric").lower() or "metric"
+    lang = _str_env("WEATHER_LANG", "en")
+    timeout_ms = _float_env("WEATHER_TIMEOUT_MS", 1500.0)
+
+    if provider in {"", "noop", "none", "disabled"}:
+        return NoKeyWeatherClient()
+    if provider == "openweather" and api_key:
+        return OpenWeatherClient(
+            api_key=api_key,
+            timeout_seconds=max(0.1, timeout_ms / 1000.0),
+            units=units,
+            lang=lang,
+        )
     return NoKeyWeatherClient()

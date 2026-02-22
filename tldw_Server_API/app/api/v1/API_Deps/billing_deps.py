@@ -12,6 +12,7 @@ from fastapi import Depends, Header, HTTPException, Query, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.org_deps import _is_membership_active
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
@@ -28,6 +29,41 @@ from tldw_Server_API.app.core.Resource_Governance import cost_units
 BILLING_WARNING_HEADER = "X-Billing-Warning"
 BILLING_LIMIT_HEADER = "X-Billing-Limit"
 BILLING_USAGE_HEADER = "X-Billing-Usage"
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
+def _allow_orgless_billing_access() -> bool:
+    """
+    Return True when org-less billing checks are acceptable.
+
+    Single-user mode has no organization context by design and should remain
+    permissive. Multi-user mode must require explicit org context.
+    """
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+        settings = get_settings()
+        auth_mode = str(getattr(settings, "AUTH_MODE", "") or "").strip().lower()
+        return auth_mode == "single_user"
+    except Exception:
+        # Fail closed when settings resolution fails.
+        return False
 
 
 async def _resolve_org_id(
@@ -48,34 +84,44 @@ async def _resolve_org_id(
         pool = await get_db_pool()
         repo = AuthnzOrgsTeamsRepo(db_pool=pool)
         if org_id is not None:
-            if principal.is_admin:
+            if _principal_has_admin_claims(principal):
                 return org_id
             membership = await repo.get_org_member(org_id, principal.user_id)
-            if not membership:
+            if not membership or not _is_membership_active(membership):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have access to the specified organization",
+                    detail="You do not have active access to the specified organization",
                 )
             return org_id
 
         if x_tldw_org_id is not None:
-            if principal.is_admin:
+            if _principal_has_admin_claims(principal):
                 return x_tldw_org_id
             membership = await repo.get_org_member(x_tldw_org_id, principal.user_id)
-            if membership:
+            if membership and _is_membership_active(membership):
                 return x_tldw_org_id
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have access to the specified organization",
+                detail="You do not have active access to the specified organization",
             )
 
         memberships = await repo.list_org_memberships_for_user(principal.user_id)
         if memberships:
-            return memberships[0].get("org_id")
+            for membership in memberships:
+                if _is_membership_active(membership):
+                    return membership.get("org_id")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have an active organization membership",
+            )
     except HTTPException:
         raise
     except Exception as exc:
-        logger.debug(f"Failed to resolve org_id for user {principal.user_id}: {exc}")
+        logger.error(f"Failed to resolve org_id for user {principal.user_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to resolve organization for billing enforcement",
+        ) from exc
 
     return None
 
@@ -119,14 +165,19 @@ def require_within_limit(category: LimitCategory, units: int = 1):
         org_id = await _resolve_org_id(principal, org_id, x_tldw_org_id)
 
         if org_id is None:
-            # No org - use permissive defaults (single-user mode)
-            return LimitCheckResult(
-                category=category.value,
-                action=EnforcementAction.ALLOW,
-                current=0,
-                limit=-1,
-                percent_used=0,
-                unlimited=True,
+            if _allow_orgless_billing_access():
+                # No org is expected in single-user mode.
+                return LimitCheckResult(
+                    category=category.value,
+                    action=EnforcementAction.ALLOW,
+                    current=0,
+                    limit=-1,
+                    percent_used=0,
+                    unlimited=True,
+                )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="An active organization context is required for billing enforcement",
             )
 
         # Check the limit
@@ -193,8 +244,13 @@ def require_feature(feature: str):
         org_id = await _resolve_org_id(principal, org_id, x_tldw_org_id)
 
         if org_id is None:
-            # No org - assume feature is available (single-user mode)
-            return True
+            if _allow_orgless_billing_access():
+                # No org is expected in single-user mode.
+                return True
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="An active organization context is required for billing feature checks",
+            )
 
         # Check feature access
         enforcer = get_billing_enforcer()
@@ -230,14 +286,19 @@ async def get_org_limits(
     org_id = await _resolve_org_id(principal, org_id, x_tldw_org_id)
 
     if org_id is None:
-        # Return permissive defaults
-        return {
-            "api_calls_day": -1,
-            "llm_tokens_month": -1,
-            "storage_mb": -1,
-            "team_members": -1,
-            "unlimited": True,
-        }
+        if _allow_orgless_billing_access():
+            # Return permissive defaults in single-user mode.
+            return {
+                "api_calls_day": -1,
+                "llm_tokens_month": -1,
+                "storage_mb": -1,
+                "team_members": -1,
+                "unlimited": True,
+            }
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="An active organization context is required to fetch billing limits",
+        )
 
     enforcer = get_billing_enforcer()
     return await enforcer.get_org_limits(org_id)

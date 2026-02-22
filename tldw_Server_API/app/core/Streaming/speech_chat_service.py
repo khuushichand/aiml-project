@@ -70,6 +70,7 @@ from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requir
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
 from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSAuthenticationError,
     TTSError,
@@ -197,8 +198,7 @@ def _validate_audio_constraints(
 
 def _actions_enabled() -> bool:
     """Return True when action execution is enabled for audio chat."""
-    flag = os.getenv("AUDIO_CHAT_ENABLE_ACTIONS", "")
-    return str(flag).lower() in ("1", "true", "yes", "on")
+    return is_truthy(os.getenv("AUDIO_CHAT_ENABLE_ACTIONS"))
 
 
 async def _execute_action(action_name: str, transcript: str, current_user: User) -> dict[str, Any]:

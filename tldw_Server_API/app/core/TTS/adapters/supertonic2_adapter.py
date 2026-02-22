@@ -168,14 +168,14 @@ class Supertonic2OnnxAdapter(TTSAdapter):
             )
             if asyncio.iscoroutine(register_result):
                 await register_result
-        except Exception:
-            pass
+        except Exception as registration_error:
+            logger.debug("Supertonic2 provider registration failed; continuing", exc_info=registration_error)
 
         try:
             self.sample_rate = int(getattr(self._engine, "sample_rate", self.sample_rate))
         except Exception:
             logger.debug(
-                "Supertonic2: unable to read sample_rate from engine, using default %s",
+                'Supertonic2: unable to read sample_rate from engine, using default {}',
                 self.sample_rate,
             )
 
@@ -185,7 +185,7 @@ class Supertonic2OnnxAdapter(TTSAdapter):
         self._initialized = True
         self._status = ProviderStatus.AVAILABLE
         logger.info(
-            "Supertonic2 adapter initialized (onnx_dir=%s, voices=%d, sample_rate=%s)",
+            'Supertonic2 adapter initialized (onnx_dir={}, voices={}, sample_rate={})',
             self.onnx_dir,
             len(self._voice_infos),
             self.sample_rate,
@@ -204,7 +204,7 @@ class Supertonic2OnnxAdapter(TTSAdapter):
                 if voice_id == self.default_voice:
                     missing_default = True
                 logger.warning(
-                    "Supertonic2 voice style missing: voice_id=%s path=%s", voice_id, path
+                    'Supertonic2 voice style missing: voice_id={} path={}', voice_id, path
                 )
                 continue
             voice_map[voice_id] = path
@@ -391,8 +391,8 @@ class Supertonic2OnnxAdapter(TTSAdapter):
             end_idx = int(self.sample_rate * dur_val)
             if end_idx > 0:
                 arr = arr[:end_idx]
-        except Exception:
-            pass
+        except Exception as trim_error:
+            logger.debug("Supertonic2 audio trim by duration failed; using untrimmed audio", exc_info=trim_error)
         return arr
 
     def _build_stream(self, audio_bytes: bytes) -> AsyncGenerator[bytes, None]:

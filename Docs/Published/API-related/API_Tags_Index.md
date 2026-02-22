@@ -14,7 +14,6 @@ Notes:
 | `chat-documents` | API-related/Chatbook_Features_API_Documentation.md#document-generator-api |
 | `rag-unified` | API-related/RAG-API-Guide.md |
 | `rag-health` | API-related/RAG-API-Guide.md |
-| `feedback` | API-related/Feedback_API.md |
 | `prompt-studio` | API-related/Prompt_Studio_API.md |
 | `embeddings` | API-related/Embeddings_API_Documentation.md |
 | `vector-stores` | API-related/API_Design.md |
@@ -25,19 +24,8 @@ Notes:
 | `audio-jobs` | API-related/Audio_Jobs_API.md |
 | `Media Ingestion Jobs` | API-related/Media_Ingest_Jobs_API.md |
 | `evaluations` | API-related/Evaluations_API_Unified_Reference.md |
-| `items` | API-related/Items_API.md |
-| `notes` | API-related/Notes_API_Documentation.md |
-| `notes-graph` | API-related/Notes_Graph_API.md |
 | `reading` | API-related/Reading_List_API.md |
 | `collections-feeds` | API-related/Collections_Feeds_API.md |
-| `data-tables` | API-related/Data_Tables_API.md |
-| `files` | API-related/File_Artifacts_API.md |
-| `storage` | API-related/Storage_API_Documentation.md |
-| `slides` | API/Slides.md |
-| `voice-assistant` | API/Voice_Assistant.md |
-| `quizzes` | API-related/Quizzes_API.md |
-| `sync` | API-related/Sync_API.md |
-| `writing` | API-related/Writing_API.md |
 | `benchmarks` | Coming soon |
 | `characters` | CHARACTER_CHAT_API_DOCUMENTATION.md |
 | `character-chat-sessions` | API-related/Character_Chat_Sessions_API.md |

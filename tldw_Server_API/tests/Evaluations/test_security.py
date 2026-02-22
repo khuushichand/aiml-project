@@ -376,7 +376,7 @@ class TestConnectionPoolThreadSafety:
                     try:
                         ctx.__exit__(None, None, None)
                     except:
-                        pass
+                        _ = None
 
                 pool.shutdown()
                 os.unlink(tmp.name)

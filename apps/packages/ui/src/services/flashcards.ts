@@ -1,4 +1,4 @@
-import { bgRequest } from "@/services/background-proxy"
+import { bgRequest, bgUpload } from "@/services/background-proxy"
 import type { AllowedPath } from "@/services/tldw/openapi-guard"
 import {
   buildQuery,
@@ -39,6 +39,7 @@ export type Flashcard = {
   repetitions: number
   lapses: number
   due_at?: string | null
+  created_at?: string | null
   last_reviewed_at?: string | null
   last_modified?: string | null
   deleted: boolean
@@ -46,6 +47,10 @@ export type Flashcard = {
   version: number
   model_type: "basic" | "basic_reverse" | "cloze"
   reverse: boolean
+  source_ref_type?: "media" | "message" | "note" | "manual" | null
+  source_ref_id?: string | null
+  conversation_id?: string | null
+  message_id?: string | null
 }
 
 export type FlashcardCreate = {
@@ -75,6 +80,10 @@ export type FlashcardUpdate = {
   reverse?: boolean | null
 }
 
+export type FlashcardResetSchedulingRequest = {
+  expected_version: number
+}
+
 export type FlashcardListResponse = {
   items: Flashcard[]
   count: number
@@ -85,6 +94,30 @@ export type FlashcardReviewRequest = {
   card_uuid: string
   rating: number // 0-5
   answer_time_ms?: number | null
+}
+
+export type FlashcardGeneratedDraft = {
+  front: string
+  back: string
+  tags?: string[] | null
+  model_type?: "basic" | "basic_reverse" | "cloze"
+  notes?: string | null
+  extra?: string | null
+}
+
+export type FlashcardsGenerateRequest = {
+  text: string
+  num_cards?: number
+  card_type?: "basic" | "basic_reverse" | "cloze"
+  difficulty?: "easy" | "medium" | "hard" | "mixed"
+  focus_topics?: string[] | null
+  provider?: string | null
+  model?: string | null
+}
+
+export type FlashcardsGenerateResponse = {
+  flashcards: FlashcardGeneratedDraft[]
+  count: number
 }
 
 export type FlashcardReviewResponse = {
@@ -105,6 +138,31 @@ export type FlashcardsImportRequest = {
   has_header?: boolean | null
 }
 
+export type FlashcardsImportJsonRequest = {
+  content: string
+  filename?: string | null
+}
+
+export type FlashcardsImportApkgRequest = {
+  bytes: Uint8Array
+  filename?: string | null
+}
+
+export type FlashcardsImportError = {
+  line?: number | null
+  index?: number | null
+  error: string
+}
+
+export type FlashcardsImportResponse = {
+  imported: number
+  items: Array<{
+    uuid: string
+    deck_id: number
+  }>
+  errors: FlashcardsImportError[]
+}
+
 export type FlashcardsExportParams = {
   deck_id?: number | null
   tag?: string | null
@@ -116,13 +174,40 @@ export type FlashcardsExportParams = {
   extended_header?: boolean | null
 }
 
-// Decks
-export async function listDecks(): Promise<Deck[]> {
-  return await decksClient.list<Deck[]>()
+export type FlashcardDeckProgress = {
+  deck_id: number
+  deck_name: string
+  total: number
+  new: number
+  learning: number
+  due: number
+  mature: number
 }
 
-export async function createDeck(input: { name: string; description?: string | null }): Promise<Deck> {
-  return await decksClient.create<Deck>(input)
+export type FlashcardAnalyticsSummary = {
+  reviewed_today: number
+  retention_rate_today?: number | null
+  lapse_rate_today?: number | null
+  avg_answer_time_ms_today?: number | null
+  study_streak_days: number
+  generated_at: string
+  decks: FlashcardDeckProgress[]
+}
+
+// Decks
+export async function listDecks(options?: { signal?: AbortSignal }): Promise<Deck[]> {
+  return await decksClient.list<Deck[]>(undefined, {
+    abortSignal: options?.signal
+  })
+}
+
+export async function createDeck(
+  input: { name: string; description?: string | null },
+  options?: { signal?: AbortSignal }
+): Promise<Deck> {
+  return await decksClient.create<Deck>(input, {
+    abortSignal: options?.signal
+  })
 }
 
 // Flashcards CRUD
@@ -146,8 +231,13 @@ export async function listFlashcards(params: {
   })
 }
 
-export async function createFlashcard(input: FlashcardCreate): Promise<Flashcard> {
-  return await flashcardsClient.create<Flashcard>(input)
+export async function createFlashcard(
+  input: FlashcardCreate,
+  options?: { signal?: AbortSignal }
+): Promise<Flashcard> {
+  return await flashcardsClient.create<Flashcard>(input, {
+    abortSignal: options?.signal
+  })
 }
 
 export async function getFlashcard(card_uuid: string): Promise<Flashcard> {
@@ -164,10 +254,33 @@ export async function deleteFlashcard(card_uuid: string, expected_version: numbe
   })
 }
 
+export async function resetFlashcardScheduling(
+  card_uuid: string,
+  input: FlashcardResetSchedulingRequest
+): Promise<Flashcard> {
+  return await bgRequest<Flashcard, AllowedPath, "POST">({
+    path: `/api/v1/flashcards/${card_uuid}/reset-scheduling` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
 // Review
 export async function reviewFlashcard(input: FlashcardReviewRequest): Promise<FlashcardReviewResponse> {
   return await bgRequest<FlashcardReviewResponse, AllowedPath, "POST">({
     path: "/api/v1/flashcards/review",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
+export async function generateFlashcards(
+  input: FlashcardsGenerateRequest
+): Promise<FlashcardsGenerateResponse> {
+  return await bgRequest<FlashcardsGenerateResponse, AllowedPath, "POST">({
+    path: "/api/v1/flashcards/generate",
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: input
@@ -186,18 +299,91 @@ export async function importFlashcards(payload: FlashcardsImportRequest, overrid
   max_lines?: number | null
   max_line_length?: number | null
   max_field_length?: number | null
-}): Promise<any> {
+}): Promise<FlashcardsImportResponse> {
   const query = buildQuery({
     max_lines: overrides?.max_lines,
     max_line_length: overrides?.max_line_length,
     max_field_length: overrides?.max_field_length
   })
   const path = `/api/v1/flashcards/import${query}` as AllowedPath
-  return await bgRequest<any, AllowedPath, "POST">({
+  return await bgRequest<FlashcardsImportResponse, AllowedPath, "POST">({
     path,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: payload
+  })
+}
+
+export async function importFlashcardsJson(
+  payload: FlashcardsImportJsonRequest,
+  overrides?: {
+    max_items?: number | null
+    max_field_length?: number | null
+  }
+): Promise<FlashcardsImportResponse> {
+  const query = buildQuery({
+    max_items: overrides?.max_items,
+    max_field_length: overrides?.max_field_length
+  })
+  const path = `/api/v1/flashcards/import/json${query}` as AllowedPath
+  const filename = (payload.filename || "flashcards.json").trim() || "flashcards.json"
+  const lowerName = filename.toLowerCase()
+  const mimeType =
+    lowerName.endsWith(".jsonl") || lowerName.endsWith(".ndjson")
+      ? "application/x-ndjson"
+      : "application/json"
+  const bytes = new TextEncoder().encode(payload.content)
+
+  return await bgUpload<FlashcardsImportResponse, AllowedPath, "POST">({
+    path,
+    method: "POST",
+    fileFieldName: "file",
+    file: {
+      name: filename,
+      type: mimeType,
+      data: bytes
+    }
+  })
+}
+
+export async function importFlashcardsApkg(
+  payload: FlashcardsImportApkgRequest,
+  overrides?: {
+    max_items?: number | null
+    max_field_length?: number | null
+  }
+): Promise<FlashcardsImportResponse> {
+  const query = buildQuery({
+    max_items: overrides?.max_items,
+    max_field_length: overrides?.max_field_length
+  })
+  const path = `/api/v1/flashcards/import/apkg${query}` as AllowedPath
+  const filename = (payload.filename || "flashcards.apkg").trim() || "flashcards.apkg"
+
+  return await bgUpload<FlashcardsImportResponse, AllowedPath, "POST">({
+    path,
+    method: "POST",
+    fileFieldName: "file",
+    file: {
+      name: filename,
+      type: "application/apkg",
+      data: payload.bytes
+    }
+  })
+}
+
+export async function getFlashcardsAnalyticsSummary(params?: {
+  deck_id?: number | null
+  signal?: AbortSignal
+}): Promise<FlashcardAnalyticsSummary> {
+  const query = buildQuery({
+    deck_id: params?.deck_id
+  })
+  const path = `/api/v1/flashcards/analytics/summary${query}` as AllowedPath
+  return await bgRequest<FlashcardAnalyticsSummary, AllowedPath, "GET">({
+    path,
+    method: "GET",
+    abortSignal: params?.signal
   })
 }
 

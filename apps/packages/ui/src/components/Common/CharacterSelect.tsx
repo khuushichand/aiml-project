@@ -1,5 +1,12 @@
 import { useQuery } from "@tanstack/react-query"
-import { Dropdown, Tooltip, Input, Select, type MenuProps } from "antd"
+import {
+  Dropdown,
+  Tooltip,
+  Input,
+  Select,
+  type MenuProps,
+  type InputRef
+} from "antd"
 import { Star, UserCircle2 } from "lucide-react"
 import React from "react"
 import { useStorage } from "@plasmohq/storage/hook"
@@ -13,8 +20,27 @@ import { useConfirmModal } from "@/hooks/useConfirmModal"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { collectGreetings } from "@/utils/character-greetings"
 import { createImageDataUrl } from "@/utils/image-utils"
+import {
+  CHARACTER_MOOD_OPTIONS,
+  getCharacterMoodImagesFromExtensions,
+  removeCharacterMoodImage,
+  upsertCharacterMoodImage,
+  type CharacterMoodLabel
+} from "@/utils/character-mood"
+import {
+  DEFAULT_MESSAGE_STEERING_PROMPTS,
+  MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
+  normalizeMessageSteeringPrompts
+} from "@/utils/message-steering"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
+import type { MessageSteeringPromptTemplates } from "@/types/message-steering"
+import { getBrowserRuntime, isExtensionRuntime } from "@/utils/browser-runtime"
+import {
+  buildCharactersHash as buildCharactersHashUrl,
+  buildCharactersRoute as buildCharactersRouteUrl,
+  resolveCharactersDestinationMode
+} from "@/utils/characters-route"
 
 type Props = {
   className?: string
@@ -24,6 +50,7 @@ type Props = {
 
 type CharacterSummary = {
   id?: string | number
+  version?: number
   slug?: string
   name?: string
   title?: string
@@ -41,6 +68,7 @@ type CharacterSummary = {
   greet?: string
   alternate_greetings?: string[] | string | null
   alternateGreetings?: string[] | string | null
+  extensions?: Record<string, unknown> | string | null
 }
 
 type ImportedCharacterResponse = {
@@ -61,11 +89,15 @@ type ImportError = Error & {
 
 type CharacterSelection = {
   id: string
+  version?: number
   name: string
   system_prompt: string
   greeting: string
   alternate_greetings?: string[]
   avatar_url: string
+  image_base64?: string | null
+  image_mime?: string | null
+  extensions?: Record<string, unknown> | string | null
 }
 
 type CharacterSortMode = "favorites" | "az"
@@ -75,6 +107,9 @@ type FavoriteCharacter = {
   slug?: string
   name: string
 }
+
+const MAX_PERSONA_IMAGE_BYTES = 5 * 1024 * 1024
+const MAX_MOOD_IMAGE_BYTES = 5 * 1024 * 1024
 
 const normalizeCharacter = (
   character: CharacterSummary
@@ -98,6 +133,10 @@ const normalizeCharacter = (
 
   return {
     id: String(idSource),
+    version:
+      typeof character.version === "number" && Number.isFinite(character.version)
+        ? character.version
+        : undefined,
     name: String(nameSource),
     system_prompt:
       character.system_prompt ||
@@ -108,7 +147,14 @@ const normalizeCharacter = (
     greeting: primaryGreeting ?? "",
     alternate_greetings:
       alternateGreetings.length > 0 ? alternateGreetings : undefined,
-    avatar_url: avatar
+    avatar_url: avatar,
+    image_base64:
+      typeof character.image_base64 === "string"
+        ? character.image_base64
+        : null,
+    image_mime:
+      typeof character.image_mime === "string" ? character.image_mime : null,
+    extensions: character.extensions ?? null
   }
 }
 
@@ -130,11 +176,25 @@ export const CharacterSelect: React.FC<Props> = ({
     "chatUserDisplayName",
     ""
   )
-  const previousCharacterId = React.useRef<string | null>(null)
+  const [userPersonaImage, setUserPersonaImage] = useStorage(
+    "chatUserPersonaImage",
+    ""
+  )
+  const [showCharacterPortraits, setShowCharacterPortraits] = useStorage(
+    "chatShowCharacterPortraits",
+    true
+  )
+  const [messageSteeringPrompts, setMessageSteeringPrompts] =
+    useStorage<MessageSteeringPromptTemplates>(
+      MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
+      DEFAULT_MESSAGE_STEERING_PROMPTS
+    )
   const latestSelectionIdRef = React.useRef<string | null>(null)
-  const initialized = React.useRef(false)
   const lastErrorRef = React.useRef<unknown | null>(null)
   const importInputRef = React.useRef<HTMLInputElement | null>(null)
+  const personaImageInputRef = React.useRef<HTMLInputElement | null>(null)
+  const moodImageInputRef = React.useRef<HTMLInputElement | null>(null)
+  const pendingMoodUploadRef = React.useRef<CharacterMoodLabel | null>(null)
   const imageOnlyModalRef = React.useRef<ReturnType<typeof modal.confirm> | null>(
     null
   )
@@ -145,12 +205,21 @@ export const CharacterSelect: React.FC<Props> = ({
     null
   )
   const [isImporting, setIsImporting] = React.useState(false)
+  const steeringPromptDraftRef = React.useRef<MessageSteeringPromptTemplates>(
+    normalizeMessageSteeringPrompts(messageSteeringPrompts)
+  )
+
+  React.useEffect(() => {
+    steeringPromptDraftRef.current = normalizeMessageSteeringPrompts(
+      messageSteeringPrompts
+    )
+  }, [messageSteeringPrompts])
 
   const { data, refetch, isFetching, isLoading, error } = useQuery<CharacterSummary[]>({
     queryKey: ["tldw:listCharacters"],
     queryFn: async () => {
       await tldwClient.initialize()
-      const list = await tldwClient.listCharacters()
+      const list = await tldwClient.listAllCharacters()
       return Array.isArray(list) ? list : []
     },
     // Cache characters so we don't refetch on every open.
@@ -173,6 +242,8 @@ export const CharacterSelect: React.FC<Props> = ({
     "favorites"
   )
   const [searchQuery, setSearchQuery] = React.useState("")
+  const [dropdownOpen, setDropdownOpen] = React.useState(false)
+  const searchInputRef = React.useRef<InputRef | null>(null)
   const selectLabel = t("option:characters.selectCharacter", {
     defaultValue: "Select character"
   }) as string
@@ -203,6 +274,12 @@ export const CharacterSelect: React.FC<Props> = ({
   }) as string
   const trimmedDisplayName =
     typeof userDisplayName === "string" ? userDisplayName.trim() : ""
+  const hasUserPersonaImage =
+    typeof userPersonaImage === "string" && userPersonaImage.trim().length > 0
+  const selectedCharacterMoodImages = React.useMemo(
+    () => getCharacterMoodImagesFromExtensions(selectedCharacter?.extensions),
+    [selectedCharacter?.extensions]
+  )
   const hasActiveChat = React.useMemo(() => {
     if (serverChatId) return true
     return messages.some(
@@ -239,6 +316,7 @@ export const CharacterSelect: React.FC<Props> = ({
       }),
       cancelText: t("common:cancel", { defaultValue: "Cancel" }),
       centered: true,
+      maskClosable: false,
       onOk: () => {
         setUserDisplayName(nextValue.trim())
       },
@@ -247,6 +325,303 @@ export const CharacterSelect: React.FC<Props> = ({
       }
     })
   }, [modal, setUserDisplayName, t, trimmedDisplayName])
+
+  const handlePersonaImageUploadClick = React.useCallback(() => {
+    if (!personaImageInputRef.current) return
+    personaImageInputRef.current.value = ""
+    personaImageInputRef.current.click()
+  }, [])
+
+  const handlePersonaImageFile = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+
+      try {
+        if (!file.type.startsWith("image/")) {
+          notification.error({
+            message: t("settings:manageCharacters.notification.error", {
+              defaultValue: "Error"
+            }),
+            description: t("common:upload.imageRequired", {
+              defaultValue: "Please select an image file."
+            })
+          })
+          return
+        }
+
+        if (file.size > MAX_PERSONA_IMAGE_BYTES) {
+          notification.error({
+            message: t("settings:manageCharacters.notification.error", {
+              defaultValue: "Error"
+            }),
+            description: t("common:upload.imageTooLarge", {
+              defaultValue:
+                "Please choose a smaller image (around 5 MB or less)."
+            })
+          })
+          return
+        }
+
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => {
+            const result = reader.result
+            if (typeof result === "string" && result.startsWith("data:image/")) {
+              resolve(result)
+              return
+            }
+            reject(new Error("Invalid image payload"))
+          }
+          reader.onerror = () => {
+            reject(reader.error || new Error("Failed to read image"))
+          }
+          reader.readAsDataURL(file)
+        })
+
+        await setUserPersonaImage(dataUrl)
+        await setShowCharacterPortraits(true)
+        notification.success({
+          message: t("option:characters.personaImageSaved", {
+            defaultValue: "Persona image updated"
+          })
+        })
+      } catch (error) {
+        const messageText =
+          error instanceof Error ? error.message : String(error)
+        notification.error({
+          message: t("settings:manageCharacters.notification.error", {
+            defaultValue: "Error"
+          }),
+          description:
+            messageText ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      } finally {
+        event.target.value = ""
+      }
+    },
+    [notification, setShowCharacterPortraits, setUserPersonaImage, t]
+  )
+
+  const clearPersonaImage = React.useCallback(() => {
+    void setUserPersonaImage("")
+    notification.success({
+      message: t("option:characters.personaImageRemoved", {
+        defaultValue: "Persona image removed"
+      })
+    })
+  }, [notification, setUserPersonaImage, t])
+
+  const handleMoodImageUploadClick = React.useCallback(
+    (mood: CharacterMoodLabel) => {
+      if (!selectedCharacter?.id) {
+        notification.warning({
+          message: t("option:characters.moodPortraitNeedsCharacter", {
+            defaultValue: "Select a character first"
+          })
+        })
+        return
+      }
+      if (!moodImageInputRef.current) return
+      pendingMoodUploadRef.current = mood
+      moodImageInputRef.current.value = ""
+      moodImageInputRef.current.click()
+    },
+    [notification, selectedCharacter?.id, t]
+  )
+
+  const handleMoodImageFile = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      const pendingMood = pendingMoodUploadRef.current
+      const activeCharacterId = selectedCharacter?.id
+      const moodOption = CHARACTER_MOOD_OPTIONS.find(
+        (option) => option.key === pendingMood
+      )
+      const moodLabel = moodOption?.label ?? pendingMood ?? "mood"
+
+      try {
+        if (!file || !pendingMood || !activeCharacterId) {
+          return
+        }
+
+        if (!file.type.startsWith("image/")) {
+          notification.error({
+            message: t("settings:manageCharacters.notification.error", {
+              defaultValue: "Error"
+            }),
+            description: t("common:upload.imageRequired", {
+              defaultValue: "Please select an image file."
+            })
+          })
+          return
+        }
+
+        if (file.size > MAX_MOOD_IMAGE_BYTES) {
+          notification.error({
+            message: t("settings:manageCharacters.notification.error", {
+              defaultValue: "Error"
+            }),
+            description: t("common:upload.imageTooLarge", {
+              defaultValue:
+                "Please choose a smaller image (around 5 MB or less)."
+            })
+          })
+          return
+        }
+
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => {
+            const result = reader.result
+            if (typeof result === "string" && result.startsWith("data:image/")) {
+              resolve(result)
+              return
+            }
+            reject(new Error("Invalid image payload"))
+          }
+          reader.onerror = () => {
+            reject(reader.error || new Error("Failed to read image"))
+          }
+          reader.readAsDataURL(file)
+        })
+
+        await tldwClient.initialize().catch(() => null)
+        const fetchedCharacter = (await tldwClient.getCharacter(
+          activeCharacterId
+        )) as CharacterSummary
+        const baseCharacter = fetchedCharacter || selectedCharacter
+        const nextExtensions = upsertCharacterMoodImage(
+          baseCharacter?.extensions,
+          pendingMood,
+          dataUrl
+        )
+        const expectedVersion =
+          typeof baseCharacter?.version === "number" &&
+          Number.isFinite(baseCharacter.version)
+            ? baseCharacter.version
+            : undefined
+        const updatedCharacter = (await tldwClient.updateCharacter(
+          activeCharacterId,
+          {
+            extensions: nextExtensions
+          },
+          expectedVersion
+        )) as CharacterSummary
+        const normalized = normalizeCharacter(
+          updatedCharacter || {
+            ...(baseCharacter || {}),
+            extensions: nextExtensions
+          }
+        )
+        if (normalized) {
+          await setSelectedCharacter(normalized)
+        }
+        await setShowCharacterPortraits(true)
+        await refetch({ cancelRefetch: true })
+
+        notification.success({
+          message: t("option:characters.moodPortraitSaved", {
+            defaultValue: "{{mood}} mood portrait updated",
+            mood: moodLabel
+          })
+        })
+      } catch (error) {
+        const messageText =
+          error instanceof Error ? error.message : String(error)
+        notification.error({
+          message: t("settings:manageCharacters.notification.error", {
+            defaultValue: "Error"
+          }),
+          description:
+            messageText ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      } finally {
+        pendingMoodUploadRef.current = null
+        event.target.value = ""
+      }
+    },
+    [notification, refetch, selectedCharacter, setSelectedCharacter, setShowCharacterPortraits, t]
+  )
+
+  const clearMoodImage = React.useCallback(
+    async (mood: CharacterMoodLabel) => {
+      if (!selectedCharacter?.id) {
+        notification.warning({
+          message: t("option:characters.moodPortraitNeedsCharacter", {
+            defaultValue: "Select a character first"
+          })
+        })
+        return
+      }
+      const moodOption = CHARACTER_MOOD_OPTIONS.find(
+        (option) => option.key === mood
+      )
+      const moodLabel = moodOption?.label ?? mood
+      try {
+        await tldwClient.initialize().catch(() => null)
+        const fetchedCharacter = (await tldwClient.getCharacter(
+          selectedCharacter.id
+        )) as CharacterSummary
+        const baseCharacter = fetchedCharacter || selectedCharacter
+        const currentImages = getCharacterMoodImagesFromExtensions(
+          baseCharacter?.extensions
+        )
+        if (!currentImages[mood]) return
+
+        const nextExtensions = removeCharacterMoodImage(
+          baseCharacter?.extensions,
+          mood
+        )
+        const expectedVersion =
+          typeof baseCharacter?.version === "number" &&
+          Number.isFinite(baseCharacter.version)
+            ? baseCharacter.version
+            : undefined
+        const updatedCharacter = (await tldwClient.updateCharacter(
+          selectedCharacter.id,
+          { extensions: nextExtensions },
+          expectedVersion
+        )) as CharacterSummary
+        const normalized = normalizeCharacter(
+          updatedCharacter || {
+            ...(baseCharacter || {}),
+            extensions: nextExtensions
+          }
+        )
+        if (normalized) {
+          await setSelectedCharacter(normalized)
+        }
+        await refetch({ cancelRefetch: true })
+        notification.success({
+          message: t("option:characters.moodPortraitRemoved", {
+            defaultValue: "{{mood}} mood portrait removed",
+            mood: moodLabel
+          })
+        })
+      } catch (error) {
+        const messageText =
+          error instanceof Error ? error.message : String(error)
+        notification.error({
+          message: t("settings:manageCharacters.notification.error", {
+            defaultValue: "Error"
+          }),
+          description:
+            messageText ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      }
+    },
+    [notification, refetch, selectedCharacter, setSelectedCharacter, t]
+  )
 
   const confirmCharacterSwitch = React.useCallback(
     (nextName?: string) =>
@@ -287,8 +662,20 @@ export const CharacterSelect: React.FC<Props> = ({
 
       latestSelectionIdRef.current = nextId
       await setSelectedCharacter(next)
+      if (next?.name) {
+        notification.success({
+          message: t("option:characters.chattingAs", {
+            defaultValue: "You are chatting with {{name}}.",
+            name: next.name
+          })
+        })
+      }
 
-      if (next && !next.greeting) {
+      const shouldHydrateGreetingOrExtensions =
+        Boolean(next) &&
+        (!next?.greeting || next?.extensions == null)
+
+      if (next && shouldHydrateGreetingOrExtensions) {
         const targetId = next.id
         void tldwClient
           .initialize()
@@ -391,69 +778,59 @@ export const CharacterSelect: React.FC<Props> = ({
     })
   }, [error, isFetching, notification, t])
 
-  React.useEffect(() => {
-    if (!initialized.current) {
-      initialized.current = true
-      previousCharacterId.current = selectedCharacter?.id ?? null
-      return
-    }
-
-    if (
-      selectedCharacter?.id &&
-      selectedCharacter?.name &&
-      previousCharacterId.current !== selectedCharacter.id
-    ) {
-      notification.success({
-        message: t("option:characters.chattingAs", {
-          defaultValue: "You are chatting with {{name}}.",
-          name: selectedCharacter.name
-        })
-      })
-    }
-
-    previousCharacterId.current = selectedCharacter?.id ?? null
-  }, [notification, selectedCharacter?.id, selectedCharacter?.name, t])
+  const buildCharactersRoute = React.useCallback((create?: boolean) => {
+    return buildCharactersRouteUrl({ from: "header-select", create })
+  }, [])
 
   const buildCharactersHash = React.useCallback((create?: boolean) => {
-    const params = new URLSearchParams({ from: "header-select" })
-    if (create) {
-      params.set("create", "true")
-    }
-    return `#/characters?${params.toString()}`
+    return buildCharactersHashUrl({ from: "header-select", create })
   }, [])
 
   const handleOpenCharacters = React.useCallback((options?: { create?: boolean }) => {
     try {
       if (typeof window === "undefined") return
 
+      const route = buildCharactersRoute(options?.create)
       const hash = buildCharactersHash(options?.create)
       const pathname = window.location.pathname || ""
+      const optionsPath = `/options.html${hash}`
+      const runtime = getBrowserRuntime()
+      const mode = resolveCharactersDestinationMode({
+        pathname,
+        extensionRuntime: isExtensionRuntime(runtime)
+      })
 
-      // If we're already inside the options UI, just switch routes in-place.
-      if (pathname.includes("options.html")) {
+      if (mode === "options-in-place") {
+        // If we're already inside options UI, switch routes in-place.
         const base = window.location.href.replace(/#.*$/, "")
         window.location.href = `${base}${hash}`
         return
       }
 
-      // Otherwise, try to open the options page in a new tab.
-      try {
-        const url = browser.runtime.getURL(`/options.html${hash}`)
-        if (browser.tabs?.create) {
-          browser.tabs.create({ url })
-        } else {
-          window.open(url, "_blank")
+      if (mode === "options-tab") {
+        // Outside options.html in extension runtime: open options page in a new tab.
+        try {
+          const url = runtime?.getURL ? runtime.getURL(optionsPath) : optionsPath
+          if (browser.tabs?.create) {
+            browser.tabs.create({ url })
+          } else {
+            window.open(url, "_blank")
+          }
+          return
+        } catch {
+          // fall through to options path fallback
         }
+
+        window.open(optionsPath, "_blank")
         return
-      } catch {
-        // fall through to window.open fallback
       }
 
-      window.open(`/options.html${hash}`, "_blank")
+      // In web runtime, open the direct Next.js route.
+      window.open(route, "_blank")
     } catch {
       // ignore navigation errors
     }
-  }, [buildCharactersHash])
+  }, [buildCharactersHash, buildCharactersRoute])
 
   const handleOpenCreate = React.useCallback(() => {
     handleOpenCharacters({ create: true })
@@ -463,7 +840,6 @@ export const CharacterSelect: React.FC<Props> = ({
     return () => {
       imageOnlyModalRef.current?.destroy()
       imageOnlyModalRef.current = null
-      displayNameModalRef.current?.destroy()
       displayNameModalRef.current = null
     }
   }, [])
@@ -883,7 +1259,251 @@ export const CharacterSelect: React.FC<Props> = ({
     onClick: openDisplayNameModal
   }
 
-  menuItems.push(noneItem, displayNameItem, openPageItem, createItem, importItem)
+  const uploadPersonaImageItem: MenuProps["items"][number] = {
+    key: "__user_persona_image_upload__",
+    label: (
+      <button
+        type="button"
+        className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
+      >
+        {hasUserPersonaImage
+          ? t("option:characters.personaImageReplace", {
+              defaultValue: "Replace your persona image"
+            })
+          : t("option:characters.personaImageUpload", {
+              defaultValue: "Upload your persona image"
+            })}
+      </button>
+    ),
+    onClick: handlePersonaImageUploadClick
+  }
+
+  const clearPersonaImageItem: MenuProps["items"][number] | null =
+    hasUserPersonaImage
+      ? {
+          key: "__user_persona_image_clear__",
+          label: (
+            <button
+              type="button"
+              className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
+            >
+              {t("option:characters.personaImageClear", {
+                defaultValue: "Remove your persona image"
+              })}
+            </button>
+          ),
+          onClick: clearPersonaImage
+        }
+      : null
+
+  const togglePortraitsItem: MenuProps["items"][number] = {
+    key: "__toggle_character_portraits__",
+    label: (
+      <button
+        type="button"
+        className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
+      >
+        {showCharacterPortraits
+          ? t("option:characters.hidePortraits", {
+              defaultValue: "Hide large portraits"
+            })
+          : t("option:characters.showPortraits", {
+              defaultValue: "Show large portraits"
+            })}
+      </button>
+    ),
+    onClick: () => {
+      void setShowCharacterPortraits((prev) => !prev)
+    }
+  }
+
+  const editGenerationPromptsItem: MenuProps["items"][number] = {
+    key: "__edit_generation_prompts__",
+    label: (
+      <button
+        type="button"
+        className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
+      >
+        {t("playground:composer.steering.editPrompts", {
+          defaultValue: "Edit generation prompts"
+        })}
+      </button>
+    ),
+    onClick: () => {
+      const current = normalizeMessageSteeringPrompts(messageSteeringPrompts)
+      steeringPromptDraftRef.current = {
+        ...current
+      }
+      React.startTransition(() => {
+        modal.confirm({
+          title: t("playground:composer.steering.editPromptsTitle", {
+            defaultValue: "Edit generation prompts"
+          }),
+          width: 720,
+          centered: true,
+          maskClosable: false,
+          content: (
+            <div className="space-y-3">
+              <div className="text-xs text-text-muted">
+                {t("playground:composer.steering.editPromptsHelp", {
+                  defaultValue:
+                    "These templates are used when running Continue as user, Impersonate user, and Force narrate."
+                })}
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-medium text-text">
+                  {t("playground:composer.steering.continue", {
+                    defaultValue: "Continue as user"
+                  })}
+                </div>
+                <Input.TextArea
+                  rows={3}
+                  defaultValue={current.continueAsUser}
+                  onChange={(event) => {
+                    steeringPromptDraftRef.current = {
+                      ...steeringPromptDraftRef.current,
+                      continueAsUser: event.target.value
+                    }
+                  }}
+                />
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-medium text-text">
+                  {t("playground:composer.steering.impersonate", {
+                    defaultValue: "Impersonate user"
+                  })}
+                </div>
+                <Input.TextArea
+                  rows={3}
+                  defaultValue={current.impersonateUser}
+                  onChange={(event) => {
+                    steeringPromptDraftRef.current = {
+                      ...steeringPromptDraftRef.current,
+                      impersonateUser: event.target.value
+                    }
+                  }}
+                />
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-medium text-text">
+                  {t("playground:composer.steering.narrate", {
+                    defaultValue: "Force narrate"
+                  })}
+                </div>
+                <Input.TextArea
+                  rows={3}
+                  defaultValue={current.forceNarrate}
+                  onChange={(event) => {
+                    steeringPromptDraftRef.current = {
+                      ...steeringPromptDraftRef.current,
+                      forceNarrate: event.target.value
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          ),
+          okText: t("common:save", { defaultValue: "Save" }),
+          cancelText: t("common:cancel", { defaultValue: "Cancel" }),
+          onOk: async () => {
+            const next = normalizeMessageSteeringPrompts(
+              steeringPromptDraftRef.current
+            )
+            await new Promise<void>((resolve) => {
+              React.startTransition(() => {
+                Promise.resolve(setMessageSteeringPrompts(next)).finally(() =>
+                  resolve()
+                )
+              })
+            })
+            notification.success({
+              message: t("playground:composer.steering.editPromptsSaved", {
+                defaultValue: "Generation prompts saved"
+              })
+            })
+          }
+        })
+      })
+    }
+  }
+
+  const moodPortraitItems: MenuProps["items"] = selectedCharacter
+    ? CHARACTER_MOOD_OPTIONS.flatMap((moodOption) => {
+        const hasMoodImage = Boolean(selectedCharacterMoodImages[moodOption.key])
+        const uploadItem: MenuProps["items"][number] = {
+          key: `__mood_upload_${moodOption.key}__`,
+          label: (
+            <button
+              type="button"
+              className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
+            >
+              {hasMoodImage
+                ? t("option:characters.moodPortraitReplace", {
+                    defaultValue: "Replace {{mood}} mood portrait",
+                    mood: moodOption.label
+                  })
+                : t("option:characters.moodPortraitSet", {
+                    defaultValue: "Set {{mood}} mood portrait",
+                    mood: moodOption.label
+                  })}
+            </button>
+          ),
+          onClick: () => {
+            handleMoodImageUploadClick(moodOption.key)
+          }
+        }
+        if (!hasMoodImage) {
+          return [uploadItem]
+        }
+        const clearItem: MenuProps["items"][number] = {
+          key: `__mood_clear_${moodOption.key}__`,
+          label: (
+            <button
+              type="button"
+              className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
+            >
+              {t("option:characters.moodPortraitRemove", {
+                defaultValue: "Remove {{mood}} mood portrait",
+                mood: moodOption.label
+              })}
+            </button>
+          ),
+          onClick: () => {
+            void clearMoodImage(moodOption.key)
+          }
+        }
+        return [uploadItem, clearItem]
+      })
+    : []
+
+  menuItems.push(
+    noneItem,
+    displayNameItem,
+    editGenerationPromptsItem,
+    uploadPersonaImageItem,
+    togglePortraitsItem
+  )
+  if (clearPersonaImageItem) {
+    menuItems.push(clearPersonaImageItem)
+  }
+  if (selectedCharacter && moodPortraitItems.length > 0) {
+    menuItems.push(
+      dividerItem("__divider_mood_portraits__"),
+      {
+        key: "__mood_portraits_heading__",
+        label: (
+          <div className="w-full text-left text-[11px] font-semibold uppercase tracking-wide text-text-subtle">
+            {t("option:characters.moodPortraits", {
+              defaultValue: "Mood portraits"
+            })}
+          </div>
+        ),
+        disabled: true
+      },
+      ...moodPortraitItems
+    )
+  }
+  menuItems.push(openPageItem, createItem, importItem)
 
   if (characterItems && characterItems.length > 0) {
     menuItems.push(dividerItem("__divider_items__"), ...characterItems)
@@ -892,7 +1512,7 @@ export const CharacterSelect: React.FC<Props> = ({
       key: "__loading__",
       label: (
         <div className="w-56 px-2 py-2 text-xs text-text-muted">
-          {t("common:loading", "Loading…") as string}
+          {t("common:loading.title", "Loading…") as string}
         </div>
       )
     })
@@ -1001,6 +1621,39 @@ export const CharacterSelect: React.FC<Props> = ({
     firstItem?.focus()
   }, [])
 
+  React.useEffect(() => {
+    if (!dropdownOpen) return
+
+    let frameId: number | null = null
+    let attempts = 0
+    let canceled = false
+    const focusWhenReady = () => {
+      if (canceled) return
+      const input = searchInputRef.current
+      if (input) {
+        try {
+          input.focus({ preventScroll: true } as any)
+        } catch {
+          input.focus()
+        }
+        return
+      }
+      if (attempts < 10) {
+        attempts += 1
+        frameId = window.requestAnimationFrame(focusWhenReady)
+      }
+    }
+
+    frameId = window.requestAnimationFrame(focusWhenReady)
+
+    return () => {
+      canceled = true
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+  }, [dropdownOpen])
+
   return (
     <div className="flex items-center gap-2">
       <input
@@ -1010,8 +1663,23 @@ export const CharacterSelect: React.FC<Props> = ({
         className="hidden"
         onChange={handleImportFile}
       />
+      <input
+        ref={personaImageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        className="hidden"
+        onChange={handlePersonaImageFile}
+      />
+      <input
+        ref={moodImageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        className="hidden"
+        onChange={handleMoodImageFile}
+      />
       <Dropdown
         onOpenChange={(open) => {
+          setDropdownOpen(open)
           if (!open) {
             setSearchQuery("")
           }
@@ -1020,10 +1688,10 @@ export const CharacterSelect: React.FC<Props> = ({
           <div className="w-64" ref={menuContainerRef}>
             <div className="px-2 py-2 border-b border-border flex items-center gap-2">
               <Input
+                ref={searchInputRef}
                 size="small"
                 placeholder={searchPlaceholder}
                 value={searchQuery}
-                autoFocus
                 allowClear
                 className="flex-1"
                 onChange={(e) => setSearchQuery(e.target.value)}

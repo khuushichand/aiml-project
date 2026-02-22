@@ -3,12 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from tldw_Server_API.app.core.AuthNZ import rate_limiter as rate_limiter_module
+from tldw_Server_API.app.core.AuthNZ import lockout_tracker as lockout_tracker_module
+from tldw_Server_API.app.core.AuthNZ.lockout_tracker import LockoutTracker
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 
 
-class _ControlledDatetime(rate_limiter_module.datetime):
-    current = rate_limiter_module.datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+class _ControlledDatetime(lockout_tracker_module.datetime):
+    current = lockout_tracker_module.datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
     @classmethod
     def utcnow(cls):
@@ -79,18 +80,25 @@ class _StubRepo:
 
 @pytest.mark.asyncio
 async def test_lockout_recovers_after_window(monkeypatch):
-    original_datetime = rate_limiter_module.datetime
-    monkeypatch.setattr(rate_limiter_module, "datetime", _ControlledDatetime)
+    original_datetime = lockout_tracker_module.datetime
+    monkeypatch.setattr(lockout_tracker_module, "datetime", _ControlledDatetime)
 
     settings = SimpleNamespace(
         MAX_LOGIN_ATTEMPTS=3,
         LOCKOUT_DURATION_MINUTES=5,
         PII_REDACT_LOGS=False,
     )
+    # Set up a LockoutTracker with stub internals
+    tracker = LockoutTracker(settings=settings)
+    tracker.db_pool = object()
+    tracker._repo = _StubRepo()
+    tracker._initialized = True
+
+    # Wire it into the RateLimiter for backward-compat testing
     limiter = RateLimiter(settings=settings)
     limiter.db_pool = object()
-    limiter._rate_limits_repo = _StubRepo()
     limiter._initialized = True
+    limiter._lockout = tracker
 
     identifier = "ip:127.0.0.1"
 

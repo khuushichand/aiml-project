@@ -37,6 +37,7 @@ from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import (
     WatchlistRuleRecord,
 )
 from tldw_Server_API.app.core.Monitoring.notification_service import get_notification_service
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 @dataclass
@@ -118,7 +119,7 @@ class TopicMonitoringService:
         raw = monitoring_cfg.get("enabled") if isinstance(monitoring_cfg, dict) else None
         if raw is None:
             raw = os.getenv("MONITORING_ENABLED", "false")
-        return str(raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+        return is_truthy(str(raw))
 
     def _resolve_max_scan_chars(self) -> int:
         default = 200000
@@ -205,7 +206,7 @@ class TopicMonitoringService:
         try:
             if not self._watchlists_path or not os.path.exists(self._watchlists_path):
                 logger.info(
-                    "Topic monitoring: watchlists file not found at %s, skipping seed",
+                    'Topic monitoring: watchlists file not found at {}, skipping seed',
                     self._watchlists_path,
                 )
                 return None
@@ -283,7 +284,7 @@ class TopicMonitoringService:
             if severity not in self._ALLOWED_SEVERITIES:
                 if strict:
                     raise ValueError(f"Invalid rule severity '{rule.severity}'")
-                logger.warning("Topic monitoring: skipped rule with invalid severity '%s'", rule.severity)
+                logger.warning("Topic monitoring: skipped rule with invalid severity '{}'", rule.severity)
                 continue
             pattern = str(rule.pattern or "").strip()
             if not pattern:
@@ -323,7 +324,7 @@ class TopicMonitoringService:
             try:
                 scope_type, scope_id = self._normalize_scope(wl.scope_type, wl.scope_id)
                 if scope_type != "global" and not scope_id:
-                    logger.warning("Topic monitoring: skipping watchlist with missing scope_id: %s", wl.name)
+                    logger.warning("Topic monitoring: skipping watchlist with missing scope_id: {}", wl.name)
                     continue
                 wl.scope_type = scope_type
                 wl.scope_id = scope_id
@@ -336,7 +337,7 @@ class TopicMonitoringService:
                 if existing:
                     if not include_unmanaged and str(existing.get("managed_by")) != "config":
                         logger.info(
-                            "Topic monitoring: skipping seed update for unmanaged watchlist %s",
+                            'Topic monitoring: skipping seed update for unmanaged watchlist {}',
                             existing.get("id"),
                         )
                         continue
@@ -607,7 +608,7 @@ class TopicMonitoringService:
             try:
                 scope_type, scope_id = self._normalize_scope(wl.scope_type, wl.scope_id)
             except ValueError as exc:
-                logger.warning("Topic monitoring: skipping watchlist %s due to scope error: %s", wid, exc)
+                logger.warning("Topic monitoring: skipping watchlist {} due to scope error: {}", wid, exc)
                 continue
             if scope_type == "global":
                 out_global.append((wid, wl))
@@ -645,7 +646,7 @@ class TopicMonitoringService:
             grams = [text]
         weights = [0] * 64
         for gram in grams:
-            digest = hashlib.sha1(gram.encode("utf-8")).digest()
+            digest = hashlib.sha1(gram.encode("utf-8"), usedforsecurity=False).digest()
             h = int.from_bytes(digest[:8], "big")
             for i in range(64):
                 if h & (1 << i):
@@ -761,7 +762,7 @@ class TopicMonitoringService:
                     )
                     if skip:
                         logger.debug(
-                            "Topic monitoring dedupe skipped stream=%s rule=%s",
+                            'Topic monitoring dedupe skipped stream={} rule={}',
                             source_id,
                             cr.rule_id,
                         )

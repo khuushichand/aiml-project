@@ -21,11 +21,65 @@ import {
   type TldwConfig,
   type AdminUserListResponse,
   type AdminUserSummary,
-  type AdminRole
+  type AdminRole,
+  type MediaIngestionBudgetDiagnostics
 } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
+import { isTimeoutLikeError } from "@/utils/request-timeout"
+import {
+  deriveAdminGuardFromError,
+  sanitizeAdminErrorMessage
+} from "./admin-error-utils"
 
 const { Title, Text } = Typography
+const SYSTEM_STATS_TIMEOUT_MS = 10_000
+
+const formatBytesForAdmin = (value: number | null | undefined): string => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "–"
+  if (value < 1024) return `${value} B`
+
+  const units = ["KiB", "MiB", "GiB", "TiB"]
+  let normalized = value / 1024
+  let unitIndex = 0
+  while (normalized >= 1024 && unitIndex < units.length - 1) {
+    normalized /= 1024
+    unitIndex += 1
+  }
+  const rounded = normalized.toFixed(1).replace(/\.0$/, "")
+  return `${rounded} ${units[unitIndex]}`
+}
+
+const formatMegabytesForAdmin = (value: number | null | undefined): string => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "–"
+
+  // Some backends still report these legacy *_mb fields in raw bytes.
+  const looksLikeRawBytes = value >= 1_000_000
+  const bytesValue = looksLikeRawBytes ? value : value * 1024 * 1024
+  return formatBytesForAdmin(bytesValue)
+}
+
+const formatRetryAfterForAdmin = (value: number | null | undefined): string => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "–"
+  if (value < 60) {
+    return `~${Math.round(value)}s`
+  }
+  if (value < 3600) {
+    return `~${Math.round(value / 60)}m`
+  }
+
+  const totalMinutes = Math.round(value / 60)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24)
+    const remainingHours = hours % 24
+    if (remainingHours > 0) {
+      return `~${days}d ${remainingHours}h`
+    }
+    return `~${days}d`
+  }
+  return `~${hours}h ${minutes}m`
+}
 
 export const ServerAdminPage: React.FC = () => {
   const { t } = useTranslation(["option", "settings"])
@@ -40,6 +94,11 @@ export const ServerAdminPage: React.FC = () => {
   const [roles, setRoles] = React.useState<AdminRole[]>([])
   const [rolesLoading, setRolesLoading] = React.useState(false)
   const [rolesError, setRolesError] = React.useState<string | null>(null)
+  const [mediaBudget, setMediaBudget] = React.useState<MediaIngestionBudgetDiagnostics | null>(null)
+  const [mediaBudgetLoading, setMediaBudgetLoading] = React.useState(false)
+  const [mediaBudgetError, setMediaBudgetError] = React.useState<string | null>(null)
+  const [mediaBudgetUserId, setMediaBudgetUserId] = React.useState<number | null>(null)
+  const [mediaBudgetPolicyId, setMediaBudgetPolicyId] = React.useState("media.default")
   const [userRoleFilter, setUserRoleFilter] = React.useState<string | undefined>(undefined)
   const [userActiveFilter, setUserActiveFilter] = React.useState<string | undefined>(undefined)
   const [usersPage, setUsersPage] = React.useState(1)
@@ -50,14 +109,12 @@ export const ServerAdminPage: React.FC = () => {
   const [roleForm] = Form.useForm()
   const initialLoadRef = React.useRef(false)
 
-  const markAdminGuardFromError = (err: any) => {
-    const msg = String(err?.message || "")
-    if (msg.includes("Request failed: 403")) {
-      setAdminGuard("forbidden")
-    } else if (msg.includes("Request failed: 404")) {
-      setAdminGuard("notFound")
+  const markAdminGuardFromError = React.useCallback((err: any) => {
+    const guardState = deriveAdminGuardFromError(err)
+    if (guardState) {
+      setAdminGuard(guardState)
     }
-  }
+  }, [])
 
   const loadUsers = React.useCallback(
     async (
@@ -79,13 +136,13 @@ export const ServerAdminPage: React.FC = () => {
         setUsersData(data)
         setUsersError(null)
       } catch (e: any) {
-        setUsersError(e?.message || "Failed to load users.")
+        setUsersError(sanitizeAdminErrorMessage(e, "Failed to load users."))
         markAdminGuardFromError(e)
       } finally {
         setUsersLoading(false)
       }
     },
-    []
+    [markAdminGuardFromError]
   )
 
   const loadRoles = React.useCallback(async () => {
@@ -95,12 +152,64 @@ export const ServerAdminPage: React.FC = () => {
       setRoles(data || [])
       setRolesError(null)
     } catch (e: any) {
-      setRolesError(e?.message || "Failed to load roles.")
+      setRolesError(sanitizeAdminErrorMessage(e, "Failed to load roles."))
       markAdminGuardFromError(e)
     } finally {
       setRolesLoading(false)
     }
-  }, [])
+  }, [markAdminGuardFromError])
+
+  const loadMediaBudget = React.useCallback(
+    async (userId: number, policyId: string = "media.default") => {
+      try {
+        setMediaBudgetLoading(true)
+        const data = await tldwClient.getMediaIngestionBudgetDiagnostics({
+          userId,
+          policyId: policyId || "media.default"
+        })
+        setMediaBudget(data)
+        setMediaBudgetError(null)
+    } catch (e: any) {
+      setMediaBudgetError(
+        sanitizeAdminErrorMessage(
+          e,
+          "Failed to load media ingestion budget diagnostics."
+        )
+      )
+      markAdminGuardFromError(e)
+    } finally {
+      setMediaBudgetLoading(false)
+      }
+    },
+    [markAdminGuardFromError]
+  )
+
+  const loadSystemStats = React.useCallback(async () => {
+    try {
+      setLoading(true)
+      const data = await tldwClient.getSystemStats({
+        timeoutMs: SYSTEM_STATS_TIMEOUT_MS
+      })
+      setStats(data)
+      setError(null)
+    } catch (e: any) {
+      const baseError = sanitizeAdminErrorMessage(
+        e,
+        "Failed to load system statistics."
+      )
+      setError(
+        isTimeoutLikeError(e)
+          ? (t(
+              "settings:admin.systemStatsTimeout",
+              "System statistics took longer than 10 seconds. Retry to try again."
+            ) as string)
+          : baseError
+      )
+      markAdminGuardFromError(e)
+    } finally {
+      setLoading(false)
+    }
+  }, [markAdminGuardFromError, t])
 
   React.useEffect(() => {
     if (initialLoadRef.current) return
@@ -115,22 +224,8 @@ export const ServerAdminPage: React.FC = () => {
       } catch {
         // ignore; health checks will surface errors
       }
-      try {
-        setLoading(true)
-        const data = await tldwClient.getSystemStats()
-        if (!cancelled) {
-          setStats(data)
-          setError(null)
-        }
-      } catch (e: any) {
-        if (!cancelled) {
-          setError(e?.message || "Failed to load system statistics.")
-          markAdminGuardFromError(e)
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
+      if (!cancelled) {
+        await loadSystemStats()
       }
 
       // Initial users + roles
@@ -141,25 +236,44 @@ export const ServerAdminPage: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [loadRoles, loadUsers, userActiveFilter, userRoleFilter, usersPageSize])
+  }, [
+    loadRoles,
+    loadSystemStats,
+    loadUsers,
+    userActiveFilter,
+    userRoleFilter,
+    usersPageSize
+  ])
 
   const handleRefresh = async () => {
-    try {
-      setLoading(true)
-      const data = await tldwClient.getSystemStats()
-      setStats(data)
-      setError(null)
-    } catch (e: any) {
-      setError(e?.message || "Failed to load system statistics.")
-      markAdminGuardFromError(e)
-    } finally {
-      setLoading(false)
+    await loadSystemStats()
+    if (mediaBudgetUserId !== null && !adminGuard) {
+      void loadMediaBudget(mediaBudgetUserId, mediaBudgetPolicyId)
     }
   }
 
   const users = stats?.users || {}
   const storage = stats?.storage || {}
   const sessions = stats?.sessions || {}
+  const mediaBudgetLimits = mediaBudget?.limits || {}
+  const mediaBudgetUsage = mediaBudget?.usage || {}
+
+  React.useEffect(() => {
+    if (mediaBudgetUserId !== null) {
+      return
+    }
+    const firstUser = usersData?.users?.[0]
+    if (firstUser && typeof firstUser.id === "number" && firstUser.id > 0) {
+      setMediaBudgetUserId(firstUser.id)
+    }
+  }, [mediaBudgetUserId, usersData])
+
+  React.useEffect(() => {
+    if (adminGuard || mediaBudgetUserId === null) {
+      return
+    }
+    void loadMediaBudget(mediaBudgetUserId, mediaBudgetPolicyId)
+  }, [adminGuard, loadMediaBudget, mediaBudgetPolicyId, mediaBudgetUserId])
 
   const handleUserTableChange = (pagination: any) => {
     const page = pagination.current || 1
@@ -304,7 +418,8 @@ export const ServerAdminPage: React.FC = () => {
       key: "storage",
       render: (_: any, record: AdminUserSummary) => (
         <span>
-          {record.storage_used_mb} / {record.storage_quota_mb} MB
+          {formatMegabytesForAdmin(record.storage_used_mb)} /{" "}
+          {formatMegabytesForAdmin(record.storage_quota_mb)}
         </span>
       )
     }
@@ -312,13 +427,13 @@ export const ServerAdminPage: React.FC = () => {
 
   return (
     <PageShell>
-      <Space direction="vertical" size="large" className="w-full py-6">
+      <Space orientation="vertical" size="large" className="w-full py-6">
         {adminGuard && (
           <Alert
             type="warning"
             showIcon
             className="mb-4"
-            message={
+            title={
               adminGuard === "forbidden"
                 ? t(
                     "settings:admin.adminGuardForbiddenTitle",
@@ -405,14 +520,19 @@ export const ServerAdminPage: React.FC = () => {
               {error && (
                 <Alert
                   type="error"
-                  message={t("settings:admin.systemStatsError", "Unable to load system statistics")}
+                  title={t("settings:admin.systemStatsError", "Unable to load system statistics")}
                   description={error}
                   showIcon
                   className="mb-3"
+                  action={
+                    <Button size="small" onClick={handleRefresh} disabled={loading}>
+                      {t("common:retry", "Retry")}
+                    </Button>
+                  }
                 />
               )}
               {stats ? (
-                <Space direction="vertical" size="large" className="w-full">
+                <Space orientation="vertical" size="large" className="w-full">
                   <Descriptions title={t("settings:admin.userStats", "Users")} column={3} size="small">
                     <Descriptions.Item label={t("settings:admin.users.total", "Total")}>
                       {users.total ?? "–"}
@@ -431,18 +551,22 @@ export const ServerAdminPage: React.FC = () => {
                     </Descriptions.Item>
                   </Descriptions>
 
-                  <Descriptions title={t("settings:admin.storageStats", "Storage")} column={3} size="small">
-                    <Descriptions.Item label={t("settings:admin.storage.totalUsed", "Total used (MB)")}>
-                      {storage.total_used_mb ?? "–"}
+                  <Descriptions
+                    title={t("settings:admin.storageStats", "Storage")}
+                    column={3}
+                    size="small">
+                    <Descriptions.Item label={t("settings:admin.storage.totalUsed", "Total used")}>
+                      {formatMegabytesForAdmin(storage.total_used_mb)}
                     </Descriptions.Item>
-                    <Descriptions.Item label={t("settings:admin.storage.totalQuota", "Total quota (MB)")}>
-                      {storage.total_quota_mb ?? "–"}
+                    <Descriptions.Item label={t("settings:admin.storage.totalQuota", "Total quota")}>
+                      {formatMegabytesForAdmin(storage.total_quota_mb)}
                     </Descriptions.Item>
-                    <Descriptions.Item label={t("settings:admin.storage.averageUsed", "Average used (MB)")}>
-                      {storage.average_used_mb ?? "–"}
+                    <Descriptions.Item
+                      label={t("settings:admin.storage.averageUsed", "Average used")}>
+                      {formatMegabytesForAdmin(storage.average_used_mb)}
                     </Descriptions.Item>
-                    <Descriptions.Item label={t("settings:admin.storage.maxUsed", "Max used (MB)")}>
-                      {storage.max_used_mb ?? "–"}
+                    <Descriptions.Item label={t("settings:admin.storage.maxUsed", "Max used")}>
+                      {formatMegabytesForAdmin(storage.max_used_mb)}
                     </Descriptions.Item>
                   </Descriptions>
 
@@ -479,11 +603,11 @@ export const ServerAdminPage: React.FC = () => {
                   </Button>
                 </Space>
               }>
-              <Space direction="vertical" size="middle" className="w-full">
+              <Space orientation="vertical" size="middle" className="w-full">
                 {usersError && (
                   <Alert
                     type="error"
-                    message={t("settings:admin.usersError", "Unable to load users")}
+                    title={t("settings:admin.usersError", "Unable to load users")}
                     description={usersError}
                     showIcon
                   />
@@ -545,13 +669,13 @@ export const ServerAdminPage: React.FC = () => {
                 {rolesError && (
                   <Alert
                     type="error"
-                    message={t("settings:admin.rolesError", "Unable to load roles")}
+                    title={t("settings:admin.rolesError", "Unable to load roles")}
                     description={rolesError}
                     showIcon
                   />
                 )}
 
-                <Space direction="vertical" size="small" className="w-full">
+                <Space orientation="vertical" size="small" className="w-full">
                   <Text strong>
                     {t("settings:admin.roles.title", "Roles")}
                   </Text>
@@ -669,6 +793,106 @@ export const ServerAdminPage: React.FC = () => {
                     </Form.Item>
                   </Form>
                 </Space>
+              </Space>
+            </Card>
+
+            <Card
+              title={t("settings:admin.mediaBudget.title", "Media ingestion budget")}
+              loading={mediaBudgetLoading}
+              extra={
+                <Space size="small">
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      mediaBudgetUserId !== null
+                        ? loadMediaBudget(mediaBudgetUserId, mediaBudgetPolicyId)
+                        : undefined
+                    }
+                    disabled={mediaBudgetUserId === null || mediaBudgetLoading}>
+                    {t("common:refresh", "Refresh")}
+                  </Button>
+                </Space>
+              }>
+              <Space orientation="vertical" size="middle" className="w-full">
+                <Space wrap align="center">
+                  <Select
+                    size="small"
+                    style={{ minWidth: 220 }}
+                    value={mediaBudgetUserId ?? undefined}
+                    placeholder={t("settings:admin.mediaBudget.user", "User")}
+                    onChange={(value) => setMediaBudgetUserId(value)}
+                    options={(usersData?.users || []).map((user) => ({
+                      label: `${user.username} (#${user.id})`,
+                      value: user.id
+                    }))}
+                  />
+                  <Input
+                    size="small"
+                    style={{ width: 180 }}
+                    value={mediaBudgetPolicyId}
+                    onChange={(event) => setMediaBudgetPolicyId(event.target.value || "media.default")}
+                    placeholder={t("settings:admin.mediaBudget.policy", "Policy ID")}
+                  />
+                </Space>
+
+                {mediaBudgetError && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    title={t(
+                      "settings:admin.mediaBudget.errorTitle",
+                      "Unable to load media ingestion budget diagnostics"
+                    )}
+                    description={mediaBudgetError}
+                  />
+                )}
+
+                {mediaBudget ? (
+                  <Descriptions
+                    size="small"
+                    column={2}
+                    title={t("settings:admin.mediaBudget.current", "Current diagnostics")}>
+                    <Descriptions.Item label={t("settings:admin.mediaBudget.status", "Status")}>
+                      {mediaBudget.status || "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label={t("settings:admin.mediaBudget.entity", "Entity")}>
+                      {mediaBudget.entity || "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.jobsLimit", "Jobs max concurrent")}>
+                      {mediaBudgetLimits.jobs_max_concurrent ?? "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.jobsActive", "Jobs active")}>
+                      {mediaBudgetUsage.jobs_active ?? "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.bytesCap", "Daily ingestion bytes cap")}>
+                      {formatBytesForAdmin(mediaBudgetLimits.ingestion_bytes_daily_cap)}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.bytesUsed", "Daily ingestion bytes used")}>
+                      {formatBytesForAdmin(mediaBudgetUsage.ingestion_bytes_daily_used)}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.bytesRemaining", "Daily ingestion bytes remaining")}>
+                      {formatBytesForAdmin(
+                        mediaBudgetUsage.ingestion_bytes_daily_remaining
+                      )}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.retryAfter", "Retry after (seconds)")}>
+                      {formatRetryAfterForAdmin(mediaBudget.retry_after)}
+                    </Descriptions.Item>
+                  </Descriptions>
+                ) : (
+                  <Text type="secondary">
+                    {t(
+                      "settings:admin.mediaBudget.empty",
+                      "Select a user to inspect media ingestion limits and usage."
+                    )}
+                  </Text>
+                )}
               </Space>
             </Card>
           </>

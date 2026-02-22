@@ -14,17 +14,21 @@ This guide gets you from zero to a running tldw_server with working API calls. N
 
 ## Fastest Path (30 Seconds)
 
-If you have Python 3.10+ and ffmpeg already installed:
+If you have Python 3.10+ (recommended: 3.12):
 
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
-make quickstart
+make quickstart-install
+# If `python3` is older than 3.10 on your machine:
+# make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 ```
 
-This creates a `.env`, initializes auth, and starts the server. Verify with:
+This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
 ```bash
 curl http://localhost:8000/health
 ```
+
+Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
 **Not working?** Continue with the step-by-step options below.
 
@@ -32,13 +36,30 @@ curl http://localhost:8000/health
 
 ## Prerequisites
 
+Python support for this repo:
+- Minimum: Python 3.10+
+- CI-tested: Python 3.11, 3.12, and 3.13
+- Recommended for local development: Python 3.12
+
 | Requirement | Check Command | Install |
 |-------------|---------------|---------|
-| Python 3.10+ | `python3 --version` | [python.org](https://www.python.org/downloads/) |
-| ffmpeg | `ffmpeg -version` | `brew install ffmpeg` (macOS) or `apt install ffmpeg` (Linux) |
+| Python 3.10+ | `python --version` (or `python3 --version` on macOS/Linux) | [python.org](https://www.python.org/downloads/) |
+| ffmpeg | `ffmpeg -version` | `brew install ffmpeg` (macOS) or your Linux package manager |
+| PyAudio/PortAudio (optional; audio capture paths) | `python -c "import pyaudio"` | Linux: install `portaudio` + `python3-pyaudio`; macOS: `brew install portaudio && pip install pyaudio`; Windows: `pip install pyaudio` |
+| Bun (optional; WebUI section below) | `bun --version` | [bun.sh](https://bun.sh/) |
 | pip | `pip --version` | Comes with Python |
 
 **Don't have Python/ffmpeg?** Use [Docker instead](#option-b-docker) (requires Docker Desktop or Docker Engine).
+
+Linux package examples:
+```bash
+# Ubuntu/Debian
+sudo apt update
+sudo apt install -y ffmpeg portaudio19-dev python3-pyaudio
+
+# Fedora/RHEL (RPM Fusion may be required for ffmpeg)
+sudo dnf install -y ffmpeg portaudio-devel python3-pyaudio
+```
 
 ---
 
@@ -51,13 +72,26 @@ curl http://localhost:8000/health
 git clone https://github.com/rmusser01/tldw_server.git
 cd tldw_server
 
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# Create virtual environment with a supported Python interpreter
+# macOS/Linux (3.12 recommended)
+python3.12 -m venv .venv  # or python3.13 / python3.11 / python3.10
+source .venv/bin/activate
+
+# Windows (PowerShell)
+py -3.12 -m venv .venv  # or -3.13 / -3.11 / -3.10
+.venv\Scripts\Activate.ps1
+
+# Confirm the active interpreter version
+python --version
 
 # Install dependencies
 pip install -e .
 ```
+
+PyAudio/PortAudio notes:
+- Linux: install `portaudio19-dev` + `python3-pyaudio` (Debian/Ubuntu) or `portaudio-devel` + `python3-pyaudio` (Fedora/RHEL).
+- macOS: `brew install portaudio`, then `pip install pyaudio` in the activated venv.
+- Windows: run `pip install pyaudio` in the activated venv; if build fails, install Microsoft C++ Build Tools and retry.
 
 **Expected output:** Lots of package installation messages, ending with "Successfully installed..."
 
@@ -67,13 +101,13 @@ pip install -e .
 
 ```bash
 # Copy the minimal config template
-cp tldw_Server_API/Config_Files/.env.quickstart .env
+cp tldw_Server_API/Config_Files/.env.quickstart tldw_Server_API/Config_Files/.env
 ```
 
-Now edit `.env` and change the API key:
+Now edit `tldw_Server_API/Config_Files/.env` and change the API key:
 
 ```bash
-# .env
+# tldw_Server_API/Config_Files/.env
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=my-super-secret-key-at-least-16-chars   # <-- Change this!
 DATABASE_URL=sqlite:///./Databases/users.db
@@ -139,18 +173,18 @@ If you prefer Docker or don't want to install Python.
 git clone https://github.com/rmusser01/tldw_server.git
 cd tldw_server
 
-# Create .env with your API key
-cat > .env << 'EOF'
+# Create tldw_Server_API/Config_Files/.env with your API key
+cat > tldw_Server_API/Config_Files/.env << 'EOF'
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=my-super-secret-key-at-least-16-chars
 DATABASE_URL=sqlite:///./Databases/users.db
 EOF
 
 # Start with Docker Compose (takes 3-5 minutes first time)
-docker compose -f Dockerfiles/docker-compose.yml up -d --build
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
 
 # Initialize auth
-docker compose -f Dockerfiles/docker-compose.yml exec app \
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml exec app \
   python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
 
 # Verify
@@ -173,7 +207,7 @@ Expected: `{"status":"ok",...}`
 ### 2. Authentication Test
 
 ```bash
-# Replace YOUR_KEY with your SINGLE_USER_API_KEY from .env
+# Replace YOUR_KEY with your SINGLE_USER_API_KEY from tldw_Server_API/Config_Files/.env
 curl -H "X-API-KEY: YOUR_KEY" http://localhost:8000/api/v1/llm/providers
 ```
 Expected: `{"providers":[...]}`
@@ -183,6 +217,70 @@ Expected: `{"providers":[...]}`
 Open in browser: http://localhost:8000/docs
 
 You should see the Swagger UI with all available endpoints.
+
+---
+
+## Optional: Add the WebUI (Bun)
+
+If your API is already running on `http://127.0.0.1:8000`, you can launch the Next.js WebUI with Bun.
+
+### Step 1: Install Bun (if needed)
+
+```bash
+# macOS/Linux
+curl -fsSL https://bun.sh/install | bash
+
+# Windows (PowerShell)
+powershell -c "irm bun.sh/install.ps1 | iex"
+
+# Open a new terminal, then verify:
+bun --version
+```
+
+### Step 2: Set up the WebUI project
+
+```bash
+# from the repo root
+cd apps/tldw-frontend
+cp .env.local.example .env.local
+bun install
+```
+
+### Step 3: Run the WebUI
+
+```bash
+bun run dev -- -p 8080
+```
+
+Confirm `.env.local` has:
+```bash
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_API_VERSION=v1
+# Optional in single-user mode:
+# NEXT_PUBLIC_X_API_KEY=your_single_user_api_key
+```
+
+Open in browser: http://localhost:8080
+
+Access from another device on your network (for example, phone/tablet):
+
+```bash
+# API (from repo root)
+python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
+
+# tldw_Server_API/Config_Files/.env
+# ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
+
+# apps/tldw-frontend/.env.local
+# NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:8000
+
+# WebUI
+bun run dev -- -H 0.0.0.0 -p 8080
+```
+
+Then open: `http://YOUR_SERVER_IP:8080` from your mobile device (same LAN), and ensure server firewall/security group rules allow TCP 8000/8080.
+
+Security note: this is for trusted LAN testing. For internet-facing deployments, put API + WebUI behind HTTPS/reverse proxy and follow `Docs/Getting_Started/Production.md`.
 
 ---
 
@@ -206,6 +304,7 @@ Now that your server is running:
 | I want to... | Guide |
 |--------------|-------|
 | Add LLM providers (OpenAI, Anthropic, etc.) | [Local Development Guide](./Local_Development.md) |
+| Launch the WebUI with Bun | [Optional: Add the WebUI (Bun)](#optional-add-the-webui-bun) |
 | Run on my home server with Docker | [Docker Self-Host Guide](./Docker_Self_Host.md) |
 | Deploy for a team with proper security | [Production Guide](./Production.md) |
 | Process my first media file | See README.md Usage Examples |

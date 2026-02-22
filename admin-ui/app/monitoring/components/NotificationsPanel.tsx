@@ -17,7 +17,7 @@ type NotificationsPanelProps = {
   saving: boolean;
   canSave: boolean;
   onSave: (settings: NotificationSettings) => Promise<boolean> | boolean;
-  onTest: () => void;
+  onTest: (payload?: { message?: string; severity?: string }) => Promise<void> | void;
 };
 
 const CHANNEL_TYPES = [
@@ -40,12 +40,16 @@ const DIGEST_FREQUENCIES = [
   { value: 'weekly', label: 'Weekly' },
 ] as const;
 
+const DELIVERY_CHANNELS = ['email', 'slack', 'webhook', 'discord'] as const;
+const SENT_STATUSES = new Set<RecentNotification['status']>(['sent']);
+const FAILED_STATUSES = new Set<RecentNotification['status']>(['failed']);
+
 type NotificationsPanelShellProps = {
   children: ReactNode;
   enabledChannels: number;
   loading: boolean;
   saving: boolean;
-  onTest: () => void;
+  onTest: (payload?: { message?: string; severity?: string }) => Promise<void> | void;
 };
 
 const NotificationsPanelShell = ({
@@ -140,7 +144,28 @@ const NotificationsPanelForm = ({
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [newChannelType, setNewChannelType] = useState<NotificationChannel['type']>('email');
   const [newChannelConfig, setNewChannelConfig] = useState('');
+  const [retryingNotificationId, setRetryingNotificationId] = useState<string | null>(null);
   const effectiveSettings = isDirty ? editSettings : baseSettings;
+
+  const deliveryStats = useMemo(() => {
+    const total = recentNotifications.length;
+    const sent = recentNotifications.filter((notification) => SENT_STATUSES.has(notification.status)).length;
+    const failed = recentNotifications.filter((notification) => FAILED_STATUSES.has(notification.status)).length;
+    const byChannel = DELIVERY_CHANNELS.map((channel) => ({
+      channel,
+      count: recentNotifications.filter(
+        (notification) => notification.channel.toLowerCase() === channel,
+      ).length,
+    }));
+    return {
+      total,
+      sent,
+      failed,
+      deliveryRate: total > 0 ? (sent / total) * 100 : 0,
+      failureRate: total > 0 ? (failed / total) * 100 : 0,
+      byChannel,
+    };
+  }, [recentNotifications]);
 
   const updateEditSettings = (
     next: NotificationSettings | ((prev: NotificationSettings) => NotificationSettings),
@@ -195,6 +220,18 @@ const NotificationsPanelForm = ({
   };
 
   const enabledChannels = effectiveSettings.channels.filter((c) => c.enabled).length;
+
+  const handleRetryNotification = async (notification: RecentNotification) => {
+    setRetryingNotificationId(notification.id);
+    try {
+      await onTest({
+        message: notification.message,
+        severity: notification.severity || 'error',
+      });
+    } finally {
+      setRetryingNotificationId((current) => (current === notification.id ? null : current));
+    }
+  };
 
   return (
     <NotificationsPanelShell
@@ -308,6 +345,48 @@ const NotificationsPanelForm = ({
               )}
             </div>
 
+            <div className="space-y-3" data-testid="notification-delivery-dashboard">
+              <Label>Delivery Dashboard</Label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs uppercase text-muted-foreground">Total Sent</p>
+                  <p className="text-xl font-semibold" data-testid="notification-delivery-total">
+                    {deliveryStats.total}
+                  </p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs uppercase text-muted-foreground">Delivery Rate</p>
+                  <p className="text-xl font-semibold" data-testid="notification-delivery-rate">
+                    {deliveryStats.deliveryRate.toFixed(1)}%
+                  </p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs uppercase text-muted-foreground">Failure Rate</p>
+                  <p className="text-xl font-semibold" data-testid="notification-failure-rate">
+                    {deliveryStats.failureRate.toFixed(1)}%
+                  </p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs uppercase text-muted-foreground">Failed</p>
+                  <p className="text-xl font-semibold" data-testid="notification-delivery-failed">
+                    {deliveryStats.failed}
+                  </p>
+                </div>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {deliveryStats.byChannel.map((channelStats) => (
+                  <div
+                    key={channelStats.channel}
+                    className="flex items-center justify-between rounded border px-3 py-2 text-sm"
+                    data-testid={`notification-channel-${channelStats.channel}`}
+                  >
+                    <span className="capitalize">{channelStats.channel}</span>
+                    <Badge variant="outline">{channelStats.count}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             {/* Settings */}
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-1">
@@ -363,19 +442,19 @@ const NotificationsPanelForm = ({
               </div>
             </div>
 
-            <Button onClick={handleSave} disabled={saving || !isDirty || !canSave}>
-              {saving ? 'Saving...' : 'Save Settings'}
+            <Button onClick={handleSave} disabled={saving || !isDirty || !canSave} loading={saving} loadingText="Saving...">
+              Save Settings
             </Button>
 
             {/* Recent Notifications */}
             {recentNotifications.length > 0 && (
               <div className="space-y-2">
                 <Label>Recent Notifications</Label>
-                <div className="space-y-1 max-h-40 overflow-y-auto">
+                <div className="space-y-1 max-h-64 overflow-y-auto" data-testid="recent-notifications-list">
                   {recentNotifications.slice(0, 5).map((notification) => (
                     <div
                       key={notification.id}
-                      className={`flex items-center justify-between p-2 rounded text-sm ${
+                      className={`p-2 rounded text-sm ${
                         notification.status === 'sent'
                           ? 'bg-green-50 dark:bg-green-900/20'
                           : notification.status === 'failed'
@@ -383,9 +462,22 @@ const NotificationsPanelForm = ({
                             : 'bg-muted/30'
                       }`}
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        {getChannelIcon(notification.channel)}
-                        <span className="truncate">{notification.message}</span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {getChannelIcon(notification.channel)}
+                          <span className="truncate">{notification.message}</span>
+                        </div>
+                        {notification.status === 'failed' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => { void handleRetryNotification(notification); }}
+                            loading={retryingNotificationId === notification.id}
+                            loadingText="Retrying..."
+                          >
+                            Retry
+                          </Button>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge
@@ -403,6 +495,11 @@ const NotificationsPanelForm = ({
                           {formatTimestamp(notification.timestamp)}
                         </span>
                       </div>
+                      {notification.error && (
+                        <p className="mt-1 text-xs text-destructive" data-testid={`notification-error-${notification.id}`}>
+                          {notification.error}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>

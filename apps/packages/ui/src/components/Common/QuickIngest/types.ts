@@ -32,6 +32,7 @@ export type ResultOutcome = "ingested" | "processed" | "skipped" | "failed"
 
 export type ResultItemWithMediaId = ResultItem & {
   mediaId: string | number | null
+  title?: string | null
 }
 
 export type ResultSummary = {
@@ -106,4 +107,6 @@ export type TabBadgeState = {
   optionsModified: boolean
   /** Whether processing is currently running (for Results tab) */
   isProcessing: boolean
+  /** Whether the latest run failed and needs attention (for Results tab) */
+  hasFailure?: boolean
 }

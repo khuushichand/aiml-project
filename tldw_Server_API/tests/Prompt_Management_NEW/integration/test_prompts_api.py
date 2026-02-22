@@ -5,10 +5,13 @@ Tests the complete API flow with real components, no mocking.
 """
 
 import pytest
-pytestmark = pytest.mark.integration
-import json
-from datetime import datetime
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.api.v1.endpoints.prompts import router as prompts_router
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+
+pytestmark = pytest.mark.integration
 
 # ========================================================================
 # Prompt CRUD Endpoint Tests
@@ -36,6 +39,25 @@ class TestPromptCRUDEndpoints:
         data = response.json()
         assert 'id' in data and data['id'] > 0
         assert data['name'] == payload['name']
+
+    @pytest.mark.integration
+    def test_legacy_create_prompt_endpoint_returns_created(self, test_client, auth_headers):
+        """Legacy /create route should behave like a create operation."""
+        response = test_client.post(
+            "/api/v1/prompts/create",
+            json={
+                "name": "Legacy Create Prompt",
+                "content": "Legacy content",
+                "author": "legacy_test",
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert "prompt_id" in data
+        assert isinstance(data["prompt_id"], int)
+        assert data["prompt_id"] > 0
 
     @pytest.mark.integration
     def test_get_prompt_endpoint(self, test_client, auth_headers):
@@ -115,6 +137,34 @@ class TestPromptCRUDEndpoints:
         data = update_response.json()
         assert data['id'] == prompt_id
         assert data.get('details') == 'Updated content {{new_var}}'
+
+    @pytest.mark.integration
+    def test_record_prompt_usage_endpoint(self, test_client, auth_headers):
+        """Test recording prompt usage increments usage_count and updates last_used_at."""
+        create_response = test_client.post(
+            "/api/v1/prompts",
+            json={'name': 'Usage Test', 'details': 'Track this prompt', 'author': 'test'},
+            headers=auth_headers
+        )
+        prompt_id = create_response.json()['id']
+
+        first_use = test_client.post(
+            f"/api/v1/prompts/{prompt_id}/use",
+            headers=auth_headers
+        )
+        assert first_use.status_code == 200
+        first_payload = first_use.json()
+        assert first_payload.get('usage_count') == 1
+        assert first_payload.get('last_used_at') is not None
+
+        second_use = test_client.post(
+            f"/api/v1/prompts/{prompt_id}/use",
+            headers=auth_headers
+        )
+        assert second_use.status_code == 200
+        second_payload = second_use.json()
+        assert second_payload.get('usage_count') == 2
+        assert second_payload.get('last_used_at') is not None
 
     @pytest.mark.integration
     def test_delete_prompt_endpoint(self, test_client, auth_headers):
@@ -425,6 +475,18 @@ class TestCollectionEndpoints:
     """Test collection management endpoints."""
 
     @pytest.mark.integration
+    def test_list_collections_empty_endpoint(self, test_client, auth_headers):
+        """Listing collections should return an empty list when none exist."""
+        response = test_client.get(
+            "/api/v1/prompts/collections",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload == {"collections": []}
+
+    @pytest.mark.integration
     def test_create_collection_endpoint(self, test_client, auth_headers):
         """Test creating a collection via API."""
         # Create prompts for collection
@@ -482,6 +544,162 @@ class TestCollectionEndpoints:
         data = get_response.json()
         assert data['name'] == 'Get Test'
         assert data['description'] == 'Test'
+
+    @pytest.mark.integration
+    def test_list_collections_endpoint(self, test_client, auth_headers):
+        """Test listing collections via API."""
+        first = test_client.post(
+            "/api/v1/prompts/collections/create",
+            json={"name": "List Collection A", "description": "A", "prompt_ids": []},
+            headers=auth_headers,
+        )
+        second = test_client.post(
+            "/api/v1/prompts/collections/create",
+            json={"name": "List Collection B", "description": "B", "prompt_ids": []},
+            headers=auth_headers,
+        )
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+
+        list_response = test_client.get(
+            "/api/v1/prompts/collections",
+            headers=auth_headers,
+        )
+
+        assert list_response.status_code == 200, list_response.text
+        payload = list_response.json()
+        assert "collections" in payload
+        names = {item["name"] for item in payload["collections"]}
+        assert {"List Collection A", "List Collection B"}.issubset(names)
+
+    @pytest.mark.integration
+    def test_update_collection_endpoint(self, test_client, auth_headers):
+        """Test updating collection metadata and prompt membership."""
+        prompt_one = test_client.post(
+            "/api/v1/prompts/create",
+            json={"name": "Update Col Prompt 1", "content": "P1", "author": "test"},
+            headers=auth_headers,
+        )
+        prompt_two = test_client.post(
+            "/api/v1/prompts/create",
+            json={"name": "Update Col Prompt 2", "content": "P2", "author": "test"},
+            headers=auth_headers,
+        )
+        assert prompt_one.status_code == 201, prompt_one.text
+        assert prompt_two.status_code == 201, prompt_two.text
+
+        create_response = test_client.post(
+            "/api/v1/prompts/collections/create",
+            json={
+                "name": "Original Collection",
+                "description": "Original",
+                "prompt_ids": [prompt_one.json()["prompt_id"]],
+            },
+            headers=auth_headers,
+        )
+        assert create_response.status_code == 200, create_response.text
+        collection_id = create_response.json()["collection_id"]
+
+        update_response = test_client.put(
+            f"/api/v1/prompts/collections/{collection_id}",
+            json={
+                "name": "Updated Collection",
+                "description": "Updated description",
+                "prompt_ids": [
+                    prompt_one.json()["prompt_id"],
+                    prompt_two.json()["prompt_id"],
+                ],
+            },
+            headers=auth_headers,
+        )
+
+        assert update_response.status_code == 200, update_response.text
+        updated_payload = update_response.json()
+        assert updated_payload["name"] == "Updated Collection"
+        assert updated_payload["description"] == "Updated description"
+        assert sorted(updated_payload["prompt_ids"]) == sorted(
+            [prompt_one.json()["prompt_id"], prompt_two.json()["prompt_id"]]
+        )
+
+        get_response = test_client.get(
+            f"/api/v1/prompts/collections/{collection_id}",
+            headers=auth_headers,
+        )
+        assert get_response.status_code == 200, get_response.text
+        persisted = get_response.json()
+        assert persisted["name"] == "Updated Collection"
+        assert sorted(persisted["prompt_ids"]) == sorted(
+            [prompt_one.json()["prompt_id"], prompt_two.json()["prompt_id"]]
+        )
+
+
+class TestCollectionTenantIsolation:
+    """Collections should remain isolated by authenticated user scope."""
+
+    @pytest.mark.integration
+    def test_collection_ids_are_not_shared_across_users(self, test_env_vars, auth_headers):
+        app = FastAPI()
+        app.include_router(prompts_router, prefix="/api/v1/prompts")
+
+        active_user = {"id": 101}
+
+        async def _override_user():
+            uid = int(active_user["id"])
+            return User(
+                id=uid,
+                username=f"user_{uid}",
+                email=None,
+                role="admin",
+                is_active=True,
+                is_verified=True,
+                is_superuser=True,
+                roles=["admin"],
+                permissions=["*"],
+                is_admin=True,
+            )
+
+        app.dependency_overrides[get_request_user] = _override_user
+
+        with TestClient(app) as client:
+            p1 = client.post(
+                "/api/v1/prompts",
+                json={"name": "Tenant A Prompt 1", "details": "A1"},
+                headers=auth_headers,
+            )
+            p2 = client.post(
+                "/api/v1/prompts",
+                json={"name": "Tenant A Prompt 2", "details": "A2"},
+                headers=auth_headers,
+            )
+            assert p1.status_code == 201, p1.text
+            assert p2.status_code == 201, p2.text
+
+            create_collection = client.post(
+                "/api/v1/prompts/collections/create",
+                json={
+                    "name": "Tenant A Collection",
+                    "description": "Owned by A",
+                    "prompt_ids": [p1.json()["id"], p2.json()["id"]],
+                },
+                headers=auth_headers,
+            )
+            assert create_collection.status_code == 200, create_collection.text
+            collection_id = create_collection.json()["collection_id"]
+
+            active_user["id"] = 202
+            cross_tenant_get = client.get(
+                f"/api/v1/prompts/collections/{collection_id}",
+                headers=auth_headers,
+            )
+            assert cross_tenant_get.status_code == 404, cross_tenant_get.text
+
+            active_user["id"] = 101
+            owner_get = client.get(
+                f"/api/v1/prompts/collections/{collection_id}",
+                headers=auth_headers,
+            )
+            assert owner_get.status_code == 200, owner_get.text
+            assert owner_get.json()["name"] == "Tenant A Collection"
 
 # ========================================================================
 # Error Handling Endpoint Tests

@@ -38,6 +38,7 @@
   - DuckDuckGo: `search_web_duckduckgo` — :1339; `parse_duckduckgo_results` — :1459
   - Kagi: `search_web_kagi` — :1820; `parse_kagi_results` — :1861
   - Searx: `search_web_searx` — :1925; `parse_searx_results` — :2021
+  - Serper: `search_web_serper`; `parse_serper_results`
   - Tavily: `search_web_tavily` — :2085; `parse_tavily_results` — :2134
   - Exa: `search_web_exa` — :2140; `parse_exa_results` — :2191
   - Firecrawl: `search_web_firecrawl` — :2220; `parse_firecrawl_results` — :2272
@@ -47,7 +48,7 @@
   - Browser automation (optional): `playwright`
   - LLM/relevance/aggregation: `chat_orchestrator` and `LLM_Calls.Summarization_General_Lib.analyze`
 - Configuration
-  - Web search: Provider keys/URLs under `search_engines` in `Config_Files/config.txt` (e.g., `google_search_api_key`, `google_search_engine_id`, `brave_search_api_key`, `searx_search_api_url`, `tavily_search_api_key`).
+  - Web search: Provider keys/URLs under `search_engines` in `Config_Files/config.txt` (e.g., `google_search_api_key`, `google_search_engine_id`, `brave_search_api_key`, `searx_search_api_url`, `serper_search_api_key`, `tavily_search_api_key`).
   - Relevance/aggregation tuning in `Web-Scraping` config section (e.g., `relevance_llm_timeout_s`, `relevance_jitter_ms`).
   - Enhanced scraper (section `web_scraper`): `max_rps`, `max_rpm`, `max_rph`, `connector_limit`, `connector_limit_per_host`, `web_scraper_respect_robots`, `web_crawl_max_pages`, `web_crawl_include_external`, `web_crawl_keywords`, `web_crawl_enable_keyword_scorer`, `web_crawl_allowed_domains`, `web_crawl_blocked_domains`.
   - Preflight analyzers (optional): `web_scraper_preflight_analyzers`, `web_scraper_preflight_timeout_s`, `web_scraper_preflight_scan_depth`, `web_scraper_preflight_find_all_waf`, `web_scraper_preflight_impersonate`, `web_scraper_preflight_include_results`.

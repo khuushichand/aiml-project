@@ -1,0 +1,1469 @@
+{
+  "formError_noModel": {
+    "message": "Виберіть модель"
+  },
+  "formError_noEmbeddingModel": {
+    "message": "Налаштуйте модель вкладень на сторінці Налаштування > Знання"
+  },
+  "form_textarea_placeholder": {
+    "message": "Введіть повідомлення..."
+  },
+  "form_webSearch_on": {
+    "message": "Увімкнено"
+  },
+  "form_webSearch_off": {
+    "message": "Вимкнено"
+  },
+  "tooltip_searchInternet": {
+    "message": "Пошук в Інтернеті"
+  },
+  "tooltip_speechToText": {
+    "message": "Голос у текст"
+  },
+  "tooltip_uploadImage": {
+    "message": "Завантажити зображення"
+  },
+  "tooltip_stopStreaming": {
+    "message": "Зупинити трансляцію"
+  },
+  "tooltip_knowledge": {
+    "message": "Знання"
+  },
+  "tooltip_clearContext": {
+    "message": "Очистити контекст"
+  },
+  "tooltip_speechToTextServer": {
+    "message": "Диктування через ваш tldw server"
+  },
+  "tooltip_speechToTextBrowser": {
+    "message": "Диктування через розпізнавання мовлення браузера"
+  },
+  "tooltip_speechToTextDetails": {
+    "message": "Використовує {{model}} · {{task}} · {{format}}. Налаштуйте в Налаштування → Загальні → Speech-to-Text."
+  },
+  "tooltip_vision": {
+    "message": "[Експериментальний] Чат з баченням"
+  },
+  "tooltip_uploadDocuments": {
+    "message": "Завантажити документи (бета)"
+  },
+  "sendWhenEnter": {
+    "message": "Надсилати при натисканні Enter"
+  },
+  "welcome": {
+    "message": "Вітаю! Як я можу допомогти вам сьогодні?"
+  },
+  "useOCR": {
+    "message": "Витягти текст із зображення (OCR)"
+  },
+  "tips_title": {
+    "message": "Поради"
+  },
+  "tips_quickIngest": {
+    "message": "Використовуйте Quick Ingest, щоб додати документи та веб-сторінки."
+  },
+  "tips_pickModelPrompt": {
+    "message": "Виберіть модель і промпт у верхній панелі."
+  },
+  "tips_startChatFocus": {
+    "message": "Після підключення «Почати чат» фокусується на полі введення."
+  },
+  "tldwState_searching": {
+    "message": "Пошук вашого tldw server"
+  },
+  "tldwState_running": {
+    "message": "tldw працює"
+  },
+  "tldwState_notRunning": {
+    "message": "Неможливо підключитися до tldw server"
+  },
+  "tldwState_connectionError": {
+    "message": "Здається, у вас виникла проблема з підключенням. Будь ласка, зверніться до цієї документації<anchor> для усунення несправностей.</anchor>"
+  },
+  "tldwState_openTldwSettings": {
+    "message": "Відкрити налаштування tldw"
+  },
+  "tldwState_cancelSearch": {
+    "message": "Скасувати пошук"
+  },
+  "tldwState_connectionFailedWithCode": {
+    "message": "Підключення не вдалося (HTTP {{code}})"
+  },
+  "tldwState_connectionFailed": {
+    "message": "Підключення не вдалося"
+  },
+  "tldwState_errorDetailsLabel": {
+    "message": "Деталі:"
+  },
+  "tldwState_title": {
+    "message": "Очікування вашого tldw server"
+  },
+  "tldwState_subtitle": {
+    "message": "Пінгуємо {{host}}, щоб перевірити з'єднання."
+  },
+  "tldwState_missing": {
+    "message": "URL сервера не налаштовано"
+  },
+  "tldwState_noServer": {
+    "message": "Додайте свій tldw server, щоб почати чат."
+  },
+  "tldwState_connectedSubtitle": {
+    "message": "Підключено до {{host}}. Починайте чат, коли будете готові."
+  },
+  "tldwState_errorSubtitle": {
+    "message": "Поки не вдалося досягти {{host}}. Спробуйте ще раз або оновіть налаштування сервера."
+  },
+  "tldwState_openSettings": {
+    "message": "Відкрити налаштування"
+  },
+  "tldwState_changeServer": {
+    "message": "Змінити сервер"
+  },
+  "tldwState_elapsed": {
+    "message": "Перевірка… {{seconds}} с"
+  },
+  "tldwState_connectedHint": {
+    "message": "Підключено до {{host}}."
+  },
+  "tldwState_lastChecked": {
+    "message": "Перевірено {{seconds}} с тому"
+  },
+  "tldwState_recheck": {
+    "message": "Перевірити ще раз"
+  },
+  "tldwState_errorToast": {
+    "message": "Не вдалося досягти {{host}}"
+  },
+  "tldwState_missingHelp": {
+    "message": "Відкрийте Налаштування → tldw Server, щоб додати URL або перейти на сторінку параметрів."
+  },
+  "tldwState_troubleshoot": {
+    "message": "Переконайтеся, що сервер працює і браузер має доступ до нього, потім повторіть зі сторінки параметрів."
+  },
+  "errors_privateModeDescription": {
+    "message": "Приватний режим Firefox не підтримує збереження чату. Тимчасовий чат увімкнено за замовчуванням. Далі будуть покращення."
+  },
+  "tts_playErrorTitle": {
+    "message": "Помилка"
+  },
+  "tts_playErrorDescription": {
+    "message": "Під час відтворення аудіо сталася помилка"
+  },
+  "tts_browserInfoTitle": {
+    "message": "Браузерний TTS використовує системний звук"
+  },
+  "tts_browserInfoDescription": {
+    "message": "Браузерний TTS відтворює звук через системний синтезатор і не надає файлу аудіо для завантаження. Використовуйте елементи керування сегментами нижче або змініть провайдера, щоб отримати список треків і плеєр."
+  },
+  "tts_unsupportedProviderTitle": {
+    "message": "Непідтримуваний TTS-провайдер"
+  },
+  "tts_unsupportedProviderDescription": {
+    "message": "Провайдер \"{{provider}}\" поки що не підтримується в плеєрі playground."
+  },
+  "tts_unsupportedFormatTitle": {
+    "message": "Непідтримуваний формат аудіо"
+  },
+  "tts_unsupportedFormatDescription": {
+    "message": "Формат відповіді «{{format}}» не підтримується. Використовується MP3."
+  },
+  "tts_elevenLabsMissingTitle": {
+    "message": "ElevenLabs потребує API-ключа"
+  },
+  "tts_elevenLabsMissingBody": {
+    "message": "Додайте API-ключ ElevenLabs у Налаштуваннях, щоб завантажити голоси та моделі."
+  },
+  "tts_elevenLabsUnavailableTitle": {
+    "message": "Голоси ElevenLabs недоступні"
+  },
+  "tts_elevenLabsUnavailableBody": {
+    "message": "Не вдалося завантажити голоси або моделі. Перевірте API-ключ і спробуйте ще раз."
+  },
+  "tts_elevenLabsMissingCta": {
+    "message": "Встановити API-ключ у Налаштуваннях"
+  },
+  "tts_generateErrorTitle": {
+    "message": "Помилка створення аудіо"
+  },
+  "tts_generateErrorDescription": {
+    "message": "Сталася помилка під час генерації TTS-аудіо."
+  },
+  "tts_sampleText": {
+    "message": "Вставити зразок тексту"
+  },
+  "tts_playHelper": {
+    "message": "Відтворення використовує вибраного провайдера, голос і швидкість."
+  },
+  "tts_playDisabledNoText": {
+    "message": "Введіть текст, щоб увімкнути відтворення."
+  },
+  "tts_playDisabledTtsOff": {
+    "message": "Увімкніть перетворення тексту на мовлення вище, щоб відтворити аудіо."
+  },
+  "tts_playDisabledElevenLabs": {
+    "message": "Додайте API-ключ ElevenLabs, голос і модель, щоб увімкнути відтворення."
+  },
+  "tts_stopDisabled": {
+    "message": "Кнопка «Стоп» активується після початку відтворення."
+  },
+  "tts_providerChangeHelper": {
+    "message": "Відкрийте селектор провайдера нижче, щоб перемкнутися між Browser, tldw, OpenAI або Supersonic."
+  },
+  "tts_changeProvider": {
+    "message": "Змінити провайдера"
+  },
+  "tts_title": {
+    "message": "TTS-майданчик"
+  },
+  "tts_subtitle": {
+    "message": "Спробуйте text-to-speech і налаштуйте провайдери, моделі та голоси."
+  },
+  "tts_currentProvider": {
+    "message": "Поточний провайдер"
+  },
+  "tts_settingsIntro": {
+    "message": "Налаштуйте провайдера TTS, модель і голос. Ці налаштування використовуються, коли ви відтворюєте аудіо з чату чи медіа."
+  },
+  "tts_providerCapabilities": {
+    "message": "Можливості провайдера"
+  },
+  "tts_voicesPreview": {
+    "message": "Голоси сервера"
+  },
+  "tts_providerDetails": {
+    "message": "Переглянути конфігурацію провайдера"
+  },
+  "tts_providerDetailsTitle": {
+    "message": "Деталі провайдера"
+  },
+  "tts_inputLabel": {
+    "message": "Введіть текст, щоб почути його озвучення."
+  },
+  "tts_inputPlaceholder": {
+    "message": "Введіть або вставте текст тут, потім натисніть «Відтворити»."
+  },
+  "tts_play": {
+    "message": "Відтворити"
+  },
+  "tts_playing": {
+    "message": "Відтворення…"
+  },
+  "tts_stop": {
+    "message": "Зупинити"
+  },
+  "tts_browserSegmentsTitle": {
+    "message": "Сегменти браузерного TTS"
+  },
+  "tts_browserSegmentsHelp": {
+    "message": "Ставте сегменти в чергу або відтворюйте окремий сегмент через системний звук."
+  },
+  "tts_browserQueueAll": {
+    "message": "Додати все в чергу"
+  },
+  "tts_browserQueueFromHere": {
+    "message": "Додати в чергу звідси"
+  },
+  "tts_browserSegmentPlay": {
+    "message": "Відтворити сегмент"
+  },
+  "tts_browserStatusSpeaking": {
+    "message": "Відтворюється сегмент {{current}}/{{total}}"
+  },
+  "tts_browserStatusPaused": {
+    "message": "Призупинено"
+  },
+  "tts_browserPause": {
+    "message": "Пауза"
+  },
+  "tts_browserResume": {
+    "message": "Відновити"
+  },
+  "tts_tldwStatusOnline": {
+    "message": "Виявлено аудіо API tldw server (audio/speech)"
+  },
+  "tts_tldwStatusOffline": {
+    "message": "Аудіо API не виявлено; перевірте версію tldw server."
+  },
+  "tts_tldwWarningTitle": {
+    "message": "Аудіо/speech API tldw не виявлено"
+  },
+  "tts_tldwWarningBody": {
+    "message": "Переконайтеся, що версія tldw_server містить /api/v1/audio/speech і що розширення підключено з дійсним API-ключем."
+  },
+  "tts_speechErrorTitle": {
+    "message": "Диктування не вдалося"
+  },
+  "tts_speechErrorBody": {
+    "message": "Запит на транскрипцію не вдався. Перевірте стан tldw server."
+  },
+  "tts_speechNoText": {
+    "message": "Транскрипція не повернула текст."
+  },
+  "tts_speechMicError": {
+    "message": "Не вдалося отримати доступ до мікрофона. Перевірте дозволи браузера та спробуйте ще раз."
+  },
+  "tts_savedToNotes": {
+    "message": "Транскрипцію збережено як нотатку."
+  },
+  "empty_title": {
+    "message": "Почати новий чат"
+  },
+  "empty_description": {
+    "message": "Експериментуйте тут із різними моделями, промптами та джерелами знань."
+  },
+  "empty_demoDescription": {
+    "message": "Ви в демо-режимі — спробуйте поставити запитання, щоб побачити відповідь асистента. Ви можете підключити власний tldw server пізніше."
+  },
+  "empty_example1": {
+    "message": "Поставте запитання, а потім перетягніть документи чи веб-сторінки, які хочете обговорити."
+  },
+  "empty_example2": {
+    "message": "Використовуйте Quick Ingest, щоб додати транскрипти чи нотатки, а потім посилатися на них у чаті."
+  },
+  "empty_example3": {
+    "message": "Try different prompts or models, or open Model Playground to compare answers."
+  },
+  "empty_primaryCta": {
+    "message": "Почати чат"
+  },
+  "empty_secondaryCta": {
+    "message": "Відкрити налаштування сервера"
+  },
+  "drop_hint": {
+    "message": "Перетягніть файли, щоб прикріпити їх до повідомлення"
+  },
+  "drop_readySingle": {
+    "message": "{{name}} готовий до надсилання"
+  },
+  "drop_readyMultiple": {
+    "message": "{{count}} файлів готові до надсилання"
+  },
+  "drop_unsupported": {
+    "message": "Цей тип файлу не підтримується. Спробуйте зображення або текстові файли."
+  },
+  "drop_defaultFileName": {
+    "message": "Файл"
+  },
+  "drop_imageOnly": {
+    "message": "Наразі тут можна перетягувати лише зображення."
+  },
+  "drop_imageHint": {
+    "message": "Перетягніть зображення, щоб додати його до повідомлення"
+  },
+  "drop_overlayInstruction": {
+    "message": "Перетягніть зображення, щоб прикріпити до наступної відповіді"
+  },
+  "aria_chatTranscript": {
+    "message": "Повідомлення чату"
+  },
+  "more_history": {
+    "message": "Збереження чату"
+  },
+  "more_searchKnowledge": {
+    "message": "Пошук і знання"
+  },
+  "more_voice": {
+    "message": "Більше параметрів голосу"
+  },
+  "more_uploads": {
+    "message": "Завантаження та ingest"
+  },
+  "fileRetrievalEnabled": {
+    "message": "Увімкнути пошук знань для документів"
+  },
+  "stt_title": {
+    "message": "STT-майданчик"
+  },
+  "stt_subtitle": {
+    "message": "Спробуйте моделі транскрипції, запускайте довші сесії диктування та зберігайте транскрипти в Нотатках."
+  },
+  "stt_currentModelLabel": {
+    "message": "Поточна модель транскрипції"
+  },
+  "stt_defaultModel": {
+    "message": "За замовчуванням із Налаштувань"
+  },
+  "stt_settingsNotice": {
+    "message": "Мова, завдання, формат відповіді, сегментація та промпт використовують ваші значення Speech-to-Text з Налаштувань."
+  },
+  "stt_sessionMode": {
+    "message": "Режим сесії"
+  },
+  "stt_modeLong": {
+    "message": "Тривалий (запис частинами)"
+  },
+  "stt_modeShort": {
+    "message": "Коротке диктування (один кліп)"
+  },
+  "stt_languageTag": {
+    "message": "Мова"
+  },
+  "stt_taskTag": {
+    "message": "Завдання"
+  },
+  "stt_formatTag": {
+    "message": "Формат"
+  },
+  "stt_segmentationEnabled": {
+    "message": "Сегментацію увімкнено"
+  },
+  "stt_recordButton": {
+    "message": "Запис"
+  },
+  "stt_stopButton": {
+    "message": "Зупинити"
+  },
+  "stt_startTooltip": {
+    "message": "Почати запис аудіо для транскрипції"
+  },
+  "stt_stopTooltip": {
+    "message": "Зупинити й надіслати на сервер"
+  },
+  "stt_transcribingButton": {
+    "message": "Транскрибування..."
+  },
+  "stt_transcribingTooltip": {
+    "message": "Транскрибування аудіо..."
+  },
+  "stt_transcribingPlaceholder": {
+    "message": "Транскрибування аудіо..."
+  },
+  "stt_historyTitle": {
+    "message": "Історія транскрипцій"
+  },
+  "stt_clearAll": {
+    "message": "Очистити все"
+  },
+  "stt_emptyHistory": {
+    "message": "Почніть запис, щоб побачити транскрипти тут. Ви можете зберегти будь-який елемент у Нотатки."
+  },
+  "stt_saveToNotes": {
+    "message": "Зберегти в Нотатки"
+  },
+  "stt_delete": {
+    "message": "Видалити"
+  },
+  "stt_durationTag": {
+    "message": "Тривалість"
+  },
+  "stt_modelTag": {
+    "message": "Модель"
+  },
+  "stt_currentTranscriptTitle": {
+    "message": "Транскрипт поточної сесії"
+  },
+  "stt_currentTranscriptPlaceholder": {
+    "message": "Живий транскрипт з'явиться тут під час запису."
+  },
+  "actions_temporaryOn": {
+    "message": "Тимчасовий чат (не зберігається)"
+  },
+  "actions_temporaryOff": {
+    "message": "Зберігати чат в історії"
+  },
+  "actions_webSearchOn": {
+    "message": "Вебпошук увімкнено"
+  },
+  "actions_webSearchOff": {
+    "message": "Вебпошук вимкнено"
+  },
+  "actions_speechStart": {
+    "message": "Почати диктування"
+  },
+  "actions_speechStop": {
+    "message": "Зупинити диктування"
+  },
+  "actions_streamStart": {
+    "message": "Живі субтитри"
+  },
+  "actions_streamStop": {
+    "message": "Зупинити субтитри"
+  },
+  "actions_visionOn": {
+    "message": "Візія увімкнена"
+  },
+  "actions_visionOff": {
+    "message": "Візія вимкнена"
+  },
+  "actions_upload": {
+    "message": "Прикріпити зображення"
+  },
+  "actions_ingest": {
+    "message": "Quick Ingest"
+  },
+  "actions_ingestDisabled": {
+    "message": "Підключіть свій tldw server, щоб виконати ingest."
+  },
+  "actions_ingestHint": {
+    "message": "Завантажуйте URL або файли з розширеними параметрами."
+  },
+  "actions_ingestSub": {
+    "message": "Використовуйте URL/файли; завантажуйте або зберігайте."
+  },
+  "actions_streamErrorTitle": {
+    "message": "Живі субтитри недоступні"
+  },
+  "composer_toolsButton": {
+    "message": "+Інструменти"
+  },
+  "composer_queuedBanner_title": {
+    "message": "У черзі, поки офлайн"
+  },
+  "composer_queuedBanner_body": {
+    "message": "Ми збережемо ці повідомлення і надішлемо їх, щойно ваш tldw server буде підключено."
+  },
+  "composer_queuedBanner_sendNow": {
+    "message": "Надіслати повідомлення з черги"
+  },
+  "composer_queuedBanner_clear": {
+    "message": "Очистити чергу"
+  },
+  "composer_coreTools": {
+    "message": "Параметри розмови"
+  },
+  "composer_captureTools": {
+    "message": "Інструменти захоплення й допомоги"
+  },
+  "composer_actions": {
+    "message": "Параметри надсилання"
+  },
+  "composer_moreTools": {
+    "message": "Більше інструментів"
+  },
+  "composer_scrollToLatest": {
+    "message": "Прокрутити до останніх повідомлень"
+  },
+  "composer_submitAria": {
+    "message": "Надіслати повідомлення"
+  },
+  "composer_openModelSettings": {
+    "message": "Відкрити налаштування поточного чату"
+  },
+  "composer_stopStreaming": {
+    "message": "Зупинити потокову відповідь"
+  },
+  "composer_connectionPlaceholder": {
+    "message": "Підключіть свій tldw server у Налаштуваннях, щоб надсилати повідомлення та переглядати медіа."
+  },
+  "composer_connectNotice": {
+    "message": "Підключіть свій tldw server у Налаштуваннях, щоб надсилати повідомлення та переглядати медіа."
+  },
+  "composer_connectionChipDisconnected": {
+    "message": "Сервер: не підключено"
+  },
+  "composer_contextLabel": {
+    "message": "Контекст:"
+  },
+  "composer_contextKnowledgeEmpty": {
+    "message": "Знання не вибрано"
+  },
+  "composer_contextTabs": {
+    "message": "{{count}} вкладок"
+  },
+  "composer_contextFiles": {
+    "message": "{{count}} файлів"
+  },
+  "composer_contextMedia": {
+    "message": "Медіа та нотатки"
+  },
+  "composer_contextMediaHint": {
+    "message": "Додайте медіа та нотатки, які мають спрямовувати відповідь."
+  },
+  "composer_contextMediaSelected": {
+    "message": "Медіа або нотатка"
+  },
+  "composer_contextMediaEmpty": {
+    "message": "Медіа та нотатки ще не вибрані."
+  },
+  "composer_addKnowledge": {
+    "message": "Додати медіа та нотатки"
+  },
+  "composer_contextTabsTitle": {
+    "message": "Вкладки в контексті"
+  },
+  "composer_contextTabsHint": {
+    "message": "Перегляньте або видаліть посилання на вкладки, або додайте ще з відкритих вкладок браузера."
+  },
+  "composer_contextManager": {
+    "message": "Керування контекстом"
+  },
+  "composer_contextManagerTitle": {
+    "message": "Керування контекстом"
+  },
+  "composer_contextKnowledge": {
+    "message": "Контекст і знання"
+  },
+  "composer_contextKnowledgeClose": {
+    "message": "Закрити контекст і знання"
+  },
+  "composer_knowledgeSearch": {
+    "message": "Пошук знань"
+  },
+  "composer_knowledgeSearchClose": {
+    "message": "Закрити пошук знань"
+  },
+  "composer_persistence_ephemeral": {
+    "message": "Не зберігається в історії; очищується при закритті вкладки."
+  },
+  "composer_persistence_local": {
+    "message": "Зберігається лише в цьому браузері."
+  },
+  "composer_persistence_server": {
+    "message": "Збережено локально+сервер"
+  },
+  "composer_persistence_ephemeralPill": {
+    "message": "Тимчасово"
+  },
+  "composer_persistence_localPill": {
+    "message": "Лише локально"
+  },
+  "composer_persistence_serverPill": {
+    "message": "Локально + сервер"
+  },
+  "composer_ephemeralLabel": {
+    "message": "Тимчасовий"
+  },
+  "composer_savedLabel": {
+    "message": "Збережено"
+  },
+  "composer_persistence_saveToServer": {
+    "message": "Також зберегти цей чат на сервері"
+  },
+  "composer_persistence_connectToSave": {
+    "message": "Підключіть сервер, щоб зберігати чати там."
+  },
+  "composer_persistence_serverDefaultTitle": {
+    "message": "Чат розширення"
+  },
+  "composer_persistence_serverSavedTitle": {
+    "message": "Чат тепер збережено на сервері"
+  },
+  "composer_persistence_serverSaved": {
+    "message": "Подальші повідомлення в цьому чаті синхронізуватимуться з вашим tldw server."
+  },
+  "composer_persistence_serverCharacterRequired": {
+    "message": "Не вдалося знайти або створити стандартного персонажа асистента на сервері. Спробуйте ще раз зі сторінки Персонажів."
+  },
+  "composer_connectToSend": {
+    "message": "Підключіть свій сервер tldw у Налаштуваннях, щоб надсилати повідомлення та переглядати медіа."
+  },
+  "composer_compareTag": {
+    "message": "Порівняти"
+  },
+  "composer_compareLabel": {
+    "message": "Режим порівняння"
+  },
+  "composer_compareButton": {
+    "message": "Порівняти моделі"
+  },
+  "composer_compareButtonActive": {
+    "message": "Порівняння: {{count}} моделей"
+  },
+  "composer_compareButtonOn": {
+    "message": "Порівняння увімкнено"
+  },
+  "composer_compareSettingsTitle": {
+    "message": "Налаштування порівняння"
+  },
+  "composer_compareSettingsToggle": {
+    "message": "Увімкнути режим порівняння"
+  },
+  "composer_compareSettingsToggleHint": {
+    "message": "Надішліть наступне повідомлення кільком моделям."
+  },
+  "composer_compareNoneSelected": {
+    "message": "Для порівняння не вибрано моделей"
+  },
+  "composer_compareSingle": {
+    "message": "Порівнюється 1 модель"
+  },
+  "composer_compareMany": {
+    "message": "Порівнюються {{count}} моделей"
+  },
+  "composer_compareActiveSummary": {
+    "message": "Активні моделі в наступному ході: {{label}}"
+  },
+  "composer_compareModelPickerLabel": {
+    "message": "Виберіть моделі"
+  },
+  "composer_compareModelPickerPlaceholder": {
+    "message": "Виберіть моделі для порівняння"
+  },
+  "composer_compareActiveModelsLabel": {
+    "message": "Активні моделі"
+  },
+  "composer_compareActiveModelsHint": {
+    "message": "Ваше наступне повідомлення буде надіслано кожній активній моделі."
+  },
+  "composer_compareSendToModels": {
+    "message": "Надіслати {{count}} моделям"
+  },
+  "composer_compareMaxModelsTitle": {
+    "message": "Досягнуто ліміту порівняння"
+  },
+  "composer_compareMaxModels": {
+    "message": "За один хід можна порівняти до {{limit}} моделей."
+  },
+  "composer_compareMaxModelsTrimmed": {
+    "message": "Порівняння обмежено {{limit}} моделями на хід. Використовуються перші {{limit}} вибраних моделей."
+  },
+  "composer_compareMaxLabel": {
+    "message": "Макс. моделей на хід"
+  },
+  "composer_compareMaxHelper": {
+    "message": "Вибрано {{current}} / {{limit}}"
+  },
+  "composer_compareSelectedLabel": {
+    "message": "Вибрано як відповідь:"
+  },
+  "composer_compareContinueHint": {
+    "message": "Продовжити цей чат із вибраною моделлю."
+  },
+  "composer_compareContinue": {
+    "message": "Продовжити з цією моделлю"
+  },
+  "composer_compareThreadShared": {
+    "message": "Ви (спільне)"
+  },
+  "composer_compareBulkSplitSuccess": {
+    "message": "Створено {{count}} чатів"
+  },
+  "composer_compareBulkSplitPartialFail": {
+    "message": "Не вдалося створити {{count}} чатів"
+  },
+  "composer_validationCompareSelectModelsInline": {
+    "message": "Виберіть принаймні одну модель для режиму порівняння."
+  },
+  "speech_title": {
+    "message": "Мовний майданчик"
+  },
+  "speech_subtitle": {
+    "message": "Записуйте мову, редагуйте транскрипти та синтезуйте аудіо в одному місці."
+  },
+  "speech_modeLabel": {
+    "message": "Режим"
+  },
+  "speech_modeRoundTrip": {
+    "message": "Туди-й-назад"
+  },
+  "speech_modeSpeak": {
+    "message": "Говорити"
+  },
+  "speech_modeListen": {
+    "message": "Слухати"
+  },
+  "speech_modeHint": {
+    "message": "Останній режим запам’ятовується на цьому пристрої."
+  },
+  "speech_recordingWaveform": {
+    "message": "Хвильова форма запису в реальному часі"
+  },
+  "speech_playbackWaveform": {
+    "message": "Хвильова форма відтворення"
+  },
+  "speech_sendToTts": {
+    "message": "Надіслати до TTS"
+  },
+  "speech_sendHint": {
+    "message": "Використовуйте останню транскрипцію як чернетку TTS."
+  },
+  "speech_download": {
+    "message": "Завантажити"
+  },
+  "speech_downloadCurrent": {
+    "message": "Завантажити поточний сегмент"
+  },
+  "speech_downloadAll": {
+    "message": "Завантажити всі сегменти"
+  },
+  "speech_segmentFormat": {
+    "message": "Формат"
+  },
+  "speech_historyTitle": {
+    "message": "Історія мовлення"
+  },
+  "speech_historyAll": {
+    "message": "Усі"
+  },
+  "speech_historyStt": {
+    "message": "STT"
+  },
+  "speech_historyTts": {
+    "message": "TTS"
+  },
+  "speech_historySearch": {
+    "message": "Пошук транскриптів"
+  },
+  "speech_historyRetentionHint": {
+    "message": "Зберігає останні {{count}} елементів. Натисніть «Очистити все», щоб видалити все."
+  },
+  "speech_useInTts": {
+    "message": "Використати в TTS"
+  },
+  "speech_copy": {
+    "message": "Копіювати"
+  },
+  "speech_copySuccess": {
+    "message": "Скопійовано в буфер обміну"
+  },
+  "speech_copyError": {
+    "message": "Не вдалося скопіювати транскрипт."
+  },
+  "speech_providerTag": {
+    "message": "Провайдер"
+  },
+  "speech_voiceTag": {
+    "message": "Голос"
+  },
+  "speech_emptyHistory": {
+    "message": "Почніть запис або згенеруйте аудіо, щоб побачити історію."
+  },
+  "speech_downloadDisabledBrowser": {
+    "message": "TTS браузера не створює аудіо для завантаження."
+  },
+  "speech_downloadDisabledEmpty": {
+    "message": "Згенеруйте аудіо, щоб увімкнути завантаження."
+  },
+  "speech_transcriptLock": {
+    "message": "Заблокувати"
+  },
+  "speech_transcriptUnlock": {
+    "message": "Розблокувати"
+  },
+  "speech_transcriptEditHint": {
+    "message": "Редагування увімкнено для цього транскрипту."
+  },
+  "speech_transcriptLockedHint": {
+    "message": "Заблоковано для оновлень живої транскрипції."
+  },
+  "speech_transcriptRecordingHint": {
+    "message": "Запис триває; транскрипт заблоковано."
+  },
+  "actor_title": {
+    "message": "Режисер сцени (Actor)"
+  },
+  "actor_help": {
+    "message": "Налаштуйте контекст сцени для кожного чату: ролі, настрій, світ, цілі та нотатки."
+  },
+  "actor_addLabel": {
+    "message": "Додавайте або видаляйте аспекти, щоб сфокусувати сцену."
+  },
+  "actor_user": {
+    "message": "Користувач"
+  },
+  "actor_char": {
+    "message": "Персонаж"
+  },
+  "actor_world": {
+    "message": "Світ"
+  },
+  "actor_newAspectPlaceholder": {
+    "message": "Назва аспекту (наприклад, Настрій, Роль, Локація)"
+  },
+  "actor_addButton": {
+    "message": "Додати аспект"
+  },
+  "actor_aspectPlaceholder": {
+    "message": "Коротко опишіть (необов'язково)"
+  },
+  "actor_notes": {
+    "message": "Нотатки сцени"
+  },
+  "actor_notesHelp": {
+    "message": "Необов'язкові нотатки, що надсилаються моделі. Підтримує Markdown і LaTeX."
+  },
+  "actor_position": {
+    "message": "Позиція промпта Actor"
+  },
+  "actor_before": {
+    "message": "Перед основним промптом/історією"
+  },
+  "actor_after": {
+    "message": "Після основного промпта/історії"
+  },
+  "actor_depth": {
+    "message": "У чаті на глибині"
+  },
+  "actor_depthLabel": {
+    "message": "Глибина (несистемні повідомлення)"
+  },
+  "actor_depthPlaceholder": {
+    "message": "0 = початок чату"
+  },
+  "actor_depthHelp": {
+    "message": "Використовується лише коли позиція \"У чаті на глибині\". Рахує несистемні повідомлення від початку чату."
+  },
+  "actor_roleLabel": {
+    "message": "Роль повідомлення Actor"
+  },
+  "actor_roleSystem": {
+    "message": "Система"
+  },
+  "actor_roleUser": {
+    "message": "Користувач"
+  },
+  "actor_roleAssistant": {
+    "message": "Асистент"
+  },
+  "actor_positionHelp": {
+    "message": "Глибина використовується лише коли позиція \"У чаті на глибині\". Роль визначає, чи Actor з'являється як система, користувач або асистент."
+  },
+  "actor_preview": {
+    "message": "Попередній перегляд промпта Actor"
+  },
+  "actor_tokens": {
+    "message": "Токени: {{count}}"
+  },
+  "actor_previewEmpty": {
+    "message": "Поки що нічого надсилати."
+  },
+  "actor_offlineHintTitle": {
+    "message": "World Books недоступні для Actor"
+  },
+  "actor_offlineHintBody": {
+    "message": "Підключіть сервер tldw у налаштуваннях, щоб використовувати World Books для аспектів Actor, або продовжуйте використовувати вільний текст."
+  },
+  "actor_loreWorldBookMissing": {
+    "message": "Попереднє прив'язування World Book не знайдено; використовується вільний текст."
+  },
+  "actor_loreEntryMissing": {
+    "message": "Попередній запис World Book не знайдено; використовується вільний текст."
+  },
+  "actor_sourceFree": {
+    "message": "Вільний текст"
+  },
+  "actor_sourceLore": {
+    "message": "World Book"
+  },
+  "actor_worldBookPlaceholder": {
+    "message": "World Book"
+  },
+  "actor_entryPlaceholder": {
+    "message": "Запис"
+  },
+  "actor_loreValuePlaceholder": {
+    "message": "Виберіть варіант (необов'язково)"
+  },
+  "actor_tokenLabel": {
+    "message": "Токен"
+  },
+  "actor_tokensTitle": {
+    "message": "Токени словника Actor"
+  },
+  "actor_tokensHelp": {
+    "message": "Використовуйте ці токени в промптах і системних повідомленнях."
+  },
+  "actor_keyChangeTitle": {
+    "message": "Змінити ключ токена Actor?"
+  },
+  "actor_keyChangeBody": {
+    "message": "Це змінить токен з {{old}} на {{next}}. Промпти, що використовують старий токен, не оновляться автоматично."
+  },
+  "actor_keyCollisionTitle": {
+    "message": "Ключ Actor вже використовується"
+  },
+  "actor_keyCollisionBody": {
+    "message": "Інший аспект уже використовує цей ключ. Ключі мають бути унікальними для кожного чату."
+  },
+  "actor_copy": {
+    "message": "Копіювати"
+  },
+  "actor_copied": {
+    "message": "Скопійовано"
+  },
+  "actor_copySuccess": {
+    "message": "Токен скопійовано в буфер обміну"
+  },
+  "actor_copyError": {
+    "message": "Не вдалося скопіювати токен"
+  },
+  "actor_notesPreviewTitle": {
+    "message": "Попередній перегляд нотаток сцени"
+  },
+  "actor_notesPreviewToggle": {
+    "message": "Показати попередній перегляд Markdown + LaTeX"
+  },
+  "actor_aspectLimitWarningTitle": {
+    "message": "Для цього чату налаштовано багато аспектів"
+  },
+  "actor_aspectLimitWarningBody": {
+    "message": "У вас {{count}} аспектів (м'який ліміт {{limit}}). Розгляньте можливість скоротити їх, щоб сфокусувати сцену та зекономити токени."
+  },
+  "actor_tokenWarning": {
+    "message": "Промпт Actor занадто довгий ({{count}} токенів; м'який ліміт {{limit}}). Розгляньте можливість скоротити аспекти або нотатки, щоб зекономити контекст."
+  },
+  "actor_depthRangeHelp": {
+    "message": "Глибина має бути між 0 і 999; значення за межами довжини історії обмежуються."
+  },
+  "actor_presetLabel": {
+    "message": "Пресети"
+  },
+  "actor_presetPlaceholder": {
+    "message": "Виберіть пресет"
+  },
+  "actor_preset.sliceOfLife": {
+    "message": "Повсякденність"
+  },
+  "actor_preset.dungeonCrawl": {
+    "message": "Похід у підземелля"
+  },
+  "actor_preset.romance": {
+    "message": "Романтика"
+  },
+  "actor_preset.workSession": {
+    "message": "Робоча сесія"
+  },
+  "actor_applyPreset": {
+    "message": "Застосувати"
+  },
+  "actor_resetChat": {
+    "message": "Скинути для цього чату"
+  },
+  "actor_saveAsCharacterDefault": {
+    "message": "Зберегти як стандарт для {{name}}"
+  },
+  "actor_applyCharacterDefault": {
+    "message": "Застосувати стандарт {{name}}"
+  },
+  "actor_notesGmOnly": {
+    "message": "Лише GM: не надсилати нотатки моделі"
+  },
+  "actor_templateModeLabel": {
+    "message": "Взаємодія з шаблонами сцен"
+  },
+  "actor_templateModeHelp": {
+    "message": "Керує тим, як Actor взаємодіє з активними шаблонами сцен. Об'єднання зберігає обидва; Перевизначення дозволяє Actor замінювати перекривані поля; Ігнорування пропускає Actor, коли шаблони активні."
+  },
+  "actor_templateMode.merge": {
+    "message": "Об'єднати з шаблонами"
+  },
+  "actor_templateMode.override": {
+    "message": "Перевизначити шаблони"
+  },
+  "actor_templateMode.ignore": {
+    "message": "Ігнорувати, коли шаблони активні"
+  },
+  "actor_bladeAspectsTitle": {
+    "message": "Аспекти"
+  },
+  "actor_bladeNotesTitle": {
+    "message": "Нотатки сцени"
+  },
+  "actor_bladePlacementTitle": {
+    "message": "Розміщення й шаблони"
+  },
+  "actor_bladeTokensTitle": {
+    "message": "Токени та перегляд"
+  },
+  "actor_summaryAspectsEmpty": {
+    "message": "Аспекти ще не налаштовані."
+  },
+  "actor_summaryAspectsCount": {
+    "message": "Налаштовано {{count}} аспектів."
+  },
+  "actor_summaryNotesEmpty": {
+    "message": "Ще немає нотаток сцени."
+  },
+  "actor_summaryNotes": {
+    "message": "{{chars}} символів{{gmSuffix}}."
+  },
+  "actor_summaryNotesGmOnly": {
+    "message": " · Лише GM"
+  },
+  "actor_summaryPlacementBefore": {
+    "message": "Перед основним промптом/історією."
+  },
+  "actor_summaryPlacementAfter": {
+    "message": "Після основного промпта/історії."
+  },
+  "actor_summaryPlacementDepth": {
+    "message": "Глибина {{depth}} · Роль: {{role}}."
+  },
+  "actor_summaryTokensEmpty": {
+    "message": "Ще не визначено токенів; задайте значення аспектів."
+  },
+  "actor_summaryTokensCount": {
+    "message": "{{tokens}} токенів · ~{{estimate}} токенів у промпті."
+  },
+  "actor_sceneTemplateActive": {
+    "message": "Шаблон сцени активний: Actor дотримується налаштувань взаємодії з шаблонами."
+  },
+  "composer_compareFeatureToggle": {
+    "message": "Увімкнути режим порівняння"
+  },
+  "composer_compareFeatureToggleHint": {
+    "message": "Відкрити експериментальні можливості порівняння кількох моделей."
+  },
+  "composer_compareDisabled": {
+    "message": "Режим порівняння вимкнено в налаштуваннях."
+  },
+  "composer_compareChosenHint": {
+    "message": "Продовжити з вибраною відповіддю або порівняти знову."
+  },
+  "composer_compareChosenLabel": {
+    "message": "Вибрано"
+  },
+  "composer_compareLatency": {
+    "message": "Затримка"
+  },
+  "composer_compareHistoryPrefix": {
+    "message": "Порівняння: {{title}}"
+  },
+  "composer_compareHistorySuffix": {
+    "message": "(з порівняння)"
+  },
+  "composer_compareClusterLabel": {
+    "message": "Відповіді кількох моделей"
+  },
+  "composer_compareClusterCount": {
+    "message": "{{count}} моделей"
+  },
+  "composer_compareBulkSplitHint": {
+    "message": "Вибрані моделі: {{count}}"
+  },
+  "composer_compareBulkSplit": {
+    "message": "Відкрити кожну вибрану відповідь в окремому чаті"
+  },
+  "composer_compareThreadLabel": {
+    "message": "Гілка для моделі"
+  },
+  "composer_compareThreadYou": {
+    "message": "Ви"
+  },
+  "composer_compareOpenFullChat": {
+    "message": "Відкрити як повний чат"
+  },
+  "composer_compareSpawnedChat": {
+    "message": "Відкрити розгалужений чат"
+  },
+  "composer_compareCanonicalOn": {
+    "message": "Канонічна"
+  },
+  "composer_compareCanonicalOff": {
+    "message": "Закріпити як канонічну"
+  },
+  "composer_compareCanonicalLabel": {
+    "message": "Канонічна відповідь"
+  },
+  "composer_compareFilterLabel": {
+    "message": "Фільтрувати моделі"
+  },
+  "composer_compareFilterClear": {
+    "message": "Показати всі"
+  },
+  "composer_compareFilterCount": {
+    "message": "Показано {{visible}} / {{total}}"
+  },
+  "composer_compareTokens": {
+    "message": "Токени: {{count}}"
+  },
+  "feedback_prompt": {
+    "message": "Це було корисно?"
+  },
+  "feedback_thumbsUp": {
+    "message": "Корисно"
+  },
+  "feedback_thumbsDown": {
+    "message": "Некорисно"
+  },
+  "feedback_more": {
+    "message": "Більше відгуків"
+  },
+  "feedback_thanks": {
+    "message": "Дякуємо за відгук"
+  },
+  "feedback_disabled": {
+    "message": "Відгук доступний після завершення відповіді."
+  },
+  "feedback_unavailable": {
+    "message": "Відгук недоступний для цього повідомлення."
+  },
+  "feedback_modalTitle": {
+    "message": "Відгук"
+  },
+  "feedback_modalRatingLabel": {
+    "message": "Як би ви оцінили цю відповідь?"
+  },
+  "feedback_modalIssuesLabel": {
+    "message": "У чому була проблема? (оберіть усе, що підходить)"
+  },
+  "feedback_modalNotesLabel": {
+    "message": "Додаткові коментарі (необов'язково)"
+  },
+  "feedback_modalSubmit": {
+    "message": "Надіслати відгук"
+  },
+  "feedback_errorTitle": {
+    "message": "Не вдалося надіслати відгук"
+  },
+  "feedback_errorBody": {
+    "message": "Не вдалося надіслати відгук."
+  },
+  "feedback_errorSource": {
+    "message": "Не вдалося надіслати відгук щодо джерела."
+  },
+  "feedback_issues_incorrect": {
+    "message": "Неправильна інформація"
+  },
+  "feedback_issues_notRelevant": {
+    "message": "Не стосується мого запитання"
+  },
+  "feedback_issues_missingDetails": {
+    "message": "Бракує важливих деталей"
+  },
+  "feedback_issues_badSources": {
+    "message": "Джерела були некорисні"
+  },
+  "feedback_issues_tooVerbose": {
+    "message": "Надто докладно"
+  },
+  "feedback_issues_tooBrief": {
+    "message": "Надто коротко"
+  },
+  "feedback_issues_other": {
+    "message": "Інше"
+  },
+  "feedback_sourceHelpful": {
+    "message": "Корисне джерело"
+  },
+  "feedback_sourceUnhelpful": {
+    "message": "Некорисне джерело"
+  },
+  "actor_uploadedFiles": {
+    "message": "Завантажені файли ({{count}})"
+  },
+  "actor_fileRetrieval": {
+    "message": "Отримання файлів"
+  },
+  "actor_fileStatusProcessed": {
+    "message": "Опрацьовано"
+  },
+  "actor_fileStatusProcessing": {
+    "message": "Опрацювання..."
+  },
+  "documentGenerator_title": {
+    "message": "Генератор документів"
+  },
+  "documentGenerator_unavailable": {
+    "message": "Генерація документів недоступна на цьому сервері."
+  },
+  "documentGenerator_noConversation": {
+    "message": "Почніть чат із підтримкою сервера для генерації документів."
+  },
+  "documentGenerator_source": {
+    "message": "Джерело"
+  },
+  "documentGenerator_sourceId": {
+    "message": "Розмова {{id}}"
+  },
+  "documentGenerator_sourceMissing": {
+    "message": "Наразі немає активної розмови."
+  },
+  "documentGenerator_sourceMessageId": {
+    "message": "Повідомлення {{id}}"
+  },
+  "documentGenerator_documentType": {
+    "message": "Тип документа"
+  },
+  "documentGenerator_model": {
+    "message": "Модель"
+  },
+  "documentGenerator_modelPlaceholder": {
+    "message": "ID моделі"
+  },
+  "documentGenerator_providerPlaceholder": {
+    "message": "Назва провайдера"
+  },
+  "documentGenerator_providerLabel": {
+    "message": "Провайдер: {{provider}}"
+  },
+  "documentGenerator_specificMessage": {
+    "message": "Зосередитись на конкретному повідомленні"
+  },
+  "documentGenerator_specificMessagePlaceholder": {
+    "message": "Необов'язково: вставте уривок повідомлення для фокуса."
+  },
+  "documentGenerator_customPrompt": {
+    "message": "Користувацький промпт"
+  },
+  "documentGenerator_customPromptPlaceholder": {
+    "message": "Необов'язкові інструкції для створюваного документа."
+  },
+  "documentGenerator_asyncGeneration": {
+    "message": "Генерувати асинхронно"
+  },
+  "documentGenerator_promptPresetTitle": {
+    "message": "Пресет промпта"
+  },
+  "documentGenerator_promptPresetHint": {
+    "message": "Налаштуйте системні/користувацькі промпти для цього типу документа."
+  },
+  "documentGenerator_promptReload": {
+    "message": "Перезавантажити з сервера"
+  },
+  "documentGenerator_systemPrompt": {
+    "message": "Системний промпт"
+  },
+  "documentGenerator_userPrompt": {
+    "message": "Користувацький промпт"
+  },
+  "documentGenerator_temperature": {
+    "message": "Температура"
+  },
+  "documentGenerator_maxTokens": {
+    "message": "Макс. токенів"
+  },
+  "documentGenerator_jobQueued": {
+    "message": "Генерацію документа поставлено в чергу."
+  },
+  "documentGenerator_generated": {
+    "message": "Документ згенеровано."
+  },
+  "documentGenerator_deleteTitle": {
+    "message": "Видалити документ?"
+  },
+  "documentGenerator_deleteBody": {
+    "message": "Це назавжди видалить згенерований документ."
+  },
+  "documentGenerator_jobCancelled": {
+    "message": "Завдання скасовано."
+  },
+  "documentGenerator_promptSaved": {
+    "message": "Пресет промпта збережено."
+  },
+  "documentGenerator_documentsTitle": {
+    "message": "Згенеровані документи"
+  },
+  "documentGenerator_loading": {
+    "message": "Завантаження…"
+  },
+  "documentGenerator_noDocuments": {
+    "message": "Документів ще немає."
+  },
+  "documentGenerator_jobsTitle": {
+    "message": "Завдання генерації"
+  },
+  "documentGenerator_progress": {
+    "message": "{{percent}}% завершено"
+  },
+  "documentGenerator_noContent": {
+    "message": "Вміст відсутній."
+  },
+  "documentGenerator_errors_missingModel": {
+    "message": "Спочатку виберіть модель і провайдера."
+  },
+  "documentGenerator_types_summary": {
+    "message": "Підсумок"
+  },
+  "documentGenerator_types_timeline": {
+    "message": "Хронологія"
+  },
+  "documentGenerator_types_briefing": {
+    "message": "Брифінг"
+  },
+  "documentGenerator_types_study_guide": {
+    "message": "Навчальний посібник"
+  },
+  "documentGenerator_types_q_and_a": {
+    "message": "Питання й відповіді"
+  },
+  "documentGenerator_types_meeting_notes": {
+    "message": "Нотатки зустрічі"
+  },
+  "composer_contextTabsEmpty": {
+    "message": "Вкладки не вибрано."
+  },
+  "composer_contextFilesTitle": {
+    "message": "Файли в контексті"
+  },
+  "composer_contextFilesEmpty": {
+    "message": "Файли не прикріплено."
+  },
+  "composer_addFile": {
+    "message": "Додати файл"
+  },
+  "composer_contextTabsAvailable": {
+    "message": "Відкриті вкладки"
+  },
+  "composer_noTabsFound": {
+    "message": "Відповідних відкритих вкладок не знайдено."
+  },
+  "errors_loadLocalHistoryPrefix": {
+    "message": "Не вдалося завантажити локальну історію чату"
+  },
+  "errors_loadLocalHistoryDefault": {
+    "message": "Щось пішло не так під час завантаження локальної історії чату."
+  },
+  "ttsClips_title": {
+    "message": "TTS clips"
+  },
+  "ttsClips_empty": {
+    "message": "Generate chat audio to save it here."
+  },
+  "ttsClips_clearAll": {
+    "message": "Clear all"
+  },
+  "ttsClips_clearConfirm": {
+    "message": "Clear all saved TTS clips?"
+  },
+  "ttsClips_deleteConfirm": {
+    "message": "Delete this clip?"
+  },
+  "ttsClips_download": {
+    "message": "Download"
+  },
+  "ttsClips_downloadAll": {
+    "message": "Download all segments"
+  },
+  "ttsClips_segmentsLabel": {
+    "message": "{{count}} segments"
+  },
+  "composer_modelSearchPlaceholder": {
+    "message": "Search models"
+  },
+  "composer_noModelsMatch": {
+    "message": "No models match your search."
+  },
+  "composer_favorites": {
+    "message": "Favorites"
+  },
+  "composer_favoriteAdd": {
+    "message": "Add to favorites"
+  },
+  "composer_favoriteRemove": {
+    "message": "Remove from favorites"
+  },
+  "composer_sort_favorites": {
+    "message": "Favorites"
+  },
+  "composer_sort_az": {
+    "message": "A-Z"
+  },
+  "composer_sort_provider": {
+    "message": "Provider"
+  },
+  "composer_sort_localFirst": {
+    "message": "Local-first"
+  },
+  "composer_mcpAriaUnavailable": {
+    "message": "MCP tools unavailable"
+  },
+  "composer_mcpAriaLabel": {
+    "message": "Інструменти MCP: {{choice}}, {{summary}}"
+  },
+  "composer_mcpConfigure": {
+    "message": "Налаштувати інструменти"
+  },
+  "composer_mcpSettingsTitle": {
+    "message": "Налаштування інструментів MCP"
+  },
+  "acp_workspace_selectSession": {
+    "message": "Виберіть сесію, щоб відкрити термінал робочого простору."
+  },
+  "acp_workspace_unavailable": {
+    "message": "Термінал робочого простору недоступний для цієї сесії."
+  },
+  "acp_workspace_title": {
+    "message": "Термінал робочого простору"
+  }
+}

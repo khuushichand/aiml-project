@@ -22,6 +22,14 @@ type NavigateOptions = {
   state?: unknown
 }
 
+const runNavigationTransition = (update: () => void) => {
+  if (typeof React.startTransition === "function") {
+    React.startTransition(update)
+    return
+  }
+  update()
+}
+
 export const Link = React.forwardRef<HTMLAnchorElement, LinkProps>(
   function Link({ to, href, ...rest }, ref) {
     const resolvedHref = href ?? to ?? "#"
@@ -59,7 +67,9 @@ export const useNavigate = () => {
   return (to: string | number, options?: NavigateOptions) => {
     if (typeof to === "number") {
       if (to < 0) {
-        router.back()
+        runNavigationTransition(() => {
+          router.back()
+        })
       }
       return
     }
@@ -74,11 +84,13 @@ export const useNavigate = () => {
     }
 
     try {
-      if (options?.replace) {
-        void router.replace(to)
-      } else {
-        void router.push(to)
-      }
+      runNavigationTransition(() => {
+        if (options?.replace) {
+          void router.replace(to)
+        } else {
+          void router.push(to)
+        }
+      })
     } catch (err) {
       console.error("[useNavigate shim] Navigation failed:", err)
       doFallback()
@@ -125,11 +137,13 @@ export const useSearchParams = (): [
       const nextPath = queryString
         ? `${router.pathname}?${queryString}`
         : router.pathname
-      if (options?.replace) {
-        void router.replace(nextPath)
-      } else {
-        void router.push(nextPath)
-      }
+      runNavigationTransition(() => {
+        if (options?.replace) {
+          void router.replace(nextPath)
+        } else {
+          void router.push(nextPath)
+        }
+      })
     },
     [router]
   )
@@ -165,11 +179,13 @@ type NavigateProps = {
 export const Navigate: React.FC<NavigateProps> = ({ to, replace }) => {
   const router = useRouter()
   React.useEffect(() => {
-    if (replace) {
-      void router.replace(to)
-    } else {
-      void router.push(to)
-    }
+    runNavigationTransition(() => {
+      if (replace) {
+        void router.replace(to)
+      } else {
+        void router.push(to)
+      }
+    })
   }, [router, to, replace])
   return null
 }

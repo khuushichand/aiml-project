@@ -94,7 +94,7 @@ def _process_single_ebook(
         return result_dict
     except Exception as exc:  # pragma: no cover - defensive fallback
         logger.error(
-            "_process_single_ebook error for %s (%s): %s",
+            '_process_single_ebook error for {} ({}): {}',
             original_ref,
             ebook_path,
             exc,
@@ -144,9 +144,9 @@ async def process_ebooks_endpoint(
             tags=["no_db"],
             metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
         )
-    except Exception:
+    except Exception as usage_log_error:
         # Usage logging is best-effort; do not fail the request.
-        pass
+        logger.debug("Ebook process endpoint usage logging failed", exc_info=usage_log_error)
 
     # Legacy endpoint treats urls=[""] as "no URLs".
     if form_data.urls and form_data.urls == [""]:
@@ -228,7 +228,7 @@ async def process_ebooks_endpoint(
         # ---- Handle URL inputs via shared downloader ----
         if form_data.urls:
             logger.info(
-                "Attempting to download %d EPUB URL(s) asynchronously...",
+                'Attempting to download {} EPUB URL(s) asynchronously...',
                 len(form_data.urls),
             )
             download_url_async = media_mod._download_url_async
@@ -356,7 +356,7 @@ async def process_ebooks_endpoint(
                     res = await loop.run_in_executor(None, partial_func)
                 except Exception as exc:  # pragma: no cover - defensive fallback
                     logger.error(
-                        "Task execution failed for %s: %s",
+                        'Task execution failed for {}: {}',
                         original_ref,
                         exc,
                         exc_info=True,

@@ -40,30 +40,14 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_engine import (
     ClaimsEngine,
     ClaimVerification,
 )
+from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+    Document,
+    VerificationStatus,
+)
 from tldw_Server_API.app.core.Claims_Extraction.falsification import (
     FalsificationDecision,
     should_trigger_falsification,
 )
-
-# Import types
-try:
-    from tldw_Server_API.app.core.RAG.rag_service.types import Document, VerificationStatus
-except ImportError:
-    from dataclasses import dataclass as _dc
-    from enum import Enum as _Enum
-
-    class VerificationStatus(_Enum):  # type: ignore
-        VERIFIED = "verified"
-        CONTESTED = "contested"
-        REFUTED = "refuted"
-        UNVERIFIED = "unverified"
-
-    @_dc
-    class Document:  # type: ignore
-        id: str
-        content: str
-        metadata: dict[str, Any] = field(default_factory=dict)
-        score: float = 0.0
 
 
 # Metrics integration - graceful fallback if not available
@@ -176,8 +160,10 @@ class FVAPipeline:
             self.config.anti_context_config,
         )
 
-        # Get NLI pipeline from claims_engine if available
-        nli_pipeline = getattr(claims_engine, "_nli", None)
+        # Prefer verifier-managed NLI pipeline (where ClaimsEngine stores it), then legacy fallback.
+        nli_pipeline = getattr(getattr(claims_engine, "verifier", None), "_nli", None)
+        if nli_pipeline is None:
+            nli_pipeline = getattr(claims_engine, "_nli", None)
 
         self.adjudicator = ClaimAdjudicator(
             nli_pipeline=nli_pipeline,

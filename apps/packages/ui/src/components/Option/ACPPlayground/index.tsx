@@ -4,7 +4,9 @@ import { useStorage } from "@plasmohq/storage/hook"
 import { Drawer, Tabs } from "antd"
 import { Bot, MessageSquare, Wrench, Terminal } from "lucide-react"
 import { useMobile } from "@/hooks/useMediaQuery"
+import { useACPSession } from "@/hooks/useACPSession"
 import { useACPSessionsStore } from "@/store/acp-sessions"
+import type { ACPPermissionTier } from "@/services/acp/types"
 import { ACPPlaygroundHeader } from "./ACPPlaygroundHeader"
 import { ACPSessionPanel } from "./ACPSessionPanel"
 import { ACPChatPanel } from "./ACPChatPanel"
@@ -42,17 +44,99 @@ export const ACPPlayground: React.FC = () => {
   const [rightTab, setRightTab] = React.useState<"tools" | "workspace">("tools")
 
   // Store
-  const sessions = useACPSessionsStore((s) => s.getSessions())
+  const sessionsById = useACPSessionsStore((s) => s.sessions)
   const activeSessionId = useACPSessionsStore((s) => s.activeSessionId)
-  const activeSession = useACPSessionsStore((s) =>
-    s.activeSessionId ? s.getSession(s.activeSessionId) : undefined
+  const sessions = React.useMemo(
+    () =>
+      Object.values(sessionsById).sort(
+        (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+      ),
+    [sessionsById]
   )
+  const activeSession = React.useMemo(
+    () => (activeSessionId ? sessionsById[activeSessionId] : undefined),
+    [activeSessionId, sessionsById]
+  )
+  const updateSessionState = useACPSessionsStore((s) => s.updateSessionState)
+  const setSessionCapabilities = useACPSessionsStore((s) => s.setSessionCapabilities)
+  const addUpdate = useACPSessionsStore((s) => s.addUpdate)
+  const addPendingPermission = useACPSessionsStore((s) => s.addPendingPermission)
+  const removePendingPermission = useACPSessionsStore((s) => s.removePendingPermission)
+  const clearPendingPermissions = useACPSessionsStore((s) => s.clearPendingPermissions)
+  const setGlobalError = useACPSessionsStore((s) => s.setGlobalError)
   const cleanupExpiredSessions = useACPSessionsStore((s) => s.cleanupExpiredSessions)
+  const workspaceTabLabel = t("playground:acp.workspace.title", "Workspace")
+
+  // Single ACP connection shared across chat + modal actions.
+  const {
+    state,
+    isConnected,
+    sendPrompt,
+    cancel,
+    approvePermission,
+    denyPermission,
+  } = useACPSession({
+    sessionId: activeSessionId ?? undefined,
+    autoConnect: !!activeSessionId,
+    onConnected: (message) => {
+      updateSessionState(message.session_id, "connected")
+      if (message.agent_capabilities) {
+        setSessionCapabilities(message.session_id, message.agent_capabilities)
+      }
+    },
+    onUpdate: (message) => {
+      addUpdate(message.session_id, {
+        type: message.update_type,
+        data: message.data,
+      })
+    },
+    onPermissionRequest: (message) => {
+      addPendingPermission(message.session_id, {
+        request_id: message.request_id,
+        tool_name: message.tool_name,
+        tool_arguments: message.tool_arguments,
+        tier: message.tier,
+        timeout_seconds: message.timeout_seconds,
+        requestedAt: new Date(),
+      })
+    },
+    onPromptComplete: (message) => {
+      clearPendingPermissions(message.session_id)
+      updateSessionState(message.session_id, "connected")
+    },
+    onError: (message) => {
+      if (message.session_id) {
+        updateSessionState(message.session_id, "error")
+      }
+      setGlobalError(message.message)
+    },
+  })
 
   // Cleanup expired sessions on mount
   useEffect(() => {
     cleanupExpiredSessions()
   }, [cleanupExpiredSessions])
+
+  // Keep the active session state in sync with the shared ACP hook.
+  useEffect(() => {
+    if (!activeSessionId) return
+    updateSessionState(activeSessionId, state)
+    if (state === "disconnected") {
+      clearPendingPermissions(activeSessionId)
+    }
+  }, [activeSessionId, state, updateSessionState, clearPendingPermissions])
+
+  const previousActiveSessionIdRef = React.useRef<string | null>(null)
+
+  // Mark the previous active session disconnected when switching sessions.
+  useEffect(() => {
+    const previousSessionId = previousActiveSessionIdRef.current
+    if (previousSessionId && previousSessionId !== activeSessionId) {
+      updateSessionState(previousSessionId, "disconnected")
+      clearPendingPermissions(previousSessionId)
+    }
+    previousActiveSessionIdRef.current = activeSessionId
+  }, [activeSessionId, updateSessionState, clearPendingPermissions])
 
   const handleToggleLeftPane = () => {
     if (isMobile) {
@@ -70,9 +154,30 @@ export const ACPPlayground: React.FC = () => {
     }
   }
 
-  // Check if there are pending permissions
-  const hasPendingPermissions =
-    activeSession && activeSession.pendingPermissions.length > 0
+  const pendingPermissions = activeSession?.pendingPermissions ?? []
+  const hasPendingPermissions = pendingPermissions.length > 0
+
+  const handleApprovePermission = React.useCallback((requestId: string, batchApproveTier?: ACPPermissionTier) => {
+    try {
+      approvePermission(requestId, batchApproveTier)
+      if (activeSessionId) {
+        removePendingPermission(activeSessionId, requestId)
+      }
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : "Failed to approve permission")
+    }
+  }, [approvePermission, activeSessionId, removePendingPermission, setGlobalError])
+
+  const handleDenyPermission = React.useCallback((requestId: string) => {
+    try {
+      denyPermission(requestId)
+      if (activeSessionId) {
+        removePendingPermission(activeSessionId, requestId)
+      }
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : "Failed to deny permission")
+    }
+  }, [denyPermission, activeSessionId, removePendingPermission, setGlobalError])
 
   // Mobile tab items
   const mobileTabItems = [
@@ -99,7 +204,15 @@ export const ACPPlayground: React.FC = () => {
           <span>{t("playground:acp.chat", "Chat")}</span>
         </span>
       ),
-      children: <ACPChatPanel />,
+      children: (
+        <ACPChatPanel
+          state={state}
+          isConnected={isConnected}
+          updates={activeSession?.updates ?? []}
+          sendPrompt={sendPrompt}
+          cancel={cancel}
+        />
+      ),
     },
     {
       key: "tools",
@@ -116,7 +229,7 @@ export const ACPPlayground: React.FC = () => {
       label: (
         <span className="flex items-center gap-1.5">
           <Terminal className="h-4 w-4" />
-          <span>{t("playground:acp.workspace", "Workspace")}</span>
+          <span>{workspaceTabLabel}</span>
         </span>
       ),
       children: <ACPWorkspacePanel />,
@@ -144,7 +257,13 @@ export const ACPPlayground: React.FC = () => {
           tabBarStyle={{ marginBottom: 0, borderBottom: "1px solid var(--border)" }}
         />
 
-        {hasPendingPermissions && <ACPPermissionModal />}
+        {hasPendingPermissions && (
+          <ACPPermissionModal
+            pendingPermissions={pendingPermissions}
+            approvePermission={handleApprovePermission}
+            denyPermission={handleDenyPermission}
+          />
+        )}
       </div>
     )
   }
@@ -178,7 +297,7 @@ export const ACPPlayground: React.FC = () => {
           placement="left"
           onClose={() => setLeftDrawerOpen(false)}
           open={leftDrawerOpen}
-          width={320}
+          size={320}
           className="lg:hidden"
           styles={{ body: { padding: 0 } }}
         >
@@ -187,7 +306,13 @@ export const ACPPlayground: React.FC = () => {
 
         {/* Center pane - Chat */}
         <main className="flex min-w-0 flex-1 flex-col">
-          <ACPChatPanel />
+          <ACPChatPanel
+            state={state}
+            isConnected={isConnected}
+            updates={activeSession?.updates ?? []}
+            sendPrompt={sendPrompt}
+            cancel={cancel}
+          />
         </main>
 
         {/* Right pane - Tools (desktop) */}
@@ -204,7 +329,7 @@ export const ACPPlayground: React.FC = () => {
                 },
                 {
                   key: "workspace",
-                  label: t("playground:acp.workspace", "Workspace"),
+                  label: workspaceTabLabel,
                   children: <ACPWorkspacePanel />,
                 },
               ]}
@@ -224,7 +349,7 @@ export const ACPPlayground: React.FC = () => {
           placement="right"
           onClose={() => setRightDrawerOpen(false)}
           open={rightDrawerOpen}
-          width={320}
+          size={320}
           className="lg:hidden"
           styles={{ body: { padding: 0 } }}
         >
@@ -246,7 +371,7 @@ export const ACPPlayground: React.FC = () => {
               },
               {
                 key: "workspace",
-                label: t("playground:acp.workspace", "Workspace"),
+                label: workspaceTabLabel,
                 children: <ACPWorkspacePanel />,
               },
             ]}
@@ -256,7 +381,13 @@ export const ACPPlayground: React.FC = () => {
       </div>
 
       {/* Permission modal */}
-      {hasPendingPermissions && <ACPPermissionModal />}
+      {hasPendingPermissions && (
+        <ACPPermissionModal
+          pendingPermissions={pendingPermissions}
+          approvePermission={handleApprovePermission}
+          denyPermission={handleDenyPermission}
+        />
+      )}
     </div>
   )
 }

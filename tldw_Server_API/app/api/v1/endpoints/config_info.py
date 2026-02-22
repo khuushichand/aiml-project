@@ -13,10 +13,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from tldw_Server_API.app.core.config import load_comprehensive_config
-from tldw_Server_API.app.core.config import settings as global_settings
+from tldw_Server_API.app.core import config as config_mod
+from tldw_Server_API.app.core.testing import is_truthy
 
 router = APIRouter()
+_DOCS_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 
 
 def get_config_path() -> Path:
@@ -62,7 +63,7 @@ def load_safe_config() -> dict:
         }
     }
 
-    # In single-user mode, we can expose the API key for documentation
+    # Never expose a real API key via docs-info.
     if auth_mode == 'single_user':
         api_key = config.get('Authentication', 'single_user_api_key', fallback='').strip()
         placeholders = {
@@ -73,9 +74,10 @@ def load_safe_config() -> dict:
             "CHANGE_ME_TO_SECURE_API_KEY",
             "test-api-key-12345",
         }
-        safe_config["api_key_for_docs"] = "" if api_key in placeholders else api_key
+        safe_config["api_key_configured"] = bool(api_key and api_key not in placeholders)
     else:
-        safe_config["api_key_for_docs"] = ""
+        safe_config["api_key_configured"] = False
+    safe_config["api_key_for_docs"] = ""
 
     # Check which LLM providers are configured (without exposing keys)
     configured_providers = []
@@ -89,7 +91,10 @@ def load_safe_config() -> dict:
             'mistral_api_key': 'Mistral',
             'deepseek_api_key': 'DeepSeek',
             'huggingface_api_key': 'HuggingFace',
-            'openrouter_api_key': 'OpenRouter'
+            'openrouter_api_key': 'OpenRouter',
+            'novita_api_key': 'Novita',
+            'poe_api_key': 'Poe',
+            'together_api_key': 'Together',
         }
 
         for key_name, provider_name in provider_keys.items():
@@ -101,16 +106,18 @@ def load_safe_config() -> dict:
 
     # Feature flags / capabilities (safe to expose)
     try:
-        from tldw_Server_API.app.core.config import settings as _settings
+        _settings = config_mod.settings
         caps = {
-            "personalization": bool(_settings.get("PERSONALIZATION_ENABLED", True)),
-            "persona": bool(_settings.get("PERSONA_ENABLED", True)),
+            "personalization": bool(_settings.get("PERSONALIZATION_ENABLED", True))
+            and bool(config_mod.route_enabled("personalization", default_stable=False)),
+            "persona": bool(_settings.get("PERSONA_ENABLED", True))
+            and bool(config_mod.route_enabled("persona", default_stable=True)),
         }
         # expose both for backward-compat and forward-looking UI
         safe_config["supported_features"] = caps
         safe_config["capabilities"] = caps
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to derive safe capability flags: {e}")
 
     return safe_config
 
@@ -121,7 +128,7 @@ async def get_documentation_config():
     Get configuration information suitable for auto-populating documentation.
 
     This endpoint returns non-sensitive configuration that can be used to:
-    - Auto-populate API keys in documentation (single-user mode only)
+    - Provide a safe placeholder key for documentation snippets
     - Show which LLM providers are configured
     - Provide the correct base URL for examples
 
@@ -134,8 +141,8 @@ async def get_documentation_config():
     host = config.get("server", {}).get("host", "127.0.0.1")
     port = config.get("server", {}).get("port", 8000)
 
-    # Convert 0.0.0.0 to localhost for documentation
-    if host == "0.0.0.0":
+    # Convert 0.0.0.0 to localhost for documentation (comparison/sanitization only).
+    if host == "0.0.0.0":  # nosec B104
         host = "localhost"
 
     base_url = f"http://{host}:{port}"
@@ -143,7 +150,8 @@ async def get_documentation_config():
     return {
         "configured": config.get("configured", False),
         "auth_mode": config.get("auth_mode", "single_user"),
-        "api_key": config.get("api_key_for_docs") or "YOUR_API_KEY",
+        "api_key": _DOCS_API_KEY_PLACEHOLDER,
+        "api_key_configured": bool(config.get("api_key_configured", False)),
         "base_url": base_url,
         "configured_providers": config.get("configured_llm_providers", []),
         # Surface capabilities map so WebUI can dynamically hide/show experimental tabs
@@ -152,15 +160,15 @@ async def get_documentation_config():
         "supported_features": config.get("supported_features", {}),
         "examples": {
             "python": generate_python_example(
-                config.get("api_key_for_docs") or "YOUR_API_KEY",
+                _DOCS_API_KEY_PLACEHOLDER,
                 base_url
             ),
             "curl": generate_curl_example(
-                config.get("api_key_for_docs") or "YOUR_API_KEY",
+                _DOCS_API_KEY_PLACEHOLDER,
                 base_url
             ),
             "javascript": generate_js_example(
-                config.get("api_key_for_docs") or "YOUR_API_KEY",
+                _DOCS_API_KEY_PLACEHOLDER,
                 base_url
             )
         }
@@ -211,7 +219,7 @@ eval_data = {{
 }}
 
 req = Request(
-    f"{{BASE_URL}}/api/v1/evals",
+    f"{{BASE_URL}}/api/v1/evaluations",
     data=json.dumps(eval_data).encode("utf-8"),
     headers={{
         "Authorization": f"Bearer {{API_KEY}}",
@@ -227,7 +235,7 @@ print(f"Created evaluation: {{payload['id']}}")"""
 
 def generate_curl_example(api_key: str, base_url: str) -> str:
     """Generate a cURL example with the provided configuration."""
-    return f"""curl -X POST {base_url}/api/v1/evals \\
+    return f"""curl -X POST {base_url}/api/v1/evaluations \\
   -H "Authorization: Bearer {api_key}" \\
   -H "Content-Type: application/json" \\
   -d '{{
@@ -254,7 +262,7 @@ const evalData = {{
     ]
 }};
 
-const response = await fetch(`${{BASE_URL}}/api/v1/evals`, {{
+const response = await fetch(`${{BASE_URL}}/api/v1/evaluations`, {{
     method: 'POST',
     headers: {{
         'Authorization': `Bearer ${{API_KEY}}`,
@@ -323,7 +331,7 @@ async def get_jobs_config_info():
             "JOBS_LEASE_RENEW_SECONDS": _to_int("JOBS_LEASE_RENEW_SECONDS", 30),
             "JOBS_LEASE_RENEW_JITTER_SECONDS": _to_int("JOBS_LEASE_RENEW_JITTER_SECONDS", 5),
             "JOBS_LEASE_MAX_SECONDS": _to_int("JOBS_LEASE_MAX_SECONDS", 3600),
-            "JOBS_ENFORCE_LEASE_ACK": str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1", "true", "yes", "y", "on"},
+            "JOBS_ENFORCE_LEASE_ACK": is_truthy(os.getenv("JOBS_ENFORCE_LEASE_ACK")),
         },
         "notes": "DSN is not exposed for security. Configure via the environment (PostgreSQL DSN) to use a Postgres backend."
     }

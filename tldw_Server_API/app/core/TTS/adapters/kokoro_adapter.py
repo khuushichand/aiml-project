@@ -34,6 +34,9 @@ from ..tts_exceptions import (
     TTSModelNotFoundError,
     TTSProviderNotConfiguredError,
 )
+from ..tts_resource_manager import get_resource_manager as _get_resource_manager
+from ...testing import env_flag_enabled, is_explicit_pytest_runtime, is_test_mode
+from ...Utils.torch_import_guard import safe_import_torch
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
 
@@ -72,6 +75,11 @@ _KOKORO_NONCRITICAL_EXCEPTIONS = (
 )
 
 _KOKORO_REPO_WARNING_PREFIX = "WARNING: Defaulting repo_id to "
+
+
+async def get_resource_manager():
+    """Compatibility wrapper so tests can monkeypatch the adapter-level symbol."""
+    return await _get_resource_manager()
 
 
 @contextmanager
@@ -198,8 +206,10 @@ class KokoroAdapter(TTSAdapter):
         mps_avail = False
 
         def _probe_devices() -> tuple[bool, bool]:
+            if is_test_mode() or is_explicit_pytest_runtime() or env_flag_enabled("MINIMAL_TEST_APP"):
+                return False, False
             try:
-                import torch  # type: ignore
+                torch = safe_import_torch()
                 cuda_ok = torch.cuda.is_available()
                 mps_ok = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
                 return cuda_ok, mps_ok
@@ -259,11 +269,7 @@ class KokoroAdapter(TTSAdapter):
             default=parse_bool(os.getenv("KOKORO_LAZY_INIT"), default=False),
         )
         if not self._lazy_init:
-            test_mode = bool(os.getenv("PYTEST_CURRENT_TEST")) or parse_bool(
-                os.getenv("TESTING"), default=False
-            ) or parse_bool(os.getenv("TEST_MODE"), default=False) or parse_bool(
-                os.getenv("TLDW_TEST_MODE"), default=False
-            )
+            test_mode = is_explicit_pytest_runtime() or env_flag_enabled("TESTING") or is_test_mode()
             explicit_model = any(
                 key in self.config for key in ("kokoro_model_path", "kokoro_use_onnx", "kokoro_voices_json")
             )
@@ -585,7 +591,6 @@ class KokoroAdapter(TTSAdapter):
 
             # Register model with resource manager (best-effort)
             try:
-                from ..tts_resource_manager import get_resource_manager
                 resource_manager = await get_resource_manager()
                 if self.kokoro_instance:
                     register_result = resource_manager.register_model(
@@ -621,21 +626,21 @@ class KokoroAdapter(TTSAdapter):
 
     async def _initialize_pytorch(self) -> bool:
         """Initialize PyTorch backend"""
-        try:
-            import torch
-        except ImportError as e:
-            raise TTSModelLoadError(
-                "PyTorch is required for Kokoro PyTorch backend",
-                provider=self.provider_name,
-                details={"error": str(e), "suggestion": "pip install torch"}
-            ) from e
-        # Check model file
+        # Check model file before importing torch so missing-model failures stay lightweight.
         if not os.path.exists(self.model_path):
             raise TTSModelNotFoundError(
                 f"Kokoro PyTorch model not found at {self.model_path}",
                 provider=self.provider_name,
                 details={"model_path": self.model_path}
             )
+        try:
+            torch = safe_import_torch()
+        except ImportError as e:
+            raise TTSModelLoadError(
+                "PyTorch is required for Kokoro PyTorch backend",
+                provider=self.provider_name,
+                details={"error": str(e), "suggestion": "pip install torch"}
+            ) from e
         # Try native Kokoro PyTorch if available
         try:
             from kokoro.model import KModel  # type: ignore
@@ -675,7 +680,6 @@ class KokoroAdapter(TTSAdapter):
             logger.info(f"{self.provider_name}: Kokoro PyTorch model loaded on {dev} (t={time.time() - start:.2f}s)")
             # Register model with resource manager (best-effort)
             try:
-                from ..tts_resource_manager import get_resource_manager
                 resource_manager = await get_resource_manager()
                 if self.kokoro_pt_model is not None:
                     register_result = resource_manager.register_model(
@@ -701,7 +705,6 @@ class KokoroAdapter(TTSAdapter):
                 logger.info(f"{self.provider_name}: Loaded generic PyTorch model on {self.device}")
                 # Register model with resource manager (best-effort)
                 try:
-                    from ..tts_resource_manager import get_resource_manager
                     resource_manager = await get_resource_manager()
                     if self.model_pt is not None:
                         register_result = resource_manager.register_model(
@@ -1441,7 +1444,7 @@ class KokoroAdapter(TTSAdapter):
             if hasattr(item, "audio"):
                 audio = item.audio
                 try:
-                    import torch  # type: ignore
+                    torch = safe_import_torch()
 
                     if isinstance(audio, torch.Tensor):
                         audio = audio.detach().cpu().numpy()
@@ -1648,7 +1651,9 @@ class KokoroAdapter(TTSAdapter):
             # Clear CUDA cache if using GPU
             if self.device.startswith("cuda"):
                 try:
-                    import torch
+                    if is_test_mode() or is_explicit_pytest_runtime() or env_flag_enabled("MINIMAL_TEST_APP"):
+                        return
+                    torch = safe_import_torch()
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                         logger.debug(f"{self.provider_name}: CUDA cache cleared")

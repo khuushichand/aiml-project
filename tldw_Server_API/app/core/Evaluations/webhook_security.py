@@ -280,7 +280,8 @@ class WebhookSecurityValidator:
         try:
             # Check for localhost variations
             localhost_patterns = [
-                "localhost", "127.0.0.1", "::1", "0.0.0.0",
+                # Validation denylist literals (not socket bind targets).
+                "localhost", "127.0.0.1", "::1", "0.0.0.0",  # nosec B104
                 "10.0.", "172.16.", "172.17.", "172.18.", "172.19.",
                 "172.20.", "172.21.", "172.22.", "172.23.", "172.24.",
                 "172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
@@ -587,8 +588,8 @@ class WebhookSecurityValidator:
                                 except (socket.gaierror, ValueError):
                                     pass
                             result["redirect_location"] = redirect_location[:200]  # Truncate for safety
-                        except Exception:
-                            pass
+                        except Exception as redirect_error:
+                            logger.debug("Webhook redirect location parsing failed", exc_info=redirect_error)
 
                 # Check SSL if HTTPS
                 if url.startswith("https://"):

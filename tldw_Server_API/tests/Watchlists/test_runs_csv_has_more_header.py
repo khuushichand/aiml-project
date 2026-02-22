@@ -30,7 +30,7 @@ def client_with_user(monkeypatch):
         if user_db_path.exists():
             user_db_path.unlink()
     except Exception:
-        pass
+        _ = None
 
     from fastapi import FastAPI
     from tldw_Server_API.app.core.config import API_V1_PREFIX

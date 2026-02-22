@@ -32,6 +32,7 @@
   - Compiled rules hold `regex`, `category`, `severity`; dangerous regex patterns are rejected; snippets are bounded to avoid large payloads.
   - Alerts persistence via `TopicMonitoringDB` (SQLite, WAL, indexes on timestamps/users/watchlists); shape defined in module docstring: tldw_Server_API/app/core/DB_Management/TopicMonitoring_DB.py:1
   - NotificationService: JSONL file sink for notifications with optional webhook/email (best‑effort threads + retries): tldw_Server_API/app/core/Monitoring/notification_service.py:1
+  - NotificationService also serves **guardian alert dispatch** — `dispatch_guardian_notification()` in `supervised_policy.py` calls `notify_or_batch()` to route guardian alerts through the same JSONL/webhook/email pipeline.
 
 - Configuration (env or config file `monitoring.*`)
   - Topic monitor:
@@ -54,7 +55,7 @@
 - Error Handling & Safety
   - Rule compilation is guarded; invalid rules are skipped with warnings.
   - Alert metadata is JSON‑encoded/decoded with fallback on parse failures.
-  - Admin endpoints require `require_admin` and validate inputs.
+  - Admin endpoints use claim-first authorization (`get_auth_principal` + `require_roles("admin")` / `require_permissions(...)`) and validate inputs.
 
 ## 3. Developer-Related/Relevant Information for Contributors
 

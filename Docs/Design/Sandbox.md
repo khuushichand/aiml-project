@@ -14,3 +14,7 @@ https://github.com/instavm/coderunner
 https://github.com/lukehinds/nono
 https://github.com/trycua/cua
 https://github.com/trailofbits/claude-code-devcontainer?utm_source=substack&utm_medium=email
+https://gobii.ai/blog/how-we-sandbox-ai-agents-in-production/
+https://github.com/gobii-ai/gobii-platform
+https://github.com/gobii-ai/sandbox-compute-server
+

@@ -161,7 +161,7 @@ export default function HealthSummary() {
       <Drawer
         title={t("healthSummary.diagnostics", "Health & diagnostics")}
         placement="right"
-        width={360}
+        size={360}
         onClose={() => setOpen(false)}
         open={open}>
         <div id={diagnosticsPanelId} className="space-y-3 text-sm">

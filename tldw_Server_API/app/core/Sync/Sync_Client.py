@@ -2,6 +2,7 @@
 import json
 import os
 import sqlite3  # For specific error types
+from datetime import datetime, timezone
 from typing import Optional
 
 #
@@ -21,6 +22,11 @@ except ImportError:
     logger.error("Could not import the 'Media_DB' library. Make sure Media_DB.py is accessible.")
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import fetch
+from tldw_Server_API.app.core.Sync.sync_contract import (
+    ALLOWED_SYNC_ENTITIES,
+    ALLOWED_SYNC_OPERATIONS,
+    ALLOWED_SYNC_SEND_ENTITIES,
+)
 
 #
 #######################################################################################################################
@@ -31,9 +37,13 @@ from tldw_Server_API.app.core.http_client import fetch
 
 # --- Configuration ---
 # These should ideally come from a config file or environment variables
-SERVER_API_URL = "http://127.0.0.1:5000" # Replace with your actual server URL
-SYNC_ENDPOINT_SEND = "/sync/send"
-SYNC_ENDPOINT_GET = "/sync/get"
+SERVER_API_URL = os.getenv("SYNC_SERVER_API_URL", "http://127.0.0.1:8000") # Replace with your actual server URL
+_SYNC_API_PREFIX = (os.getenv("SYNC_API_PREFIX", "/api/v1/sync") or "/api/v1/sync").strip()
+if not _SYNC_API_PREFIX.startswith("/"):
+    _SYNC_API_PREFIX = f"/{_SYNC_API_PREFIX}"
+_SYNC_API_PREFIX = _SYNC_API_PREFIX.rstrip("/")
+SYNC_ENDPOINT_SEND = f"{_SYNC_API_PREFIX}/send"
+SYNC_ENDPOINT_GET = f"{_SYNC_API_PREFIX}/get"
 STATE_FILE = "client_sync_state.json" # File to store last sync IDs
 CLIENT_ID = "client_abc_123" # Needs to be unique per client instance
 DATABASE_PATH = f"./client_dbs/{CLIENT_ID}_media.db" # Example: One DB per client
@@ -51,6 +61,8 @@ SYNC_RUNTIME_ERRORS = (
     json.JSONDecodeError,
 )
 
+_SYNC_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
 
 def _extract_http_status_error(exc: Exception) -> Optional[tuple[int, str]]:
     resp = getattr(exc, "response", None)
@@ -65,13 +77,85 @@ def _extract_http_status_error(exc: Exception) -> Optional[tuple[int, str]]:
     return status_int, str(text)
 
 
+def _validate_sync_entity_operation(entity: str, operation: str) -> Optional[str]:
+    if entity not in ALLOWED_SYNC_ENTITIES:
+        return f"Unsupported sync entity '{entity}'"
+    if operation not in ALLOWED_SYNC_OPERATIONS:
+        return f"Unsupported sync operation '{operation}'"
+    if entity == "MediaKeywords" and operation not in {"link", "unlink"}:
+        return "MediaKeywords only supports 'link'/'unlink' operations"
+    if entity != "MediaKeywords" and operation in {"link", "unlink"}:
+        return f"Operation '{operation}' is only valid for MediaKeywords"
+    return None
+
+
+def _validate_sync_send_entity_operation(entity: str, operation: str) -> Optional[str]:
+    validation_error = _validate_sync_entity_operation(entity, operation)
+    if validation_error:
+        return validation_error
+    if entity not in ALLOWED_SYNC_SEND_ENTITIES:
+        return f"Unsupported sync entity '{entity}' for /sync/send"
+    return None
+
+
+def _max_change_id(changes: list[dict]) -> int:
+    max_change_id = 0
+    for change in changes:
+        try:
+            change_id = int(change.get("change_id", 0))
+        except (TypeError, ValueError):
+            continue
+        if change_id > max_change_id:
+            max_change_id = change_id
+    return max_change_id
+
+
+def _parse_sync_timestamp(value: object) -> datetime:
+    """Parse sync timestamps into timezone-aware UTC datetimes."""
+    if value is None:
+        return _SYNC_EPOCH
+    raw = str(value).strip()
+    if not raw:
+        return _SYNC_EPOCH
+    # Normalize common RFC3339 "Z" suffix for fromisoformat.
+    candidate = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+        ):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return _SYNC_EPOCH
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 class ClientSyncEngine:
     """
     Manages the synchronization process for a client's local database
     with a central server.
     """
 
-    def __init__(self, db_instance: MediaDatabase, server_api_url: str, client_id: str, state_file: str):
+    def __init__(
+        self,
+        db_instance: MediaDatabase,
+        server_api_url: str,
+        client_id: str,
+        state_file: str,
+        auth_token: Optional[str] = None,
+        api_key: Optional[str] = None,
+        default_headers: Optional[dict[str, str]] = None,
+    ):
         if not isinstance(db_instance, MediaDatabase):
              raise TypeError("db_instance must be a valid Database object.")
 
@@ -79,6 +163,13 @@ class ClientSyncEngine:
         self.server_api_url = server_api_url.rstrip('/') # Ensure no trailing slash
         self.client_id = client_id
         self.state_file = state_file
+        self.auth_token = (auth_token or "").strip() or None
+        self.api_key = (api_key or "").strip() or None
+        self.default_headers = {
+            str(k): str(v)
+            for k, v in (default_headers or {}).items()
+            if str(k).strip() and v is not None
+        }
 
         # Load persistent sync state
         self.last_local_log_id_sent: int = 0
@@ -89,6 +180,37 @@ class ClientSyncEngine:
         logger.info(f"  DB Path: {self.db.db_path_str}")
         logger.info(f"  Server URL: {self.server_api_url}")
         logger.info(f"  Initial State: Last Sent={self.last_local_log_id_sent}, Last Processed={self.last_server_log_id_processed}")
+        if self.auth_token:
+            logger.debug("  Auth: bearer token configured")
+        if self.api_key:
+            logger.debug("  Auth: API key configured")
+
+    def _build_request_headers(
+        self,
+        *,
+        content_type_json: bool = False,
+        accept_json: bool = False,
+    ) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if content_type_json:
+            headers["Content-Type"] = "application/json"
+        if accept_json:
+            headers["Accept"] = "application/json"
+
+        # Let explicit default headers win for base values.
+        headers.update(self.default_headers)
+
+        lower_keys = {k.lower() for k in headers}
+        if self.auth_token and "authorization" not in lower_keys:
+            token = self.auth_token
+            if token.lower().startswith("bearer "):
+                headers["Authorization"] = token
+            else:
+                headers["Authorization"] = f"Bearer {token}"
+            lower_keys.add("authorization")
+        if self.api_key and "x-api-key" not in lower_keys:
+            headers["X-API-KEY"] = self.api_key
+        return headers
 
     # --- State Management ---
 
@@ -191,20 +313,50 @@ class ClientSyncEngine:
             return
 
         logger.info(f"Found {len(client_changes)} local changes to push.")
+        sendable_changes: list[dict] = []
+        skipped_changes: list[tuple[int, str, str, str]] = []
+        for change in client_changes:
+            entity = str(change.get("entity", ""))
+            operation = str(change.get("operation", ""))
+            validation_error = _validate_sync_send_entity_operation(entity, operation)
+            if validation_error:
+                try:
+                    change_id = int(change.get("change_id", 0))
+                except (TypeError, ValueError):
+                    change_id = 0
+                skipped_changes.append((change_id, entity, operation, validation_error))
+                continue
+            sendable_changes.append(change)
+
+        if skipped_changes:
+            skipped_change_ids = [entry[0] for entry in skipped_changes if entry[0] > 0]
+            logger.warning(
+                f"Skipping {len(skipped_changes)} local sync changes not sendable to /sync/send. "
+                f"change_ids={skipped_change_ids}"
+            )
+
+        if not sendable_changes:
+            skipped_max_id = _max_change_id(client_changes)
+            if skipped_max_id > self.last_local_log_id_sent:
+                self.last_local_log_id_sent = skipped_max_id
+                self._save_sync_state()
+                logger.info(
+                    f"Advanced last_local_log_id_sent to {skipped_max_id} "
+                    "after dropping unsupported outbound changes."
+                )
+            return
 
         payload = {
             'client_id': self.client_id,
-            'changes': client_changes,
+            'changes': sendable_changes,
             # Include the last processed server ID so server knows our state
             'last_processed_server_id': self.last_server_log_id_processed
         }
 
         try:
-            # TODO: Add authentication headers (e.g., Bearer token)
-            # headers = {'Authorization': f'Bearer {your_auth_token}'}
-            headers = {'Content-Type': 'application/json'}
+            headers = self._build_request_headers(content_type_json=True)
             full_url = f"{self.server_api_url}{SYNC_ENDPOINT_SEND}"
-            logger.debug(f"Posting {len(client_changes)} changes to {full_url}")
+            logger.debug(f"Posting {len(sendable_changes)} changes to {full_url}")
 
             # Use fetch here so tests can patch tldw_Server_API.app.core.Sync.Sync_Client.fetch
             resp = fetch(
@@ -222,17 +374,23 @@ class ClientSyncEngine:
                     close()
 
             # If successful, update the marker
-            new_last_sent = client_changes[-1]['change_id']
-            self.last_local_log_id_sent = new_last_sent
-            self._save_sync_state()
-            logger.info(f"Successfully pushed {len(client_changes)} changes. Last sent ID updated to {new_last_sent}.")
+            new_last_sent = _max_change_id(client_changes)
+            if new_last_sent > self.last_local_log_id_sent:
+                self.last_local_log_id_sent = new_last_sent
+                self._save_sync_state()
+            logger.info(
+                f"Successfully pushed {len(sendable_changes)} changes. "
+                f"Last sent ID updated to {self.last_local_log_id_sent}."
+            )
 
-        except SYNC_RUNTIME_ERRORS as e:
+        except Exception as e:
             http_err = _extract_http_status_error(e)
             if http_err:
                 status, text = http_err
                 logger.error(f"HTTP error pushing changes: {status} - {text}")
                 return
+            if isinstance(e, SYNC_RUNTIME_ERRORS):
+                raise
             raise
             # Do NOT update last_local_log_id_sent if push fails
         # Let transport errors be caught by run_sync_cycle
@@ -242,8 +400,7 @@ class ClientSyncEngine:
         logger.info(f"Pulling remote changes since server log ID {self.last_server_log_id_processed}.")
 
         try:
-            # TODO: Add authentication headers
-            headers = {'Accept': 'application/json'}
+            headers = self._build_request_headers(accept_json=True)
             params = {
                 'client_id': self.client_id,
                 'since_change_id': self.last_server_log_id_processed
@@ -297,6 +454,13 @@ class ClientSyncEngine:
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding JSON response from server: {e}")
             raise
+        except Exception as e:
+            http_err = _extract_http_status_error(e)
+            if http_err:
+                status, text = http_err
+                logger.error(f"HTTP error pulling changes: {status} - {text}")
+                return
+            raise
         # Let transport errors be caught by run_sync_cycle
 
 
@@ -349,14 +513,17 @@ class ClientSyncEngine:
         Applies a single change record. Raises ConflictError if optimistic lock fails.
         This is called within the transaction managed by _apply_remote_changes_batch.
         """
-        entity = change['entity']
+        entity = str(change['entity'])
         entity_uuid = change['entity_uuid']
-        operation = change['operation']
+        operation = str(change['operation'])
         remote_version = change['version']
         remote_client_id = change['client_id']
         # Use server's timestamp; fall back to original if missing (shouldn't happen ideally)
         authoritative_timestamp = change.get('server_timestamp', change['timestamp'])
         payload_str = change.get('payload')
+        validation_error = _validate_sync_entity_operation(entity, operation)
+        if validation_error:
+            raise ValueError(validation_error)
         if not payload_str:
              # Handle link/unlink which might not have payload in simple cases
              if entity == "MediaKeywords" and operation in ['link', 'unlink']:
@@ -367,53 +534,73 @@ class ClientSyncEngine:
         else:
             payload = json.loads(payload_str)
 
-            # --- Idempotency/Conflict Check ---
-            cursor.execute(f"SELECT version, client_id FROM {entity} WHERE uuid = ?",
-                           (entity_uuid,))  # Fetch client_id too
-            local_record_info = cursor.fetchone()
-            local_version = local_record_info[0] if local_record_info else 0
-            local_client_id = local_record_info[1] if local_record_info else None
+        # MediaKeywords is non-versioned and idempotent (`link` is INSERT OR IGNORE,
+        # `unlink` is DELETE). Apply directly and skip generic uuid/version checks.
+        if entity == "MediaKeywords":
+            self._execute_change_sql(
+                cursor,
+                entity,
+                operation,
+                payload,
+                entity_uuid,
+                remote_version,
+                remote_client_id,
+                authoritative_timestamp,
+                force_apply=False,
+            )
+            return
 
-            # If remote version isn't strictly newer, investigate further
-            if remote_version <= local_version:
-                # Scenario 1: Remote version is older OR same version AND same client (duplicate/idempotent)
-                if remote_version < local_version or (
-                        remote_version == local_version and remote_client_id == local_client_id):
-                    logger.debug(
-                        f"Skipping old/duplicate change for {entity} UUID {entity_uuid} (RemoteVer: {remote_version}, LocalVer: {local_version}, RemoteClient: {remote_client_id}, LocalClient: {local_client_id})")
-                    return  # Successfully skipped
+        # --- Idempotency/Conflict Check ---
+        select_version_client_sql_template = "SELECT version, client_id FROM `{entity}` WHERE uuid = ?"
+        select_version_client_sql = select_version_client_sql_template.format_map(locals())  # nosec B608
+        cursor.execute(
+            select_version_client_sql,
+            (entity_uuid,),
+        )  # Fetch client_id too
+        local_record_info = cursor.fetchone()
+        local_version = local_record_info[0] if local_record_info else 0
+        local_client_id = local_record_info[1] if local_record_info else None
 
-                # Scenario 2: Same version but DIFFERENT client - THIS IS A CONFLICT
-                elif remote_version == local_version and remote_client_id != local_client_id:
-                    logger.warning(
-                        f"Potential Conflict Detected (same version, different client) for {entity} UUID {entity_uuid}. RemoteVer: {remote_version}, RemoteClient: {remote_client_id}, LocalClient: {local_client_id}")
-                    # Raise ConflictError here so _resolve_conflict is triggered
-                    # We pass the local version to the error context
-                    raise ConflictError(
-                        f"Conflict detected applying change: Same version ({remote_version}) from different client.",
-                        entity=entity,
-                        identifier=entity_uuid
-                    )
-                # Scenario 3: Create operation for existing UUID (should be rare if server validates)
-                elif operation == 'create' and local_version > 0:
-                    logger.warning(
-                        f"Skipping remote 'create' for existing {entity} UUID {entity_uuid} (RemoteVer: {remote_version}, LocalVer: {local_version})")
-                    return  # Skipped
+        # If remote version isn't strictly newer, investigate further
+        if remote_version <= local_version:
+            # Scenario 1: Remote version is older OR same version AND same client (duplicate/idempotent)
+            if remote_version < local_version or (
+                    remote_version == local_version and remote_client_id == local_client_id):
+                logger.debug(
+                    f"Skipping old/duplicate change for {entity} UUID {entity_uuid} (RemoteVer: {remote_version}, LocalVer: {local_version}, RemoteClient: {remote_client_id}, LocalClient: {local_client_id})")
+                return  # Successfully skipped
 
-                else:
-                    # Should not happen with the logic above, but log just in case
-                    logger.error(
-                        f"Unhandled state in idempotency check for {entity} {entity_uuid}. RemoteVer: {remote_version}, LocalVer: {local_version}, Op: {operation}")
-                    return  # Skip defensively
+            # Scenario 2: Same version but DIFFERENT client - THIS IS A CONFLICT
+            elif remote_version == local_version and remote_client_id != local_client_id:
+                logger.warning(
+                    f"Potential Conflict Detected (same version, different client) for {entity} UUID {entity_uuid}. RemoteVer: {remote_version}, RemoteClient: {remote_client_id}, LocalClient: {local_client_id}")
+                # Raise ConflictError here so _resolve_conflict is triggered
+                # We pass the local version to the error context
+                raise ConflictError(
+                    f"Conflict detected applying change: Same version ({remote_version}) from different client.",
+                    entity=entity,
+                    identifier=entity_uuid
+                )
+            # Scenario 3: Create operation for existing UUID (should be rare if server validates)
+            elif operation == 'create' and local_version > 0:
+                logger.warning(
+                    f"Skipping remote 'create' for existing {entity} UUID {entity_uuid} (RemoteVer: {remote_version}, LocalVer: {local_version})")
+                return  # Skipped
 
-            # --- Execute the change (only reached if remote_version > local_version) ---
-            # Pass force_apply=False for standard application with optimistic locking
-            logger.debug(
-                f"Attempting to apply: {operation} on {entity} UUID {entity_uuid} (RemoteVer: {remote_version}, LocalVer: {local_version})")
-            # Note: _execute_change_sql still has its own optimistic lock check (WHERE version = expected_base_version)
-            # which acts as a secondary safety net against race conditions between the read above and the write below.
-            self._execute_change_sql(cursor, entity, operation, payload, entity_uuid, remote_version, remote_client_id,
-                                     authoritative_timestamp, force_apply=False)
+            else:
+                # Should not happen with the logic above, but log just in case
+                logger.error(
+                    f"Unhandled state in idempotency check for {entity} {entity_uuid}. RemoteVer: {remote_version}, LocalVer: {local_version}, Op: {operation}")
+                return  # Skip defensively
+
+        # --- Execute the change (only reached if remote_version > local_version) ---
+        # Pass force_apply=False for standard application with optimistic locking
+        logger.debug(
+            f"Attempting to apply: {operation} on {entity} UUID {entity_uuid} (RemoteVer: {remote_version}, LocalVer: {local_version})")
+        # Note: _execute_change_sql still has its own optimistic lock check (WHERE version = expected_base_version)
+        # which acts as a secondary safety net against race conditions between the read above and the write below.
+        self._execute_change_sql(cursor, entity, operation, payload, entity_uuid, remote_version, remote_client_id,
+                                 authoritative_timestamp, force_apply=False)
 
 
     def _resolve_conflict(self, cursor: sqlite3.Cursor, change: dict, conflict_error: ConflictError) -> bool:
@@ -421,30 +608,60 @@ class ClientSyncEngine:
         Attempts to resolve a conflict based on the chosen strategy (LWW).
         Returns True if resolved (applied or skipped), False if resolution failed.
         """
-        entity = change['entity']
+        entity = str(change['entity'])
         entity_uuid = change['entity_uuid']
-        operation = change['operation']
+        operation = str(change['operation'])
         remote_version = change['version']
         remote_client_id = change['client_id']
         authoritative_timestamp = change.get('server_timestamp', change['timestamp'])
         payload_str = change.get('payload')
         payload = json.loads(payload_str) if payload_str else {}
 
+        validation_error = _validate_sync_entity_operation(entity, operation)
+        if validation_error:
+            logger.error(f"Conflict resolution aborted: {validation_error}")
+            return False
+
+        if entity == "MediaKeywords":
+            # Non-versioned link table operations are idempotent; apply directly.
+            try:
+                self._execute_change_sql(
+                    cursor,
+                    entity,
+                    operation,
+                    payload,
+                    entity_uuid,
+                    remote_version,
+                    remote_client_id,
+                    authoritative_timestamp,
+                    force_apply=False,
+                )
+                return True
+            except (DatabaseError, sqlite3.Error, ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
+                logger.error(f"Error resolving MediaKeywords conflict for {entity_uuid}: {e}", exc_info=True)
+                return False
+
         # --- LWW Conflict Resolution ---
         try:
-            cursor.execute(f"SELECT last_modified FROM {entity} WHERE uuid = ?", (entity_uuid,))
+            select_last_modified_sql_template = "SELECT last_modified FROM `{entity}` WHERE uuid = ?"
+            select_last_modified_sql = select_last_modified_sql_template.format_map(locals())  # nosec B608
+            cursor.execute(select_last_modified_sql, (entity_uuid,))
             local_ts_row = cursor.fetchone()
             # Use a very old timestamp if record somehow doesn't exist (shouldn't happen in conflict)
             local_timestamp = local_ts_row[0] if local_ts_row else '1970-01-01 00:00:00'
+            local_dt = _parse_sync_timestamp(local_timestamp)
+            authoritative_dt = _parse_sync_timestamp(authoritative_timestamp)
 
-            # Compare server's authoritative timestamp with the local record's timestamp
-            if authoritative_timestamp >= local_timestamp:
-                logger.warning(f"  Resolving Conflict (LWW): Remote change wins (RemoteTS: {authoritative_timestamp} >= LocalTS: {local_timestamp}). Forcing apply.")
+            # Compare server's authoritative timestamp with the local record's timestamp.
+            if authoritative_dt >= local_dt:
+                logger.warning(
+                    f"  Resolving Conflict (LWW): Remote change wins (RemoteTS: {authoritative_dt.isoformat()} >= LocalTS: {local_dt.isoformat()}). Forcing apply.")
                 # Force apply the change, overwriting local concurrent changes
                 self._execute_change_sql(cursor, entity, operation, payload, entity_uuid, remote_version, remote_client_id, authoritative_timestamp, force_apply=True)
                 return True # Resolved by applying remote change
             else:
-                logger.warning(f"  Resolving Conflict (LWW): Local change wins (RemoteTS: {authoritative_timestamp} < LocalTS: {local_timestamp}). Skipping remote change.")
+                logger.warning(
+                    f"  Resolving Conflict (LWW): Local change wins (RemoteTS: {authoritative_dt.isoformat()} < LocalTS: {local_dt.isoformat()}). Skipping remote change.")
                 # Skip applying the remote change; local state is kept
                 return True # Resolved by skipping remote change
 
@@ -464,6 +681,10 @@ class ClientSyncEngine:
         logger.debug(
             f"Executing SQL for: Op='{operation}', Entity='{entity}', UUID='{uuid}', RemoteVer='{remote_version}', Force='{force_apply}'")
 
+        validation_error = _validate_sync_entity_operation(str(entity), str(operation))
+        if validation_error:
+            raise ValueError(validation_error)
+
         # --- Special handling for MediaKeywords junction table ---
         if entity == "MediaKeywords":
             # This function handles the specific INSERT/DELETE for the junction
@@ -481,7 +702,9 @@ class ClientSyncEngine:
         if operation in ['update', 'delete'] or force_apply:
             try:
                 # Use try-except as the record might not exist yet during a forced 'create' or 'update' after delete
-                cursor.execute(f"SELECT version FROM `{entity}` WHERE uuid = ?", (uuid,))
+                select_version_sql_template = "SELECT version FROM `{entity}` WHERE uuid = ?"
+                select_version_sql = select_version_sql_template.format_map(locals())  # nosec B608
+                cursor.execute(select_version_sql, (uuid,))
                 current_rec = cursor.fetchone()
                 if current_rec:
                     current_db_version = current_rec[0]
@@ -570,7 +793,10 @@ class ClientSyncEngine:
 
             if not set_clauses:
                 logger.warning(
-                    f"Update operation for {entity} {uuid} resulted in no data SET clauses (only metadata). Skipping DB execute.")
+                    "Update operation for {} {} resulted in no data SET clauses (only metadata). Skipping DB execute.",
+                    entity,
+                    uuid,
+                )
                 execute_main_sql = False
             else:
                 where_clause = " WHERE uuid = ?"
@@ -579,7 +805,9 @@ class ClientSyncEngine:
                     where_clause += optimistic_lock_sql
                     where_params.extend(optimistic_lock_param)
 
-                main_sql = f"UPDATE `{entity}` SET {', '.join(set_clauses)}{where_clause}"
+                set_clause_sql = ", ".join(set_clauses)
+                update_entity_sql_template = "UPDATE `{entity}` SET {set_clause_sql}{where_clause}"
+                main_sql = update_entity_sql_template.format_map(locals())  # nosec B608
                 main_params_tuple = tuple(params_list + where_params)
                 execute_main_sql = True
 
@@ -590,7 +818,10 @@ class ClientSyncEngine:
                 where_clause += optimistic_lock_sql
                 where_params.extend(optimistic_lock_param)
 
-            main_sql = f"UPDATE `{entity}` SET deleted = 1, last_modified = ?, version = ?, client_id = ?{where_clause}"
+            delete_entity_sql_template = (
+                "UPDATE `{entity}` SET deleted = 1, last_modified = ?, version = ?, client_id = ?{where_clause}"
+            )
+            main_sql = delete_entity_sql_template.format_map(locals())  # nosec B608
             main_params_tuple = tuple([timestamp, target_sql_version, client_id] + where_params)
             execute_main_sql = True
 

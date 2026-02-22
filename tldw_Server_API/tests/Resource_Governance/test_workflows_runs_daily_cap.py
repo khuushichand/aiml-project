@@ -21,20 +21,20 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         await reset_db_pool()
         reset_settings()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
 
         await ensure_authnz_schema_ready_once()
     except Exception:
-        pass
+        _ = None
     # Reset cached RG daily ledger between tests when DATABASE_URL changes.
     try:
         import tldw_Server_API.app.core.Resource_Governance.daily_caps as _dc
 
         _dc._daily_ledger = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     # Reset cached ledger inside workflows daily_ledger between tests.
     try:
         import tldw_Server_API.app.core.Workflows.daily_ledger as _dl
@@ -42,7 +42,7 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         _dl._workflows_daily_ledger = None  # type: ignore[attr-defined]
         _dl._workflows_backfill_done = set()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.mark.asyncio

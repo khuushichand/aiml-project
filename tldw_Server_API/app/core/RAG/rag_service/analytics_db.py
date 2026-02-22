@@ -374,7 +374,7 @@ class AnalyticsDatabase:
             self.db_path = str(path_obj)
 
         logger.info(
-            "Initializing AnalyticsDatabase (backend=%s) at %s",
+            'Initializing AnalyticsDatabase (backend={}) at {}',
             self.backend_type.value,
             self._db_identifier,
         )
@@ -426,9 +426,9 @@ class AnalyticsDatabase:
                 self.backend.create_tables(schema, connection=conn)
                 for statement in self._INDEX_STATEMENTS:
                     self._execute(conn, statement)
-            logger.info("Analytics database initialized at %s", self._db_identifier)
+            logger.info("Analytics database initialized at {}", self._db_identifier)
         except Exception as exc:
-            logger.error("Failed to initialize analytics database: %s", exc)
+            logger.error("Failed to initialize analytics database: {}", exc)
             raise
 
     def _prepare_backend_statement(
@@ -464,7 +464,7 @@ class AnalyticsDatabase:
             )
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
-            logger.error("Backend execute failed: %s", exc)
+            logger.error("Backend execute failed: {}", exc)
             raise
 
     def _fetchone(
@@ -526,9 +526,9 @@ class AnalyticsDatabase:
                 )
                 prepared_query, prepared_params = self._prepare_backend_statement(raw_query, raw_params)
                 self._execute(conn, prepared_query, prepared_params)
-                logger.debug("Recorded search analytics for query hash: %s", query_hash)
+                logger.debug("Recorded search analytics for query hash: {}", query_hash)
         except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
-            logger.error("Failed to record search analytics: %s", exc)
+            logger.error("Failed to record search analytics: {}", exc)
 
     def record_document_performance(self, doc_data: dict[str, Any]) -> None:
         try:
@@ -590,9 +590,9 @@ class AnalyticsDatabase:
                             1 if doc_data.get('feedback') == 'negative' else 0,
                         ),
                     )
-                logger.debug("Recorded document performance for hash: %s", doc_hash)
+                logger.debug("Recorded document performance for hash: {}", doc_hash)
         except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
-            logger.error("Failed to record document performance: %s", exc)
+            logger.error("Failed to record document performance: {}", exc)
 
     def record_feedback(self, feedback_data: dict[str, Any]) -> None:
         try:
@@ -620,9 +620,9 @@ class AnalyticsDatabase:
                         json.dumps(feedback_data.get('improvement_areas', [])),
                     ),
                 )
-                logger.debug("Recorded feedback for session: %s", session_hash)
+                logger.debug("Recorded feedback for session: {}", session_hash)
         except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
-            logger.error("Failed to record feedback: %s", exc)
+            logger.error("Failed to record feedback: {}", exc)
 
     def record_event(self, event_data: dict[str, Any]) -> None:
         try:
@@ -650,9 +650,9 @@ class AnalyticsDatabase:
 
                 prepared_query, prepared_params = self._prepare_backend_statement(raw_query, raw_params)
                 self._execute(conn, prepared_query, prepared_params)
-                logger.debug("Recorded analytics event type: %s", event_type)
+                logger.debug("Recorded analytics event type: {}", event_type)
         except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
-            logger.error("Failed to record analytics event: %s", exc)
+            logger.error("Failed to record analytics event: {}", exc)
 
     def record_error(self, error_data: dict[str, Any]) -> None:
         try:
@@ -702,9 +702,9 @@ class AnalyticsDatabase:
                             stack_hash,
                         ),
                     )
-                logger.debug("Recorded error: %s", error_hash)
+                logger.debug("Recorded error: {}", error_hash)
         except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
-            logger.error("Failed to record error: %s", exc)
+            logger.error("Failed to record error: {}", exc)
 
     def record_feature_usage(self, feature_data: dict[str, Any]) -> None:
         try:
@@ -765,9 +765,9 @@ class AnalyticsDatabase:
                             feature_data.get('execution_time_ms', 0),
                         ),
                     )
-                logger.debug("Recorded feature usage: %s", feature_name)
+                logger.debug("Recorded feature usage: {}", feature_name)
         except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
-            logger.error("Failed to record feature usage: %s", exc)
+            logger.error("Failed to record feature usage: {}", exc)
 
     def get_analytics_summary(self, days: int = 7) -> dict[str, Any]:
         try:
@@ -866,7 +866,7 @@ class AnalyticsDatabase:
                     'generated_at': datetime.utcnow().isoformat(),
                 }
         except Exception as exc:  # noqa: BLE001 - analytics summary best-effort
-            logger.error("Failed to get analytics summary: %s", exc)
+            logger.error("Failed to get analytics summary: {}", exc)
             return {}
 
     def cleanup_old_data(self, days_to_keep: int = 90) -> int:
@@ -888,7 +888,7 @@ class AnalyticsDatabase:
                 ):
                     cursor = self._execute(
                         conn,
-                        f"DELETE FROM {table} WHERE timestamp < ?",
+                        f"DELETE FROM {table} WHERE timestamp < ?",  # nosec B608
                         (threshold_iso,),
                     )
                     total_deleted += cursor.rowcount or 0
@@ -897,17 +897,17 @@ class AnalyticsDatabase:
                 try:
                     self.backend.vacuum()
                 except Exception as exc:  # noqa: BLE001 - vacuum best-effort
-                    logger.warning("SQLite vacuum failed after cleanup: %s", exc)
+                    logger.warning("SQLite vacuum failed after cleanup: {}", exc)
 
-            logger.info("Cleanup complete. Deleted %s total records", total_deleted)
+            logger.info("Cleanup complete. Deleted {} total records", total_deleted)
         except Exception as exc:  # noqa: BLE001 - cleanup best-effort
-            logger.error("Failed to cleanup old data: %s", exc)
+            logger.error("Failed to cleanup old data: {}", exc)
             return 0
         else:
             return total_deleted
 
     def close(self) -> None:
-        logger.debug("AnalyticsDatabase.close called for backend %s", self.backend_type.value)
+        logger.debug("AnalyticsDatabase.close called for backend {}", self.backend_type.value)
 
 
 _analytics_db: AnalyticsDatabase | None = None

@@ -337,8 +337,8 @@ async def process_text_for_chunking_json(
             }
             if ext in ext_map:
                 effective_options['language'] = ext_map[ext]
-    except Exception:
-        pass
+    except Exception as ext_detect_error:
+        logger.debug("Failed to infer code language from file extension", exc_info=ext_detect_error)
 
     logger.debug(f"Effective chunking options before LLM setup: {effective_options}")
 
@@ -425,7 +425,7 @@ async def process_text_for_chunking_json(
         provider_key = (summarization_provider or "").strip().lower()
         if not llm_api_config_to_use.get("api_key") and provider_requires_api_key(provider_key):
             logger.error(
-                "API key for '%s' for internal summarization step not found in server configuration.",
+                "API key for '{}' for internal summarization step not found in server configuration.",
                 summarization_provider,
             )
             _raise_missing_chunking_key(provider_key)
@@ -566,8 +566,8 @@ async def process_file_for_chunking(
             }
             if ext in ext_map:
                 form_options_cleaned['language'] = ext_map[ext]
-    except Exception:
-        pass
+    except Exception as ext_detect_error:
+        logger.debug("Failed to infer cleaned form language from file extension", exc_info=ext_detect_error)
     if code_mode is not None:
         form_options_cleaned['code_mode'] = code_mode
 

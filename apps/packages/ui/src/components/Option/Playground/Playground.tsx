@@ -3,6 +3,7 @@ import { PlaygroundForm } from "./PlaygroundForm"
 import { PlaygroundChat } from "./PlaygroundChat"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { usePlaygroundSessionPersistence } from "@/hooks/usePlaygroundSessionPersistence"
+import { shouldRestorePersistedPlaygroundSession } from "@/hooks/playground-session-restore"
 import { webUIResumeLastChat } from "@/services/app"
 import {
   formatToChatHistory,
@@ -12,7 +13,7 @@ import {
 } from "@/db/dexie/helpers"
 import { useStoreChatModelSettings } from "@/store/model"
 import { useSmartScroll } from "@/hooks/useSmartScroll"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, Keyboard, Search, X } from "lucide-react"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { useTranslation } from "react-i18next"
@@ -22,7 +23,9 @@ import { ArtifactsPanel } from "@/components/Sidepanel/Chat/ArtifactsPanel"
 import { useSetting } from "@/hooks/useSetting"
 import { useStorage } from "@plasmohq/storage/hook"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
+import { useMobile } from "@/hooks/useMediaQuery"
 import { useLoadLocalConversation } from "@/hooks/useLoadLocalConversation"
+import { resolvePlaygroundShortcutAction } from "./playground-shortcuts"
 import {
   EDIT_MESSAGE_EVENT,
   OPEN_HISTORY_EVENT,
@@ -31,8 +34,16 @@ import {
   type TimelineActionDetail
 } from "@/utils/timeline-actions"
 import { useCharacterGreeting } from "@/hooks/useCharacterGreeting"
+import {
+  collectThreadSearchMatches,
+  getWrappedMatchIndex
+} from "./playground-thread-search"
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
+  const artifactsTriggerRef = React.useRef<HTMLButtonElement>(null)
+  const threadSearchInputRef = React.useRef<HTMLInputElement>(null)
+  const shortcutsTriggerRef = React.useRef<HTMLButtonElement>(null)
+  const shortcutsCloseRef = React.useRef<HTMLButtonElement>(null)
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([])
   const { t } = useTranslation(["playground", "common"])
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
@@ -40,6 +51,7 @@ export const Playground = () => {
     "stickyChatInput",
     DEFAULT_CHAT_SETTINGS.stickyChatInput
   )
+  const isMobileViewport = useMobile()
   const {
     messages,
     history,
@@ -56,7 +68,9 @@ export const Playground = () => {
     createChatBranch,
     streaming,
     selectedCharacter,
-    setSelectedCharacter
+    setSelectedCharacter,
+    compareMode,
+    compareFeatureEnabled
   } = useMessageOption()
   const { setSystemPrompt } = useStoreChatModelSettings()
   const { containerRef, isAutoScrollToBottom, autoScrollToBottom } =
@@ -65,6 +79,10 @@ export const Playground = () => {
   const [dropState, setDropState] = React.useState<
     "idle" | "dragging" | "error"
   >("idle")
+  const [threadSearchOpen, setThreadSearchOpen] = React.useState(false)
+  const [threadSearchQuery, setThreadSearchQuery] = React.useState("")
+  const [threadSearchActiveIndex, setThreadSearchActiveIndex] = React.useState(0)
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = React.useState(false)
   const [dropFeedback, setDropFeedback] = React.useState<
     { type: "info" | "error" | "warning"; message: string } | null
   >(null)
@@ -206,14 +224,27 @@ export const Playground = () => {
   }, [])
 
   // Session persistence for draft restoration
-  const { restoreSession, hasPersistedSession } = usePlaygroundSessionPersistence()
+  const {
+    restoreSession,
+    hasPersistedSession,
+    persistedHistoryId,
+    persistedServerChatId
+  } = usePlaygroundSessionPersistence()
 
   const initializePlayground = React.useCallback(async () => {
-    if (serverChatId) {
-      return
-    }
     // 1. Try session persistence first (restores exact state from nav-away)
-    if (hasPersistedSession && messages.length === 0) {
+    const shouldRestorePersistedSession =
+      shouldRestorePersistedPlaygroundSession({
+        hasPersistedSession,
+        persistedHistoryId,
+        persistedServerChatId,
+        currentHistoryId: historyId ?? null,
+        currentServerChatId: serverChatId ?? null,
+        currentMessagesLength: messages.length,
+        currentHistoryLength: history.length
+      })
+
+    if (shouldRestorePersistedSession) {
       const restored = await restoreSession()
       if (restored) return
     }
@@ -222,7 +253,7 @@ export const Playground = () => {
     const isEnabled = await webUIResumeLastChat()
     if (!isEnabled) return
 
-    if (messages.length === 0) {
+    if (messages.length === 0 && history.length === 0) {
       const recentChat = await getRecentChatFromWebUI()
       if (recentChat) {
         setHistoryId(recentChat.history.id)
@@ -247,8 +278,12 @@ export const Playground = () => {
       }
     }
   }, [
+    history.length,
+    historyId,
     hasPersistedSession,
     messages.length,
+    persistedHistoryId,
+    persistedServerChatId,
     restoreSession,
     serverChatId,
     setHistory,
@@ -316,6 +351,23 @@ export const Playground = () => {
   )
 
   const pendingTimelineActionRef = React.useRef<TimelineActionDetail | null>(null)
+  const threadSearchMatches = React.useMemo(
+    () => collectThreadSearchMatches(messages, threadSearchQuery),
+    [messages, threadSearchQuery]
+  )
+  const threadSearchMatchSet = React.useMemo(
+    () => new Set(threadSearchMatches),
+    [threadSearchMatches]
+  )
+  const threadSearchActiveMessageIndex =
+    threadSearchMatches.length > 0
+      ? threadSearchMatches[
+          Math.max(
+            0,
+            Math.min(threadSearchActiveIndex, threadSearchMatches.length - 1)
+          )
+        ]
+      : null
 
   const findMessageIndex = React.useCallback(
     (messageId: string) =>
@@ -333,6 +385,17 @@ export const Playground = () => {
       const target = container.querySelector<HTMLElement>(
         `[data-message-id="${messageId}"], [data-server-message-id="${messageId}"]`
       )
+      if (!target) return false
+      target.scrollIntoView({ block: "center", behavior: "smooth" })
+      return true
+    },
+    [containerRef]
+  )
+  const scrollToMessageIndex = React.useCallback(
+    (index: number) => {
+      const container = containerRef.current
+      if (!container) return false
+      const target = container.querySelector<HTMLElement>(`[data-index="${index}"]`)
       if (!target) return false
       target.scrollIntoView({ block: "center", behavior: "smooth" })
       return true
@@ -440,25 +503,228 @@ export const Playground = () => {
         messageId: detail.messageId
       })
     }
+    const handleScrollToLatestEvent = () => {
+      autoScrollToBottom()
+    }
 
     window.addEventListener(TIMELINE_ACTION_EVENT, handleTimelineActionEvent)
     window.addEventListener(OPEN_HISTORY_EVENT, handleOpenHistoryEvent)
+    window.addEventListener("tldw:scroll-to-latest", handleScrollToLatestEvent)
     return () => {
       window.removeEventListener(TIMELINE_ACTION_EVENT, handleTimelineActionEvent)
       window.removeEventListener(OPEN_HISTORY_EVENT, handleOpenHistoryEvent)
+      window.removeEventListener(
+        "tldw:scroll-to-latest",
+        handleScrollToLatestEvent
+      )
     }
-  }, [enqueueTimelineAction])
+  }, [autoScrollToBottom, enqueueTimelineAction])
 
   const compareParentByHistory = useStoreMessageOption(
     (state) => state.compareParentByHistory
   )
   const artifactsOpen = useArtifactsStore((state) => state.isOpen)
+  const activeArtifact = useArtifactsStore((state) => state.active)
+  const artifactsPinned = useArtifactsStore((state) => state.isPinned)
+  const artifactHistory = useArtifactsStore((state) => state.history)
+  const artifactUnreadCount = useArtifactsStore((state) => state.unreadCount)
+  const setArtifactsOpen = useArtifactsStore((state) => state.setOpen)
   const closeArtifacts = useArtifactsStore((state) => state.closeArtifact)
+  const markArtifactsRead = useArtifactsStore((state) => state.markRead)
 
   const parentMeta =
     historyId && compareParentByHistory
       ? compareParentByHistory[historyId]
       : undefined
+  const compareActive = compareFeatureEnabled && compareMode
+  const compactFeatureNoticeVisible =
+    isMobileViewport &&
+    (compareActive || Boolean(parentMeta?.parentHistoryId))
+  const artifactPinnedCount =
+    activeArtifact && artifactsPinned ? 1 : 0
+  const artifactHistoryCount = artifactHistory.length
+  const artifactBadgeLabel = artifactsOpen
+    ? t("playground:regions.artifactsOpen", "Artifacts panel open")
+    : activeArtifact
+      ? t("playground:regions.artifactsAvailable", "Artifacts ready")
+      : t("playground:regions.artifactsClosed", "Artifacts panel closed")
+  const closeArtifactsWithFocusReturn = React.useCallback(() => {
+    closeArtifacts()
+    requestAnimationFrame(() => {
+      artifactsTriggerRef.current?.focus()
+    })
+  }, [closeArtifacts])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const handleShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const isEditableTarget = Boolean(
+        target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.isContentEditable)
+      )
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "f"
+      ) {
+        event.preventDefault()
+        setThreadSearchOpen(true)
+        requestAnimationFrame(() => {
+          threadSearchInputRef.current?.focus()
+          threadSearchInputRef.current?.select()
+        })
+        return
+      }
+      if (
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        event.shiftKey &&
+        event.key === "?"
+      ) {
+        event.preventDefault()
+        setShortcutsHelpOpen(true)
+        return
+      }
+      if (shortcutsHelpOpen && event.key === "Escape") {
+        event.preventDefault()
+        setShortcutsHelpOpen(false)
+        requestAnimationFrame(() => {
+          shortcutsTriggerRef.current?.focus()
+        })
+        return
+      }
+      if (threadSearchOpen && event.key === "Escape") {
+        event.preventDefault()
+        setThreadSearchOpen(false)
+        return
+      }
+
+      const action = resolvePlaygroundShortcutAction(event)
+      if (!action) return
+      if (isEditableTarget) return
+      event.preventDefault()
+
+      if (action === "toggle_artifacts") {
+        if (artifactsOpen) {
+          closeArtifacts()
+          return
+        }
+        if (!activeArtifact) return
+        setArtifactsOpen(true)
+        markArtifactsRead()
+        return
+      }
+
+      if (action === "toggle_compare") {
+        window.dispatchEvent(new CustomEvent("tldw:toggle-compare-mode"))
+        return
+      }
+
+      if (action === "toggle_modes") {
+        window.dispatchEvent(new CustomEvent("tldw:toggle-mode-launcher"))
+      }
+    }
+
+    window.addEventListener("keydown", handleShortcut)
+    return () => {
+      window.removeEventListener("keydown", handleShortcut)
+    }
+  }, [
+    activeArtifact,
+    artifactsOpen,
+    closeArtifacts,
+    markArtifactsRead,
+    setArtifactsOpen,
+    shortcutsHelpOpen,
+    threadSearchOpen
+  ])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handleFocusArtifactsTrigger = () => {
+      artifactsTriggerRef.current?.focus()
+    }
+    window.addEventListener(
+      "tldw:focus-artifacts-trigger",
+      handleFocusArtifactsTrigger
+    )
+    return () => {
+      window.removeEventListener(
+        "tldw:focus-artifacts-trigger",
+        handleFocusArtifactsTrigger
+      )
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handleOpenShortcutHelp = () => {
+      setShortcutsHelpOpen(true)
+    }
+    window.addEventListener(
+      "tldw:open-playground-shortcuts",
+      handleOpenShortcutHelp
+    )
+    return () => {
+      window.removeEventListener(
+        "tldw:open-playground-shortcuts",
+        handleOpenShortcutHelp
+      )
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (!shortcutsHelpOpen) return
+    requestAnimationFrame(() => {
+      shortcutsCloseRef.current?.focus()
+    })
+  }, [shortcutsHelpOpen])
+
+  React.useEffect(() => {
+    if (!threadSearchOpen) return
+    if (threadSearchMatches.length === 0) {
+      setThreadSearchActiveIndex(0)
+      return
+    }
+    setThreadSearchActiveIndex((previous) => {
+      const bounded =
+        previous >= 0 && previous < threadSearchMatches.length ? previous : 0
+      const messageIndex = threadSearchMatches[bounded]
+      if (typeof messageIndex === "number") {
+        requestAnimationFrame(() => {
+          scrollToMessageIndex(messageIndex)
+        })
+      }
+      return bounded
+    })
+  }, [scrollToMessageIndex, threadSearchMatches, threadSearchOpen])
+
+  const stepThreadSearchMatch = React.useCallback(
+    (direction: 1 | -1) => {
+      if (threadSearchMatches.length === 0) return
+      setThreadSearchActiveIndex((previous) => {
+        const next = getWrappedMatchIndex(
+          previous,
+          threadSearchMatches.length,
+          direction
+        )
+        const messageIndex = threadSearchMatches[next]
+        if (typeof messageIndex === "number") {
+          requestAnimationFrame(() => {
+            scrollToMessageIndex(messageIndex)
+          })
+        }
+        return next
+      })
+    },
+    [scrollToMessageIndex, threadSearchMatches]
+  )
 
   return (
     <div
@@ -500,7 +766,7 @@ export const Playground = () => {
               dropFeedback.type === "error"
                 ? "border border-danger bg-danger text-white"
                 : dropFeedback.type === "warning"
-                  ? "border border-yellow-500 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400"
+                  ? "border border-warn bg-warn/10 text-warn"
                   : "border border-border bg-elevated text-text"
             }`}
           >
@@ -537,6 +803,216 @@ export const Playground = () => {
               </button>
             </div>
           )}
+          <div className="px-4 pt-2">
+            <div className="mx-auto flex w-full max-w-[52rem] items-center justify-between text-[11px] text-text-muted">
+              <span className="inline-flex items-center rounded-full border border-border bg-surface2 px-2 py-0.5">
+                {t("playground:regions.timeline", "Conversation timeline")}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  ref={shortcutsTriggerRef}
+                  type="button"
+                  data-testid="playground-shortcuts-help-trigger"
+                  onClick={() => setShortcutsHelpOpen((previous) => !previous)}
+                  title={
+                    t(
+                      "playground:shortcuts.openHelp",
+                      "Open keyboard shortcuts (Shift+/)"
+                    ) as string
+                  }
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface2 px-2 py-0.5 text-text hover:bg-surface"
+                >
+                  <Keyboard className="h-3 w-3" aria-hidden="true" />
+                  {t("playground:shortcuts.title", "Shortcuts")}
+                </button>
+                <button
+                  ref={artifactsTriggerRef}
+                  type="button"
+                  data-testid="playground-artifacts-trigger"
+                  disabled={!activeArtifact && !artifactsOpen}
+                  onClick={() => {
+                    if (artifactsOpen) {
+                      closeArtifacts()
+                      return
+                    }
+                    if (!activeArtifact) {
+                      return
+                    }
+                    setArtifactsOpen(true)
+                    markArtifactsRead()
+                  }}
+                  title={artifactBadgeLabel as string}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 transition ${
+                    !activeArtifact && !artifactsOpen
+                      ? "cursor-not-allowed border-border bg-surface text-text-subtle opacity-70"
+                      : "border-border bg-surface2 text-text hover:bg-surface"
+                  }`}
+                >
+                  <span>{artifactBadgeLabel}</span>
+                  {artifactUnreadCount > 0 && (
+                    <span
+                      data-testid="playground-artifacts-unread"
+                      className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                    >
+                      {t("playground:regions.artifactsNew", "New {{count}}", {
+                        count: artifactUnreadCount
+                      } as any)}
+                    </span>
+                  )}
+                  {artifactPinnedCount > 0 && (
+                    <span
+                      data-testid="playground-artifacts-pinned"
+                      className="rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] font-medium text-text-subtle"
+                    >
+                      {t("playground:regions.artifactsPinned", "Pinned {{count}}", {
+                        count: artifactPinnedCount
+                      } as any)}
+                    </span>
+                  )}
+                  {artifactHistoryCount > 0 && (
+                    <span
+                      data-testid="playground-artifacts-count"
+                      className="rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] text-text-subtle"
+                    >
+                      {t("playground:regions.artifactsCount", "{{count}} total", {
+                        count: artifactHistoryCount
+                      } as any)}
+                    </span>
+                  )}
+                </button>
+              </div>
+            </div>
+            {shortcutsHelpOpen && (
+              <div
+                data-testid="playground-shortcuts-help-panel"
+                role="dialog"
+                aria-modal="false"
+                aria-label={t("playground:shortcuts.title", "Shortcuts")}
+                className="mx-auto mt-1 w-full max-w-[52rem] rounded-md border border-border bg-surface2 px-2 py-1.5 text-[11px] text-text"
+              >
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="font-semibold">
+                    {t("playground:shortcuts.title", "Shortcuts")}
+                  </span>
+                  <button
+                    ref={shortcutsCloseRef}
+                    type="button"
+                    data-testid="playground-shortcuts-help-close"
+                    onClick={() => {
+                      setShortcutsHelpOpen(false)
+                      requestAnimationFrame(() => {
+                        shortcutsTriggerRef.current?.focus()
+                      })
+                    }}
+                    className="rounded border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-text hover:bg-surface2"
+                  >
+                    {t("common:close", "Close")}
+                  </button>
+                </div>
+                <div className="grid gap-1 sm:grid-cols-2">
+                  <p><span className="font-medium">Shift+Esc</span> {t("playground:shortcuts.focusComposer", "Focus composer")}</p>
+                  <p><span className="font-medium">{t("playground:shortcuts.findCombo", "Cmd/Ctrl+F")}</span> {t("playground:shortcuts.searchThread", "Search this thread")}</p>
+                  <p><span className="font-medium">{t("playground:shortcuts.helpCombo", "Shift+/")}</span> {t("playground:shortcuts.openHelp", "Open keyboard shortcuts (Shift+/)")}</p>
+                  <p><span className="font-medium">Alt+Shift+A</span> {t("playground:shortcuts.toggleArtifacts", "Toggle artifacts panel")}</p>
+                  <p><span className="font-medium">Alt+Shift+C</span> {t("playground:shortcuts.toggleCompare", "Toggle compare mode")}</p>
+                  <p><span className="font-medium">Alt+Shift+M</span> {t("playground:shortcuts.toggleModes", "Open mode launcher")}</p>
+                  <p><span className="font-medium">Alt+Shift+← / →</span> {t("playground:shortcuts.variantSwitch", "Switch response variant")}</p>
+                  <p><span className="font-medium">Alt+Shift+B / R</span> {t("playground:shortcuts.branchRegenerate", "Fork branch / regenerate")}</p>
+                </div>
+              </div>
+            )}
+            {threadSearchOpen && (
+              <div className="mx-auto mt-1 flex w-full max-w-[52rem] flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 px-2 py-1">
+                <div className="relative min-w-[200px] flex-1">
+                  <Search
+                    className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle"
+                    aria-hidden="true"
+                  />
+                  <input
+                    ref={threadSearchInputRef}
+                    value={threadSearchQuery}
+                    onChange={(event) => {
+                      setThreadSearchQuery(event.target.value)
+                      setThreadSearchActiveIndex(0)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault()
+                        stepThreadSearchMatch(event.shiftKey ? -1 : 1)
+                      }
+                    }}
+                    placeholder={t(
+                      "playground:search.placeholder",
+                      "Search messages in this conversation"
+                    )}
+                    className="h-7 w-full rounded border border-border bg-surface pl-7 pr-2 text-xs text-text placeholder:text-text-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                  />
+                </div>
+                <span
+                  className="rounded-full border border-border bg-surface px-2 py-0.5 text-[10px] text-text-subtle"
+                  aria-live="polite"
+                >
+                  {threadSearchMatches.length > 0
+                    ? t(
+                        "playground:search.matchCount",
+                        "{{current}} / {{total}}",
+                        {
+                          current: Math.min(
+                            threadSearchActiveIndex + 1,
+                            threadSearchMatches.length
+                          ),
+                          total: threadSearchMatches.length
+                        } as any
+                      )
+                    : t("playground:search.noMatches", "No matches")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => stepThreadSearchMatch(-1)}
+                  disabled={threadSearchMatches.length === 0}
+                  className={`rounded border px-2 py-0.5 text-[10px] font-medium ${
+                    threadSearchMatches.length === 0
+                      ? "cursor-not-allowed border-border bg-surface text-text-subtle opacity-60"
+                      : "border-border bg-surface text-text hover:bg-surface2"
+                  }`}
+                >
+                  {t("common:previous", "Previous")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => stepThreadSearchMatch(1)}
+                  disabled={threadSearchMatches.length === 0}
+                  className={`rounded border px-2 py-0.5 text-[10px] font-medium ${
+                    threadSearchMatches.length === 0
+                      ? "cursor-not-allowed border-border bg-surface text-text-subtle opacity-60"
+                      : "border-border bg-surface text-text hover:bg-surface2"
+                  }`}
+                >
+                  {t("common:next", "Next")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setThreadSearchOpen(false)}
+                  title={t("common:close", "Close") as string}
+                  className="inline-flex items-center rounded border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-text hover:bg-surface2"
+                >
+                  <X className="mr-1 h-3 w-3" aria-hidden="true" />
+                  {t("common:close", "Close")}
+                </button>
+              </div>
+            )}
+            {compactFeatureNoticeVisible && (
+              <div
+                data-testid="playground-mobile-parity-notice"
+                className="mx-auto mt-1 w-full max-w-[52rem] rounded-md border border-warn/30 bg-warn/10 px-2 py-1 text-[10px] text-warn"
+              >
+                {t(
+                  "playground:regions.compactFeatureNotice",
+                  "Limited on this device: compare and branch workflows use compact controls. Use full-chat opens from model cards for detailed review."
+                )}
+              </div>
+            )}
+          </div>
           <div
             ref={containerRef}
             role="log"
@@ -545,7 +1021,11 @@ export const Playground = () => {
             aria-label={t("playground:aria.chatTranscript", "Chat messages")}
             className="custom-scrollbar flex-1 min-h-0 w-full overflow-x-hidden overflow-y-auto px-4">
             <div className="mx-auto w-full max-w-[52rem] pb-6">
-              <PlaygroundChat />
+              <PlaygroundChat
+                searchQuery={threadSearchQuery.trim()}
+                matchedMessageIndices={threadSearchMatchSet}
+                activeSearchMessageIndex={threadSearchActiveMessageIndex}
+              />
             </div>
           </div>
           <div
@@ -555,6 +1035,11 @@ export const Playground = () => {
                 : ""
             }`}
           >
+            <div className="mx-auto w-full max-w-[52rem] px-4 pt-2 text-[11px] text-text-muted">
+              <span className="inline-flex items-center rounded-full border border-border bg-surface2 px-2 py-0.5">
+                {t("playground:regions.composer", "Composer")}
+              </span>
+            </div>
             {!isAutoScrollToBottom && (
               <div className="pointer-events-none absolute -top-12 left-0 right-0 flex justify-center">
                 <button
@@ -577,13 +1062,47 @@ export const Playground = () => {
             <div className="lg:hidden">
               <button
                 type="button"
-                aria-label={t("common:close", "Close")}
-                title={t("common:close", "Close") as string}
-                onClick={closeArtifacts}
+                aria-label={
+                  t(
+                    "playground:regions.closeArtifactsDrawer",
+                    "Close artifacts drawer"
+                  ) as string
+                }
+                title={
+                  t(
+                    "playground:regions.closeArtifactsDrawer",
+                    "Close artifacts drawer"
+                  ) as string
+                }
+                onClick={closeArtifactsWithFocusReturn}
                 className="fixed inset-0 z-40 bg-black/40"
               />
-              <div className="fixed inset-y-0 right-0 z-50 w-full max-w-[520px]">
-                <ArtifactsPanel />
+              <div
+                data-testid="playground-mobile-artifacts-sheet"
+                role="dialog"
+                aria-modal="true"
+                aria-label={t("playground:regions.artifacts", "Artifacts panel")}
+                className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[520px] flex-col border-l border-border bg-surface"
+              >
+                <div className="flex items-center justify-between border-b border-border px-3 py-2 text-xs text-text">
+                  <span
+                    data-testid="playground-mobile-artifacts-title"
+                    className="font-semibold"
+                  >
+                    {t("playground:regions.artifacts", "Artifacts panel")}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="playground-mobile-artifacts-return"
+                    onClick={closeArtifactsWithFocusReturn}
+                    className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] font-medium text-text hover:bg-surface"
+                  >
+                    {t("playground:regions.returnToTimeline", "Back to timeline")}
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1">
+                  <ArtifactsPanel />
+                </div>
               </div>
             </div>
           </>

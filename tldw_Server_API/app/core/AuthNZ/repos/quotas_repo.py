@@ -20,6 +20,16 @@ class AuthnzQuotasRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres_backend(self) -> bool:
+        """
+        Return True when the underlying DatabasePool is using PostgreSQL.
+
+        Backend selection should be derived from DatabasePool state instead of
+        probing connection-method presence at runtime, which can misclassify
+        shim/wrapper connections.
+        """
+        return bool(getattr(self.db_pool, "pool", None))
+
     async def ensure_schema(self) -> None:
         """
         Ensure the virtual-key counters tables exist for the current backend.
@@ -34,8 +44,7 @@ class AuthnzQuotasRepo:
         bootstrap paths) instead of embedding new vk_* DDL.
         """
         try:
-            # Postgres backends expose an asyncpg pool on DatabasePool.pool
-            if getattr(self.db_pool, "pool", None) is not None:
+            if self._is_postgres_backend():
                 from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                     ensure_virtual_key_counters_pg,
                 )
@@ -80,7 +89,7 @@ class AuthnzQuotasRepo:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     # Postgres path – ON CONFLICT upsert with returning count
                     new_count = await conn.fetchval(
                         """
@@ -156,7 +165,7 @@ class AuthnzQuotasRepo:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     # Postgres path – ON CONFLICT upsert with returning count
                     new_count = await conn.fetchval(
                         """

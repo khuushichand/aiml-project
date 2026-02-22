@@ -7,6 +7,7 @@ import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useDemoMode } from "@/context/demo-mode"
+import { RouteErrorBoundary } from "@/components/Common/RouteErrorBoundary"
 
 const MediaMultiInner = () => {
   const { t } = useTranslation(["review", "common", "settings"])
@@ -80,19 +81,19 @@ const MediaMultiInner = () => {
           )}
           onSecondaryAction={() => navigate("/settings/health")}
         />
-        <div className="rounded-lg border border-dashed border-gray-300 bg-white p-3 text-xs text-gray-700 dark:border-gray-700 dark:bg-[#111] dark:text-gray-200">
+        <div className="rounded-lg border border-dashed border-border bg-surface p-3 text-xs text-text">
           <div className="mb-2 font-semibold">
             {t("review:mediaEmpty.demoPreviewHeading", {
               defaultValue: "Example media items (preview only)"
             })}
           </div>
-          <div className="divide-y divide-gray-200 dark:divide-gray-800">
+          <div className="divide-y divide-border">
             {demoMediaItems.map((item) => (
               <div key={item.id} className="py-2">
-                <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                <div className="text-sm font-medium text-text">
                   {item.title}
                 </div>
-                <div className="mt-1 text-[11px] text-gray-600 dark:text-gray-300">
+                <div className="mt-1 text-[11px] text-text-muted">
                   {item.meta}
                 </div>
               </div>
@@ -164,7 +165,9 @@ const MediaMultiInner = () => {
 const OptionMediaMulti = () => {
   return (
     <OptionLayout>
-      <MediaMultiInner />
+      <RouteErrorBoundary routeId="media-multi" routeLabel="Media Review">
+        <MediaMultiInner />
+      </RouteErrorBoundary>
     </OptionLayout>
   )
 }

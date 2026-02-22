@@ -41,6 +41,7 @@ interface TerminalOutputProps {
 
 // ANSI escape code patterns and color mappings
 const ANSI_REGEX = /\x1b\[([0-9;]+)m/g
+// theme-exempt: ANSI terminal standard colors
 const ANSI_COLOR_MAP: Record<string, string> = {
   "30": "text-text",
   "31": "text-red-500",

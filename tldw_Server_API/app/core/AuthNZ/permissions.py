@@ -230,27 +230,6 @@ def require_permission(permission: str):
         return wrapper
     return decorator
 
-def require_role(role: str):
-    """
-    Decorator to require a specific role for a function.
-
-    Args:
-        role: Required role name
-
-    Usage:
-        @require_role("admin")
-        def admin_function(user: User):
-            # Function implementation
-    """
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(user: User, *args, **kwargs):
-            if not check_role(user, role):
-                raise PermissionError(f"User {user.username} lacks role: {role}")
-            return func(user, *args, **kwargs)
-        return wrapper
-    return decorator
-
 def require_any_permission(permissions: list[str]):
     """
     Decorator to require at least one of the specified permissions.

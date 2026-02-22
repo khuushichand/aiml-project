@@ -222,6 +222,11 @@ def mock_ws_dependencies(monkeypatch: pytest.MonkeyPatch) -> tuple:
 
     monkeypatch.setattr(voice_assistant, "_generate_tts_audio", _generate_tts)
 
+    async def _stream_tts_response(websocket, text, config):
+        return None
+
+    monkeypatch.setattr(voice_assistant, "_stream_tts_response", _stream_tts_response)
+
     # Mock transcription
     async def _transcribe(audio_bytes, config):
         return "transcribed text"

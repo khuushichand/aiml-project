@@ -29,7 +29,22 @@ const formatErrorMessageInternal = (
     const trimmed = error.trim()
     return trimmed ? error : fallback
   }
-  if (error instanceof Error) return error.message || fallback
+  if (error instanceof Error) {
+    const message = (error.message || "").trim()
+    if (message && message !== "[object Object]") {
+      return message
+    }
+    const cause = (error as Error & { cause?: unknown }).cause
+    if (typeof cause !== "undefined") {
+      const causeMessage = formatErrorMessageInternal(cause, "", depth + 1).trim()
+      if (causeMessage) return causeMessage
+    }
+    const serialized = safeStringify(error)
+    if (serialized && serialized !== "{}") {
+      return serialized
+    }
+    return fallback
+  }
   if (error == null) return fallback
   if (depth > 3) return safeStringify(error) || fallback
 

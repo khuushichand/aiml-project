@@ -3,14 +3,22 @@ import uuid
 import io
 import zipfile
 import sqlite3
+import os
 from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 from loguru import logger
 
+# Keep this module self-contained and deterministic by disabling optional
+# reading-digest startup paths that pull heavyweight STT deps during app import.
+os.environ.setdefault("READING_DIGEST_JOBS_WORKER_ENABLED", "0")
+os.environ.setdefault("READING_DIGEST_SCHEDULER_ENABLED", "0")
+os.environ.setdefault("TEST_MODE", "1")
+
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 from tldw_Server_API.tests.test_config import TestConfig
 
 # Explicit auth headers for single-user mode (required by get_request_user)
@@ -133,6 +141,43 @@ def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
                 conn.close()
     finally:
         zf.close()
+
+
+def test_generate_flashcards_endpoint_returns_generated_cards(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    async def fake_generate_adapter(config, context):
+        assert config.get("text") == "Cell respiration summary"
+        assert config.get("num_cards") == 2
+        return {
+            "flashcards": [
+                {"front": "ATP stands for?", "back": "Adenosine triphosphate", "tags": ["bio"]},
+                {"front": "Where does glycolysis occur?", "back": "Cytoplasm", "tags": "biology metabolism"},
+            ],
+            "count": 2,
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.flashcards.run_flashcard_generate_adapter",
+        fake_generate_adapter,
+    )
+
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/generate",
+        json={
+            "text": "Cell respiration summary",
+            "num_cards": 2,
+            "card_type": "basic",
+            "difficulty": "medium",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert payload["flashcards"][0]["front"] == "ATP stands for?"
+    assert payload["flashcards"][1]["tags"] == ["biology", "metabolism"]
 
 
 def test_export_apkg_include_reverse_flag_generates_reverse(client_with_flashcards_db: TestClient):
@@ -303,6 +348,67 @@ def test_get_flashcard_alias_path_returns_card(client_with_flashcards_db: TestCl
     assert data.get("tags") == ["t1"]
 
 
+def test_source_attribution_fields_present_in_flashcard_responses(client_with_flashcards_db: TestClient):
+    deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "SourceDeck"},
+        headers=AUTH_HEADERS,
+    )
+    assert deck_response.status_code == 200
+    deck_id = deck_response.json()["id"]
+
+    created_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": deck_id,
+            "front": "Source Q",
+            "back": "Source A",
+            "source_ref_type": "media",
+            "source_ref_id": "42",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert created_response.status_code == 200
+    created = created_response.json()
+    card_uuid = created["uuid"]
+
+    assert created["source_ref_type"] == "media"
+    assert created["source_ref_id"] == "42"
+    assert "conversation_id" in created
+    assert "message_id" in created
+    assert created["conversation_id"] is None
+    assert created["message_id"] is None
+
+    list_response = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert list_response.status_code == 200
+    listed_items = list_response.json().get("items", [])
+    listed = next((item for item in listed_items if item.get("uuid") == card_uuid), None)
+    assert listed is not None
+    assert listed["source_ref_type"] == "media"
+    assert listed["source_ref_id"] == "42"
+    assert "conversation_id" in listed
+    assert "message_id" in listed
+
+    get_response = client_with_flashcards_db.get(f"/api/v1/flashcards/{card_uuid}", headers=AUTH_HEADERS)
+    assert get_response.status_code == 200
+    fetched = get_response.json()
+    assert fetched["source_ref_type"] == "media"
+    assert fetched["source_ref_id"] == "42"
+    assert "conversation_id" in fetched
+    assert "message_id" in fetched
+
+
+def test_openapi_flashcard_response_includes_source_fields():
+    openapi = fastapi_app.openapi()
+    flashcard_schema = openapi["components"]["schemas"]["Flashcard"]
+    properties = flashcard_schema.get("properties", {})
+
+    assert "source_ref_type" in properties
+    assert "source_ref_id" in properties
+    assert "conversation_id" in properties
+    assert "message_id" in properties
+
+
 def test_create_flashcard_normalizes_model_fields(client_with_flashcards_db: TestClient):
     r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "NormalizeDeck"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]
@@ -337,6 +443,178 @@ def test_review_missing_flashcard_returns_404(client_with_flashcards_db: TestCli
         "rating": 3
     }, headers=AUTH_HEADERS)
     assert r.status_code == 404
+
+
+def test_analytics_summary_returns_daily_metrics_and_deck_progress(client_with_flashcards_db: TestClient):
+    # Seed one deck and two cards
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "AnalyticsDeck"},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    deck_id = r.json()["id"]
+
+    first = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_id, "front": "Q1", "back": "A1"},
+        headers=AUTH_HEADERS,
+    )
+    second = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_id, "front": "Q2", "back": "A2"},
+        headers=AUTH_HEADERS,
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_uuid = first.json()["uuid"]
+    second_uuid = second.json()["uuid"]
+
+    # One successful recall + one lapse to verify retention/lapse calculations
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": first_uuid, "rating": 3, "answer_time_ms": 2500},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": second_uuid, "rating": 1, "answer_time_ms": 4500},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+
+    # Fetch analytics summary
+    r = client_with_flashcards_db.get("/api/v1/flashcards/analytics/summary", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    payload = r.json()
+
+    assert payload["reviewed_today"] == 2
+    assert payload["study_streak_days"] >= 1
+    assert payload["avg_answer_time_ms_today"] == pytest.approx(3500.0)
+    assert payload["retention_rate_today"] == pytest.approx(50.0)
+    assert payload["lapse_rate_today"] == pytest.approx(50.0)
+    assert payload.get("generated_at")
+
+    deck = next((d for d in payload["decks"] if d["deck_id"] == deck_id), None)
+    assert deck is not None
+    assert deck["deck_name"] == "AnalyticsDeck"
+    assert deck["total"] == 2
+    assert deck["new"] == 0
+
+
+def test_analytics_summary_honors_deck_filter(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "DeckA"},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    deck_a = r.json()["id"]
+
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "DeckB"},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    deck_b = r.json()["id"]
+
+    card_a = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_a, "front": "A1", "back": "A1"},
+        headers=AUTH_HEADERS,
+    )
+    card_b = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_b, "front": "B1", "back": "B1"},
+        headers=AUTH_HEADERS,
+    )
+    assert card_a.status_code == 200
+    assert card_b.status_code == 200
+
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": card_a.json()["uuid"], "rating": 3, "answer_time_ms": 1200},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": card_b.json()["uuid"], "rating": 1, "answer_time_ms": 3600},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+
+    scoped = client_with_flashcards_db.get(
+        "/api/v1/flashcards/analytics/summary",
+        params={"deck_id": deck_a},
+        headers=AUTH_HEADERS,
+    )
+    assert scoped.status_code == 200
+    payload = scoped.json()
+
+    assert payload["reviewed_today"] == 1
+    assert payload["avg_answer_time_ms_today"] == pytest.approx(1200.0)
+    assert payload["retention_rate_today"] == pytest.approx(100.0)
+    assert payload["lapse_rate_today"] == pytest.approx(0.0)
+    assert len(payload["decks"]) == 1
+    assert payload["decks"][0]["deck_id"] == deck_a
+    assert payload["decks"][0]["deck_name"] == "DeckA"
+
+
+def test_reset_scheduling_resets_card_to_new_defaults(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "ResetDeck"},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    deck_id = r.json()["id"]
+
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_id, "front": "Reset Q", "back": "Reset A"},
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    card = created.json()
+    card_uuid = card["uuid"]
+
+    reviewed = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": card_uuid, "rating": 3, "answer_time_ms": 2100},
+        headers=AUTH_HEADERS,
+    )
+    assert reviewed.status_code == 200
+    reviewed_payload = reviewed.json()
+    assert reviewed_payload["repetitions"] >= 1
+
+    current = client_with_flashcards_db.get(f"/api/v1/flashcards/id/{card_uuid}", headers=AUTH_HEADERS)
+    assert current.status_code == 200
+    current_version = current.json()["version"]
+
+    reset = client_with_flashcards_db.post(
+        f"/api/v1/flashcards/{card_uuid}/reset-scheduling",
+        json={"expected_version": current_version},
+        headers=AUTH_HEADERS,
+    )
+    assert reset.status_code == 200
+    payload = reset.json()
+
+    assert payload["ef"] == pytest.approx(2.5)
+    assert payload["interval_days"] == 0
+    assert payload["repetitions"] == 0
+    assert payload["lapses"] == 0
+    assert payload["last_reviewed_at"] is None
+    assert payload["due_at"] is not None
+
+    conflict = client_with_flashcards_db.post(
+        f"/api/v1/flashcards/{card_uuid}/reset-scheduling",
+        json={"expected_version": current_version},
+        headers=AUTH_HEADERS,
+    )
+    assert conflict.status_code == 409
 
 
 def test_patch_partial_update_keeps_required_fields(client_with_flashcards_db: TestClient):
@@ -902,6 +1180,114 @@ def test_import_json_unicode_preserved(client_with_flashcards_db: TestClient):
     assert r2.status_code == 200
     items = r2.json().get('items', [])
     assert any('😀' in (it.get('front') or '') for it in items)
+
+
+def test_import_apkg_file_basic(client_with_flashcards_db: TestClient):
+    payload_rows = [
+        {
+            "deck_name": "APKG Deck",
+            "model_type": "basic",
+            "front": "APKG Q1",
+            "back": "APKG A1",
+            "extra": "extra 1",
+            "tags_json": json.dumps(["apkg", "basic"]),
+        },
+        {
+            "deck_name": "APKG Deck",
+            "model_type": "basic_reverse",
+            "front": "APKG Q2",
+            "back": "APKG A2",
+            "extra": "extra 2",
+            "tags_json": json.dumps(["apkg", "reverse"]),
+            "reverse": True,
+        },
+        {
+            "deck_name": "APKG Deck",
+            "model_type": "cloze",
+            "front": "APKG {{c1::cloze}}",
+            "back": "",
+            "extra": "cloze extra",
+            "tags_json": json.dumps(["apkg", "cloze"]),
+        },
+    ]
+    apkg = export_apkg_from_rows(payload_rows)
+    files = {
+        "file": ("flashcards.apkg", apkg, "application/apkg"),
+    }
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/apkg", files=files, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("imported") == 3
+    assert data.get("errors") == []
+
+    r2 = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert r2.status_code == 200
+    items = r2.json().get("items", [])
+    by_front = {item.get("front"): item for item in items}
+    assert "APKG Q1" in by_front
+    assert "APKG Q2" in by_front
+    assert "APKG {{c1::cloze}}" in by_front
+    assert by_front["APKG Q2"].get("model_type") == "basic_reverse"
+    assert by_front["APKG Q2"].get("reverse") is True
+    assert by_front["APKG {{c1::cloze}}"].get("model_type") == "cloze"
+    assert by_front["APKG {{c1::cloze}}"].get("is_cloze") is True
+
+
+def test_import_apkg_preserves_scheduling_fields(client_with_flashcards_db: TestClient):
+    payload_rows = [
+        {
+            "deck_name": "SchedDeck",
+            "model_type": "basic",
+            "front": "New Card",
+            "back": "A0",
+            "ef": 2.5,
+            "interval_days": 0,
+            "repetitions": 0,
+            "lapses": 0,
+            "due_at": None,
+        },
+        {
+            "deck_name": "SchedDeck",
+            "model_type": "basic",
+            "front": "Review Card",
+            "back": "A1",
+            "ef": 2.1,
+            "interval_days": 14,
+            "repetitions": 5,
+            "lapses": 2,
+            "due_at": None,
+        },
+    ]
+    apkg = export_apkg_from_rows(payload_rows)
+    files = {
+        "file": ("sched.apkg", apkg, "application/apkg"),
+    }
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/apkg", files=files, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    assert r.json().get("imported") == 2
+
+    r2 = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert r2.status_code == 200
+    by_front = {item.get("front"): item for item in r2.json().get("items", [])}
+    assert by_front["New Card"].get("repetitions") == 0
+    assert by_front["New Card"].get("interval_days") == 0
+    assert by_front["New Card"].get("due_at") is None
+
+    review = by_front["Review Card"]
+    assert review.get("repetitions") == 5
+    assert review.get("interval_days") == 14
+    assert review.get("lapses") == 2
+    assert pytest.approx(review.get("ef"), rel=1e-3) == 2.1
+    assert review.get("due_at") is not None
+
+
+def test_import_apkg_invalid_archive_returns_400(client_with_flashcards_db: TestClient):
+    files = {
+        "file": ("bad.apkg", b"not a zip archive", "application/apkg"),
+    }
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/apkg", files=files, headers=AUTH_HEADERS)
+    assert r.status_code == 400
+    assert "Invalid APKG archive" in r.json().get("detail", "")
 
 
 def test_export_csv_preserves_quotes_and_no_extra_separators(client_with_flashcards_db: TestClient):

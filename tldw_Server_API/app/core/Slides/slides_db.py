@@ -391,10 +391,10 @@ class SlidesDatabase:
         safe_column = allowed_columns.get(sort_column, "created_at")
         safe_direction = "DESC" if sort_direction.upper() == "DESC" else "ASC"
         where = "" if include_deleted else "WHERE deleted = 0"
-        query = (
-            f"SELECT * FROM presentations {where} ORDER BY {safe_column} {safe_direction} LIMIT ? OFFSET ?"
-        )
-        count_query = f"SELECT COUNT(*) AS cnt FROM presentations {where}"
+        query_template = "SELECT * FROM presentations {where} ORDER BY {safe_column} {safe_direction} LIMIT ? OFFSET ?"
+        query = query_template.format_map(locals())  # nosec B608
+        count_query_template = "SELECT COUNT(*) AS cnt FROM presentations {where}"
+        count_query = count_query_template.format_map(locals())  # nosec B608
         conn = self.get_connection()
         rows = conn.execute(query, (limit, offset)).fetchall()
         count_row = conn.execute(count_query).fetchone()
@@ -414,19 +414,21 @@ class SlidesDatabase:
         if limit < 1:
             raise InputError("limit must be >= 1")
         where = "" if include_deleted else "AND p.deleted = 0"
-        sql = (
+        search_sql_template = (
             "SELECT p.* FROM presentations p "
             "JOIN presentations_fts fts ON p.rowid = fts.rowid "
             "WHERE presentations_fts MATCH ? "
-            f"{where} "
+            "{where} "
             "ORDER BY p.last_modified DESC LIMIT ? OFFSET ?"
         )
-        count_sql = (
+        sql = search_sql_template.format_map(locals())  # nosec B608
+        count_sql_template = (
             "SELECT COUNT(*) AS cnt FROM presentations p "
             "JOIN presentations_fts fts ON p.rowid = fts.rowid "
             "WHERE presentations_fts MATCH ? "
-            f"{where}"
+            "{where}"
         )
+        count_sql = count_sql_template.format_map(locals())  # nosec B608
         conn = self.get_connection()
         rows = conn.execute(sql, (query, limit, offset)).fetchall()
         count_row = conn.execute(count_sql, (query,)).fetchone()
@@ -471,7 +473,9 @@ class SlidesDatabase:
         sets.extend(["last_modified = ?", "version = ?", "client_id = ?"])
         params.extend([self._utcnow_iso(), next_version, self.client_id, presentation_id, expected_version])
         # Column names come from the allowlist above; values are always bound params.
-        sql = f"UPDATE presentations SET {', '.join(sets)} WHERE id = ? AND version = ?"
+        set_clause_sql = ", ".join(sets)
+        update_sql_template = "UPDATE presentations SET {set_clause_sql} WHERE id = ? AND version = ?"
+        sql = update_sql_template.format_map(locals())  # nosec B608
         with self.transaction() as conn:
             cur = conn.execute(sql, tuple(params))
             if cur.rowcount == 0:

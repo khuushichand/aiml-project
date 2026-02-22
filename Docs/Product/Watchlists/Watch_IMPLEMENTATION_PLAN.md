@@ -17,7 +17,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 **Success Criteria**
 - API docs include `GET /api/v1/watchlists/runs`, `include_tallies` for Run Detail, and OPML export `group` filter.
 - Deprecation path finalized: all `/api/v1/subscriptions/*` return 410 with Link header and docs + release notes updated.
-- YouTube normalization hardened (handles/vanity accepted → canonical; normalization headers logged in diagnostics).
+- YouTube normalization hardened (channel/user/playlist forms accepted and canonicalized to feeds; unsupported `@handle` and `/c/...` forms return 400; normalization headers logged in diagnostics).
 - Admin Runs view shows per-run counters and supports CSV/JSON export.
 
 **Tests**
@@ -87,7 +87,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Optional: TTS brief generated and attached when item count below threshold.
   - tldw_Server_API/tests/Watchlists/test_tts_brief_optional.py
 
-**Status**: Completed (template version history + version-aware rendering landed; regenerate supports template version selection; delivery status is surfaced in outputs UI; optional small-run TTS brief auto-generation is covered by integration tests)
+**Status**: Completed (template version history + version-aware rendering landed; regenerate supports template version selection; delivery status is surfaced in outputs UI; job-level default email subject controls are wired in the Jobs form; optional small-run TTS brief auto-generation and delivery-default subject behavior are covered by integration tests)
 
 ---
 
@@ -109,7 +109,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Rate-limit headers deterministic under non-test mode with configured backend.
   - tldw_Server_API/tests/Watchlists/test_rate_limit_headers_strict.py
 
-**Status**: Complete (dedup/seen inspect-reset API + DB support shipped; scheduler controls and broader scale validation tests added; operational limits boundary tests + admin UI surfacing for dedup/seen completed)
+**Status**: Complete (dedup/seen inspect-reset API + DB support shipped; scheduler controls and broader scale validation tests added; operational limits boundary tests + admin UI surfacing for dedup/seen completed; verification rerun on 2026-02-08: Stage-5 backend slice `40 passed`, SourceSeenDrawer UI tests `14 passed`; AuthNZ usage aggregation sqlite-corruption logging hardened with one-time warning + skip behavior and dedicated tests)
 
 Stage 5 scale target matrix is tracked in:
 - `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_scale_validation_dedup_ui.md` (all 5 stages complete)
@@ -119,7 +119,7 @@ Stage 5 scale target matrix is tracked in:
 ## Notes
 - Include-only gating: default can be set per-org (and via env); tests should cover both job-flag and org-default paths.
 - Keep tests deterministic; mock external services (feeds, email, Chatbook, TTS). Mark performance tests with `@pytest.mark.perf`.
-- Update Docs/Published/API-related/Watchlists_API.md and Docs/Published/RELEASE_NOTES.md alongside code changes.
+- Update Docs/API-related/Watchlists_API.md and Docs/Published/RELEASE_NOTES.md alongside code changes.
 
 ### Operational Limits (enforced via Pydantic Query constraints)
 
@@ -148,3 +148,5 @@ Checklist (quick)
 - [x] Stage 5: runs/export/details API load validation (`test_watchlists_scale_load_api.py`)
 - [x] Stage 5: operational limits boundary tests (`test_operational_limits.py`)
 - [x] Stage 5: admin UI dedup/seen drawer (`SourceSeenDrawer.tsx` + component tests)
+- [x] Stage 5: AuthNZ usage aggregation sqlite-corruption warning hardening + tests (`test_authnz_usage_repo_corruption_sqlite.py`)
+- [x] Stage 5: strict rate-limit header tests made rerun-safe via isolated temp DB base path (`test_rate_limit_headers_strict.py`)

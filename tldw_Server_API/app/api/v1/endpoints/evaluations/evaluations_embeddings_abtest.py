@@ -50,6 +50,7 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 abtest_router = APIRouter()
 
@@ -194,7 +195,7 @@ async def run_embeddings_abtest(
     # In testing mode, execute synchronously to make polling deterministic
     testing = False
     try:
-        testing = os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
+        testing = env_flag_enabled("TESTING")
     except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
         testing = False
 

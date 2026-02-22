@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     normalize_output_storage_filename,
 )
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
+from tldw_Server_API.app.core.testing import is_truthy
 
 READING_IMPORT_DOMAIN = "reading"
 READING_IMPORT_JOB_TYPE = "reading_import"
@@ -121,7 +122,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
         return value
     if isinstance(value, (int, float)):
         return bool(value)
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(str(value).strip().lower())
 
 
 def _resolve_user_id(job: dict[str, Any], payload: dict[str, Any]) -> int:

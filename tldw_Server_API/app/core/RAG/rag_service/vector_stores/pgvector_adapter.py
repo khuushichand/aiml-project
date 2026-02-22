@@ -303,14 +303,14 @@ class PGVectorAdapter(VectorStoreAdapter):
                 await self._exec(
                     f"CREATE INDEX IF NOT EXISTS {tbl}_embedding_ivf ON {tbl} USING ivfflat (embedding {ops})"
                 )
-            except Exception:  # noqa: BLE001 - index creation best-effort
+            except Exception as index_error:  # noqa: BLE001 - index creation best-effort
                 # If both fail, continue without an ANN index (still usable for brute-force)
-                pass
+                logger.debug("pgvector index creation failed; continuing without ANN index", exc_info=index_error)
         # Analyze to help planner (best-effort)
         try:
             await self._exec(f"ANALYZE {tbl}")
-        except Exception:  # noqa: BLE001 - analyze best-effort
-            pass
+        except Exception as analyze_error:  # noqa: BLE001 - analyze best-effort
+            logger.debug("pgvector analyze after collection creation failed", exc_info=analyze_error)
 
     async def delete_collection(self, collection_name: str) -> None:
         tbl = self._sanitize_collection(collection_name)
@@ -350,7 +350,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                         logger.debug("pgvector.upsert: SET hnsw.ef_search failed", exc_info=e)
                     args = [(_id, doc, JsonDumper.dumps(meta), vec) for _id, doc, meta, vec in values]
                     cur.executemany(
-                        f"INSERT INTO {tbl}(id, content, metadata, embedding) VALUES (%s, %s, %s, %s) "
+                        f"INSERT INTO {tbl}(id, content, metadata, embedding) VALUES (%s, %s, %s, %s) "  # nosec B608
                         f"ON CONFLICT (id) DO UPDATE SET content=EXCLUDED.content, metadata=EXCLUDED.metadata, embedding=EXCLUDED.embedding",
                         args,
                     )
@@ -375,7 +375,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             with ctx as conn:
                 cur = conn.cursor()
                 try:
-                    cur.executemany(f"DELETE FROM {tbl} WHERE id=%s", [(i,) for i in ids])
+                    cur.executemany(f"DELETE FROM {tbl} WHERE id=%s", [(i,) for i in ids])  # nosec B608
                     conn.commit()
                     rc = getattr(cur, 'rowcount', 0)
                     return int(rc) if rc is not None else 0
@@ -408,7 +408,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
                     except Exception as e:  # noqa: BLE001 - best-effort session tuning
                         logger.debug("pgvector.delete_by_filter: SET hnsw.ef_search failed", exc_info=e)
-                    cur.execute(f"DELETE FROM {tbl}{where_sql}", tuple(params))
+                    cur.execute(f"DELETE FROM {tbl}{where_sql}", tuple(params))  # nosec B608
                     rc = getattr(cur, 'rowcount', 0)
                     conn.commit()
                     return int(rc) if rc is not None else 0
@@ -511,7 +511,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                 ob = 'id'
         odir = 'ASC' if str(order_dir).lower() == 'asc' else 'DESC'
         rows = await self._query(
-            f"SELECT id, content, metadata FROM {tbl}{where_sql} ORDER BY {ob} {odir} LIMIT %s OFFSET %s",
+            f"SELECT id, content, metadata FROM {tbl}{where_sql} ORDER BY {ob} {odir} LIMIT %s OFFSET %s",  # nosec B608
             tuple(params + [int(limit), int(offset)]),
         )
         items = []
@@ -522,9 +522,9 @@ class PGVectorAdapter(VectorStoreAdapter):
                 'metadata': metadata if isinstance(metadata, dict) else {},
             })
         if where_sql:
-            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}{where_sql}", tuple(params))
+            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}{where_sql}", tuple(params))  # nosec B608
         else:
-            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")
+            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")  # nosec B608
         total = int(cnt_rows[0][0]) if cnt_rows else 0
         return {'items': items, 'total': total}
 
@@ -544,7 +544,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                 ob = 'id'
         odir = 'ASC' if str(order_dir).lower() == 'asc' else 'DESC'
         rows = await self._query(
-            f"SELECT id, content, metadata, embedding FROM {tbl}{where_sql} ORDER BY {ob} {odir} LIMIT %s OFFSET %s",
+            f"SELECT id, content, metadata, embedding FROM {tbl}{where_sql} ORDER BY {ob} {odir} LIMIT %s OFFSET %s",  # nosec B608
             tuple(params + [int(limit), int(offset)]),
         )
         items = []
@@ -564,9 +564,9 @@ class PGVectorAdapter(VectorStoreAdapter):
                 'vector': vec if isinstance(vec, list) else [],
             })
         if where_sql:
-            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}{where_sql}", tuple(params))
+            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}{where_sql}", tuple(params))  # nosec B608
         else:
-            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")
+            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")  # nosec B608
         total = int(cnt_rows[0][0]) if cnt_rows else 0
         return {'items': items, 'total': total}
 
@@ -601,15 +601,15 @@ class PGVectorAdapter(VectorStoreAdapter):
                 defrows = await self._query("SELECT indexdef FROM pg_indexes WHERE indexname = %s", (name,))
                 if defrows and 'embedding' in (defrows[0][0] or '').lower():
                     await self._exec(f"DROP INDEX IF EXISTS \"{name}\"")
-            except Exception:  # noqa: BLE001 - index drop best-effort
+            except Exception as drop_error:  # noqa: BLE001 - index drop best-effort
                 # Continue dropping best-effort
-                pass
+                logger.debug("pgvector index drop failed during optimize", exc_info=drop_error)
 
         if index_type.lower() == 'drop':
             try:
                 await self._exec(f"ANALYZE {tbl}")
-            except Exception:  # noqa: BLE001 - analyze best-effort
-                pass
+            except Exception as analyze_error:  # noqa: BLE001 - analyze best-effort
+                logger.debug("pgvector analyze after index drop failed", exc_info=analyze_error)
             return await self.get_index_info(collection_name)
 
         op_metric = (metric or self.config.distance_metric or 'cosine').lower()
@@ -627,15 +627,15 @@ class PGVectorAdapter(VectorStoreAdapter):
 
         try:
             await self._exec(f"ANALYZE {tbl}")
-        except Exception:  # noqa: BLE001 - analyze best-effort
-            pass
+        except Exception as analyze_error:  # noqa: BLE001 - analyze best-effort
+            logger.debug("pgvector analyze after index optimize failed", exc_info=analyze_error)
         return await self.get_index_info(collection_name)
 
     # Adapter-specific helper: get a single vector by id
     async def get_vector(self, collection_name: str, vector_id: str) -> Optional[dict[str, Any]]:
         tbl = self._sanitize_collection(collection_name)
         rows = await self._query(
-            f"SELECT id, content, metadata FROM {tbl} WHERE id=%s",
+            f"SELECT id, content, metadata FROM {tbl} WHERE id=%s",  # nosec B608
             (vector_id,),
         )
         if not rows:
@@ -667,7 +667,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             op = "<#>"
         placeholder = "%s" if use_native_vector else "%s::vector"
         dist_expr = f"embedding {op} {placeholder}"
-        sql = f"SELECT id, content, metadata, {dist_expr} AS distance FROM {tbl}"
+        sql = f"SELECT id, content, metadata, {dist_expr} AS distance FROM {tbl}"  # nosec B608
         # Build WHERE using rich filter support (equality, $and/$or, $in, numeric cmp)
         vector_param: Any
         if use_native_vector:
@@ -725,7 +725,7 @@ class PGVectorAdapter(VectorStoreAdapter):
 
     async def get_collection_stats(self, collection_name: str) -> dict[str, Any]:
         tbl = self._sanitize_collection(collection_name)
-        rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")
+        rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")  # nosec B608
         count = int(rows[0][0]) if rows else 0
         return {
             "collection": collection_name,
@@ -741,8 +741,8 @@ class PGVectorAdapter(VectorStoreAdapter):
         tbl = self._sanitize_collection(collection_name)
         try:
             await self._exec(f"ANALYZE {tbl}")
-        except Exception:  # noqa: BLE001 - analyze best-effort
-            pass
+        except Exception as analyze_error:  # noqa: BLE001 - analyze best-effort
+            logger.debug("pgvector analyze in optimize_collection failed", exc_info=analyze_error)
 
     async def get_index_info(self, collection_name: str) -> dict[str, Any]:
         tbl = self._sanitize_collection(collection_name)
@@ -769,15 +769,15 @@ class PGVectorAdapter(VectorStoreAdapter):
             if self._pool is not None:
                 # psycopg_pool.ConnectionPool exposes close(); run in executor to avoid blocking
                 await asyncio.get_event_loop().run_in_executor(None, getattr(self._pool, "close", lambda: None))
-        except Exception:  # noqa: BLE001 - close best-effort
-            pass
+        except Exception as close_error:  # noqa: BLE001 - close best-effort
+            logger.debug("pgvector pool close failed", exc_info=close_error)
         finally:
             self._pool = None
         try:
             if self._conn:
                 await asyncio.get_event_loop().run_in_executor(None, self._conn.close)
-        except Exception:  # noqa: BLE001 - close best-effort
-            pass
+        except Exception as close_error:  # noqa: BLE001 - close best-effort
+            logger.debug("pgvector connection close failed", exc_info=close_error)
         finally:
             self._conn = None
         await super().close()
@@ -795,8 +795,8 @@ class PGVectorAdapter(VectorStoreAdapter):
                     "num_connections": getattr(self._pool, "num_connections", None),
                     "num_available": getattr(self._pool, "num_available", None),
                 }
-        except Exception:  # noqa: BLE001 - pool stats best-effort
-            pass
+        except Exception as stats_error:  # noqa: BLE001 - pool stats best-effort
+            logger.debug("pgvector pool stats collection failed", exc_info=stats_error)
         try:
             rows = await self._query("SELECT 1", None)
             ok = bool(rows)

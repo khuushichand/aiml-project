@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseLockError
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
 
@@ -40,6 +41,39 @@ class _DummyRequest:
         self.method = "GET"
         self.url = SimpleNamespace(path="/test")
         self.headers: dict[str, str] = {}
+
+
+class _LockingTxnCM:
+    def __init__(self, pool: "_LockingPool") -> None:
+        self._pool = pool
+
+    async def __aenter__(self) -> object:
+        self._pool.enter_calls += 1
+        if self._pool.lock_on_enter_remaining > 0:
+            self._pool.lock_on_enter_remaining -= 1
+            raise DatabaseLockError()
+        return self._pool.conn
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        self._pool.exit_calls += 1
+        if self._pool.raise_lock_on_exit:
+            raise DatabaseLockError()
+        return False
+
+
+class _LockingPool:
+    def __init__(self, *, lock_on_enter_count: int = 0, raise_lock_on_exit: bool = False) -> None:
+        self.lock_on_enter_remaining = lock_on_enter_count
+        self.raise_lock_on_exit = raise_lock_on_exit
+        self.enter_calls = 0
+        self.exit_calls = 0
+        self.conn = object()
+
+    def transaction(self) -> _LockingTxnCM:
+        return _LockingTxnCM(self)
+
+    def acquire(self) -> object:
+        raise AssertionError("adapter path should not be used for lock retry tests")
 
 
 @pytest.mark.asyncio
@@ -274,8 +308,11 @@ async def test_admin_rate_limit_bypass_is_principal_first(
 
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
-    monkeypatch.setattr(auth_deps, "is_single_user_mode", _mode_helper_should_not_be_called)
-    monkeypatch.setattr(auth_deps, "is_single_user_profile_mode", _profile_helper_should_not_be_called)
+    # Compatibility: these helpers may no longer be imported by auth_deps in
+    # claim-first paths; patch with raising=False so the assertion remains valid
+    # regardless of symbol exposure.
+    monkeypatch.setattr(auth_deps, "is_single_user_mode", _mode_helper_should_not_be_called, raising=False)
+    monkeypatch.setattr(auth_deps, "is_single_user_profile_mode", _profile_helper_should_not_be_called, raising=False)
     monkeypatch.setattr(auth_deps, "get_auth_governor", _boom_auth_governor)
 
     calls = {"count": 0}
@@ -307,79 +344,94 @@ async def test_admin_rate_limit_bypass_is_principal_first(
 
 
 @pytest.mark.asyncio
-async def test_check_rate_limit_falls_back_to_ip_for_non_int_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_check_rate_limit_enforces_fallback_limiter_when_rg_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RG_ENABLED", "0")
     monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AUTH_DEPS_FALLBACK_RATE_LIMIT", "1")
+    monkeypatch.setenv("AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS", "60")
+
+    async def _fake_get_auth_governor() -> object:
+        return object()
+
+    monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+    auth_deps._AUTH_DEPS_FALLBACK_RATE_WINDOWS.clear()
+
     request = _DummyRequest()
     request.state.user_id = "not-an-int"
-
-    calls = {"user": 0, "ip": 0}
-
-    class _StubLimiter:
-        enabled = True
-
-        async def check_user_rate_limit(self, user_id, endpoint, **kwargs):
-            calls["user"] += 1
-            return True, {}
-
-        async def check_rate_limit(self, identifier, endpoint, **kwargs):
-            calls["ip"] += 1
-            return True, {}
-
-    await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
-    assert calls["user"] == 0
-    assert calls["ip"] == 1
-
-
-@pytest.mark.asyncio
-async def test_check_auth_rate_limit_uses_fallback_limiter_when_rg_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("RG_ENABLED", "0")
-    monkeypatch.setenv("TEST_MODE", "0")
-    monkeypatch.setenv("TLDW_TEST_MODE", "0")
-    monkeypatch.setenv("TESTING", "0")
-
-    async def _fake_get_auth_governor() -> object:
-        return object()
-
-    monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
-
-    request = _DummyRequest()
-    request.url.path = "/api/v1/auth/forgot-password"
-
-    calls: dict[str, Any] = {}
+    request.url.path = "/api/v1/rag/search"
 
     class _StubLimiter:
         enabled = True
 
-        async def check_rate_limit_fallback(self, **kwargs):
-            calls.update(kwargs)
-            return True, {"rate_limit_source": "authnz_fallback_db"}
+        async def check_user_rate_limit(self, **kwargs):
+            _ = kwargs
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is disabled")
 
         async def check_rate_limit(self, **kwargs):
-            raise AssertionError(
-                "check_auth_rate_limit should use check_rate_limit_fallback when RG ingress is inactive"
-            )
+            _ = kwargs
+            raise AssertionError("legacy limiter should not be used by auth_deps fallback")
 
-    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
-    assert calls["identifier"] == "ip:127.0.0.1"
-    assert calls["endpoint"] == "auth:/api/v1/auth/forgot-password"
-    assert calls["window_minutes"] == 1
+    await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
-async def test_check_auth_rate_limit_fails_open_when_fallback_backend_unavailable(
+async def test_check_rate_limit_enforces_fallback_limiter_when_rg_enabled_without_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RG_ENABLED", "1")
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AUTH_DEPS_FALLBACK_RATE_LIMIT", "1")
+    monkeypatch.setenv("AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS", "60")
+
+    async def _fake_get_auth_governor() -> object:
+        return object()
+
+    monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+    auth_deps._AUTH_DEPS_FALLBACK_RATE_WINDOWS.clear()
+
+    request = _DummyRequest()
+    request.url.path = "/api/v1/rag/search"
+
+    class _StubLimiter:
+        enabled = True
+
+        async def check_user_rate_limit(self, **kwargs):
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
+
+        async def check_rate_limit(self, **kwargs):
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
+
+    await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_check_auth_rate_limit_enforces_fallback_limiter_when_rg_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RG_ENABLED", "0")
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
     monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT", "1")
+    monkeypatch.setenv("AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS", "60")
 
     async def _fake_get_auth_governor() -> object:
         return object()
 
     monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+    auth_deps._AUTH_DEPS_FALLBACK_RATE_WINDOWS.clear()
 
     request = _DummyRequest()
     request.url.path = "/api/v1/auth/forgot-password"
@@ -389,42 +441,51 @@ async def test_check_auth_rate_limit_fails_open_when_fallback_backend_unavailabl
 
         async def check_rate_limit_fallback(self, **kwargs):
             _ = kwargs
-            return True, {"rate_limit_source": "authnz_fallback_db", "error": "fallback_limiter_unavailable"}
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is disabled")
 
         async def check_rate_limit(self, **kwargs):
-            raise AssertionError("legacy no-op path should not be called")
+            _ = kwargs
+            raise AssertionError("legacy limiter should not be used by auth_deps fallback")
 
     await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
-async def test_check_auth_rate_limit_legacy_limiter_path_when_fallback_method_missing(
+async def test_check_auth_rate_limit_enforces_fallback_limiter_when_rg_enabled_without_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("RG_ENABLED", "0")
+    monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
     monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT", "1")
+    monkeypatch.setenv("AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS", "60")
 
     async def _fake_get_auth_governor() -> object:
         return object()
 
     monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+    auth_deps._AUTH_DEPS_FALLBACK_RATE_WINDOWS.clear()
 
     request = _DummyRequest()
     request.url.path = "/api/v1/auth/forgot-password"
 
-    calls: dict[str, Any] = {}
-
-    class _LegacyOnlyLimiter:
+    class _StubLimiter:
         enabled = True
 
-        async def check_rate_limit(self, **kwargs):
-            calls.update(kwargs)
-            return True, {"rate_limit_source": "legacy"}
+        async def check_rate_limit_fallback(self, **kwargs):
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
 
-    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_LegacyOnlyLimiter())
-    assert calls["identifier"] == "ip:127.0.0.1"
+        async def check_rate_limit(self, **kwargs):
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
+
+    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
@@ -465,6 +526,7 @@ async def test_get_session_manager_dep_does_not_use_stub_without_explicit_pytest
 @pytest.mark.asyncio
 async def test_get_db_transaction_requires_explicit_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
 
     sentinel = object()
 
@@ -491,5 +553,146 @@ async def test_get_db_transaction_requires_explicit_test_mode(monkeypatch: pytes
     try:
         conn = await agen.__anext__()
         assert conn is sentinel
+    finally:
+        await agen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_db_transaction_retries_lock_contention_on_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_MAX_RETRIES", "2")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_BASE_SECONDS", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_MAX_SECONDS", "0")
+
+    pool = _LockingPool(lock_on_enter_count=1, raise_lock_on_exit=False)
+
+    async def _fake_get_db_pool() -> _LockingPool:
+        return pool
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(auth_deps, "get_db_pool", _fake_get_db_pool)
+    monkeypatch.setattr(auth_deps.asyncio, "sleep", _fake_sleep)
+
+    agen = auth_deps.get_db_transaction()
+    try:
+        conn = await agen.__anext__()
+        assert conn is pool.conn
+    finally:
+        await agen.aclose()
+
+    assert pool.enter_calls == 2
+    assert pool.exit_calls == 1
+    assert sleep_calls == [0.0]
+
+
+@pytest.mark.asyncio
+async def test_get_db_transaction_returns_503_when_lock_retries_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_MAX_RETRIES", "1")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_BASE_SECONDS", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_MAX_SECONDS", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_AFTER_SECONDS", "7")
+
+    pool = _LockingPool(lock_on_enter_count=5, raise_lock_on_exit=False)
+
+    async def _fake_get_db_pool() -> _LockingPool:
+        return pool
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(auth_deps, "get_db_pool", _fake_get_db_pool)
+    monkeypatch.setattr(auth_deps.asyncio, "sleep", _fake_sleep)
+
+    agen = auth_deps.get_db_transaction()
+    with pytest.raises(HTTPException) as exc_info:
+        await agen.__anext__()
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.headers is not None
+    assert exc_info.value.headers.get("Retry-After") == "7"
+    assert pool.enter_calls == 2
+    assert pool.exit_calls == 0
+    assert sleep_calls == [0.0]
+
+
+@pytest.mark.asyncio
+async def test_get_db_transaction_maps_cleanup_lock_error_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_AFTER_SECONDS", "3")
+
+    pool = _LockingPool(lock_on_enter_count=0, raise_lock_on_exit=True)
+
+    async def _fake_get_db_pool() -> _LockingPool:
+        return pool
+
+    monkeypatch.setattr(auth_deps, "get_db_pool", _fake_get_db_pool)
+
+    agen = auth_deps.get_db_transaction()
+    conn = await agen.__anext__()
+    assert conn is pool.conn
+
+    with pytest.raises(HTTPException) as exc_info:
+        await agen.__anext__()
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.headers is not None
+    assert exc_info.value.headers.get("Retry-After") == "3"
+    assert pool.enter_calls == 1
+    assert pool.exit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_db_transaction_uses_adapter_when_tldw_test_mode_is_y(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "y")
+
+    class _Conn:
+        async def execute(self, query: str, params: Any) -> Any:
+            return SimpleNamespace()
+
+        async def commit(self) -> None:
+            return None
+
+    class _Acquire:
+        async def __aenter__(self) -> _Conn:
+            return _Conn()
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _Pool:
+        def acquire(self) -> _Acquire:
+            return _Acquire()
+
+        def transaction(self) -> object:
+            raise AssertionError("transaction() path should not be used when TLDW_TEST_MODE=y")
+
+    async def _fake_get_db_pool() -> _Pool:
+        return _Pool()
+
+    monkeypatch.setattr(auth_deps, "get_db_pool", _fake_get_db_pool)
+
+    agen = auth_deps.get_db_transaction()
+    try:
+        conn = await agen.__anext__()
+        assert hasattr(conn, "execute")
     finally:
         await agen.aclose()

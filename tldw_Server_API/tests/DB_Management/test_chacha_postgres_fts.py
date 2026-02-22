@@ -27,6 +27,15 @@ def _make_postgres_db() -> CharactersRAGDB:
     db.backend_type = BackendType.POSTGRESQL
     db.backend = MagicMock()
     db._CHARACTER_CARD_JSON_FIELDS = []
+
+    class _TxConn:
+        _connection = None
+
+    @contextmanager
+    def fake_transaction() -> Iterable[_TxConn]:
+        yield _TxConn()
+
+    db.transaction = fake_transaction  # type: ignore[assignment]
     return db
 
 

@@ -13,8 +13,23 @@ import { TableBlock } from "./TableBlock"
 import { preprocessLaTeX } from "@/utils/latex"
 import { useStorage } from "@plasmohq/storage/hook"
 import { highlightText } from "@/utils/text-highlight"
-import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
+import {
+  DEFAULT_CHAT_SETTINGS,
+  type ChatRichTextMode
+} from "@/types/chat-settings"
 import { normalizeLanguage, resolveTheme, safeLanguage } from "@/utils/code-theme"
+import {
+  normalizeChatRichTextMode,
+  renderStCompatMarkdownToHtml
+} from "@/utils/chat-rich-text"
+import {
+  normalizeChatRichTextColor,
+  normalizeChatRichTextFont,
+  resolveChatRichTextStyleCssVars
+} from "@/utils/chat-rich-text-style"
+
+const RICH_TEXT_ELEMENT_STYLE_CLASS =
+  "[&_em]:[color:var(--rt-italic-color)] [&_em]:[font-family:var(--rt-italic-font)] [&_strong]:[color:var(--rt-bold-color)] [&_strong]:[font-family:var(--rt-bold-font)] [&_blockquote]:[color:var(--rt-quote-text-color)] [&_blockquote]:[font-family:var(--rt-quote-font)] [&_blockquote]:[border-left-color:var(--rt-quote-border-color)] [&_blockquote]:[background-color:var(--rt-quote-bg-color)] [&_blockquote]:border-l-4 [&_blockquote]:rounded-md [&_blockquote]:px-3 [&_blockquote]:py-2"
 
 function Markdown({
   message,
@@ -22,16 +37,57 @@ function Markdown({
   searchQuery,
   codeBlockVariant = "default",
   allowExternalImages,
+  richTextModeOverride,
 }: {
   message: string
   className?: string
   searchQuery?: string
-  codeBlockVariant?: "default" | "plain" | "compact"
+  codeBlockVariant?: "default" | "plain" | "compact" | "github"
   allowExternalImages?: boolean
+  richTextModeOverride?: ChatRichTextMode
 }) {
   const [checkWideMode] = useStorage("checkWideMode", false)
   const [codeTheme] = useStorage("codeTheme", "auto")
-  const [allowExternalImagesSetting] = useStorage("allowExternalImages", DEFAULT_CHAT_SETTINGS.allowExternalImages)
+  const [allowExternalImagesSetting] = useStorage(
+    "allowExternalImages",
+    DEFAULT_CHAT_SETTINGS.allowExternalImages
+  )
+  const [chatRichTextModeRaw] = useStorage(
+    "chatRichTextMode",
+    DEFAULT_CHAT_SETTINGS.chatRichTextMode
+  )
+  const [chatRichItalicColorRaw] = useStorage(
+    "chatRichItalicColor",
+    DEFAULT_CHAT_SETTINGS.chatRichItalicColor
+  )
+  const [chatRichItalicFontRaw] = useStorage(
+    "chatRichItalicFont",
+    DEFAULT_CHAT_SETTINGS.chatRichItalicFont
+  )
+  const [chatRichBoldColorRaw] = useStorage(
+    "chatRichBoldColor",
+    DEFAULT_CHAT_SETTINGS.chatRichBoldColor
+  )
+  const [chatRichBoldFontRaw] = useStorage(
+    "chatRichBoldFont",
+    DEFAULT_CHAT_SETTINGS.chatRichBoldFont
+  )
+  const [chatRichQuoteTextColorRaw] = useStorage(
+    "chatRichQuoteTextColor",
+    DEFAULT_CHAT_SETTINGS.chatRichQuoteTextColor
+  )
+  const [chatRichQuoteFontRaw] = useStorage(
+    "chatRichQuoteFont",
+    DEFAULT_CHAT_SETTINGS.chatRichQuoteFont
+  )
+  const [chatRichQuoteBorderColorRaw] = useStorage(
+    "chatRichQuoteBorderColor",
+    DEFAULT_CHAT_SETTINGS.chatRichQuoteBorderColor
+  )
+  const [chatRichQuoteBackgroundColorRaw] = useStorage(
+    "chatRichQuoteBackgroundColor",
+    DEFAULT_CHAT_SETTINGS.chatRichQuoteBackgroundColor
+  )
   const blockIndexRef = React.useRef(0)
   // Reset index each render pass to assign sequential indices to code blocks.
   blockIndexRef.current = 0
@@ -39,8 +95,71 @@ function Markdown({
     if (!checkWideMode) return className
     return `${className} max-w-none`
   }, [checkWideMode, className])
-  const resolvedAllowExternalImages = typeof allowExternalImages === "boolean" ? allowExternalImages : allowExternalImagesSetting
-  const paragraphClass = codeBlockVariant === "plain" || codeBlockVariant === "compact" ? "mb-2 last:mb-0 whitespace-pre-wrap" : "mb-2 last:mb-0"
+  const resolvedAllowExternalImages =
+    typeof allowExternalImages === "boolean"
+      ? allowExternalImages
+      : allowExternalImagesSetting
+  const richTextMode = React.useMemo(
+    () =>
+      normalizeChatRichTextMode(
+        richTextModeOverride ?? chatRichTextModeRaw,
+        DEFAULT_CHAT_SETTINGS.chatRichTextMode
+      ),
+    [chatRichTextModeRaw, richTextModeOverride]
+  )
+  const richTextStyleVars = React.useMemo(
+    () =>
+      resolveChatRichTextStyleCssVars({
+        chatRichItalicColor: normalizeChatRichTextColor(
+          chatRichItalicColorRaw,
+          DEFAULT_CHAT_SETTINGS.chatRichItalicColor
+        ),
+        chatRichItalicFont: normalizeChatRichTextFont(
+          chatRichItalicFontRaw,
+          DEFAULT_CHAT_SETTINGS.chatRichItalicFont
+        ),
+        chatRichBoldColor: normalizeChatRichTextColor(
+          chatRichBoldColorRaw,
+          DEFAULT_CHAT_SETTINGS.chatRichBoldColor
+        ),
+        chatRichBoldFont: normalizeChatRichTextFont(
+          chatRichBoldFontRaw,
+          DEFAULT_CHAT_SETTINGS.chatRichBoldFont
+        ),
+        chatRichQuoteTextColor: normalizeChatRichTextColor(
+          chatRichQuoteTextColorRaw,
+          DEFAULT_CHAT_SETTINGS.chatRichQuoteTextColor
+        ),
+        chatRichQuoteFont: normalizeChatRichTextFont(
+          chatRichQuoteFontRaw,
+          DEFAULT_CHAT_SETTINGS.chatRichQuoteFont
+        ),
+        chatRichQuoteBorderColor: normalizeChatRichTextColor(
+          chatRichQuoteBorderColorRaw,
+          DEFAULT_CHAT_SETTINGS.chatRichQuoteBorderColor
+        ),
+        chatRichQuoteBackgroundColor: normalizeChatRichTextColor(
+          chatRichQuoteBackgroundColorRaw,
+          DEFAULT_CHAT_SETTINGS.chatRichQuoteBackgroundColor
+        )
+      }),
+    [
+      chatRichBoldColorRaw,
+      chatRichBoldFontRaw,
+      chatRichItalicColorRaw,
+      chatRichItalicFontRaw,
+      chatRichQuoteBackgroundColorRaw,
+      chatRichQuoteBorderColorRaw,
+      chatRichQuoteFontRaw,
+      chatRichQuoteTextColorRaw
+    ]
+  )
+  const paragraphClass =
+    codeBlockVariant === "plain" ||
+    codeBlockVariant === "compact" ||
+    codeBlockVariant === "github"
+      ? "mb-2 last:mb-0 whitespace-pre-wrap"
+      : "mb-2 last:mb-0"
   const renderHighlightedChildren = React.useCallback(
     (children: React.ReactNode): React.ReactNode => {
       if (!searchQuery) return children
@@ -59,16 +178,42 @@ function Markdown({
     [searchQuery],
   )
   const processedMessage = React.useMemo(() => preprocessLaTeX(message), [message])
+  const stCompatHtml = React.useMemo(() => {
+    if (richTextMode !== "st_compat") return ""
+    return renderStCompatMarkdownToHtml(
+      processedMessage,
+      resolvedAllowExternalImages
+    )
+  }, [processedMessage, resolvedAllowExternalImages, richTextMode])
+
+  if (richTextMode === "st_compat") {
+    return (
+      <div
+        className={`${resolvedClassName} ${RICH_TEXT_ELEMENT_STYLE_CLASS} [&_.st-inline-spoiler]:rounded-sm [&_.st-inline-spoiler]:bg-surface2 [&_.st-inline-spoiler]:px-1 [&_.st-inline-spoiler]:py-0.5 [&_.st-inline-spoiler]:font-medium [&_.st-spoiler]:my-2 [&_.st-spoiler]:rounded-md [&_.st-spoiler]:border [&_.st-spoiler]:border-border [&_.st-spoiler]:bg-surface2/70 [&_.st-spoiler]:px-3 [&_.st-spoiler]:py-2 [&_.st-spoiler_>summary]:cursor-pointer [&_.st-spoiler_>summary]:font-medium [&_.st-external-image-blocked]:inline-flex [&_.st-external-image-blocked]:items-center [&_.st-external-image-blocked]:gap-2 [&_.st-external-image-blocked]:rounded-md [&_.st-external-image-blocked]:border [&_.st-external-image-blocked]:border-border [&_.st-external-image-blocked]:bg-surface2 [&_.st-external-image-blocked]:px-2 [&_.st-external-image-blocked]:py-1 [&_.st-external-image-blocked]:text-[11px] [&_.st-external-image-blocked]:text-text-muted`}
+        style={richTextStyleVars as React.CSSProperties}
+        dangerouslySetInnerHTML={{ __html: stCompatHtml }}
+      />
+    )
+  }
+
   return (
-    <React.Fragment>
+    <div
+      className={`${resolvedClassName} ${RICH_TEXT_ELEMENT_STYLE_CLASS}`}
+      style={richTextStyleVars as React.CSSProperties}
+    >
       <ReactMarkdown
-        className={resolvedClassName}
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
           pre({ children, ...props }) {
             const childArray = React.Children.toArray(children)
-            const codeChild = childArray.find((child) => React.isValidElement(child) && child.type === "code") as React.ReactElement | undefined
+            const codeChild = childArray.find((child) => {
+              if (!React.isValidElement(child)) return false
+              const element = child as React.ReactElement
+              const className = element.props?.className as string | undefined
+              const nodeTag = element.props?.node?.tagName
+              return Boolean(className || nodeTag === "code")
+            }) as React.ReactElement | undefined
 
             if (!codeChild) {
               return <pre {...props}>{children}</pre>
@@ -85,7 +230,7 @@ function Markdown({
             if (codeBlockVariant === "compact") {
               const rawLanguage = match ? match[1] : ""
               const normalizedLanguage = normalizeLanguage(rawLanguage)
-              const highlightLanguage = rawLanguage ? normalizedLanguage : "markdown"
+              const highlightLanguage = rawLanguage ? normalizedLanguage : "plaintext"
               return (
                 <div className="not-prose my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 overflow-x-auto">
                   <Highlight code={value} language={safeLanguage(highlightLanguage)} theme={resolveTheme(codeTheme || "dracula")}>
@@ -96,6 +241,44 @@ function Markdown({
                           ...style,
                           backgroundColor: "transparent",
                           fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        {tokens.map((line, i) => (
+                          <div key={i} {...getLineProps({ line, key: i })}>
+                            {line.map((token, key) => (
+                              <span key={key} {...getTokenProps({ token, key })} />
+                            ))}
+                          </div>
+                        ))}
+                      </pre>
+                    )}
+                  </Highlight>
+                </div>
+              )
+            }
+            if (codeBlockVariant === "github") {
+              const rawLanguage = match ? match[1] : ""
+              const normalizedLanguage = normalizeLanguage(rawLanguage)
+              return (
+                <div className="not-prose my-2 overflow-x-auto rounded-md border border-border/80 bg-surface2/70 px-4 py-3">
+                  <Highlight
+                    code={value}
+                    language={safeLanguage(normalizedLanguage)}
+                    theme={resolveTheme("auto")}
+                  >
+                    {({
+                      className: highlightClassName,
+                      style,
+                      tokens,
+                      getLineProps,
+                      getTokenProps
+                    }) => (
+                      <pre
+                        className={`${highlightClassName} m-0 text-xs font-mono leading-relaxed`}
+                        style={{
+                          ...style,
+                          backgroundColor: "transparent",
+                          fontFamily: "var(--font-mono)"
                         }}
                       >
                         {tokens.map((line, i) => (
@@ -123,7 +306,7 @@ function Markdown({
           },
           a({ ...props }) {
             return (
-              <a target="_blank" rel="noopener noreferrer" className="text-blue-500 text-sm hover:underline" {...props}>
+              <a target="_blank" rel="noopener noreferrer" className="text-primary text-sm hover:underline" {...props}>
                 {props.children}
               </a>
             )
@@ -188,7 +371,7 @@ function Markdown({
       >
         {processedMessage}
       </ReactMarkdown>
-    </React.Fragment>
+    </div>
   )
 }
 

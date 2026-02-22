@@ -1083,7 +1083,7 @@ class TestCacheTTL:
 
         # Force cache timestamp to be in the past
         with engine._lock:
-            engine._cache_timestamps["child1"] = 0.0
+            engine._cache_timestamps["child1:"] = 0.0
 
         result2 = engine.check_text("cached_word here", "child1")
         assert result2.action == "pass"
@@ -1114,3 +1114,274 @@ class TestSeverityPropagation:
         )
         result = engine.check_text("mild_content here", "child1")
         assert result.severity == "info"
+
+
+# ── 30. GovernancePolicyId on SupervisedPolicy ────────────────
+
+
+class TestGovernancePolicyId:
+    def test_create_policy_with_governance_policy_id(self, db, engine):
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="School Hours",
+            policy_mode="guardian",
+        )
+        pol = db.create_policy(
+            relationship_id=rel.id,
+            pattern="games",
+            action="block",
+            governance_policy_id=gp.id,
+        )
+        assert pol.governance_policy_id == gp.id
+        # Read back
+        fetched = db.get_policy(pol.id)
+        assert fetched.governance_policy_id == gp.id
+
+    def test_policy_without_governance_policy_id_backward_compat(self, db, engine):
+        rel = _setup_active_relationship(db)
+        pol = db.create_policy(
+            relationship_id=rel.id,
+            pattern="test",
+            action="warn",
+        )
+        assert pol.governance_policy_id is None
+        fetched = db.get_policy(pol.id)
+        assert fetched.governance_policy_id is None
+
+    def test_update_governance_policy_id(self, db, engine):
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="Evening Policy",
+            policy_mode="guardian",
+        )
+        pol = db.create_policy(
+            relationship_id=rel.id,
+            pattern="test",
+            action="warn",
+        )
+        assert pol.governance_policy_id is None
+        db.update_policy(pol.id, governance_policy_id=gp.id)
+        fetched = db.get_policy(pol.id)
+        assert fetched.governance_policy_id == gp.id
+
+
+# ── 31. Schedule Filtering ────────────────────────────────────
+
+
+class TestScheduleFiltering:
+    def test_policy_skipped_outside_schedule(self, db, engine):
+        """Policy linked to a governance policy with a non-matching day is skipped."""
+        rel = _setup_active_relationship(db)
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("UTC"))
+        day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        # Pick a day that is NOT today
+        other_day = day_names[(now.weekday() + 3) % 7]
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="Weekday Only",
+            policy_mode="guardian",
+            schedule_days=other_day,
+            schedule_timezone="UTC",
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="restricted",
+            action="block",
+            governance_policy_id=gp.id,
+        )
+        result = engine.check_text("restricted content", "child1")
+        assert result.action == "pass"
+
+    def test_policy_active_within_schedule(self, db, engine):
+        """Policy linked to a governance policy with today's day should fire."""
+        rel = _setup_active_relationship(db)
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("UTC"))
+        day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        today_name = day_names[now.weekday()]
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="Today Policy",
+            policy_mode="guardian",
+            schedule_days=today_name,
+            schedule_timezone="UTC",
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="restricted",
+            action="block",
+            governance_policy_id=gp.id,
+        )
+        result = engine.check_text("restricted content", "child1")
+        assert result.action == "block"
+
+    def test_no_schedule_always_active(self, db, engine):
+        """Policy linked to governance policy with no schedule is always active."""
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="No Schedule",
+            policy_mode="guardian",
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="word",
+            action="block",
+            governance_policy_id=gp.id,
+        )
+        result = engine.check_text("word here", "child1")
+        assert result.action == "block"
+
+
+# ── 32. Chat-Type Filtering ──────────────────────────────────
+
+
+class TestChatTypeFiltering:
+    def test_policy_skipped_for_wrong_chat_type(self, db, engine):
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="Character Only",
+            policy_mode="guardian",
+            scope_chat_types="character",
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="trigger",
+            action="block",
+            governance_policy_id=gp.id,
+        )
+        result = engine.check_text("trigger word", "child1", chat_type="regular")
+        assert result.action == "pass"
+
+    def test_policy_matches_for_correct_chat_type(self, db, engine):
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="Character Only",
+            policy_mode="guardian",
+            scope_chat_types="character",
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="trigger",
+            action="block",
+            governance_policy_id=gp.id,
+        )
+        result = engine.check_text("trigger word", "child1", chat_type="character")
+        assert result.action == "block"
+
+    def test_scope_all_matches_any_chat_type(self, db, engine):
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="All Types",
+            policy_mode="guardian",
+            scope_chat_types="all",
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="trigger",
+            action="block",
+            governance_policy_id=gp.id,
+        )
+        result = engine.check_text("trigger word", "child1", chat_type="rag")
+        assert result.action == "block"
+
+
+# ── 33. Transparent Mode ─────────────────────────────────────
+
+
+class TestTransparentMode:
+    def test_transparent_shows_rule_name(self, db, engine):
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="School Policy",
+            policy_mode="guardian",
+            transparent=True,
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="games",
+            action="block",
+            category="entertainment",
+            governance_policy_id=gp.id,
+        )
+        result = engine.check_text("play some games", "child1")
+        assert result.action == "block"
+        assert result.rule_name_visible == "School Policy"
+        assert "School Policy" in result.message_to_dependent
+
+    def test_non_transparent_hides_rule_name(self, db, engine):
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="Hidden Policy",
+            policy_mode="guardian",
+            transparent=False,
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="games",
+            action="block",
+            governance_policy_id=gp.id,
+        )
+        result = engine.check_text("play some games", "child1")
+        assert result.action == "block"
+        assert result.rule_name_visible is None
+
+
+# ── 34. Guardian Notification Dispatch ────────────────────────
+
+
+class TestGuardianNotificationDispatch:
+    def test_dispatches_when_notify_guardian_true(self, db, engine):
+        from unittest.mock import MagicMock, patch
+        from tldw_Server_API.app.core.Moderation.supervised_policy import (
+            SupervisedCheckResult,
+            dispatch_guardian_notification,
+        )
+        result = SupervisedCheckResult(
+            action="block",
+            notify_guardian=True,
+            severity="critical",
+            matched_category="violence",
+            matched_pattern="fight",
+        )
+        mock_svc = MagicMock()
+        mock_svc.notify_or_batch.return_value = "logged"
+        with patch(
+            "tldw_Server_API.app.core.Monitoring.notification_service.get_notification_service",
+            return_value=mock_svc,
+        ):
+            status = dispatch_guardian_notification(result, "child1", "guardian1")
+        assert status == "logged"
+        mock_svc.notify_or_batch.assert_called_once()
+        payload = mock_svc.notify_or_batch.call_args[0][0]
+        assert payload["type"] == "guardian_alert"
+        assert payload["dependent_user_id"] == "child1"
+        assert payload["guardian_user_id"] == "guardian1"
+
+    def test_skipped_when_action_pass(self):
+        from tldw_Server_API.app.core.Moderation.supervised_policy import (
+            SupervisedCheckResult,
+            dispatch_guardian_notification,
+        )
+        result = SupervisedCheckResult(action="pass", notify_guardian=True)
+        status = dispatch_guardian_notification(result, "child1")
+        assert status == "skipped"
+
+    def test_skipped_when_notify_guardian_false(self):
+        from tldw_Server_API.app.core.Moderation.supervised_policy import (
+            SupervisedCheckResult,
+            dispatch_guardian_notification,
+        )
+        result = SupervisedCheckResult(action="block", notify_guardian=False)
+        status = dispatch_guardian_notification(result, "child1")
+        assert status == "skipped"

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.testing import is_truthy
 
 from ..models import RunPhase, RunSpec, RunStatus
 from ..network_policy import (
@@ -46,7 +47,7 @@ def docker_available() -> bool:
     # Prefer explicit override for CI/tests; otherwise probe PATH
     env = os.getenv("TLDW_SANDBOX_DOCKER_AVAILABLE")
     if env is not None:
-        return env.lower() in {"1", "true", "yes", "on"}
+        return is_truthy(env)
     return shutil.which("docker") is not None
 
 
@@ -61,7 +62,7 @@ class DockerRunner:
         pass
 
     def _truthy(self, v: str | None) -> bool:
-        return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+        return is_truthy(v)
 
     @staticmethod
     def _docker_version() -> str | None:
@@ -341,7 +342,8 @@ class DockerRunner:
             cmd += ["--mount", f"type=bind,src={session_workspace},dst=/workspace"]
         else:
             cmd += ["--tmpfs", f"/workspace:rw,noexec,nodev,nosuid,uid={uid},gid={gid},size={ws_cap}m"]
-        cmd += ["--tmpfs", f"/tmp:rw,noexec,nodev,nosuid,uid={uid},gid={gid},size=64m"]
+        # Container-scoped tmpfs mount path, not host temp-dir creation.
+        cmd += ["--tmpfs", f"/tmp:rw,noexec,nodev,nosuid,uid={uid},gid={gid},size=64m"]  # nosec B108
         # Working dir
         cmd += ["-w", "/workspace"]
 
@@ -357,6 +359,8 @@ class DockerRunner:
             port_mappings = list(getattr(spec, "port_mappings", []) or [])
         except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             port_mappings = []
+        # OpenSSH in capability-dropped containers needs a small capability set for pre-auth.
+        needs_ssh_caps = False
         for mapping in port_mappings:
             try:
                 host_ip = str(mapping.get("host_ip") or "127.0.0.1")
@@ -364,7 +368,11 @@ class DockerRunner:
                 container_port = int(mapping.get("container_port"))
             except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 continue
+            if container_port == 22:
+                needs_ssh_caps = True
             cmd += ["-p", f"{host_ip}:{host_port}:{container_port}"]
+        if needs_ssh_caps:
+            cmd += ["--cap-add", "SYS_CHROOT", "--cap-add", "SETUID", "--cap-add", "SETGID"]
 
         image = spec.base_image or "python:3.11-slim"
         cmd.append(image)

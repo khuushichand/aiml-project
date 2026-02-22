@@ -5,6 +5,7 @@ import contextlib
 import inspect
 import json
 import time
+from types import ModuleType
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,7 +19,6 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_usage_event_logger,
 )
-from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import get_job_manager
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.tts_service import _raise_for_tts_error
@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSError, TTSAuthenticationError
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2, get_tts_service_v2
 from tldw_Server_API.app.core.TTS.utils import (
     build_tts_segments_payload,
@@ -49,6 +50,7 @@ _AUDIO_TTS_NONCRITICAL_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
     json.JSONDecodeError,
+    TTSError,
     HTTPException,
     QuotaExceededError,
     StorageError,
@@ -64,18 +66,55 @@ router = APIRouter(
 )
 
 
+def get_job_manager() -> JobManager:
+    """Lazy import to avoid loading audio_jobs (and heavy transcriber deps) at module import time."""
+    from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import get_job_manager as _get_job_manager
+
+    return _get_job_manager()
+
+
 def _audio_shim_attr(name: str):
-    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
-    try:
-        if name in getattr(audio_shim, "__dict__", {}):
-            return getattr(audio_shim, name)
-    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
-        pass
+    def _is_override(value: Any) -> bool:
+        if value is None or isinstance(value, ModuleType):
+            return False
+        mod_name = getattr(value, "__module__", None)
+        if isinstance(mod_name, str) and mod_name:
+            return not mod_name.startswith("tldw_Server_API.")
+        return True
+
+    mod_has = False
+    mod_value: Any = None
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
 
         if hasattr(audio_mod, name):
-            return getattr(audio_mod, name)
+            mod_has = True
+            mod_value = getattr(audio_mod, name)
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+        mod_has = False
+        mod_value = None
+    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
+    pkg_dict = getattr(audio_shim, "__dict__", {})
+    pkg_has = name in pkg_dict
+    pkg_value = pkg_dict.get(name) if pkg_has else None
+
+    if pkg_has and mod_has and pkg_value is not mod_value:
+        pkg_override = _is_override(pkg_value)
+        mod_override = _is_override(mod_value)
+        if mod_override and not pkg_override:
+            return mod_value
+        if pkg_override and not mod_override:
+            return pkg_value
+        if mod_override and pkg_override:
+            return mod_value
+
+    if pkg_has:
+        return pkg_value
+    if mod_has:
+        return mod_value
+    try:
+        if hasattr(audio_shim, name):
+            return getattr(audio_shim, name)
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
         pass
     if not hasattr(audio_shim, name):
@@ -95,6 +134,56 @@ def _tts_history_config() -> dict[str, Any]:
 def _extract_tts_metadata(request_data: OpenAISpeechRequest) -> dict[str, Any]:
     metadata = getattr(request_data, "_tts_metadata", None)
     return metadata if isinstance(metadata, dict) else {}
+
+
+_AUDIO_CONTENT_TYPE_MAP = {
+    "mp3": "audio/mpeg",
+    "opus": "audio/opus",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+    "wav": "audio/wav",
+    "pcm": "audio/L16; rate=24000; channels=1",
+}
+
+
+def _coerce_positive_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _resolve_pcm_sample_rate(request_data: OpenAISpeechRequest) -> int:
+    metadata = _extract_tts_metadata(request_data)
+    candidates: list[Any] = [
+        metadata.get("sample_rate"),
+        getattr(request_data, "target_sample_rate", None),
+    ]
+    extra_params = getattr(request_data, "extra_params", None)
+    if isinstance(extra_params, dict):
+        candidates.append(extra_params.get("target_sample_rate"))
+        candidates.append(extra_params.get("sample_rate"))
+
+    for candidate in candidates:
+        parsed = _coerce_positive_int(candidate)
+        if parsed is not None:
+            return parsed
+    return 24000
+
+
+def _resolve_response_content_type(request_data: OpenAISpeechRequest) -> str:
+    base_type = _AUDIO_CONTENT_TYPE_MAP.get(request_data.response_format, "audio/mpeg")
+    if request_data.response_format != "pcm":
+        return base_type
+    sample_rate = _resolve_pcm_sample_rate(request_data)
+    return f"audio/L16; rate={sample_rate}; channels=1"
+
+
+def _append_pcm_response_headers(request_data: OpenAISpeechRequest, headers: dict[str, str]) -> None:
+    if request_data.response_format != "pcm":
+        return
+    headers["X-Audio-Sample-Rate"] = str(_resolve_pcm_sample_rate(request_data))
 
 
 def _tts_history_error_message(exc: Exception) -> str:
@@ -208,6 +297,10 @@ async def get_tts_service() -> TTSServiceV2:
     responses={
         200: {
             "headers": {
+                "X-Audio-Sample-Rate": {
+                    "description": "Resolved PCM sample rate in Hz (present when response_format=pcm).",
+                    "schema": {"type": "string"},
+                },
                 "X-TTS-Alignment": {
                     "description": "Base64url-encoded JSON alignment payload when available (non-streaming).",
                     "schema": {"type": "string"},
@@ -258,8 +351,35 @@ async def create_speech(
         current_user=current_user,
         request=request,
     )
+    oauth_retry_attempted = False
+
+    def _is_openai_oauth_request() -> bool:
+        return (
+            tts_provider_hint == "openai"
+            and byok_tts_resolution is not None
+            and getattr(byok_tts_resolution, "auth_source", None) == "oauth"
+        )
+
+    def _is_tts_auth_failure(exc: BaseException) -> bool:
+        if isinstance(exc, TTSAuthenticationError):
+            return True
+        try:
+            return int(getattr(exc, "status_code", 0) or 0) == status.HTTP_401_UNAUTHORIZED
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+            return False
+
+    def _raise_oauth_reconnect_required() -> None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error_code": "oauth_reconnect_required",
+                "provider": "openai",
+                "reconnect_required": True,
+                "message": "OpenAI OAuth access is no longer valid. Reconnect OpenAI and retry.",
+            },
+        )
     logger.info(
-        "Received speech request: model=%s, voice=%s, format=%s, request_id=%s",
+        'Received speech request: model={}, voice={}, format={}, request_id={}',
         request_data.model,
         request_data.voice,
         request_data.response_format,
@@ -293,22 +413,14 @@ async def create_speech(
         logger.debug(f"usage_log audio.tts failed: error={e}")
 
     # Determine Content-Type
-    content_type_map = {
-        "mp3": "audio/mpeg",
-        "opus": "audio/opus",
-        "aac": "audio/aac",
-        "flac": "audio/flac",
-        "wav": "audio/wav",
-        "pcm": "audio/L16; rate=24000; channels=1",
-    }
-    content_type = content_type_map.get(request_data.response_format)
+    content_type = _AUDIO_CONTENT_TYPE_MAP.get(request_data.response_format)
     if not content_type:
         logger.warning(f"Unsupported response format: {request_data.response_format}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 "Unsupported response_format: "
-                f"{request_data.response_format}. Supported formats are: {', '.join(content_type_map.keys())}"
+                f"{request_data.response_format}. Supported formats are: {', '.join(_AUDIO_CONTENT_TYPE_MAP.keys())}"
             ),
         )
     if request_data.stream and request_data.return_download_link:
@@ -334,7 +446,7 @@ async def create_speech(
         try:
             text_hash = compute_tts_history_text_hash(request_data.input, history_cfg.get("hash_key"))
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("TTS history: failed to compute text hash: {}", exc)
+            logger.debug("TTS history: failed to compute text hash: {} (request_id={})", exc, request_id)
             return
         text_length = tts_history_text_length(request_data.input)
         text_value = request_data.input if history_cfg.get("store_text", True) else None
@@ -355,6 +467,8 @@ async def create_speech(
                 duration_ms = int(float(duration_seconds) * 1000)
 
         params_json: dict[str, Any] = {"speed": request_data.speed}
+        if request_data.target_sample_rate is not None:
+            params_json["target_sample_rate"] = request_data.target_sample_rate
         if request_data.extra_params:
             try:
                 extra_params = dict(request_data.extra_params)
@@ -428,10 +542,10 @@ async def create_speech(
                 pass
             history_written = True
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("TTS history: failed to write record: {}", exc)
+            logger.debug("TTS history: failed to write record: {} (request_id={})", exc, request_id)
 
-    try:
-        speech_iter = tts_service.generate_speech(
+    def _build_speech_iter():
+        return tts_service.generate_speech(
             request_data,
             provider=tts_provider_hint,
             fallback=True,
@@ -439,11 +553,53 @@ async def create_speech(
             voice_to_voice_start=voice_to_voice_start,
             voice_to_voice_route="audio.speech",
             user_id=user_id_int,
+            request_id=request_id,
         )
+
+    speech_iter = None
+
+    async def _refresh_openai_oauth_and_rebuild_iter() -> None:
+        nonlocal user_id_int, tts_overrides, byok_tts_resolution, speech_iter
+        try:
+            user_id_int, tts_overrides, byok_tts_resolution = await _audio_shim_attr("_resolve_tts_byok")(
+                provider_hint=tts_provider_hint,
+                current_user=current_user,
+                request=request,
+                force_oauth_refresh=True,
+            )
+        except HTTPException as refresh_exc:
+            if refresh_exc.status_code in {
+                status.HTTP_401_UNAUTHORIZED,
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            }:
+                _raise_oauth_reconnect_required()
+            raise
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+            _raise_oauth_reconnect_required()
+
+        if byok_tts_resolution is None:
+            _raise_oauth_reconnect_required()
+
+        api_key = (tts_overrides or {}).get("api_key") if isinstance(tts_overrides, dict) else None
+        if not api_key:
+            api_key = getattr(byok_tts_resolution, "api_key", None)
+        if not isinstance(api_key, str) or not api_key.strip():
+            _raise_oauth_reconnect_required()
+
+        try:
+            speech_iter = _build_speech_iter()
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
+            if _is_tts_auth_failure(exc):
+                _raise_oauth_reconnect_required()
+            _raise_for_tts_error(exc, request_id)
+
+    try:
+        speech_iter = _build_speech_iter()
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc, request_id)
 
     async def _pull_first_chunk() -> bytes:
+        nonlocal oauth_retry_attempted
         try:
             return await speech_iter.__anext__()
         except StopAsyncIteration:
@@ -451,6 +607,27 @@ async def create_speech(
         except HTTPException:
             raise
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
+            if (
+                not oauth_retry_attempted
+                and _is_openai_oauth_request()
+                and _is_tts_auth_failure(exc)
+            ):
+                oauth_retry_attempted = True
+                await _refresh_openai_oauth_and_rebuild_iter()
+                try:
+                    return await speech_iter.__anext__()
+                except StopAsyncIteration:
+                    return b""
+                except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as retry_exc:
+                    if _is_tts_auth_failure(retry_exc):
+                        _raise_oauth_reconnect_required()
+                    _raise_for_tts_error(retry_exc, request_id)
+                except Exception as retry_exc:  # pragma: no cover - defensive fallback
+                    if _is_tts_auth_failure(retry_exc):
+                        _raise_oauth_reconnect_required()
+                    _raise_for_tts_error(retry_exc, request_id)
+            _raise_for_tts_error(exc, request_id)
+        except Exception as exc:  # pragma: no cover - defensive fallback
             _raise_for_tts_error(exc, request_id)
 
     async def _stream_chunks(initial_chunk: bytes):
@@ -476,6 +653,9 @@ async def create_speech(
             stream_failed = _tts_history_error_message(exc)
             raise
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
+            stream_failed = _tts_history_error_message(exc)
+            _raise_for_tts_error(exc, request_id)
+        except Exception as exc:  # pragma: no cover - defensive fallback
             stream_failed = _tts_history_error_message(exc)
             _raise_for_tts_error(exc, request_id)
         finally:
@@ -512,15 +692,18 @@ async def create_speech(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Audio generation failed to produce data.",
             )
+        response_content_type = _resolve_response_content_type(request_data)
+        stream_headers = {
+            "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+            "X-Request-Id": request_id,
+        }
+        _append_pcm_response_headers(request_data, stream_headers)
         return StreamingResponse(
             _stream_chunks(first_chunk),
-            media_type=content_type,
-            headers={
-                "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
-                "X-Accel-Buffering": "no",
-                "Cache-Control": "no-cache",
-                "X-Request-Id": request_id,
-            },
+            media_type=response_content_type,
+            headers=stream_headers,
         )
     # Non-streaming mode: accumulate chunks and return a single response
     try:
@@ -565,6 +748,7 @@ async def create_speech(
         "Cache-Control": "no-cache",
         "X-Request-Id": request_id,
     }
+    _append_pcm_response_headers(request_data, headers)
     try:
         metadata = getattr(request_data, "_tts_metadata", None)
         alignment_payload = metadata.get("alignment") if isinstance(metadata, dict) else None
@@ -617,7 +801,7 @@ async def create_speech(
 
     return Response(
         content=all_audio_bytes,
-        media_type=content_type,
+        media_type=_resolve_response_content_type(request_data),
         headers=headers,
     )
 
@@ -664,6 +848,33 @@ async def create_speech_metadata(
         current_user=current_user,
         request=request,
     )
+    oauth_retry_attempted = False
+
+    def _is_openai_oauth_request() -> bool:
+        return (
+            tts_provider_hint == "openai"
+            and byok_tts_resolution is not None
+            and getattr(byok_tts_resolution, "auth_source", None) == "oauth"
+        )
+
+    def _is_tts_auth_failure(exc: BaseException) -> bool:
+        if isinstance(exc, TTSAuthenticationError):
+            return True
+        try:
+            return int(getattr(exc, "status_code", 0) or 0) == status.HTTP_401_UNAUTHORIZED
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+            return False
+
+    def _raise_oauth_reconnect_required() -> None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error_code": "oauth_reconnect_required",
+                "provider": "openai",
+                "reconnect_required": True,
+                "message": "OpenAI OAuth access is no longer valid. Reconnect OpenAI and retry.",
+            },
+        )
 
     try:
         usage_log.log_event(
@@ -691,8 +902,8 @@ async def create_speech_metadata(
             request_id,
         )
 
-    try:
-        speech_iter = tts_service.generate_speech(
+    def _build_speech_iter():
+        return tts_service.generate_speech(
             request_data,
             provider=tts_provider_hint,
             fallback=True,
@@ -700,7 +911,48 @@ async def create_speech_metadata(
             voice_to_voice_route="audio.speech.metadata",
             user_id=user_id_int,
             metadata_only=True,
+            request_id=request_id,
         )
+
+    speech_iter = None
+
+    async def _refresh_openai_oauth_and_rebuild_iter() -> None:
+        nonlocal user_id_int, tts_overrides, byok_tts_resolution, speech_iter
+        try:
+            user_id_int, tts_overrides, byok_tts_resolution = await _audio_shim_attr("_resolve_tts_byok")(
+                provider_hint=tts_provider_hint,
+                current_user=current_user,
+                request=request,
+                force_oauth_refresh=True,
+            )
+        except HTTPException as refresh_exc:
+            if refresh_exc.status_code in {
+                status.HTTP_401_UNAUTHORIZED,
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            }:
+                _raise_oauth_reconnect_required()
+            raise
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+            _raise_oauth_reconnect_required()
+
+        if byok_tts_resolution is None:
+            _raise_oauth_reconnect_required()
+
+        api_key = (tts_overrides or {}).get("api_key") if isinstance(tts_overrides, dict) else None
+        if not api_key:
+            api_key = getattr(byok_tts_resolution, "api_key", None)
+        if not isinstance(api_key, str) or not api_key.strip():
+            _raise_oauth_reconnect_required()
+
+        try:
+            speech_iter = _build_speech_iter()
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
+            if _is_tts_auth_failure(exc):
+                _raise_oauth_reconnect_required()
+            _raise_for_tts_error(exc, request_id)
+
+    try:
+        speech_iter = _build_speech_iter()
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc, request_id)
 
@@ -708,7 +960,22 @@ async def create_speech_metadata(
         with contextlib.suppress(StopAsyncIteration):
             await speech_iter.__anext__()
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
-        _raise_for_tts_error(exc, request_id)
+        if (
+            not oauth_retry_attempted
+            and _is_openai_oauth_request()
+            and _is_tts_auth_failure(exc)
+        ):
+            oauth_retry_attempted = True
+            await _refresh_openai_oauth_and_rebuild_iter()
+            try:
+                with contextlib.suppress(StopAsyncIteration):
+                    await speech_iter.__anext__()
+            except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as retry_exc:
+                if _is_tts_auth_failure(retry_exc):
+                    _raise_oauth_reconnect_required()
+                _raise_for_tts_error(retry_exc, request_id)
+        else:
+            _raise_for_tts_error(exc, request_id)
     finally:
         if byok_tts_resolution is not None:
             try:
@@ -835,7 +1102,7 @@ async def reset_tts_metrics(
             for name, method in provider_methods:
                 if _can_call_with_provider(method):
                     await _call_reset(method, provider)
-                    logger.info("reset_tts_metrics: reset metrics for provider=%s via %s", provider, name)
+                    logger.info("reset_tts_metrics: reset metrics for provider={} via {}", provider, name)
                     return {"message": f"Metrics reset for provider {provider}"}
 
             raise HTTPException(
@@ -854,7 +1121,7 @@ async def reset_tts_metrics(
         for name, method in global_methods:
             if _can_call_without_args(method):
                 await _call_reset(method)
-                logger.info("reset_tts_metrics: reset all TTS metrics via %s", name)
+                logger.info("reset_tts_metrics: reset all TTS metrics via {}", name)
                 return {"message": "All TTS metrics reset"}
 
         raise HTTPException(

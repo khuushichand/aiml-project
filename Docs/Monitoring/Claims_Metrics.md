@@ -5,6 +5,19 @@
 - `claims_provider_latency_seconds{provider,model}`
 - `claims_provider_errors_total{provider,model,reason}`
 - `claims_provider_estimated_cost_usd_total{provider,model}`
+- `claims_provider_budget_exhausted_total{provider,model,mode,reason}`
+- `claims_provider_throttled_total{provider,model,mode,reason}`
+
+## Structured Output & Parse Metrics
+- `claims_response_format_selected_total{provider,model,mode,response_format_type}`
+- `claims_output_parse_events_total{provider,model,mode,parse_mode,outcome,reason}`
+- `claims_fallback_total{provider,model,mode,reason}`
+
+## Recommended Ratios
+- Parse error ratio (10m):
+  - `sum(increase(claims_output_parse_events_total{outcome="error"}[10m])) / clamp_min(sum(increase(claims_provider_requests_total{mode=~"extract|verify|ingestion"}[10m])), 1)`
+- Fallback ratio (10m):
+  - `sum(increase(claims_fallback_total[10m])) / clamp_min(sum(increase(claims_provider_requests_total{mode=~"extract|verify|ingestion"}[10m])), 1)`
 
 ## Rebuild Metrics
 - `claims_rebuild_queue_size`

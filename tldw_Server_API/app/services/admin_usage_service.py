@@ -17,7 +17,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     UsageTopResponse,
     UsageTopRow,
 )
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.services import admin_scope_service
@@ -43,6 +43,29 @@ _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _is_db_pool_object(db: Any) -> bool:
+    return isinstance(db, DatabasePool)
+
+
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probes."""
+    if _is_db_pool_object(db):
+        return getattr(db, "pool", None) is not None
+
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    return callable(getattr(db, "fetchrow", None))
+
+
 def _fmt_csv_value(x: Any) -> str:
     if x is None:
         return ""
@@ -66,7 +89,7 @@ async def fetch_usage_daily(
     offset = (page - 1) * limit
     conditions: list[str] = []
     params: list[Any] = []
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     if org_ids is not None and len(org_ids) == 0:
         return [], 0, True
 
@@ -97,11 +120,11 @@ async def fetch_usage_daily(
     where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
     if pg:
-        total = await db.fetchval(f"SELECT COUNT(*) FROM usage_daily{join_clause}{where_clause}", *params)
+        total = await db.fetchval(f"SELECT COUNT(*) FROM usage_daily{join_clause}{where_clause}", *params)  # nosec B608
         has_in = True
         try:
             sql = (
-                f"SELECT user_id, day, requests, errors, bytes_total, COALESCE(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
+                f"SELECT user_id, day, requests, errors, bytes_total, COALESCE(bytes_in_total,0) as bytes_in_total, latency_avg_ms "  # nosec B608
                 f"FROM usage_daily{join_clause}{where_clause} ORDER BY day DESC, user_id ASC LIMIT ${len(params)+1} OFFSET ${len(params)+2}"
             )
             rows = await db.fetch(sql, *params, limit, offset)
@@ -116,7 +139,7 @@ async def fetch_usage_daily(
                 logger.debug("metrics increment failed for daily_bytes_in_missing_fallback")
             has_in = False
             sql = (
-                f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
+                f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "  # nosec B608
                 f"FROM usage_daily{join_clause}{where_clause} ORDER BY day DESC, user_id ASC LIMIT ${len(params)+1} OFFSET ${len(params)+2}"
             )
             rows = await db.fetch(sql, *params, limit, offset)
@@ -134,23 +157,22 @@ async def fetch_usage_daily(
             out.append(d)
         return out, int(total or 0), has_in
     # SQLite
-    # Prefer pool-style helpers when available (e.g., DatabasePool in tests)
-    if hasattr(db, "fetchval"):
+    if _is_db_pool_object(db):
         total = int(
-            (await db.fetchval(f"SELECT COUNT(*) FROM usage_daily{join_clause}{where_clause}", params))
+            (await db.fetchval(f"SELECT COUNT(*) FROM usage_daily{join_clause}{where_clause}", params))  # nosec B608
             or 0
         )
     else:
-        cur = await db.execute(f"SELECT COUNT(*) FROM usage_daily{join_clause}{where_clause}", params)
+        cur = await db.execute(f"SELECT COUNT(*) FROM usage_daily{join_clause}{where_clause}", params)  # nosec B608
         total_row = await cur.fetchone()
         total = int(total_row[0] if total_row else 0)
     has_in = True
     try:
         sql = (
-            f"SELECT user_id, day, requests, errors, bytes_total, IFNULL(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
+            f"SELECT user_id, day, requests, errors, bytes_total, IFNULL(bytes_in_total,0) as bytes_in_total, latency_avg_ms "  # nosec B608
             f"FROM usage_daily{join_clause}{where_clause} ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
         )
-        if hasattr(db, "fetchall"):
+        if _is_db_pool_object(db):
             rows = await db.fetchall(sql, params + [limit, offset])
         else:
             cur = await db.execute(sql, params + [limit, offset])
@@ -166,10 +188,10 @@ async def fetch_usage_daily(
             logger.debug("metrics increment failed for daily_bytes_in_missing_fallback")
         has_in = False
         sql = (
-            f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
+            f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "  # nosec B608
             f"FROM usage_daily{join_clause}{where_clause} ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
         )
-        if hasattr(db, "fetchall"):
+        if _is_db_pool_object(db):
             rows = await db.fetchall(sql, params + [limit, offset])
         else:
             cur = await db.execute(sql, params + [limit, offset])
@@ -242,7 +264,7 @@ async def fetch_usage_top(
     metric: str,
     org_ids: list[int] | None,
 ) -> list[dict[str, Any]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     conditions: list[str] = []
     params: list[Any] = []
     if org_ids is not None and len(org_ids) == 0:
@@ -279,7 +301,7 @@ async def fetch_usage_top(
     if pg:
         try:
             sql = (
-                f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, COALESCE(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms)::float AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
+                f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, COALESCE(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms)::float AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"  # nosec B608
             ).replace('$ ', '$')
             rows = await db.fetch(sql, *params, limit)
         except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as e:
@@ -292,16 +314,16 @@ async def fetch_usage_top(
             except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for top_bytes_in_missing_fallback")
             sql = (
-                f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
+                f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"  # nosec B608
             ).replace('$ ', '$')
             rows = await db.fetch(sql, *params, limit)
         return [dict(r) for r in rows]
     # SQLite
     try:
         sql = (
-            f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, IFNULL(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
+            f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, IFNULL(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"  # nosec B608
         )
-        if hasattr(db, "fetchall"):
+        if _is_db_pool_object(db):
             rows = await db.fetchall(sql, params + [limit])
         else:
             cur = await db.execute(sql, params + [limit])
@@ -338,9 +360,9 @@ async def fetch_usage_top(
         except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics increment failed for top_bytes_in_missing_fallback")
         sql = (
-            f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
+            f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"  # nosec B608
         )
-        if hasattr(db, "fetchall"):
+        if _is_db_pool_object(db):
             rows = await db.fetchall(sql, params + [limit])
         else:
             cur = await db.execute(sql, params + [limit])
@@ -400,7 +422,7 @@ async def fetch_llm_usage(
     org_ids: list[int] | None,
 ) -> tuple[list[dict[str, Any]], int]:
     offset = (page - 1) * limit
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     conditions: list[str] = []
     params: list[Any] = []
     if org_ids is not None and len(org_ids) == 0:
@@ -437,19 +459,19 @@ async def fetch_llm_usage(
     where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
     if pg:
-        total = await db.fetchval(f"SELECT COUNT(*) FROM llm_usage_log{join_clause}{where_clause}", *params)
+        total = await db.fetchval(f"SELECT COUNT(*) FROM llm_usage_log{join_clause}{where_clause}", *params)  # nosec B608
         data_sql = (
-            f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+            f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"  # nosec B608
         )
         rows = await db.fetch(data_sql, *params, limit, offset)
         return [dict(r) for r in rows], int(total or 0)
 
     # SQLite
-    cur = await db.execute(f"SELECT COUNT(*) FROM llm_usage_log{join_clause}{where_clause}", params)
+    cur = await db.execute(f"SELECT COUNT(*) FROM llm_usage_log{join_clause}{where_clause}", params)  # nosec B608
     total_row = await cur.fetchone()
     total = int(total_row[0] if total_row else 0)
     data_sql = (
-        f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT ? OFFSET ?"
+        f"SELECT id, ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, total_cost_usd, currency, estimated, request_id FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT ? OFFSET ?"  # nosec B608
     )
     cur = await db.execute(data_sql, params + [limit, offset])
     rows = await cur.fetchall()
@@ -471,7 +493,7 @@ async def fetch_llm_usage(
 async def fetch_llm_usage_summary(
     db,
     *,
-    group_by: str,
+    group_by: str | list[str],
     provider: str | None,
     start: str | None,
     end: str | None,
@@ -479,9 +501,9 @@ async def fetch_llm_usage_summary(
 ) -> list[dict[str, Any]]:
     """Summarize llm_usage_log grouped by a key.
 
-    group_by: one of user|operation|day|endpoint|provider|model|status
+    group_by: one or two of user|operation|day|endpoint|provider|model|status
     """
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     params: list[Any] = []
     where: list[str] = []
     if org_ids is not None and len(org_ids) == 0:
@@ -509,26 +531,39 @@ async def fetch_llm_usage_summary(
             params.extend(org_ids)
     where_clause = (" WHERE " + " AND ".join(where)) if where else ""
 
-    # Determine grouping expression per backend
-    if group_by == 'user':
-        key_expr = 'COALESCE(user_id,0)' if pg else 'IFNULL(user_id,0)'
-    elif group_by == 'operation':
-        key_expr = 'operation'
-    elif group_by == 'day':
-        # Align to UTC day boundary
-        key_expr = "CAST(date_trunc('day', ts AT TIME ZONE 'UTC') AS date)" if pg else "strftime('%Y-%m-%d', ts, 'utc')"
-    elif group_by in {'endpoint', 'provider', 'model', 'status'}:
-        key_expr = group_by
-    else:
+    group_fields = [group_by] if isinstance(group_by, str) else list(group_by)
+    group_fields = [field.strip().lower() for field in group_fields if field and field.strip()]
+    if not group_fields:
+        group_fields = ['user']
+    if len(group_fields) > 2:
+        group_fields = group_fields[:2]
+
+    def _group_expr(field: str) -> str:
+        # Determine grouping expression per backend
+        if field == 'user':
+            return 'COALESCE(user_id,0)' if pg else 'IFNULL(user_id,0)'
+        if field == 'operation':
+            return 'operation'
+        if field == 'day':
+            # Align to UTC day boundary
+            return "CAST(date_trunc('day', ts AT TIME ZONE 'UTC') AS date)" if pg else "strftime('%Y-%m-%d', ts, 'utc')"
+        if field in {'endpoint', 'provider', 'model', 'status'}:
+            return field
         # Fallback to endpoint for unknown values
-        key_expr = 'endpoint'
+        return 'endpoint'
+
+    key_exprs = [_group_expr(field) for field in group_fields]
+    key_select_parts = [f"{expr} as group_value{'' if idx == 0 else f'_{idx + 1}'}" for idx, expr in enumerate(key_exprs)]
+    key_group_by = ", ".join(key_exprs)
+    key_order_by = ", ".join(key_exprs)
+
     if pg:
         sql = (
-            f"SELECT {key_expr} as group_value, "
+            f"SELECT {', '.join(key_select_parts)}, "  # nosec B608
             "COUNT(*) AS requests, SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors, "
             "SUM(COALESCE(prompt_tokens,0)) AS input_tokens, SUM(COALESCE(completion_tokens,0)) AS output_tokens, "
             "SUM(COALESCE(total_tokens,0)) AS total_tokens, SUM(COALESCE(total_cost_usd,0)) AS total_cost_usd, AVG(latency_ms)::float AS latency_avg_ms "
-            f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY {key_expr} ORDER BY requests DESC"
+            f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY {key_group_by} ORDER BY requests DESC, {key_order_by}"
         )
         rows = await db.fetch(sql, *params)
         out: list[dict[str, Any]] = []
@@ -538,15 +573,23 @@ async def fetch_llm_usage_summary(
                 d["group_value"] = str(d.get("group_value", ""))
             except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
                 d["group_value"] = str(d.get("group_value"))
+            if len(group_fields) > 1:
+                secondary_key = "group_value_2"
+                try:
+                    d["group_value_secondary"] = str(d.get(secondary_key, ""))
+                except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
+                    d["group_value_secondary"] = str(d.get(secondary_key))
+            else:
+                d["group_value_secondary"] = None
             out.append(d)
         return out
     # SQLite
     sql = (
-        f"SELECT {key_expr} as group_value, "
+        f"SELECT {', '.join(key_select_parts)}, "  # nosec B608
         "COUNT(*) as requests, SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors, "
         "SUM(IFNULL(prompt_tokens,0)) as input_tokens, SUM(IFNULL(completion_tokens,0)) as output_tokens, "
         "SUM(IFNULL(total_tokens,0)) as total_tokens, SUM(IFNULL(total_cost_usd,0)) as total_cost_usd, AVG(latency_ms) as latency_avg_ms "
-        f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY {key_expr} ORDER BY requests DESC"
+        f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY {key_group_by} ORDER BY requests DESC, {key_order_by}"
     )
     cur = await db.execute(sql, params)
     rows = await cur.fetchall()
@@ -557,15 +600,24 @@ async def fetch_llm_usage_summary(
             gv_str = str(gv)
         except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
             gv_str = f"{gv}"
+        secondary_value: str | None = None
+        if len(group_fields) > 1:
+            secondary_raw = r[1]
+            try:
+                secondary_value = str(secondary_raw)
+            except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
+                secondary_value = f"{secondary_raw}"
+        metric_index_offset = len(group_fields)
         out_rows.append({
             'group_value': gv_str,
-            'requests': int(r[1] or 0),
-            'errors': int(r[2] or 0),
-            'input_tokens': int(r[3] or 0),
-            'output_tokens': int(r[4] or 0),
-            'total_tokens': int(r[5] or 0),
-            'total_cost_usd': float(r[6] or 0.0),
-            'latency_avg_ms': (float(r[7]) if r[7] is not None else None),
+            'group_value_secondary': secondary_value,
+            'requests': int(r[metric_index_offset] or 0),
+            'errors': int(r[metric_index_offset + 1] or 0),
+            'input_tokens': int(r[metric_index_offset + 2] or 0),
+            'output_tokens': int(r[metric_index_offset + 3] or 0),
+            'total_tokens': int(r[metric_index_offset + 4] or 0),
+            'total_cost_usd': float(r[metric_index_offset + 5] or 0.0),
+            'latency_avg_ms': (float(r[metric_index_offset + 6]) if r[metric_index_offset + 6] is not None else None),
         })
     return out_rows
 
@@ -578,7 +630,7 @@ async def fetch_llm_top_spenders(
     limit: int,
     org_ids: list[int] | None,
 ) -> list[dict[str, Any]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     params: list[Any] = []
     where: list[str] = []
     if org_ids is not None and len(org_ids) == 0:
@@ -607,7 +659,7 @@ async def fetch_llm_top_spenders(
     if pg:
         limit_placeholder = f"${len(params) + 1}"
         sql = (
-            f"SELECT COALESCE(user_id,0) as user_id, COUNT(*) as requests, SUM(COALESCE(total_cost_usd,0)) as total_cost_usd "
+            f"SELECT COALESCE(user_id,0) as user_id, COUNT(*) as requests, SUM(COALESCE(total_cost_usd,0)) as total_cost_usd "  # nosec B608
             f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY COALESCE(user_id,0) ORDER BY total_cost_usd DESC LIMIT {limit_placeholder}"
         )
         rows = await db.fetch(sql, *params, limit)
@@ -616,7 +668,7 @@ async def fetch_llm_top_spenders(
             for r in rows
         ]
     sql = (
-        f"SELECT IFNULL(user_id,0) as user_id, COUNT(*) as requests, SUM(IFNULL(total_cost_usd,0)) as total_cost_usd "
+        f"SELECT IFNULL(user_id,0) as user_id, COUNT(*) as requests, SUM(IFNULL(total_cost_usd,0)) as total_cost_usd "  # nosec B608
         f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY IFNULL(user_id,0) ORDER BY total_cost_usd DESC LIMIT ?"
     )
     cur = await db.execute(sql, params + [limit])
@@ -823,7 +875,8 @@ async def get_llm_usage_summary(
     db,
     start: str | None,
     end: str | None,
-    group_by: str,
+    group_by: str | list[str],
+    provider: str | None,
     org_id: int | None,
 ) -> LLMUsageSummaryResponse:
     try:
@@ -833,7 +886,7 @@ async def get_llm_usage_summary(
         rows = await fetch_llm_usage_summary(
             db,
             group_by=group_by,
-            provider=None,
+            provider=provider,
             start=start,
             end=end,
             org_ids=org_ids,
@@ -884,7 +937,7 @@ async def export_llm_usage_csv(
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
             org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         conditions: list[str] = []
         params: list[Any] = []
 
@@ -921,7 +974,7 @@ async def export_llm_usage_csv(
         if is_pg:
             limit_placeholder = f"${len(params) + 1}"
             sql = (
-                f"SELECT id, ts, COALESCE(user_id,0) as user_id, COALESCE(key_id,0) as key_id, endpoint, operation, provider, model, status, latency_ms, "
+                f"SELECT id, ts, COALESCE(user_id,0) as user_id, COALESCE(key_id,0) as key_id, endpoint, operation, provider, model, status, latency_ms, "  # nosec B608
                 f"COALESCE(prompt_tokens,0), COALESCE(completion_tokens,0), COALESCE(total_tokens,0), COALESCE(total_cost_usd,0), currency, estimated, request_id "
                 f"FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT {limit_placeholder}"
             )
@@ -932,7 +985,7 @@ async def export_llm_usage_csv(
             ) for r in rows]
         else:
             sql = (
-                f"SELECT id, ts, IFNULL(user_id,0), IFNULL(key_id,0), endpoint, operation, provider, model, status, latency_ms, "
+                f"SELECT id, ts, IFNULL(user_id,0), IFNULL(key_id,0), endpoint, operation, provider, model, status, latency_ms, "  # nosec B608
                 f"IFNULL(prompt_tokens,0), IFNULL(completion_tokens,0), IFNULL(total_tokens,0), IFNULL(total_cost_usd,0), currency, estimated, request_id "
                 f"FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT ?"
             )

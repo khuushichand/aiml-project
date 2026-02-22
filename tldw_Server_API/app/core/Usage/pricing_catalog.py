@@ -129,10 +129,8 @@ DEFAULT_PRICING: dict[str, dict[str, dict[str, float]]] = {
         "qwen2.5-7b": {"prompt": 0.2e-3, "completion": 0.2e-3},
         "qwen2.5-72b": {"prompt": 0.5e-3, "completion": 0.5e-3},
     },
-    "openrouter": {
-        "gpt-4o": {"prompt": 5e-3, "completion": 15e-3},
-        "meta-llama/llama-3-70b": {"prompt": 0.8e-3, "completion": 0.8e-3},
-    },
+    # OpenRouter models are sourced from model_pricing.json overrides.
+    "openrouter": {},
     "xai": {
         "grok-2": {"prompt": 3e-3, "completion": 6e-3},
     },

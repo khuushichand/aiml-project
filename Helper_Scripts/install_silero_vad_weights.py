@@ -108,7 +108,7 @@ def _download_weights(url: str, dest_dir: Path) -> None:
     dest = dest_dir / "silero_vad_v6.onnx"
     print(f"Downloading Silero VAD weights from {url} -> {dest}")
     # User-provided URL; script does not guess or hard-code sources.
-    urllib.request.urlretrieve(url, dest)  # noqa: S310
+    urllib.request.urlretrieve(url, dest)  # nosec B310
     print(f"Downloaded Silero VAD weights to {dest}")
 
 

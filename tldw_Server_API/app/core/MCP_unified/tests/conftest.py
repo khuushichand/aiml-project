@@ -1,18 +1,8 @@
 """Local test config for MCP WS tests.
 
-- Provides lightweight stubs to avoid optional LLM import issues.
 - Adds a reusable auth-disabled WebSocket TestClient fixture for MCP.
 """
 from __future__ import annotations
-
-try:
-    from tldw_Server_API.app.core.LLM_Calls import local_chat_calls as _llm_local  # type: ignore
-    if not hasattr(_llm_local, "chat_with_custom_openai_2"):
-        def _stub(*args, **kwargs):  # pragma: no cover - simple stub
-            return None
-        setattr(_llm_local, "chat_with_custom_openai_2", _stub)
-except Exception:
-    pass
 
 import os
 import pytest
@@ -41,7 +31,7 @@ def mcp_ws_client(monkeypatch):
         server.config.blocked_client_ips = []
     except Exception:
         # If server not yet initialized in tests, proceed; WS paths may init lazily
-        pass
+        _ = None
 
     client = TestClient(app)
     try:

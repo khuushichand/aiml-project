@@ -77,14 +77,14 @@ const SortableColumnHeader: React.FC<{
       {!readOnly && (
         <span
           ref={handleRef}
-          className="cursor-grab hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="cursor-grab hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
         >
           <GripVertical className="h-4 w-4" />
         </span>
       )}
       <div className="flex-1">
         <div className="font-medium">{column.name}</div>
-        <div className="text-xs text-zinc-400">{column.type}</div>
+        <div className="text-xs text-text-subtle">{column.type}</div>
       </div>
       {!readOnly && (
         <Popconfirm
@@ -98,7 +98,7 @@ const SortableColumnHeader: React.FC<{
           cancelText={t("common:cancel", "Cancel")}
           okButtonProps={{ danger: true }}
         >
-          <button className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity p-1">
+          <button className="opacity-0 group-hover:opacity-100 hover:text-danger transition-opacity p-1">
             <Trash2 className="h-3 w-3" />
           </button>
         </Popconfirm>
@@ -246,7 +246,7 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
       title: readOnly ? (
         <div>
           <div className="font-medium">{col.name}</div>
-          <div className="text-xs text-zinc-400">{col.type}</div>
+          <div className="text-xs text-text-subtle">{col.type}</div>
         </div>
       ) : (
         <SortableColumnHeader
@@ -264,7 +264,7 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
         if (readOnly) {
           // Read-only rendering
           if (value === null || value === undefined) {
-            return <span className="text-zinc-400">-</span>
+            return <span className="text-text-subtle">-</span>
           }
           if (col.type === "url" && typeof value === "string") {
             if (!isHttpUrl(value)) {
@@ -275,7 +275,7 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
                 href={value}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                className="text-primary hover:text-primaryStrong"
               >
                 {value.length > 40 ? `${value.slice(0, 40)}...` : value}
               </a>
@@ -329,7 +329,7 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
             okButtonProps={{ danger: true }}
           >
             <Tooltip title={t("dataTables:deleteRow", "Delete row")}>
-              <button className="text-zinc-400 hover:text-red-500 p-1">
+              <button className="text-text-subtle hover:text-danger p-1">
                 <Trash2 className="h-4 w-4" />
               </button>
             </Tooltip>
@@ -407,14 +407,14 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
 
       {/* Dirty indicator */}
       {!readOnly && editingState.isDirty && (
-        <div className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
-          <span className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+        <div className="text-xs text-warn flex items-center gap-1">
+          <span className="w-2 h-2 bg-warn rounded-full animate-pulse" />
           {t("dataTables:unsavedChanges", "You have unsaved changes")}
         </div>
       )}
 
       {/* Table info */}
-      <div className="text-sm text-zinc-600 dark:text-zinc-400">
+      <div className="text-sm text-text-muted">
         <span className="font-medium">{dataSource.length}</span>{" "}
         {t("dataTables:rows", "rows")} &bull;{" "}
         <span className="font-medium">

@@ -43,7 +43,7 @@ def workflows_db(tmp_path: Path):
         try:
             db._conn.close()
         except Exception:
-            pass
+            _ = None
 
 
 def _wait_for_status(db: WorkflowsDatabase, run_id: str, timeout: float = 3.0) -> str:

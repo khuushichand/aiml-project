@@ -12,6 +12,9 @@ import type {
 } from '@/types';
 export { ApiError };
 
+type QueryParamPrimitive = string | number | boolean;
+type QueryParamValue = QueryParamPrimitive | QueryParamPrimitive[] | null | undefined;
+
 type AddTeamMemberInput =
   | { email: string; role?: string }
   | { userId: string | number; role?: string }
@@ -34,6 +37,22 @@ function normalizeTeamMemberInput(member: AddTeamMemberInput): Record<string, un
     return { user_id: userId, role: member.role };
   }
   throw new Error('Invalid team member payload');
+}
+
+function buildQueryString(params?: Record<string, QueryParamValue>): string {
+  if (!params) return '';
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      value.forEach((entry) => {
+        query.append(key, String(entry));
+      });
+      return;
+    }
+    query.append(key, String(value));
+  });
+  return query.toString();
 }
 
 export async function getTeam(teamId: string) {
@@ -70,15 +89,39 @@ export const api = {
   // Dashboard & Stats
   // ============================================
   getDashboardStats: () => requestJson('/admin/stats'),
-  getDashboardActivity: (days = 7) => requestJson(`/admin/activity?days=${days}`),
+  getDashboardActivity: (days = 7, params?: { granularity?: 'hour' | 'day' }) => {
+    const query = new URLSearchParams({ days: String(days) });
+    if (params?.granularity) {
+      query.set('granularity', params.granularity);
+    }
+    return requestJson(`/admin/activity?${query.toString()}`);
+  },
 
   // ============================================
   // User Management
   // ============================================
-  getUsers: async (params?: Record<string, string>) => {
+  getUsersPage: async (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     const response = await requestJson(`/admin/users${queryParams ? `?${queryParams}` : ''}`);
-    return normalizeListResponse<UserWithKeyCount>(response, ['users', 'items']);
+    const { items, total, limit } = normalizePagedResponse<UserWithKeyCount>(response, ['users', 'items']);
+    const record = response && typeof response === 'object'
+      ? (response as Record<string, unknown>)
+      : {};
+    const page = typeof record.page === 'number' ? record.page : 1;
+    const pages = typeof record.pages === 'number'
+      ? record.pages
+      : (typeof limit === 'number' && limit > 0 ? Math.ceil(total / limit) : 1);
+    return {
+      items,
+      total,
+      page,
+      limit: limit ?? items.length,
+      pages,
+    };
+  },
+  getUsers: async (params?: Record<string, string>) => {
+    const response = await api.getUsersPage(params);
+    return response.items;
   },
   createUser: (data: Record<string, unknown>) => requestJson('/admin/users', {
     method: 'POST',
@@ -86,6 +129,7 @@ export const api = {
   }),
   getUser: (userId: string) => requestJson(`/admin/users/${userId}`),
   getUserOrgMemberships: (userId: string) => requestJson(`/admin/users/${userId}/org-memberships`),
+  getUserTeamMemberships: (userId: string) => requestJson(`/admin/users/${userId}/team-memberships`),
   getUserEffectivePermissions: (userId: string) =>
     requestJson(`/admin/users/${userId}/effective-permissions`),
   getUserSessions: (userId: string) => requestJson(`/admin/users/${userId}/sessions`),
@@ -102,8 +146,20 @@ export const api = {
     requestJson(`/admin/users/${userId}/mfa/disable`, {
       method: 'POST',
     }),
+  setUserMfaRequirement: (userId: string, data: { require_mfa: boolean }) =>
+    requestJson(`/admin/users/${userId}/mfa/require`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   updateUser: (userId: string, data: Record<string, unknown>) => requestJson(`/admin/users/${userId}`, {
     method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  resetUserPassword: (
+    userId: string,
+    data: { temporary_password?: string; force_password_change?: boolean } = {}
+  ) => requestJson(`/admin/users/${userId}/reset-password`, {
+    method: 'POST',
     body: JSON.stringify(data),
   }),
   deleteUser: (userId: string) => requestJson(`/admin/users/${userId}`, {
@@ -134,7 +190,19 @@ export const api = {
   // ============================================
   // API Key Management
   // ============================================
-  getUserApiKeys: (userId: string) => requestJson(`/admin/users/${userId}/api-keys`),
+  getUserApiKeys: (
+    userId: string,
+    params?: {
+      include_revoked?: boolean;
+    }
+  ) => {
+    const query = new URLSearchParams();
+    if (params?.include_revoked !== undefined) {
+      query.set('include_revoked', String(params.include_revoked));
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return requestJson(`/admin/users/${userId}/api-keys${suffix}`);
+  },
   createApiKey: (userId: string, data: Record<string, unknown>) => requestJson(`/admin/users/${userId}/api-keys`, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -159,6 +227,13 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
+  updateOrganization: (orgId: string, data: Record<string, unknown>) => requestJson(`/orgs/${orgId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  }),
+  deleteOrganization: (orgId: string) => requestJson(`/orgs/${orgId}`, {
+    method: 'DELETE',
+  }),
   getOrgMembers: (orgId: string) => requestJson(`/admin/orgs/${orgId}/members`),
   addOrgMember: (orgId: string, data: Record<string, unknown>) => requestJson(`/admin/orgs/${orgId}/members`, {
     method: 'POST',
@@ -175,6 +250,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
+  getOrgInvites: (orgId: string, params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/orgs/${encodeURIComponent(orgId)}/invites${queryParams ? `?${queryParams}` : ''}`);
+  },
 
   // ============================================
   // Teams
@@ -185,8 +264,22 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
+  updateTeam: (orgId: string, teamId: string, data: Record<string, unknown>) =>
+    requestJson(`/orgs/${orgId}/teams/${teamId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteTeam: (orgId: string, teamId: string) =>
+    requestJson(`/orgs/${orgId}/teams/${teamId}`, {
+      method: 'DELETE',
+    }),
   getTeamMembers,
   addTeamMember,
+  updateTeamMemberRole: (teamId: string, memberId: string | number, data: Record<string, unknown>) =>
+    requestJson(`/admin/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(String(memberId))}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
   removeTeamMember,
 
   // ============================================
@@ -237,6 +330,7 @@ export const api = {
   // Provider Secrets (BYOK)
   // ============================================
   getUserByokKeys: (userId: string) => requestJson(`/admin/users/${userId}/byok-keys`),
+  getAdminUserByokKeys: (userId: string) => requestJson(`/admin/keys/users/${userId}`),
   createUserByokKey: (userId: string, data: Record<string, unknown>) => requestJson(`/admin/users/${userId}/byok-keys`, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -252,6 +346,23 @@ export const api = {
   deleteOrgByokKey: (orgId: string, provider: string) => requestJson(`/admin/orgs/${orgId}/byok-keys/${provider}`, {
     method: 'DELETE',
   }),
+  getOpenAIOAuthStatus: () => requestJson('/users/keys/openai/oauth/status'),
+  startOpenAIOAuth: (data?: { credential_fields?: Record<string, unknown>; return_path?: string }) =>
+    requestJson('/users/keys/openai/oauth/authorize', {
+      method: 'POST',
+      body: JSON.stringify(data ?? {}),
+    }),
+  refreshOpenAIOAuth: () => requestJson('/users/keys/openai/oauth/refresh', {
+    method: 'POST',
+  }),
+  disconnectOpenAIOAuth: () => requestJson('/users/keys/openai/oauth', {
+    method: 'DELETE',
+  }),
+  switchOpenAICredentialSource: (authSource: 'api_key' | 'oauth') =>
+    requestJson('/users/keys/openai/source', {
+      method: 'POST',
+      body: JSON.stringify({ auth_source: authSource }),
+    }),
 
   // ============================================
   // Budgets
@@ -259,6 +370,29 @@ export const api = {
   getBudgets: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/budgets${queryParams ? `?${queryParams}` : ''}`);
+  },
+  updateBudget: async (orgId: string, data: Record<string, unknown>) => {
+    const normalizedOrgId = Number(orgId);
+    if (!Number.isInteger(normalizedOrgId) || normalizedOrgId <= 0) {
+      throw new Error('Invalid organization ID');
+    }
+    try {
+      return await requestJson(`/admin/budgets/${encodeURIComponent(String(normalizedOrgId))}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      });
+    } catch (error: unknown) {
+      if (error instanceof ApiError && [404, 405].includes(error.status)) {
+        return requestJson('/admin/budgets', {
+          method: 'POST',
+          body: JSON.stringify({
+            org_id: normalizedOrgId,
+            ...data,
+          }),
+        });
+      }
+      throw error;
+    }
   },
 
   // ============================================
@@ -278,9 +412,24 @@ export const api = {
       body: JSON.stringify(data),
     }),
   getRetentionPolicies: () => requestJson<RetentionPoliciesResponse>('/admin/retention-policies'),
+  previewRetentionPolicyImpact: (policyKey: string, data: Record<string, unknown>) =>
+    requestJson(`/admin/retention-policies/${encodeURIComponent(policyKey)}/preview`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   updateRetentionPolicy: (policyKey: string, data: Record<string, unknown>) =>
     requestJson(`/admin/retention-policies/${encodeURIComponent(policyKey)}`, {
       method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  previewDataSubjectRequest: (data: Record<string, unknown>) =>
+    requestJson('/admin/data-subject-requests/preview', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  createDataSubjectRequest: (data: Record<string, unknown>) =>
+    requestJson('/admin/data-subject-requests', {
+      method: 'POST',
       body: JSON.stringify(data),
     }),
 
@@ -389,6 +538,41 @@ export const api = {
   }),
 
   // ============================================
+  // Config Profiles & Editing
+  // ============================================
+  getEffectiveConfig: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/config/effective${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getConfigProfiles: () => requestJson('/admin/config/profiles'),
+  snapshotConfigProfile: (data: { name: string; description?: string }) =>
+    requestJson('/admin/config/profiles/snapshot', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getConfigProfile: (name: string) =>
+    requestJson(`/admin/config/profiles/${encodeURIComponent(name)}`),
+  restoreConfigProfile: (name: string) =>
+    requestJson(`/admin/config/profiles/${encodeURIComponent(name)}/restore`, {
+      method: 'POST',
+    }),
+  deleteConfigProfile: (name: string) =>
+    requestJson(`/admin/config/profiles/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }),
+  updateConfigSection: (section: string, values: Record<string, string>) =>
+    requestJson(`/admin/config/sections/${encodeURIComponent(section)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ values }),
+    }),
+  exportConfig: () => requestJson('/admin/config/export'),
+  importConfig: (sections: Record<string, Record<string, string>>) =>
+    requestJson('/admin/config/import', {
+      method: 'POST',
+      body: JSON.stringify({ sections }),
+    }),
+
+  // ============================================
   // LLM Providers
   // ============================================
   getLLMProviders: () => requestJson('/llm/providers'),
@@ -405,6 +589,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
+  getLLMProvidersHealth: () => requestJson('/admin/llm/providers/health'),
 
   // ============================================
   // Monitoring
@@ -428,9 +613,16 @@ export const api = {
   dismissAlert: (alertId: string) => requestJson(`/monitoring/alerts/${alertId}`, {
     method: 'DELETE',
   }),
+  getMonitoringMetrics: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/monitoring/metrics${queryParams ? `?${queryParams}` : ''}`);
+  },
   getHealth: () => requestJson('/health'),
   getHealthMetrics: () => requestJson('/health/metrics'),
   getLlmHealth: () => requestJson('/llm/health'),
+  getTtsHealth: () => requestJson('/audio/health'),
+  getSttHealth: () => requestJson('/audio/transcriptions/health'),
+  getEmbeddingsHealth: () => requestJson('/embeddings/health'),
   getMetrics: () => requestJson('/metrics'),
   getMetricsText: () => requestText('/metrics/text'),
   getRagHealth: () => requestJson('/rag/health'),
@@ -480,9 +672,13 @@ export const api = {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/admin/usage/top${queryParams ? `?${queryParams}` : ''}`);
   },
-  getLlmUsageSummary: (params?: Record<string, string>) => {
-    const queryParams = params ? new URLSearchParams(params).toString() : '';
+  getLlmUsageSummary: (params?: Record<string, QueryParamValue>) => {
+    const queryParams = buildQueryString(params);
     return requestJson(`/admin/llm-usage/summary${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getLlmUsage: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/llm-usage${queryParams ? `?${queryParams}` : ''}`);
   },
   getLlmTopSpenders: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
@@ -492,12 +688,21 @@ export const api = {
   // ============================================
   // Resource Governor
   // ============================================
+  getRateLimitEvents: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/rate-limit-events${queryParams ? `?${queryParams}` : ''}`);
+  },
   getResourceGovernorPolicy: (params?: { include_ids?: boolean }, signal?: AbortSignal) => {
     const queryParams = params ? new URLSearchParams(
       Object.entries(params).map(([k, v]) => [k, String(v)])
     ).toString() : '';
     return requestJson(`/resource-governor/policy${queryParams ? `?${queryParams}` : ''}`, { signal });
   },
+  simulateResourceGovernorPolicy: (data: Record<string, unknown>) =>
+    requestJson('/resource-governor/policy/simulate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   updateResourceGovernorPolicy: (data: Record<string, unknown>) =>
     requestJson('/resource-governor/policy', {
       method: 'PUT',
@@ -537,9 +742,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
-  testNotification: () =>
+  testNotification: (data?: Record<string, unknown>) =>
     requestJson('/monitoring/notifications/test', {
       method: 'POST',
+      body: JSON.stringify(data ?? {}),
     }),
   getRecentNotifications: () => requestJson('/monitoring/notifications/recent'),
 
@@ -700,6 +906,76 @@ export const api = {
     requestJson('/authnz/debug/budget-summary', {
       headers: { 'X-API-KEY': apiKey },
     }),
+
+  // ============================================
+  // ACP Sessions (Admin)
+  // ============================================
+  getACPSessions: (params?: Record<string, QueryParamValue>) => {
+    const queryParams = buildQueryString(params);
+    return requestJson(`/admin/acp/sessions${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getACPSessionUsage: (sessionId: string) =>
+    requestJson(`/admin/acp/sessions/${encodeURIComponent(sessionId)}/usage`),
+  closeACPSession: (sessionId: string) =>
+    requestJson(`/admin/acp/sessions/${encodeURIComponent(sessionId)}/close`, {
+      method: 'POST',
+    }),
+
+  // ============================================
+  // ACP Agent Configs (Admin)
+  // ============================================
+  getACPAgentConfigs: (params?: Record<string, QueryParamValue>) => {
+    const queryParams = buildQueryString(params);
+    return requestJson(`/admin/acp/agents${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getACPAgentConfig: (configId: number) =>
+    requestJson(`/admin/acp/agents/${configId}`),
+  createACPAgentConfig: (data: Record<string, unknown>) =>
+    requestJson('/admin/acp/agents', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateACPAgentConfig: (configId: number, data: Record<string, unknown>) =>
+    requestJson(`/admin/acp/agents/${configId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteACPAgentConfig: (configId: number) =>
+    requestJson(`/admin/acp/agents/${configId}`, {
+      method: 'DELETE',
+    }),
+
+  // ============================================
+  // ACP Permission Policies (Admin)
+  // ============================================
+  getACPPermissionPolicies: (params?: Record<string, QueryParamValue>) => {
+    const queryParams = buildQueryString(params);
+    return requestJson(`/admin/acp/permission-policies${queryParams ? `?${queryParams}` : ''}`);
+  },
+  createACPPermissionPolicy: (data: Record<string, unknown>) =>
+    requestJson('/admin/acp/permission-policies', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateACPPermissionPolicy: (policyId: number, data: Record<string, unknown>) =>
+    requestJson(`/admin/acp/permission-policies/${policyId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteACPPermissionPolicy: (policyId: number) =>
+    requestJson(`/admin/acp/permission-policies/${policyId}`, {
+      method: 'DELETE',
+    }),
+
+  // ============================================
+  // MCP Servers (Admin)
+  // ============================================
+  getMCPStatus: () => requestJson('/mcp/status'),
+  getMCPMetrics: () => requestJson('/mcp/metrics'),
+  getMCPTools: () => requestJson('/mcp/tools'),
+  getMCPModules: () => requestJson('/mcp/modules'),
+  getMCPModulesHealth: () => requestJson('/mcp/modules/health'),
+  getMCPHealth: () => requestJson('/mcp/health'),
 
   // ============================================
   // Voice Commands & Assistant

@@ -4,9 +4,11 @@ import { createContext, Suspense, useCallback, useContext, useEffect, useState, 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api-client';
 import { hasStoredAuth, subscribeAuthChange } from '@/lib/auth';
+import { resolveUnauthenticatedRouteState } from '@/lib/auth-navigation';
 import { User } from '@/types';
 import { getRoleRank, hasRoleAccess, isAdminRole, isMemberRole, isSuperAdminRole } from '@/lib/roles';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 
 // UI gating only; backend must enforce authorization and never trust client permissions.
 interface PermissionContextType {
@@ -298,6 +300,24 @@ const renderRouteDenied = () => (
   </div>
 );
 
+const renderRouteSessionUnavailable = (onRetry: () => void, onLogin: () => void) => (
+  <div className="flex h-screen items-center justify-center p-8">
+    <Alert className="max-w-md">
+      <AlertDescription className="space-y-4">
+        <p>Unable to verify your session right now. Check your connection and try again.</p>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
+          <Button type="button" onClick={onLogin}>
+            Sign in again
+          </Button>
+        </div>
+      </AlertDescription>
+    </Alert>
+  </div>
+);
+
 function RoutePermissionGuard(props: PermissionGuardProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -320,14 +340,22 @@ function RoutePermissionGuard(props: PermissionGuardProps) {
   }
 
   if (decision === 'unauthenticated') {
-    if (authError) {
+    const routeState = resolveUnauthenticatedRouteState(authError);
+    if (routeState === 'redirect_to_login') {
       return (
         <div className="flex h-screen items-center justify-center">
           <div className="text-muted-foreground">Redirecting to login...</div>
         </div>
       );
     }
-    return renderRouteLoading();
+    return renderRouteSessionUnavailable(
+      () => {
+        if (typeof window !== 'undefined') {
+          window.location.reload();
+        }
+      },
+      () => router.replace(`/login?redirectTo=${encodeURIComponent(redirectTo)}`)
+    );
   }
 
   if (decision === 'denied') {

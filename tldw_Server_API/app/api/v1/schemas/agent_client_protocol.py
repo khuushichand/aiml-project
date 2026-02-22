@@ -212,6 +212,7 @@ class ACPSessionPromptRequest(BaseModel):
 class ACPSessionPromptResponse(BaseModel):
     stop_reason: str | None = None
     raw_result: dict[str, Any]
+    usage: ACPTokenUsage | None = Field(default=None, description="Token usage for this prompt turn")
 
 
 class ACPSessionCancelRequest(BaseModel):
@@ -224,6 +225,157 @@ class ACPSessionCloseRequest(BaseModel):
 
 class ACPSessionUpdatesResponse(BaseModel):
     updates: list[dict[str, Any]]
+
+
+# -----------------------------------------------------------------------------
+# Token Usage Tracking
+# -----------------------------------------------------------------------------
+
+
+class ACPTokenUsage(BaseModel):
+    """Token usage counts for an ACP session."""
+    prompt_tokens: int = Field(default=0, description="Total prompt/input tokens consumed")
+    completion_tokens: int = Field(default=0, description="Total completion/output tokens consumed")
+    total_tokens: int = Field(default=0, description="Total tokens consumed (prompt + completion)")
+
+
+# -----------------------------------------------------------------------------
+# Session Listing & Detail
+# -----------------------------------------------------------------------------
+
+
+class ACPSessionStatus(str, Enum):
+    """Status of an ACP session."""
+    ACTIVE = "active"
+    CLOSED = "closed"
+    ERROR = "error"
+
+
+class ACPSessionInfo(BaseModel):
+    """Summary information about an ACP session."""
+    session_id: str = Field(..., description="Unique session identifier")
+    user_id: int = Field(..., description="ID of the user who owns this session")
+    agent_type: str = Field(default="custom", description="Type of agent used")
+    name: str = Field(default="", description="Session name")
+    status: ACPSessionStatus = Field(default=ACPSessionStatus.ACTIVE, description="Current session status")
+    created_at: str = Field(..., description="ISO 8601 creation timestamp")
+    last_activity_at: str | None = Field(default=None, description="ISO 8601 timestamp of last activity")
+    message_count: int = Field(default=0, description="Number of messages exchanged")
+    usage: ACPTokenUsage = Field(default_factory=ACPTokenUsage, description="Token usage for this session")
+    tags: list[str] = Field(default_factory=list, description="Tags for organizing sessions")
+    has_websocket: bool = Field(default=False, description="Whether a WebSocket is connected")
+
+
+class ACPSessionListResponse(BaseModel):
+    """Response for listing ACP sessions."""
+    sessions: list[ACPSessionInfo] = Field(default_factory=list)
+    total: int = Field(default=0, description="Total number of sessions matching filters")
+
+
+class ACPSessionDetailResponse(ACPSessionInfo):
+    """Detailed information about an ACP session, including message history."""
+    messages: list[dict[str, Any]] = Field(default_factory=list, description="Message history (if available)")
+    cwd: str | None = Field(default=None, description="Working directory for this session")
+
+
+class ACPSessionForkRequest(BaseModel):
+    """Request to fork an ACP session from a specific message index."""
+    message_index: int = Field(
+        ...,
+        ge=0,
+        description="Index of the last message to include in the forked session (0-based)",
+    )
+    name: str | None = Field(default=None, description="Optional name for the forked session")
+
+
+class ACPSessionForkResponse(BaseModel):
+    """Response when a session is forked."""
+    session_id: str = Field(..., description="New forked session ID")
+    name: str = Field(..., description="Name of the forked session")
+    forked_from: str = Field(..., description="ID of the source session")
+    message_count: int = Field(default=0, description="Number of messages copied to the fork")
+
+
+class ACPSessionUsageResponse(BaseModel):
+    """Usage details for a specific ACP session."""
+    session_id: str
+    user_id: int
+    agent_type: str = "custom"
+    usage: ACPTokenUsage = Field(default_factory=ACPTokenUsage)
+    message_count: int = 0
+    created_at: str = ""
+    last_activity_at: str | None = None
+
+
+# -----------------------------------------------------------------------------
+# Agent Configuration (Admin-managed)
+# -----------------------------------------------------------------------------
+
+
+class ACPAgentConfigCreate(BaseModel):
+    """Request to create a custom agent configuration."""
+    type: str = Field(..., description="Unique agent type identifier")
+    name: str = Field(..., description="Human-readable name")
+    description: str = Field(default="", description="Agent description")
+    system_prompt: str | None = Field(default=None, description="System prompt for the agent")
+    allowed_tools: list[str] | None = Field(default=None, description="Tools this agent is allowed to use (null = all)")
+    denied_tools: list[str] | None = Field(default=None, description="Tools this agent is denied from using")
+    parameters: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Agent parameters (temperature, topP, model, max_tokens, etc.)",
+    )
+    requires_api_key: str | None = Field(default=None, description="Env var name for required API key")
+    org_id: int | None = Field(default=None, description="Restrict to specific organization")
+    team_id: int | None = Field(default=None, description="Restrict to specific team")
+    enabled: bool = Field(default=True, description="Whether the agent is enabled")
+
+
+class ACPAgentConfigResponse(ACPAgentConfigCreate):
+    """Agent configuration as stored."""
+    id: int = Field(..., description="Config ID")
+    created_at: str = Field(..., description="ISO 8601 creation timestamp")
+    updated_at: str | None = Field(default=None, description="ISO 8601 last update timestamp")
+    is_configured: bool = Field(default=True, description="Whether required keys are present")
+
+
+class ACPAgentConfigListResponse(BaseModel):
+    """Response for listing agent configurations."""
+    agents: list[ACPAgentConfigResponse] = Field(default_factory=list)
+    total: int = Field(default=0)
+
+
+# -----------------------------------------------------------------------------
+# Permission Policy (Admin-managed)
+# -----------------------------------------------------------------------------
+
+
+class ACPPermissionPolicyRule(BaseModel):
+    """A single permission policy rule."""
+    tool_pattern: str = Field(..., description="Tool name or glob pattern (e.g., 'file_*', 'bash')")
+    tier: ACPPermissionTier = Field(..., description="Permission tier to assign")
+
+
+class ACPPermissionPolicyCreate(BaseModel):
+    """Request to create/update a permission policy."""
+    name: str = Field(..., description="Policy name")
+    description: str = Field(default="", description="Policy description")
+    rules: list[ACPPermissionPolicyRule] = Field(default_factory=list)
+    org_id: int | None = Field(default=None, description="Restrict to specific organization")
+    team_id: int | None = Field(default=None, description="Restrict to specific team")
+    priority: int = Field(default=0, description="Higher priority policies take precedence")
+
+
+class ACPPermissionPolicyResponse(ACPPermissionPolicyCreate):
+    """Permission policy as stored."""
+    id: int = Field(..., description="Policy ID")
+    created_at: str = Field(..., description="ISO 8601 creation timestamp")
+    updated_at: str | None = Field(default=None)
+
+
+class ACPPermissionPolicyListResponse(BaseModel):
+    """Response for listing permission policies."""
+    policies: list[ACPPermissionPolicyResponse] = Field(default_factory=list)
+    total: int = Field(default=0)
 
 
 # -----------------------------------------------------------------------------

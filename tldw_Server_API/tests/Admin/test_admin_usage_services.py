@@ -7,12 +7,11 @@ from tldw_Server_API.app.services.admin_usage_service import (
 )
 
 
-def _setup_env():
-
-
+def _setup_env(tmp_path):
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key"
     os.environ["USAGE_LOG_ENABLED"] = "true"
+    os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path / 'users_test_admin_usage_services.db'}"
 
 
 async def _seed_sqlite_usage_rows():
@@ -40,8 +39,8 @@ async def _seed_sqlite_usage_rows():
 
 
 @pytest.mark.asyncio
-async def test_fetch_usage_daily_sqlite_roundtrip():
-    _setup_env()
+async def test_fetch_usage_daily_sqlite_roundtrip(tmp_path):
+    _setup_env(tmp_path)
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
     await reset_db_pool()
     await _seed_sqlite_usage_rows()
@@ -64,8 +63,8 @@ async def test_fetch_usage_daily_sqlite_roundtrip():
 
 
 @pytest.mark.asyncio
-async def test_export_usage_top_csv_text_smoke():
-    _setup_env()
+async def test_export_usage_top_csv_text_smoke(tmp_path):
+    _setup_env(tmp_path)
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
     await reset_db_pool()
     await _seed_sqlite_usage_rows()

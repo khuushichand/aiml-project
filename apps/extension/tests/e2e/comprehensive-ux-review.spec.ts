@@ -7,6 +7,7 @@
  * - Live server integration (localhost:8000)
  */
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -54,7 +55,7 @@ function logResult(testName: string, passed: boolean, details?: string) {
 // ============================================================================
 test.describe('Onboarding Flow', () => {
   test('new onboarding form renders correctly', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
       // No serverUrl triggers onboarding
     })
@@ -85,7 +86,7 @@ test.describe('Onboarding Flow', () => {
   })
 
   test('onboarding URL validation feedback', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
     })
 
@@ -108,7 +109,7 @@ test.describe('Onboarding Flow', () => {
   })
 
   test('onboarding auth mode toggle', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
     })
 
@@ -133,7 +134,7 @@ test.describe('Onboarding Flow', () => {
   })
 
   test('onboarding connect test with live server', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
     })
 
@@ -163,7 +164,7 @@ test.describe('Onboarding Flow', () => {
   })
 
   test('onboarding demo mode activation', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withFeatures([FEATURE_FLAG_KEYS.NEW_ONBOARDING])
     })
 
@@ -190,7 +191,7 @@ test.describe('Onboarding Flow', () => {
 // ============================================================================
 test.describe('Chat Sidebar', () => {
   test('sidebar visibility with feature flag', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -215,7 +216,7 @@ test.describe('Chat Sidebar', () => {
   })
 
   test('sidebar collapse/expand toggle', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -246,7 +247,7 @@ test.describe('Chat Sidebar', () => {
   })
 
   test('sidebar search functionality', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -276,7 +277,7 @@ test.describe('Chat Sidebar', () => {
   })
 
   test('sidebar keyboard shortcuts', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -306,7 +307,7 @@ test.describe('Chat Sidebar', () => {
 // ============================================================================
 test.describe('Command Palette', () => {
   test('opens with keyboard shortcut (⌘K)', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -338,7 +339,7 @@ test.describe('Command Palette', () => {
   })
 
   test('search filtering works', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -376,7 +377,7 @@ test.describe('Command Palette', () => {
   })
 
   test('arrow key navigation', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -410,7 +411,7 @@ test.describe('Command Palette', () => {
   })
 
   test('escape closes palette', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -441,7 +442,7 @@ test.describe('Command Palette', () => {
   })
 
   test('enter executes selected command', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -479,7 +480,7 @@ test.describe('Command Palette', () => {
 // ============================================================================
 test.describe('Compact Messages', () => {
   test('messages render in full-width layout', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -507,7 +508,7 @@ test.describe('Compact Messages', () => {
   })
 
   test('hover reveals action buttons', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -545,7 +546,7 @@ test.describe('Compact Messages', () => {
   })
 
   test('copy button functionality', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -594,7 +595,7 @@ test.describe('Compact Messages', () => {
 // ============================================================================
 test.describe('Header Components', () => {
   test('ConnectionStatus shows correct state', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -624,7 +625,7 @@ test.describe('Header Components', () => {
   })
 
   test('HeaderShortcuts expand/collapse', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -660,7 +661,7 @@ test.describe('Header Components', () => {
   })
 
   test('ModeSelector tab switching', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -697,7 +698,7 @@ test.describe('Header Components', () => {
   })
 
   test('QuickIngestButton badge and modal', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -734,7 +735,7 @@ test.describe('Header Components', () => {
 // ============================================================================
 test.describe('Sidepanel Chat', () => {
   test('ControlRow displays with labels', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -761,7 +762,7 @@ test.describe('Sidepanel Chat', () => {
   })
 
   test('StatusDot shows connection state', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -788,7 +789,7 @@ test.describe('Sidepanel Chat', () => {
   })
 
   test('message input form is functional', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -829,7 +830,7 @@ test.describe('Sidepanel Chat', () => {
 // ============================================================================
 test.describe('Dark Mode', () => {
   test('sidepanel renders in dark mode', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -855,7 +856,7 @@ test.describe('Dark Mode', () => {
   })
 
   test('options page renders in dark mode', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -879,7 +880,7 @@ test.describe('Dark Mode', () => {
   })
 
   test('command palette renders in dark mode', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',

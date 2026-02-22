@@ -26,6 +26,7 @@ import time
 from sqlite3 import Error as SQLiteError
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 try:
     # JobManager path in this repository
@@ -48,7 +49,7 @@ _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS = (
 
 
 def _is_truthy(v: str | None) -> bool:
-    return str(v or "").lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(v)
 
 
 class JobsMetricsService:

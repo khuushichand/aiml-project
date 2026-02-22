@@ -136,7 +136,7 @@ class TestAuthLoginLockoutViaAuthGovernor:
         def _fake_settings():
             from tldw_Server_API.app.core.AuthNZ.settings import Settings
 
-            return Settings(RATE_LIMIT_ENABLED=True)
+            return Settings()
 
         monkeypatch.setattr(
             "tldw_Server_API.app.core.AuthNZ.settings.get_settings",

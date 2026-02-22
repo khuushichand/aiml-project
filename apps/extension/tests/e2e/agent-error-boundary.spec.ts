@@ -1,10 +1,11 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 
 const openErrorBoundaryTestPage = async () => {
   const extPath = path.resolve("build/chrome-mv3")
-  const { context, openSidepanel } = await launchWithExtension(extPath)
+  const { context, openSidepanel } = await launchWithExtensionOrSkip(test, extPath)
   const page = await openSidepanel()
 
   await page.waitForFunction(

@@ -24,7 +24,13 @@ from typing import Any, Callable, Optional
 import numpy as np
 from loguru import logger
 
-from .Audio_Transcription_Lib import is_transcription_error_message
+# Keep streaming importable even when optional transcription dependencies
+# (e.g. soundfile pulled by transformers) are intentionally unavailable in tests.
+try:
+    from .Audio_Transcription_Lib import is_transcription_error_message
+except ImportError:
+    def is_transcription_error_message(_: str) -> bool:
+        return False
 
 # Import transcription functions
 from .Audio_Transcription_Nemo import (

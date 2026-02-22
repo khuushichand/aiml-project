@@ -8,14 +8,20 @@ This module includes adapters for image operations:
 from __future__ import annotations
 
 import base64
-import os
 import time
 import uuid
 from typing import Any
 
 from loguru import logger
 
+try:
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+except ImportError:
+    async def perform_chat_api_call_async(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise ImportError("chat_service_unavailable")
+
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     extract_openai_content,
     resolve_artifacts_dir,
@@ -92,8 +98,8 @@ async def run_image_gen_adapter(config: dict[str, Any], context: dict[str, Any])
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 prompt = str(last.get("text") or last.get("prompt") or "")
-        except Exception:
-            pass
+        except Exception as prompt_context_error:
+            logger.debug("Image adapter failed to read prompt from context fallback", exc_info=prompt_context_error)
     prompt = prompt or ""
 
     if not prompt.strip():
@@ -126,7 +132,7 @@ async def run_image_gen_adapter(config: dict[str, Any], context: dict[str, Any])
     save_artifact = True if save_artifact is None else bool(save_artifact)
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         fake_id = str(uuid.uuid4())[:8]
         step_run_id = str(context.get("step_run_id") or f"test_image_gen_{int(time.time()*1000)}")
         out_dir = resolve_artifacts_dir(step_run_id)
@@ -296,8 +302,6 @@ async def run_image_describe_adapter(config: dict[str, Any], context: dict[str, 
         return {"description": "", "error": "missing_image"}
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
-
         # Build message with image
         content = [{"type": "text", "text": prompt}]
         if image_url:

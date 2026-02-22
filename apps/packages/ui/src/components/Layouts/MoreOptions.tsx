@@ -174,6 +174,11 @@ const downloadFile = (content: string, filename: string) => {
 const generateChatImage = async (messages: Message[]) => {
   // Lazy-load html2canvas to reduce initial bundle size (~400KB)
   const html2canvas = (await import("html2canvas")).default
+  const rootStyles = getComputedStyle(document.documentElement)
+  const themeBackground =
+    rootStyles.getPropertyValue("--color-bg").trim() ||
+    rootStyles.getPropertyValue("--color-surface").trim() ||
+    null
 
   const root = document.createElement("div")
   document.body.appendChild(root)
@@ -187,7 +192,7 @@ const generateChatImage = async (messages: Message[]) => {
   }
   const canvas = await html2canvas(container, {
     useCORS: true,
-    backgroundColor: "#ffffff",
+    backgroundColor: themeBackground,
     scale: 2
   })
   reactRoot.unmount()

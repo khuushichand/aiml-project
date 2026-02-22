@@ -330,6 +330,11 @@ class WorldBookEntry:
             'world_book_id': self.world_book_id,
             'keywords': list(self.keywords),
             'content': self.content,
+            'group': (
+                str(self.metadata.get('group')).strip()
+                if self.metadata.get('group') not in (None, "")
+                else None
+            ),
             'appendable': bool(self.metadata.get('appendable', False)),
             'priority': int(self.priority),
             'enabled': bool(self.enabled),
@@ -710,7 +715,8 @@ class WorldBookService:
         scan_depth: Optional[int] = None,
         token_budget: Optional[int] = None,
         recursive_scanning: Optional[bool] = None,
-        enabled: Optional[bool] = None
+        enabled: Optional[bool] = None,
+        expected_version: Optional[int] = None
     ) -> bool:
         """
         Update a world book's settings.
@@ -718,6 +724,8 @@ class WorldBookService:
         Args:
             world_book_id: World book ID
             Various optional fields to update
+            expected_version: Optional optimistic-locking version. If provided,
+                update only succeeds when the current row version matches.
 
         Returns:
             True if updated successfully
@@ -753,12 +761,19 @@ class WorldBookService:
 
             updates.append("last_modified = CURRENT_TIMESTAMP")
             updates.append("version = version + 1")
-            params.extend([world_book_id, False])
+            where_clause = "id = ? AND deleted = ?"
+            where_params: list[Any] = [world_book_id, False]
+            if expected_version is not None:
+                if not isinstance(expected_version, int) or expected_version < 1:
+                    raise InputError("expected_version must be a positive integer")
+                where_clause += " AND version = ?"
+                where_params.append(expected_version)
+            params.extend(where_params)
 
             with self.db.get_connection() as conn:
                 set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_UPDATE_FIELDS)
                 cursor = conn.execute(
-                    f"UPDATE world_books SET {set_clause} WHERE id = ? AND deleted = ?",
+                    f"UPDATE world_books SET {set_clause} WHERE {where_clause}",  # nosec B608
                     tuple(params)
                 )
                 conn.commit()
@@ -767,6 +782,23 @@ class WorldBookService:
                     logger.info(f"Updated world book {world_book_id}")
                     self._invalidate_cache()
                     return True
+                if expected_version is not None:
+                    current = conn.execute(
+                        """
+                        SELECT version FROM world_books
+                        WHERE id = ? AND deleted = ?
+                        """,
+                        (world_book_id, False),
+                    ).fetchone()
+                    if current is not None:
+                        current_version = (
+                            current["version"]
+                            if hasattr(current, "keys") and "version" in current.keys()
+                            else current[0]
+                        )
+                        raise ConflictError(
+                            f"Version mismatch. Expected {expected_version}, found {current_version}. Please refresh and try again."
+                        )
                 return False
 
         except sqlite3.IntegrityError as e:
@@ -1099,7 +1131,7 @@ class WorldBookService:
             with self.db.get_connection() as conn:
                 set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_ENTRY_UPDATE_FIELDS)
                 cursor = conn.execute(
-                    f"UPDATE world_book_entries SET {set_clause} WHERE id = ?",
+                    f"UPDATE world_book_entries SET {set_clause} WHERE id = ?",  # nosec B608
                     tuple(params)
                 )
                 conn.commit()
@@ -1861,13 +1893,16 @@ class WorldBookService:
                 params.append(world_book_id)
 
                 set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_ENTRY_UPDATE_FIELDS)
-                cursor = conn.execute(
-                    f"""
+                entry_ids_clause = f"({placeholders})"
+                update_entries_sql_template = """
                     UPDATE world_book_entries
                     SET {set_clause}
-                    WHERE id IN ({placeholders})
+                    WHERE id IN {entry_ids_clause}
                     AND world_book_id = ?
-                    """,
+                    """
+                update_entries_sql = update_entries_sql_template.format_map(locals())  # nosec B608
+                cursor = conn.execute(
+                    update_entries_sql,
                     params
                 )
                 conn.commit()

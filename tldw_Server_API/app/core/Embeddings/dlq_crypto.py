@@ -15,6 +15,8 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import env_flag_enabled
+
 try:
     from cryptography.exceptions import InvalidTag  # type: ignore
 
@@ -53,9 +55,9 @@ def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> tuple[bytes, st
         )
         return key, "scrypt"
     except (ValueError, MemoryError) as exc:
-        allow_weak = str(os.getenv("EMBEDDINGS_DLQ_ALLOW_WEAK_KDF", "")).lower() in {"1", "true", "yes", "on"}
+        allow_weak = env_flag_enabled("EMBEDDINGS_DLQ_ALLOW_WEAK_KDF")
         logger.warning(
-            "DLQ KDF scrypt failed; weak fallback %s. error=%s",
+            'DLQ KDF scrypt failed; weak fallback {}. error={}',
             "enabled" if allow_weak else "disabled",
             f"{type(exc).__name__}: {exc}",
         )
@@ -159,7 +161,7 @@ def decrypt_payload_if_present(enc_json: str | None) -> dict[str, Any] | None:
                 )
             except (ValueError, MemoryError, TypeError) as exc:
                 logger.debug(
-                    "DLQ decrypt scrypt failed, using legacy KDF: %s",
+                    'DLQ decrypt scrypt failed, using legacy KDF: {}',
                     type(exc).__name__,
                 )
                 key = _derive_key_from_passphrase_legacy(key_str)

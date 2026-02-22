@@ -120,6 +120,46 @@ class AudioMixConfig(BaseAdapterConfig):
     output_format: str = Field("mp3", description="Output audio format")
 
 
+class MultiVoiceTTSConfig(BaseAdapterConfig):
+    """Config for multi-voice TTS adapter."""
+
+    sections: list[dict[str, Any]] | None = Field(None, description="Sections [{voice, text}] from compose step")
+    voice_assignments: dict[str, str] | None = Field(None, description="Voice marker -> Kokoro voice ID mapping")
+    default_model: str = Field("kokoro", description="Default TTS model")
+    default_voice: str = Field("af_heart", description="Fallback voice if assignment missing")
+    response_format: Literal["mp3", "wav", "opus", "flac", "aac"] = Field(
+        "mp3", description="Output audio format"
+    )
+    speed: float = Field(1.0, ge=0.25, le=4.0, description="Speech speed multiplier")
+    pause_duration_seconds: float = Field(1.0, ge=0.0, le=5.0, description="Silence between sections")
+    normalize: bool = Field(True, description="EBU R128 normalize final output")
+    target_lufs: float = Field(-16.0, description="Target LUFS for normalization")
+    fallback_provider: str | None = Field("openai", description="Fallback TTS provider on failure")
+    fallback_voice: str = Field("nova", description="Fallback voice for fallback provider")
+    background_audio_uri: str | None = Field(
+        None,
+        description="Optional file:// URI for background music/ambience to mix under narration",
+    )
+    background_volume: float = Field(
+        0.15,
+        ge=0.0,
+        le=2.0,
+        description="Background track volume multiplier",
+    )
+    background_delay_ms: int = Field(
+        0,
+        ge=0,
+        le=120000,
+        description="Delay before background enters, in milliseconds",
+    )
+    background_fade_seconds: float = Field(
+        2.0,
+        ge=0.0,
+        le=30.0,
+        description="Fade-in/out duration for background track, in seconds",
+    )
+
+
 class AudioDiarizeConfig(BaseAdapterConfig):
     """Config for speaker diarization adapter."""
 

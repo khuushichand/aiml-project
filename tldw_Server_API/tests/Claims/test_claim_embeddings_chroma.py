@@ -68,12 +68,12 @@ def test_optional_claim_embeddings_with_chroma(monkeypatch):
         try:
             db.close_connection()
         except Exception:
-            pass
+            _ = None
         try:
             shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception:
-            pass
+            _ = None
         try:
             shutil.rmtree(base_dir, ignore_errors=True)
         except Exception:
-            pass
+            _ = None

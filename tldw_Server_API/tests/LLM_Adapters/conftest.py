@@ -45,21 +45,22 @@ except Exception:
 def client_user_only(request):  # noqa: D401 - compatibility alias with fallback
     """Return an authenticated TestClient.
 
-    Prefer the rich 'authenticated_client' fixture from chat_fixtures when
-    available; otherwise fall back to the project-level client_with_single_user
-    which already overrides authentication dependencies.
+    Prefer the project-level `client_with_single_user` fixture, which returns
+    a FastAPI TestClient with auth dependencies overridden for tests.
+
+    Important:
+    Do not resolve `authenticated_client` dynamically here. A globally-loaded
+    e2e fixture uses the same name and can resolve to `tests.e2e.fixtures.APIClient`,
+    which does not expose `.stream()` and breaks streaming adapter tests.
     """
     try:
-        return request.getfixturevalue("authenticated_client")
+        client, _logger = request.getfixturevalue("client_with_single_user")
+        return client
     except Exception:
-        try:
-            client, _logger = request.getfixturevalue("client_with_single_user")
-            return client
-        except Exception:
-            # Last resort: construct a minimal TestClient against the app
-            from fastapi.testclient import TestClient
-            from tldw_Server_API.app.main import app as fastapi_app
-            return TestClient(fastapi_app)
+        # Last resort: construct a minimal TestClient against the app
+        from fastapi.testclient import TestClient
+        from tldw_Server_API.app.main import app as fastapi_app
+        return TestClient(fastapi_app)
 
 
 @pytest.fixture
@@ -93,7 +94,7 @@ def client(client_user_only):
             else:
                 headers.setdefault("X-API-KEY", auth_token)
         except Exception:
-            pass
+            _ = None
         return test_client.post(url, headers=headers, **kwargs)
 
     setattr(test_client, "post_with_auth", post_with_auth)
@@ -101,9 +102,62 @@ def client(client_user_only):
 
 
 @pytest.fixture
-def authenticated_client(client_user_only):  # pragma: no cover - thin alias
-    """Alias for compatibility with tests expecting authenticated_client."""
-    return client_user_only
+def authenticated_client(client_user_only, auth_token):
+    """Return a client that automatically applies auth/CSRF headers.
+
+    Streaming adapter tests call `client.stream(...)` directly, so this fixture
+    wraps request methods to ensure they remain authenticated without each test
+    manually constructing headers.
+    """
+    test_client = client_user_only
+
+    # Best-effort CSRF token discovery.
+    try:
+        resp = test_client.get("/api/v1/health")
+        csrf_token = getattr(test_client, "csrf_token", None) or resp.cookies.get("csrf_token", "")
+        setattr(test_client, "csrf_token", csrf_token)
+    except Exception:
+        csrf_token = getattr(test_client, "csrf_token", "")
+
+    original_post = test_client.post
+    original_get = test_client.get
+    original_stream = getattr(test_client, "stream", None)
+
+    def _auth_headers(existing=None):
+        headers = dict(existing or {})
+        if csrf_token and "X-CSRF-Token" not in headers:
+            headers["X-CSRF-Token"] = csrf_token
+        try:
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+            settings = get_settings()
+            if settings.AUTH_MODE == "multi_user":
+                token = auth_token if str(auth_token).startswith("Bearer ") else f"Bearer {auth_token}"
+                headers.setdefault("Authorization", token)
+            else:
+                headers.setdefault("X-API-KEY", auth_token)
+        except Exception:
+            headers.setdefault("X-API-KEY", auth_token)
+        return headers
+
+    def authenticated_post(url, **kwargs):
+        headers = _auth_headers(kwargs.pop("headers", None))
+        return original_post(url, headers=headers, **kwargs)
+
+    def authenticated_get(url, **kwargs):
+        headers = _auth_headers(kwargs.pop("headers", None))
+        return original_get(url, headers=headers, **kwargs)
+
+    def authenticated_stream(method, url, **kwargs):
+        headers = _auth_headers(kwargs.pop("headers", None))
+        if callable(original_stream):
+            return original_stream(method, url, headers=headers, **kwargs)
+        raise RuntimeError("Test client does not support streaming in this environment")
+
+    test_client.post = authenticated_post
+    test_client.get = authenticated_get
+    if callable(original_stream):
+        test_client.stream = authenticated_stream
+    return test_client
 
 
 @pytest.fixture

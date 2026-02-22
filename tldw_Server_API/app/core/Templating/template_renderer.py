@@ -3,16 +3,19 @@ from __future__ import annotations
 import os
 import re
 import time
+import threading
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 
-from jinja2 import StrictUndefined, nodes
+from jinja2 import StrictUndefined, TemplateError, nodes
 from jinja2.sandbox import SandboxedEnvironment
 from loguru import logger
 
 from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
+from tldw_Server_API.app.core.testing import is_truthy
 
 try:  # Python 3.9+
     from zoneinfo import ZoneInfo
@@ -35,6 +38,7 @@ _TEMPLATE_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     UnicodeDecodeError,
     ValueError,
+    TemplateError,
 )
 
 
@@ -65,6 +69,7 @@ class TemplateOptions:
     max_output_chars: int = 2000
     timeout_ms: int = 250
     random_seed: int | None = None
+    cache_max_entries: int = 256
 
 
 import contextlib
@@ -77,7 +82,7 @@ def options_from_env() -> TemplateOptions:
         val = os.getenv(name)
         if val is None:
             return default
-        return str(val).strip().lower() in {"1", "true", "yes", "on"}
+        return is_truthy(str(val))
 
     def _int(name: str, default: int) -> int:
         raw = os.getenv(name)
@@ -107,7 +112,7 @@ def options_from_env() -> TemplateOptions:
         if cp and cp.has_section(section):
             try:
                 raw = cp.get(section, key, fallback=str(default))
-                return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+                return is_truthy(str(raw))
             except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                 return default
         return default
@@ -126,6 +131,7 @@ def options_from_env() -> TemplateOptions:
         max_output_chars=_int("MAX_TEMPLATE_OUTPUT_CHARS", _cfg_int("Chat-Templating", "max_output_chars", 2000)),
         timeout_ms=_int("TEMPLATE_RENDER_TIMEOUT_MS", _cfg_int("Chat-Templating", "render_timeout_ms", 250)),
         random_seed=seed,
+        cache_max_entries=_int("TEMPLATE_CACHE_MAX_ENTRIES", _cfg_int("Chat-Templating", "cache_max_entries", 256)),
     )
 
 
@@ -236,8 +242,41 @@ _DISALLOWED_NODE_TYPES = {
     nodes.ScopedEvalContextModifier,
 }
 
+_COMPILED_TEMPLATE_CACHE: OrderedDict[str, Any] = OrderedDict()
+_COMPILED_TEMPLATE_CACHE_LOCK = threading.Lock()
+
+
+def _get_compiled_template(template_src: str, max_entries: int) -> Any:
+    """Return a compiled template using a bounded LRU cache keyed by source text."""
+    if max_entries <= 0:
+        return _ENV.from_string(template_src)
+
+    with _COMPILED_TEMPLATE_CACHE_LOCK:
+        cached = _COMPILED_TEMPLATE_CACHE.get(template_src)
+        if cached is not None:
+            _COMPILED_TEMPLATE_CACHE.move_to_end(template_src)
+            return cached
+
+    compiled = _ENV.from_string(template_src)
+    with _COMPILED_TEMPLATE_CACHE_LOCK:
+        _COMPILED_TEMPLATE_CACHE[template_src] = compiled
+        _COMPILED_TEMPLATE_CACHE.move_to_end(template_src)
+        while len(_COMPILED_TEMPLATE_CACHE) > max_entries:
+            _COMPILED_TEMPLATE_CACHE.popitem(last=False)
+    return compiled
+
+
+def _clear_template_cache() -> None:
+    """Test helper to clear compiled template cache."""
+    with _COMPILED_TEMPLATE_CACHE_LOCK:
+        _COMPILED_TEMPLATE_CACHE.clear()
+
 
 def _validate_expression_only(template_src: str) -> None:
+    # Block statements/tags are intentionally unsupported for this feature.
+    if "{%" in template_src:
+        raise ValueError("Forbidden construct in template: BlockTag")
+
     ast = _ENV.parse(template_src)
 
     def _walk(n: nodes.Node) -> None:
@@ -326,7 +365,7 @@ def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = No
     # Perform render with guardrails
     start = time.monotonic()
     try:
-        tmpl = _ENV.from_string(text)
+        tmpl = _get_compiled_template(text, int(opts.cache_max_entries))
         output = tmpl.render(render_vars)
     except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"template_render_failure: {e}")

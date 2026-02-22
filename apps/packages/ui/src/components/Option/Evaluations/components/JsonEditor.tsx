@@ -22,7 +22,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   onChange,
   onValidationError,
   showError = true,
-  errorClassName = "mt-1 text-xs text-red-600",
+  errorClassName = "mt-1 text-xs text-danger",
   className,
   ...textAreaProps
 }) => {

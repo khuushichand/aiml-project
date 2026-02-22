@@ -11,7 +11,6 @@ This module includes adapters for knowledge CRUD operations:
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -20,6 +19,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.knowledge._config import (
@@ -92,7 +92,7 @@ async def run_notes_adapter(config: dict[str, Any], context: dict[str, Any]) -> 
         return value
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         if action == "create":
             return {"note": {"id": "test-note-id", "title": _render(config.get("title")), "content": _render(config.get("content"))}, "success": True, "simulated": True}
         if action == "get":
@@ -229,7 +229,7 @@ async def run_prompts_adapter(config: dict[str, Any], context: dict[str, Any]) -
         return value
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         if action == "create":
             return {"prompt": {"id": 1, "name": _render(config.get("name"))}, "success": True, "simulated": True}
         if action == "get":
@@ -400,7 +400,7 @@ async def run_collections_adapter(config: dict[str, Any], context: dict[str, Any
         return value
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         if action == "save":
             return {
                 "item": {"id": 1, "url": _render(config.get("url")), "title": "Test Item", "status": "saved"},
@@ -625,7 +625,7 @@ async def run_chunking_adapter(config: dict[str, Any], context: dict[str, Any]) 
         return {"error": f"invalid_method:{method}", "valid_methods": list(valid_methods)}
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         # Simple mock chunking
         words = text.split()
         chunk_size = max(1, max_size // 5)  # Rough word-based simulation
@@ -706,7 +706,7 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
         return value
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         if action == "extract":
             return {
                 "claims": [
@@ -913,7 +913,7 @@ async def run_voice_intent_adapter(config: dict[str, Any], context: dict[str, An
         conversation_history = None
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         # Simulate basic intent parsing
         text_lower = text.lower()
 

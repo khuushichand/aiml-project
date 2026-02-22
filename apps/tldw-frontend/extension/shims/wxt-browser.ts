@@ -138,15 +138,19 @@ const createStorageArea = (areaName: "local" | "sync" | "session") => ({
       {}
     if (backend) {
       Object.entries(items).forEach(([key, value]) => {
-        const oldRaw = backend.getItem(key)
-        const newRaw = JSON.stringify(value)
-        if (oldRaw !== newRaw) {
-          changes[key] = {
-            oldValue: parseStoredValue(oldRaw),
-            newValue: parseStoredValue(newRaw)
+        try {
+          const oldRaw = backend.getItem(key)
+          const newRaw = JSON.stringify(value)
+          if (oldRaw !== newRaw) {
+            changes[key] = {
+              oldValue: parseStoredValue(oldRaw),
+              newValue: parseStoredValue(newRaw)
+            }
           }
+          backend.setItem(key, newRaw)
+        } catch {
+          // Silently ignore storage failures (quota exceeded, circular refs, etc.)
         }
-        backend.setItem(key, newRaw)
       })
     }
     if (Object.keys(changes).length > 0) {
@@ -162,14 +166,18 @@ const createStorageArea = (areaName: "local" | "sync" | "session") => ({
     if (backend) {
       const keyList = Array.isArray(keys) ? keys : [keys]
       keyList.forEach((key) => {
-        const oldRaw = backend.getItem(key)
-        if (oldRaw !== null) {
-          changes[key] = {
-            oldValue: parseStoredValue(oldRaw),
-            newValue: undefined
+        try {
+          const oldRaw = backend.getItem(key)
+          if (oldRaw !== null) {
+            changes[key] = {
+              oldValue: parseStoredValue(oldRaw),
+              newValue: undefined
+            }
           }
+          backend.removeItem(key)
+        } catch {
+          // Silently ignore storage failures
         }
-        backend.removeItem(key)
       })
     }
     if (Object.keys(changes).length > 0) {
@@ -183,16 +191,20 @@ const createStorageArea = (areaName: "local" | "sync" | "session") => ({
     const changes: Record<string, { oldValue?: unknown; newValue?: unknown }> =
       {}
     if (backend) {
-      for (let i = 0; i < backend.length; i += 1) {
-        const key = backend.key(i)
-        if (!key) continue
-        const oldRaw = backend.getItem(key)
-        changes[key] = {
-          oldValue: parseStoredValue(oldRaw),
-          newValue: undefined
+      try {
+        for (let i = 0; i < backend.length; i += 1) {
+          const key = backend.key(i)
+          if (!key) continue
+          const oldRaw = backend.getItem(key)
+          changes[key] = {
+            oldValue: parseStoredValue(oldRaw),
+            newValue: undefined
+          }
         }
+        backend.clear()
+      } catch {
+        // Silently ignore storage failures
       }
-      backend.clear()
     }
     if (Object.keys(changes).length > 0) {
       storageOnChanged.trigger(changes, areaName)

@@ -45,6 +45,22 @@ class AuthnzLLMProviderOverridesRepo:
     def _normalize_datetime_for_postgres(dt: datetime) -> datetime:
         return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
+    @staticmethod
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        if row is None:
+            return {}
+        if isinstance(row, dict):
+            return dict(row)
+        try:
+            return dict(row)
+        except Exception as row_cast_error:
+            logger.debug("LLM provider override row cast failed; trying keys()/mapping fallback", exc_info=row_cast_error)
+        try:
+            keys = row.keys()
+            return {key: row[key] for key in keys}
+        except Exception:
+            return {}
+
     async def list_overrides(self, provider: str | None = None) -> list[dict[str, Any]]:
         provider_norm = normalize_provider_name(provider) if provider else None
         try:
@@ -90,7 +106,7 @@ class AuthnzLLMProviderOverridesRepo:
                         ORDER BY provider
                         """
                     )
-            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row} for row in rows]
+            return [self._row_to_dict(row) for row in rows]
         except Exception as exc:
             logger.error(f"AuthnzLLMProviderOverridesRepo.list_overrides failed: {exc}")
             raise
@@ -118,7 +134,7 @@ class AuthnzLLMProviderOverridesRepo:
                     """,
                     (provider_norm,),
                 )
-            return dict(row) if row else None
+            return self._row_to_dict(row) if row else None
         except Exception as exc:
             logger.error(f"AuthnzLLMProviderOverridesRepo.fetch_override failed: {exc}")
             raise
@@ -162,7 +178,7 @@ class AuthnzLLMProviderOverridesRepo:
                     api_key_hint,
                     ts,
                 )
-                return dict(row) if row else {}
+                return self._row_to_dict(row) if row else {}
 
             await self.db_pool.execute(
                 """
@@ -198,7 +214,7 @@ class AuthnzLLMProviderOverridesRepo:
                 """,
                 (provider_norm,),
             )
-            return dict(row) if row else {}
+            return self._row_to_dict(row) if row else {}
         except Exception as exc:
             logger.error(f"AuthnzLLMProviderOverridesRepo.upsert_override failed: {exc}")
             raise

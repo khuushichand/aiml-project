@@ -94,6 +94,7 @@ class StepTypeRegistry:
             "s3_upload": StepType("s3_upload", "Upload content to S3-compatible storage"),
             "s3_download": StepType("s3_download", "Download content from S3-compatible storage"),
             "github_create_issue": StepType("github_create_issue", "Create a GitHub issue"),
+            "podcast_rss_publish": StepType("podcast_rss_publish", "Publish/merge podcast RSS feed entries"),
             # Tier 6: Agentic Support
             "llm_with_tools": StepType("llm_with_tools", "LLM call that can invoke tools"),
             "llm_critique": StepType("llm_critique", "Run LLM critique on content (Constitutional AI)"),
@@ -113,6 +114,7 @@ class StepTypeRegistry:
             "image_describe": StepType("image_describe", "Describe image using VLM/multimodal LLM"),
             "report_generate": StepType("report_generate", "Generate structured report from content"),
             "newsletter_generate": StepType("newsletter_generate", "Generate newsletter from content/items"),
+            "audio_briefing_compose": StepType("audio_briefing_compose", "Compose multi-voice audio briefing script from article summaries"),
             "slides_generate": StepType("slides_generate", "Generate slide deck structure"),
             "diagram_generate": StepType("diagram_generate", "Generate diagram (mermaid/graphviz)"),
             "email_send": StepType("email_send", "Send email via SMTP"),
@@ -121,6 +123,7 @@ class StepTypeRegistry:
             "timing_start": StepType("timing_start", "Start a named timer"),
             "timing_stop": StepType("timing_stop", "Stop timer, return elapsed time"),
             # Phase 2: Group B - Audio & Video Processing
+            "multi_voice_tts": StepType("multi_voice_tts", "Multi-voice TTS with per-section synthesis, concatenation, and normalization"),
             "audio_normalize": StepType("audio_normalize", "Normalize audio volume levels"),
             "audio_concat": StepType("audio_concat", "Concatenate multiple audio files"),
             "audio_trim": StepType("audio_trim", "Trim audio by start/end timestamps"),

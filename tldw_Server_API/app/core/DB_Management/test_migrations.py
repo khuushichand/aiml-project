@@ -187,6 +187,22 @@ class TestMigrations(unittest.TestCase):
         self.assertEqual(len(result["migrations_applied"]), 1)
         self.assertEqual(result["migrations_applied"][0]["direction"], "down")
 
+    def test_no_migrations_upgrade_reports_diagnostics(self):
+        """Upgrade with no migration files should expose diagnostic details."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER)")
+            conn.execute("DELETE FROM schema_version")
+            conn.execute("INSERT INTO schema_version (version) VALUES (?)", (8,))
+
+        result = self.migrator.migrate_to_version(20)
+
+        self.assertEqual(result["status"], "no_migrations")
+        self.assertEqual(result["current_version"], 8)
+        self.assertEqual(result["target_version"], 20)
+        self.assertEqual(result["available_versions"], [])
+        self.assertEqual(result["missing_versions"], list(range(9, 21)))
+        self.assertEqual(Path(result["migrations_dir"]), Path(self.migrations_dir).resolve())
+
     def test_sql_migration_without_down_sql_prevents_downgrade(self):
         """Ensure SQL migrations without down_sql cannot be downgraded."""
         sql_path = Path(self.migrations_dir) / "001_add_flag.sql"
@@ -212,7 +228,10 @@ class TestMigrations(unittest.TestCase):
         with open(backup_path + ".json") as f:
             metadata = json.load(f)
 
-        self.assertEqual(metadata["original_path"], self.db_path)
+        self.assertEqual(
+            Path(metadata["original_path"]).resolve(),
+            Path(self.db_path).resolve(),
+        )
         self.assertEqual(metadata["description"], "test_backup")
 
     def test_verify_migrations(self):

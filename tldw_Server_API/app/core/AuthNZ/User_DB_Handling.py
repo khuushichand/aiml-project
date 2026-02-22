@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
     resolve_client_ip,
@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode, is_truthy
 
 #
 # Local Imports
@@ -42,6 +43,9 @@ from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.core.exceptions import InactiveUserError
 
 _USER_DB_NONCRITICAL_EXCEPTIONS = (
@@ -60,6 +64,8 @@ _USER_DB_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
     UnicodeDecodeError,
+    DatabaseError,
+    BackendDatabaseError,
     HTTPException,
     InvalidTokenError,
     TokenExpiredError,
@@ -313,10 +319,7 @@ def _is_test_context() -> bool:
         pass
     if os.getenv("PYTEST_CURRENT_TEST") is not None:
         return True
-    for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
-        if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
-            return True
-    return False
+    return is_test_mode() or env_flag_enabled("TESTING")
 
 
 def _is_strict_test_bypass_context() -> bool:
@@ -329,9 +332,8 @@ def _is_strict_test_bypass_context() -> bool:
     """
     if os.getenv("PYTEST_CURRENT_TEST") is not None:
         return True
-    for flag in ("TEST_MODE", "TLDW_TEST_MODE"):
-        if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
-            return True
+    if is_test_mode():
+        return True
     try:
         if getattr(get_settings(), "TEST_MODE", False):
             return True
@@ -347,8 +349,7 @@ def _is_production_like_env() -> bool:
     This intentionally checks multiple keys because not all deployments set
     `tldw_production`.
     """
-    truthy = {"1", "true", "yes", "on", "y"}
-    if os.getenv("tldw_production", "").strip().lower() in truthy:
+    if is_truthy(os.getenv("tldw_production", "").strip().lower()):
         return True
 
     production_values = {"production", "prod", "live"}
@@ -610,7 +611,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             if pii_redact_logs:
                 logger.warning("Scoped token used without scope enforcement (details redacted)")
             else:
-                logger.warning("Scoped token used without scope enforcement for subject %s", raw_subject)
+                logger.warning("Scoped token used without scope enforcement for subject {}", raw_subject)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Scoped token requires endpoint scope enforcement",
@@ -1035,6 +1036,9 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 except _USER_DB_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Unable to populate AuthContext for single-user API key")
                 return user
+            logger.warning(
+                "Single-user mode received a non-matching API key; falling back to AuthNZ API key lookup."
+            )
     except HTTPException:
         # Preserve explicit auth failures (e.g., IP allowlist rejection).
         raise
@@ -1048,7 +1052,39 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         api_mgr = await get_api_key_manager()
         client_ip = resolve_client_ip(request, settings)
 
-        key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
+        usage_details: dict[str, Any] | None = None
+        try:
+            endpoint_id = getattr(request.state, "_auth_endpoint_id", None)
+            action = getattr(request.state, "_auth_action", None)
+            scope_name = getattr(request.state, "_auth_scope_name", None)
+            if endpoint_id is not None or action is not None or scope_name is not None:
+                usage_details = {}
+                if endpoint_id is not None:
+                    usage_details["endpoint_id"] = str(endpoint_id)
+                if action is not None:
+                    usage_details["action"] = str(action)
+                if scope_name is not None:
+                    usage_details["scope"] = str(scope_name)
+                path = getattr(getattr(request, "url", None), "path", None) or getattr(request, "scope", {}).get("path")
+                if path:
+                    usage_details["path"] = str(path)
+                method = getattr(request, "method", None)
+                if method:
+                    usage_details["method"] = str(method).upper()
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
+            usage_details = None
+
+        if usage_details is None:
+            key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
+        else:
+            try:
+                key_info = await api_mgr.validate_api_key(
+                    api_key=api_key,
+                    ip_address=client_ip,
+                    usage_details=usage_details,
+                )
+            except TypeError:
+                key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
         if not key_info:
             logger.warning("Multi-User Mode: Invalid X-API-KEY presented.")
             raise HTTPException(
@@ -1138,7 +1174,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 if row:
                     key_org_id = _coerce_int(row.get("org_id"))
                     key_team_id = _coerce_int(row.get("team_id"))
-            except _USER_DB_NONCRITICAL_EXCEPTIONS as exc:
+            except Exception as exc:
                 logger.debug("API key scope fallback lookup failed: {}", exc)
 
         # Attach context for downstream consumers
@@ -1348,6 +1384,59 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             detail="Authentication failed due to internal error",
         ) from e
 
+
+def _coerce_user_id_for_log(user: User) -> Optional[int]:
+    with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
+        if getattr(user, "id_int", None) is not None:
+            return int(user.id_int)  # type: ignore[arg-type]
+    with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
+        return int(user.id)  # type: ignore[arg-type]
+    return None
+
+
+def _warn_single_user_context_mismatch(
+    request: Request,
+    user: User,
+    auth_source: str,
+) -> None:
+    try:
+        settings = get_settings()
+        if getattr(settings, "AUTH_MODE", None) != "single_user":
+            return
+
+        expected_id = int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+        resolved_id = _coerce_user_id_for_log(user)
+        if resolved_id is None or resolved_id == expected_id:
+            return
+
+        has_auth_header = bool(
+            request.headers.get("Authorization")
+            if getattr(request, "headers", None)
+            else False
+        )
+        has_api_key_header = bool(
+            request.headers.get("X-API-KEY")
+            if getattr(request, "headers", None)
+            else False
+        )
+
+        logger.warning(
+            "Single-user mode resolved unexpected principal via {}: resolved_user_id={}, "
+            "expected_user_id={}, has_authorization_header={}, has_api_key_header={}",
+            auth_source,
+            resolved_id,
+            expected_id,
+            has_auth_header,
+            has_api_key_header,
+        )
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as e:
+        logger.debug(
+            "Could not emit single-user context mismatch warning (source={}): {}",
+            auth_source,
+            e,
+        )
+
+
 async def get_request_user(
     request: Request,
     api_key: Optional[str] = Header(None, alias="X-API-KEY"),
@@ -1372,8 +1461,8 @@ async def get_request_user(
         # Test-mode bypass for evaluations when admin gating is explicitly disabled
         if (
             not _prod
-            and _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
-            and _os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in {"1", "true", "yes", "on"}
+            and env_flag_enabled("TESTING")
+            and not is_truthy(_os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true"))
             and _is_strict_test_bypass_context()
         ):
             logger.info(
@@ -1391,8 +1480,8 @@ async def get_request_user(
         import os as _os
         _prod = _is_production_like_env()
         if _prod and (
-            _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-            or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
+            is_test_mode()
+            or env_flag_enabled("TESTING")
         ) and not getattr(get_request_user, "_warned_testflags_prod", False):
             logger.warning(
                 "TEST flags detected while tldw_production=true; "
@@ -1430,10 +1519,14 @@ async def get_request_user(
         token_is_jwt = _looks_like_jwt(token)
         if settings is not None and getattr(settings, "AUTH_MODE", None) == "single_user":
             logger.debug("get_request_user: Treating Bearer token as API key in single-user mode.")
-            return await authenticate_api_key_user(request, token)
+            user = await authenticate_api_key_user(request, token)
+            _warn_single_user_context_mismatch(request, user, "bearer_single_user")
+            return user
         if not token_is_jwt:
             logger.debug("get_request_user: Treating Bearer token as API key (non-JWT token).")
-            return await authenticate_api_key_user(request, token)
+            user = await authenticate_api_key_user(request, token)
+            _warn_single_user_context_mismatch(request, user, "bearer_non_jwt")
+            return user
         logger.debug("get_request_user: Attempting JWT-based authentication.")
         try:
             user = await verify_jwt_and_fetch_user(request, token)
@@ -1447,11 +1540,14 @@ async def get_request_user(
             request.state._auth_user = user
         except _USER_DB_NONCRITICAL_EXCEPTIONS as cache_exc:
             logger.debug(f"Failed to cache _auth_user on request.state: {cache_exc}")
+        _warn_single_user_context_mismatch(request, user, "bearer_jwt")
         return user
 
     if api_key:
         logger.debug("get_request_user: Attempting API-key-based authentication.")
-        return await authenticate_api_key_user(request, api_key)
+        user = await authenticate_api_key_user(request, api_key)
+        _warn_single_user_context_mismatch(request, user, "x_api_key")
+        return user
 
     # Neither Bearer token nor API key provided
     logger.warning(

@@ -1,5 +1,6 @@
 import { isCustomModel } from "@/db/dexie/models"
 import { removeReasoning } from "@/libs/reasoning"
+import { isImageGenerationMessageType } from "@/utils/image-generation-chat"
 import {
   HumanMessage,
   AIMessage,
@@ -11,12 +12,16 @@ export const generateHistory = (
     role: "user" | "assistant" | "system"
     content: string
     image?: string
+    messageType?: string
   }[],
   model: string
 ) => {
   let history = []
   const isCustom = isCustomModel(model)
   for (const message of messages) {
+    if (isImageGenerationMessageType(message.messageType)) {
+      continue
+    }
     if (message.role === "user") {
       let content: MessageContent = isCustom
         ? message.content

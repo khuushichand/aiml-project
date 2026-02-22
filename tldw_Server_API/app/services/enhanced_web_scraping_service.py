@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_datab
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import ContentMetadataHandler, is_content_page
 
@@ -49,6 +50,18 @@ _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     json.JSONDecodeError,
 )
+_PLATFORM_ADMIN_ROLES = frozenset({"admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _normalized_claim_values(values: Any) -> set[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return set()
+    return {
+        str(value).strip().lower()
+        for value in values
+        if str(value).strip()
+    }
 
 
 class WebScrapingService:
@@ -88,7 +101,7 @@ class WebScrapingService:
         scrape_method: str,
         url_input: str,
         url_level: Optional[int] = None,
-        max_pages: int = 100,
+        max_pages: Optional[int] = None,
         max_depth: int = 3,
         summarize_checkbox: bool = False,
         custom_prompt: Optional[str] = None,
@@ -130,7 +143,7 @@ class WebScrapingService:
             def _as_bool(v: Any, d: bool) -> bool:
                 try:
                     s = str(v).strip().lower()
-                    if s in {"1", "true", "yes", "on", "y"}:
+                    if is_truthy(s):
                         return True
                     if s in {"0", "false", "no", "off", "n"}:
                         return False
@@ -153,13 +166,39 @@ class WebScrapingService:
             score_threshold_cfg: float = _as_float(wc.get('web_crawl_score_threshold', 0.0), 0.0)
             default_max_pages: int = _as_int(wc.get('web_crawl_max_pages', 100), 100)
 
-            # Respect explicit API param; otherwise allow config default to apply
-            effective_max_pages: int = max_pages if max_pages is not None and max_pages != 100 else default_max_pages
+            # Effective max-pages precedence:
+            # - explicit request value wins
+            # - otherwise use config default
+            requested_max_pages: Optional[int] = None
+            if max_pages is not None:
+                requested_max_pages = _as_int(max_pages, default_max_pages)
+            effective_max_pages: int = (
+                requested_max_pages if requested_max_pages is not None else default_max_pages
+            )
+            max_pages_source = "request" if requested_max_pages is not None else "config_default"
 
-            # Effective overrides (prefer explicit inputs over config)
-            eff_strategy = (crawl_strategy or '').strip() or crawl_strategy_cfg
-            eff_include_external = include_external if include_external is not None else include_external_cfg
-            eff_score_threshold = score_threshold if score_threshold is not None else score_threshold_cfg
+            # Effective overrides with explicit source tracking for observability.
+            requested_strategy = (crawl_strategy or "").strip()
+            if requested_strategy:
+                eff_strategy = requested_strategy
+                strategy_source = "request"
+            else:
+                eff_strategy = crawl_strategy_cfg
+                strategy_source = "config_default"
+
+            if include_external is not None:
+                eff_include_external = include_external
+                include_external_source = "request"
+            else:
+                eff_include_external = include_external_cfg
+                include_external_source = "config_default"
+
+            if score_threshold is not None:
+                eff_score_threshold = score_threshold
+                score_threshold_source = "request"
+            else:
+                eff_score_threshold = score_threshold_cfg
+                score_threshold_source = "config_default"
 
             # Map priority string to enum
             priority_map = {
@@ -229,10 +268,15 @@ class WebScrapingService:
                 result.setdefault('crawl_config', {})
                 result['crawl_config'].update({
                     'strategy': eff_strategy,
+                    'strategy_source': strategy_source,
                     'include_external': eff_include_external,
+                    'include_external_source': include_external_source,
                     'score_threshold': eff_score_threshold,
+                    'score_threshold_source': score_threshold_source,
                     'default_max_pages': default_max_pages,
+                    'requested_max_pages': requested_max_pages,
                     'effective_max_pages': effective_max_pages,
+                    'max_pages_source': max_pages_source,
                     'enable_keyword_scorer': bool(wc.get('web_crawl_enable_keyword_scorer', False)),
                     'enable_domain_map': bool(wc.get('web_crawl_enable_domain_map', False)),
                 })
@@ -580,10 +624,40 @@ class WebScrapingService:
 
                     # Format content with metadata
                     # Include crawl metadata (depth, parent_url, score) if present
-                    md = article.get("metadata") or {}
-                    crawl_depth = md.get("depth")
-                    crawl_parent = md.get("parent_url")
-                    crawl_score = md.get("score")
+                    md = article.get("metadata") if isinstance(article.get("metadata"), dict) else {}
+                    crawl_depth = (
+                        md.get("depth")
+                        if md.get("depth") is not None
+                        else md.get("crawl_depth")
+                    )
+                    if crawl_depth is None:
+                        crawl_depth = article.get("crawl_depth")
+                    crawl_parent = (
+                        md.get("parent_url")
+                        if md.get("parent_url") is not None
+                        else md.get("crawl_parent_url")
+                    )
+                    if crawl_parent is None:
+                        crawl_parent = article.get("crawl_parent_url")
+                    crawl_score = (
+                        md.get("score")
+                        if md.get("score") is not None
+                        else md.get("crawl_score")
+                    )
+                    if crawl_score is None:
+                        crawl_score = article.get("crawl_score")
+
+                    # Normalize metadata types when possible so persistence remains stable.
+                    try:
+                        if crawl_depth is not None:
+                            crawl_depth = int(crawl_depth)
+                    except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS:
+                        pass
+                    try:
+                        if crawl_score is not None:
+                            crawl_score = float(crawl_score)
+                    except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS:
+                        pass
 
                     content_with_metadata = ContentMetadataHandler.format_content_with_metadata(
                         url=article.get("url", ""),
@@ -729,11 +803,22 @@ class WebScrapingService:
         }
 
     def _is_admin_user(self, user: Any) -> bool:
-        return bool(
-            getattr(user, "is_admin", False)
-            or getattr(user, "is_superuser", False)
-            or str(getattr(user, "role", "") or "").lower() == "admin"
+        if user is None:
+            return False
+        role = str(
+            user.get("role", "") if isinstance(user, dict) else getattr(user, "role", "")
+        ).strip().lower()
+        if role in _PLATFORM_ADMIN_ROLES:
+            return True
+        roles = _normalized_claim_values(
+            user.get("roles", []) if isinstance(user, dict) else getattr(user, "roles", [])
         )
+        if roles & _PLATFORM_ADMIN_ROLES:
+            return True
+        permissions = _normalized_claim_values(
+            user.get("permissions", []) if isinstance(user, dict) else getattr(user, "permissions", [])
+        )
+        return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
     def _can_access_job(self, job: ScrapingJob, user: Any) -> bool:
         if self._is_admin_user(user):
@@ -792,6 +877,22 @@ class WebScrapingService:
             return {
                 "status": "not_initialized",
                 "initialized": False
+            }
+
+        if self.scraper is None:
+            return {
+                "status": "unavailable",
+                "initialized": True,
+                "scraper_available": False,
+                "queue": {
+                    "active_jobs": 0,
+                    "completed_jobs": 0,
+                    "pending_by_priority": {
+                        priority.name: 0 for priority in JobPriority
+                    },
+                },
+                "active_jobs": 0,
+                "rate_limiter": None,
             }
 
         queue_status = self.scraper.job_queue.get_status()

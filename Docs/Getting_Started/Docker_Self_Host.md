@@ -23,25 +23,60 @@ The fastest way to get a persistent tldw_server running:
 git clone https://github.com/rmusser01/tldw_server.git
 cd tldw_server
 
-# Create .env with your API key
-cat > .env << 'EOF'
-AUTH_MODE=single_user
-SINGLE_USER_API_KEY=your-secure-api-key-at-least-16-chars
-DATABASE_URL=sqlite:///./Databases/users.db
-EOF
-
-# Start the stack
-docker compose -f Dockerfiles/docker-compose.yml up -d --build
-
-# Initialize authentication
-docker compose -f Dockerfiles/docker-compose.yml exec app \
-  python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+# Start the stack with first-use bootstrap
+make quickstart-docker
 
 # Verify
 curl http://localhost:8000/health
 ```
 
 The server is now running on port 8000.
+On first start in `single_user` mode, this flow ensures a secure `SINGLE_USER_API_KEY` is set and runs `AuthNZ.initialize --non-interactive` automatically once.
+
+---
+
+## Optional: Add the WebUI (Docker) + Mobile Access
+
+If you want a browser UI in addition to the API:
+
+```bash
+# From repo root
+make quickstart-docker-webui
+```
+
+This starts:
+- API on `http://localhost:8000`
+- WebUI on `http://localhost:8080`
+
+Access from another device on your network (for example, phone/tablet):
+
+1) Use your server IP (not localhost) for WebUI -> API calls.
+2) Allow the WebUI origin in backend CORS.
+3) Rebuild/start with the WebUI overlay.
+
+```bash
+# Example server IP on your LAN
+SERVER_IP=192.168.1.50
+
+# tldw_Server_API/Config_Files/.env
+# ALLOWED_ORIGINS=http://$SERVER_IP:8080
+
+# Build/start API + WebUI with browser-reachable API URL
+NEXT_PUBLIC_API_URL=http://$SERVER_IP:8000 \
+docker compose --env-file tldw_Server_API/Config_Files/.env \
+  -f Dockerfiles/docker-compose.yml \
+  -f Dockerfiles/docker-compose.webui.yml \
+  up -d --build
+```
+
+Open `http://$SERVER_IP:8080` from your mobile device (same LAN).  
+Make sure firewall/security-group rules allow TCP `8000` and `8080`.
+
+Important:
+- Do not set `NEXT_PUBLIC_API_URL` to `localhost` for remote/mobile browsers.
+- If `.env` already has `ALLOWED_ORIGINS`, append `http://$SERVER_IP:8080` (comma-separated) instead of replacing existing origins.
+- `NEXT_PUBLIC_API_URL` is injected at WebUI build time, so re-run with `--build` after changing it.
+- For internet-facing deployments, use HTTPS + reverse proxy and follow `./Production.md`.
 
 ---
 
@@ -61,10 +96,10 @@ The default `docker-compose.yml` starts:
 
 ### Adding LLM Providers
 
-Edit your `.env` file to add provider API keys:
+Edit your `tldw_Server_API/Config_Files/.env` file to add provider API keys:
 
 ```bash
-# .env
+# tldw_Server_API/Config_Files/.env
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=your-secure-api-key-at-least-16-chars
 DATABASE_URL=sqlite:///./Databases/users.db
@@ -98,7 +133,7 @@ services:
 For better performance with multiple users:
 
 ```bash
-# .env
+# tldw_Server_API/Config_Files/.env
 DATABASE_URL=postgresql://tldw:your-secure-password@postgres:5432/tldw
 ```
 
@@ -111,7 +146,7 @@ The postgres service in docker-compose.yml will be used automatically.
 For shared access with individual accounts:
 
 ```bash
-# .env
+# tldw_Server_API/Config_Files/.env
 AUTH_MODE=multi_user
 JWT_SECRET_KEY=your-jwt-secret-at-least-32-chars
 DATABASE_URL=postgresql://tldw:your-secure-password@postgres:5432/tldw
@@ -124,6 +159,8 @@ docker compose -f Dockerfiles/docker-compose.yml exec app \
   python -m tldw_Server_API.app.core.AuthNZ.initialize
 # Follow prompts to create admin account
 ```
+
+Note: auto-initialize on container start is only for the `single_user` bootstrap path. For `multi_user`, run initialization explicitly so you can create an admin account.
 
 ---
 
@@ -206,7 +243,7 @@ git pull
 # Rebuild and restart
 docker compose -f Dockerfiles/docker-compose.yml up -d --build
 
-# Run any migrations
+# Run auth setup (recommended for multi-user; single-user quickstart does this automatically)
 docker compose -f Dockerfiles/docker-compose.yml exec app \
   python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
 ```

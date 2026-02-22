@@ -9,9 +9,32 @@ import {
 } from "@/db/dexie/helpers"
 import { ChatDocuments } from "@/models/ChatTypes"
 import { generateTitle } from "@/services/title"
-import { ChatHistory } from "@/store/option"
+import { ChatHistory, useStoreMessageOption } from "@/store/option"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { buildAssistantErrorContent } from "@/utils/chat-error-message"
+
+let didLogSetHistoryMissing = false
+
+const resolveHistorySetter = (
+  candidate: unknown
+): ((history: ChatHistory) => void) | null => {
+  if (typeof candidate === "function") {
+    return candidate as (history: ChatHistory) => void
+  }
+
+  const fallback = useStoreMessageOption.getState().setHistory
+  if (typeof fallback === "function") {
+    return fallback
+  }
+
+  if (!didLogSetHistoryMissing) {
+    didLogSetHistoryMissing = true
+    console.error("[chat] saveMessageOnError could not resolve setHistory setter", {
+      setHistoryType: typeof candidate
+    })
+  }
+  return null
+}
 
 export const saveMessageOnError = async ({
   e,
@@ -77,18 +100,21 @@ export const saveMessageOnError = async ({
   )
 
   const assistantContent = buildAssistantErrorContent(botMessage, e)
+  const safeSetHistory = resolveHistorySetter(setHistory)
 
   if (isAbort) {
-    setHistory([
+    safeSetHistory?.([
       ...history,
       {
         role: "user",
         content: userMessage,
-        image
+        image,
+        messageType: userMessageType ?? message_type
       },
       {
         role: "assistant",
-        content: assistantContent
+        content: assistantContent,
+        messageType: assistantMessageType ?? message_type
       }
     ])
 
@@ -188,16 +214,18 @@ export const saveMessageOnError = async ({
   }
 
   // Non-abort errors: append user + assistant with error content as well
-  setHistory([
+  safeSetHistory?.([
     ...history,
     {
       role: "user",
       content: userMessage,
-      image
+      image,
+      messageType: userMessageType ?? message_type
     },
     {
       role: "assistant",
-      content: assistantContent
+      content: assistantContent,
+      messageType: assistantMessageType ?? message_type
     }
   ])
 

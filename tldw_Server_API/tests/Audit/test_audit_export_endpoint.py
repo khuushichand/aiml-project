@@ -601,6 +601,125 @@ async def test_audit_count_shared_mode_allows_admin_cross_tenant(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_audit_shared_mode_uses_principal_not_user_admin_for_cross_tenant(monkeypatch):
+    async with _get_client(monkeypatch) as (client, app):
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+        from tldw_Server_API.app.core.config import settings
+
+        monkeypatch.setitem(settings, "AUDIT_STORAGE_MODE", "shared")
+        monkeypatch.setitem(settings, "AUDIT_STORAGE_ROLLBACK", False)
+
+        # Compatibility user object claims admin, but principal does not.
+        app.dependency_overrides[get_request_user] = lambda: User(
+            id=5, username="legacy-admin", is_active=True, is_admin=True
+        )
+        principal = _make_principal(is_admin=False, roles=["user"], permissions=["system.logs"], user_id=5)
+        _override_principal(app, principal)
+
+        from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
+        captured = {}
+
+        class _StubAudit:
+            async def export_events(self, **kwargs):
+                captured.update(kwargs)
+                return "[]"
+
+        async def _get_stub_service():
+            return _StubAudit()
+
+        app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
+
+        r = await client.get(
+            "/api/v1/audit/export?format=json&user_id=99",
+            headers={"X-API-KEY": "test-api-key-12345"},
+        )
+        assert r.status_code == 200
+        assert captured.get("allow_cross_tenant") is False
+        assert captured.get("user_id") == "5"
+
+
+@pytest.mark.asyncio
+async def test_audit_shared_mode_allows_principal_admin_even_if_user_not_admin(monkeypatch):
+    async with _get_client(monkeypatch) as (client, app):
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+        from tldw_Server_API.app.core.config import settings
+
+        monkeypatch.setitem(settings, "AUDIT_STORAGE_MODE", "shared")
+        monkeypatch.setitem(settings, "AUDIT_STORAGE_ROLLBACK", False)
+
+        app.dependency_overrides[get_request_user] = lambda: User(
+            id=8, username="non-admin-user", is_active=True, is_admin=False
+        )
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"], user_id=8)
+        _override_principal(app, principal)
+
+        from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
+        captured = {}
+
+        class _StubAudit:
+            async def count_events(self, **kwargs):
+                captured.update(kwargs)
+                return 3
+
+        async def _get_stub_service():
+            return _StubAudit()
+
+        app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
+
+        r = await client.get(
+            "/api/v1/audit/count?user_id=99",
+            headers={"X-API-KEY": "test-api-key-12345"},
+        )
+        assert r.status_code == 200
+        assert r.json()["count"] == 3
+        assert captured.get("allow_cross_tenant") is True
+        assert captured.get("user_id") == "99"
+
+
+@pytest.mark.asyncio
+async def test_audit_shared_mode_allows_system_configure_permission_cross_tenant(monkeypatch):
+    async with _get_client(monkeypatch) as (client, app):
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+        from tldw_Server_API.app.core.config import settings
+
+        monkeypatch.setitem(settings, "AUDIT_STORAGE_MODE", "shared")
+        monkeypatch.setitem(settings, "AUDIT_STORAGE_ROLLBACK", False)
+
+        app.dependency_overrides[get_request_user] = lambda: User(
+            id=11, username="ops-user", is_active=True, is_admin=False
+        )
+        principal = _make_principal(
+            is_admin=False,
+            roles=["user"],
+            permissions=["system.logs", "system.configure"],
+            user_id=11,
+        )
+        _override_principal(app, principal)
+
+        from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
+        captured = {}
+
+        class _StubAudit:
+            async def count_events(self, **kwargs):
+                captured.update(kwargs)
+                return 7
+
+        async def _get_stub_service():
+            return _StubAudit()
+
+        app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
+
+        r = await client.get(
+            "/api/v1/audit/count?user_id=99",
+            headers={"X-API-KEY": "test-api-key-12345"},
+        )
+        assert r.status_code == 200
+        assert r.json()["count"] == 7
+        assert captured.get("allow_cross_tenant") is True
+        assert captured.get("user_id") == "99"
+
+
+@pytest.mark.asyncio
 async def test_audit_export_filename_extension_normalization(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User

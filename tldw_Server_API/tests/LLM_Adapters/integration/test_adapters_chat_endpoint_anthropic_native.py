@@ -14,7 +14,9 @@ import os
 import pytest
 
 
-NETWORK_TESTS_ENABLED = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "on"}
+NETWORK_TESTS_ENABLED = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "y", "on"}
+
+_AUTH_HEADERS = {"Authorization": f"Bearer {os.environ.get('SINGLE_USER_API_KEY', 'test-api-key-12345')}"}
 
 class _FakeResponse:
     def __init__(self, status_code: int = 200, json_obj: Dict[str, Any] | None = None, lines: List[str] | None = None):
@@ -93,7 +95,7 @@ def test_chat_completions_anthropic_native_non_streaming(monkeypatch, client_use
     if real:
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": real}
         client = client_user_only
-        r = client.post("/api/v1/chat/completions", json=_payload(stream=False))
+        r = client.post("/api/v1/chat/completions", json=_payload(stream=False), headers=_AUTH_HEADERS)
         assert r.status_code == 200
         data = r.json()
         assert data.get("object") == "chat.completion"
@@ -105,7 +107,7 @@ def test_chat_completions_anthropic_native_non_streaming(monkeypatch, client_use
         monkeypatch.setattr(anthropic_mod, "http_client_factory", lambda *a, **k: _FakeClient())
 
         client = client_user_only
-        r = client.post("/api/v1/chat/completions", json=_payload(stream=False))
+        r = client.post("/api/v1/chat/completions", json=_payload(stream=False), headers=_AUTH_HEADERS)
         assert r.status_code == 200
         data = r.json()
         assert data["object"] == "chat.completion"
@@ -117,7 +119,7 @@ def test_chat_completions_anthropic_native_streaming(monkeypatch, client_user_on
     if real:
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": real}
         client = client_user_only
-        with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True)) as resp:
+        with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True), headers=_AUTH_HEADERS) as resp:
             assert resp.status_code == 200
             ct = resp.headers.get("content-type", "").lower()
             assert ct.startswith("text/event-stream")
@@ -130,7 +132,7 @@ def test_chat_completions_anthropic_native_streaming(monkeypatch, client_user_on
         monkeypatch.setattr(anthropic_mod, "http_client_factory", lambda *a, **k: _FakeClient())
 
         client = client_user_only
-        with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True)) as resp:
+        with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True), headers=_AUTH_HEADERS) as resp:
             assert resp.status_code == 200
             ct = resp.headers.get("content-type", "").lower()
             assert ct.startswith("text/event-stream")

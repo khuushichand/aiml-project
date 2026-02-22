@@ -1,9 +1,9 @@
 # PRD: Watchlists UX Enhancements (Content Collections UX Backlog)
 
-Version: 0.1
+Version: 0.2
 Owner: Core Maintainers (Server/API + WebUI)
 Status: Draft
-Updated: 2026-01-12
+Updated: 2026-02-07
 
 Related: Docs/Product/Content_Collections_PRD.md
 
@@ -25,14 +25,14 @@ This PRD captures the remaining UX work for Content Collections after the core A
 
 - New backend ingestion or scraping capabilities.
 - New import formats beyond Pocket JSON and Instapaper CSV.
-- Rewriting the existing Next.js pages or API contracts.
+- Broad API rewrites unrelated to UX-driven contract alignment.
 
 ## 4. UX Scope and Flows
 
 ### 4.1 Pocket/Instapaper Import/Export
 - Import modal: drag/drop and file picker, file type validation, source override (auto/pocket/instapaper), merge-tags toggle.
-- Import results: show imported/updated/skipped counts and top errors (if any).
-- Export panel: format selection (jsonl/zip), filter options (status/tags/favorite/domain), and clear filename hints.
+- Import results: async job status (queued/processing/completed/failed/cancelled/quarantined) with imported/updated/skipped counts and top errors (if any).
+- Export panel: format selection (jsonl/zip), filter options (status/tags/favorite/domain/date), include toggles (`include_notes`, `include_highlights`), and clear filename hints.
 
 ### 4.2 Reader Highlights and Notes UX
 - Highlight selection in reader view with quick actions (color, note, delete).
@@ -50,10 +50,13 @@ This PRD captures the remaining UX work for Content Collections after the core A
 
 ## 5. Requirements
 
-- Use existing endpoints: `/api/v1/reading/import`, `/api/v1/reading/export`, `/api/v1/reading/items`,
-  `/api/v1/outputs/templates`, `/api/v1/outputs/templates/{id}/preview`, `/api/v1/outputs`.
+- Use endpoints: `/api/v1/reading/import`, `/api/v1/reading/import/jobs`, `/api/v1/reading/import/jobs/{job_id}`,
+  `/api/v1/reading/export`, `/api/v1/reading/items`, `/api/v1/outputs/templates`,
+  `/api/v1/outputs/templates/{template_id}/preview`, `/api/v1/outputs`.
 - Import UX must surface invalid file errors (400) and size limit errors (413) clearly.
+- Import request supports `merge_tags`; import status polling must use job endpoints.
 - Export UX must preserve filters used in list views by default.
+- Export request supports `include_notes` and `include_highlights` toggles.
 - Bulk actions must provide a clear completion summary and error details.
 - Notes edits must not be lost on navigation; prompt to save or auto-save before leaving.
 
@@ -80,8 +83,9 @@ This PRD captures the remaining UX work for Content Collections after the core A
 
 ## 9. Open Questions
 
-- Do we need background jobs for very large imports, or is the current sync flow acceptable?
-- Should exports include highlights and notes by default or behind a toggle?
+- Resolved: Import uses async job lifecycle with `/reading/import/jobs` polling.
+- Resolved: Exports keep notes/highlights as explicit toggles (defaults: notes on, highlights off).
+- Open: Should date-range filtered ZIP export gain backend support, or remain JSONL-only fallback?
 
 ## 10. Implementation Plan (Phase 3)
 
@@ -89,22 +93,22 @@ This PRD captures the remaining UX work for Content Collections after the core A
 **Goal**: Confirm current Reading/Watchlists UI coverage against Watchlists-UX-PRD and validate required API contracts.
 **Success Criteria**: Phase 3 backlog is finalized with scoped UI changes, confirmed endpoints, and any required API additions explicitly listed.
 **Tests**: None (documentation and scope validation only).
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Import/Export UX (Pocket/Instapaper)
 **Goal**: Implement the import/export UX refinements described in the PRD (drag/drop, validation errors, results summary, export filters).
-**Success Criteria**: Import modal validates file type/size, supports source override + merge tags toggle, and surfaces API error details; export panel preserves list filters and delivers JSONL/ZIP with clear filename hints.
-**Tests**: Frontend component tests for import validation and export filter wiring; manual QA with Pocket JSON and Instapaper CSV fixtures.
-**Status**: Not Started
+**Success Criteria**: Import modal validates file type/size, supports source override + merge tags toggle, starts async import jobs, polls status, and surfaces API/job error details; export panel preserves list filters, wires `include_notes`/`include_highlights`, and delivers JSONL/ZIP with clear filename hints.
+**Tests**: Targeted frontend client tests for import/export contract wiring; manual QA with Pocket JSON and Instapaper CSV fixtures.
+**Status**: Complete
 
 ## Stage 3: Reader Highlights and Notes UX
 **Goal**: Provide selection-based highlight creation, highlight list filtering, stale badges, and stronger notes autosave/dirty indicators.
 **Success Criteria**: Users can select text to create highlights, edit/delete highlights in-place, filter highlights by color/search, and see stale badges; notes show dirty state and do not lose edits on navigation.
 **Tests**: UI tests for highlight CRUD state changes and notes autosave/dirty indicator; manual QA for text selection flows.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Output Template Editor and Bulk Item Actions
 **Goal**: Add a template editor with preview and integrate bulk actions in Items/Reading views.
 **Success Criteria**: Templates list/create/edit/preview flows work end-to-end; job editor can assign default templates; bulk actions support tag add/remove, status update, favorite toggle, delete, and output generation with progress/error summaries.
 **Tests**: UI tests for template preview rendering and bulk action summaries; manual QA for mixed-success scenarios.
-**Status**: Not Started
+**Status**: Complete

@@ -103,7 +103,7 @@ class TestEvaluationIntegration:
 
         # Mock LLM to fail
         with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread') as mock_thread:
-            mock_thread.side_effect = Exception("LLM error")
+            mock_thread.side_effect = RuntimeError("LLM error")
 
             # Should raise error instead of returning 0.0
             with pytest.raises(ValueError) as exc_info:
@@ -177,7 +177,7 @@ class TestEvaluationIntegration:
         """Test that evaluation falls back to LLM when embeddings unavailable."""
         # Create evaluator without embeddings
         with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.create_embedding') as mock_create:
-            mock_create.side_effect = Exception("No API key")
+            mock_create.side_effect = RuntimeError("No API key")
 
             evaluator = RAGEvaluator()
             assert evaluator.embedding_available is False
@@ -289,8 +289,6 @@ class TestAuthentication:
         """Create mock settings."""
         settings = Mock()
         settings.AUTH_MODE = "single_user"
-        settings.RATE_LIMIT_PER_MINUTE = 60
-        settings.RATE_LIMIT_BURST = 10
         settings.SINGLE_USER_ALLOWED_IPS = []
         settings.AUTH_TRUST_X_FORWARDED_FOR = False
         settings.AUTH_TRUSTED_PROXY_IPS = []
@@ -304,7 +302,7 @@ class TestAuthentication:
         from fastapi.security import HTTPAuthorizationCredentials
         from starlette.requests import Request
 
-        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
 
             # Test with valid API key
@@ -332,7 +330,7 @@ class TestAuthentication:
 
         mock_settings.AUTH_MODE = "multi_user"
 
-        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
 
             async def _fake_verify_jwt(_request, token: str) -> User:
@@ -344,8 +342,8 @@ class TestAuthentication:
                     assert token == "valid-jwt-token"
                     return {"sub": "123"}
 
-            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_jwt_service', lambda: _JwtService()):
-                with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.verify_jwt_and_fetch_user', _fake_verify_jwt):
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_jwt_service', lambda: _JwtService()):
+                with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.verify_jwt_and_fetch_user', _fake_verify_jwt):
                     with patch.dict(os.environ, {'TEST_MODE': 'false'}):
                         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="valid-jwt-token")
                         request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
@@ -363,14 +361,14 @@ class TestAuthentication:
 
         mock_settings.AUTH_MODE = "multi_user"
 
-        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
 
             class _JwtService:
                 def decode_access_token(self, token: str):
                     raise TokenExpiredError()
 
-            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_jwt_service', lambda: _JwtService()):
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_jwt_service', lambda: _JwtService()):
                 creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="expired-token")
                 request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
                 with pytest.raises(HTTPException) as exc_info:
@@ -390,14 +388,14 @@ class TestAuthentication:
 
         mock_settings.AUTH_MODE = "multi_user"
 
-        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
 
             class _JwtService:
                 def decode_access_token(self, token: str):
                     raise InvalidTokenError("invalid")
 
-            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_jwt_service', lambda: _JwtService()):
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_jwt_service', lambda: _JwtService()):
                 creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="invalid-token")
                 request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
                 with pytest.raises(HTTPException) as exc_info:
@@ -417,7 +415,7 @@ class TestAuthentication:
 
         mock_settings.AUTH_MODE = "multi_user"
 
-        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
 
             class _JwtService:
@@ -427,8 +425,8 @@ class TestAuthentication:
             async def _inactive_user(_request, _token: str):
                 raise InactiveUserError("Inactive user")
 
-            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_jwt_service', lambda: _JwtService()):
-                with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.verify_jwt_and_fetch_user', _inactive_user):
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_jwt_service', lambda: _JwtService()):
+                with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.verify_jwt_and_fetch_user', _inactive_user):
                     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="inactive-user-token")
                     request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
                     with pytest.raises(HTTPException) as exc_info:
@@ -448,7 +446,7 @@ class TestAuthentication:
         mock_settings.SINGLE_USER_API_KEY = "test-api-key-abcdefghijklmnopqrstuvwxyz"
         mock_settings.SINGLE_USER_ALLOWED_IPS = ["203.0.113.10"]
 
-        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
 
             request_denied = Request({"type": "http", "client": ("198.51.100.5", 12345), "headers": []})

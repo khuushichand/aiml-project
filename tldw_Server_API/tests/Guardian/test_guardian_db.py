@@ -5,6 +5,7 @@ Pure SQLite -- no network, no mocking required.
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -41,6 +42,66 @@ class TestSchemaCreation:
         path = str(tmp_path / "dup.db")
         GuardianDB(path)
         GuardianDB(path)
+
+    def test_legacy_schema_without_governance_policy_id_migrates_cleanly(self, tmp_path):
+        path = tmp_path / "legacy_guardian.db"
+        conn = sqlite3.connect(path)
+        try:
+            # Legacy shape intentionally omits supervised_policies.governance_policy_id.
+            conn.executescript(
+                """
+                CREATE TABLE guardian_relationships (
+                    id TEXT PRIMARY KEY,
+                    guardian_user_id TEXT NOT NULL,
+                    dependent_user_id TEXT NOT NULL,
+                    relationship_type TEXT NOT NULL DEFAULT 'parent',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    consent_given_by_dependent INTEGER NOT NULL DEFAULT 0,
+                    consent_given_at TEXT,
+                    dependent_visible INTEGER NOT NULL DEFAULT 1,
+                    dissolution_reason TEXT,
+                    dissolved_at TEXT,
+                    metadata TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(guardian_user_id, dependent_user_id)
+                );
+
+                CREATE TABLE supervised_policies (
+                    id TEXT PRIMARY KEY,
+                    relationship_id TEXT NOT NULL,
+                    policy_type TEXT NOT NULL DEFAULT 'block',
+                    category TEXT NOT NULL DEFAULT '',
+                    pattern TEXT NOT NULL DEFAULT '',
+                    pattern_type TEXT NOT NULL DEFAULT 'literal',
+                    action TEXT NOT NULL DEFAULT 'block',
+                    phase TEXT NOT NULL DEFAULT 'both',
+                    severity TEXT NOT NULL DEFAULT 'warning',
+                    notify_guardian INTEGER NOT NULL DEFAULT 1,
+                    notify_context TEXT NOT NULL DEFAULT 'topic_only',
+                    message_to_dependent TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    metadata TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (relationship_id) REFERENCES guardian_relationships(id)
+                );
+                """
+            )
+        finally:
+            conn.close()
+
+        # Should not raise OperationalError during schema bootstrap.
+        GuardianDB(str(path))
+
+        conn = sqlite3.connect(path)
+        try:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(supervised_policies)").fetchall()
+            }
+            assert "governance_policy_id" in columns
+        finally:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------

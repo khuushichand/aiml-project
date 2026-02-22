@@ -256,9 +256,9 @@ async def wait_for_http_ready(
                     else:
                         if 200 <= resp.status_code < 300:
                             return True
-                except Exception:
+                except Exception as healthcheck_error:
                     # Not ready yet
-                    pass
+                    logger.debug("Local LLM readiness probe failed; retrying", exc_info=healthcheck_error)
             await asyncio.sleep(interval)
     return False
 

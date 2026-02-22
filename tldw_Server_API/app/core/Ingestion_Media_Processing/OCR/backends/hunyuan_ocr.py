@@ -242,6 +242,7 @@ def _load_transformers():
         from transformers import AutoProcessor, HunYuanVLForConditionalGeneration
 
         model_path = os.getenv("HUNYUAN_MODEL_PATH", "tencent/HunyuanOCR")
+        model_revision = (os.getenv("HUNYUAN_MODEL_REVISION") or "").strip() or None
         device_env = os.getenv("HUNYUAN_DEVICE")
         device_map = device_env or "auto"
 
@@ -249,11 +250,16 @@ def _load_transformers():
 
         _TF_MODEL = HunYuanVLForConditionalGeneration.from_pretrained(
             model_path,
+            revision=model_revision,
             torch_dtype=dtype,
             device_map=device_map,
             trust_remote_code=True,
+        )  # nosec B615
+        _TF_PROCESSOR = AutoProcessor.from_pretrained(  # nosec B615
+            model_path,
+            revision=model_revision,
+            trust_remote_code=True,
         )
-        _TF_PROCESSOR = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
         return _TF_MODEL, _TF_PROCESSOR
 
 

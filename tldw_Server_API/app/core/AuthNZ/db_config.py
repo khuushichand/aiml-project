@@ -103,21 +103,39 @@ class AuthDatabaseConfig:
 
         def _combine_path() -> str:
             netloc = parsed.netloc or ""
-            path = parsed.path or ""
-            combined = f"{netloc}{path}" if netloc else path
+            path_part = parsed.path or ""
+            combined = f"{netloc}{path_part}" if netloc else path_part
             combined = unquote(combined or "")
-            # Handle sqlite:///:memory: and variants
+
+            # Handle sqlite:///:memory: and variants.
             if combined in {":memory:", "/:memory:"}:
                 return ":memory:"
-            if combined.startswith("///"):
-                combined = "/" + combined.lstrip("/")
-            if combined.startswith("/"):
+
+            # Keep path interpretation aligned with DatabasePool._resolve_sqlite_paths:
+            # - sqlite:///relative.db      -> relative path (cwd/relative.db)
+            # - sqlite:///./relative.db    -> relative path (cwd/./relative.db)
+            # - sqlite:////absolute.db     -> absolute path (/absolute.db)
+            if path_part.startswith("//") or netloc:
+                filesystem_path = "/" + combined.lstrip("/")
+            elif combined.startswith("/"):
+                filesystem_path = combined.lstrip("/")
+            else:
+                filesystem_path = combined
+
+            if filesystem_path.startswith("///"):
+                filesystem_path = filesystem_path.lstrip("/")
+
+            if not filesystem_path:
+                return str(Path.cwd().resolve())
+
+            candidate = Path(filesystem_path)
+            if candidate.is_absolute():
                 try:
-                    return str(Path(combined).resolve())
+                    return str(candidate.resolve())
                 except Exception:
-                    return combined
-            # Relative path - resolve against project root
-            return str((Path.cwd() / combined).resolve())
+                    return str(candidate)
+
+            return str((Path.cwd() / candidate).resolve())
 
         if base_scheme in {"sqlite", "file", ""}:
             combined = _combine_path()

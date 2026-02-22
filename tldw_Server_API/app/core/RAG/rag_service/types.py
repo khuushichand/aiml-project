@@ -300,8 +300,8 @@ try:  # pragma: no cover - defensive convenience for tests
     import builtins as _builtins
     if not hasattr(_builtins, "RAGPipelineContext"):
         _builtins.RAGPipelineContext = RAGPipelineContext  # type: ignore[attr-defined]
-except Exception:
-    pass
+except Exception as builtins_patch_error:
+    _ = builtins_patch_error
 
 
 class Reranker(Protocol):

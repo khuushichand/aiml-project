@@ -145,7 +145,7 @@ def test_input_block_returns_400(monkeypatch):
             if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
 
@@ -189,7 +189,7 @@ def test_output_redaction_non_streaming(monkeypatch):
             if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
 
@@ -251,7 +251,7 @@ def test_streaming_redaction_applied():
             if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
 
@@ -320,7 +320,7 @@ def test_streaming_cross_chunk_redaction_output(monkeypatch):
             if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
 
@@ -364,7 +364,7 @@ def test_streaming_block_emits_sse_error_and_finishes():
             if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
 
@@ -425,5 +425,5 @@ def test_streaming_cross_chunk_redaction_persisted(monkeypatch):
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)

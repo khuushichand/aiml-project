@@ -209,6 +209,8 @@ class DatabasePaths:
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
     KANBAN_DB_NAME = "Kanban.db"
     SLIDES_DB_NAME = "Slides.db"
+    VOICE_REGISTRY_DB_NAME = "voice_registry.db"
+    CIRCUIT_BREAKER_REGISTRY_DB_NAME = "circuit_breaker_registry.db"
 
     # Subdirectories
     PROMPTS_SUBDIR = "prompts_user_dbs"
@@ -261,8 +263,23 @@ class DatabasePaths:
                 user_db_base = legacy_base
         if not user_db_base:
             if _is_test_context():
-                base_path = (Path.cwd() / "Databases" / "user_databases").resolve()
-                logger.warning(f"USER_DB_BASE_DIR not configured in tests, using cwd fallback: {base_path}")
+                import tempfile
+
+                run_tag = (
+                    os.getenv("TLDW_TEST_RUN_ID")
+                    or os.getenv("PYTEST_XDIST_WORKER")
+                    or "default"
+                )
+                safe_run_tag = "".join(
+                    ch if ch.isalnum() or ch in "-_." else "_"
+                    for ch in str(run_tag)
+                )
+                base_path = (
+                    Path(tempfile.gettempdir()) / "tldw_user_databases_test" / safe_run_tag
+                ).resolve()
+                logger.warning(
+                    f"USER_DB_BASE_DIR not configured in tests, using isolated fallback: {base_path}"
+                )
             else:
                 base_path = (project_root / "Databases" / "user_databases").resolve()
                 logger.warning(f"USER_DB_BASE_DIR not configured, using fallback: {base_path}")
@@ -358,6 +375,33 @@ class DatabasePaths:
             project_root = Path(get_project_root())
             candidate = (project_root / "Databases" / "audit_shared.db").resolve()
         _ensure_dir(candidate.parent, label="shared audit")
+        return candidate
+
+    @staticmethod
+    def get_shared_circuit_breaker_db_path() -> Path:
+        """Get the path to the shared circuit breaker registry database."""
+        raw = (
+            os.getenv("CIRCUIT_BREAKER_REGISTRY_DB_PATH")
+            or settings.get("CIRCUIT_BREAKER_REGISTRY_DB_PATH")
+        )
+        if raw:
+            try:
+                candidate = Path(str(raw)).expanduser()
+            except Exception:
+                candidate = Path(str(raw))
+            if not candidate.is_absolute():
+                project_root = Path(get_project_root())
+                candidate = (project_root / candidate).resolve()
+            else:
+                candidate = candidate.resolve()
+        else:
+            project_root = Path(get_project_root())
+            candidate = (
+                project_root
+                / "Databases"
+                / DatabasePaths.CIRCUIT_BREAKER_REGISTRY_DB_NAME
+            ).resolve()
+        _ensure_dir(candidate.parent, label="shared circuit breaker")
         return candidate
 
     @staticmethod
@@ -475,6 +519,19 @@ class DatabasePaths:
         _ensure_dir(voices_dir / "temp", label="voice temp")
         _ensure_dir(voices_dir / "metadata", label="voice metadata")
         return voices_dir
+
+    @staticmethod
+    def get_user_voice_registry_db_path(
+        user_id: Optional[UserId],
+        *,
+        base_dir_override: Optional[Union[str, Path]] = None,
+    ) -> Path:
+        """Get the path to the user's persistent voice registry database."""
+        voices_dir = DatabasePaths.get_user_voices_dir(
+            user_id,
+            base_dir_override=base_dir_override,
+        )
+        return voices_dir / DatabasePaths.VOICE_REGISTRY_DB_NAME
 
     @staticmethod
     def get_user_chatbooks_dir(user_id: Optional[UserId]) -> Path:

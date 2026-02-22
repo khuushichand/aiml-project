@@ -603,6 +603,51 @@ def test_speech_to_text_qwen2audio_disabled_falls_back_to_whisper(monkeypatch, t
 
 
 @pytest.mark.unit
+def test_speech_to_text_parakeet_failure_falls_back_to_valid_whisper_model(monkeypatch, tmp_path):
+    """Parakeet fallback should use a valid faster-whisper model identifier."""
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    def fake_parakeet(*_args, **_kwargs):
+        raise ImportError("No module named 'librosa'")
+
+    class _Seg:
+        start = 0.0
+        end = 1.0
+        text = "fallback whisper"
+
+    class _Info:
+        language = "en"
+        language_probability = 0.9
+
+    class _Model:
+        def transcribe(self, *_args, **_kwargs):
+            return [_Seg()], _Info()
+
+    captured: dict[str, str] = {}
+
+    def fake_get_whisper_model(model_name, device, check_download_status=False):
+        captured["model_name"] = model_name
+        return _Model()
+
+    monkeypatch.setattr(atlib, "speech_to_text_parakeet", fake_parakeet)
+    monkeypatch.setattr(atlib, "get_whisper_model", fake_get_whisper_model)
+    monkeypatch.setattr(atlib, "processing_choice", "cpu")
+
+    segments = atlib.speech_to_text(
+        str(audio_file),
+        whisper_model="parakeet-mlx",
+        selected_source_lang="en",
+    )
+
+    assert captured.get("model_name") == "distil-large-v3"
+    assert isinstance(segments, list)
+    assert "fallback whisper" in (segments[0].get("Text") or "")
+
+
+@pytest.mark.unit
 def test_speech_to_text_does_not_return_model_downloading_sentinel(monkeypatch, tmp_path):
     """
     speech_to_text should always return real transcript segments,

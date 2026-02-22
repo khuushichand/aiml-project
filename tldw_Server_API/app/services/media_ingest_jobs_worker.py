@@ -79,6 +79,16 @@ def _build_worker_config(*, worker_id: str, queue: str) -> WorkerConfig:
     )
 
 
+def _resolve_worker_queue(explicit_queue: str | None = None) -> str:
+    if explicit_queue and str(explicit_queue).strip():
+        return str(explicit_queue).strip()
+    return (
+        (os.getenv("MEDIA_INGEST_JOBS_QUEUE") or "").strip()
+        or (os.getenv("MEDIA_INGEST_JOBS_DEFAULT_QUEUE") or "").strip()
+        or "default"
+    )
+
+
 def _normalize_payload(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
@@ -163,7 +173,7 @@ async def _schedule_embeddings(
             chunk_overlap=getattr(form_data, "overlap", None) or 200,
         )
     except Exception as exc:
-        logger.warning("Embedding generation failed for media %s: %s", media_id, exc)
+        logger.warning("Embedding generation failed for media {}: {}", media_id, exc)
 
 
 async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressState) -> dict[str, Any]:
@@ -220,7 +230,7 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
                     first_filename=first_filename,
                 )
             except Exception as exc:
-                logger.debug("Chunking template auto-apply failed: %s", exc)
+                logger.debug("Chunking template auto-apply failed: {}", exc)
 
         if str(form_data.media_type) in {"video", "audio"}:
             urls = [source] if source_kind == "url" else []
@@ -303,11 +313,20 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
             _cleanup_temp_dir(temp_dir)
 
 
-async def run_media_ingest_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
+async def run_media_ingest_jobs_worker(
+    stop_event: asyncio.Event | None = None,
+    *,
+    queue: str | None = None,
+    worker_id: str | None = None,
+) -> None:
     jm = _jobs_manager()
-    worker_id = "media-ingest-worker"
-    queue = (os.getenv("MEDIA_INGEST_JOBS_QUEUE") or "default").strip() or "default"
-    cfg = _build_worker_config(worker_id=worker_id, queue=queue)
+    queue_name = _resolve_worker_queue(queue)
+    resolved_worker_id = (
+        str(worker_id).strip()
+        if worker_id and str(worker_id).strip()
+        else f"media-ingest-worker-{queue_name}"
+    )
+    cfg = _build_worker_config(worker_id=resolved_worker_id, queue=queue_name)
     sdk = WorkerSDK(jm, cfg)
     progress_state = _ProgressState()
 
@@ -335,13 +354,25 @@ async def run_media_ingest_jobs_worker(stop_event: asyncio.Event | None = None) 
         except Exception:
             sdk.stop()
 
-    logger.info("Starting Media Ingest Jobs worker")
+    logger.info("Starting Media Ingest Jobs worker (queue={})", queue_name)
     watcher = asyncio.create_task(_watch_stop())
     try:
         await sdk.run(handler=_handler, cancel_check=_cancel_check, progress_cb=_progress_cb)
     finally:
         with contextlib.suppress(Exception):
             watcher.cancel()
+
+
+async def run_media_ingest_heavy_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
+    heavy_queue = (
+        (os.getenv("MEDIA_INGEST_JOBS_HEAVY_QUEUE") or "").strip()
+        or "low"
+    )
+    await run_media_ingest_jobs_worker(
+        stop_event,
+        queue=heavy_queue,
+        worker_id=f"media-ingest-worker-{heavy_queue}",
+    )
 
 
 if __name__ == "__main__":

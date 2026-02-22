@@ -21,6 +21,12 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from tldw_Server_API.app.core.config_paths import resolve_config_file
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled,
+    is_explicit_pytest_runtime,
+    is_test_mode,
+    is_truthy,
+)
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamaCppConfig
@@ -138,10 +144,10 @@ def _load_env_files_early() -> None:
         current_file_path = Path(__file__).resolve()
         project_root = current_file_path.parent.parent.parent
         candidate_env_paths = [
-            project_root / '.env',
-            project_root / '.ENV',
             project_root / 'Config_Files' / '.env',
             project_root / 'Config_Files' / '.ENV',
+            project_root / '.env',
+            project_root / '.ENV',
         ]
         loaded_any = False
         for p in candidate_env_paths:
@@ -252,27 +258,37 @@ def _parse_allowed_origins_env(raw: str):
     # Fallback: comma-separated list
     return [s.strip() for s in raw.split(",") if s.strip()]
 
+_DEFAULT_ALLOWED_ORIGINS = [
+    # Common local origins
+    "http://localhost",
+    "http://localhost:8000",
+    "http://localhost:8080",
+    "http://localhost:8081",
+    "http://localhost:3000",  # Next.js frontend default
+    "http://localhost:3001",  # Admin UI
+    "http://127.0.0.1",
+    "http://127.0.0.1:8000",
+    "http://127.0.0.1:8080",
+    "http://127.0.0.1:8081",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "https://localhost",
+    "https://localhost:8080",
+]
+
 _ENV_ALLOWED = os.getenv("ALLOWED_ORIGINS")
-if _ENV_ALLOWED:
-    ALLOWED_ORIGINS = _parse_allowed_origins_env(_ENV_ALLOWED)
+if _ENV_ALLOWED is None:
+    ALLOWED_ORIGINS = list(_DEFAULT_ALLOWED_ORIGINS)
+    _ALLOWED_ORIGINS_SOURCE = "default"
+elif not str(_ENV_ALLOWED).strip():
+    _log_warning(
+        "ALLOWED_ORIGINS is set but empty; falling back to default local origins for compatibility."
+    )
+    ALLOWED_ORIGINS = list(_DEFAULT_ALLOWED_ORIGINS)
+    _ALLOWED_ORIGINS_SOURCE = "default(empty-env)"
 else:
-    ALLOWED_ORIGINS = [
-        # Common local origins
-        "http://localhost",
-        "http://localhost:8000",
-        "http://localhost:8080",
-        "http://localhost:8081",
-        "http://localhost:3000",  # Next.js frontend default
-        "http://localhost:3001",  # Admin UI
-        "http://127.0.0.1",
-        "http://127.0.0.1:8000",
-        "http://127.0.0.1:8080",
-        "http://127.0.0.1:8081",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "https://localhost",
-        "https://localhost:8080",
-    ]
+    ALLOWED_ORIGINS = _parse_allowed_origins_env(_ENV_ALLOWED)
+    _ALLOWED_ORIGINS_SOURCE = "env"
 
 # --- API Configuration ---
 # API version prefix for all endpoints
@@ -667,7 +683,7 @@ def load_settings():
     def _to_bool(value: Optional[str], default: bool = False) -> bool:
         if value is None:
             return default
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+        return is_truthy(value)
 
     def _safe_int(value: object, default: int) -> int:
         try:
@@ -683,11 +699,11 @@ def load_settings():
     def _env_or_cfg_bool(env_key: str, cfg_key: str, default: bool) -> bool:
         env_val = os.getenv(env_key)
         if env_val is not None:
-            return str(env_val).strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(env_val)
         cfg_val = get_config_value("TTS-Settings", cfg_key)
         if cfg_val is None:
             return default
-        return str(cfg_val).strip().lower() in {"1", "true", "yes", "on"}
+        return is_truthy(cfg_val)
 
     def _env_or_cfg_int(env_key: str, cfg_key: str, default: int) -> int:
         env_val = os.getenv(env_key)
@@ -887,7 +903,7 @@ def load_settings():
             try:
                 if _cp.has_section('Character-Chat') and _cp.has_option('Character-Chat', key):
                     raw = str(_cp.get('Character-Chat', key)).strip().lower()
-                    return True, raw in {"1","true","yes","on"}
+                    return True, is_truthy(raw)
             except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 pass
             return False, False
@@ -901,7 +917,7 @@ def load_settings():
         _max_messages_per_chat_soft = _cc_int('MAX_MESSAGES_PER_CHAT_SOFT', _max_messages_per_chat)
         _max_chat_completions_per_minute = _cc_int('MAX_CHAT_COMPLETIONS_PER_MINUTE', 20)
         _max_message_sends_per_minute = _cc_int('MAX_MESSAGE_SENDS_PER_MINUTE', 60)
-        _has_char_rl_enabled, _char_rl_enabled_bool = _cc_bool_present('RATE_LIMIT_ENABLED')
+        _has_char_rl_enabled, _char_rl_enabled_bool = _cc_bool_present('CHARACTER_RATE_LIMIT_ENABLED')
     except _CONFIG_NONCRITICAL_EXCEPTIONS:
         _character_rate_limit_ops = 100
         _character_rate_limit_window = 3600
@@ -990,9 +1006,7 @@ def load_settings():
     SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
     # Optional: signed WS URLs for log_stream_url issuance
     SANDBOX_WS_SIGNED_URL_TTL_SEC = _sbx_int("SANDBOX_WS_SIGNED_URL_TTL_SEC", "ws_signed_url_ttl_sec", 60)
-    SANDBOX_WS_SIGNED_URLS = (
-        lambda v: str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
-    )(
+    SANDBOX_WS_SIGNED_URLS = is_truthy(
         os.getenv("SANDBOX_WS_SIGNED_URLS")
         or _sbx_get("ws_signed_urls", "false")
         or "false"
@@ -1001,19 +1015,17 @@ def load_settings():
     # Test-only helper: when true, the WS endpoint will publish synthetic
     # start/end frames to ensure subscribers see frames immediately. Disabled
     # by default; tests should set SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS=true.
-    SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS = (
-        lambda v: str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
-    )(
+    SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS = is_truthy(
         os.getenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS")
         or _sbx_get("ws_synthetic_frames_for_tests", "false")
         or "false"
     )
     # Advertise spec 1.1 support by default (backward-compatible with 1.0)
     SANDBOX_SUPPORTED_SPEC_VERSIONS = _sbx_list("SANDBOX_SUPPORTED_SPEC_VERSIONS", "supported_spec_versions", ["1.0", "1.1"])
-    SANDBOX_ENABLE_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
+    SANDBOX_ENABLE_EXECUTION = is_truthy(
         os.getenv("SANDBOX_ENABLE_EXECUTION") or _sbx_get("enable_execution", "false") or "false"
     )
-    SANDBOX_BACKGROUND_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
+    SANDBOX_BACKGROUND_EXECUTION = is_truthy(
         os.getenv("SANDBOX_BACKGROUND_EXECUTION") or _sbx_get("background_execution", "false") or "false"
     )
     SANDBOX_IDEMPOTENCY_TTL_SEC = _sbx_int("SANDBOX_IDEMPOTENCY_TTL_SEC", "idempotency_ttl_sec", 600)
@@ -1143,8 +1155,8 @@ def load_settings():
         # Precedence: ENV > config.txt [Notes] > defaults
         "NOTES_TITLE_LLM_ENABLED": (lambda _env, _cp: (
             # env override first
-            (str(_env).strip().lower() in {"1", "true", "yes", "on"}) if _env is not None else (
-                (str(_cp.get('Notes', 'title_llm_enabled', fallback='false')).strip().lower() in {"1", "true", "yes", "on"})
+            is_truthy(_env) if _env is not None else (
+                is_truthy(_cp.get('Notes', 'title_llm_enabled', fallback='false'))
                 if _cp and hasattr(_cp, 'get') and _cp.has_section('Notes') else False
             )
         ))(
@@ -1169,8 +1181,25 @@ def load_settings():
         "SANDBOX_DOCKER_APPARMOR_PROFILE": SANDBOX_DOCKER_APPARMOR_PROFILE,
         "SANDBOX_STORE_BACKEND": SANDBOX_STORE_BACKEND,
         "SANDBOX_STORE_DB_PATH": SANDBOX_STORE_DB_PATH,
+        # Email ingestion/search rollout controls
+        "EMAIL_NATIVE_PERSIST_ENABLED": is_truthy(
+            os.getenv("EMAIL_NATIVE_PERSIST_ENABLED", "true")
+        ),
+        "EMAIL_OPERATOR_SEARCH_ENABLED": is_truthy(
+            os.getenv("EMAIL_OPERATOR_SEARCH_ENABLED", "true")
+        ),
+        "EMAIL_MEDIA_SEARCH_DELEGATION_MODE": (
+            lambda raw_mode: (
+                raw_mode if raw_mode in {"opt_in", "auto_email"} else "opt_in"
+            )
+        )(
+            str(os.getenv("EMAIL_MEDIA_SEARCH_DELEGATION_MODE", "opt_in")).strip().lower()
+        ),
+        "EMAIL_GMAIL_CONNECTOR_ENABLED": is_truthy(
+            os.getenv("EMAIL_GMAIL_CONNECTOR_ENABLED", "false")
+        ),
         # --- HYDE/doc2query (per-chunk) feature flags ---
-        "HYDE_ENABLED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ENABLED", "false")),
+        "HYDE_ENABLED": is_truthy(os.getenv("HYDE_ENABLED", "false")),
         "HYDE_QUESTIONS_PER_CHUNK": int(os.getenv("HYDE_QUESTIONS_PER_CHUNK", "0")),
         "HYDE_PROVIDER": os.getenv("HYDE_PROVIDER"),
         "HYDE_MODEL": os.getenv("HYDE_MODEL"),
@@ -1181,9 +1210,9 @@ def load_settings():
         # Retrieval side HYDE controls
         "HYDE_WEIGHT_QUESTION_MATCH": float(os.getenv("HYDE_WEIGHT_QUESTION_MATCH", "0.05")),
         "HYDE_K_FRACTION": float(os.getenv("HYDE_K_FRACTION", "0.5")),
-        "HYDE_ONLY_IF_NEEDED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ONLY_IF_NEEDED", "true")),
+        "HYDE_ONLY_IF_NEEDED": is_truthy(os.getenv("HYDE_ONLY_IF_NEEDED", "true")),
         "HYDE_SCORE_FLOOR": float(os.getenv("HYDE_SCORE_FLOOR", "0.30")),
-        "HYDE_DEDUPE_BY_PARENT": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_DEDUPE_BY_PARENT", "false")),
+        "HYDE_DEDUPE_BY_PARENT": is_truthy(os.getenv("HYDE_DEDUPE_BY_PARENT", "false")),
         # Add other configs from comprehensive_config as needed
         "OPENAI_API_KEY": comprehensive_config.get("openai_api", {}).get("api_key", os.getenv("OPENAI_API_KEY")),
         "TTS_HISTORY_ENABLED": tts_history_enabled,
@@ -1640,7 +1669,7 @@ def load_settings():
             _cp.getboolean('persona.rbac', 'allow_delete', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
         ))(load_comprehensive_config()),
     }
-    # Only include explicit Character-Chat RATE_LIMIT_ENABLED if present in config.txt
+    # Only include explicit Character-Chat CHARACTER_RATE_LIMIT_ENABLED if present in config.txt
     try:
         if _has_char_rl_enabled:
             config_dict["CHARACTER_RATE_LIMIT_ENABLED"] = _char_rl_enabled_bool
@@ -1688,7 +1717,7 @@ def load_settings():
         def _parse_bool(value: Optional[str], default: bool) -> bool:
             if value is None:
                 return default
-            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(value)
 
         def _parse_json(value: Optional[str]):
             if value is None or str(value).strip() == "":
@@ -1750,13 +1779,8 @@ def load_settings():
         # actual server startup paths still validate and will hard-fail
         # when SINGLE_USER_API_KEY is required.
         try:
-            import os as _os
             import sys as _sys
-            _in_test = (
-                bool(_os.getenv("PYTEST_CURRENT_TEST"))
-                or str(_os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
-                or ("pytest" in _sys.modules)
-            )
+            _in_test = is_explicit_pytest_runtime() or is_test_mode() or ("pytest" in _sys.modules)
         except _CONFIG_NONCRITICAL_EXCEPTIONS:
             _in_test = False
 
@@ -1803,18 +1827,18 @@ def load_comprehensive_config():
     # .parent.parent.parent -> .../tldw_Server_API (This is the project root)
     project_root = current_file_path.parent.parent.parent
 
-    # Load .env/.ENV files if they exist (API keys should be here)
-    # Support both lowercase and uppercase filenames in the project root, repo root, and Config_Files directories.
+    # Load .env/.ENV files if they exist (API keys should be here).
+    # Prefer Config_Files/.env (canonical) before root-level fallbacks.
     repo_root = project_root.parent
     candidate_env_paths = [
-        project_root / '.env',
-        project_root / '.ENV',
         project_root / 'Config_Files' / '.env',
         project_root / 'Config_Files' / '.ENV',
-        repo_root / '.env',
-        repo_root / '.ENV',
+        project_root / '.env',
+        project_root / '.ENV',
         repo_root / 'Config_Files' / '.env',
         repo_root / 'Config_Files' / '.ENV',
+        repo_root / '.env',
+        repo_root / '.ENV',
     ]
     loaded_any_env = False
     for p in candidate_env_paths:
@@ -1883,6 +1907,61 @@ def load_comprehensive_config():
             _env_default(
                 'IMPLICIT_FEEDBACK_ENABLED',
                 str(implicit_feedback_enabled(default=True, config_parser=config_parser)).lower()
+            )
+
+        # Search-Agent defaults used by unified RAG endpoint/router.
+        if hasattr(config_parser, 'has_section') and config_parser.has_section('Search-Agent'):
+            _env_default(
+                'SEARCH_QUERY_CLASSIFICATION',
+                config_parser.get('Search-Agent', 'search_query_classification', fallback='false')
+            )
+            _env_default(
+                'SEARCH_DEFAULT_MODE',
+                config_parser.get('Search-Agent', 'search_default_mode', fallback='balanced')
+            )
+            _env_default(
+                'SEARCH_QUERY_REFORMULATION',
+                config_parser.get('Search-Agent', 'search_query_reformulation', fallback='true')
+            )
+            _env_default(
+                'SEARCH_RESEARCH_LOOP',
+                config_parser.get('Search-Agent', 'search_research_loop', fallback='false')
+            )
+            _env_default(
+                'SEARCH_DISCUSSIONS_ENABLED',
+                config_parser.get('Search-Agent', 'search_discussions_enabled', fallback='false')
+            )
+            _env_default(
+                'SEARCH_DISCUSSION_PLATFORMS',
+                config_parser.get('Search-Agent', 'search_discussion_platforms', fallback='reddit,stackoverflow,hackernews')
+            )
+            _env_default(
+                'SEARCH_PROGRESS_STREAMING',
+                config_parser.get('Search-Agent', 'search_progress_streaming', fallback='false')
+            )
+            _env_default(
+                'SEARCH_URL_SCRAPING',
+                config_parser.get('Search-Agent', 'search_url_scraping', fallback='true')
+            )
+            _env_default(
+                'SEARCH_CLASSIFIER_PROVIDER',
+                config_parser.get('Search-Agent', 'search_classifier_provider', fallback=None)
+            )
+            _env_default(
+                'SEARCH_CLASSIFIER_MODEL',
+                config_parser.get('Search-Agent', 'search_classifier_model', fallback=None)
+            )
+            _env_default(
+                'SEARCH_MAX_ITERATIONS_SPEED',
+                config_parser.get('Search-Agent', 'search_max_iterations_speed', fallback='0')
+            )
+            _env_default(
+                'SEARCH_MAX_ITERATIONS_BALANCED',
+                config_parser.get('Search-Agent', 'search_max_iterations_balanced', fallback='0')
+            )
+            _env_default(
+                'SEARCH_MAX_ITERATIONS_QUALITY',
+                config_parser.get('Search-Agent', 'search_max_iterations_quality', fallback='0')
             )
     except _CONFIG_NONCRITICAL_EXCEPTIONS as _rag_env_err:
         _log_debug(f"RAG env propagation skipped: {_rag_env_err}")
@@ -2043,7 +2122,7 @@ def _as_bool(val: object, default: bool) -> bool:
     if val is None:
         return default
     s = str(val).strip().lower()
-    if s in ("1", "true", "yes", "on", "y"):  # truthy
+    if is_truthy(s):  # truthy
         return True
     if s in ("0", "false", "no", "off", "n"):
         return False
@@ -2187,8 +2266,8 @@ def rg_enabled(default: bool = True) -> bool:
         try:
             import sys as _sys
 
-            _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
-            _pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in _sys.modules)
+            _test_mode = is_test_mode()
+            _pytest_active = is_explicit_pytest_runtime() or ("pytest" in _sys.modules)
             if _test_mode or _pytest_active:
                 return False
         except _CONFIG_NONCRITICAL_EXCEPTIONS:
@@ -2436,17 +2515,80 @@ def rg_policy_path() -> str:
 @lru_cache(maxsize=1)
 def should_disable_cors() -> bool:
     """Return True if CORS middleware should be skipped."""
+    value, _ = _resolve_disable_cors_value_and_source()
+    return value
+
+
+@lru_cache(maxsize=1)
+def should_allow_cors_credentials() -> bool:
+    """Return True when CORS should allow credentials (cookies/auth)."""
+    value, _ = _resolve_cors_allow_credentials_value_and_source()
+    return value
+
+
+def _resolve_disable_cors_value_and_source() -> tuple[bool, str]:
     env_value = os.getenv("DISABLE_CORS")
     if env_value is not None:
-        return env_value.strip().lower() in {"true", "1", "yes", "on"}
+        return env_value.strip().lower() in {"true", "1", "yes", "on"}, "env"
 
     try:
-        config_parser = load_comprehensive_config()
-        if config_parser.has_section('Server'):
-            return config_parser.getboolean('Server', 'disable_cors', fallback=False)
+        config_parser = _load_config_parser()
+        if config_parser.has_section("Server"):
+            has_option = config_parser.has_option("Server", "disable_cors")
+            value = config_parser.getboolean("Server", "disable_cors", fallback=False)
+            return value, ("config" if has_option else "default")
     except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
         _log_debug(f"Unable to read disable_cors flag from config: {exc}")
-    return False
+
+    return False, "default"
+
+
+def _resolve_cors_allow_credentials_value_and_source() -> tuple[bool, str]:
+    env_value = os.getenv("CORS_ALLOW_CREDENTIALS")
+    if env_value is not None:
+        return is_truthy(env_value), "env"
+
+    try:
+        config_parser = _load_config_parser()
+        if config_parser.has_section("Server"):
+            has_option = config_parser.has_option("Server", "cors_allow_credentials")
+            value = config_parser.getboolean("Server", "cors_allow_credentials", fallback=False)
+            return value, ("config" if has_option else "default")
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+        _log_debug(f"Unable to read cors_allow_credentials flag from config: {exc}")
+
+    return False, "default"
+
+
+def _resolve_allowed_origins_source() -> str:
+    return _ALLOWED_ORIGINS_SOURCE
+
+
+def get_cors_runtime_diagnostics() -> dict[str, Any]:
+    """Return effective CORS values with source attribution for startup diagnostics."""
+    disable_cors, disable_cors_source = _resolve_disable_cors_value_and_source()
+    allow_credentials, allow_credentials_source = _resolve_cors_allow_credentials_value_and_source()
+    allowed_origins = [str(origin).strip() for origin in ALLOWED_ORIGINS if str(origin).strip()]
+    allowed_origins_source = _resolve_allowed_origins_source()
+
+    try:
+        _load_config_parser()
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
+        pass
+    config_meta = get_config_source_metadata()
+
+    return {
+        "disable_cors": disable_cors,
+        "disable_cors_source": disable_cors_source,
+        "allow_credentials": allow_credentials,
+        "allow_credentials_source": allow_credentials_source,
+        "allowed_origins": allowed_origins,
+        "allowed_origins_count": len(allowed_origins),
+        "allowed_origins_source": allowed_origins_source,
+        "config_path": config_meta.get("path"),
+        "config_loaded": bool(config_meta.get("loaded")),
+    }
+
 
 def load_comprehensive_config_with_tts():
     """
@@ -2509,12 +2651,20 @@ def load_comprehensive_config_with_tts():
 
 @lru_cache(maxsize=1)
 def _route_toggle_policy() -> dict:
-    """Compute route toggle policy from env and config.txt.
+    """Compute route toggle policy from config.txt (authoritative in runtime).
 
-    Priority: ENV overrides > config.txt > defaults.
+    Priority:
+      - Normal runtime: config.txt > defaults
+      - Explicit pytest runtime: ENV overrides > config.txt > defaults
 
-    ENV variables supported:
-      - ROUTES_STABLE_ONLY: true|false (default false)
+    Defaults:
+      - Conservative baseline is `stable_only=True` when config cannot be read
+        or the [API-Routes] section is missing.
+      - If [API-Routes] exists but omits `stable_only`, parser fallback is false.
+      - During explicit pytest runtime only, ROUTES_STABLE_ONLY can override.
+
+    ENV variables supported (explicit pytest runtime only):
+      - ROUTES_STABLE_ONLY: true|false
       - ROUTES_DISABLE: comma-separated list of route keys
       - ROUTES_ENABLE: comma-separated list of route keys
       - ROUTES_EXPERIMENTAL: comma-separated list of additional experimental route keys
@@ -2548,14 +2698,14 @@ def _route_toggle_policy() -> dict:
         "workflows",
         "scheduler",
         "personalization",
-        "persona",
         "jobs",  # jobs admin
         "benchmarks",
         "guardian",
         "self-monitoring",
     }
 
-    # Load from config.txt (if available)
+    # Load from config.txt (if available). Keep a conservative default when
+    # section/config are unavailable.
     cfg_stable_only = True
     cfg_disable: set[str] = set()
     cfg_enable: set[str] = set()
@@ -2570,14 +2720,23 @@ def _route_toggle_policy() -> dict:
     except _CONFIG_NONCRITICAL_EXCEPTIONS as _e:
         _log_debug(f"Route policy: unable to read config.txt [API-Routes]: {_e}")
 
-    # ENV overrides
-    env_stable_only = os.getenv('ROUTES_STABLE_ONLY')
-    if env_stable_only is not None:
-        cfg_stable_only = str(env_stable_only).strip().lower() in {"true", "1", "yes", "on"}
+    # Keep config.txt authoritative in normal runtime.
+    # Preserve env overrides only for explicit pytest execution where tests
+    # rely on route toggling without mutating shared config files.
+    allow_env_overrides = False
+    try:
+        allow_env_overrides = bool(is_explicit_pytest_runtime())
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
+        allow_env_overrides = False
 
-    cfg_disable |= _parse_list(os.getenv('ROUTES_DISABLE'))
-    cfg_enable |= _parse_list(os.getenv('ROUTES_ENABLE'))
-    default_experimental |= _parse_list(os.getenv('ROUTES_EXPERIMENTAL'))
+    if allow_env_overrides:
+        env_stable_only = os.getenv('ROUTES_STABLE_ONLY')
+        if env_stable_only is not None:
+            cfg_stable_only = is_truthy(env_stable_only)
+
+        cfg_disable |= _parse_list(os.getenv('ROUTES_DISABLE'))
+        cfg_enable |= _parse_list(os.getenv('ROUTES_ENABLE'))
+        default_experimental |= _parse_list(os.getenv('ROUTES_EXPERIMENTAL'))
     default_experimental |= cfg_experimental_extra
 
     return {
@@ -2598,10 +2757,10 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
     """
     key = (route_key or "").strip().lower()
 
-    # Hard-enable critical test routes when the minimal test app is active to
-    # avoid 404s in unit tests even if config.txt marks them experimental.
-    _minimal = str(os.getenv("MINIMAL_TEST_APP", "")).strip().lower() in {"1", "true", "yes", "on"}
-    if _minimal and key in {"workflows", "scheduler"}:
+    # Hard-enable critical test routes only in explicit pytest runtime.
+    _minimal = env_flag_enabled("MINIMAL_TEST_APP")
+    _pytest_runtime = is_explicit_pytest_runtime()
+    if _minimal and _pytest_runtime and key in {"workflows", "scheduler"}:
         return True
     policy = _route_toggle_policy()
 
@@ -2622,8 +2781,8 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
 
     # In test environments, force-enable certain routes commonly used by tests
     try:
-        _test_mode = os.getenv('TEST_MODE', '').strip().lower() in {"1", "true", "yes", "on"}
-        _pytest_active = bool(os.getenv('PYTEST_CURRENT_TEST')) or 'pytest' in sys.modules
+        _test_mode = is_test_mode()
+        _pytest_active = is_explicit_pytest_runtime()
         # Force-enable a small set of routes that tests rely on, regardless of
         # stable/experimental gating or import order. This avoids 404s when
         # the app module is imported before fixtures set ROUTES_ENABLE.
@@ -2636,7 +2795,6 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "tools",
             "jobs",
             "personalization",
-            "evaluations",
             "orgs",
             "org-invites",
             "prompt-studio",
@@ -2647,7 +2805,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "guardian",
             "self-monitoring",
         }
-        if (_test_mode or _pytest_active) and key in _force_in_tests:
+        if _pytest_active and _test_mode and key in _force_in_tests:
             return True
     except _CONFIG_NONCRITICAL_EXCEPTIONS:
         pass
@@ -2936,7 +3094,7 @@ def load_and_log_configs():
         aphrodite_model = config_parser_object.get('Local-API', 'aphrodite_model', fallback='')
         aphrodite_max_tokens = config_parser_object.get('Local-API', 'aphrodite_max_tokens', fallback='4096')
         aphrodite_streaming = config_parser_object.get('Local-API', 'aphrodite_streaming', fallback='False')
-        aphrodite_api_timeout = config_parser_object.get('Local-API', 'llama_api_timeout', fallback='90')
+        aphrodite_api_timeout = config_parser_object.get('Local-API', 'aphrodite_api_timeout', fallback='90')
         aphrodite_api_retries = config_parser_object.get('Local-API', 'aphrodite_api_retry', fallback='3')
         aphrodite_api_retry_delay = config_parser_object.get('Local-API', 'aphrodite_api_retry_delay', fallback='5')
 
@@ -2958,7 +3116,7 @@ def load_and_log_configs():
         custom_openai2_api_model = config_parser_object.get('API', 'custom_openai2_api_model', fallback=None)
         custom_openai2_api_streaming = config_parser_object.get('API', 'custom_openai2_api_streaming', fallback='False')
         custom_openai2_api_temperature = config_parser_object.get('API', 'custom_openai2_api_temperature', fallback='0.7')
-        custom_openai2_api_top_p = config_parser_object.get('API', 'custom_openai_api2_top_p', fallback='0.95')
+        custom_openai2_api_top_p = config_parser_object.get('API', 'custom_openai2_api_top_p', fallback='0.95')
         custom_openai2_api_min_p = config_parser_object.get('API', 'custom_openai2_api_min_p', fallback='0.05')
         custom_openai2_api_max_tokens = config_parser_object.get('API', 'custom_openai2_api_max_tokens', fallback='4096')
         custom_openai2_api_timeout = config_parser_object.get('API', 'custom_openai2_api_timeout', fallback='90')
@@ -3193,6 +3351,41 @@ def load_and_log_configs():
         max_archive_internal_files = int(config_parser_object.get('Media-Processing', 'max_archive_internal_files', fallback='100'))
         max_archive_uncompressed_size_mb = int(config_parser_object.get('Media-Processing', 'max_archive_uncompressed_size_mb', fallback='200'))
         max_archive_nesting_depth = int(config_parser_object.get('Media-Processing', 'max_archive_nesting_depth', fallback='2'))
+        max_archive_member_uncompressed_size_mb = int(
+            config_parser_object.get(
+                'Media-Processing',
+                'max_archive_member_uncompressed_size_mb',
+                fallback='100',
+            )
+        )
+        sanitize_html_uploads = is_truthy(
+            config_parser_object.get(
+                'Media-Processing',
+                'sanitize_html_uploads',
+                fallback='true',
+            )
+        )
+        sanitize_xml_uploads = is_truthy(
+            config_parser_object.get(
+                'Media-Processing',
+                'sanitize_xml_uploads',
+                fallback='true',
+            )
+        )
+        sanitize_email_html_bodies = is_truthy(
+            config_parser_object.get(
+                'Media-Processing',
+                'sanitize_email_html_bodies',
+                fallback='true',
+            )
+        )
+        validate_email_archive_contents = is_truthy(
+            config_parser_object.get(
+                'Media-Processing',
+                'validate_email_archive_contents',
+                fallback='true',
+            )
+        )
         # Transcription settings
         audio_transcription_buffer_size_mb = int(config_parser_object.get('Media-Processing', 'audio_transcription_buffer_size_mb', fallback='10'))
         # General settings
@@ -3250,7 +3443,7 @@ def load_and_log_configs():
             if raw is None:
                 return default
             s = str(raw).strip().lower()
-            if s in {"1", "true", "yes", "y", "on"}:
+            if is_truthy(s):
                 return True
             if s in {"0", "false", "no", "n", "off"}:
                 return False
@@ -3293,7 +3486,7 @@ def load_and_log_configs():
         def _env_or_cfg_bool(env_key: str, section: str, key: str, default: bool) -> bool:
             env_val = os.getenv(env_key)
             if env_val is not None:
-                return str(env_val).strip().lower() in {"1", "true", "yes", "on"}
+                return is_truthy(env_val)
             return _get_bool(section, key, default)
 
         def _env_or_cfg_int(env_key: str, section: str, key: str, default: int) -> int:
@@ -3484,6 +3677,9 @@ def load_and_log_configs():
         search_engine_searx_api = config_parser_object.get('Search-Engines', 'search_engine_searx_api', fallback='')
         # Tavily Search Settings
         tavily_search_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_tavily', fallback='')
+        # Serper Search Settings
+        serper_search_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_serper', fallback='')
+        serper_search_api_url = config_parser_object.get('Search-Engines', 'search_engine_api_url_serper', fallback='https://google.serper.dev/search')
         # Exa Search Settings
         exa_search_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_exa', fallback='')
         exa_search_api_url = config_parser_object.get('Search-Engines', 'search_engine_api_url_exa', fallback='https://api.exa.ai/search')
@@ -3539,7 +3735,7 @@ def load_and_log_configs():
         def _as_bool(v: object, d: bool) -> bool:
             try:
                 s = str(v).strip().lower()
-                if s in {"1", "true", "yes", "on", "y"}:
+                if is_truthy(s):
                     return True
                 if s in {"0", "false", "no", "off", "n"}:
                     return False
@@ -3879,6 +4075,11 @@ def load_and_log_configs():
                 'max_archive_internal_files': max_archive_internal_files,
                 'max_archive_uncompressed_size_mb': max_archive_uncompressed_size_mb,
                 'max_archive_nesting_depth': max_archive_nesting_depth,
+                'max_archive_member_uncompressed_size_mb': max_archive_member_uncompressed_size_mb,
+                'sanitize_html_uploads': sanitize_html_uploads,
+                'sanitize_xml_uploads': sanitize_xml_uploads,
+                'sanitize_email_html_bodies': sanitize_email_html_bodies,
+                'validate_email_archive_contents': validate_email_archive_contents,
                 'audio_transcription_buffer_size_mb': audio_transcription_buffer_size_mb,
                 'uuid_generation_length': uuid_generation_length,
                 'kept_video_max_files': kept_video_max_files,
@@ -4153,6 +4354,8 @@ def load_and_log_configs():
                 'kagi_search_api_key': kagi_search_api_key,
                 'searx_search_api_url': search_engine_searx_api,
                 'tavily_search_api_key': tavily_search_api_key,
+                'serper_search_api_key': serper_search_api_key,
+                'serper_search_api_url': serper_search_api_url,
                 'exa_search_api_key': exa_search_api_key,
                 'exa_search_api_url': exa_search_api_url,
                 'firecrawl_api_key': firecrawl_api_key,
@@ -4418,6 +4621,9 @@ def refresh_config_cache() -> None:
     _CONFIG_PARSER_CACHE = None
     _CONFIG_SOURCE_METADATA.update({"path": None, "loaded": False})
     load_comprehensive_config.cache_clear()
+    _route_toggle_policy.cache_clear()
+    should_disable_cors.cache_clear()
+    should_allow_cors_credentials.cache_clear()
 
 
 def clear_config_cache() -> None:

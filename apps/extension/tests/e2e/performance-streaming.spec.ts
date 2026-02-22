@@ -6,6 +6,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 import { waitForConnectionStore, forceConnected, setSelectedModel } from "./utils/connection"
@@ -64,7 +65,7 @@ test.describe("Streaming Performance", () => {
   test.skip(!SERVER_URL || !API_KEY, REQUIRE_ENV_REASON)
 
   test("measures time to first token", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL!,
         authMode: "single-user",
@@ -127,7 +128,7 @@ test.describe("Streaming Performance", () => {
   })
 
   test("measures streaming throughput", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL!,
         authMode: "single-user",
@@ -201,7 +202,7 @@ test.describe("Streaming Performance", () => {
   })
 
   test("memory stays stable during streaming", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL!,
         authMode: "single-user",
@@ -264,7 +265,7 @@ test.describe("Streaming Performance", () => {
   })
 
   test("cancellation works cleanly", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL!,
         authMode: "single-user",
@@ -330,7 +331,7 @@ test.describe("Sidepanel Streaming Performance", () => {
   test.skip(!SERVER_URL || !API_KEY, REQUIRE_ENV_REASON)
 
   test("sidepanel TTFT matches options page", async () => {
-    const { context, openSidepanel } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, openSidepanel } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL!,
         authMode: "single-user",

@@ -346,9 +346,9 @@ MCP_API_KEY_SALT=<strong-random-secret>
 ### Environment Variables (Optional)
 ```bash
 MCP_DATABASE_URL=postgresql+asyncpg://user:pass@localhost/mcp
-MCP_REDIS_URL=redis://localhost:6379/0
+RG_BACKEND=redis
+REDIS_URL=redis://localhost:6379/0
 MCP_RATE_LIMIT_ENABLED=true
-MCP_RATE_LIMIT_USE_REDIS=1               # Use Redis-backed limiter (multi-node)
 MCP_RATE_LIMIT_RPM_INGESTION=30         # Optional per-category rate; default = RPM
 MCP_RATE_LIMIT_BURST_INGESTION=5
 MCP_RATE_LIMIT_RPM_READ=120
@@ -371,8 +371,8 @@ Recommended hardening steps for Internet-exposed deployments:
 - Disable query-string authentication for WS
   - `MCP_WS_ALLOW_QUERY_AUTH=0` (default). If a client passes `?token=` or `?api_key=`, the server ignores it and logs a warning.
 - Rate limiting
-  - Enable Redis limiter for multi-node and avoid fail-open: `MCP_RATE_LIMIT_USE_REDIS=1`
-  - The server falls back to an in-memory token bucket if Redis is unavailable.
+  - For multi-node rate-limit consistency, use RG Redis backend: `RG_BACKEND=redis` and shared `REDIS_URL=redis://...`
+  - Keep `MCP_RATE_LIMIT_ENABLED=1` to enforce MCP route-map policies.
 - Restrict module autoloads
   - Only classes under `tldw_Server_API.app.core.MCP_unified.modules.implementations` are allowed when auto-loading.
 - Write tools safety & validation (Security knobs)
@@ -420,7 +420,7 @@ Notes
 MCP supports global and per-category (tool-driven) rate limits.
 
 - Global limiter: configured via MCP_RATE_LIMIT_ENABLED, MCP_RATE_LIMIT_RPM, MCP_RATE_LIMIT_BURST.
-- Distributed deployments: enable Redis with MCP_RATE_LIMIT_USE_REDIS=1 and MCP_REDIS_URL.
+- Distributed deployments: use shared RG Redis backend via `RG_BACKEND=redis` + `REDIS_URL`.
 - Per-category limiters:
   - Categories: free-form labels; project recognizes at least ‘ingestion’ and ‘read’.
   - Category RPM/bursts via env:

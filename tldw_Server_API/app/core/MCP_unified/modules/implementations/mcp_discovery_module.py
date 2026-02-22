@@ -15,6 +15,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import build_sqlite_in_clause, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_memberships_for_user
 from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+from tldw_Server_API.app.core.testing import is_truthy
 
 from ..base import BaseModule, create_tool_definition
 
@@ -112,7 +113,7 @@ class MCPDiscoveryModule(BaseModule):
         elif isinstance(catalog_strict, (int, float)):
             params["catalog_strict"] = bool(catalog_strict)
         elif isinstance(catalog_strict, str):
-            params["catalog_strict"] = catalog_strict.strip().lower() in {"1", "true", "yes", "on"}
+            params["catalog_strict"] = is_truthy(catalog_strict)
 
         modules: list[str] = []
         module_single = args.get("module")
@@ -168,9 +169,14 @@ class MCPDiscoveryModule(BaseModule):
                 await _add_rows(rows, "org")
             elif org_ids:
                 placeholders, params = build_sqlite_in_clause(sorted(org_ids))
-                rows = await pool.fetchall(
+                org_ids_clause = f"({placeholders})"
+                org_catalogs_sql_template = (
                     "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
+                    "FROM tool_catalogs WHERE org_id IN {org_ids_clause} AND team_id IS NULL ORDER BY created_at DESC"
+                )
+                org_catalogs_sql = org_catalogs_sql_template.format_map(locals())  # nosec B608
+                rows = await pool.fetchall(
+                    org_catalogs_sql,
                     params,
                 )
                 await _add_rows(rows, "org")
@@ -184,9 +190,14 @@ class MCPDiscoveryModule(BaseModule):
                 await _add_rows(rows, "team")
             elif team_ids:
                 placeholders, params = build_sqlite_in_clause(sorted(team_ids))
-                rows = await pool.fetchall(
+                team_ids_clause = f"({placeholders})"
+                team_catalogs_sql_template = (
                     "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
+                    "FROM tool_catalogs WHERE team_id IN {team_ids_clause} ORDER BY created_at DESC"
+                )
+                team_catalogs_sql = team_catalogs_sql_template.format_map(locals())  # nosec B608
+                rows = await pool.fetchall(
+                    team_catalogs_sql,
                     params,
                 )
                 await _add_rows(rows, "team")

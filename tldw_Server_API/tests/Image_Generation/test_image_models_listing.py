@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from tldw_Server_API.app.core.Image_Generation.config import ImageGenerationConfig
 from tldw_Server_API.app.core.Image_Generation import listing
 
@@ -48,6 +50,22 @@ def _make_config(**overrides) -> ImageGenerationConfig:
         swarmui_swarm_token=None,
         swarmui_allowed_extra_params=[],
         swarmui_timeout_seconds=120,
+        openrouter_image_base_url=None,
+        openrouter_image_api_key=None,
+        openrouter_image_default_model=None,
+        openrouter_image_allowed_extra_params=[],
+        openrouter_image_timeout_seconds=120,
+        novita_image_base_url=None,
+        novita_image_api_key=None,
+        novita_image_default_model=None,
+        novita_image_allowed_extra_params=[],
+        novita_image_timeout_seconds=180,
+        novita_image_poll_interval_seconds=2,
+        together_image_base_url=None,
+        together_image_api_key=None,
+        together_image_default_model=None,
+        together_image_allowed_extra_params=[],
+        together_image_timeout_seconds=120,
     )
     base.update(overrides)
     return ImageGenerationConfig(**base)
@@ -111,4 +129,58 @@ def test_list_image_models_swarmui_unconfigured(monkeypatch):
     models = listing.list_image_models_for_catalog()
     assert len(models) == 1
     entry = models[0]
+    assert entry["is_configured"] is False
+
+
+@pytest.mark.parametrize(
+    ("backend", "key_field", "env_var"),
+    [
+        ("openrouter", "openrouter_image_api_key", "OPENROUTER_API_KEY"),
+        ("novita", "novita_image_api_key", "NOVITA_API_KEY"),
+        ("together", "together_image_api_key", "TOGETHER_API_KEY"),
+    ],
+)
+def test_list_image_models_remote_backend_configured_via_api_key(
+    monkeypatch,
+    backend: str,
+    key_field: str,
+    env_var: str,
+):
+    monkeypatch.delenv(env_var, raising=False)
+    cfg = _make_config(enabled_backends=[backend], **{key_field: "sk-test"})
+
+    monkeypatch.setattr(listing, "get_image_generation_config", lambda: cfg)
+    monkeypatch.setattr(listing, "get_registry", lambda: _FakeRegistry([backend]))
+
+    models = listing.list_image_models_for_catalog()
+    assert len(models) == 1
+    entry = models[0]
+    assert entry["id"] == f"image/{backend}"
+    assert entry["is_configured"] is True
+
+
+@pytest.mark.parametrize(
+    ("backend", "key_field", "env_var"),
+    [
+        ("openrouter", "openrouter_image_api_key", "OPENROUTER_API_KEY"),
+        ("novita", "novita_image_api_key", "NOVITA_API_KEY"),
+        ("together", "together_image_api_key", "TOGETHER_API_KEY"),
+    ],
+)
+def test_list_image_models_remote_backend_unconfigured_without_api_key(
+    monkeypatch,
+    backend: str,
+    key_field: str,
+    env_var: str,
+):
+    monkeypatch.delenv(env_var, raising=False)
+    cfg = _make_config(enabled_backends=[backend], **{key_field: None})
+
+    monkeypatch.setattr(listing, "get_image_generation_config", lambda: cfg)
+    monkeypatch.setattr(listing, "get_registry", lambda: _FakeRegistry([backend]))
+
+    models = listing.list_image_models_for_catalog()
+    assert len(models) == 1
+    entry = models[0]
+    assert entry["id"] == f"image/{backend}"
     assert entry["is_configured"] is False

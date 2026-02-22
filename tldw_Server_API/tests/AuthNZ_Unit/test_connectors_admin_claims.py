@@ -119,18 +119,22 @@ async def test_connectors_admin_policy_200_for_admin_with_perm(monkeypatch: pyte
     assert resp.json().get("org_id") == 1
 
 
+def test_connectors_policy_role_ignores_boolean_admin_without_claims():
+    principal = _make_principal(is_admin=True, roles=["user"], permissions=[])
+    assert connectors_mod._principal_role_for_policy(principal) == "member"
+
+
 @pytest.mark.asyncio
-async def test_connectors_single_user_org_policy_flag_paths(monkeypatch: pytest.MonkeyPatch):
+async def test_connectors_single_user_org_policy_principal_only_paths(monkeypatch: pytest.MonkeyPatch):
     """
-    When ORG_POLICY_SINGLE_USER_PRINCIPAL is enabled, org-policy fallback to org_id=1
-    is driven by principal/profile, not by mode alone.
+    Org-policy fallback is principal-only:
+    - explicit single_user subject may resolve synthetic org_id=1
+    - non-single-user principals without org claims are rejected
     """
     from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 
-    # Enable principal-driven org policy fallback and ensure single-user profile detection succeeds.
-    monkeypatch.setenv("ORG_POLICY_SINGLE_USER_PRINCIPAL", "1")
-    monkeypatch.setattr(auth_deps, "is_single_user_mode", lambda: True, raising=False)
-    monkeypatch.setattr(auth_deps, "is_single_user_profile_mode", lambda: True, raising=False)
+    # Even when a legacy compatibility flag is set, behavior is principal-only.
+    monkeypatch.setenv("ORG_POLICY_SINGLE_USER_PRINCIPAL", "0")
 
     # Case A: single-user principal with no org memberships → synthetic org_id=1 allowed.
     single_principal = AuthPrincipal(
@@ -160,10 +164,8 @@ async def test_connectors_single_user_org_policy_flag_paths(monkeypatch: pytest.
     assert resp.json().get("org_id") == 1
 
     # Case B: non-single-user principal with no org memberships → 400 from org-policy helper.
-    # Important: ensure this principal has **no** org_ids so that
-    # get_org_policy_from_principal cannot resolve an organization from claims
-    # and is forced into the single-user fallback branch, which should then
-    # reject non-``single_user`` principals under the flag-enabled behaviour.
+    # Important: ensure this principal has **no** org_ids so the helper cannot
+    # resolve an organization from claims and must reject fallback.
     non_single_principal = AuthPrincipal(
         kind="user",
         user_id=1,

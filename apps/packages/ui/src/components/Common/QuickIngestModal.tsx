@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from "react-router-dom"
 import { browser } from "wxt/browser"
 import { tldwClient } from '@/services/tldw/TldwApiClient'
+import { submitQuickIngestBatch } from "@/services/tldw/quick-ingest-batch"
 import { QuickIngestTabs } from "./QuickIngest/QuickIngestTabs"
 import { QueueTab } from "./QuickIngest/QueueTab/QueueTab"
 import { FileDropZone } from "./QuickIngest/QueueTab/FileDropZone"
@@ -301,6 +302,41 @@ const normalizeStatusLabel = (value: unknown) =>
 const isSkippedStatus = (status: string) =>
   SKIPPED_STATUS_TOKENS.some((token) => status.includes(token))
 
+const RESULT_SUCCESS_STATUS_TOKENS = [
+  "ok",
+  "success",
+  "succeeded",
+  "completed",
+  "complete",
+  "done",
+  "ingested",
+  "processed",
+  "ready"
+]
+
+const RESULT_FAILURE_STATUS_TOKENS = [
+  "error",
+  "failed",
+  "failure",
+  "cancelled",
+  "canceled",
+  "timeout",
+  "auth_required",
+  "quarantined"
+]
+
+const normalizeResultStatus = (status: unknown): ResultItem["status"] => {
+  const normalized = normalizeStatusLabel(status)
+  if (normalized && RESULT_SUCCESS_STATUS_TOKENS.includes(normalized)) {
+    return "ok"
+  }
+  if (normalized && RESULT_FAILURE_STATUS_TOKENS.includes(normalized)) {
+    return "error"
+  }
+  // Default unknown statuses to error so UI does not stay in a false "valid/running" state.
+  return "error"
+}
+
 function mediaIdFromPayload(
   data: ProcessingResultPayload,
   visited?: WeakSet<object>
@@ -467,6 +503,13 @@ const getProcessingStatusLabels = (data: ProcessingResultPayload): string[] =>
     .map((item) => normalizeStatusLabel(item.status))
     .filter(Boolean)
 
+function titleFromPayload(data: ProcessingResultPayload): string | null {
+  const items = extractProcessingItems(data)
+  if (items.length === 0) return null
+  const title = items[0]?.title || items[0]?.metadata?.title
+  return typeof title === "string" && title.trim() ? title.trim() : null
+}
+
 const cloneObject = <T extends Record<string, any>>(value: T): T | null => {
   try {
     return structuredClone(value)
@@ -477,6 +520,24 @@ const cloneObject = <T extends Record<string, any>>(value: T): T | null => {
       console.warn("[cloneObject] Failed to clone object, returning null", value)
       return null
     }
+  }
+}
+
+const normalizeResultItem = (
+  item: Partial<ResultItem> | null | undefined
+): ResultItem | null => {
+  if (!item) return null
+  if (item.id === undefined || item.id === null) return null
+  const id = String(item.id).trim()
+  if (!id) return null
+  return {
+    id,
+    status: normalizeResultStatus(item.status),
+    url: item.url,
+    fileName: item.fileName,
+    type: String(item.type || "item"),
+    data: item.data as ProcessingResultPayload,
+    error: item.error
   }
 }
 
@@ -699,11 +760,14 @@ export const QuickIngestModal: React.FC<Props> = ({
       queryFn: () => getEmbeddingModels(),
       enabled: open && ingestConnectionStatus === "online"
     })
-  const { markFailure, clearFailure, setQueuedCount } = useQuickIngestStore((s) => ({
-    markFailure: s.markFailure,
-    clearFailure: s.clearFailure,
-    setQueuedCount: s.setQueuedCount
-  }))
+  const { markFailure, clearFailure, setQueuedCount, recordRunSuccess, recordRunFailure } =
+    useQuickIngestStore((s) => ({
+      markFailure: s.markFailure,
+      clearFailure: s.clearFailure,
+      setQueuedCount: s.setQueuedCount,
+      recordRunSuccess: s.recordRunSuccess,
+      recordRunFailure: s.recordRunFailure
+    }))
   const [lastRunError, setLastRunError] = React.useState<string | null>(null)
   const [draftCreationError, setDraftCreationError] = React.useState<string | null>(null)
   const [draftCreationRetrying, setDraftCreationRetrying] = React.useState(false)
@@ -738,6 +802,9 @@ export const QuickIngestModal: React.FC<Props> = ({
   )
 
   React.useEffect(() => {
+    // StrictMode replays effects in development; reset this guard on mount so
+    // async completions are not incorrectly treated as unmounted.
+    unmountedRef.current = false
     return () => {
       unmountedRef.current = true
     }
@@ -1632,13 +1699,15 @@ export const QuickIngestModal: React.FC<Props> = ({
     return {
       queueCount: plannedCount,
       optionsModified,
-      isProcessing: running
+      isProcessing: running,
+      hasFailure: !running && Boolean(lastRunError)
     }
   }, [
     plannedCount,
     common,
     advancedValues,
     hasTypeDefaultChanges,
+    lastRunError,
     reviewBeforeStorage,
     running,
     storeRemote
@@ -1760,6 +1829,16 @@ export const QuickIngestModal: React.FC<Props> = ({
       messageApi.error('Please add at least one URL or file')
       return
     }
+    const plannedUrlEntries = valid.map((row) => ({
+      id: row.id,
+      url: row.url,
+      type:
+        row.type === "auto" ? inferIngestTypeFromUrl(row.url) : row.type
+    }))
+    const plannedFiles = attachedFiles.map((file) => ({
+      file,
+      type: fileTypeFromName(file)
+    }))
     const oversizedFiles = attachedFiles.filter(
       (f) => f.size && f.size > MAX_LOCAL_FILE_BYTES
     )
@@ -1785,6 +1864,62 @@ export const QuickIngestModal: React.FC<Props> = ({
     setRunning(true)
     setResults([])
     setReviewBatchId(null)
+    const fileLookup = new Map<string, File>()
+    const fileIdByInstanceId = new Map<string, string>()
+    for (const file of attachedFiles) {
+      const instanceId = getFileInstanceId(file)
+      if (!fileIdByInstanceId.has(instanceId)) {
+        fileIdByInstanceId.set(instanceId, crypto.randomUUID())
+      }
+      const fileId = fileIdByInstanceId.get(instanceId)
+      if (fileId) {
+        fileLookup.set(fileId, file)
+      }
+    }
+    lastFileLookupRef.current = fileLookup
+    lastFileIdByInstanceIdRef.current = fileIdByInstanceId
+
+    const appendMissingFailureResults = (
+      existingResults: ResultItem[],
+      errorMessage: string
+    ): ResultItem[] => {
+      const message = String(errorMessage || "").trim() || qi("statusFailed", "Failed")
+      const byId = new Map<string, ResultItem>()
+      for (const existing of existingResults) {
+        const normalized = normalizeResultItem(existing)
+        if (normalized) {
+          byId.set(normalized.id, normalized)
+        }
+      }
+      for (const row of plannedUrlEntries) {
+        if (byId.has(row.id)) continue
+        byId.set(row.id, {
+          id: row.id,
+          status: "error",
+          url: row.url,
+          type: row.type,
+          error: message
+        })
+      }
+      for (const planned of plannedFiles) {
+        const fileId = fileIdByInstanceId.get(getFileInstanceId(planned.file))
+        if (!fileId || byId.has(fileId)) continue
+        byId.set(fileId, {
+          id: fileId,
+          status: "error",
+          fileName: planned.file.name,
+          type: planned.type,
+          error: message
+        })
+      }
+      return Array.from(byId.values())
+    }
+
+    const markPendingItemsAsFailed = (errorMessage: string) => {
+      setResults((prev) => {
+        return appendMissingFailureResults(prev, errorMessage)
+      })
+    }
     try {
       // Ensure tldwConfig is hydrated for background requests
       try {
@@ -1834,12 +1969,11 @@ export const QuickIngestModal: React.FC<Props> = ({
       }
 
       // Convert local files to transferable payloads (ArrayBuffer)
-      const fileLookup = new Map<string, File>()
-      const fileIdByInstanceId = new Map<string, string>()
       const filesPayload = await Promise.all(
         attachedFiles.map(async (f) => {
+          const instanceId = getFileInstanceId(f)
           const defaultsForFile =
-            fileDefaultsByInstanceId.get(getFileInstanceId(f)) || normalizedTypeDefaults
+            fileDefaultsByInstanceId.get(instanceId) || normalizedTypeDefaults
           if (f.size && f.size > INLINE_FILE_WARN_BYTES) {
             const msg = `File "${f.name}" is too large for inline transfer (over ${formatBytes(INLINE_FILE_WARN_BYTES)}). Please upload a smaller file or process directly on the server.`
             messageApi.error(msg)
@@ -1851,9 +1985,10 @@ export const QuickIngestModal: React.FC<Props> = ({
               `File "${f.name}" is too large to ingest (over ${formatBytes(MAX_LOCAL_FILE_BYTES)}).`
             )
           }
-          const id = crypto.randomUUID()
+          const id =
+            fileIdByInstanceId.get(instanceId) || crypto.randomUUID()
+          fileIdByInstanceId.set(instanceId, id)
           fileLookup.set(id, f)
-          fileIdByInstanceId.set(getFileInstanceId(f), id)
           // Use a plain array so runtime message cloning (MV3 SW) preserves bytes
           const data = Array.from(new Uint8Array(await f.arrayBuffer()))
           return {
@@ -1865,8 +2000,6 @@ export const QuickIngestModal: React.FC<Props> = ({
           }
         })
       )
-      lastFileLookupRef.current = fileLookup
-      lastFileIdByInstanceIdRef.current = fileIdByInstanceId
 
       console.log('[QI_MODAL] About to send tldw:quick-ingest-batch', {
         entriesCount: entries.length,
@@ -1875,39 +2008,38 @@ export const QuickIngestModal: React.FC<Props> = ({
         processOnly
       })
 
-      let resp: { ok: boolean; error?: string; results?: ResultItem[] } | undefined
-
-      // Try extension messaging with timeout, then fall back to direct HTTP if it fails
-      // This handles cases where extension messaging doesn't work (e.g., in Playwright tests)
-      const EXTENSION_TIMEOUT_MS = 10000
-      try {
-        const extensionPromise = browser.runtime.sendMessage({
-          type: "tldw:quick-ingest-batch",
-          payload: {
-            entries,
-            files: filesPayload,
-            storeRemote,
-            processOnly,
-            common,
-            advancedValues,
-            fileDefaults,
-            // Chunking template options
-            chunkingTemplateName,
-            autoApplyTemplate
+      let resp:
+        | {
+            ok: boolean
+            error?: string
+            results?: Array<Partial<ResultItem>>
           }
+        | undefined
+
+      try {
+        resp = (await submitQuickIngestBatch({
+          entries,
+          files: filesPayload,
+          storeRemote,
+          processOnly,
+          common,
+          advancedValues,
+          fileDefaults,
+          chunkingTemplateName,
+          autoApplyTemplate
+        })) as
+          | {
+              ok: boolean
+              error?: string
+              results?: Array<Partial<ResultItem>>
+            }
+          | undefined
+        console.log('[QI_MODAL] quick ingest batch returned', {
+          ok: resp?.ok,
+          error: resp?.error
         })
-        const timeoutPromise = new Promise<null>((resolve) => {
-          setTimeout(() => resolve(null), EXTENSION_TIMEOUT_MS)
-        })
-        const result = await Promise.race([extensionPromise, timeoutPromise])
-        if (result === null) {
-          console.warn('[QI_MODAL] Extension messaging timed out, cannot fall back for file uploads')
-          throw new Error('Extension messaging timed out. Please try again or reload the page.')
-        }
-        resp = result as { ok: boolean; error?: string; results?: ResultItem[] } | undefined
-        console.log('[QI_MODAL] sendMessage returned', { ok: resp?.ok, error: resp?.error })
       } catch (sendErr: any) {
-        console.error('[QI_MODAL] sendMessage error', sendErr?.message)
+        console.error('[QI_MODAL] quick ingest batch error', sendErr?.message)
         throw sendErr
       }
 
@@ -1921,14 +2053,43 @@ export const QuickIngestModal: React.FC<Props> = ({
         if (unmountedRef.current) {
           return
         }
+        markPendingItemsAsFailed(msg)
         setLastRunError(msg)
+        recordRunFailure({
+          totalCount: total,
+          failedCount: total,
+          errorMessage: msg
+        })
         markFailure()
         setRunning(false)
         setRunStartedAt(null)
         return
       }
 
-      const out = resp.results || []
+      const normalizedResults = (resp.results || [])
+        .map((item) => normalizeResultItem(item))
+        .filter((item): item is ResultItem => Boolean(item))
+      if (total > 0 && normalizedResults.length === 0) {
+        const msg = qi(
+          "noResultItemsReturned",
+          "Ingest request finished without item results."
+        )
+        markPendingItemsAsFailed(msg)
+        setLastRunError(msg)
+        recordRunFailure({
+          totalCount: total,
+          failedCount: total,
+          errorMessage: msg
+        })
+        markFailure()
+        setRunning(false)
+        setRunStartedAt(null)
+        return
+      }
+      const out = appendMissingFailureResults(
+        normalizedResults,
+        qi("missingResultItems", "No result was returned for this item.")
+      )
       if (unmountedRef.current) {
         return
       }
@@ -1936,6 +2097,35 @@ export const QuickIngestModal: React.FC<Props> = ({
       setRunning(false)
       setRunStartedAt(null)
       const hasOkResults = out.some((r) => r.status === "ok")
+      const successCount = out.filter((r) => r.status === "ok").length
+      const failCount = out.length - successCount
+      const firstSuccessfulItem = out.find((r) => r.status === "ok") || null
+      const firstMediaId = firstSuccessfulItem
+        ? mediaIdFromPayload(firstSuccessfulItem.data)
+        : null
+      const primarySourceLabel =
+        firstSuccessfulItem?.url ||
+        firstSuccessfulItem?.fileName ||
+        null
+      if (hasOkResults) {
+        recordRunSuccess({
+          totalCount: out.length,
+          successCount,
+          failedCount: failCount,
+          firstMediaId:
+            firstMediaId === null || typeof firstMediaId === "undefined"
+              ? null
+              : String(firstMediaId),
+          primarySourceLabel
+        })
+      } else {
+        const firstError = out.find((item) => item.status === "error")?.error || null
+        recordRunFailure({
+          totalCount: out.length,
+          failedCount: out.length,
+          errorMessage: firstError
+        })
+      }
       let createdDraftBatch: {
         batchId: string
         draftIds: string[]
@@ -1974,8 +2164,6 @@ export const QuickIngestModal: React.FC<Props> = ({
         )
       }
       if (out.length > 0) {
-        const successCount = out.filter((r) => r.status === 'ok').length
-        const failCount = out.length - successCount
         const summary = `${successCount} succeeded · ${failCount} failed`
         if (failCount > 0) messageApi.warning(summary)
         else messageApi.success(summary)
@@ -1992,9 +2180,15 @@ export const QuickIngestModal: React.FC<Props> = ({
       if (unmountedRef.current) {
         return
       }
+      markPendingItemsAsFailed(msg)
       setRunning(false)
       setRunStartedAt(null)
       setLastRunError(msg)
+      recordRunFailure({
+        totalCount: total,
+        failedCount: total > 0 ? total : undefined,
+        errorMessage: msg
+      })
       markFailure()
     }
   }, [
@@ -2016,6 +2210,9 @@ export const QuickIngestModal: React.FC<Props> = ({
     mergeDefaults,
     processOnly,
     qi,
+    recordRunFailure,
+    recordRunSuccess,
+    fileTypeFromName,
     reviewBeforeStorage,
     rows,
     storeRemote,
@@ -2702,7 +2899,8 @@ export const QuickIngestModal: React.FC<Props> = ({
       }
       const payload = {
         mediaId: String(id),
-        url: item.url || sourceUrl
+        url: item.url || sourceUrl,
+        mode: "rag_media" as const
       }
       void setSetting(DISCUSS_MEDIA_PROMPT_SETTING, payload)
       try {
@@ -2780,6 +2978,44 @@ export const QuickIngestModal: React.FC<Props> = ({
     requestFileReattach(selectedFileStub.id)
   }, [requestFileReattach, selectedFileStub])
 
+  const statusForUrlRowWithRunState = React.useCallback(
+    (row: Entry) => {
+      const base = statusForUrlRow(row)
+      const result = resultById.get(row.id)
+      if (result?.status === "error") {
+        return {
+          label: qi("statusFailed", "Failed"),
+          color: "red",
+          reason: result.error || base.reason
+        }
+      }
+      return base
+    },
+    [qi, resultById, statusForUrlRow]
+  )
+
+  const statusForFileWithRunState = React.useCallback(
+    (fileLike: { size: number }, attached: boolean) => {
+      const base = statusForFile(fileLike, attached)
+      if (
+        attached &&
+        typeof (fileLike as File).name === "string" &&
+        typeof (fileLike as File).lastModified === "number"
+      ) {
+        const match = getResultForFile(fileLike as File)
+        if (match?.status === "error") {
+          return {
+            label: qi("statusFailed", "Failed"),
+            color: "red",
+            reason: match.error || base.reason
+          }
+        }
+      }
+      return base
+    },
+    [getResultForFile, qi, statusForFile]
+  )
+
   // Keep intro hidden if user dismissed previously
   React.useEffect(() => {
     if (inspectorIntroDismissed) {
@@ -2828,8 +3064,25 @@ export const QuickIngestModal: React.FC<Props> = ({
       elapsedMs > 0
         ? `${Math.floor(elapsedMs / 60000)}:${String(Math.floor((elapsedMs % 60000) / 1000)).padStart(2, '0')}`
         : null
-    return { total, done, pct, elapsedLabel }
-  }, [liveTotalCount, processedCount, progressTick, results.length, runStartedAt, totalPlanned])
+    const state: "running" | "failed" | "complete" | "ready" =
+      running
+        ? "running"
+        : lastRunError
+          ? "failed"
+          : total > 0 && done >= total
+            ? "complete"
+            : "ready"
+    return { total, done, pct, elapsedLabel, state, error: lastRunError }
+  }, [
+    lastRunError,
+    liveTotalCount,
+    processedCount,
+    progressTick,
+    results.length,
+    runStartedAt,
+    running,
+    totalPlanned
+  ])
 
   const doneCount = processedCount || results.length || 0
   const totalCount = liveTotalCount || totalPlanned || 0
@@ -3420,7 +3673,7 @@ export const QuickIngestModal: React.FC<Props> = ({
     const handler = (message: any) => {
       if (!message || message.type !== "tldw:quick-ingest-progress") return
       const payload = message.payload || {}
-      const result = payload.result as ResultItem | undefined
+      const result = normalizeResultItem(payload.result as Partial<ResultItem> | undefined)
       if (typeof payload.processedCount === "number") {
         setProcessedCount(payload.processedCount)
         if (
@@ -3443,7 +3696,11 @@ export const QuickIngestModal: React.FC<Props> = ({
           if (r.id) map.set(r.id, r)
         }
         const existing = map.get(result.id)
-        map.set(result.id, { ...(existing || {}), ...result })
+        map.set(result.id, {
+          ...(existing || {}),
+          ...result,
+          status: normalizeResultStatus(result.status)
+        })
         return Array.from(map.values())
       })
     }
@@ -3557,7 +3814,7 @@ export const QuickIngestModal: React.FC<Props> = ({
         badges={tabBadges}
       />
 
-      <Space direction="vertical" className="w-full">
+      <Space orientation="vertical" className="w-full">
         {/* Connection/Onboarding banners shown on all tabs */}
         {!isOnlineForIngest && connectionBannerTitle && (
           <div className="rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
@@ -3710,7 +3967,7 @@ export const QuickIngestModal: React.FC<Props> = ({
             <li>
               {qi(
                 'tipsHybrid',
-                'Hybrid input: drop files or paste URLs (comma/newline separated) to build the queue.'
+                'Hybrid input: drop files or paste URLs (one URL per line; commas also supported) to build the queue.'
               )}
             </li>
             <li>
@@ -3728,13 +3985,13 @@ export const QuickIngestModal: React.FC<Props> = ({
           </ul>
         </div>
         <div className="space-y-3">
-          <div className="rounded-md border border-border bg-surface p-3">
+          <div className="rounded-md border border-border bg-surface p-3 text-text">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <Typography.Title level={5} className="!mb-1">
+                <Typography.Title level={5} className="!mb-1 !text-text">
                   {t('quickIngest.sourceHeading') || 'Input'}
                 </Typography.Title>
-                <Typography.Text>
+                <Typography.Text className="!text-text-muted">
                   {t('quickIngest.subtitle') || 'Drop files or paste URLs; items immediately join the queue.'}
                 </Typography.Text>
                 <div className="text-xs text-text-subtle mt-1">
@@ -3799,7 +4056,7 @@ export const QuickIngestModal: React.FC<Props> = ({
                   {qi('pasteUrlsTitle', 'Paste URLs')}
                 </Typography.Text>
                 <Typography.Text className="text-xs text-text-subtle">
-                  {qi('pasteUrlsHint', 'Separate with commas or new lines')}
+                  {qi('pasteUrlsHint', 'One URL per line (commas also supported)')}
                 </Typography.Text>
               </div>
               <label
@@ -3808,26 +4065,31 @@ export const QuickIngestModal: React.FC<Props> = ({
               >
                 {qi('urlsLabel', 'URLs to ingest')}
               </label>
-              <Space.Compact className="w-full">
-                  <Input
-                    id="quick-ingest-url-input"
-                    placeholder={qi('urlsPlaceholder', 'https://example.com, https://...')}
-                    value={pendingUrlInput}
-                    onChange={(e) => setPendingUrlInput(e.target.value)}
-                    disabled={running || !isOnlineForIngest}
-                    aria-label={qi('urlsInputAria', 'Paste URLs input')}
-                    title={qi('urlsInputAria', 'Paste URLs input')}
-                  />
-                  <Button
-                    type="primary"
-                    onClick={() => void addUrlsFromInput(pendingUrlInput)}
-                    disabled={running || !isOnlineForIngest}
-                    aria-label={qi('addUrlsAria', 'Add URLs to queue')}
-                    title={qi('addUrlsAria', 'Add URLs to queue')}
-                  >
-                    {qi('addUrls', 'Add URLs')}
-                  </Button>
-                </Space.Compact>
+              <div className="flex w-full items-start gap-2">
+                <Input.TextArea
+                  id="quick-ingest-url-input"
+                  autoSize={{ minRows: 3, maxRows: 8 }}
+                  placeholder={qi(
+                    'urlsPlaceholder',
+                    'https://example.com\nhttps://example.org'
+                  )}
+                  value={pendingUrlInput}
+                  onChange={(e) => setPendingUrlInput(e.target.value)}
+                  disabled={running || !isOnlineForIngest}
+                  aria-label={qi('urlsInputAria', 'Paste URLs input')}
+                  title={qi('urlsInputAria', 'Paste URLs input')}
+                />
+                <Button
+                  type="primary"
+                  className="shrink-0"
+                  onClick={() => void addUrlsFromInput(pendingUrlInput)}
+                  disabled={running || !isOnlineForIngest}
+                  aria-label={qi('addUrlsAria', 'Add URLs to queue')}
+                  title={qi('addUrlsAria', 'Add URLs to queue')}
+                >
+                  {qi('addUrls', 'Add URLs')}
+                </Button>
+              </div>
               <div className="flex items-center gap-2 text-xs text-text-muted">
                 <AlertTriangle className="w-4 h-4 text-text-subtle" />
                 <span>
@@ -3840,9 +4102,9 @@ export const QuickIngestModal: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="rounded-md border border-border bg-surface p-3">
+          <div className="rounded-md border border-border bg-surface p-3 text-text">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <Typography.Title level={5} className="!mb-0">
+              <Typography.Title level={5} className="!mb-0 !text-text">
                 {qi('queueTitle', 'Queue')}
               </Typography.Title>
                 <div className="flex items-center gap-2">
@@ -3895,13 +4157,21 @@ export const QuickIngestModal: React.FC<Props> = ({
             <div className="max-h-[360px] space-y-2 overflow-auto pr-1">
               <React.Suspense fallback={null}>
                 {rows.map((row) => {
-                  const status = statusForUrlRow(row)
+                  const baseStatus = statusForUrlRow(row)
                   const isSelected = selectedRowId === row.id
                   const detected =
                     row.type === "auto"
                       ? inferIngestTypeFromUrl(row.url)
                       : row.type
                   const res = resultById.get(row.id)
+                  const status =
+                    res?.status === "error"
+                      ? {
+                          label: qi("statusFailed", "Failed"),
+                          color: "red",
+                          reason: res.error || baseStatus.reason
+                        }
+                      : baseStatus
                   const isProcessing = running && !res?.status
                   let runTag: React.ReactNode = null
                   if (res?.status === "ok") {
@@ -3972,7 +4242,7 @@ export const QuickIngestModal: React.FC<Props> = ({
 
                 {queuedFileStubs.map((stub) => {
                   const attachedFile = fileForStubId.get(stub.id)
-                  const status = statusForFile(
+                  const baseStatus = statusForFile(
                     attachedFile || stub,
                     Boolean(attachedFile)
                   )
@@ -3982,6 +4252,14 @@ export const QuickIngestModal: React.FC<Props> = ({
                     ? getResultForFile(attachedFile)
                     : null
                   const runStatus = match?.status
+                  const status =
+                    runStatus === "error"
+                      ? {
+                          label: qi("statusFailed", "Failed"),
+                          color: "red",
+                          reason: match?.error || baseStatus.reason
+                        }
+                      : baseStatus
                   const isProcessing = !!attachedFile && running && !runStatus
                   let runTag: React.ReactNode = null
                   if (runStatus === "ok") {
@@ -4134,6 +4412,7 @@ export const QuickIngestModal: React.FC<Props> = ({
           totalCount={totalCount}
           plannedCount={plannedCount}
           progressMeta={progressMeta}
+          lastRunError={lastRunError}
           run={run}
           hasMissingFiles={hasMissingFiles}
           missingFileCount={missingFileCount}
@@ -4168,8 +4447,8 @@ export const QuickIngestModal: React.FC<Props> = ({
           typeIcon={typeIcon}
           inferIngestTypeFromUrl={inferIngestTypeFromUrl}
           fileTypeFromName={fileTypeFromName}
-          statusForUrlRow={statusForUrlRow}
-          statusForFile={statusForFile}
+          statusForUrlRow={statusForUrlRowWithRunState}
+          statusForFile={statusForFileWithRunState}
           formatBytes={formatBytes}
           onReattachFile={handleReattachSelectedFile}
         />
@@ -4326,7 +4605,7 @@ export const QuickIngestModal: React.FC<Props> = ({
             </div>
           ),
           children: (
-        <Space direction="vertical" className="w-full">
+        <Space orientation="vertical" className="w-full">
               <div className="flex items-center gap-2">
                 <Input
                   allowClear
@@ -4401,7 +4680,7 @@ export const QuickIngestModal: React.FC<Props> = ({
                             )
                           : g}
                       </Typography.Title>
-                      <Space direction="vertical" className="w-full">
+                      <Space orientation="vertical" className="w-full">
                         {(g === "Recommended"
                           ? recommended
                           : grouped[g]
@@ -4649,7 +4928,8 @@ export const QuickIngestModal: React.FC<Props> = ({
             firstResultWithMedia,
             reviewBatchId,
             processOnly,
-            mediaIdFromPayload
+            mediaIdFromPayload,
+            titleFromPayload
           }}
           actions={{
             retryFailedUrls,

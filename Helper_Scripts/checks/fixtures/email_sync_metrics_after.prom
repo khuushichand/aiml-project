@@ -1,0 +1,21 @@
+# HELP email_sync_runs_total Total email sync runs by provider and status
+# TYPE email_sync_runs_total counter
+email_sync_runs_total{provider="gmail",status="success"} 140
+email_sync_runs_total{provider="gmail",status="failed"} 12
+email_sync_runs_total{provider="gmail",status="skipped"} 8
+
+# HELP email_sync_recovery_events_total Email sync recovery events
+# TYPE email_sync_recovery_events_total counter
+email_sync_recovery_events_total{provider="gmail",outcome="bounded_replay"} 4
+email_sync_recovery_events_total{provider="gmail",outcome="full_backfill_required"} 1
+
+# HELP email_sync_lag_seconds Observed lag in seconds for successful email sync cycles
+# TYPE email_sync_lag_seconds histogram
+email_sync_lag_seconds_bucket{provider="gmail",le="30"} 25
+email_sync_lag_seconds_bucket{provider="gmail",le="60"} 50
+email_sync_lag_seconds_bucket{provider="gmail",le="120"} 70
+email_sync_lag_seconds_bucket{provider="gmail",le="300"} 95
+email_sync_lag_seconds_bucket{provider="gmail",le="600"} 105
+email_sync_lag_seconds_bucket{provider="gmail",le="+Inf"} 110
+email_sync_lag_seconds_sum{provider="gmail"} 16800
+email_sync_lag_seconds_count{provider="gmail"} 110

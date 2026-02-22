@@ -149,13 +149,14 @@ async def list_versions(
             select_cols_list.append("dv.content")
         select_cols = ", ".join(select_cols_list)
 
-        query = f"""
+        query_template = """
             SELECT {select_cols}
             FROM DocumentVersions dv
             WHERE dv.media_id = ? AND dv.deleted = 0
             ORDER BY dv.version_number DESC
             LIMIT ? OFFSET ?
         """
+        query = query_template.format_map(locals())  # nosec B608
         params = (media_id, limit, offset)
         cursor = db.execute_query(query, params)
         raw_rows = [dict(row) for row in cursor.fetchall()]

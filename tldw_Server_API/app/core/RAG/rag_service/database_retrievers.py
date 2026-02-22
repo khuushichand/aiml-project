@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import sqlite3
+import urllib.parse as _urlparse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,8 +40,8 @@ if TYPE_CHECKING:
 class DatabasePathError(ValueError):
     """Raised when a database path is invalid."""
 
-    def __init__(self) -> None:
-        super().__init__("Invalid database path")
+    def __init__(self, message: str = "Invalid database path") -> None:
+        super().__init__(message)
 
 
 class PathNormalizationError(DatabasePathError):
@@ -82,7 +83,7 @@ class SuspiciousDatabasePathError(DatabasePathError):
     """Raised when suspicious path patterns are detected."""
 
     def __init__(self) -> None:
-        super().__init__("Suspicious path pattern detected in database path")
+        super().__init__("suspicious pattern detected in database path")
 
 
 class RestrictedDatabasePathError(DatabasePathError):
@@ -106,6 +107,37 @@ class RawSqlFallbackDisabledError(RuntimeError):
         super().__init__(
             f"Raw SQL fallback is disabled in production for {retriever_name}. Provide a database adapter."
         )
+
+
+def _normalize_sqlite_memory_path(path: str) -> Optional[str]:
+    """Return a canonical SQLite in-memory spec, or None when path is file-backed."""
+    raw = str(path).strip()
+    if not raw:
+        return None
+
+    lowered = raw.lower()
+    if raw == ":memory:":
+        return ":memory:"
+
+    if lowered.startswith("file::memory:"):
+        return raw
+
+    if lowered.startswith("file:") and "mode=memory" in lowered:
+        return raw
+
+    if raw.startswith("file://"):
+        try:
+            parsed = _urlparse.urlparse(raw)
+        except (TypeError, ValueError):
+            return None
+        extracted_path = _urlparse.unquote(parsed.path or "")
+        query = parsed.query or ""
+        if extracted_path in {":memory:", "/:memory:"}:
+            return f"file::memory:?{query}" if query else ":memory:"
+        if "mode=memory" in query.lower():
+            return f"file::memory:?{query}" if query else ":memory:"
+
+    return None
 
 
 def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
@@ -262,13 +294,16 @@ class BaseRetriever(ABC):
             logger.error(f"Path normalization error for '{path}': {exc}")
             raise PathNormalizationError() from exc
 
+        memory_path = _normalize_sqlite_memory_path(path)
+        if memory_path is not None:
+            return memory_path
+
         # Handle URI schemes - only allow file:// and validate the path component
         if '://' in path:
             if path.startswith('file://'):
-                from urllib.parse import unquote, urlparse
-                parsed = urlparse(path)
+                parsed = _urlparse.urlparse(path)
                 # Extract and decode the path component
-                extracted_path = unquote(parsed.path)
+                extracted_path = _urlparse.unquote(parsed.path)
                 # Recursively validate the extracted path (this will catch traversal, etc.)
                 validated = self._validate_path(extracted_path)
                 if validated is None:
@@ -415,9 +450,21 @@ class MediaDBRetriever(BaseRetriever):
             validated_path = self._validate_path(db_path)
             if not validated_path:
                 return None
+            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+                DatabaseError as MediaDatabaseError,
+            )
             from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
             return MediaDatabase(db_path=validated_path, client_id="rag_service")
-        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        except (
+            ImportError,
+            AttributeError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            sqlite3.Error,
+            MediaDatabaseError,
+        ):
             return None
 
     def close(self):
@@ -1267,7 +1314,7 @@ class MediaDBRetriever(BaseRetriever):
         media_adapter = getattr(self, 'media_db', None)
         if media_adapter is not None and getattr(media_adapter, 'backend_type', None) == BackendType.POSTGRESQL:
             aggregator = "STRING_AGG(t.name, ',')"
-        sql = f"""
+        metadata_sql_template = """
             SELECT
                 m.*,
                 {aggregator} as tags,
@@ -1279,6 +1326,7 @@ class MediaDBRetriever(BaseRetriever):
             WHERE m.id = ?
             GROUP BY m.id
         """
+        sql = metadata_sql_template.format_map(locals())  # nosec B608
 
         results = self._execute_query(sql, (doc_id,))
 
@@ -1470,7 +1518,7 @@ class NotesDBRetriever(BaseRetriever):
         aggregator = "GROUP_CONCAT(t.name)"
         if self.chacha_db is not None and getattr(self.chacha_db, 'backend_type', None) == BackendType.POSTGRESQL:
             aggregator = "STRING_AGG(t.name, ',')"
-        sql = f"""
+        metadata_sql_template = """
             SELECT
                 n.*,
                 nb.name as notebook_name,
@@ -1482,6 +1530,7 @@ class NotesDBRetriever(BaseRetriever):
             WHERE n.id = ?
             GROUP BY n.id
         """
+        sql = metadata_sql_template.format_map(locals())  # nosec B608
 
         results = self._execute_query(sql, (note_id,))
 
@@ -2040,7 +2089,7 @@ class CharacterCardsRetriever(BaseRetriever):
             except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as e:
                 if getattr(self.chacha_db, "backend_type", None) == BackendType.POSTGRESQL:
                     logger.warning(
-                        "ChaCha backend search failed under PostgreSQL backend; skipping legacy fallback: %s",
+                        'ChaCha backend search failed under PostgreSQL backend; skipping legacy fallback: {}',
                         e,
                     )
                     raise

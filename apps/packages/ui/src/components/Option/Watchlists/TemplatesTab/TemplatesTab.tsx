@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react"
 import {
   Button,
   Empty,
-  Popconfirm,
+  Modal,
   Space,
   Table,
   Tooltip,
@@ -13,12 +13,17 @@ import { Edit, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
+  fetchWatchlistJobs,
   fetchWatchlistTemplates,
   deleteWatchlistTemplate
 } from "@/services/watchlists"
-import type { WatchlistTemplate } from "@/types/watchlists"
+import type { WatchlistJob, WatchlistTemplate } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
+import { findActiveTemplateUsage } from "./template-usage"
 import { TemplateEditor } from "./TemplateEditor"
+
+const TEMPLATE_USAGE_CHECK_PAGE_SIZE = 200
+const TEMPLATE_USAGE_CHECK_MAX_PAGES = 10
 
 export const TemplatesTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
@@ -34,6 +39,7 @@ export const TemplatesTab: React.FC = () => {
   // Local state for editor
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingTemplate, setEditingTemplate] = useState<WatchlistTemplate | null>(null)
+  const [checkingTemplateDeleteName, setCheckingTemplateDeleteName] = useState<string | null>(null)
 
   // Fetch templates
   const loadTemplates = useCallback(async () => {
@@ -82,6 +88,97 @@ export const TemplatesTab: React.FC = () => {
     }
   }
 
+  const loadJobsForTemplateUsageCheck = useCallback(async (): Promise<WatchlistJob[]> => {
+    const allJobs: WatchlistJob[] = []
+    let page = 1
+
+    while (page <= TEMPLATE_USAGE_CHECK_MAX_PAGES) {
+      const response = await fetchWatchlistJobs({
+        page,
+        size: TEMPLATE_USAGE_CHECK_PAGE_SIZE
+      })
+      const pageItems = Array.isArray(response.items) ? response.items : []
+      allJobs.push(...pageItems)
+      if (
+        pageItems.length < TEMPLATE_USAGE_CHECK_PAGE_SIZE ||
+        allJobs.length >= Number(response.total || 0)
+      ) {
+        break
+      }
+      page += 1
+    }
+
+    return allJobs
+  }, [])
+
+  const requestDeleteConfirmation = useCallback(async (template: WatchlistTemplate) => {
+    setCheckingTemplateDeleteName(template.name)
+    let activeUsage: Array<{ id: number; name: string }> = []
+    try {
+      const jobs = await loadJobsForTemplateUsageCheck()
+      activeUsage = findActiveTemplateUsage(jobs, template.name)
+    } catch (err) {
+      console.error("Failed to check template usage:", err)
+      message.warning(
+        t(
+          "watchlists:templates.deleteUsageLookupError",
+          "Could not verify active monitor usage before deletion."
+        )
+      )
+    } finally {
+      setCheckingTemplateDeleteName(null)
+    }
+
+    const usageCount = activeUsage.length
+    Modal.confirm({
+      title: usageCount > 0
+        ? t(
+            "watchlists:templates.deleteConfirmInUseTitle",
+            "Template is used by active monitors"
+          )
+        : t("watchlists:templates.deleteConfirm", "Delete this template?"),
+      content: usageCount > 0 ? (
+        <div className="space-y-2">
+          <p>
+            {t(
+              "watchlists:templates.deleteConfirmInUseDescription",
+              "This template is referenced by {{count}} active monitor{{plural}}. Deleting it may affect scheduled reports.",
+              {
+                count: usageCount,
+                plural: usageCount === 1 ? "" : "s"
+              }
+            )}
+          </p>
+          <ul className="list-disc pl-5">
+            {activeUsage.slice(0, 5).map((job) => (
+              <li key={job.id}>{job.name}</li>
+            ))}
+          </ul>
+          {usageCount > 5 && (
+            <p className="text-xs text-text-muted">
+              {t(
+                "watchlists:templates.deleteConfirmInUseMore",
+                "+{{count}} more active monitor{{plural}}",
+                {
+                  count: usageCount - 5,
+                  plural: usageCount - 5 === 1 ? "" : "s"
+                }
+              )}
+            </p>
+          )}
+        </div>
+      ) : (
+        t("watchlists:templates.deleteConfirmDescription", "This action cannot be undone.")
+      ),
+      okText: usageCount > 0
+        ? t("watchlists:templates.deleteConfirmForce", "Delete anyway")
+        : t("watchlists:templates.delete", "Delete"),
+      cancelText: t("common:cancel", "Cancel"),
+      okButtonProps: { danger: true },
+      onOk: () => handleDelete(template)
+    })
+  }, [handleDelete, loadJobsForTemplateUsageCheck, t])
+
   // Handle editor close
   const handleEditorClose = (saved?: boolean) => {
     setEditorOpen(false)
@@ -108,7 +205,7 @@ export const TemplatesTab: React.FC = () => {
       key: "description",
       ellipsis: true,
       render: (desc: string | null) => (
-        <span className="text-sm text-zinc-500">
+        <span className="text-sm text-text-muted">
           {desc || "-"}
         </span>
       )
@@ -129,17 +226,17 @@ export const TemplatesTab: React.FC = () => {
       width: 150,
       render: (date: string | null) =>
         date ? (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-text-muted">
             {formatRelativeTime(date, t)}
           </span>
         ) : (
-          <span className="text-sm text-zinc-400">-</span>
+          <span className="text-sm text-text-subtle">-</span>
         )
     },
     {
       title: t("watchlists:templates.columns.actions", "Actions"),
       key: "actions",
-      width: 100,
+      width: 140,
       align: "center",
       render: (_, record) => (
         <Space size="small">
@@ -147,25 +244,22 @@ export const TemplatesTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("watchlists:templates.edit", "Edit")}
               icon={<Edit className="h-4 w-4" />}
               onClick={() => handleEdit(record)}
             />
           </Tooltip>
-          <Popconfirm
-            title={t("watchlists:templates.deleteConfirm", "Delete this template?")}
-            onConfirm={() => handleDelete(record)}
-            okText={t("common:yes", "Yes")}
-            cancelText={t("common:no", "No")}
-          >
-            <Tooltip title={t("watchlists:templates.delete", "Delete")}>
-              <Button
-                type="text"
-                size="small"
-                danger
-                icon={<Trash2 className="h-4 w-4" />}
-              />
-            </Tooltip>
-          </Popconfirm>
+          <Tooltip title={t("watchlists:templates.delete", "Delete")}>
+            <Button
+              type="text"
+              size="small"
+              danger
+              aria-label={t("watchlists:templates.delete", "Delete")}
+              icon={<Trash2 className="h-4 w-4" />}
+              loading={checkingTemplateDeleteName === record.name}
+              onClick={() => void requestDeleteConfirmation(record)}
+            />
+          </Tooltip>
         </Space>
       )
     }
@@ -192,7 +286,7 @@ export const TemplatesTab: React.FC = () => {
       </div>
 
       {/* Description */}
-      <div className="text-sm text-zinc-500">
+      <div className="text-sm text-text-muted">
         {t("watchlists:templates.description", "Jinja2 templates for generating briefing outputs.")}
       </div>
 

@@ -15,6 +15,8 @@ interface ScopeSelectorProps {
 }
 
 type ScopeMode = "sources" | "groups" | "tags"
+const SCOPE_SELECTOR_PAGE_SIZE = 200
+const SCOPE_SELECTOR_SOURCE_LIMIT = 500
 
 export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
   value,
@@ -39,15 +41,36 @@ export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
 
   // Load data on mount
   useEffect(() => {
+    const fetchSourceOptions = async (): Promise<WatchlistSource[]> => {
+      const allSources: WatchlistSource[] = []
+      let page = 1
+
+      while (allSources.length < SCOPE_SELECTOR_SOURCE_LIMIT) {
+        const result = await fetchWatchlistSources({
+          page,
+          size: SCOPE_SELECTOR_PAGE_SIZE
+        })
+        const batch = Array.isArray(result.items) ? result.items : []
+        allSources.push(...batch)
+        const total = typeof result.total === "number" ? result.total : undefined
+
+        if (batch.length < SCOPE_SELECTOR_PAGE_SIZE) break
+        if (total != null && allSources.length >= total) break
+        page += 1
+      }
+
+      return allSources.slice(0, SCOPE_SELECTOR_SOURCE_LIMIT)
+    }
+
     const loadData = async () => {
       setLoading(true)
       try {
         const [sourcesRes, groupsRes, tagsRes] = await Promise.all([
-          fetchWatchlistSources({ page: 1, size: 500 }),
+          fetchSourceOptions(),
           fetchWatchlistGroups({ page: 1, size: 200 }),
           fetchWatchlistTags({ page: 1, size: 200 })
         ])
-        setSources(sourcesRes.items || [])
+        setSources(sourcesRes)
         setGroups(groupsRes.items || [])
         setTags(tagsRes.items || [])
       } catch (err) {
@@ -99,13 +122,13 @@ export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
       label: (
         <span className="flex items-center gap-1.5">
           <Rss className="h-3.5 w-3.5" />
-          {t("watchlists:jobs.scope.sources", "Sources")}
+          {t("watchlists:jobs.scope.sources", "Feeds")}
         </span>
       ),
       children: (
         <Select
           mode="multiple"
-          placeholder={t("watchlists:jobs.scope.selectSources", "Select sources to include")}
+          placeholder={t("watchlists:jobs.scope.selectSources", "Select feeds to include")}
           value={value.sources || []}
           onChange={handleSourcesChange}
           loading={loading}
@@ -186,20 +209,20 @@ export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
   ]
 
   return (
-    <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg p-3">
+    <div className="border border-border rounded-lg p-3">
       <Tabs
         activeKey={activeMode}
         onChange={handleModeChange}
         items={tabItems}
         size="small"
       />
-      <div className="mt-2 text-xs text-zinc-500">
+      <div className="mt-2 text-xs text-text-muted">
         {activeMode === "sources" &&
-          t("watchlists:jobs.scope.sourcesHelp", "Job will fetch from selected sources directly")}
+          t("watchlists:jobs.scope.sourcesHelp", "Monitor will fetch directly from selected feeds")}
         {activeMode === "groups" &&
-          t("watchlists:jobs.scope.groupsHelp", "Job will fetch from all sources in selected groups")}
+          t("watchlists:jobs.scope.groupsHelp", "Monitor will fetch from all feeds in selected groups")}
         {activeMode === "tags" &&
-          t("watchlists:jobs.scope.tagsHelp", "Job will fetch from all sources with selected tags")}
+          t("watchlists:jobs.scope.tagsHelp", "Monitor will fetch from all feeds with selected tags")}
       </div>
     </div>
   )

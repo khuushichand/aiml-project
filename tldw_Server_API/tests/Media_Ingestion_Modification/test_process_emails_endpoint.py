@@ -122,7 +122,7 @@ def _build_mbox_two_emails() -> bytes:
         try:
             _os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 def test_process_emails_endpoint_mbox_archive(client_user_only):
@@ -189,7 +189,7 @@ def test_process_emails_endpoint_mbox_guardrail_too_many_messages(client_user_on
             try:
                 _os.unlink(tmp_path)
             except Exception:
-                pass
+                _ = None
 
         files = {
             "files": ("emails.mbox", BytesIO(mbox_bytes), "application/mbox"),
@@ -247,7 +247,7 @@ def test_process_emails_endpoint_mbox_guardrail_oversized_bytes(client_user_only
             try:
                 _os.unlink(tmp_path)
             except Exception:
-                pass
+                _ = None
 
         files = {
             "files": ("emails.mbox", BytesIO(mbox_bytes), "application/mbox"),
@@ -414,7 +414,7 @@ def test_process_emails_endpoint_mbox_large_container(client_user_only):
             try:
                 _os.unlink(tmp_path)
             except Exception:
-                pass
+                _ = None
 
         files = {
             "files": ("emails.mbox", BytesIO(mbox_bytes), "application/mbox"),

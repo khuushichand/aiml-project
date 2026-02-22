@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     resolve_safe_local_path,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 
 # Global cache for local model components
 _MODEL_CACHE: dict[str, tuple[Any, Any, str]] = {}
@@ -62,7 +63,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
     s = str(value).strip().lower()
-    if s in {"1", "true", "yes", "y", "on"}:
+    if is_truthy(s):
         return True
     if s in {"0", "false", "no", "n", "off"}:
         return False
@@ -106,6 +107,7 @@ def _resolve_settings() -> dict[str, Any]:
     settings = {
         "enabled": _as_bool(stt_cfg.get("vibevoice_enabled"), False),
         "model_id": model_id,
+        "model_revision": _as_str(stt_cfg.get("vibevoice_model_revision"), ""),
         "device": _as_str(stt_cfg.get("vibevoice_device"), "cuda"),
         "dtype": _as_str(stt_cfg.get("vibevoice_dtype"), "bfloat16"),
         "cache_dir": _as_str(stt_cfg.get("vibevoice_cache_dir"), "./models/vibevoice"),
@@ -171,7 +173,7 @@ def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: 
         return resampled.squeeze(0).cpu().numpy().astype("float32"), target_sample_rate
     except _VIBEVOICE_INFERENCE_EXCEPTIONS as exc:
         logger.warning(
-            "VibeVoice: resampling from %s Hz to %s Hz failed; proceeding at original rate. Error: %s",
+            'VibeVoice: resampling from {} Hz to {} Hz failed; proceeding at original rate. Error: {}',
             sample_rate,
             target_sample_rate,
             exc,
@@ -402,6 +404,7 @@ def _load_local_components(settings: dict[str, Any]) -> tuple[Any, Any, str]:
     device = _resolve_device(str(settings["device"]))
     dtype_name = str(settings["dtype"])
     allow_download = bool(settings["allow_download"])
+    model_revision = str(settings.get("model_revision") or "").strip() or None
     cache_dir = Path(str(settings["cache_dir"]))
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -425,27 +428,29 @@ def _load_local_components(settings: dict[str, Any]) -> tuple[Any, Any, str]:
 
         processor = AutoProcessor.from_pretrained(
             model_id,
+            revision=model_revision,
             trust_remote_code=True,
             cache_dir=str(cache_dir),
             local_files_only=local_only,
-        )
+        )  # nosec B615
 
         device_map = "auto" if device != "cpu" else None
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
+            revision=model_revision,
             trust_remote_code=True,
             cache_dir=str(cache_dir),
             local_files_only=local_only,
             torch_dtype=torch_dtype,
             device_map=device_map,
-        )
+        )  # nosec B615
 
         if device_map is None:
             model = model.to(device)
         model.eval()
 
         _MODEL_CACHE[cache_key] = (processor, model, device)
-        logger.info("VibeVoice: loaded local model '%s' on device '%s'", model_id, device)
+        logger.info("VibeVoice: loaded local model '{}' on device '{}'", model_id, device)
         return processor, model, device
 
 
@@ -739,7 +744,7 @@ def transcribe_with_vibevoice(
                 cancel_check=cancel_check,
             )
         except Exception as exc:
-            logger.warning("VibeVoice vLLM HTTP path failed; falling back to local inference: %s", exc)
+            logger.warning("VibeVoice vLLM HTTP path failed; falling back to local inference: {}", exc)
             if not settings.get("enabled"):
                 raise
 

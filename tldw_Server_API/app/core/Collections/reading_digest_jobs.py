@@ -15,6 +15,7 @@ from tldw_Server_API.app.core.Collections.reading_service import ReadingService
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import ReadingDigestJobError
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.services.outputs_service import (
     _build_output_filename,
     _outputs_dir_for_user,
@@ -128,7 +129,7 @@ def _normalize_suggestions_config(filters: dict[str, Any]) -> dict[str, Any] | N
         return None
     enabled = raw.get("enabled")
     if isinstance(enabled, str):
-        enabled = enabled.strip().lower() in {"1", "true", "yes", "on"}
+        enabled = is_truthy(enabled.strip())
     if not enabled:
         return None
 
@@ -137,13 +138,13 @@ def _normalize_suggestions_config(filters: dict[str, Any]) -> dict[str, Any] | N
 
     include_read = raw.get("include_read", False)
     if isinstance(include_read, str):
-        include_read = include_read.strip().lower() in {"1", "true", "yes", "on"}
+        include_read = is_truthy(include_read.strip())
     else:
         include_read = bool(include_read)
 
     include_archived = raw.get("include_archived", False)
     if isinstance(include_archived, str):
-        include_archived = include_archived.strip().lower() in {"1", "true", "yes", "on"}
+        include_archived = is_truthy(include_archived.strip())
     else:
         include_archived = bool(include_archived)
 

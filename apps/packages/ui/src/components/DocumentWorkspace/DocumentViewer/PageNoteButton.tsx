@@ -8,6 +8,7 @@ import type { AnnotationColor } from "../types"
 
 const { TextArea } = Input
 
+// theme-exempt: user annotation colors
 const NOTE_COLORS: Array<{ key: AnnotationColor; label: string; color: string }> = [
   { key: "yellow", label: "Yellow", color: "#fef08a" },
   { key: "green", label: "Green", color: "#bbf7d0" },

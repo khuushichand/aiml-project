@@ -7,6 +7,12 @@ from fastapi.testclient import TestClient
 pytestmark = pytest.mark.rate_limit
 
 
+@pytest.fixture(params=["memory", "redis"], ids=["rg-memory", "rg-redis"])
+def rg_backend(request) -> str:
+    """Exercise header behavior under both RG backends."""
+    return str(request.param)
+
+
 def _repo_policy_path() -> str:
 
 
@@ -34,7 +40,7 @@ def _with_rg_middleware(app):
             try:
                 app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
         yield
     finally:
         if changed:
@@ -42,7 +48,7 @@ def _with_rg_middleware(app):
                 app.user_middleware = original_user_middleware
                 app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
 
 
 def _reset_rg_state(app) -> None:
@@ -95,13 +101,13 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         await reset_db_pool()
         reset_settings()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
 
         await ensure_authnz_schema_ready_once()
     except Exception:
-        pass
+        _ = None
 
     # Reset cached RG daily ledger between tests when DATABASE_URL changes.
     try:
@@ -109,7 +115,7 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
 
         _dc._daily_ledger = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     # Reset cached tokens ledger/backfill flags between tests when DATABASE_URL changes.
     try:
@@ -118,7 +124,7 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         _ut._tokens_daily_ledger = None  # type: ignore[attr-defined]
         _ut._tokens_legacy_backfill_done = set()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     # Reset cached audio RG governor/handles so RG_POLICY_PATH changes take effect.
     try:
@@ -128,7 +134,7 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         _aq._rg_audio_loader = None  # type: ignore[attr-defined]
         _aq._reset_in_process_counters_for_tests()
     except Exception:
-        pass
+        _ = None
 
 
 async def _create_user_and_key(*, username: str, email: str, role: str = "user") -> tuple[int, str]:
@@ -160,7 +166,7 @@ async def _create_user_and_key(*, username: str, email: str, role: str = "user")
 
 
 @pytest.mark.asyncio
-async def test_e2e_chat_headers_tokens_and_requests(monkeypatch, tmp_path):
+async def test_e2e_chat_headers_tokens_and_requests(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_chat_headers.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
     user_id, api_key = await _create_user_and_key(username="chat-headers-user", email="chat-headers-user@example.com")
@@ -168,7 +174,7 @@ async def test_e2e_chat_headers_tokens_and_requests(monkeypatch, tmp_path):
     # Minimal app mode with RG middleware (requests headers)
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
     monkeypatch.setenv("RG_POLICY_PATH", _repo_policy_path())
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
@@ -213,7 +219,7 @@ async def test_e2e_chat_headers_tokens_and_requests(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_e2e_chat_deny_headers_retry_after(monkeypatch, tmp_path):
+async def test_e2e_chat_deny_headers_retry_after(monkeypatch, tmp_path, rg_backend):
     """
     Verify that when RGSimpleMiddleware denies /api/v1/chat/completions
     via a low-RPM policy, the response includes Retry-After and
@@ -225,18 +231,19 @@ async def test_e2e_chat_deny_headers_retry_after(monkeypatch, tmp_path):
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
+    policy_id = f"chat.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  chat.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 1 }\n"
         "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    /api/v1/chat/completions: chat.small\n"
+        f"    /api/v1/chat/completions: {policy_id}\n"
     )
     p = tmp_path / "rg_chat.yaml"
     p.write_text(policy, encoding="utf-8")
@@ -268,7 +275,7 @@ async def test_e2e_chat_deny_headers_retry_after(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_e2e_embeddings_headers_route_map(monkeypatch, tmp_path):
+async def test_e2e_embeddings_headers_route_map(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_embeddings_headers.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
     _user_id, api_key = await _create_user_and_key(
@@ -278,7 +285,7 @@ async def test_e2e_embeddings_headers_route_map(monkeypatch, tmp_path):
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
     monkeypatch.setenv("RG_POLICY_PATH", _repo_policy_path())
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
@@ -297,7 +304,7 @@ async def test_e2e_embeddings_headers_route_map(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_e2e_embeddings_deny_headers_retry_after(monkeypatch, tmp_path):
+async def test_e2e_embeddings_deny_headers_retry_after(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_embeddings_deny.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
     _user_id, api_key = await _create_user_and_key(
@@ -307,18 +314,19 @@ async def test_e2e_embeddings_deny_headers_retry_after(monkeypatch, tmp_path):
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
+    policy_id = f"embeddings.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  embeddings.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 1 }\n"
         "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    /api/v1/embeddings/providers-config: embeddings.small\n"
+        f"    /api/v1/embeddings/providers-config: {policy_id}\n"
     )
     p = tmp_path / "rg_embeddings.yaml"
     p.write_text(policy, encoding="utf-8")
@@ -345,10 +353,10 @@ async def test_e2e_embeddings_deny_headers_retry_after(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_e2e_mcp_headers_route_map(monkeypatch):
+async def test_e2e_mcp_headers_route_map(monkeypatch, rg_backend):
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
     monkeypatch.setenv("RG_POLICY_PATH", _repo_policy_path())
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
@@ -377,14 +385,14 @@ async def test_e2e_mcp_headers_route_map(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_e2e_audio_websocket_streams_limit(monkeypatch, tmp_path):
+async def test_e2e_audio_websocket_streams_limit(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_audio_ws.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
     _user_id, api_key = await _create_user_and_key(username="audio-ws-user", email="audio-ws-user@example.com")
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
     monkeypatch.setenv("RG_POLICY_PATH", _repo_policy_path())
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
@@ -423,20 +431,20 @@ async def test_e2e_audio_websocket_streams_limit(monkeypatch, tmp_path):
                     if ws3:
                         ws3.close()
                 except Exception:
-                    pass
+                    _ = None
                 try:
                     ws2.close()
                 except Exception:
-                    pass
+                    _ = None
                 try:
                     ws1.close()
                 except Exception:
-                    pass
+                    _ = None
             assert denied
 
 
 @pytest.mark.asyncio
-async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_path):
+async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_audio_transcriptions.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
     _user_id, api_key = await _create_user_and_key(
@@ -446,19 +454,20 @@ async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
+    policy_id = f"audio.transcribe.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  audio.transcribe:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 2 }\n"
         "    tokens: { per_min: 1000 }\n"
         "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    /api/v1/audio/transcriptions: audio.transcribe\n"
+        f"    /api/v1/audio/transcriptions: {policy_id}\n"
     )
     p = tmp_path / "rg_audio.yaml"
     p.write_text(policy, encoding="utf-8")
@@ -492,14 +501,20 @@ async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_
 
     import numpy as np
 
-    def fake_sf_read(fd, dtype="float32"):
+    class _FakeSoundFile:
+        @staticmethod
+        def info(path):
+            _ = path
+            return type("Info", (), {"frames": 1600, "samplerate": 16000})()
 
-        _ = (fd, dtype)
-        data = np.zeros((1600,), dtype="float32")
-        sr = 16000
-        return data, sr
+        @staticmethod
+        def read(fd, dtype="float32"):
+            _ = (fd, dtype)
+            data = np.zeros((1600,), dtype="float32")
+            sr = 16000
+            return data, sr
 
-    monkeypatch.setattr(audio_ep.sf, "read", fake_sf_read)
+    monkeypatch.setattr(audio_ep, "sf", _FakeSoundFile(), raising=False)
 
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as tl
 

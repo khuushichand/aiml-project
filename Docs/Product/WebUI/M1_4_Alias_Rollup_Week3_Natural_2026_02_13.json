@@ -1,0 +1,17 @@
+{
+  "captured_at": "2026-02-19T03:18:14.997Z",
+  "source": "natural-passive-session",
+  "run_context": {
+    "base_url": "http://localhost:8080",
+    "browser": "chromium",
+    "seeded_auth": true,
+    "synthetic_alias_flows_executed": false
+  },
+  "rollup": {
+    "total_redirects": 0,
+    "last_event_at": null,
+    "top_alias_sources": [],
+    "top_destinations": [],
+    "last_redirect": null
+  }
+}

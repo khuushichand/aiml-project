@@ -28,6 +28,7 @@ import { FeedbackButtons } from "@/components/Sidepanel/Chat/FeedbackButtons"
 import type { FeedbackThumb } from "@/store/feedback"
 import type { GenerationInfo as GenerationInfoType } from "./types"
 import type { MessageSteeringMode } from "@/types/message-steering"
+import type { QuickMessageAction } from "./quick-message-actions"
 
 const ACTION_BUTTON_CLASS =
   "flex items-center justify-center rounded-full border border-border bg-surface2 text-text-muted hover:bg-surface hover:text-text transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-focus min-w-[44px] min-h-[44px] sm:h-8 sm:w-8 sm:min-w-0 sm:min-h-0"
@@ -96,6 +97,8 @@ type MessageActionsBarProps = {
   onCopy: () => void | Promise<void>
   canReply: boolean
   onReply: () => void
+  canSaveToWorkspaceNotes?: boolean
+  onSaveToWorkspaceNotes?: () => void
   canSaveToNotes: boolean
   canSaveToFlashcards: boolean
   canGenerateDocument: boolean
@@ -110,6 +113,9 @@ type MessageActionsBarProps = {
   temporaryChat?: boolean
   hideContinue?: boolean
   onContinue?: () => void
+  onRunSteeredContinue?: (
+    mode: Exclude<MessageSteeringMode, "none">
+  ) => void
   messageSteeringMode?: MessageSteeringMode
   onMessageSteeringModeChange?: (mode: MessageSteeringMode) => void
   messageSteeringForceNarrate?: boolean
@@ -117,6 +123,7 @@ type MessageActionsBarProps = {
   onClearMessageSteering?: () => void
   onEdit: () => void
   editMode: boolean
+  showFeedbackControls: boolean
   feedbackSelected?: FeedbackThumb
   feedbackDisabled: boolean
   feedbackDisabledReason: string
@@ -129,6 +136,7 @@ type MessageActionsBarProps = {
   canPin?: boolean
   isPinned?: boolean
   onTogglePinned?: () => void
+  onQuickMessageAction?: (action: QuickMessageAction) => void
 }
 
 export function MessageActionsBar({
@@ -154,6 +162,8 @@ export function MessageActionsBar({
   onCopy,
   canReply,
   onReply,
+  canSaveToWorkspaceNotes = false,
+  onSaveToWorkspaceNotes,
   canSaveToNotes,
   canSaveToFlashcards,
   canGenerateDocument,
@@ -168,6 +178,7 @@ export function MessageActionsBar({
   temporaryChat,
   hideContinue,
   onContinue,
+  onRunSteeredContinue,
   messageSteeringMode = "none",
   onMessageSteeringModeChange,
   messageSteeringForceNarrate = false,
@@ -175,6 +186,7 @@ export function MessageActionsBar({
   onClearMessageSteering,
   onEdit,
   editMode,
+  showFeedbackControls,
   feedbackSelected,
   feedbackDisabled,
   feedbackDisabledReason,
@@ -186,13 +198,15 @@ export function MessageActionsBar({
   onDelete,
   canPin,
   isPinned,
-  onTogglePinned
+  onTogglePinned,
+  onQuickMessageAction
 }: MessageActionsBarProps) {
   const actionButtonClass = `${ACTION_BUTTON_CLASS} ${
     isProMode ? "h-11 px-3 sm:h-8 sm:px-2" : "h-11 w-11 sm:h-8 sm:w-8"
   }`
 
   const [overflowOpen, setOverflowOpen] = React.useState(false)
+  const showLeftFeedback = !editMode && showFeedbackControls
 
   // Build overflow menu items
   const overflowItems = React.useMemo(() => {
@@ -207,7 +221,7 @@ export function MessageActionsBar({
         />
       )
     }
-    if (isBot && onNewBranch && !temporaryChat) {
+    if (isBot && onNewBranch) {
       items.push(
         <OverflowMenuItem
           key="branch"
@@ -240,13 +254,17 @@ export function MessageActionsBar({
           label={
             t("playground:composer.steering.continue", "Continue as user") as string
           }
-          onClick={() =>
+          onClick={() => {
+            if (onRunSteeredContinue) {
+              onRunSteeredContinue("continue_as_user")
+              return
+            }
             onMessageSteeringModeChange(
               messageSteeringMode === "continue_as_user"
                 ? "none"
                 : "continue_as_user"
             )
-          }
+          }}
           active={messageSteeringMode === "continue_as_user"}
         />
       )
@@ -257,13 +275,17 @@ export function MessageActionsBar({
           label={
             t("playground:composer.steering.impersonate", "Impersonate user") as string
           }
-          onClick={() =>
+          onClick={() => {
+            if (onRunSteeredContinue) {
+              onRunSteeredContinue("impersonate_user")
+              return
+            }
             onMessageSteeringModeChange(
               messageSteeringMode === "impersonate_user"
                 ? "none"
                 : "impersonate_user"
             )
-          }
+          }}
           active={messageSteeringMode === "impersonate_user"}
         />
       )
@@ -291,7 +313,16 @@ export function MessageActionsBar({
         )
       }
     }
-    if (isBot && canSaveToNotes) {
+    if (canSaveToWorkspaceNotes && onSaveToWorkspaceNotes) {
+      items.push(
+        <OverflowMenuItem
+          key="save-workspace-note"
+          icon={<StickyNote className="w-3.5 h-3.5" />}
+          label={t("saveToNotes", "Save to Notes")}
+          onClick={onSaveToWorkspaceNotes}
+        />
+      )
+    } else if (isBot && canSaveToNotes) {
       items.push(
         <OverflowMenuItem
           key="save-note"
@@ -320,6 +351,40 @@ export function MessageActionsBar({
           icon={<FileText className="w-3.5 h-3.5" />}
           label={t("generateDocument", "Generate document")}
           onClick={onGenerateDocument}
+        />
+      )
+    }
+    if (isBot && onQuickMessageAction) {
+      items.push(
+        <OverflowMenuItem
+          key="quick-summarize"
+          icon={<span className="text-[10px] leading-none font-semibold">S</span>}
+          label={t("playground:actions.quickSummarize", "Summarize this")}
+          onClick={() => onQuickMessageAction("summarize")}
+        />
+      )
+      items.push(
+        <OverflowMenuItem
+          key="quick-translate"
+          icon={<span className="text-[10px] leading-none font-semibold">T</span>}
+          label={t("playground:actions.quickTranslate", "Translate this")}
+          onClick={() => onQuickMessageAction("translate")}
+        />
+      )
+      items.push(
+        <OverflowMenuItem
+          key="quick-shorten"
+          icon={<span className="text-[10px] leading-none font-semibold">L</span>}
+          label={t("playground:actions.quickShorten", "Make this shorter")}
+          onClick={() => onQuickMessageAction("shorten")}
+        />
+      )
+      items.push(
+        <OverflowMenuItem
+          key="quick-explain"
+          icon={<span className="text-[10px] leading-none font-semibold">E</span>}
+          label={t("playground:actions.quickExplain", "Explain this")}
+          onClick={() => onQuickMessageAction("explain")}
         />
       )
     }
@@ -374,28 +439,49 @@ export function MessageActionsBar({
     return items
   }, [
     canReply, onReply, isBot, onNewBranch, temporaryChat,
-    hideContinue, isLastMessage, onContinue, canSaveToNotes,
+    hideContinue, isLastMessage, onContinue, onRunSteeredContinue,
+    canSaveToWorkspaceNotes, onSaveToWorkspaceNotes, canSaveToNotes,
     messageSteeringMode, onMessageSteeringModeChange,
     messageSteeringForceNarrate, onMessageSteeringForceNarrateChange,
     onClearMessageSteering,
     canSaveToFlashcards, canGenerateDocument, onGenerateDocument,
     onSaveKnowledge, savingKnowledge, isTtsEnabled, ttsActionDisabled,
-    isSpeaking, onToggleTts, onDelete, canPin, isPinned, onTogglePinned, t
+    isSpeaking, onToggleTts, onDelete, canPin, isPinned, onTogglePinned,
+    onQuickMessageAction, t
   ])
 
   return (
-    <div className="flex w-full justify-end">
-      <div className="flex items-center gap-1">
+    <div
+      className={`flex w-full items-start gap-2 ${
+        showLeftFeedback ? "justify-between" : "justify-end"
+      }`}>
+      {showLeftFeedback && (
+        <FeedbackButtons
+          compact
+          selected={feedbackSelected}
+          disabled={feedbackDisabled}
+          disabledReason={feedbackDisabledReason}
+          isSubmitting={isFeedbackSubmitting}
+          onThumbUp={onThumbUp}
+          onThumbDown={onThumbDown}
+          onOpenDetails={onOpenDetails}
+          showThanks={showThanks}
+          className="mr-auto"
+        />
+      )}
+
+      <div className="ml-auto flex items-center gap-1">
         {/* Variant pager */}
         {showVariantPager && (
           <div className="inline-flex items-center gap-1 rounded-full border border-border bg-surface2 px-1.5 py-0.5 text-xs text-text-muted">
             <button
               type="button"
+              data-testid="variant-prev-button"
               aria-label={t("playground:actions.previousVariant", "Previous response") as string}
               title={t("playground:actions.previousVariant", "Previous response") as string}
               onClick={() => canSwipePrev && onSwipePrev?.()}
               disabled={!canSwipePrev}
-              className={`flex h-4 w-4 items-center justify-center rounded-full transition-colors ${
+              className={`flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full transition-colors sm:h-4 sm:w-4 sm:min-h-0 sm:min-w-0 ${
                 canSwipePrev ? "text-text-subtle hover:text-text" : "text-text-muted/50"
               }`}
             >
@@ -406,11 +492,12 @@ export function MessageActionsBar({
             </span>
             <button
               type="button"
+              data-testid="variant-next-button"
               aria-label={t("playground:actions.nextVariant", "Next response") as string}
               title={t("playground:actions.nextVariant", "Next response") as string}
               onClick={() => canSwipeNext && onSwipeNext?.()}
               disabled={!canSwipeNext}
-              className={`flex h-4 w-4 items-center justify-center rounded-full transition-colors ${
+              className={`flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full transition-colors sm:h-4 sm:w-4 sm:min-h-0 sm:min-w-0 ${
                 canSwipeNext ? "text-text-subtle hover:text-text" : "text-text-muted/50"
               }`}
             >
@@ -422,9 +509,10 @@ export function MessageActionsBar({
         {/* Collapsed "..." trigger (shows when action row is hidden) */}
         <button
           type="button"
+          data-testid="message-actions-overflow-chip"
           aria-label={t("common:moreActions", "More actions") as string}
           title={t("common:moreActions", "More actions") as string}
-          className={`${overflowChipVisibility} rounded-full border border-border bg-surface2 px-2 py-0.5 text-xs text-text-muted transition-colors hover:text-text`}
+          className={`${overflowChipVisibility} inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-border bg-surface2 px-3 py-0.5 text-xs text-text-muted transition-colors hover:text-text sm:min-h-0 sm:min-w-0 sm:px-2`}
         >
           •••
         </button>
@@ -527,20 +615,6 @@ export function MessageActionsBar({
             )}
           </div>
 
-          {/* Feedback buttons (separate row, unaffected) */}
-          {!editMode && isBot && (
-            <FeedbackButtons
-              compact
-              selected={feedbackSelected}
-              disabled={feedbackDisabled}
-              disabledReason={feedbackDisabledReason}
-              isSubmitting={isFeedbackSubmitting}
-              onThumbUp={onThumbUp}
-              onThumbDown={onThumbDown}
-              onOpenDetails={onOpenDetails}
-              showThanks={showThanks}
-            />
-          )}
         </div>
       </div>
     </div>

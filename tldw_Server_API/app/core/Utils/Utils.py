@@ -66,13 +66,24 @@ def extract_text_from_segments(segments, include_timestamps=True):
     logger.trace(f"Segments received: {segments}")
     logger.trace(f"Type of segments: {type(segments)}")
 
+    def _format_seconds_value(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if number == 0:
+            number = 0.0
+        return f"{number:.2f}".rstrip("0").rstrip(".")
+
     def extract_text_recursive(data):
         results = []
         if isinstance(data, dict):
             if 'Text' in data and isinstance(data['Text'], str):
                 text_item = data['Text']
                 if include_timestamps and 'Time_Start' in data and 'Time_End' in data:
-                    text_item = f"{data['Time_Start']}s - {data['Time_End']}s | {text_item}"
+                    start_ts = _format_seconds_value(data['Time_Start'])
+                    end_ts = _format_seconds_value(data['Time_End'])
+                    text_item = f"{start_ts}s - {end_ts}s | {text_item}"
                 results.append(text_item)
             for key, value in data.items():
                 if key == 'Text':
@@ -203,6 +214,7 @@ global_search_engines = [
     "google",
     "kagi",
     "searx",
+    "serper",
     "tavily",
     "yandex",
     "sogou",
@@ -569,7 +581,7 @@ def generate_unique_identifier(file_path):
     timestamp = int(time.time())
 
     # Generate a hash of the file content
-    hasher = hashlib.md5()
+    hasher = hashlib.md5(usedforsecurity=False)
     with open(file_path, 'rb') as f:
         for block in iter(lambda: f.read(1024 * 1024), b''):
             hasher.update(block)

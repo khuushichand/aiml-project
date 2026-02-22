@@ -11,7 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 
 def _perf_enabled() -> bool:
-    return os.getenv("PERF", "0").lower() in {"1", "true", "yes", "on"}
+    return os.getenv("PERF", "0").lower() in {"1", "true", "yes", "y", "on"}
 
 
 pytestmark = [
@@ -41,13 +41,12 @@ async def _build_app(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key-12345")
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("TESTING", "true")
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
 
     try:
         from tldw_Server_API.app.core.config import settings as core_settings
         core_settings["CSRF_ENABLED"] = False
     except Exception:
-        pass
+        _ = None
 
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool

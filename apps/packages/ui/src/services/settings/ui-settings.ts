@@ -5,16 +5,16 @@ import {
   coerceString,
   defineSetting
 } from "@/services/settings/registry"
+import { DEFAULT_SPLASH_CARD_NAMES } from "@/data/splash-cards"
+import {
+  normalizeMediaChatHandoffPayload,
+  type MediaChatHandoffPayload
+} from "@/services/tldw/media-chat-handoff"
+import type { ThemeDefinition } from "@/themes/types"
+import { validateThemeDefinition } from "@/themes/validation"
 
 const THEME_VALUES = ["system", "dark", "light"] as const
 export type ThemeValue = (typeof THEME_VALUES)[number]
-
-const resolveSystemTheme = (): "dark" | "light" => {
-  if (typeof window === "undefined") return "light"
-  return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches
-    ? "dark"
-    : "light"
-}
 
 const normalizeThemeValue = (value: unknown, fallback: ThemeValue) => {
   const normalized = String(value || "").toLowerCase()
@@ -25,15 +25,41 @@ const normalizeThemeValue = (value: unknown, fallback: ThemeValue) => {
 
 export const THEME_SETTING = defineSetting(
   "theme",
-  "system" as ThemeValue,
-  (value) => normalizeThemeValue(value, "system"),
+  "dark" as ThemeValue,
+  (value) => normalizeThemeValue(value, "dark"),
   {
     area: "local",
     validate: (value) => THEME_VALUES.includes(value),
     localStorageKey: "theme",
     mirrorToLocalStorage: true,
-    localStorageSerialize: (value) =>
-      value === "system" ? resolveSystemTheme() : value
+    localStorageSerialize: (value) => value
+  }
+)
+
+export const THEME_PRESET_SETTING = defineSetting(
+  "tldw:themePreset",
+  "default",
+  (value) => coerceString(value, "default"),
+  {
+    area: "local",
+    localStorageKey: "tldw:themePreset",
+    mirrorToLocalStorage: true
+  }
+)
+
+const coerceThemeArray = (value: unknown): ThemeDefinition[] => {
+  if (!Array.isArray(value)) return []
+  return value.filter(validateThemeDefinition)
+}
+
+export const CUSTOM_THEMES_SETTING = defineSetting<ThemeDefinition[]>(
+  "tldw:customThemes",
+  [],
+  coerceThemeArray,
+  {
+    area: "local",
+    localStorageKey: "tldw:customThemes",
+    mirrorToLocalStorage: true
   }
 )
 
@@ -52,6 +78,73 @@ export const CHAT_BACKGROUND_IMAGE_SETTING = defineSetting(
   "chatBackgroundImage",
   undefined as string | undefined,
   coerceOptionalString
+)
+
+const SPLASH_CARD_NAME_SET = new Set(DEFAULT_SPLASH_CARD_NAMES)
+
+const coerceSplashCardNameArray = (value: unknown): string[] => {
+  const normalized = coerceStringArray(value, DEFAULT_SPLASH_CARD_NAMES)
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const name of normalized) {
+    if (!SPLASH_CARD_NAME_SET.has(name) || seen.has(name)) continue
+    seen.add(name)
+    next.push(name)
+  }
+  return next
+}
+
+export const SPLASH_DISABLED_SETTING = defineSetting(
+  "tldw:splash:disabled",
+  false,
+  (value) => coerceBoolean(value, false),
+  {
+    area: "local",
+    localStorageKey: "tldw_splash_disabled",
+    mirrorToLocalStorage: true
+  }
+)
+
+export const SPLASH_ENABLED_CARD_NAMES_SETTING = defineSetting(
+  "tldw:splash:enabledCards",
+  DEFAULT_SPLASH_CARD_NAMES,
+  (value) => coerceSplashCardNameArray(value),
+  {
+    area: "local",
+    validate: (value) =>
+      Array.isArray(value) &&
+      value.every((name) => SPLASH_CARD_NAME_SET.has(name)),
+    localStorageKey: "tldw:splash:enabledCards",
+    mirrorToLocalStorage: true
+  }
+)
+
+export const SPLASH_DURATION_SECONDS_MIN = 1
+export const SPLASH_DURATION_SECONDS_MAX = 10
+export const SPLASH_DURATION_SECONDS_DEFAULT = 3
+
+const coerceSplashDurationSeconds = (value: unknown): number => {
+  const parsed = Math.round(coerceNumber(value, SPLASH_DURATION_SECONDS_DEFAULT))
+  if (!Number.isFinite(parsed)) return SPLASH_DURATION_SECONDS_DEFAULT
+  return Math.min(
+    SPLASH_DURATION_SECONDS_MAX,
+    Math.max(SPLASH_DURATION_SECONDS_MIN, parsed)
+  )
+}
+
+export const SPLASH_DURATION_SECONDS_SETTING = defineSetting(
+  "tldw:splash:durationSeconds",
+  SPLASH_DURATION_SECONDS_DEFAULT,
+  (value) => coerceSplashDurationSeconds(value),
+  {
+    area: "local",
+    validate: (value) =>
+      Number.isInteger(value) &&
+      value >= SPLASH_DURATION_SECONDS_MIN &&
+      value <= SPLASH_DURATION_SECONDS_MAX,
+    localStorageKey: "tldw:splash:durationSeconds",
+    mirrorToLocalStorage: true
+  }
 )
 
 export const CONTEXT_FILE_SIZE_MB_SETTING = defineSetting(
@@ -190,6 +283,33 @@ export const SIDEBAR_ACTIVE_TAB_SETTING = defineSetting(
   }
 )
 
+const SIDEBAR_SERVER_CHAT_FILTER_VALUES = [
+  "all",
+  "character",
+  "non_character",
+  "trash"
+] as const
+export type SidebarServerChatFilterValue =
+  (typeof SIDEBAR_SERVER_CHAT_FILTER_VALUES)[number]
+
+export const SIDEBAR_SERVER_CHAT_FILTER_SETTING = defineSetting(
+  "tldw:sidebar:serverChatFilter",
+  "all" as SidebarServerChatFilterValue,
+  (value) => {
+    const normalized = String(value || "").toLowerCase()
+    return SIDEBAR_SERVER_CHAT_FILTER_VALUES.includes(
+      normalized as SidebarServerChatFilterValue
+    )
+      ? (normalized as SidebarServerChatFilterValue)
+      : "all"
+  },
+  {
+    area: "local",
+    validate: (value) =>
+      SIDEBAR_SERVER_CHAT_FILTER_VALUES.includes(value)
+  }
+)
+
 export const SIDEBAR_SHORTCUTS_COLLAPSED_SETTING = defineSetting(
   "tldw:sidebar:shortcutsCollapsed",
   false,
@@ -204,6 +324,7 @@ export const SIDEBAR_SHORTCUT_MAX_COUNT = 10
 export const HEADER_SHORTCUT_IDS = [
   "chat",
   "prompts",
+  "prompt-studio",
   "characters",
   "chat-dictionaries",
   "world-books",
@@ -211,10 +332,12 @@ export const HEADER_SHORTCUT_IDS = [
   "media",
   "document-workspace",
   "multi-item-review",
+  "content-review",
   "flashcards",
   "notes",
   "watchlists",
   "collections",
+  "skills",
   "model-playground",
   "workspace-playground",
   "writing-playground",
@@ -225,9 +348,9 @@ export const HEADER_SHORTCUT_IDS = [
   "chunking-playground",
   "kanban-playground",
   "data-tables",
-  "prompt-studio",
   "audiobook-studio",
   "acp-playground",
+  "workflows",
   "admin-server",
   "documentation",
   "chatbooks-playground",
@@ -248,12 +371,19 @@ const coerceHeaderShortcutSelection = (
 ): HeaderShortcutId[] => {
   if (!Array.isArray(value)) return fallback
   const allowed = new Set<HeaderShortcutId>(HEADER_SHORTCUT_IDS)
+  const required = new Set<HeaderShortcutId>([
+    "workflows",
+    "acp-playground"
+  ])
   const unique = new Set<HeaderShortcutId>()
   for (const entry of value) {
     if (typeof entry !== "string") continue
     if (allowed.has(entry as HeaderShortcutId)) {
       unique.add(entry as HeaderShortcutId)
     }
+  }
+  for (const requiredId of required) {
+    unique.add(requiredId)
   }
   return HEADER_SHORTCUT_IDS.filter((id) => unique.has(id))
 }
@@ -489,38 +619,12 @@ export const MEDIA_REVIEW_FOCUSED_ID_SETTING = defineSetting(
   }
 )
 
-export type DiscussMediaPrompt = {
-  mediaId?: string
-  url?: string
-  title?: string
-  content?: string
-}
-
-const coerceDiscussMediaPrompt = (
-  value: unknown
-): DiscussMediaPrompt | undefined => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
-  const payload = value as Record<string, unknown>
-  const result: DiscussMediaPrompt = {}
-  if (typeof payload.mediaId === "string" && payload.mediaId.length > 0) {
-    result.mediaId = payload.mediaId
-  }
-  if (typeof payload.url === "string" && payload.url.length > 0) {
-    result.url = payload.url
-  }
-  if (typeof payload.title === "string" && payload.title.length > 0) {
-    result.title = payload.title
-  }
-  if (typeof payload.content === "string" && payload.content.length > 0) {
-    result.content = payload.content
-  }
-  return Object.keys(result).length > 0 ? result : undefined
-}
+export type DiscussMediaPrompt = MediaChatHandoffPayload
 
 export const DISCUSS_MEDIA_PROMPT_SETTING = defineSetting(
   "tldw:discussMediaPrompt",
   undefined as DiscussMediaPrompt | undefined,
-  (value) => coerceDiscussMediaPrompt(value),
+  (value) => normalizeMediaChatHandoffPayload(value),
   {
     area: "local",
     localStorageKey: "tldw:discussMediaPrompt",
@@ -550,6 +654,165 @@ export const LAST_NOTE_ID_SETTING = defineSetting(
   }
 )
 
+const NOTES_PAGE_SIZE_VALUES = [20, 50, 100] as const
+export type NotesPageSize = (typeof NOTES_PAGE_SIZE_VALUES)[number]
+
+const coerceNotesPageSize = (value: unknown): NotesPageSize => {
+  const parsed = Math.round(coerceNumber(value, 20))
+  if (NOTES_PAGE_SIZE_VALUES.includes(parsed as NotesPageSize)) {
+    return parsed as NotesPageSize
+  }
+  return 20
+}
+
+export const NOTES_PAGE_SIZE_SETTING = defineSetting(
+  "tldw:notesPageSize",
+  20 as NotesPageSize,
+  (value) => coerceNotesPageSize(value),
+  {
+    area: "local",
+    localStorageKey: "tldw:notesPageSize",
+    mirrorToLocalStorage: true
+  }
+)
+
+const NOTES_TITLE_STRATEGY_VALUES = ["heuristic", "llm", "llm_fallback"] as const
+export type NotesTitleSuggestStrategy = (typeof NOTES_TITLE_STRATEGY_VALUES)[number]
+
+export const NOTES_TITLE_SUGGEST_STRATEGY_SETTING = defineSetting(
+  "tldw:notesTitleSuggestStrategy",
+  "heuristic" as NotesTitleSuggestStrategy,
+  (value) => {
+    const normalized = String(value || "").toLowerCase()
+    if (NOTES_TITLE_STRATEGY_VALUES.includes(normalized as NotesTitleSuggestStrategy)) {
+      return normalized as NotesTitleSuggestStrategy
+    }
+    return "heuristic"
+  },
+  {
+    area: "local",
+    localStorageKey: "tldw:notesTitleSuggestStrategy",
+    mirrorToLocalStorage: true
+  }
+)
+
+export type NotesRecentOpenedEntry = {
+  id: string
+  title: string
+}
+
+const coerceNotesPinnedIds = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  const deduped: string[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    const rawId = String(entry || "").trim()
+    if (!rawId || seen.has(rawId)) continue
+    seen.add(rawId)
+    deduped.push(rawId)
+    if (deduped.length >= 500) break
+  }
+  return deduped
+}
+
+export const NOTES_PINNED_IDS_SETTING = defineSetting(
+  "tldw:notesPinnedIds",
+  [] as string[],
+  coerceNotesPinnedIds,
+  {
+    area: "local",
+    localStorageKey: "tldw:notesPinnedIds",
+    mirrorToLocalStorage: true
+  }
+)
+
+export type NotesNotebookSetting = {
+  id: number
+  name: string
+  keywords: string[]
+}
+
+const coerceNotesNotebookSettings = (value: unknown): NotesNotebookSetting[] => {
+  if (!Array.isArray(value)) return []
+  const out: NotesNotebookSetting[] = []
+  const seenIds = new Set<number>()
+  const seenNames = new Set<string>()
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue
+    const idCandidate = Number((entry as any).id)
+    const name = String((entry as any).name || "").trim()
+    if (!Number.isFinite(idCandidate) || idCandidate <= 0) continue
+    if (!name) continue
+    const id = Math.floor(idCandidate)
+    if (seenIds.has(id)) continue
+    const nameKey = name.toLowerCase()
+    if (seenNames.has(nameKey)) continue
+    const keywordsRaw = Array.isArray((entry as any).keywords)
+      ? (entry as any).keywords
+      : []
+    const keywordSeen = new Set<string>()
+    const keywords: string[] = []
+    for (const keyword of keywordsRaw) {
+      const normalizedKeyword = String(keyword || "").trim().toLowerCase()
+      if (!normalizedKeyword || keywordSeen.has(normalizedKeyword)) continue
+      keywordSeen.add(normalizedKeyword)
+      keywords.push(normalizedKeyword)
+      if (keywords.length >= 25) break
+    }
+    seenIds.add(id)
+    seenNames.add(nameKey)
+    out.push({
+      id,
+      name,
+      keywords
+    })
+    if (out.length >= 100) break
+  }
+  return out
+}
+
+export const NOTES_NOTEBOOKS_SETTING = defineSetting(
+  "tldw:notesNotebooks",
+  [] as NotesNotebookSetting[],
+  coerceNotesNotebookSettings,
+  {
+    area: "local",
+    localStorageKey: "tldw:notesNotebooks",
+    mirrorToLocalStorage: true
+  }
+)
+
+const coerceNotesRecentOpened = (value: unknown): NotesRecentOpenedEntry[] => {
+  if (!Array.isArray(value)) return []
+  const deduped: NotesRecentOpenedEntry[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue
+    const rawId = String((entry as any).id || "").trim()
+    const rawTitle = String((entry as any).title || "").trim()
+    if (!rawId || !rawTitle) continue
+    if (seen.has(rawId)) continue
+    seen.add(rawId)
+    deduped.push({
+      id: rawId,
+      title: rawTitle
+    })
+    if (deduped.length >= 5) break
+  }
+  return deduped
+}
+
+export const NOTES_RECENT_OPENED_SETTING = defineSetting(
+  "tldw:notesRecentOpened",
+  [] as NotesRecentOpenedEntry[],
+  coerceNotesRecentOpened,
+  {
+    area: "local",
+    localStorageKey: "tldw:notesRecentOpened",
+    mirrorToLocalStorage: true
+  }
+)
+
 export const LAST_DECK_ID_SETTING = defineSetting(
   "tldw:lastDeckId",
   undefined as string | undefined,
@@ -561,17 +824,80 @@ export const LAST_DECK_ID_SETTING = defineSetting(
   }
 )
 
+export const FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING = defineSetting(
+  "tldw:flashcards:reviewOnboardingDismissed",
+  false,
+  (value) => coerceBoolean(value, false),
+  {
+    area: "local",
+    localStorageKey: "tldw:flashcards:reviewOnboardingDismissed",
+    mirrorToLocalStorage: true
+  }
+)
+
+const FLASHCARDS_SHORTCUT_HINT_DENSITY_VALUES = [
+  "expanded",
+  "compact",
+  "hidden"
+] as const
+export type FlashcardsShortcutHintDensity =
+  (typeof FLASHCARDS_SHORTCUT_HINT_DENSITY_VALUES)[number]
+
+export const FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING = defineSetting(
+  "tldw:flashcards:shortcutHintDensity",
+  "expanded" as FlashcardsShortcutHintDensity,
+  (value) => {
+    const normalized = String(value || "").toLowerCase()
+    if (
+      FLASHCARDS_SHORTCUT_HINT_DENSITY_VALUES.includes(
+        normalized as FlashcardsShortcutHintDensity
+      )
+    ) {
+      return normalized as FlashcardsShortcutHintDensity
+    }
+    return "expanded"
+  },
+  {
+    area: "local",
+    localStorageKey: "tldw:flashcards:shortcutHintDensity",
+    mirrorToLocalStorage: true
+  }
+)
+
 export const DEFAULT_MEDIA_COLLAPSED_SECTIONS: Record<string, boolean> = {
   statistics: false,
   content: false,
   metadata: true,
-  analysis: false
+  analysis: false,
+  intelligence: true
 }
 
 export const MEDIA_COLLAPSED_SECTIONS_SETTING = defineSetting(
   "tldw:media:collapsedSections",
   DEFAULT_MEDIA_COLLAPSED_SECTIONS,
   (value) => coerceBooleanRecord(value),
+  {
+    area: "local"
+  }
+)
+
+const MEDIA_TEXT_SIZE_PRESET_VALUES = ["s", "m", "l"] as const
+export type MediaTextSizePreset = (typeof MEDIA_TEXT_SIZE_PRESET_VALUES)[number]
+
+const coerceMediaTextSizePreset = (
+  value: unknown
+): MediaTextSizePreset => {
+  const normalized = String(value || "").toLowerCase()
+  if (MEDIA_TEXT_SIZE_PRESET_VALUES.includes(normalized as MediaTextSizePreset)) {
+    return normalized as MediaTextSizePreset
+  }
+  return "m"
+}
+
+export const MEDIA_TEXT_SIZE_PRESET_SETTING = defineSetting(
+  "tldw:media:textSizePreset",
+  "m" as MediaTextSizePreset,
+  (value) => coerceMediaTextSizePreset(value),
   {
     area: "local"
   }

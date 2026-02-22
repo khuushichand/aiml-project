@@ -1,6 +1,7 @@
 import pytest
 
 import tldw_Server_API.app.api.v1.endpoints.setup as setup_endpoint
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
 class _FakeSQLiteConn:
@@ -29,7 +30,7 @@ _FakeAsyncPGConn.__module__ = "asyncpg.connection"
 
 @pytest.mark.asyncio
 async def test_setup_self_verify_updates_sqlite(monkeypatch):
-    """SQLite connections use '?' placeholders and commit."""
+    """SQLite-compatible execute receives normalized placeholders and commits."""
     monkeypatch.setattr(
         setup_endpoint.setup_manager,
         "get_status_snapshot",
@@ -39,21 +40,23 @@ async def test_setup_self_verify_updates_sqlite(monkeypatch):
     fake_db = _FakeSQLiteConn()
 
     result = await setup_endpoint.setup_self_verify(
-        current_user={"id": 9},
+        principal=AuthPrincipal(kind="user", user_id=9, username="setup-user"),
         db=fake_db,
         _guard=None,
     )
 
     assert result["success"] is True
-    assert fake_db.calls == [
-        ("UPDATE users SET is_verified = ?, updated_at = datetime('now') WHERE id = ?", (1, 9))
-    ]
+    assert len(fake_db.calls) == 1
+    query, params = fake_db.calls[0]
+    assert query == "UPDATE users SET is_verified = ?, updated_at = ? WHERE id = ?"
+    assert params[0] is True
+    assert params[2] == 9
     assert fake_db.commits == 1
 
 
 @pytest.mark.asyncio
 async def test_setup_self_verify_updates_asyncpg(monkeypatch):
-    """AsyncPG-style connections keep `$1` parameter style and skip commit."""
+    """AsyncPG-style execute preserves `$n` placeholders."""
     monkeypatch.setattr(
         setup_endpoint.setup_manager,
         "get_status_snapshot",
@@ -63,12 +66,14 @@ async def test_setup_self_verify_updates_asyncpg(monkeypatch):
     fake_db = _FakeAsyncPGConn()
 
     result = await setup_endpoint.setup_self_verify(
-        current_user={"id": 3},
+        principal=AuthPrincipal(kind="user", user_id=3, username="setup-user"),
         db=fake_db,
         _guard=None,
     )
 
     assert result["success"] is True
-    assert fake_db.calls == [
-        ("UPDATE users SET is_verified = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", (True, 3))
-    ]
+    assert len(fake_db.calls) == 1
+    query, params = fake_db.calls[0]
+    assert query == "UPDATE users SET is_verified = $1, updated_at = $2 WHERE id = $3"
+    assert params[0] is True
+    assert params[2] == 3

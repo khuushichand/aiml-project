@@ -249,7 +249,7 @@ class EmbeddingCache:
             # Store entry
             self._cache[key] = {
                 "embedding": embedding,
-                "text_hash": hashlib.md5(text.encode()).hexdigest(),
+                "text_hash": hashlib.md5(text.encode(), usedforsecurity=False).hexdigest(),
                 "timestamp": time.time(),
                 "last_access": time.time(),
                 "access_count": 0,

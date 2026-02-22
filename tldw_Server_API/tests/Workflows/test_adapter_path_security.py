@@ -229,6 +229,21 @@ def test_resolve_workflow_file_path_unsafe_allows_allowlist(monkeypatch, tmp_pat
     assert resolved.resolve(strict=False).is_relative_to(allow_dir.resolve(strict=False))
 
 
+def test_unsafe_file_access_flag_accepts_y(monkeypatch):
+    monkeypatch.setenv("WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS", "y")
+    assert wf_adapters._unsafe_file_access_allowed(None) is True
+
+
+def test_artifacts_base_dir_accepts_test_mode_y(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("TEST_MODE", "y")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+
+    base_dir = wf_adapters._artifacts_base_dir()
+    assert base_dir == (tmp_path / "Databases" / "artifacts").resolve()
+
+
 def test_resolve_workflow_file_path_unsafe_denies_without_allowlist(monkeypatch, tmp_path):
     base_dir = tmp_path / "base"
     allow_dir = tmp_path / "allow"

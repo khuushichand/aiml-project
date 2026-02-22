@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 
 test.describe('Packaged sidepanel bundle', () => {
   test('renders the connection card from the built artifact', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, openSidepanel } = (await launchWithExtension(extPath)) as any
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, extPath)) as any
     const page = await openSidepanel()
 
     await page.waitForLoadState('domcontentloaded')

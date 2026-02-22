@@ -90,6 +90,11 @@ Streaming variant (Python):
   - Alignment metadata (if available) is returned via `X-TTS-Alignment` (base64url JSON) on non-streaming responses.
   - `return_download_link` requires `stream: false`. When enabled, the response includes `X-Download-Path` and `X-Generated-File-Id` headers pointing at `/api/v1/storage/files/{id}/download`.
   - For streaming alignment, call `POST /api/v1/audio/speech/metadata` with the same payload.
+  - Kokoro phoneme override keys (inside `extra_params`):
+    - `phoneme_overrides` or `phoneme_map`: request-level map/list that takes highest precedence
+    - `disable_phoneme_overrides`: boolean kill-switch for this request
+    - `phoneme_overrides_enabled`: explicit on/off flag (overrides provider default)
+  - Runtime precedence for Kokoro overrides: `request > provider > global`.
 
   ———
 
@@ -207,6 +212,9 @@ Streaming variant (Python):
   - You’re scraping:
       - tts_requests_total{provider,model,voice,format,status} (counter)
       - tts_request_duration_seconds_bucket (histogram)
+      - tts_fallback_outcomes_total{from_provider,to_provider,outcome,category} (counter)
+      - tts_ttfb_seconds_bucket (histogram)
+      - voice_to_voice_seconds_bucket (histogram, when voice-to-voice timing is provided)
   - For HTTP, adjust metric names/labels to your setup (examples use http_requests_total and path="/api/v1/audio/speech"; if yours differ, just swap names/labels).
 
   ———
@@ -307,6 +315,22 @@ Streaming variant (Python):
 
   ———
 
+  5b. Panel: Fallback Outcomes by Category
+
+  - Panel type: Stacked bar or time series
+  - Title: TTS Fallback Outcomes
+  - Query:
+
+  sum by (outcome, category) (
+    rate(tts_fallback_outcomes_total[5m])
+  )
+
+  - Legend: {{outcome}} / {{category}}
+
+  This distinguishes retryable/provider/network fallback behavior from exhausted or unavailable fallback paths.
+
+  ———
+
   6. Alerts (Grafana 8+ unified alerts conceptually)
 
   Use the same PromQL queries in alert rules.
@@ -340,5 +364,19 @@ Streaming variant (Python):
       - Condition: WHEN query(A) IS ABOVE 5 FOR 10m (5 seconds as an example SLO)
       - Labels: severity=warning
       - Annotation summary: TTS p95 latency > 5s.
+  - Alert: fallback exhaustion spikes
+      - Query expression:
+
+        sum(rate(tts_fallback_outcomes_total{outcome=~"exhausted|unavailable"}[10m]))
+      - Condition: WHEN query(A) IS ABOVE 0 FOR 10m
+      - Labels: severity=warning
+      - Annotation summary: TTS fallback exhausted/unavailable.
+      - Annotation description: Check provider health, credentials, and adapter availability.
 
   ———
+
+  7. Request Correlation
+
+  - Always send `X-Request-ID` for client-generated correlation.
+  - `POST /api/v1/audio/speech` and `POST /api/v1/audio/speech/metadata` return `X-Request-Id` and propagate request/correlation IDs into TTS metadata where available.
+  - When triaging incidents, pivot by `request_id` in logs and compare with `tts_fallback_outcomes_total` spikes for the same time window.

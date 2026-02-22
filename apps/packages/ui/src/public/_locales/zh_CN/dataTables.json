@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "数据表工作室"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "Beta 功能"
+  },
+  "betaDescription": {
+    "message": "Data Tables 目前处于 Beta 阶段。表格生成需要后端支持。"
+  },
+  "offline": {
+    "message": "服务器离线。请连接以使用 Data Tables。"
+  },
+  "tabs_tables": {
+    "message": "我的表格"
+  },
+  "tabs_create": {
+    "message": "创建表格"
+  },
+  "wizard_sources": {
+    "message": "选择来源"
+  },
+  "wizard_sourcesDesc": {
+    "message": "选择数据来源"
+  },
+  "wizard_prompt": {
+    "message": "描述表格"
+  },
+  "wizard_promptDesc": {
+    "message": "撰写提示"
+  },
+  "wizard_preview": {
+    "message": "预览"
+  },
+  "wizard_previewDesc": {
+    "message": "查看生成的表格"
+  },
+  "wizard_save": {
+    "message": "保存"
+  },
+  "wizard_saveDesc": {
+    "message": "保存到库"
+  },
+  "wizard_tip": {
+    "message": "提示"
+  },
+  "wizard_tipText": {
+    "message": "选择聊天、文档或搜索你的知识库以提取结构化数据。来源越具体，结果越好。"
+  },
+  "wizard_reset": {
+    "message": "重新开始"
+  },
+  "sourceTypes_chat": {
+    "message": "聊天"
+  },
+  "sourceTypes_document": {
+    "message": "文档"
+  },
+  "sourceTypes_rag": {
+    "message": "RAG 搜索"
+  },
+  "selectedSources": {
+    "message": "已选来源"
+  },
+  "sourcesSelected": {
+    "message": "已选择来源"
+  },
+  "searchPlaceholder": {
+    "message": "搜索..."
+  },
+  "ragPlaceholder": {
+    "message": "输入知识库搜索查询..."
+  },
+  "ragQuerySnippet": {
+    "message": "知识库搜索查询"
+  },
+  "ragAdded": {
+    "message": "已将 RAG 查询添加为来源"
+  },
+  "ragTip": {
+    "message": "输入搜索查询以在知识库中找到相关内容。每个查询都会作为单独的来源添加。"
+  },
+  "fetchError": {
+    "message": "加载项目失败"
+  },
+  "promptLabel": {
+    "message": "描述你想创建的表格"
+  },
+  "promptPlaceholder": {
+    "message": "例如：创建一个比较讨论的主要主题的表格，包含主题、关键点和相关性评分等列..."
+  },
+  "examplePrompts": {
+    "message": "示例提示："
+  },
+  "advancedOptions": {
+    "message": "高级选项"
+  },
+  "columnHints": {
+    "message": "列提示（可选）"
+  },
+  "columnHintsDesc": {
+    "message": "建议列名和类型以引导 LLM。如果未指定，将根据你的提示推断列。"
+  },
+  "newColumnName": {
+    "message": "列名"
+  },
+  "modelSelection": {
+    "message": "模型"
+  },
+  "selectModel": {
+    "message": "使用默认模型"
+  },
+  "maxRows": {
+    "message": "最大行数"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "正在从你的来源生成表格..."
+  },
+  "generatingNote": {
+    "message": "根据数据量可能需要一点时间。"
+  },
+  "generateSuccess": {
+    "message": "表格生成成功！"
+  },
+  "generationFailed": {
+    "message": "生成失败"
+  },
+  "tryAgain": {
+    "message": "重试"
+  },
+  "warnings": {
+    "message": "警告"
+  },
+  "noPreview": {
+    "message": "没有可用预览"
+  },
+  "promptUsed": {
+    "message": "使用的提示："
+  },
+  "previewModified": {
+    "message": "你已修改预览。更改将随表格保存。"
+  },
+  "addRow": {
+    "message": "添加行"
+  },
+  "addColumn": {
+    "message": "添加列"
+  },
+  "deleteRow": {
+    "message": "删除行？"
+  },
+  "deleteRowConfirm": {
+    "message": "此操作无法撤销。"
+  },
+  "deleteColumn": {
+    "message": "删除列？"
+  },
+  "deleteColumnConfirm": {
+    "message": "此操作无法撤销。"
+  },
+  "discard": {
+    "message": "丢弃"
+  },
+  "changesDiscarded": {
+    "message": "更改已丢弃"
+  },
+  "save": {
+    "message": "保存"
+  },
+  "saveSuccess": {
+    "message": "更改已成功保存！"
+  },
+  "unsavedChanges": {
+    "message": "你有未保存的更改"
+  },
+  "columnAdded": {
+    "message": "已添加列“{{name}}”"
+  },
+  "rows": {
+    "message": "行"
+  },
+  "columnsLabel": {
+    "message": "列"
+  },
+  "showingRows": {
+    "message": "显示 {{total}} 行"
+  },
+  "tableSummary": {
+    "message": "表格摘要"
+  },
+  "tableName": {
+    "message": "表格名称"
+  },
+  "tableNamePlaceholder": {
+    "message": "输入表格名称"
+  },
+  "tableDescription": {
+    "message": "描述（可选）"
+  },
+  "tableDescPlaceholder": {
+    "message": "添加描述以帮助记住该表格包含的内容"
+  },
+  "saveToLibrary": {
+    "message": "保存到库"
+  },
+  "tableSaved": {
+    "message": "表格已保存！"
+  },
+  "tableSavedDesc": {
+    "message": "你的表格已保存到库中。你可以随时查看并导出。"
+  },
+  "viewTables": {
+    "message": "查看我的表格"
+  },
+  "createAnother": {
+    "message": "再创建一个"
+  },
+  "orExport": {
+    "message": "或直接导出："
+  },
+  "export": {
+    "message": "导出"
+  },
+  "exportCSV": {
+    "message": "导出为 CSV"
+  },
+  "exportExcel": {
+    "message": "导出为 Excel"
+  },
+  "exportJSON": {
+    "message": "导出为 JSON"
+  },
+  "exportSuccess": {
+    "message": "表格已导出为 {{format}}"
+  },
+  "noTableToSave": {
+    "message": "没有可保存的表格"
+  },
+  "goBackToGenerate": {
+    "message": "返回上一步先生成表格。"
+  },
+  "tableDetails": {
+    "message": "表格详情"
+  },
+  "tableNotFound": {
+    "message": "未找到表格"
+  },
+  "noData": {
+    "message": "无数据"
+  },
+  "data": {
+    "message": "数据"
+  },
+  "editMode": {
+    "message": "编辑模式"
+  },
+  "editModeActive": {
+    "message": "点击单元格进行编辑"
+  },
+  "regenerate": {
+    "message": "重新生成"
+  },
+  "regenerateSuccess": {
+    "message": "表格重新生成成功！"
+  },
+  "model": {
+    "message": "模型"
+  },
+  "prompt": {
+    "message": "生成提示"
+  },
+  "sources": {
+    "message": "来源"
+  },
+  "created": {
+    "message": "创建"
+  },
+  "updated": {
+    "message": "更新"
+  },
+  "noTables": {
+    "message": "还没有表格。创建你的第一个表格！"
+  },
+  "noSearchResults": {
+    "message": "未找到匹配搜索的表格"
+  },
+  "totalTables": {
+    "message": "{{total}} 个表格"
+  },
+  "view": {
+    "message": "查看"
+  },
+  "delete": {
+    "message": "删除"
+  },
+  "deleteConfirmTitle": {
+    "message": "删除表格"
+  },
+  "deleteConfirmMessage": {
+    "message": "确定要删除此表格吗？此操作无法撤销。"
+  },
+  "noTable": {
+    "message": "没有表格数据"
+  },
+  "add": {
+    "message": "添加"
+  },
+  "columnName": {
+    "message": "列名"
+  },
+  "columnNamePlaceholder": {
+    "message": "例如：价格、状态、日期"
+  },
+  "columnNameRequired": {
+    "message": "请输入列名"
+  },
+  "columnNameTooLong": {
+    "message": "列名必须不超过 50 个字符"
+  },
+  "columnNameExists": {
+    "message": "已存在同名列"
+  },
+  "columnType": {
+    "message": "列类型"
+  },
+  "columnTypeRequired": {
+    "message": "请选择列类型"
+  },
+  "columnDescription": {
+    "message": "描述（可选）"
+  },
+  "columnDescriptionHint": {
+    "message": "该列所含内容的简要说明"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "例如：商品价格（USD）"
+  },
+  "discardUnsavedChanges": {
+    "message": "你有未保存的更改。确定要关闭吗？"
+  },
+  "createFromChat": {
+    "message": "从聊天创建表格"
+  },
+  "saveFromArtifact": {
+    "message": "保存到 Data Tables"
+  },
+  "importedPrompt": {
+    "message": "从表格工件导入"
+  },
+  "columns_name": {
+    "message": "名称"
+  },
+  "columns_rows": {
+    "message": "行"
+  },
+  "columns_columns": {
+    "message": "列"
+  },
+  "columns_sources": {
+    "message": "来源"
+  },
+  "columns_created": {
+    "message": "创建"
+  },
+  "columns_actions": {
+    "message": "操作"
+  },
+  "dataTablesDescription": {
+    "message": "使用自然语言提示从你的聊天、文档和知识库中生成结构化表格。"
+  },
+  "descriptionLabel": {
+    "message": "描述"
+  }
+}

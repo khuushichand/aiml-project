@@ -1,0 +1,1469 @@
+{
+  "formError_noModel": {
+    "message": "Vänligen välj en modell"
+  },
+  "formError_noEmbeddingModel": {
+    "message": "Vänligen ställ in en inbäddningsmodell på sidan Inställningar > RAG"
+  },
+  "form_textarea_placeholder": {
+    "message": "Skriv ett meddelande..."
+  },
+  "form_webSearch_on": {
+    "message": "På"
+  },
+  "form_webSearch_off": {
+    "message": "Av"
+  },
+  "tooltip_searchInternet": {
+    "message": "Sök på Internet"
+  },
+  "tooltip_speechToText": {
+    "message": "Tal till text"
+  },
+  "tooltip_uploadImage": {
+    "message": "Ladda upp bild"
+  },
+  "tooltip_stopStreaming": {
+    "message": "Stoppa strömning"
+  },
+  "tooltip_knowledge": {
+    "message": "Kunskap"
+  },
+  "tooltip_clearContext": {
+    "message": "Rensa kontext"
+  },
+  "tooltip_speechToTextServer": {
+    "message": "Diktering via din tldw-server"
+  },
+  "tooltip_speechToTextBrowser": {
+    "message": "Diktering via webbläsarens taligenkänning"
+  },
+  "tooltip_speechToTextDetails": {
+    "message": "Använder {{model}} · {{task}} · {{format}}. Konfigurera i Inställningar → Allmänt → Speech-to-Text."
+  },
+  "tooltip_vision": {
+    "message": "[Experimentell] Vision-chatt"
+  },
+  "tooltip_uploadDocuments": {
+    "message": "Ladda upp dokument (beta)"
+  },
+  "sendWhenEnter": {
+    "message": "Skicka när Enter trycks"
+  },
+  "welcome": {
+    "message": "Hej! Hur kan jag hjälpa dig idag?"
+  },
+  "useOCR": {
+    "message": "Extrahera text från bild (OCR)"
+  },
+  "tips_title": {
+    "message": "Tips"
+  },
+  "tips_quickIngest": {
+    "message": "Använd Quick Ingest för att lägga till dokument och webbsidor."
+  },
+  "tips_pickModelPrompt": {
+    "message": "Välj en modell och en prompt i rubriken."
+  },
+  "tips_startChatFocus": {
+    "message": "När du är ansluten fokuserar ”Börja chatta” på kompositorn."
+  },
+  "tldwState_searching": {
+    "message": "Söker efter din tldw server"
+  },
+  "tldwState_running": {
+    "message": "tldw körs"
+  },
+  "tldwState_notRunning": {
+    "message": "Kan inte ansluta till tldw server"
+  },
+  "tldwState_connectionError": {
+    "message": "Det verkar som att du har ett anslutningsfel. Vänligen se denna <anchor>dokumentation</anchor> för felsökning."
+  },
+  "tldwState_openTldwSettings": {
+    "message": "Öppna tldw-inställningar"
+  },
+  "tldwState_cancelSearch": {
+    "message": "Avbryt sökning"
+  },
+  "tldwState_connectionFailedWithCode": {
+    "message": "Anslutningen misslyckades (HTTP {{code}})"
+  },
+  "tldwState_connectionFailed": {
+    "message": "Anslutningen misslyckades"
+  },
+  "tldwState_errorDetailsLabel": {
+    "message": "Detaljer:"
+  },
+  "tldwState_title": {
+    "message": "Väntar på din tldw-server"
+  },
+  "tldwState_subtitle": {
+    "message": "Vi pingar {{host}} för att verifiera anslutningen."
+  },
+  "tldwState_missing": {
+    "message": "Server-URL inte konfigurerad"
+  },
+  "tldwState_noServer": {
+    "message": "Lägg till din tldw-server för att börja chatta."
+  },
+  "tldwState_connectedSubtitle": {
+    "message": "Ansluten till {{host}}. Börja chatta när du är redo."
+  },
+  "tldwState_errorSubtitle": {
+    "message": "Vi kunde ännu inte nå {{host}}. Försök igen eller uppdatera serverinställningarna."
+  },
+  "tldwState_openSettings": {
+    "message": "Öppna inställningar"
+  },
+  "tldwState_changeServer": {
+    "message": "Byt server"
+  },
+  "tldwState_elapsed": {
+    "message": "Kontrollerar… {{seconds}} s"
+  },
+  "tldwState_connectedHint": {
+    "message": "Ansluten till {{host}}."
+  },
+  "tldwState_lastChecked": {
+    "message": "Kontrollerad för {{seconds}} s sedan"
+  },
+  "tldwState_recheck": {
+    "message": "Kontrollera igen"
+  },
+  "tldwState_errorToast": {
+    "message": "Vi kunde inte nå {{host}}"
+  },
+  "tldwState_missingHelp": {
+    "message": "Öppna Inställningar → tldw Server för att lägga till din URL eller ansluta till Alternativ-sidan."
+  },
+  "tldwState_troubleshoot": {
+    "message": "Bekräfta att din server körs och att webbläsaren får nå den, försök sedan igen från Alternativ-sidan."
+  },
+  "errors_privateModeDescription": {
+    "message": "Firefox privat läge stöder inte att spara chatt. Tillfällig chatt är aktiverat som standard. Fler förbättringar kommer."
+  },
+  "tts_playErrorTitle": {
+    "message": "Fel"
+  },
+  "tts_playErrorDescription": {
+    "message": "Ett fel uppstod när ljudet spelades upp"
+  },
+  "tts_browserInfoTitle": {
+    "message": "Webbläsarens TTS använder systemljud"
+  },
+  "tts_browserInfoDescription": {
+    "message": "Webbläsar-TTS spelar upp med din systemsyntetiserare och skapar inte en nedladdningsbar ljudfil. Använd segmentkontrollerna nedan eller byt leverantör för en spårlista och spelare."
+  },
+  "tts_unsupportedProviderTitle": {
+    "message": "Ej stödd TTS-leverantör"
+  },
+  "tts_unsupportedProviderDescription": {
+    "message": "Leverantören \"{{provider}}\" stöds ännu inte i playground-spelaren."
+  },
+  "tts_unsupportedFormatTitle": {
+    "message": "Ljudformat stöds inte"
+  },
+  "tts_unsupportedFormatDescription": {
+    "message": "Svarformatet \"{{format}}\" stöds inte. Faller tillbaka till MP3."
+  },
+  "tts_elevenLabsMissingTitle": {
+    "message": "ElevenLabs behöver en API-nyckel"
+  },
+  "tts_elevenLabsMissingBody": {
+    "message": "Lägg till din ElevenLabs API-nyckel i Inställningar för att ladda röster och modeller."
+  },
+  "tts_elevenLabsUnavailableTitle": {
+    "message": "ElevenLabs-röster ej tillgängliga"
+  },
+  "tts_elevenLabsUnavailableBody": {
+    "message": "Vi kunde inte ladda röster eller modeller. Kontrollera din API-nyckel och försök igen."
+  },
+  "tts_elevenLabsMissingCta": {
+    "message": "Ställ in API-nyckel i Inställningar"
+  },
+  "tts_generateErrorTitle": {
+    "message": "Fel vid generering av ljud"
+  },
+  "tts_generateErrorDescription": {
+    "message": "Något gick fel när TTS-ljudet genererades."
+  },
+  "tts_sampleText": {
+    "message": "Infoga exempeltext"
+  },
+  "tts_playHelper": {
+    "message": "Spela upp använder vald leverantör, röst och hastighet."
+  },
+  "tts_playDisabledNoText": {
+    "message": "Skriv in text för att aktivera Spela upp."
+  },
+  "tts_playDisabledTtsOff": {
+    "message": "Aktivera text-till-tal ovan för att spela upp ljud."
+  },
+  "tts_playDisabledElevenLabs": {
+    "message": "Lägg till en ElevenLabs API-nyckel, röst och modell för att aktivera Spela upp."
+  },
+  "tts_stopDisabled": {
+    "message": "Stoppa aktiveras när ljudet har startat."
+  },
+  "tts_providerChangeHelper": {
+    "message": "Öppna leverantörsväljaren nedan för att växla mellan Webbläsare, tldw, OpenAI eller Supersonic."
+  },
+  "tts_changeProvider": {
+    "message": "Byt leverantör"
+  },
+  "tts_title": {
+    "message": "TTS-lekplats"
+  },
+  "tts_subtitle": {
+    "message": "Prova text-till-tal och justera leverantörer, modeller och röster."
+  },
+  "tts_currentProvider": {
+    "message": "Aktuell leverantör"
+  },
+  "tts_settingsIntro": {
+    "message": "Justera din TTS-leverantör, modell och röst. Dessa inställningar återanvänds när du spelar upp ljud från chatt eller media."
+  },
+  "tts_providerCapabilities": {
+    "message": "Leverantörsfunktioner"
+  },
+  "tts_voicesPreview": {
+    "message": "Serverröster"
+  },
+  "tts_providerDetails": {
+    "message": "Visa rå leverantörskonfiguration"
+  },
+  "tts_providerDetailsTitle": {
+    "message": "Leverantörsdetaljer"
+  },
+  "tts_inputLabel": {
+    "message": "Skriv in text för att höra den uppläst."
+  },
+  "tts_inputPlaceholder": {
+    "message": "Skriv eller klistra in text här, använd sedan Spela upp för att lyssna."
+  },
+  "tts_play": {
+    "message": "Spela upp"
+  },
+  "tts_playing": {
+    "message": "Spelas upp…"
+  },
+  "tts_stop": {
+    "message": "Stoppa"
+  },
+  "tts_browserSegmentsTitle": {
+    "message": "Webbläsarens TTS-segment"
+  },
+  "tts_browserSegmentsHelp": {
+    "message": "Köa segment eller spela upp ett enskilt segment med systemljud."
+  },
+  "tts_browserQueueAll": {
+    "message": "Köa alla"
+  },
+  "tts_browserQueueFromHere": {
+    "message": "Köa härifrån"
+  },
+  "tts_browserSegmentPlay": {
+    "message": "Spela upp segment"
+  },
+  "tts_browserStatusSpeaking": {
+    "message": "Spelar upp segment {{current}}/{{total}}"
+  },
+  "tts_browserStatusPaused": {
+    "message": "Pausad"
+  },
+  "tts_browserPause": {
+    "message": "Pausa"
+  },
+  "tts_browserResume": {
+    "message": "Återuppta"
+  },
+  "tts_tldwStatusOnline": {
+    "message": "tldw-serverns audio API upptäckt (audio/speech)"
+  },
+  "tts_tldwStatusOffline": {
+    "message": "Audio API hittades inte; kontrollera tldw-serverns version."
+  },
+  "tts_tldwWarningTitle": {
+    "message": "tldw audio/speech API hittades inte"
+  },
+  "tts_tldwWarningBody": {
+    "message": "Se till att din tldw_server-version innehåller /api/v1/audio/speech och att tillägget är anslutet med en giltig API-nyckel."
+  },
+  "tts_speechErrorTitle": {
+    "message": "Diktering misslyckades"
+  },
+  "tts_speechErrorBody": {
+    "message": "Transkriptionsbegäran misslyckades. Kontrollera tldw-serverns hälsa."
+  },
+  "tts_speechNoText": {
+    "message": "Transkriptionen returnerade ingen text."
+  },
+  "tts_speechMicError": {
+    "message": "Det gick inte att komma åt mikrofonen. Kontrollera webbläsarens behörigheter och försök igen."
+  },
+  "tts_savedToNotes": {
+    "message": "Transkriptionen sparades som en anteckning."
+  },
+  "empty_title": {
+    "message": "Starta en ny chatt"
+  },
+  "empty_description": {
+    "message": "Experimentera här med olika modeller, prompter och kunskapskällor."
+  },
+  "empty_demoDescription": {
+    "message": "Du är i demoläge — prova att ställa en fråga för att se hur assistenten svarar. Du kan ansluta din egen tldw-server senare."
+  },
+  "empty_example1": {
+    "message": "Ställ en fråga och dra in dokument eller webbsidor du vill diskutera."
+  },
+  "empty_example2": {
+    "message": "Använd Quick Ingest för att lägga till transkript eller anteckningar och hänvisa till dem i chatten."
+  },
+  "empty_example3": {
+    "message": "Try different prompts or models, or open Model Playground to compare answers."
+  },
+  "empty_primaryCta": {
+    "message": "Börja chatta"
+  },
+  "empty_secondaryCta": {
+    "message": "Öppna serverinställningar"
+  },
+  "drop_hint": {
+    "message": "Släpp filer för att bifoga dem till ditt meddelande"
+  },
+  "drop_readySingle": {
+    "message": "{{name}} redo att skickas"
+  },
+  "drop_readyMultiple": {
+    "message": "{{count}} filer redo att skickas"
+  },
+  "drop_unsupported": {
+    "message": "Den filtypen stöds inte. Prova bilder eller textbaserade filer."
+  },
+  "drop_defaultFileName": {
+    "message": "Fil"
+  },
+  "drop_imageOnly": {
+    "message": "Endast bilder kan släppas här just nu."
+  },
+  "drop_imageHint": {
+    "message": "Släpp en bild för att inkludera den i ditt meddelande"
+  },
+  "drop_overlayInstruction": {
+    "message": "Släpp bilden för att bifoga den till ditt nästa svar"
+  },
+  "aria_chatTranscript": {
+    "message": "Chattmeddelanden"
+  },
+  "more_history": {
+    "message": "Chattsparning"
+  },
+  "more_searchKnowledge": {
+    "message": "Sök & RAG"
+  },
+  "more_voice": {
+    "message": "Fler röstalternativ"
+  },
+  "more_uploads": {
+    "message": "Uppladdningar och ingest"
+  },
+  "fileRetrievalEnabled": {
+    "message": "Aktivera RAG för dokument"
+  },
+  "stt_title": {
+    "message": "STT-lekplats"
+  },
+  "stt_subtitle": {
+    "message": "Prova transkriptionsmodeller, kör längre dikteringssessioner och spara transkript i Anteckningar."
+  },
+  "stt_currentModelLabel": {
+    "message": "Aktuell transkriptionsmodell"
+  },
+  "stt_defaultModel": {
+    "message": "Standard från Inställningar"
+  },
+  "stt_settingsNotice": {
+    "message": "Språk, uppgift, svarsformat, segmentering och prompt återanvänder dina Speech-to-Text-standarder i Inställningar."
+  },
+  "stt_sessionMode": {
+    "message": "Sessionsläge"
+  },
+  "stt_modeLong": {
+    "message": "Lång (inspelning i segment)"
+  },
+  "stt_modeShort": {
+    "message": "Kort diktering (enskilt klipp)"
+  },
+  "stt_languageTag": {
+    "message": "Språk"
+  },
+  "stt_taskTag": {
+    "message": "Uppgift"
+  },
+  "stt_formatTag": {
+    "message": "Format"
+  },
+  "stt_segmentationEnabled": {
+    "message": "Segmentering aktiverad"
+  },
+  "stt_recordButton": {
+    "message": "Spela in"
+  },
+  "stt_stopButton": {
+    "message": "Stoppa"
+  },
+  "stt_startTooltip": {
+    "message": "Starta inspelning för transkription"
+  },
+  "stt_stopTooltip": {
+    "message": "Stoppa och skicka till servern"
+  },
+  "stt_transcribingButton": {
+    "message": "Transkriberar..."
+  },
+  "stt_transcribingTooltip": {
+    "message": "Transkriberar ljud..."
+  },
+  "stt_transcribingPlaceholder": {
+    "message": "Transkriberar ljud..."
+  },
+  "stt_historyTitle": {
+    "message": "Transkriptionshistorik"
+  },
+  "stt_clearAll": {
+    "message": "Rensa alla"
+  },
+  "stt_emptyHistory": {
+    "message": "Starta en inspelning för att se transkript här. Du kan spara valfritt objekt i Anteckningar."
+  },
+  "stt_saveToNotes": {
+    "message": "Spara i Anteckningar"
+  },
+  "stt_delete": {
+    "message": "Ta bort"
+  },
+  "stt_durationTag": {
+    "message": "Varaktighet"
+  },
+  "stt_modelTag": {
+    "message": "Modell"
+  },
+  "stt_currentTranscriptTitle": {
+    "message": "Transkript för aktuell session"
+  },
+  "stt_currentTranscriptPlaceholder": {
+    "message": "Live-transkript visas här under inspelning."
+  },
+  "actions_temporaryOn": {
+    "message": "Tillfällig chatt (sparas inte)"
+  },
+  "actions_temporaryOff": {
+    "message": "Spara chatt i historik"
+  },
+  "actions_webSearchOn": {
+    "message": "Webbsökning på"
+  },
+  "actions_webSearchOff": {
+    "message": "Webbsökning av"
+  },
+  "actions_speechStart": {
+    "message": "Starta diktering"
+  },
+  "actions_speechStop": {
+    "message": "Stoppa diktering"
+  },
+  "actions_streamStart": {
+    "message": "Liveundertexter"
+  },
+  "actions_streamStop": {
+    "message": "Stoppa undertexter"
+  },
+  "actions_visionOn": {
+    "message": "Vision på"
+  },
+  "actions_visionOff": {
+    "message": "Vision av"
+  },
+  "actions_upload": {
+    "message": "Bifoga bild"
+  },
+  "actions_ingest": {
+    "message": "Quick Ingest"
+  },
+  "actions_ingestDisabled": {
+    "message": "Anslut till din tldw-server för att köra ingest."
+  },
+  "actions_ingestHint": {
+    "message": "Ladda upp URL:er eller filer med avancerade alternativ."
+  },
+  "actions_ingestSub": {
+    "message": "Använd URL:er/filer; ladda ner eller lagra."
+  },
+  "actions_streamErrorTitle": {
+    "message": "Liveundertexter ej tillgängliga"
+  },
+  "composer_toolsButton": {
+    "message": "+Verktyg"
+  },
+  "composer_queuedBanner_title": {
+    "message": "Köad när offline"
+  },
+  "composer_queuedBanner_body": {
+    "message": "Vi håller dessa meddelanden och skickar dem när din tldw-server är ansluten."
+  },
+  "composer_queuedBanner_sendNow": {
+    "message": "Skicka köade meddelanden"
+  },
+  "composer_queuedBanner_clear": {
+    "message": "Rensa kö"
+  },
+  "composer_coreTools": {
+    "message": "Konversationsalternativ"
+  },
+  "composer_captureTools": {
+    "message": "Fångst- och assistverktyg"
+  },
+  "composer_actions": {
+    "message": "Sändningsalternativ"
+  },
+  "composer_moreTools": {
+    "message": "Fler verktyg"
+  },
+  "composer_scrollToLatest": {
+    "message": "Skrolla till senaste meddelanden"
+  },
+  "composer_submitAria": {
+    "message": "Skicka meddelande"
+  },
+  "composer_openModelSettings": {
+    "message": "Öppna inställningar för aktuell chatt"
+  },
+  "composer_stopStreaming": {
+    "message": "Stoppa strömmande svar"
+  },
+  "composer_connectionPlaceholder": {
+    "message": "Anslut till din tldw-server i Inställningar för att skicka meddelanden och visa media."
+  },
+  "composer_connectNotice": {
+    "message": "Anslut till din tldw-server i Inställningar för att skicka meddelanden och visa media."
+  },
+  "composer_connectionChipDisconnected": {
+    "message": "Server: Inte ansluten"
+  },
+  "composer_contextLabel": {
+    "message": "Kontext:"
+  },
+  "composer_contextKnowledgeEmpty": {
+    "message": "Ingen kunskap vald"
+  },
+  "composer_contextTabs": {
+    "message": "{{count}} flikar"
+  },
+  "composer_contextFiles": {
+    "message": "{{count}} filer"
+  },
+  "composer_contextMedia": {
+    "message": "Media och anteckningar"
+  },
+  "composer_contextMediaHint": {
+    "message": "Bifoga media och anteckningar som ska styra svaret."
+  },
+  "composer_contextMediaSelected": {
+    "message": "Media eller anteckning"
+  },
+  "composer_contextMediaEmpty": {
+    "message": "Inga media eller anteckningar valda än."
+  },
+  "composer_addKnowledge": {
+    "message": "Lägg till media och anteckningar"
+  },
+  "composer_contextTabsTitle": {
+    "message": "Flikar i kontext"
+  },
+  "composer_contextTabsHint": {
+    "message": "Granska eller ta bort refererade flikar, eller lägg till fler från dina öppna flikar."
+  },
+  "composer_contextManager": {
+    "message": "Kontexthantering"
+  },
+  "composer_contextManagerTitle": {
+    "message": "Kontexthantering"
+  },
+  "composer_contextKnowledge": {
+    "message": "Kontext & kunskap"
+  },
+  "composer_contextKnowledgeClose": {
+    "message": "Stäng kontext och kunskap"
+  },
+  "composer_knowledgeSearch": {
+    "message": "Kunskapssökning"
+  },
+  "composer_knowledgeSearchClose": {
+    "message": "Stäng kunskapssökning"
+  },
+  "composer_persistence_ephemeral": {
+    "message": "Sparas inte i historiken; rensas när du stänger den här fliken."
+  },
+  "composer_persistence_local": {
+    "message": "Sparas endast i denna webbläsare."
+  },
+  "composer_persistence_server": {
+    "message": "Sparad lokalt + server"
+  },
+  "composer_persistence_ephemeralPill": {
+    "message": "Tillfällig"
+  },
+  "composer_persistence_localPill": {
+    "message": "Endast lokalt"
+  },
+  "composer_persistence_serverPill": {
+    "message": "Lokalt + server"
+  },
+  "composer_ephemeralLabel": {
+    "message": "Tillfällig"
+  },
+  "composer_savedLabel": {
+    "message": "Sparad"
+  },
+  "composer_persistence_saveToServer": {
+    "message": "Spara även den här chatten på servern"
+  },
+  "composer_persistence_connectToSave": {
+    "message": "Anslut din server för att spara chattar där."
+  },
+  "composer_persistence_serverDefaultTitle": {
+    "message": "Tilläggschatt"
+  },
+  "composer_persistence_serverSavedTitle": {
+    "message": "Chatten sparas nu på servern"
+  },
+  "composer_persistence_serverSaved": {
+    "message": "Framtida meddelanden i denna chatt synkas med din tldw-server."
+  },
+  "composer_persistence_serverCharacterRequired": {
+    "message": "Det gick inte att hitta eller skapa en standard-assistentkaraktär på servern. Försök igen från Karaktärssidan."
+  },
+  "composer_connectToSend": {
+    "message": "Anslut till din tldw-server i Inställningar för att skicka meddelanden och visa media."
+  },
+  "composer_compareTag": {
+    "message": "Jämför"
+  },
+  "composer_compareLabel": {
+    "message": "Jämförelseläge"
+  },
+  "composer_compareButton": {
+    "message": "Jämför modeller"
+  },
+  "composer_compareButtonActive": {
+    "message": "Jämför: {{count}} modeller"
+  },
+  "composer_compareButtonOn": {
+    "message": "Jämförelse aktiverad"
+  },
+  "composer_compareSettingsTitle": {
+    "message": "Jämförelseinställningar"
+  },
+  "composer_compareSettingsToggle": {
+    "message": "Aktivera jämförelseläge"
+  },
+  "composer_compareSettingsToggleHint": {
+    "message": "Skicka ditt nästa meddelande till flera modeller."
+  },
+  "composer_compareNoneSelected": {
+    "message": "Inga modeller valda för jämförelse"
+  },
+  "composer_compareSingle": {
+    "message": "Jämför 1 modell"
+  },
+  "composer_compareMany": {
+    "message": "Jämför {{count}} modeller"
+  },
+  "composer_compareActiveSummary": {
+    "message": "Aktiva modeller nästa tur: {{label}}"
+  },
+  "composer_compareModelPickerLabel": {
+    "message": "Välj modeller"
+  },
+  "composer_compareModelPickerPlaceholder": {
+    "message": "Välj modeller att jämföra"
+  },
+  "composer_compareActiveModelsLabel": {
+    "message": "Aktiva modeller"
+  },
+  "composer_compareActiveModelsHint": {
+    "message": "Ditt nästa meddelande skickas till varje aktiv modell."
+  },
+  "composer_compareSendToModels": {
+    "message": "Skicka till {{count}} modeller"
+  },
+  "composer_compareMaxModelsTitle": {
+    "message": "Jämförelsegräns nådd"
+  },
+  "composer_compareMaxModels": {
+    "message": "Du kan jämföra upp till {{limit}} modeller per tur."
+  },
+  "composer_compareMaxModelsTrimmed": {
+    "message": "Jämförelse är begränsad till {{limit}} modeller per tur. Använder de första {{limit}} valda modellerna."
+  },
+  "composer_compareMaxLabel": {
+    "message": "Max modeller per tur"
+  },
+  "composer_compareMaxHelper": {
+    "message": "Valda {{current}} / {{limit}}"
+  },
+  "composer_compareSelectedLabel": {
+    "message": "Vald som svar:"
+  },
+  "composer_compareContinueHint": {
+    "message": "Fortsätt den här chatten med den valda modellen."
+  },
+  "composer_compareContinue": {
+    "message": "Fortsätt med den här modellen"
+  },
+  "composer_compareThreadShared": {
+    "message": "Du (delad)"
+  },
+  "composer_compareBulkSplitSuccess": {
+    "message": "Skapade {{count}} chattar"
+  },
+  "composer_compareBulkSplitPartialFail": {
+    "message": "Det gick inte att skapa {{count}} chattar"
+  },
+  "composer_validationCompareSelectModelsInline": {
+    "message": "Välj minst en modell för jämförelseläge."
+  },
+  "speech_title": {
+    "message": "Tal-lekplats"
+  },
+  "speech_subtitle": {
+    "message": "Spela in tal, redigera transkript och syntetisera ljud på ett ställe."
+  },
+  "speech_modeLabel": {
+    "message": "Läge"
+  },
+  "speech_modeRoundTrip": {
+    "message": "Tur och retur"
+  },
+  "speech_modeSpeak": {
+    "message": "Tala"
+  },
+  "speech_modeListen": {
+    "message": "Lyssna"
+  },
+  "speech_modeHint": {
+    "message": "Ditt senaste läge sparas på den här enheten."
+  },
+  "speech_recordingWaveform": {
+    "message": "Vågform för liveinspelning"
+  },
+  "speech_playbackWaveform": {
+    "message": "Vågform för uppspelning"
+  },
+  "speech_sendToTts": {
+    "message": "Skicka till TTS"
+  },
+  "speech_sendHint": {
+    "message": "Använd den senaste transkriptionen som TTS-utkast."
+  },
+  "speech_download": {
+    "message": "Ladda ner"
+  },
+  "speech_downloadCurrent": {
+    "message": "Ladda ner aktuellt segment"
+  },
+  "speech_downloadAll": {
+    "message": "Ladda ner alla segment"
+  },
+  "speech_segmentFormat": {
+    "message": "Segmentformat"
+  },
+  "speech_historyTitle": {
+    "message": "Talhistorik"
+  },
+  "speech_historyAll": {
+    "message": "Alla"
+  },
+  "speech_historyStt": {
+    "message": "STT"
+  },
+  "speech_historyTts": {
+    "message": "TTS"
+  },
+  "speech_historySearch": {
+    "message": "Sök transkript"
+  },
+  "speech_historyRetentionHint": {
+    "message": "Behåller de senaste {{count}} objekten. Använd \"Rensa alla\" för att ta bort allt."
+  },
+  "speech_useInTts": {
+    "message": "Använd i TTS"
+  },
+  "speech_copy": {
+    "message": "Kopiera"
+  },
+  "speech_copySuccess": {
+    "message": "Kopierat till urklipp"
+  },
+  "speech_copyError": {
+    "message": "Det gick inte att kopiera transkriptet."
+  },
+  "speech_providerTag": {
+    "message": "Leverantör"
+  },
+  "speech_voiceTag": {
+    "message": "Röst"
+  },
+  "speech_emptyHistory": {
+    "message": "Starta en inspelning eller generera ljud för att se historik här."
+  },
+  "speech_downloadDisabledBrowser": {
+    "message": "Webbläsar-TTS skapar inte nedladdningsbart ljud."
+  },
+  "speech_downloadDisabledEmpty": {
+    "message": "Generera ljud för att aktivera nedladdningar."
+  },
+  "speech_transcriptLock": {
+    "message": "Lås"
+  },
+  "speech_transcriptUnlock": {
+    "message": "Lås upp"
+  },
+  "speech_transcriptEditHint": {
+    "message": "Redigering aktiverad för detta transkript."
+  },
+  "speech_transcriptLockedHint": {
+    "message": "Låst till live-transkriptionsuppdateringar."
+  },
+  "speech_transcriptRecordingHint": {
+    "message": "Inspelning pågår; transkriptet är låst."
+  },
+  "actor_title": {
+    "message": "Scenregissör (Actor)"
+  },
+  "actor_help": {
+    "message": "Konfigurera scenkontext per chatt: roller, stämning, värld, mål och anteckningar."
+  },
+  "actor_addLabel": {
+    "message": "Lägg till eller ta bort aspekter för att fokusera scenen."
+  },
+  "actor_user": {
+    "message": "Användare"
+  },
+  "actor_char": {
+    "message": "Karaktär"
+  },
+  "actor_world": {
+    "message": "Värld"
+  },
+  "actor_newAspectPlaceholder": {
+    "message": "Aspektnamn (t.ex. Stämning, Roll, Plats)"
+  },
+  "actor_addButton": {
+    "message": "Lägg till aspekt"
+  },
+  "actor_aspectPlaceholder": {
+    "message": "Beskriv kort (valfritt)"
+  },
+  "actor_notes": {
+    "message": "Scenanteckningar"
+  },
+  "actor_notesHelp": {
+    "message": "Valfria anteckningar som skickas till modellen. Stöder Markdown och LaTeX."
+  },
+  "actor_position": {
+    "message": "Position för Actor-prompt"
+  },
+  "actor_before": {
+    "message": "Före huvudprompten/berättelsen"
+  },
+  "actor_after": {
+    "message": "Efter huvudprompten/berättelsen"
+  },
+  "actor_depth": {
+    "message": "I chatten på djup"
+  },
+  "actor_depthLabel": {
+    "message": "Djup (icke-systemmeddelanden)"
+  },
+  "actor_depthPlaceholder": {
+    "message": "0 = början av chatten"
+  },
+  "actor_depthHelp": {
+    "message": "Används endast när positionen är \"I chatten på djup\". Räknar icke-systemmeddelanden från toppen av chatten."
+  },
+  "actor_roleLabel": {
+    "message": "Roll för Actor-meddelande"
+  },
+  "actor_roleSystem": {
+    "message": "System"
+  },
+  "actor_roleUser": {
+    "message": "Användare"
+  },
+  "actor_roleAssistant": {
+    "message": "Assistent"
+  },
+  "actor_positionHelp": {
+    "message": "Djup används bara när positionen är \"I chatten på djup\". Rollen styr om Actor visas som system, användare eller assistent."
+  },
+  "actor_preview": {
+    "message": "Förhandsvisning av Actor-prompt"
+  },
+  "actor_tokens": {
+    "message": "Token: {{count}}"
+  },
+  "actor_previewEmpty": {
+    "message": "Inget att skicka än."
+  },
+  "actor_offlineHintTitle": {
+    "message": "World Books inte tillgängliga för Actor"
+  },
+  "actor_offlineHintBody": {
+    "message": "Anslut din tldw-server i Inställningar för att använda World Books för Actor-aspekter, eller fortsätt använda fritextvärden."
+  },
+  "actor_loreWorldBookMissing": {
+    "message": "Tidigare World Book-koppling hittades inte; använder fritext istället."
+  },
+  "actor_loreEntryMissing": {
+    "message": "Tidigare World Book-post hittades inte; använder fritext istället."
+  },
+  "actor_sourceFree": {
+    "message": "Fritext"
+  },
+  "actor_sourceLore": {
+    "message": "World Book"
+  },
+  "actor_worldBookPlaceholder": {
+    "message": "World Book"
+  },
+  "actor_entryPlaceholder": {
+    "message": "Post"
+  },
+  "actor_loreValuePlaceholder": {
+    "message": "Välj ett alternativ (valfritt)"
+  },
+  "actor_tokenLabel": {
+    "message": "Token"
+  },
+  "actor_tokensTitle": {
+    "message": "Actor-ordboks-tokens"
+  },
+  "actor_tokensHelp": {
+    "message": "Använd dessa tokens i prompter och systemmeddelanden."
+  },
+  "actor_keyChangeTitle": {
+    "message": "Ändra Actor-tokennyckel?"
+  },
+  "actor_keyChangeBody": {
+    "message": "Detta ändrar token från {{old}} till {{next}}. Prompter som använder den gamla token uppdateras inte automatiskt."
+  },
+  "actor_keyCollisionTitle": {
+    "message": "Actor-nyckel används redan"
+  },
+  "actor_keyCollisionBody": {
+    "message": "En annan aspekt använder redan denna nyckel. Nycklar måste vara unika per chatt."
+  },
+  "actor_copy": {
+    "message": "Kopiera"
+  },
+  "actor_copied": {
+    "message": "Kopierad"
+  },
+  "actor_copySuccess": {
+    "message": "Token kopierad till urklipp"
+  },
+  "actor_copyError": {
+    "message": "Det gick inte att kopiera token"
+  },
+  "actor_notesPreviewTitle": {
+    "message": "Förhandsvisning av scenanteckningar"
+  },
+  "actor_notesPreviewToggle": {
+    "message": "Visa Markdown + LaTeX-förhandsvisning"
+  },
+  "actor_aspectLimitWarningTitle": {
+    "message": "Många aspekter konfigurerade för denna chatt"
+  },
+  "actor_aspectLimitWarningBody": {
+    "message": "Du har {{count}} aspekter (mjuk gräns {{limit}}). Överväg att trimma för att fokusera scenen och spara tokens."
+  },
+  "actor_tokenWarning": {
+    "message": "Actor-prompten är lång ({{count}} tokens; mjuk gräns {{limit}}). Överväg att trimma aspekter eller anteckningar för att spara kontext."
+  },
+  "actor_depthRangeHelp": {
+    "message": "Djupet måste vara mellan 0 och 999; värden över historiklängden begränsas."
+  },
+  "actor_presetLabel": {
+    "message": "Förinställningar"
+  },
+  "actor_presetPlaceholder": {
+    "message": "Välj en förinställning"
+  },
+  "actor_preset.sliceOfLife": {
+    "message": "Vardagsliv"
+  },
+  "actor_preset.dungeonCrawl": {
+    "message": "Dungeoncrawl"
+  },
+  "actor_preset.romance": {
+    "message": "Romantik"
+  },
+  "actor_preset.workSession": {
+    "message": "Arbetspass"
+  },
+  "actor_applyPreset": {
+    "message": "Använd"
+  },
+  "actor_resetChat": {
+    "message": "Återställ för denna chatt"
+  },
+  "actor_saveAsCharacterDefault": {
+    "message": "Spara som standard för {{name}}"
+  },
+  "actor_applyCharacterDefault": {
+    "message": "Använd standard för {{name}}"
+  },
+  "actor_notesGmOnly": {
+    "message": "Endast GM: skicka inte anteckningar till modellen"
+  },
+  "actor_templateModeLabel": {
+    "message": "Interaktion med scenmallar"
+  },
+  "actor_templateModeHelp": {
+    "message": "Styr hur Actor interagerar med aktiva scenmallar. Sammanfoga behåller båda; Åsidosätt låter Actor ersätta överlappande fält; Ignorera hoppar över Actor när mallar är aktiva."
+  },
+  "actor_templateMode.merge": {
+    "message": "Sammanfoga med mallar"
+  },
+  "actor_templateMode.override": {
+    "message": "Åsidosätt mallar"
+  },
+  "actor_templateMode.ignore": {
+    "message": "Ignorera när mallar är aktiva"
+  },
+  "actor_bladeAspectsTitle": {
+    "message": "Aspekter"
+  },
+  "actor_bladeNotesTitle": {
+    "message": "Scenanteckningar"
+  },
+  "actor_bladePlacementTitle": {
+    "message": "Placering och mallar"
+  },
+  "actor_bladeTokensTitle": {
+    "message": "Tokens och förhandsvisning"
+  },
+  "actor_summaryAspectsEmpty": {
+    "message": "Inga aspekter konfigurerade än."
+  },
+  "actor_summaryAspectsCount": {
+    "message": "{{count}} aspekter konfigurerade."
+  },
+  "actor_summaryNotesEmpty": {
+    "message": "Inga scenanteckningar än."
+  },
+  "actor_summaryNotes": {
+    "message": "{{chars}} tecken{{gmSuffix}}."
+  },
+  "actor_summaryNotesGmOnly": {
+    "message": " · Endast GM"
+  },
+  "actor_summaryPlacementBefore": {
+    "message": "Före huvudprompten/berättelsen."
+  },
+  "actor_summaryPlacementAfter": {
+    "message": "Efter huvudprompten/berättelsen."
+  },
+  "actor_summaryPlacementDepth": {
+    "message": "Djup {{depth}} · Roll: {{role}}."
+  },
+  "actor_summaryTokensEmpty": {
+    "message": "Inga tokens definierade än; ange aspektvärden."
+  },
+  "actor_summaryTokensCount": {
+    "message": "{{tokens}} tokens · ~{{estimate}} tokens i prompten."
+  },
+  "actor_sceneTemplateActive": {
+    "message": "Scenmall aktiv: Actor respekterar inställningar för mallinteraktion."
+  },
+  "composer_compareFeatureToggle": {
+    "message": "Aktivera jämförelseläge"
+  },
+  "composer_compareFeatureToggleHint": {
+    "message": "Lås upp experimentella jämförelsefunktioner för flera modeller."
+  },
+  "composer_compareDisabled": {
+    "message": "Jämförelseläge är inaktiverat i inställningarna."
+  },
+  "composer_compareChosenHint": {
+    "message": "Fortsätt med det valda svaret eller jämför igen."
+  },
+  "composer_compareChosenLabel": {
+    "message": "Vald"
+  },
+  "composer_compareLatency": {
+    "message": "Latens"
+  },
+  "composer_compareHistoryPrefix": {
+    "message": "Jämför: {{title}}"
+  },
+  "composer_compareHistorySuffix": {
+    "message": "(från jämförelse)"
+  },
+  "composer_compareClusterLabel": {
+    "message": "Svar från flera modeller"
+  },
+  "composer_compareClusterCount": {
+    "message": "{{count}} modeller"
+  },
+  "composer_compareBulkSplitHint": {
+    "message": "Valda modeller: {{count}}"
+  },
+  "composer_compareBulkSplit": {
+    "message": "Öppna varje valt svar som egen chatt"
+  },
+  "composer_compareThreadLabel": {
+    "message": "Tråd per modell"
+  },
+  "composer_compareThreadYou": {
+    "message": "Du"
+  },
+  "composer_compareOpenFullChat": {
+    "message": "Öppna som fullständig chatt"
+  },
+  "composer_compareSpawnedChat": {
+    "message": "Öppna uppdelad chatt"
+  },
+  "composer_compareCanonicalOn": {
+    "message": "Kanonisk"
+  },
+  "composer_compareCanonicalOff": {
+    "message": "Fäst som kanonisk"
+  },
+  "composer_compareCanonicalLabel": {
+    "message": "Kanoniskt svar"
+  },
+  "composer_compareFilterLabel": {
+    "message": "Filtrera modeller"
+  },
+  "composer_compareFilterClear": {
+    "message": "Visa alla"
+  },
+  "composer_compareFilterCount": {
+    "message": "Visar {{visible}} / {{total}}"
+  },
+  "composer_compareTokens": {
+    "message": "Token: {{count}}"
+  },
+  "feedback_prompt": {
+    "message": "Var detta hjälpsamt?"
+  },
+  "feedback_thumbsUp": {
+    "message": "Hjälpsamt"
+  },
+  "feedback_thumbsDown": {
+    "message": "Inte hjälpsamt"
+  },
+  "feedback_more": {
+    "message": "Mer feedback"
+  },
+  "feedback_thanks": {
+    "message": "Tack för återkopplingen"
+  },
+  "feedback_disabled": {
+    "message": "Feedback är tillgänglig när svaret är klart."
+  },
+  "feedback_unavailable": {
+    "message": "Feedback är inte tillgänglig för detta meddelande."
+  },
+  "feedback_modalTitle": {
+    "message": "Feedback"
+  },
+  "feedback_modalRatingLabel": {
+    "message": "Hur skulle du bedöma det här svaret?"
+  },
+  "feedback_modalIssuesLabel": {
+    "message": "Vad var problemet? (välj alla som gäller)"
+  },
+  "feedback_modalNotesLabel": {
+    "message": "Ytterligare kommentarer (valfritt)"
+  },
+  "feedback_modalSubmit": {
+    "message": "Skicka feedback"
+  },
+  "feedback_errorTitle": {
+    "message": "Feedback misslyckades"
+  },
+  "feedback_errorBody": {
+    "message": "Det gick inte att skicka feedback."
+  },
+  "feedback_errorSource": {
+    "message": "Det gick inte att skicka feedback om källan."
+  },
+  "feedback_issues_incorrect": {
+    "message": "Felaktig information"
+  },
+  "feedback_issues_notRelevant": {
+    "message": "Inte relevant för min fråga"
+  },
+  "feedback_issues_missingDetails": {
+    "message": "Viktiga detaljer saknas"
+  },
+  "feedback_issues_badSources": {
+    "message": "Källorna var inte hjälpsamma"
+  },
+  "feedback_issues_tooVerbose": {
+    "message": "För utförligt"
+  },
+  "feedback_issues_tooBrief": {
+    "message": "För kort"
+  },
+  "feedback_issues_other": {
+    "message": "Annat"
+  },
+  "feedback_sourceHelpful": {
+    "message": "Hjälpsam källa"
+  },
+  "feedback_sourceUnhelpful": {
+    "message": "Inte hjälpsam källa"
+  },
+  "actor_uploadedFiles": {
+    "message": "Uppladdade filer ({{count}})"
+  },
+  "actor_fileRetrieval": {
+    "message": "Filhämtning"
+  },
+  "actor_fileStatusProcessed": {
+    "message": "Bearbetad"
+  },
+  "actor_fileStatusProcessing": {
+    "message": "Bearbetas..."
+  },
+  "documentGenerator_title": {
+    "message": "Dokumentgenerator"
+  },
+  "documentGenerator_unavailable": {
+    "message": "Dokumentgenerering är inte tillgänglig på den här servern."
+  },
+  "documentGenerator_noConversation": {
+    "message": "Starta en serverstödd chatt för att generera dokument."
+  },
+  "documentGenerator_source": {
+    "message": "Källa"
+  },
+  "documentGenerator_sourceId": {
+    "message": "Konversation {{id}}"
+  },
+  "documentGenerator_sourceMissing": {
+    "message": "Ingen aktiv konversation ännu."
+  },
+  "documentGenerator_sourceMessageId": {
+    "message": "Meddelande {{id}}"
+  },
+  "documentGenerator_documentType": {
+    "message": "Dokumenttyp"
+  },
+  "documentGenerator_model": {
+    "message": "Modell"
+  },
+  "documentGenerator_modelPlaceholder": {
+    "message": "Modell-ID"
+  },
+  "documentGenerator_providerPlaceholder": {
+    "message": "Leverantörsnamn"
+  },
+  "documentGenerator_providerLabel": {
+    "message": "Leverantör: {{provider}}"
+  },
+  "documentGenerator_specificMessage": {
+    "message": "Fokusera på ett specifikt meddelande"
+  },
+  "documentGenerator_specificMessagePlaceholder": {
+    "message": "Valfritt: klistra in ett utdrag av meddelandet att fokusera på."
+  },
+  "documentGenerator_customPrompt": {
+    "message": "Egen prompt"
+  },
+  "documentGenerator_customPromptPlaceholder": {
+    "message": "Valfria instruktioner för det genererade dokumentet."
+  },
+  "documentGenerator_asyncGeneration": {
+    "message": "Generera asynkront"
+  },
+  "documentGenerator_promptPresetTitle": {
+    "message": "Promptförinställning"
+  },
+  "documentGenerator_promptPresetHint": {
+    "message": "Anpassa system-/användarprompter som används för denna dokumenttyp."
+  },
+  "documentGenerator_promptReload": {
+    "message": "Ladda om från servern"
+  },
+  "documentGenerator_systemPrompt": {
+    "message": "Systemprompt"
+  },
+  "documentGenerator_userPrompt": {
+    "message": "Användarprompt"
+  },
+  "documentGenerator_temperature": {
+    "message": "Temperatur"
+  },
+  "documentGenerator_maxTokens": {
+    "message": "Max token"
+  },
+  "documentGenerator_jobQueued": {
+    "message": "Dokumentgenerering i kö."
+  },
+  "documentGenerator_generated": {
+    "message": "Dokument genererat."
+  },
+  "documentGenerator_deleteTitle": {
+    "message": "Ta bort dokument?"
+  },
+  "documentGenerator_deleteBody": {
+    "message": "Detta tar bort det genererade dokumentet permanent."
+  },
+  "documentGenerator_jobCancelled": {
+    "message": "Jobb avbrutet."
+  },
+  "documentGenerator_promptSaved": {
+    "message": "Promptförinställning sparad."
+  },
+  "documentGenerator_documentsTitle": {
+    "message": "Genererade dokument"
+  },
+  "documentGenerator_loading": {
+    "message": "Laddar…"
+  },
+  "documentGenerator_noDocuments": {
+    "message": "Inga dokument ännu."
+  },
+  "documentGenerator_jobsTitle": {
+    "message": "Genereringsjobb"
+  },
+  "documentGenerator_progress": {
+    "message": "{{percent}}% klart"
+  },
+  "documentGenerator_noContent": {
+    "message": "Inget innehåll tillgängligt."
+  },
+  "documentGenerator_errors_missingModel": {
+    "message": "Välj först en modell och en leverantör."
+  },
+  "documentGenerator_types_summary": {
+    "message": "Sammanfattning"
+  },
+  "documentGenerator_types_timeline": {
+    "message": "Tidslinje"
+  },
+  "documentGenerator_types_briefing": {
+    "message": "Genomgång"
+  },
+  "documentGenerator_types_study_guide": {
+    "message": "Studieguide"
+  },
+  "documentGenerator_types_q_and_a": {
+    "message": "Frågor och svar"
+  },
+  "documentGenerator_types_meeting_notes": {
+    "message": "Mötesanteckningar"
+  },
+  "composer_contextTabsEmpty": {
+    "message": "Inga flikar valda."
+  },
+  "composer_contextFilesTitle": {
+    "message": "Filer i sammanhanget"
+  },
+  "composer_contextFilesEmpty": {
+    "message": "Inga filer bifogade."
+  },
+  "composer_addFile": {
+    "message": "Lägg till fil"
+  },
+  "composer_contextTabsAvailable": {
+    "message": "Öppna flikar"
+  },
+  "composer_noTabsFound": {
+    "message": "Inga lämpliga öppna flikar hittades."
+  },
+  "errors_loadLocalHistoryPrefix": {
+    "message": "Det gick inte att läsa in lokal chatthistorik"
+  },
+  "errors_loadLocalHistoryDefault": {
+    "message": "Något gick fel när den lokala chatthistoriken skulle läsas in."
+  },
+  "ttsClips_title": {
+    "message": "TTS clips"
+  },
+  "ttsClips_empty": {
+    "message": "Generate chat audio to save it here."
+  },
+  "ttsClips_clearAll": {
+    "message": "Clear all"
+  },
+  "ttsClips_clearConfirm": {
+    "message": "Clear all saved TTS clips?"
+  },
+  "ttsClips_deleteConfirm": {
+    "message": "Delete this clip?"
+  },
+  "ttsClips_download": {
+    "message": "Download"
+  },
+  "ttsClips_downloadAll": {
+    "message": "Download all segments"
+  },
+  "ttsClips_segmentsLabel": {
+    "message": "{{count}} segments"
+  },
+  "composer_modelSearchPlaceholder": {
+    "message": "Search models"
+  },
+  "composer_noModelsMatch": {
+    "message": "No models match your search."
+  },
+  "composer_favorites": {
+    "message": "Favorites"
+  },
+  "composer_favoriteAdd": {
+    "message": "Add to favorites"
+  },
+  "composer_favoriteRemove": {
+    "message": "Remove from favorites"
+  },
+  "composer_sort_favorites": {
+    "message": "Favorites"
+  },
+  "composer_sort_az": {
+    "message": "A-Z"
+  },
+  "composer_sort_provider": {
+    "message": "Provider"
+  },
+  "composer_sort_localFirst": {
+    "message": "Local-first"
+  },
+  "composer_mcpAriaUnavailable": {
+    "message": "MCP tools unavailable"
+  },
+  "composer_mcpAriaLabel": {
+    "message": "MCP-verktyg: {{choice}}, {{summary}}"
+  },
+  "composer_mcpConfigure": {
+    "message": "Konfigurera verktyg"
+  },
+  "composer_mcpSettingsTitle": {
+    "message": "MCP-verktygsinställningar"
+  },
+  "acp_workspace_selectSession": {
+    "message": "Välj en session för att öppna arbetsytans terminal."
+  },
+  "acp_workspace_unavailable": {
+    "message": "Arbetsytans terminal är inte tillgänglig för den här sessionen."
+  },
+  "acp_workspace_title": {
+    "message": "Arbetsytans terminal"
+  }
+}

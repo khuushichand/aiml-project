@@ -1,5 +1,6 @@
 import { tldwClient } from "./TldwApiClient"
 import { bgRequest } from "@/services/background-proxy"
+import { emitSplashAfterLoginSuccess } from "@/services/splash-events"
 
 export interface LoginCredentials {
   username: string
@@ -101,6 +102,7 @@ export class TldwAuthService {
       this.setupTokenRefresh(tokens.expires_in)
     }
 
+    emitSplashAfterLoginSuccess()
     return tokens
   }
 
@@ -150,6 +152,7 @@ export class TldwAuthService {
       this.setupTokenRefresh(tokens.expires_in)
     }
 
+    emitSplashAfterLoginSuccess()
     return tokens
   }
 

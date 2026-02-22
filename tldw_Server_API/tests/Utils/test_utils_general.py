@@ -41,7 +41,7 @@ def test_download_file_resumes_without_truncation(monkeypatch, tmp_path):
         return dpath
 
     monkeypatch.setattr(Utils, "download", fake_download)
-    monkeypatch.setattr(Utils, "tqdm", _TqdmStub)
+    monkeypatch.setattr(Utils, "tqdm", _TqdmStub, raising=False)
 
     Utils.download_file("https://example.com/file.bin", str(dest))
 
@@ -74,6 +74,18 @@ def test_extract_text_from_segments_handles_nested_dict():
     }
     result = Utils.extract_text_from_segments(segments, include_timestamps=False)
     assert result == "Nested text"
+
+
+def test_extract_text_from_segments_rounds_timestamps_to_hundredths():
+    segments = [
+        {
+            "Time_Start": 0.835524770187703,
+            "Time_End": 1.0966262608713602,
+            "Text": "What?",
+        }
+    ]
+    result = Utils.extract_text_from_segments(segments, include_timestamps=True)
+    assert result == "0.84s - 1.1s | What?"
 
 
 def test_save_temp_file_normalizes_and_preserves_content(monkeypatch):
@@ -191,6 +203,25 @@ def test_check_ffmpeg_handles_unknown_os(monkeypatch):
     result = System_Checks_Lib.check_ffmpeg()
 
     assert result is False
+
+
+def test_cuda_check_uses_direct_subprocess_invocation(monkeypatch):
+    System_Checks_Lib.processing_choice = "cpu"
+    recorded = {}
+
+    def _fake_check_output(cmd, **kwargs):
+        recorded["cmd"] = cmd
+        recorded["kwargs"] = kwargs
+        return "GPU info line\nCUDA Version: 12.4\n"
+
+    monkeypatch.setattr(System_Checks_Lib.subprocess, "check_output", _fake_check_output)
+
+    result = System_Checks_Lib.cuda_check()
+
+    assert result is True
+    assert System_Checks_Lib.processing_choice == "cuda"
+    assert recorded["cmd"] == ["nvidia-smi"]
+    assert "shell" not in recorded["kwargs"]
 
 
 def _raise_eof(*_args, **_kwargs):

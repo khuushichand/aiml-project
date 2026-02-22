@@ -5,6 +5,7 @@ import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import { PageShell } from "@/components/Common/PageShell"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useDemoMode } from "@/context/demo-mode"
+import { useLayoutUiStore } from "@/store/layout-ui"
 import { translateMessage } from "@/i18n/translateMessage"
 import { DictionariesManager } from "./Manager"
 
@@ -12,6 +13,12 @@ export const DictionariesWorkspace: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const isOnline = useServerOnline()
   const { demoEnabled } = useDemoMode()
+  const chatSidebarCollapsed = useLayoutUiStore(
+    (state) => state.chatSidebarCollapsed
+  )
+  const pageShellMaxWidthClassName = chatSidebarCollapsed
+    ? "max-w-none"
+    : "max-w-5xl"
 
   if (!isOnline) {
     return demoEnabled ? (
@@ -88,7 +95,10 @@ export const DictionariesWorkspace: React.FC = () => {
   }
 
   return (
-    <PageShell className="space-y-4">
+    <PageShell
+      className="space-y-4"
+      maxWidthClassName={pageShellMaxWidthClassName}
+    >
       <div className="space-y-1">
         <h1 className="text-lg font-semibold text-text">
           {translateMessage(

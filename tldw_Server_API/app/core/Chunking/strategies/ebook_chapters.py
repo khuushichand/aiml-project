@@ -12,6 +12,7 @@ from queue import Queue
 from typing import Any, Optional
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 from ..exceptions import InvalidInputError, ProcessingError
@@ -93,13 +94,13 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 try:
                     v = _cp.get('Chunking', 'regex_simple_only', fallback=None)
                     if v is not None:
-                        self._force_simple_only = str(v).strip().lower() in ("1", "true", "yes", "on")
+                        self._force_simple_only = is_truthy(str(v).strip())
                 except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     v = _cp.get('Chunking', 'regex_disable_multiprocessing', fallback=None)
                     if v is not None:
-                        self._disable_mp = str(v).strip().lower() in ("1", "true", "yes", "on")
+                        self._disable_mp = is_truthy(str(v).strip())
                 except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:

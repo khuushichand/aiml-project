@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
+import os
+import tempfile
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
@@ -13,17 +17,28 @@ from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentListResponse,
     ACPSessionCancelRequest,
     ACPSessionCloseRequest,
+    ACPSessionDetailResponse,
+    ACPSessionForkRequest,
+    ACPSessionForkResponse,
+    ACPSessionInfo,
+    ACPSessionListResponse,
     ACPSessionNewRequest,
     ACPSessionNewResponse,
     ACPSessionPromptRequest,
     ACPSessionPromptResponse,
     ACPSessionUpdatesResponse,
+    ACPSessionUsageResponse,
+    ACPTokenUsage,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     get_runner_client,
 )
+from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
-from tldw_Server_API.app.core.AuthNZ.JWT_Manager import get_jwt_manager
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     get_request_user,
@@ -47,8 +62,10 @@ _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     PermissionError,
     RuntimeError,
     TimeoutError,
+    TokenExpiredError,
     TypeError,
     UnicodeDecodeError,
+    InvalidTokenError,
     ValueError,
 )
 
@@ -56,6 +73,23 @@ _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
 # -----------------------------------------------------------------------------
 # WebSocket Authentication Helper
 # -----------------------------------------------------------------------------
+
+class _AuthNZJWTManagerCompat:
+    """Compatibility shim exposing verify_token() with token_data.user_id."""
+
+    def verify_token(self, token: str) -> SimpleNamespace | None:
+        token_data = get_jwt_service().decode_access_token(token)
+        if not isinstance(token_data, dict):
+            return None
+        user_id = token_data.get("sub")
+        if user_id is None:
+            return None
+        return SimpleNamespace(user_id=int(user_id))
+
+
+def get_jwt_manager() -> _AuthNZJWTManagerCompat:
+    """Return a compatibility JWT manager for ACP WebSocket auth and legacy tests."""
+    return _AuthNZJWTManagerCompat()
 
 
 async def _authenticate_ws(
@@ -69,18 +103,35 @@ async def _authenticate_ws(
         try:
             jwtm = get_jwt_manager()
             token_data = jwtm.verify_token(token)
-            if token_data and token_data.user_id:
-                return token_data.user_id
+            if token_data and getattr(token_data, "user_id", None):
+                return int(token_data.user_id)
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("JWT auth failed for WebSocket: {}", e)
 
     # Try API key (single-user mode)
     if api_key:
         try:
-            import os
-            expected_key = os.getenv("SINGLE_USER_API_KEY", "")
-            if expected_key and api_key == expected_key:
-                return 1  # Single-user mode user ID
+            settings = get_auth_settings()
+            auth_mode = str(getattr(settings, "AUTH_MODE", "single_user")).strip().lower()
+            if auth_mode == "single_user":
+                allowed_keys: set[str] = set()
+                primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+                if isinstance(primary_key, str) and primary_key.strip():
+                    allowed_keys.add(primary_key.strip())
+                env_primary = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
+                if isinstance(env_primary, str) and env_primary.strip():
+                    allowed_keys.add(env_primary.strip())
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if isinstance(test_key, str) and test_key.strip():
+                    allowed_keys.add(test_key.strip())
+                if api_key in allowed_keys:
+                    return int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+            else:
+                api_mgr = await get_api_key_manager()
+                info = await api_mgr.validate_api_key(api_key=api_key, required_scope="read")
+                user_id = info.get("user_id") if isinstance(info, dict) else None
+                if user_id is not None:
+                    return int(user_id)
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("API key auth failed for WebSocket: {}", e)
 
@@ -105,6 +156,26 @@ async def _authenticate_ws(
                 return await _authenticate_ws(websocket, api_key=value)
 
     return None
+
+
+async def _require_session_access(
+    client: Any,
+    *,
+    session_id: str,
+    user_id: int,
+) -> None:
+    """Require that the authenticated user owns the requested ACP session."""
+    verifier = getattr(client, "verify_session_access", None)
+    if not callable(verifier):
+        logger.warning(
+            "ACP session access denied: client {} does not expose verify_session_access()",
+            type(client).__name__,
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+
+    allowed = await verifier(session_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
 
 
 # -----------------------------------------------------------------------------
@@ -146,6 +217,18 @@ async def acp_session_stream(
             await websocket.close(code=4401)
         return
 
+    try:
+        client = await get_runner_client()
+        await _require_session_access(client, session_id=session_id, user_id=user_id)
+    except HTTPException:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4404)
+        return
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4404)
+        return
+
     # Set up WebSocket stream wrapper for metrics
     stream = WebSocketStream(
         websocket,
@@ -157,9 +240,6 @@ async def acp_session_stream(
 
     try:
         await stream.start()
-
-        # Get runner client
-        client = await get_runner_client()
 
         # Define send callback for broadcasting
         async def send_callback(message: dict[str, Any]) -> None:
@@ -246,31 +326,101 @@ async def acp_session_ssh(
         return
 
     await websocket.accept()
+    ssh_proc: asyncio.subprocess.Process | None = None
+    temp_key_path: str | None = None
     try:
-        import asyncssh  # type: ignore
-    except ImportError:
-        await websocket.close(code=1011)
-        return
+        try:
+            import asyncssh  # type: ignore
+        except ImportError:
+            asyncssh = None  # type: ignore[assignment]
 
-    try:
-        key = asyncssh.import_private_key(ssh_key)
-        async with asyncssh.connect(
-            ssh_host,
-            port=int(ssh_port),
-            username=ssh_user,
-            client_keys=[key],
-            known_hosts=None,
-        ) as conn:
-            process = await conn.create_process(term_type="xterm", term_size=(80, 24))
+        if asyncssh is not None:
+            key = asyncssh.import_private_key(ssh_key)
+            async with asyncssh.connect(
+                ssh_host,
+                port=int(ssh_port),
+                username=ssh_user,
+                client_keys=[key],
+                known_hosts=None,
+            ) as conn:
+                process = await conn.create_process(term_type="xterm", term_size=(80, 24))
 
-            async def _read_output(reader: Any) -> None:
+                async def _read_output(reader: Any) -> None:
+                    while True:
+                        data = await reader.read(4096)
+                        if not data:
+                            return
+                        await websocket.send_bytes(data.encode() if isinstance(data, str) else data)
+
+                async def _write_input() -> None:
+                    while True:
+                        try:
+                            msg = await websocket.receive()
+                        except WebSocketDisconnect:
+                            return
+                        if msg.get("type") == "websocket.disconnect":
+                            return
+                        if msg.get("text"):
+                            text = msg["text"]
+                            try:
+                                payload = json.loads(text)
+                            except json.JSONDecodeError:
+                                payload = None
+                            if isinstance(payload, dict) and payload.get("type") == "resize":
+                                cols = int(payload.get("cols") or 0)
+                                rows = int(payload.get("rows") or 0)
+                                if cols > 0 and rows > 0:
+                                    with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                                        process.set_term_size(cols, rows)
+                                continue
+                            process.stdin.write(text)
+                            await process.stdin.drain()
+                        elif msg.get("bytes"):
+                            process.stdin.write(msg["bytes"])
+                            await process.stdin.drain()
+
+                await asyncio.gather(
+                    _read_output(process.stdout),
+                    _read_output(process.stderr),
+                    _write_input(),
+                )
+        else:
+            with tempfile.NamedTemporaryFile("w", delete=False, prefix="acp_ssh_", suffix="_key") as tmp_key:
+                tmp_key.write(ssh_key)
+                temp_key_path = tmp_key.name
+            os.chmod(temp_key_path, 0o600)
+
+            ssh_proc = await asyncio.create_subprocess_exec(
+                "ssh",
+                "-i",
+                temp_key_path,
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "IdentitiesOnly=yes",
+                "-p",
+                str(ssh_port),
+                f"{ssh_user}@{ssh_host}",
+                "-tt",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            async def _read_output(reader: asyncio.StreamReader | None) -> None:
+                if reader is None:
+                    return
                 while True:
                     data = await reader.read(4096)
                     if not data:
                         return
-                    await websocket.send_bytes(data.encode() if isinstance(data, str) else data)
+                    await websocket.send_bytes(data)
 
             async def _write_input() -> None:
+                if ssh_proc is None or ssh_proc.stdin is None:
+                    return
                 while True:
                     try:
                         msg = await websocket.receive()
@@ -280,31 +430,44 @@ async def acp_session_ssh(
                         return
                     if msg.get("text"):
                         text = msg["text"]
+                        # The ssh fallback cannot resize PTY directly; ignore resize control messages.
                         try:
                             payload = json.loads(text)
                         except json.JSONDecodeError:
                             payload = None
                         if isinstance(payload, dict) and payload.get("type") == "resize":
-                            cols = int(payload.get("cols") or 0)
-                            rows = int(payload.get("rows") or 0)
-                            if cols > 0 and rows > 0:
-                                with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
-                                    process.set_term_size(cols, rows)
                             continue
-                        process.stdin.write(text)
-                        await process.stdin.drain()
+                        ssh_proc.stdin.write(text.encode("utf-8"))
+                        await ssh_proc.stdin.drain()
                     elif msg.get("bytes"):
-                        process.stdin.write(msg["bytes"])
-                        await process.stdin.drain()
+                        ssh_proc.stdin.write(msg["bytes"])
+                        await ssh_proc.stdin.drain()
 
-            await asyncio.gather(
-                _read_output(process.stdout),
-                _read_output(process.stderr),
-                _write_input(),
-            )
+            tasks = {
+                asyncio.create_task(_read_output(ssh_proc.stdout)),
+                asyncio.create_task(_read_output(ssh_proc.stderr)),
+                asyncio.create_task(_write_input()),
+            }
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in pending:
+                with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                    await task
+            for task in done:
+                with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                    _ = task.result()
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=1011)
+    finally:
+        if ssh_proc is not None and ssh_proc.returncode is None:
+            ssh_proc.terminate()
+            with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                await asyncio.wait_for(ssh_proc.wait(), timeout=2)
+        if temp_key_path:
+            with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                os.unlink(temp_key_path)
 
 async def _handle_client_message(
     client: Any,
@@ -335,6 +498,23 @@ async def _handle_client_message(
             approved,
             batch_approve_tier,
         )
+        logger.debug(
+            "ACP permission response processed: session_id={} request_id={} approved={} success={}",
+            session_id,
+            request_id,
+            approved,
+            success,
+        )
+        if not success:
+            # Compatibility fallback for lightweight/mock runner clients that
+            # track pending permissions in a simple dict.
+            with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                pending = getattr(client, "_pending_permissions", None)
+                if isinstance(pending, dict):
+                    sess_pending = pending.get(session_id)
+                    if isinstance(sess_pending, dict) and request_id in sess_pending:
+                        sess_pending.pop(request_id, None)
+                        success = True
         if not success:
             await stream.send_json({
                 "type": "error",
@@ -541,19 +721,17 @@ async def acp_session_new(
 
     try:
         client = await get_runner_client()
-        try:
-            session_id = await client.create_session(
-                payload.cwd,
-                mcp_servers_dicts,
-                agent_type=payload.agent_type,
-                user_id=user.id,
-            )
-        except TypeError:
-            session_id = await client.create_session(
-                payload.cwd,
-                mcp_servers_dicts,
-                agent_type=payload.agent_type,
-            )
+        create_session_params = set(inspect.signature(client.create_session).parameters.keys())
+        create_session_kwargs: dict[str, Any] = {}
+        if payload.agent_type is not None and "agent_type" in create_session_params:
+            create_session_kwargs["agent_type"] = payload.agent_type
+        if "user_id" in create_session_params:
+            create_session_kwargs["user_id"] = user.id
+        session_id = await client.create_session(
+            payload.cwd,
+            mcp_servers_dicts,
+            **create_session_kwargs,
+        )
     except ACPResponseError as exc:
         logger.error("ACP session/new failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
@@ -576,6 +754,30 @@ async def acp_session_new(
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             resolved_agent_type = "custom"
 
+    # Persist session metadata and emit SSE event
+    try:
+        store = await get_acp_session_store()
+        await store.register_session(
+            session_id=session_id,
+            user_id=int(user.id),
+            agent_type=resolved_agent_type or "custom",
+            name=session_name,
+            cwd=payload.cwd,
+            tags=payload.tags,
+        )
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Failed to persist ACP session metadata for {}", session_id)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.admin.admin_events_stream import emit_admin_event
+        await emit_admin_event("acp_session_created", {
+            "session_id": session_id,
+            "user_id": int(user.id),
+            "agent_type": resolved_agent_type or "custom",
+            "name": session_name,
+        }, category="acp")
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
+
     return ACPSessionNewResponse(
         session_id=session_id,
         name=session_name,
@@ -595,14 +797,30 @@ async def acp_session_prompt(
 ) -> ACPSessionPromptResponse:
     try:
         client = await get_runner_client()
+        await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
         result = await client.prompt(payload.session_id, payload.prompt)
     except ACPResponseError as exc:
         logger.error("ACP session/prompt failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
+    # Record prompt exchange and accumulate token usage
+    turn_usage = None
+    try:
+        store = await get_acp_session_store()
+        turn_usage_data = await store.record_prompt(payload.session_id, payload.prompt, result)
+        if turn_usage_data:
+            turn_usage = ACPTokenUsage(
+                prompt_tokens=turn_usage_data.prompt_tokens,
+                completion_tokens=turn_usage_data.completion_tokens,
+                total_tokens=turn_usage_data.total_tokens,
+            )
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Failed to record prompt for session {}", payload.session_id)
+
     return ACPSessionPromptResponse(
         stop_reason=result.get("stopReason"),
         raw_result=result,
+        usage=turn_usage,
     )
 
 
@@ -613,6 +831,7 @@ async def acp_session_cancel(
 ) -> dict:
     try:
         client = await get_runner_client()
+        await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
         await client.cancel(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/cancel failed for user {}: {}", user.id, exc)
@@ -627,10 +846,25 @@ async def acp_session_close(
 ) -> dict:
     try:
         client = await get_runner_client()
+        await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
         await client.close_session(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/close failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    # Mark session as closed in store and emit SSE event
+    try:
+        store = await get_acp_session_store()
+        await store.close_session(payload.session_id)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.admin.admin_events_stream import emit_admin_event
+        await emit_admin_event("acp_session_closed", {
+            "session_id": payload.session_id,
+            "user_id": int(user.id),
+        }, category="acp")
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
     return {"status": "ok"}
 
 
@@ -641,5 +875,128 @@ async def acp_session_updates(
     user: User = Depends(get_request_user),
 ) -> ACPSessionUpdatesResponse:
     client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
     updates = client.pop_updates(session_id, limit=limit or 100)
     return ACPSessionUpdatesResponse(updates=updates)
+
+
+# -----------------------------------------------------------------------------
+# Session Listing & Detail Endpoints
+# -----------------------------------------------------------------------------
+
+
+@router.get("/sessions", response_model=ACPSessionListResponse)
+async def acp_list_sessions(
+    status_filter: str | None = Query(default=None, alias="status"),
+    agent_type: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_request_user),
+) -> ACPSessionListResponse:
+    """List ACP sessions for the authenticated user."""
+    store = await get_acp_session_store()
+    client = await get_runner_client()
+    records, total = await store.list_sessions(
+        user_id=int(user.id),
+        status=status_filter,
+        agent_type=agent_type,
+        limit=limit,
+        offset=offset,
+    )
+    sessions = [
+        ACPSessionInfo(**rec.to_info_dict(
+            has_websocket=client.has_websocket_connections(rec.session_id),
+        ))
+        for rec in records
+    ]
+    return ACPSessionListResponse(sessions=sessions, total=total)
+
+
+@router.get("/sessions/{session_id}/detail", response_model=ACPSessionDetailResponse)
+async def acp_session_detail(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> ACPSessionDetailResponse:
+    """Get detailed information about an ACP session."""
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    return ACPSessionDetailResponse(**rec.to_detail_dict(
+        has_websocket=client.has_websocket_connections(session_id),
+    ))
+
+
+@router.get("/sessions/{session_id}/usage", response_model=ACPSessionUsageResponse)
+async def acp_session_usage(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> ACPSessionUsageResponse:
+    """Get token usage for an ACP session."""
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    return ACPSessionUsageResponse(
+        session_id=rec.session_id,
+        user_id=rec.user_id,
+        agent_type=rec.agent_type,
+        usage=ACPTokenUsage(**rec.usage.to_dict()),
+        message_count=rec.message_count,
+        created_at=rec.created_at,
+        last_activity_at=rec.last_activity_at,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Session Forking
+# -----------------------------------------------------------------------------
+
+
+@router.post("/sessions/{session_id}/fork", response_model=ACPSessionForkResponse)
+async def acp_session_fork(
+    session_id: str,
+    payload: ACPSessionForkRequest,
+    user: User = Depends(get_request_user),
+) -> ACPSessionForkResponse:
+    """Fork an ACP session from a specific message index.
+
+    Creates a new session with message history up to the specified index.
+    The forked session starts fresh with no active runner process — call
+    ``/sessions/new`` with the returned session_id to resume.
+    """
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+
+    store = await get_acp_session_store()
+    source = await store.get_session(session_id)
+    if not source:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    if payload.message_index >= len(source.messages):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"message_index {payload.message_index} exceeds message count {len(source.messages)}",
+        )
+
+    import uuid as _uuid
+    new_session_id = str(_uuid.uuid4())
+    forked = await store.fork_session(
+        source_session_id=session_id,
+        new_session_id=new_session_id,
+        message_index=payload.message_index,
+        user_id=int(user.id),
+        name=payload.name,
+    )
+    if not forked:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="fork_failed")
+
+    return ACPSessionForkResponse(
+        session_id=forked.session_id,
+        name=forked.name,
+        forked_from=session_id,
+        message_count=forked.message_count,
+    )

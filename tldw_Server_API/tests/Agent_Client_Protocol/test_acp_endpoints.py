@@ -11,6 +11,7 @@ class StubRunnerClient:
         self.cancelled = []
         self.closed = []
         self.prompt_calls = []
+        self.denied_sessions = set()
         self._updates = {
             "session-123": [
                 {"sessionId": "session-123", "event": "message", "content": "hello"}
@@ -19,6 +20,9 @@ class StubRunnerClient:
 
     async def create_session(self, cwd: str, mcp_servers=None) -> str:
         return "session-123"
+
+    async def verify_session_access(self, session_id: str, user_id: int) -> bool:
+        return session_id not in self.denied_sessions
 
     async def prompt(self, session_id: str, prompt):
         self.prompt_calls.append((session_id, prompt))
@@ -114,3 +118,20 @@ def test_acp_session_new_error(client_user_only, monkeypatch):
     )
     assert resp.status_code == 502
     assert resp.json()["detail"] == "boom"
+
+
+def test_acp_session_prompt_denied_for_unowned_session(client_user_only, stub_runner_client):
+    stub_runner_client.denied_sessions.add("session-999")
+    resp = client_user_only.post(
+        "/api/v1/acp/sessions/prompt",
+        json={"session_id": "session-999", "prompt": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "session_not_found"
+
+
+def test_acp_session_updates_denied_for_unowned_session(client_user_only, stub_runner_client):
+    stub_runner_client.denied_sessions.add("session-999")
+    resp = client_user_only.get("/api/v1/acp/sessions/session-999/updates")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "session_not_found"

@@ -88,6 +88,6 @@ async def test_chat_budget_guard_dependency_returns_principal(tmp_path):
         try:
             await pool.close()
         except Exception:
-            pass
+            _ = None
         await reset_db_pool()
         reset_settings()

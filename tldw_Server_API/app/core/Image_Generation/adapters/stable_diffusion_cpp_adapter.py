@@ -77,7 +77,7 @@ class StableDiffusionCppAdapter:
                 extra_params=extra_params,
                 device=self._config.sd_cpp_device,
             )
-            logger.info("stable-diffusion.cpp: running %s", " ".join(cmd))
+            logger.info("stable-diffusion.cpp: running {}", " ".join(cmd))
             try:
                 result = subprocess.run(
                     cmd,

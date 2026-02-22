@@ -1,13 +1,16 @@
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from importlib import import_module
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 
@@ -20,16 +23,39 @@ def client_with_user(monkeypatch, tmp_path):
     async def override_user():
         return User(id=555, username="wluser", email=None, is_active=True)
 
-    # Route user DB base dir into project Databases to avoid permission issues
-    base_dir = Path.cwd() / "Databases" / "test_user_dbs"
+    # Route user DB base dir into an isolated temp directory per test.
+    base_dir = tmp_path / "test_user_dbs"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    # Keep this suite focused on watchlists API behavior; seeding behavior is covered separately.
+    monkeypatch.setenv("WATCHLISTS_SEED_OUTPUT_TEMPLATES", "false")
 
     mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")
     app.dependency_overrides[get_request_user] = override_user
     with TestClient(app) as client:
         yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def client_with_mutable_user(monkeypatch, tmp_path):
+    user_state: dict[str, int] = {"id": 555}
+
+    async def override_user():
+        current_id = int(user_state["id"])
+        return User(id=current_id, username=f"wluser{current_id}", email=None, is_active=True)
+
+    base_dir = tmp_path / "test_user_dbs_mutable"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    monkeypatch.setenv("WATCHLISTS_SEED_OUTPUT_TEMPLATES", "false")
+
+    mod = import_module("tldw_Server_API.app.main")
+    app = getattr(mod, "app")
+    app.dependency_overrides[get_request_user] = override_user
+    with TestClient(app) as client:
+        yield client, user_state
     app.dependency_overrides.clear()
 
 
@@ -97,8 +123,22 @@ def test_sources_crud_and_tags(client_with_user):
     # Delete source
     r = c.delete(f"/api/v1/watchlists/sources/{sid}")
     assert r.status_code == 200
+    delete_payload = r.json()
+    assert delete_payload["success"] is True
+    assert int(delete_payload["source_id"]) == sid
+    assert int(delete_payload["restore_window_seconds"]) >= 1
+    assert delete_payload.get("restore_expires_at")
+
     r = c.get(f"/api/v1/watchlists/sources/{sid}")
     assert r.status_code == 404
+
+    # Restore source
+    r = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert r.status_code == 200, r.text
+    restored = r.json()
+    assert int(restored["id"]) == sid
+    assert set(restored.get("tags", [])) == {"updates", "tech"}
+    assert restored.get("group_ids") == [group_b["id"]]
 
 
 def test_sources_test_endpoint(client_with_user, monkeypatch):
@@ -130,6 +170,118 @@ def test_sources_test_endpoint(client_with_user, monkeypatch):
     assert data["filtered"] == 0
     assert all(it["source_id"] == sid for it in data["items"])
 
+
+def test_sources_test_draft_endpoint_create_mode(client_with_user, monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "1")
+    c = client_with_user
+
+    r = c.post(
+        "/api/v1/watchlists/sources/test",
+        params={"limit": 3},
+        json={
+            "url": "https://example.com/draft-source",
+            "source_type": "site",
+        },
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] >= 1
+    assert data["ingestable"] == data["total"]
+    assert data["filtered"] == 0
+    assert all(int(it["source_id"]) == 0 for it in data["items"])
+    assert all(str(it["source_type"]) == "site" for it in data["items"])
+
+
+def test_sources_test_draft_endpoint_forum_disabled(client_with_user, monkeypatch):
+    monkeypatch.delenv("WATCHLIST_FORUMS_ENABLED", raising=False)
+    c = client_with_user
+
+    r = c.post(
+        "/api/v1/watchlists/sources/test",
+        json={
+            "url": "https://forum.example.com/thread/1",
+            "source_type": "forum",
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "forum_sources_disabled" in r.text
+
+
+def test_sources_check_now_endpoint_triggers_runs_and_items(client_with_user, monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "1")
+    c = client_with_user
+    source_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Check RSS",
+            "url": "https://example.com/check-rss.xml",
+            "source_type": "rss",
+        },
+    )
+    assert source_resp.status_code == 200, source_resp.text
+    source_id = int(source_resp.json()["id"])
+
+    check_resp = c.post(
+        "/api/v1/watchlists/sources/check-now",
+        json={"source_ids": [source_id, source_id]},
+    )
+    assert check_resp.status_code == 200, check_resp.text
+    payload = check_resp.json()
+    assert payload["total"] == 1
+    assert payload["success"] == 1
+    assert payload["failed"] == 0
+    assert payload["items"][0]["source_id"] == source_id
+    assert payload["items"][0]["status"] == "ok"
+    assert payload["items"][0].get("last_scraped_at")
+    run_id = payload["items"][0].get("run_id")
+    assert isinstance(run_id, int) and run_id > 0
+
+    runs_resp = c.get("/api/v1/watchlists/runs", params={"page": 1, "size": 20})
+    assert runs_resp.status_code == 200, runs_resp.text
+    run_ids = [int(run["id"]) for run in runs_resp.json().get("items", [])]
+    assert run_id in run_ids
+
+    items_resp = c.get("/api/v1/watchlists/items", params={"source_id": source_id, "page": 1, "size": 20})
+    assert items_resp.status_code == 200, items_resp.text
+    items_payload = items_resp.json()
+    assert int(items_payload.get("total", 0)) >= 1
+    assert any(int(item.get("source_id", -1)) == source_id for item in items_payload.get("items", []))
+
+
+def test_sources_check_now_reports_run_errors_and_missing_sources(client_with_user, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import watchlists as watchlists_endpoints
+
+    async def _raise_run_error(*_args, **_kwargs):
+        raise RuntimeError("run_failed")
+
+    monkeypatch.setattr(watchlists_endpoints, "run_watchlist_job", _raise_run_error)
+
+    c = client_with_user
+    src_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Broken RSS",
+            "url": "https://example.com/broken-rss.xml",
+            "source_type": "rss",
+        },
+    )
+    assert src_resp.status_code == 200, src_resp.text
+    source_id = int(src_resp.json()["id"])
+
+    check_resp = c.post(
+        "/api/v1/watchlists/sources/check-now",
+        json={"source_ids": [source_id, 999999]},
+    )
+    assert check_resp.status_code == 200, check_resp.text
+    payload = check_resp.json()
+    assert payload["total"] == 2
+    assert payload["success"] == 0
+    assert payload["failed"] == 2
+
+    by_source = {int(item["source_id"]): item for item in payload["items"]}
+    assert by_source[source_id]["status"] == "error"
+    assert by_source[source_id]["detail"] == "run_trigger_failed"
+    assert by_source[999999]["status"] == "not_found"
 
 def test_source_group_validation_and_idempotent_create(client_with_user):
 
@@ -193,6 +345,141 @@ def test_source_group_validation_and_idempotent_create(client_with_user):
     assert "group_not_found" in r.text
 
 
+def test_source_restore_expired_window_returns_gone(client_with_user):
+    c = client_with_user
+
+    create_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Expiring Source",
+            "url": "https://example.com/expiring-source.xml",
+            "source_type": "rss",
+            "tags": ["expiring"],
+            "group_ids": [],
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    sid = int(create_resp.json()["id"])
+
+    delete_resp = c.delete(f"/api/v1/watchlists/sources/{sid}")
+    assert delete_resp.status_code == 200, delete_resp.text
+
+    db = WatchlistsDatabase.for_user(555)
+    db.backend.execute(
+        "UPDATE deleted_sources SET expires_at = ? WHERE user_id = ? AND source_id = ?",
+        ("2000-01-01T00:00:00+00:00", "555", sid),
+    )
+
+    restore_resp = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert restore_resp.status_code == 410, restore_resp.text
+    assert restore_resp.json().get("detail") == "source_restore_expired"
+
+    # Expired tombstones are purged on first restore attempt.
+    restore_again_resp = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert restore_again_resp.status_code == 404, restore_again_resp.text
+
+
+def test_restore_requires_original_user_context(client_with_mutable_user):
+    c, user_state = client_with_mutable_user
+
+    create_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Scoped Source",
+            "url": "https://example.com/scoped-source.xml",
+            "source_type": "rss",
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    sid = int(create_resp.json()["id"])
+
+    delete_resp = c.delete(f"/api/v1/watchlists/sources/{sid}")
+    assert delete_resp.status_code == 200, delete_resp.text
+
+    user_state["id"] = 777
+    unauthorized_restore = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert unauthorized_restore.status_code == 404, unauthorized_restore.text
+    assert unauthorized_restore.json().get("detail") == "source_restore_not_found"
+
+    user_state["id"] = 555
+    authorized_restore = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert authorized_restore.status_code == 200, authorized_restore.text
+    assert int(authorized_restore.json()["id"]) == sid
+
+
+def test_job_delete_and_restore_fidelity(client_with_user):
+    c = client_with_user
+
+    source_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Source For Job Restore",
+            "url": "https://example.com/job-restore-source.xml",
+            "source_type": "rss",
+            "tags": ["restore-tag"],
+        },
+    )
+    assert source_resp.status_code == 200, source_resp.text
+    source_id = int(source_resp.json()["id"])
+
+    group_resp = c.post(
+        "/api/v1/watchlists/groups",
+        json={"name": "Restore Group", "description": "for restore"},
+    )
+    assert group_resp.status_code == 200, group_resp.text
+    group_id = int(group_resp.json()["id"])
+
+    job_body = {
+        "name": "Restore Fidelity Job",
+        "description": "Ensure restored jobs preserve payload fields",
+        "scope": {"sources": [source_id], "groups": [group_id], "tags": ["restore-tag"]},
+        "schedule_expr": "*/15 * * * *",
+        "timezone": "UTC",
+        "active": False,
+        "max_concurrency": 2,
+        "per_host_delay_ms": 500,
+        "retry_policy": {"retries": 3, "backoff_seconds": 10},
+        "output_prefs": {"template_name": "daily-brief", "delivery_config": {"create_chatbook": True}},
+        "job_filters": {"filters": [{"type": "keyword", "action": "include", "value": {"keywords": ["ai"]}}]},
+    }
+    create_job_resp = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert create_job_resp.status_code == 200, create_job_resp.text
+    created_job = create_job_resp.json()
+    job_id = int(created_job["id"])
+
+    delete_job_resp = c.delete(f"/api/v1/watchlists/jobs/{job_id}")
+    assert delete_job_resp.status_code == 200, delete_job_resp.text
+    delete_payload = delete_job_resp.json()
+    assert delete_payload["success"] is True
+    assert int(delete_payload["job_id"]) == job_id
+    assert int(delete_payload["restore_window_seconds"]) >= 1
+    assert delete_payload.get("restore_expires_at")
+
+    get_deleted = c.get(f"/api/v1/watchlists/jobs/{job_id}")
+    assert get_deleted.status_code == 404, get_deleted.text
+
+    restore_job_resp = c.post(f"/api/v1/watchlists/jobs/{job_id}/restore")
+    assert restore_job_resp.status_code == 200, restore_job_resp.text
+    restored_job = restore_job_resp.json()
+
+    assert int(restored_job["id"]) == job_id
+    assert restored_job["name"] == job_body["name"]
+    assert restored_job["description"] == job_body["description"]
+    assert restored_job["scope"] == job_body["scope"]
+    assert restored_job["schedule_expr"] == job_body["schedule_expr"]
+    assert restored_job["timezone"] == job_body["timezone"]
+    assert restored_job["active"] is job_body["active"]
+    assert restored_job["max_concurrency"] == job_body["max_concurrency"]
+    assert restored_job["per_host_delay_ms"] == job_body["per_host_delay_ms"]
+    assert restored_job["retry_policy"] == job_body["retry_policy"]
+    assert restored_job["output_prefs"] == job_body["output_prefs"]
+    restored_filters = restored_job.get("job_filters") or {}
+    assert restored_filters.get("require_include") is None
+    assert isinstance(restored_filters.get("filters"), list) and len(restored_filters["filters"]) == 1
+    assert restored_filters["filters"][0]["type"] == "keyword"
+    assert restored_filters["filters"][0]["action"] == "include"
+    assert restored_filters["filters"][0]["value"] == {"keywords": ["ai"]}
+
 def test_bulk_sources_and_groups_and_jobs(client_with_user):
 
 
@@ -255,6 +542,179 @@ def test_bulk_sources_and_groups_and_jobs(client_with_user):
     r = c.get(f"/api/v1/watchlists/runs/{rid}")
     assert r.status_code == 200
 
+
+def _assert_watchlists_validation_error(resp, *, rule: str, message_key: str) -> dict:
+    assert resp.status_code == 422, resp.text
+    payload = resp.json()
+    detail = payload.get("detail")
+    assert isinstance(detail, dict), payload
+    assert detail.get("code") == "watchlists_validation_error"
+    assert detail.get("rule") == rule
+    assert detail.get("message_key") == message_key
+    assert isinstance(detail.get("message"), str) and detail.get("message")
+    assert isinstance(detail.get("remediation"), str) and detail.get("remediation")
+    return detail
+
+
+def test_create_job_scope_validation_returns_structured_detail(client_with_user):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Invalid Scope Job",
+            "scope": {"sources": [], "groups": [], "tags": []},
+            "schedule_expr": None,
+            "timezone": "UTC",
+            "active": True,
+        },
+    )
+    _assert_watchlists_validation_error(
+        r,
+        rule="scope_required",
+        message_key="watchlists:jobs.form.scopeRequired",
+    )
+
+
+def test_create_job_schedule_validation_returns_structured_detail(client_with_user):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Too Frequent Job",
+            "scope": {"tags": ["alpha"]},
+            "schedule_expr": "* * * * *",
+            "timezone": "UTC",
+            "active": True,
+        },
+    )
+    detail = _assert_watchlists_validation_error(
+        r,
+        rule="schedule_too_frequent",
+        message_key="watchlists:jobs.form.scheduleTooFrequent",
+    )
+    meta = detail.get("meta")
+    assert isinstance(meta, dict)
+    assert int(meta.get("minimum_minutes", 0)) >= 1
+    assert float(meta.get("detected_interval_minutes", 0)) <= 1.0
+
+
+def test_create_job_email_validation_returns_structured_detail(client_with_user):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Invalid Email Job",
+            "scope": {"tags": ["alpha"]},
+            "schedule_expr": None,
+            "timezone": "UTC",
+            "active": True,
+            "output_prefs": {
+                "deliveries": {
+                    "email": {
+                        "recipients": ["valid@example.com", "bad-email", "also bad"]
+                    }
+                }
+            },
+        },
+    )
+    detail = _assert_watchlists_validation_error(
+        r,
+        rule="invalid_email_recipients",
+        message_key="watchlists:jobs.form.emailRecipientsInvalidSubmit",
+    )
+    meta = detail.get("meta")
+    assert isinstance(meta, dict)
+    assert int(meta.get("count", 0)) == 2
+    assert "bad-email" in (meta.get("invalid_recipients") or [])
+
+
+def test_update_job_email_validation_returns_structured_detail(client_with_user):
+    c = client_with_user
+    create_resp = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Updatable Job",
+            "scope": {"tags": ["alpha"]},
+            "schedule_expr": None,
+            "timezone": "UTC",
+            "active": True,
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    job_id = int(create_resp.json()["id"])
+
+    update_resp = c.patch(
+        f"/api/v1/watchlists/jobs/{job_id}",
+        json={
+            "output_prefs": {
+                "deliveries": {"email": {"recipients": ["not-an-email"]}}
+            }
+        },
+    )
+    detail = _assert_watchlists_validation_error(
+        update_resp,
+        rule="invalid_email_recipients",
+        message_key="watchlists:jobs.form.emailRecipientsInvalidSubmit",
+    )
+    meta = detail.get("meta")
+    assert isinstance(meta, dict)
+    assert int(meta.get("count", 0)) == 1
+    assert "not-an-email" in (meta.get("invalid_recipients") or [])
+
+
+def test_cancel_run_endpoint_marks_running_run_cancelled(client_with_user):
+    c = client_with_user
+    db = WatchlistsDatabase.for_user(555)
+    job = db.create_job(
+        name="Cancelable Job",
+        description=None,
+        scope_json=json.dumps({"sources": []}),
+        schedule_expr=None,
+        schedule_timezone=None,
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+    run = db.create_run(job_id=job.id, status="running")
+
+    cancel_resp = c.post(f"/api/v1/watchlists/runs/{run.id}/cancel")
+    assert cancel_resp.status_code == 200, cancel_resp.text
+    payload = cancel_resp.json()
+    assert payload["run_id"] == run.id
+    assert payload["cancelled"] is True
+    assert payload["status"] == "cancelled"
+
+    run_resp = c.get(f"/api/v1/watchlists/runs/{run.id}")
+    assert run_resp.status_code == 200, run_resp.text
+    assert run_resp.json()["status"] == "cancelled"
+
+
+def test_cancel_run_endpoint_rejects_terminal_runs(client_with_user):
+    c = client_with_user
+    db = WatchlistsDatabase.for_user(555)
+    job = db.create_job(
+        name="Terminal Job",
+        description=None,
+        scope_json=json.dumps({"sources": []}),
+        schedule_expr=None,
+        schedule_timezone=None,
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+    run = db.create_run(job_id=job.id, status="completed")
+
+    cancel_resp = c.post(f"/api/v1/watchlists/runs/{run.id}/cancel")
+    assert cancel_resp.status_code == 200, cancel_resp.text
+    payload = cancel_resp.json()
+    assert payload["run_id"] == run.id
+    assert payload["cancelled"] is False
+    assert payload["status"] == "completed"
+    assert payload["message"] == "run_not_cancellable"
 
 def test_forum_sources_feature_flag(client_with_user, monkeypatch):
     c = client_with_user
@@ -349,6 +809,21 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     first_item = data["items"][0]
     item_id = first_item["id"]
     assert first_item["status"] in {"ingested", "error", "duplicate"}
+    assert "content" in first_item
+
+    # Item detail should also expose content for feed-reader style rendering.
+    r = c.get(f"/api/v1/watchlists/items/{item_id}")
+    assert r.status_code == 200, r.text
+    item_detail = r.json()
+    assert "content" in item_detail
+
+    # Search should match content text as well as title/summary.
+    if item_detail.get("content"):
+        term = str(item_detail["content"]).split()[0]
+        r = c.get("/api/v1/watchlists/items", params={"run_id": run_id, "q": term})
+        assert r.status_code == 200, r.text
+        matches = r.json().get("items", [])
+        assert any(it["id"] == item_id for it in matches)
 
     # Mark reviewed
     r = c.patch(f"/api/v1/watchlists/items/{item_id}", json={"reviewed": True})
@@ -412,7 +887,8 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     assert r.status_code == 200, r.text
 
     # Output templates (DB-backed)
-    db_template_name = f"db_daily_md_{run_id}"
+    unique_suffix = uuid.uuid4().hex[:8]
+    db_template_name = f"db_daily_md_{unique_suffix}"
     db_template_payload = {
         "name": db_template_name,
         "type": "briefing_markdown",
@@ -436,8 +912,9 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     assert r.status_code == 200, r.text
 
     # Template management
+    legacy_template_name = f"daily_md_{unique_suffix}"
     template_payload = {
-        "name": "daily_md",
+        "name": legacy_template_name,
         "format": "md",
         "content": "{{ title }}\\n{% for item in items %}- {{ loop.index }}. {{ item.title }}{% endfor %}",
         "description": "Markdown summary template",
@@ -452,31 +929,54 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     r = c.get("/api/v1/watchlists/templates")
     assert r.status_code == 200
     templates = r.json()["items"]
-    assert any(t["name"] == "daily_md" for t in templates)
+    assert any(t["name"] == legacy_template_name for t in templates)
 
     # Get template detail
-    r = c.get("/api/v1/watchlists/templates/daily_md")
+    r = c.get(f"/api/v1/watchlists/templates/{legacy_template_name}")
     assert r.status_code == 200
     template_detail = r.json()
     assert "Markdown summary template" in template_detail["description"]
 
     # Generate output using stored template
-    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": "daily_md", "temporary": True})
+    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": legacy_template_name, "temporary": True})
     assert r.status_code == 200, r.text
     templated = r.json()
     assert templated["version"] == 5
     assert templated["format"] == "md"
-    assert templated["metadata"].get("template_name") == "daily_md"
+    assert templated["metadata"].get("template_name") == legacy_template_name
     assert templated["metadata"].get("template_source") == "watchlists_templates"
     assert templated["content"].startswith("Daily Digest-Output-5") or "Daily Digest" in templated["content"]
 
+    # When both stores have the same template name, DB-backed outputs template wins.
+    collision_payload = {
+        "name": legacy_template_name,
+        "type": "briefing_markdown",
+        "format": "md",
+        "body": "DB OVERRIDE {{ title }}",
+        "description": "DB-backed collision template",
+    }
+    r = c.post("/api/v1/outputs/templates", json=collision_payload)
+    assert r.status_code == 200, r.text
+    colliding_db_template = r.json()
+
+    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": legacy_template_name, "temporary": True})
+    assert r.status_code == 200, r.text
+    collision_output = r.json()
+    assert collision_output["version"] == 6
+    assert collision_output["metadata"].get("template_source") == "outputs_templates"
+    assert collision_output["metadata"].get("template_id") == colliding_db_template["id"]
+    assert "DB OVERRIDE" in (collision_output.get("content") or "")
+
+    r = c.delete(f"/api/v1/outputs/templates/{colliding_db_template['id']}")
+    assert r.status_code == 200, r.text
+
     # Delete template and confirm removal
-    r = c.delete("/api/v1/watchlists/templates/daily_md")
+    r = c.delete(f"/api/v1/watchlists/templates/{legacy_template_name}")
     assert r.status_code == 200
-    r = c.get("/api/v1/watchlists/templates/daily_md")
+    r = c.get(f"/api/v1/watchlists/templates/{legacy_template_name}")
     assert r.status_code == 404
     r = c.get("/api/v1/watchlists/templates")
-    assert all(t["name"] != "daily_md" for t in r.json().get("items", []))
+    assert all(t["name"] != legacy_template_name for t in r.json().get("items", []))
 
 
 def test_watchlists_outputs_variants_and_ingest(client_with_user, monkeypatch):
@@ -591,6 +1091,70 @@ def test_watchlists_outputs_variants_and_ingest(client_with_user, monkeypatch):
     assert r.status_code == 200, r.text
 
 
+def test_watchlists_outputs_pagination_excludes_mixed_origin_rows(client_with_user):
+    c = client_with_user
+    cdb = CollectionsDatabase.for_user(555)
+    suffix = uuid.uuid4().hex[:8]
+    job_id = int(f"91{suffix[:6]}", 16) % 1_000_000
+    run_id = job_id + 1
+
+    wl_old = cdb.create_output_artifact(
+        type_="briefing_markdown",
+        title=f"wl-old-{suffix}",
+        format_="md",
+        storage_path=f"wl-old-{suffix}.md",
+        metadata_json=json.dumps({"origin": "watchlists"}),
+        job_id=job_id,
+        run_id=run_id,
+    )
+    wl_new = cdb.create_output_artifact(
+        type_="briefing_markdown",
+        title=f"wl-new-{suffix}",
+        format_="md",
+        storage_path=f"wl-new-{suffix}.md",
+        metadata_json=json.dumps({"origin": "watchlists"}),
+        job_id=job_id,
+        run_id=run_id,
+    )
+    nw_1 = cdb.create_output_artifact(
+        type_="briefing_markdown",
+        title=f"non-watch-1-{suffix}",
+        format_="md",
+        storage_path=f"non-watch-1-{suffix}.md",
+        metadata_json=json.dumps({"origin": "outputs"}),
+        job_id=job_id,
+        run_id=run_id,
+    )
+    nw_2 = cdb.create_output_artifact(
+        type_="briefing_markdown",
+        title=f"non-watch-2-{suffix}",
+        format_="md",
+        storage_path=f"non-watch-2-{suffix}.md",
+        metadata_json=json.dumps({"origin": "outputs"}),
+        job_id=job_id,
+        run_id=run_id,
+    )
+
+    r = c.get("/api/v1/watchlists/outputs", params={"job_id": job_id, "page": 1, "size": 1})
+    assert r.status_code == 200, r.text
+    page1 = r.json()
+    assert page1["total"] == 2
+    assert len(page1["items"]) == 1
+    assert page1["items"][0]["id"] == wl_new.id
+
+    r = c.get("/api/v1/watchlists/outputs", params={"job_id": job_id, "page": 2, "size": 1})
+    assert r.status_code == 200, r.text
+    page2 = r.json()
+    assert page2["total"] == 2
+    assert len(page2["items"]) == 1
+    assert page2["items"][0]["id"] == wl_old.id
+
+    returned_ids = {page1["items"][0]["id"], page2["items"][0]["id"]}
+    assert returned_ids == {wl_old.id, wl_new.id}
+    assert nw_1.id not in returned_ids
+    assert nw_2.id not in returned_ids
+
+
 def test_preview_site_sources_returns_items(client_with_user, monkeypatch):
 
 
@@ -701,3 +1265,147 @@ def test_output_deliveries_email_and_chatbook(client_with_user, monkeypatch, tmp
             assert stored_meta.get("job_id") == job_id
             assert stored_meta.get("run_id") == run_id
             assert stored_meta.get("origin") == "test"
+
+
+def test_outputs_generate_audio_payload_triggers_workflow_and_updates_run_stats(client_with_user, monkeypatch):
+
+
+    c = client_with_user
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    src_body = {
+        "name": "Audio Feed",
+        "url": "https://example.com/audio.xml",
+        "source_type": "rss",
+        "tags": ["audio"],
+    }
+    r = c.post("/api/v1/watchlists/sources", json=src_body)
+    assert r.status_code == 200, r.text
+
+    job_body = {
+        "name": "Audio Digest",
+        "scope": {"tags": ["audio"]},
+        "schedule_expr": None,
+        "timezone": "UTC",
+        "active": True,
+    }
+    r = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{job_id}/run")
+    assert r.status_code == 200, r.text
+    run_id = r.json()["id"]
+
+    with patch(
+        "tldw_Server_API.app.core.Watchlists.audio_briefing_workflow.trigger_audio_briefing",
+        new=AsyncMock(return_value="task_output_audio"),
+    ) as mock_trigger:
+        r = c.post(
+            "/api/v1/watchlists/outputs",
+            json={
+                "run_id": run_id,
+                "title": "Audio Briefing Output",
+                "generate_audio": True,
+                "target_audio_minutes": 5,
+                "audio_model": "tts-1",
+                "audio_voice": "nova",
+                "audio_speed": 1.2,
+                "background_audio_uri": "file:///tmp/background.mp3",
+                "background_volume": 0.25,
+                "background_delay_ms": 750,
+                "background_fade_seconds": 2.5,
+                "audio_language": "fr",
+                "llm_provider": "openai",
+                "llm_model": "gpt-4o-mini",
+                "persona_summarize": True,
+                "persona_id": "analyst",
+                "persona_provider": "openai",
+                "persona_model": "gpt-4o-mini",
+                "voice_map": {"HOST": "af_bella"},
+            },
+        )
+    assert r.status_code == 200, r.text
+    output = r.json()
+    metadata = output.get("metadata", {})
+    assert metadata.get("audio_briefing_requested") is True
+    assert metadata.get("audio_briefing_task_id") == "task_output_audio"
+    assert metadata.get("audio_briefing_status") == "pending"
+
+    assert mock_trigger.await_count == 1
+    kwargs = mock_trigger.await_args.kwargs
+    assert kwargs["user_id"] == 555
+    assert kwargs["job_id"] == job_id
+    assert kwargs["run_id"] == run_id
+    assert kwargs["output_prefs"]["generate_audio"] is True
+    assert kwargs["output_prefs"]["target_audio_minutes"] == 5
+    assert kwargs["output_prefs"]["audio_model"] == "tts-1"
+    assert kwargs["output_prefs"]["audio_voice"] == "nova"
+    assert kwargs["output_prefs"]["audio_speed"] == 1.2
+    assert kwargs["output_prefs"]["background_audio_uri"] == "file:///tmp/background.mp3"
+    assert kwargs["output_prefs"]["background_volume"] == 0.25
+    assert kwargs["output_prefs"]["background_delay_ms"] == 750
+    assert kwargs["output_prefs"]["background_fade_seconds"] == 2.5
+    assert kwargs["output_prefs"]["audio_language"] == "fr"
+    assert kwargs["output_prefs"]["llm_provider"] == "openai"
+    assert kwargs["output_prefs"]["llm_model"] == "gpt-4o-mini"
+    assert kwargs["output_prefs"]["persona_summarize"] is True
+    assert kwargs["output_prefs"]["persona_id"] == "analyst"
+    assert kwargs["output_prefs"]["persona_provider"] == "openai"
+    assert kwargs["output_prefs"]["persona_model"] == "gpt-4o-mini"
+    assert kwargs["output_prefs"]["voice_map"] == {"HOST": "af_bella"}
+
+    r = c.get(f"/api/v1/watchlists/runs/{run_id}")
+    assert r.status_code == 200, r.text
+    run_payload = r.json()
+    assert run_payload.get("stats", {}).get("audio_briefing_task_id") == "task_output_audio"
+
+
+def test_outputs_generate_audio_false_does_not_trigger_workflow(client_with_user, monkeypatch):
+
+
+    c = client_with_user
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    src_body = {
+        "name": "No Audio Feed",
+        "url": "https://example.com/no-audio.xml",
+        "source_type": "rss",
+        "tags": ["silent"],
+    }
+    r = c.post("/api/v1/watchlists/sources", json=src_body)
+    assert r.status_code == 200, r.text
+
+    job_body = {
+        "name": "No Audio Digest",
+        "scope": {"tags": ["silent"]},
+        "schedule_expr": None,
+        "timezone": "UTC",
+        "active": True,
+    }
+    r = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{job_id}/run")
+    assert r.status_code == 200, r.text
+    run_id = r.json()["id"]
+
+    with patch(
+        "tldw_Server_API.app.core.Watchlists.audio_briefing_workflow.trigger_audio_briefing",
+        new=AsyncMock(return_value="task_should_not_exist"),
+    ) as mock_trigger:
+        r = c.post(
+            "/api/v1/watchlists/outputs",
+            json={
+                "run_id": run_id,
+                "title": "No Audio Output",
+                "generate_audio": False,
+            },
+        )
+    assert r.status_code == 200, r.text
+    output = r.json()
+    metadata = output.get("metadata", {})
+    assert "audio_briefing_requested" not in metadata
+    assert "audio_briefing_task_id" not in metadata
+    assert mock_trigger.await_count == 0

@@ -31,14 +31,10 @@ class AuthnzOrgsTeamsRepo:
 
     def _is_postgres(self, conn: Any | None = None) -> bool:
         """
-        Detect whether the current backend/connection is Postgres.
-
-        When a connection object is available, prefer checking for asyncpg-style
-        methods; otherwise, fall back to the pool attribute on DatabasePool.
+        Detect whether the configured backend is PostgreSQL from pool state.
         """
-        if conn is not None:
-            return hasattr(conn, "fetchrow")
-        return getattr(self.db_pool, "pool", None) is not None
+        _ = conn  # Compatibility placeholder for legacy call sites.
+        return bool(getattr(self.db_pool, "pool", None))
 
     async def create_organization(
         self,
@@ -271,19 +267,19 @@ class AuthnzOrgsTeamsRepo:
                 limit_param = param_count + 1
                 offset_param = param_count + 2
                 rows = await self.db_pool.fetchall(
-                    f"""
+                    """
                     SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
                     FROM organizations{where_clause}
                     ORDER BY created_at DESC
                     LIMIT ${limit_param} OFFSET ${offset_param}
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     *params,
                     limit,
                     offset,
                 )
                 total = (
                     await self.db_pool.fetchval(
-                        f"SELECT COUNT(*) FROM organizations{where_clause}",
+                        f"SELECT COUNT(*) FROM organizations{where_clause}",  # nosec B608
                         *params,
                     )
                     if with_total
@@ -314,12 +310,12 @@ class AuthnzOrgsTeamsRepo:
 
                 where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
                 cursor = await conn.execute(
-                    f"""
+                    """
                     SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
                     FROM organizations{where_clause}
                     ORDER BY created_at DESC
                     LIMIT ? OFFSET ?
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     (*params, limit, offset),
                 )
                 rows_raw = await cursor.fetchall()
@@ -337,7 +333,7 @@ class AuthnzOrgsTeamsRepo:
                 ]
                 if with_total:
                     cur2 = await conn.execute(
-                        f"SELECT COUNT(*) FROM organizations{where_clause}",
+                        f"SELECT COUNT(*) FROM organizations{where_clause}",  # nosec B608
                         params,
                     )
                     total_row = await cur2.fetchone()
@@ -407,12 +403,12 @@ class AuthnzOrgsTeamsRepo:
                     set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
                     params = [org_id] + list(updates.values())
                     row = await conn.fetchrow(
-                        f"""
+                        """
                         UPDATE organizations
                         SET {set_clause}, updated_at = CURRENT_TIMESTAMP
                         WHERE id = $1
                         RETURNING id, name, slug, owner_user_id, is_active, created_at, updated_at
-                        """,
+                        """.format_map(locals()),  # nosec B608
                         *params,
                     )
                     if not row:
@@ -447,7 +443,7 @@ class AuthnzOrgsTeamsRepo:
                 set_clause = ", ".join(f"{k} = ?" for k in updates)
                 params = list(updates.values()) + [org_id]
                 await conn.execute(
-                    f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",  # nosec B608
                     tuple(params),
                 )
                 cur = await conn.execute(
@@ -468,6 +464,231 @@ class AuthnzOrgsTeamsRepo:
                 }
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzOrgsTeamsRepo.update_organization failed: {exc}")
+            raise
+
+    async def delete_organization_with_provider_secrets(
+        self,
+        *,
+        org_id: int,
+    ) -> None:
+        """
+        Delete an organization and any provider secrets scoped to it or its teams.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    await conn.execute(
+                        "DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = $1",
+                        org_id,
+                    )
+                    await conn.execute(
+                        """
+                        DELETE FROM org_provider_secrets
+                        WHERE scope_type = 'team'
+                          AND scope_id IN (SELECT id FROM teams WHERE org_id = $1)
+                        """,
+                        org_id,
+                    )
+                    await conn.execute("DELETE FROM organizations WHERE id = $1", org_id)
+                    return
+
+                await conn.execute(
+                    "DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = ?",
+                    (org_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM org_provider_secrets
+                    WHERE scope_type = 'team'
+                      AND scope_id IN (SELECT id FROM teams WHERE org_id = ?)
+                    """,
+                    (org_id,),
+                )
+                await conn.execute("DELETE FROM organizations WHERE id = ?", (org_id,))
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzOrgsTeamsRepo.delete_organization_with_provider_secrets failed: {exc}")
+            raise
+
+    async def transfer_organization_ownership(
+        self,
+        *,
+        org_id: int,
+        new_owner_user_id: int,
+        current_owner_user_id: int,
+    ) -> dict[str, Any] | None:
+        """
+        Transfer organization ownership and update org-member roles atomically.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    await conn.execute(
+                        "UPDATE organizations SET owner_user_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                        new_owner_user_id,
+                        org_id,
+                    )
+                    await conn.execute(
+                        "UPDATE org_members SET role = 'owner' WHERE org_id = $1 AND user_id = $2",
+                        org_id,
+                        new_owner_user_id,
+                    )
+                    await conn.execute(
+                        "UPDATE org_members SET role = 'admin' WHERE org_id = $1 AND user_id = $2",
+                        org_id,
+                        current_owner_user_id,
+                    )
+                    row = await conn.fetchrow(
+                        "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = $1",
+                        org_id,
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    d["is_active"] = bool(d.get("is_active", True))
+                    try:
+                        from datetime import datetime
+
+                        for key in ("created_at", "updated_at"):
+                            if isinstance(d.get(key), datetime):
+                                d[key] = d[key].isoformat()
+                    except (TypeError, ValueError, AttributeError) as exc:
+                        logger.debug(f"Skipping datetime normalization for org row: {exc}")
+                    return d
+
+                await conn.execute(
+                    "UPDATE organizations SET owner_user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (new_owner_user_id, org_id),
+                )
+                await conn.execute(
+                    "UPDATE org_members SET role = 'owner' WHERE org_id = ? AND user_id = ?",
+                    (org_id, new_owner_user_id),
+                )
+                await conn.execute(
+                    "UPDATE org_members SET role = 'admin' WHERE org_id = ? AND user_id = ?",
+                    (org_id, current_owner_user_id),
+                )
+                cur = await conn.execute(
+                    "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = ?",
+                    (org_id,),
+                )
+                row = await cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row[0],
+                    "name": row[1],
+                    "slug": row[2],
+                    "owner_user_id": row[3],
+                    "is_active": bool(row[4]),
+                    "created_at": row[5],
+                    "updated_at": row[6],
+                }
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzOrgsTeamsRepo.transfer_organization_ownership failed: {exc}")
+            raise
+
+    async def update_team(
+        self,
+        *,
+        team_id: int,
+        name: str | None = None,
+        slug: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Update a team row and return the updated projection.
+        """
+        updates: dict[str, Any] = {}
+        if name is not None:
+            updates["name"] = name
+        if slug is not None:
+            updates["slug"] = slug
+        if description is not None:
+            updates["description"] = description
+
+        if not updates:
+            raise ValueError("No fields to update")
+
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
+                    params = [team_id] + list(updates.values())
+                    row = await conn.fetchrow(
+                        """
+                        UPDATE teams
+                        SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = $1
+                        RETURNING id, org_id, name, slug, description, is_active, created_at, updated_at
+                        """.format_map(locals()),  # nosec B608
+                        *params,
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    d["is_active"] = bool(d.get("is_active", True))
+                    try:
+                        from datetime import datetime
+
+                        for key in ("created_at", "updated_at"):
+                            if isinstance(d.get(key), datetime):
+                                d[key] = d[key].isoformat()
+                    except (TypeError, ValueError, AttributeError) as exc:
+                        logger.debug(f"Skipping datetime normalization for team row: {exc}")
+                    return d
+
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
+                params = list(updates.values()) + [team_id]
+                await conn.execute(
+                    f"UPDATE teams SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",  # nosec B608
+                    tuple(params),
+                )
+                cur = await conn.execute(
+                    "SELECT id, org_id, name, slug, description, is_active, created_at, updated_at FROM teams WHERE id = ?",
+                    (team_id,),
+                )
+                row = await cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row[0],
+                    "org_id": row[1],
+                    "name": row[2],
+                    "slug": row[3],
+                    "description": row[4],
+                    "is_active": bool(row[5]),
+                    "created_at": row[6],
+                    "updated_at": row[7],
+                }
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzOrgsTeamsRepo.update_team failed: {exc}")
+            raise
+
+    async def delete_team_with_provider_secrets(
+        self,
+        *,
+        team_id: int,
+    ) -> None:
+        """
+        Delete a team and any team-scoped provider secrets.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    await conn.execute(
+                        "DELETE FROM org_provider_secrets WHERE scope_type = 'team' AND scope_id = $1",
+                        team_id,
+                    )
+                    await conn.execute("DELETE FROM teams WHERE id = $1", team_id)
+                    return
+
+                await conn.execute(
+                    "DELETE FROM org_provider_secrets WHERE scope_type = 'team' AND scope_id = ?",
+                    (team_id,),
+                )
+                await conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzOrgsTeamsRepo.delete_team_with_provider_secrets failed: {exc}")
             raise
 
     # -------------------------------------------------------------------------
@@ -636,7 +857,7 @@ class AuthnzOrgsTeamsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     await conn.execute(
                         """
                         INSERT INTO team_members (team_id, user_id, role)
@@ -745,7 +966,7 @@ class AuthnzOrgsTeamsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     row = await conn.fetchrow(
                         """
                         UPDATE team_members
@@ -791,15 +1012,17 @@ class AuthnzOrgsTeamsRepo:
         """
         List team memberships (including org_id) for a user.
 
-        Returns dicts with ``team_id``, ``user_id``, ``role``, ``org_id``.
+        Returns dicts with ``team_id``, ``user_id``, ``role``, ``org_id``,
+        ``team_name``, and ``org_name``.
         """
         try:
             if self._is_postgres():
                 rows = await self.db_pool.fetchall(
                     """
-                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id
+                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id, t.name AS team_name, o.name AS org_name
                     FROM team_members tm
                     JOIN teams t ON tm.team_id = t.id
+                    JOIN organizations o ON t.org_id = o.id
                     WHERE tm.user_id = $1
                     ORDER BY tm.team_id
                     """,
@@ -810,9 +1033,10 @@ class AuthnzOrgsTeamsRepo:
             async with self.db_pool.acquire() as conn:
                 cur = await conn.execute(
                     """
-                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id
+                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id, t.name, o.name
                     FROM team_members tm
                     JOIN teams t ON tm.team_id = t.id
+                    JOIN organizations o ON t.org_id = o.id
                     WHERE tm.user_id = ?
                     ORDER BY tm.team_id
                     """,
@@ -825,12 +1049,71 @@ class AuthnzOrgsTeamsRepo:
                         "user_id": r[1],
                         "role": r[2],
                         "org_id": r[3],
+                        "team_name": r[4],
+                        "org_name": r[5],
                     }
                     for r in rows
                 ]
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzOrgsTeamsRepo.list_memberships_for_user failed: {exc}"
+            )
+            raise
+
+    async def list_active_team_memberships_for_user(
+        self,
+        user_id: int,
+    ) -> list[dict[str, Any]]:
+        """
+        List active team memberships (including org_id) for a user.
+
+        Returns dicts with ``team_id``, ``user_id``, ``role``, ``org_id``,
+        ``team_name``, and ``org_name``.
+        """
+        try:
+            if self._is_postgres():
+                rows = await self.db_pool.fetchall(
+                    """
+                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id, t.name AS team_name, o.name AS org_name
+                    FROM team_members tm
+                    JOIN teams t ON tm.team_id = t.id
+                    JOIN organizations o ON t.org_id = o.id
+                    WHERE tm.user_id = $1
+                      AND COALESCE(tm.status, 'active') = 'active'
+                    ORDER BY tm.team_id
+                    """,
+                    user_id,
+                )
+                return [dict(r) for r in rows]
+
+            async with self.db_pool.acquire() as conn:
+                cur = await conn.execute(
+                    """
+                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id, t.name, o.name
+                    FROM team_members tm
+                    JOIN teams t ON tm.team_id = t.id
+                    JOIN organizations o ON t.org_id = o.id
+                    WHERE tm.user_id = ?
+                      AND COALESCE(tm.status, 'active') = 'active'
+                    ORDER BY tm.team_id
+                    """,
+                    (user_id,),
+                )
+                rows = await cur.fetchall()
+                return [
+                    {
+                        "team_id": r[0],
+                        "user_id": r[1],
+                        "role": r[2],
+                        "org_id": r[3],
+                        "team_name": r[4],
+                        "org_name": r[5],
+                    }
+                    for r in rows
+                ]
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzOrgsTeamsRepo.list_active_team_memberships_for_user failed: {exc}"
             )
             raise
 
@@ -848,7 +1131,7 @@ class AuthnzOrgsTeamsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 removed = False
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     row = await conn.fetchrow(
                         """
                         DELETE FROM team_members
@@ -876,7 +1159,7 @@ class AuthnzOrgsTeamsRepo:
             }
         except Exception:  # pragma: no cover - surfaced via callers
             logger.exception(
-                "AuthnzOrgsTeamsRepo.remove_team_member failed for team_id=%s user_id=%s",
+                'AuthnzOrgsTeamsRepo.remove_team_member failed for team_id={} user_id={}',
                 team_id,
                 user_id,
             )
@@ -894,7 +1177,7 @@ class AuthnzOrgsTeamsRepo:
         create: bool = True,
     ) -> int | None:
         """Fetch (and optionally create) the Default-Base team for an organization."""
-        if hasattr(conn, "fetchrow"):
+        if self._is_postgres():
             row = await conn.fetchrow(
                 """
                 SELECT id
@@ -962,7 +1245,7 @@ class AuthnzOrgsTeamsRepo:
         team_id = await self._get_or_create_default_team_id(conn, org_id, create=True)
         if team_id is None:
             return
-        if hasattr(conn, "execute") and hasattr(conn, "fetchrow"):
+        if self._is_postgres():
             await conn.execute(
                 """
                 INSERT INTO team_members (team_id, user_id, role)
@@ -992,7 +1275,7 @@ class AuthnzOrgsTeamsRepo:
         team_id = await self._get_or_create_default_team_id(conn, org_id, create=False)
         if team_id is None:
             return
-        if hasattr(conn, "execute") and hasattr(conn, "fetchrow"):
+        if self._is_postgres():
             await conn.execute(
                 """
                 DELETE FROM team_members
@@ -1026,7 +1309,7 @@ class AuthnzOrgsTeamsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     await conn.execute(
                         """
                         INSERT INTO org_members (org_id, user_id, role)
@@ -1084,7 +1367,7 @@ class AuthnzOrgsTeamsRepo:
                     await self._ensure_user_in_default_team(conn, org_id, user_id)
                 except Exception as exc:
                     logger.warning(
-                        "Default team auto-enroll failed for org_id=%s, user_id=%s: %s",
+                        'Default team auto-enroll failed for org_id={}, user_id={}: {}',
                         org_id,
                         user_id,
                         exc,
@@ -1125,7 +1408,7 @@ class AuthnzOrgsTeamsRepo:
                 p += 1
                 params.append(offset)
                 sql = (
-                    f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "
+                    f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "  # nosec B608
                     f"ORDER BY added_at DESC LIMIT ${p-1} OFFSET ${p}"
                 )
                 rows = await self.db_pool.fetchall(sql, *params)
@@ -1142,7 +1425,7 @@ class AuthnzOrgsTeamsRepo:
                     params2.append(status)
                 where_clause = " AND ".join(conditions)
                 sql = (
-                    f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "
+                    f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "  # nosec B608
                     f"ORDER BY added_at DESC LIMIT ? OFFSET ?"
                 )
                 params2.extend([limit, offset])
@@ -1173,7 +1456,7 @@ class AuthnzOrgsTeamsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 removed = False
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     current_role = await conn.fetchval(
                         """
                         SELECT role
@@ -1213,7 +1496,7 @@ class AuthnzOrgsTeamsRepo:
                             await self._remove_user_from_default_team(conn, org_id, user_id)
                         except Exception as exc:
                             logger.warning(
-                                "Default team removal failed for org_id=%s, user_id=%s: %s",
+                                'Default team removal failed for org_id={}, user_id={}: {}',
                                 org_id,
                                 user_id,
                                 exc,
@@ -1261,7 +1544,7 @@ class AuthnzOrgsTeamsRepo:
                             await self._remove_user_from_default_team(conn, org_id, user_id)
                         except Exception as exc:
                             logger.warning(
-                                "Default team removal failed for org_id=%s, user_id=%s: %s",
+                                'Default team removal failed for org_id={}, user_id={}: {}',
                                 org_id,
                                 user_id,
                                 exc,
@@ -1289,7 +1572,7 @@ class AuthnzOrgsTeamsRepo:
         target_role = (role or "").lower()
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     current_role = await conn.fetchval(
                         """
                         SELECT role
@@ -1392,25 +1675,35 @@ class AuthnzOrgsTeamsRepo:
         user_id: int,
     ) -> list[dict[str, Any]]:
         """
-        List org memberships for a user: ``[{org_id, role}]``.
+        List org memberships for a user: ``[{org_id, role, status}]``.
         """
         try:
             if self.db_pool.pool:
                 rows = await self.db_pool.fetchall(
                     """
-                    SELECT org_id, role
+                    SELECT org_id, role, status
                     FROM org_members
                     WHERE user_id = $1
                     ORDER BY org_id
                     """,
                     user_id,
                 )
-                return [dict(r) for r in rows]
+                normalized: list[dict[str, Any]] = []
+                for r in rows:
+                    row_dict = dict(r)
+                    normalized.append(
+                        {
+                            "org_id": int(row_dict.get("org_id")),
+                            "role": row_dict.get("role"),
+                            "status": row_dict.get("status"),
+                        }
+                    )
+                return normalized
 
             async with self.db_pool.acquire() as conn:
                 cur = await conn.execute(
                     """
-                    SELECT org_id, role
+                    SELECT org_id, role, status
                     FROM org_members
                     WHERE user_id = ?
                     ORDER BY org_id
@@ -1418,7 +1711,7 @@ class AuthnzOrgsTeamsRepo:
                     (user_id,),
                 )
                 rows = await cur.fetchall()
-                return [{"org_id": r[0], "role": r[1]} for r in rows]
+                return [{"org_id": r[0], "role": r[1], "status": r[2]} for r in rows]
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzOrgsTeamsRepo.list_org_memberships_for_user failed: {exc}"

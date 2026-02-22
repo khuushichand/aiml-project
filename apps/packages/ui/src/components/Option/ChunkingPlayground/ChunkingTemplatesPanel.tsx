@@ -625,7 +625,7 @@ export const ChunkingTemplatesPanel: React.FC = () => {
                       "settings:chunkingPlayground.templates.filtersTitle",
                       "Filters"
                     )}>
-                    <Space direction="vertical" size={8} className="w-full">
+                    <Space orientation="vertical" size={8} className="w-full">
                       <div className="flex items-center justify-between">
                         <Text>
                           {t(
@@ -681,7 +681,7 @@ export const ChunkingTemplatesPanel: React.FC = () => {
                   <Alert
                     type="warning"
                     showIcon
-                    message={(templateError as Error)?.message}
+                    title={(templateError as Error)?.message}
                   />
                 )}
 
@@ -721,7 +721,7 @@ export const ChunkingTemplatesPanel: React.FC = () => {
                       "Template details"
                     )}
                     className="mt-3">
-                    <Space direction="vertical" size="small" className="w-full">
+                    <Space orientation="vertical" size="small" className="w-full">
                       <div>
                         <Text strong>{selectedTemplate.name}</Text>
                       </div>
@@ -1011,7 +1011,7 @@ export const ChunkingTemplatesPanel: React.FC = () => {
                             ),
                             children: (
                               <Space
-                                direction="vertical"
+                                orientation="vertical"
                                 size="small"
                                 className="w-full">
                                 <Form.Item

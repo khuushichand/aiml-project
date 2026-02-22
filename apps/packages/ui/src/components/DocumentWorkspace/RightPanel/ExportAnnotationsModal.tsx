@@ -144,7 +144,7 @@ export const ExportAnnotationsModal: React.FC<ExportAnnotationsModalProps> = ({
 
         {/* Empty state warning */}
         {annotations.length === 0 && (
-          <div className="rounded border border-yellow-200 bg-yellow-50 dark:bg-yellow-900/20 p-3 text-sm text-yellow-700 dark:text-yellow-400">
+          <div className="rounded border border-warn/30 bg-warn/10 p-3 text-sm text-warn">
             {t(
               "option:documentWorkspace.noAnnotationsToExport",
               "No annotations to export. Add some highlights or notes first."

@@ -340,7 +340,7 @@ class L2DiskCache:
             return False
         with self._lock:
             # Generate file name
-            file_name = f"{hashlib.md5(key.encode()).hexdigest()}.cache"
+            file_name = f"{hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()}.cache"
             file_path = self.cache_dir / file_name
 
             try:

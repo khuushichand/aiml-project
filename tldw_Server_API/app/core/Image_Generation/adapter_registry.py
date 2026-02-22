@@ -18,6 +18,9 @@ class ImageAdapterRegistry:
     DEFAULT_ADAPTERS: dict[str, str] = {
         "stable_diffusion_cpp": "tldw_Server_API.app.core.Image_Generation.adapters.stable_diffusion_cpp_adapter.StableDiffusionCppAdapter",
         "swarmui": "tldw_Server_API.app.core.Image_Generation.adapters.swarmui_adapter.SwarmUIAdapter",
+        "openrouter": "tldw_Server_API.app.core.Image_Generation.adapters.openrouter_image_adapter.OpenRouterImageAdapter",
+        "novita": "tldw_Server_API.app.core.Image_Generation.adapters.novita_image_adapter.NovitaImageAdapter",
+        "together": "tldw_Server_API.app.core.Image_Generation.adapters.together_image_adapter.TogetherImageAdapter",
     }
 
     def __init__(self, config_override: dict[str, Any] | None = None) -> None:
@@ -40,7 +43,7 @@ class ImageAdapterRegistry:
             adapter_name = adapter.__name__  # type: ignore[attr-defined]
         except Exception:
             adapter_name = str(adapter)
-        logger.info("Registered image adapter %s for backend '%s'", adapter_name, name)
+        logger.info("Registered image adapter {} for backend '{}'", adapter_name, name)
 
     def list_backend_names(self, *, include_disabled: bool = False) -> list[str]:
         names = list(self._adapter_specs.keys())
@@ -80,7 +83,7 @@ class ImageAdapterRegistry:
 
         spec = self._adapter_specs.get(name)
         if not spec:
-            logger.debug("No image adapter spec registered for backend '%s'", name)
+            logger.debug("No image adapter spec registered for backend '{}'", name)
             return None
 
         try:
@@ -89,18 +92,18 @@ class ImageAdapterRegistry:
             self._adapters[name] = adapter
             return adapter
         except Exception as exc:
-            logger.error("Failed to initialize image adapter for '%s': %s", name, exc)
+            logger.error("Failed to initialize image adapter for '{}': {}", name, exc)
             return None
 
     def get_adapter_class(self, name: str) -> type[ImageGenerationAdapter] | None:
         spec = self._adapter_specs.get(name)
         if not spec:
-            logger.debug("No image adapter spec registered for backend '%s'", name)
+            logger.debug("No image adapter spec registered for backend '{}'", name)
             return None
         try:
             return self._resolve_adapter_class(spec)
         except Exception as exc:
-            logger.error("Failed to resolve image adapter class for '%s': %s", name, exc)
+            logger.error("Failed to resolve image adapter class for '{}': {}", name, exc)
             return None
 
     @staticmethod

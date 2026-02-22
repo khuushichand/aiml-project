@@ -36,6 +36,9 @@ How to apply changes
 
 ## [Server]
 - `disable_cors` (bool): Disable CORS protections for development.
+- `cors_allow_credentials` (bool): Include `Access-Control-Allow-Credentials` on CORS responses.
+  - Default: `false` (safer; compatible with wildcard origins in local/test).
+  - Env override: `CORS_ALLOW_CREDENTIALS=true|false`
 - `trusted_proxies` (csv): Proxy IPs/CIDRs trusted for X-Forwarded-For/X-Real-IP processing.
   - If the socket peer is in this list, the server uses the leftmost X-Forwarded-For IP as the client.
   - Env override: `TLDW_TRUSTED_PROXIES="10.0.0.0/8,192.168.0.0/16,127.0.0.1"`
@@ -194,6 +197,14 @@ For each type in `chunking_types` (`article|audio|book|document|mediawiki_articl
 - `CLAIMS_EMBED_MODEL_ID` (str)
 - `CLAIMS_LLM_PROVIDER|CLAIMS_LLM_MODEL` (str)
 - `CLAIMS_LLM_TEMPERATURE` (float)
+- `CLAIMS_JSON_PARSE_MODE` (str): `lenient|strict`
+- `CLAIMS_ALIGNMENT_MODE` (str): `off|exact|fuzzy`
+- `CLAIMS_ALIGNMENT_THRESHOLD` (float)
+- `CLAIMS_MONITORING_ENABLED` (bool)
+- `CLAIMS_ADAPTIVE_THROTTLE_ENABLED` (bool)
+- `CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS` (float)
+- `CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE` (float)
+- `CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO` (float)
 - `CLAIMS_REBUILD_ENABLED` (bool)
 - `CLAIMS_REBUILD_INTERVAL_SEC` (int)
 - `CLAIMS_REBUILD_POLICY` (str)
@@ -265,8 +276,16 @@ Common: `max_tokens`, `local_api_timeout`, `local_api_retries`, `local_api_retry
 
 ## [TTS-Settings]
 General and provider-specific:
-- `local_tts_device` (str): `cpu|cuda|auto`.
-- `default_tts_provider` (str), `default_tts_voice` (str), `default_tts_speed` (float)
+- Canonical keys:
+  - `local_device` (str): `cpu|cuda|auto`.
+  - `default_provider` (str), `default_voice` (str), `default_speed` (float)
+  - `TTS_VOICE_REGISTRY_ENABLED` (bool-like via env/settings): when `false`, disables persistent `voice_registry.db` and uses runtime/filesystem-only compatibility mode for custom voices (deprecated; planned removal after 2026-12-31).
+- Compatibility aliases (deprecated; scheduled for removal after 2026-06-30):
+  - `local_tts_device`/`tts_device` -> `local_device`
+  - `default_tts_provider` -> `default_provider`
+  - `default_tts_voice` -> `default_voice`
+  - `default_tts_speed` -> `default_speed`
+- Precedence for effective values: environment variables > `config.txt` `[TTS-Settings]` > `tts_providers_config.yaml` > defaults.
 OpenAI TTS:
 - `default_openai_tts_voice|_speed|_model|_output_format|_streaming`
 ElevenLabs TTS (placeholders if not used):
@@ -298,6 +317,7 @@ VibeVoice:
     - Brave: `search_engine_api_key_brave_regular`, `search_engine_api_key_brave_ai`
     - Searx: `search_engine_searx_api`
     - Tavily: `search_engine_api_key_tavily`
+    - Serper: `search_engine_api_key_serper`, `search_engine_api_url_serper`
     - Exa: `search_engine_api_key_exa`, `search_engine_api_url_exa`
     - Firecrawl: `search_engine_api_key_firecrawl`, `search_engine_api_url_firecrawl`
 

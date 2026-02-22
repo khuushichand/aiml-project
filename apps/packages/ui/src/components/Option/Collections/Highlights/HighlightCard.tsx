@@ -1,9 +1,10 @@
 import React from "react"
-import { Button, Tooltip } from "antd"
+import { Button, Tag, Tooltip } from "antd"
 import { ExternalLink, Trash2, Edit } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import type { Highlight, HighlightColor } from "@/types/collections"
 
+// theme-exempt: user highlight colors
 const HIGHLIGHT_BG: Record<HighlightColor, string> = {
   yellow: "bg-yellow-100 dark:bg-yellow-900/30",
   green: "bg-green-100 dark:bg-green-900/30",
@@ -35,22 +36,27 @@ export const HighlightCard: React.FC<HighlightCardProps> = ({
 
   return (
     <div
-      className={`group rounded-lg border border-zinc-200 p-3 transition-shadow hover:shadow-sm dark:border-zinc-700 ${getHighlightBgColor(highlight.color)}`}
+      className={`group rounded-lg border border-border p-3 transition-shadow hover:shadow-sm ${getHighlightBgColor(highlight.color)}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <blockquote className="text-sm italic text-zinc-700 dark:text-zinc-200">
+          {highlight.state === "stale" && (
+            <Tag color="orange" className="mb-2">
+              {t("collections:highlights.state.stale", "Stale")}
+            </Tag>
+          )}
+          <blockquote className="text-sm italic text-text">
             "{highlight.quote}"
           </blockquote>
 
           {highlight.note && (
-            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+            <p className="mt-2 text-sm text-text-muted">
               {highlight.note}
             </p>
           )}
 
           {!compact && highlight.item_title && (
-            <p className="mt-2 text-xs text-zinc-500">
+            <p className="mt-2 text-xs text-text-subtle">
               {t("collections:highlights.from", "From")}: {highlight.item_title}
             </p>
           )}

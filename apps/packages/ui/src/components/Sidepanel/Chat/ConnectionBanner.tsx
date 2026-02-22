@@ -172,7 +172,7 @@ export const ConnectionBanner: React.FC<ConnectionBannerProps> = ({
         type={config.type}
         showIcon
         icon={config.icon}
-        message={
+        title={
           <span className="text-sm font-medium">{config.message}</span>
         }
         description={

@@ -6,6 +6,11 @@ export interface DeliveryStatusSummary {
   detail?: string
 }
 
+export interface DeliveryDisclosureSummary {
+  visible: DeliveryStatusSummary[]
+  hidden: DeliveryStatusSummary[]
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
@@ -90,6 +95,23 @@ export const getOutputDeliveryStatuses = (metadata: unknown): DeliveryStatusSumm
   return []
 }
 
+export const buildDeliveryDisclosureSummary = (
+  deliveries: DeliveryStatusSummary[],
+  options?: { maxVisible?: number }
+): DeliveryDisclosureSummary => {
+  const maxVisible = Math.max(1, Number(options?.maxVisible ?? 1))
+  if (!Array.isArray(deliveries) || deliveries.length <= maxVisible) {
+    return {
+      visible: Array.isArray(deliveries) ? [...deliveries] : [],
+      hidden: []
+    }
+  }
+  return {
+    visible: deliveries.slice(0, maxVisible),
+    hidden: deliveries.slice(maxVisible)
+  }
+}
+
 export const getDeliveryStatusColor = (status: string): string => {
   const normalized = status.trim().toLowerCase()
   if (normalized === "sent" || normalized === "stored" || normalized === "success") return "green"
@@ -97,6 +119,21 @@ export const getDeliveryStatusColor = (status: string): string => {
   if (normalized === "queued" || normalized === "pending" || normalized === "in_progress") return "blue"
   if (normalized === "failed" || normalized === "error") return "red"
   return "default"
+}
+
+export const getDeliveryStatusLabel = (status: string): string => {
+  const normalized = status.trim().toLowerCase()
+  if (normalized === "sent") return "Sent"
+  if (normalized === "stored") return "Stored"
+  if (normalized === "success") return "Success"
+  if (normalized === "partial") return "Partial"
+  if (normalized === "warning") return "Warning"
+  if (normalized === "queued") return "Queued"
+  if (normalized === "pending") return "Pending"
+  if (normalized === "in_progress") return "In progress"
+  if (normalized === "failed") return "Failed"
+  if (normalized === "error") return "Error"
+  return status
 }
 
 interface BuildRegenerateOptions {

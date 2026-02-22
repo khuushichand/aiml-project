@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 
@@ -7,7 +8,7 @@ test.describe("Prompts workspace UX", () => {
     test.setTimeout(120000)
     const baseName = `E2E Prompt ${Date.now()}`
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page, extensionId, optionsUrl } = (await launchWithExtension(extPath)) as any
+    const { context, page, extensionId, optionsUrl } = (await launchWithExtensionOrSkip(test, extPath)) as any
 
     await page.goto(`${optionsUrl}#/prompts`)
     await page.waitForLoadState("domcontentloaded")

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   deactivateRule,
   getAuditLog,
+  getDependentStatus,
   listAlerts,
   listGovernancePolicies,
   listRelationships,
@@ -63,11 +64,11 @@ describe("guardian service API contracts", () => {
   it("includes optional relationship role and status filters", async () => {
     await listRelationships({
       role: "dependent",
-      status: "pending consent"
+      status: "pending"
     })
 
     expect(bgRequestMock).toHaveBeenCalledWith({
-      path: "/api/v1/guardian/relationships?role=dependent&status=pending%20consent",
+      path: "/api/v1/guardian/relationships?role=dependent&status=pending",
       method: "GET"
     })
   })
@@ -91,6 +92,15 @@ describe("guardian service API contracts", () => {
     expect(bgRequestMock).toHaveBeenCalledWith({
       path: "/api/v1/self-monitoring/rules/rule%2F1/deactivate",
       method: "POST"
+    })
+  })
+
+  it("uses dependent status endpoint with GET", async () => {
+    await getDependentStatus()
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/dependent/status",
+      method: "GET"
     })
   })
 })

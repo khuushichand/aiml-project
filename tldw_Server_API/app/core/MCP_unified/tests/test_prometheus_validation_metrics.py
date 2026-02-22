@@ -23,12 +23,12 @@ def _setup_env():
         from tldw_Server_API.app.core.MCP_unified.config import get_config as _gc
         _gc.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.MCP_unified.security.ip_filter import get_ip_access_controller as _gip
         _gip.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
 
 class StubWriteModule(BaseModule):
@@ -111,7 +111,7 @@ async def test_prometheus_exports_validation_counters(client: TestClient):
         ctrl.allowed_networks = []
         ctrl.blocked_networks = []
     except Exception:
-        pass
+        _ = None
     # Bypass RBAC in protocol for this test
     from tldw_Server_API.app.core.MCP_unified import get_mcp_server
     class _AllowAll:
@@ -195,7 +195,7 @@ async def test_prometheus_validator_missing_counter(client: TestClient):
         ctrl.allowed_networks = []
         ctrl.blocked_networks = []
     except Exception:
-        pass
+        _ = None
     # Bypass RBAC in protocol for this test
     from tldw_Server_API.app.core.MCP_unified import get_mcp_server
     class _AllowAll:

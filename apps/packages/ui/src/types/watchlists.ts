@@ -16,6 +16,7 @@ export interface WatchlistSource {
   source_type: SourceType
   active: boolean
   tags: string[]
+  group_ids?: number[]
   settings?: Record<string, unknown> | null
   last_scraped_at?: string | null
   status?: string | null
@@ -244,6 +245,7 @@ export interface ScrapedItem {
   url?: string | null
   title?: string | null
   summary?: string | null
+  content?: string | null
   published_at?: string | null
   tags: string[]
   status: ItemStatus
@@ -356,6 +358,76 @@ export interface WatchlistSettingsStats {
 export interface WatchlistSettings {
   default_output_ttl_seconds?: number
   temporary_output_ttl_seconds?: number
+  forums_enabled?: boolean
+  forum_default_top_n?: number
+  sharing_mode?: string
+  watchlists_backend?: "sqlite" | "postgres" | string
+}
+
+export type WatchlistsIaExperimentVariant = "baseline" | "experimental"
+
+export interface WatchlistsIaExperimentTelemetryPayload {
+  variant: WatchlistsIaExperimentVariant
+  session_id: string
+  previous_tab?: string | null
+  current_tab: string
+  transitions: number
+  visited_tabs: string[]
+  first_seen_at?: string | null
+  last_seen_at?: string | null
+}
+
+export interface WatchlistsIaExperimentTelemetryResponse {
+  accepted: boolean
+}
+
+export interface WatchlistsIaExperimentVariantSummary {
+  variant: WatchlistsIaExperimentVariant
+  events: number
+  sessions: number
+  reached_target_sessions: number
+  avg_transitions: number
+  avg_visited_tabs: number
+  avg_session_seconds: number
+}
+
+export interface WatchlistsIaExperimentTelemetrySummaryResponse {
+  items: WatchlistsIaExperimentVariantSummary[]
+  since?: string | null
+  until?: string | null
+}
+
+export type WatchlistsIaExperimentVariant = "baseline" | "experimental"
+
+export interface WatchlistsIaExperimentTelemetryIngestRequest {
+  variant: WatchlistsIaExperimentVariant
+  session_id: string
+  previous_tab?: string | null
+  current_tab: string
+  transitions: number
+  visited_tabs: string[]
+  first_seen_at?: string | null
+  last_seen_at?: string | null
+}
+
+export interface WatchlistsIaExperimentTelemetryIngestResponse {
+  accepted: boolean
+}
+
+export interface WatchlistsIaExperimentVariantSummary {
+  variant: WatchlistsIaExperimentVariant
+  events: number
+  sessions: number
+  reached_target_sessions: number
+  avg_transitions: number
+  avg_visited_tabs: number
+  avg_session_seconds: number
+}
+
+export interface WatchlistsIaExperimentTelemetrySummaryResponse {
+  items: WatchlistsIaExperimentVariantSummary[]
+  since?: string | null
+  until?: string | null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -386,6 +458,21 @@ export interface PaginatedResponse<T> {
   page?: number
   size?: number
   has_more?: boolean
+}
+
+export interface SourceCheckNowItem {
+  source_id: number
+  status: "ok" | "error" | "not_found" | "inactive"
+  detail?: string | null
+  last_scraped_at?: string | null
+  run_id?: number | null
+}
+
+export interface SourcesCheckNowResponse {
+  items: SourceCheckNowItem[]
+  total: number
+  success: number
+  failed: number
 }
 
 export interface SourcesBulkCreateItem {
@@ -467,4 +554,12 @@ export interface SourceSeenResetResponse {
 // UI State Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type WatchlistTab = "sources" | "jobs" | "runs" | "outputs" | "templates" | "settings"
+export type WatchlistTab =
+  | "overview"
+  | "sources"
+  | "jobs"
+  | "runs"
+  | "items"
+  | "outputs"
+  | "templates"
+  | "settings"

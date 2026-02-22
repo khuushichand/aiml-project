@@ -1,14 +1,13 @@
-import dynamic from "next/dynamic"
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
-export default dynamic(async () => {
-  const { useRouter } = await import("next/router")
-  const { useEffect } = await import("react")
-  const Page = () => {
-    const router = useRouter()
-    useEffect(() => {
-      void router.replace("/admin/server")
-    }, [router])
-    return null
-  }
-  return { default: Page }
-}, { ssr: false })
+export default function AdminMaintenanceRedirectPage() {
+  return (
+    <RoutePlaceholder
+      title="Maintenance Console Is Coming Soon"
+      description="Advanced maintenance tooling will be available on this route."
+      plannedPath="/admin/maintenance"
+      primaryCtaHref="/admin/server"
+      primaryCtaLabel="Open Server Admin"
+    />
+  );
+}

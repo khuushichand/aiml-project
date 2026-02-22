@@ -177,7 +177,7 @@ Rotation guidance: see `Docs/Operations/JWT_Rotation_Runbook.md`.
 
 "Rate limit exceeded"
 - Default: 60 requests/minute for authenticated users
-- Adjust RATE_LIMIT_PER_MINUTE in .env if needed
+- Adjust Resource Governor policy limits (`requests.rpm` / `requests.burst`) in `Config_Files/resource_governor_policies.yaml` if needed
 
 ### Documentation
 

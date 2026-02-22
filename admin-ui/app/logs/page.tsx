@@ -5,10 +5,12 @@ import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
@@ -41,6 +43,8 @@ type LogFilters = {
   level: string;
   service: string;
   query: string;
+  regexMode: boolean;
+  requestId: string;
   orgId: string;
   userId: string;
 };
@@ -79,12 +83,46 @@ const parsePositiveInt = (value: string) => {
   return parsed;
 };
 
+const toRegexValidation = (enabled: boolean, pattern: string): {
+  enabled: boolean;
+  valid: boolean;
+  message: string;
+} => {
+  if (!enabled) {
+    return { enabled: false, valid: true, message: '' };
+  }
+  if (!pattern.trim()) {
+    return { enabled: true, valid: true, message: 'Regex enabled. Enter a pattern to match log entries.' };
+  }
+  try {
+    // Validate pattern early so we can provide immediate feedback and avoid failing fetch cycles.
+    new RegExp(pattern);
+    return { enabled: true, valid: true, message: 'Valid regex pattern.' };
+  } catch (err: unknown) {
+    const reason = err instanceof Error && err.message ? err.message : 'Invalid regular expression.';
+    return { enabled: true, valid: false, message: reason };
+  }
+};
+
+const buildSearchableLogText = (entry: SystemLogEntry): string =>
+  [
+    entry.message,
+    entry.logger,
+    entry.module,
+    entry.function,
+    entry.request_id,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .join(' ');
+
 const areFiltersEqual = (left: LogFilters, right: LogFilters) => (
   left.start === right.start
   && left.end === right.end
   && left.level === right.level
   && left.service === right.service
   && left.query === right.query
+  && left.regexMode === right.regexMode
+  && left.requestId === right.requestId
   && left.orgId === right.orgId
   && left.userId === right.userId
 );
@@ -106,8 +144,22 @@ function LogsPageContent() {
   const [level, setLevel] = useState('');
   const [service, setService] = useState('');
   const [query, setQuery] = useState('');
+  const [regexMode, setRegexMode] = useState(false);
+  const [requestId, setRequestId] = useState('');
   const [orgId, setOrgId] = useState('');
   const [userId, setUserId] = useState('');
+  const clearLogFilters = useCallback(() => {
+    setStart('');
+    setEnd('');
+    setLevel('');
+    setService('');
+    setQuery('');
+    setRegexMode(false);
+    setRequestId('');
+    setOrgId('');
+    setUserId('');
+    resetPagination();
+  }, [resetPagination]);
 
   const filters = useMemo<LogFilters>(() => ({
     start,
@@ -115,11 +167,18 @@ function LogsPageContent() {
     level,
     service,
     query,
+    regexMode,
+    requestId,
     orgId,
     userId,
-  }), [end, level, orgId, query, service, start, userId]);
+  }), [end, level, orgId, query, regexMode, requestId, service, start, userId]);
   const [debouncedFilters, setDebouncedFilters] = useState<LogFilters>(filters);
   const debouncedFiltersRef = useRef<LogFilters>(filters);
+
+  const regexValidation = useMemo(
+    () => toRegexValidation(debouncedFilters.regexMode, debouncedFilters.query),
+    [debouncedFilters.query, debouncedFilters.regexMode]
+  );
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -141,8 +200,11 @@ function LogsPageContent() {
     if (debouncedFilters.userId.trim() && parsePositiveInt(debouncedFilters.userId) === null) {
       issues.push('User ID must be a positive integer.');
     }
+    if (!regexValidation.valid) {
+      issues.push(`Regex pattern is invalid: ${regexValidation.message}`);
+    }
     return issues.join(' ');
-  }, [debouncedFilters.orgId, debouncedFilters.userId]);
+  }, [debouncedFilters.orgId, debouncedFilters.userId, regexValidation.message, regexValidation.valid]);
 
   const params = useMemo(() => {
     const offset = Math.max(0, (page - 1) * pageSize);
@@ -157,6 +219,8 @@ function LogsPageContent() {
     if (debouncedFilters.level) payload.level = debouncedFilters.level;
     if (debouncedFilters.service) payload.service = debouncedFilters.service;
     if (debouncedFilters.query) payload.query = debouncedFilters.query;
+    if (debouncedFilters.regexMode) payload.query_mode = 'regex';
+    if (debouncedFilters.requestId) payload.request_id = debouncedFilters.requestId;
     if (debouncedFilters.orgId) payload.org_id = debouncedFilters.orgId;
     if (debouncedFilters.userId) payload.user_id = debouncedFilters.userId;
     return payload;
@@ -172,8 +236,27 @@ function LogsPageContent() {
       }
       const data = (await api.getSystemLogs(params, { signal })) as SystemLogsResponse;
       const items = Array.isArray(data?.items) ? data.items : [];
-      setLogs(items);
-      setTotal(typeof data?.total === 'number' ? data.total : items.length);
+      const hasRequestIdFilter = debouncedFilters.requestId.trim().length > 0;
+      const hasRegexFilter = debouncedFilters.regexMode && debouncedFilters.query.trim().length > 0;
+
+      let filteredItems = items;
+      if (hasRequestIdFilter) {
+        const normalizedRequestId = debouncedFilters.requestId.trim();
+        filteredItems = filteredItems.filter((entry) => entry.request_id === normalizedRequestId);
+      }
+
+      if (hasRegexFilter) {
+        const regex = new RegExp(debouncedFilters.query);
+        filteredItems = filteredItems.filter((entry) => regex.test(buildSearchableLogText(entry)));
+      }
+
+      setLogs(filteredItems);
+      const isClientFiltered = hasRequestIdFilter || hasRegexFilter;
+      setTotal(
+        isClientFiltered
+          ? filteredItems.length
+          : (typeof data?.total === 'number' ? data.total : filteredItems.length)
+      );
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
       const message = err instanceof Error && err.message ? err.message : 'Failed to load logs';
@@ -183,7 +266,7 @@ function LogsPageContent() {
     } finally {
       setLoading(false);
     }
-  }, [params, validationError]);
+  }, [debouncedFilters.query, debouncedFilters.regexMode, debouncedFilters.requestId, params, validationError]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -192,6 +275,12 @@ function LogsPageContent() {
   }, [loadLogs, refreshSignal]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const applyRequestCorrelationFilter = (nextRequestId: string) => {
+    if (!nextRequestId.trim()) return;
+    setRequestId(nextRequestId.trim());
+    resetPagination();
+  };
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
@@ -282,6 +371,39 @@ function LogsPageContent() {
                     setQuery(e.target.value);
                   }}
                 />
+                <div className="flex items-center gap-2 pt-1">
+                  <Checkbox
+                    id="queryRegexMode"
+                    checked={regexMode}
+                    onCheckedChange={(checked) => {
+                      setRegexMode(checked === true);
+                    }}
+                  />
+                  <Label htmlFor="queryRegexMode" className="text-sm font-normal">
+                    Treat search as regex
+                  </Label>
+                </div>
+                {regexValidation.enabled && (
+                  <p
+                    className={`text-xs ${
+                      regexValidation.valid ? 'text-muted-foreground' : 'text-destructive'
+                    }`}
+                    role={regexValidation.valid ? 'status' : 'alert'}
+                  >
+                    {regexValidation.message}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="requestId">Request ID</Label>
+                <Input
+                  id="requestId"
+                  placeholder="Correlate by request id"
+                  value={requestId}
+                  onChange={(e) => {
+                    setRequestId(e.target.value);
+                  }}
+                />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="orgId">Org ID</Label>
@@ -314,6 +436,26 @@ function LogsPageContent() {
             </Alert>
           )}
 
+          {debouncedFilters.requestId.trim() && (
+            <Alert className="border-blue-200 bg-blue-50">
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-blue-900">
+                <span>
+                  Showing correlated entries for request ID{' '}
+                  <span className="font-mono">{debouncedFilters.requestId.trim()}</span>.
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setRequestId('');
+                  }}
+                >
+                  Clear correlation filter
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle>Entries</CardTitle>
@@ -323,7 +465,18 @@ function LogsPageContent() {
               {loading ? (
                 <div className="py-12 text-center text-muted-foreground">Loading logs...</div>
               ) : logs.length === 0 ? (
-                <div className="py-12 text-center text-muted-foreground">No logs match the filters.</div>
+                <EmptyState
+                  icon={RefreshCw}
+                  title="No logs match the filters."
+                  description="Broaden time range or clear filters to see recent entries."
+                  actions={[
+                    {
+                      label: 'Clear filters',
+                      onClick: clearLogFilters,
+                    },
+                  ]}
+                  className="py-12"
+                />
               ) : (
                 <Table>
                   <TableHeader>
@@ -334,13 +487,16 @@ function LogsPageContent() {
                       <TableHead>Logger</TableHead>
                       <TableHead>Request ID</TableHead>
                       <TableHead>Org/User</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {logs.map((entry, idx) => (
                       <TableRow
                         key={
-                          entry.request_id ||
+                          (entry.request_id
+                            ? `${entry.request_id}-${idx}`
+                            : '') ||
                           `${entry.timestamp || 'log'}-${entry.logger || 'unknown'}-${
                             entry.org_id || 'org'
                           }-${entry.user_id || 'user'}-${idx}`
@@ -372,11 +528,38 @@ function LogsPageContent() {
                           {entry.logger || entry.module || '—'}
                         </TableCell>
                         <TableCell className="max-w-[200px] truncate">
-                          {entry.request_id || '—'}
+                          {entry.request_id ? (
+                            <Button
+                              variant="link"
+                              className="h-auto p-0 font-mono text-xs"
+                              onClick={() => {
+                                applyRequestCorrelationFilter(entry.request_id ?? '');
+                              }}
+                            >
+                              {entry.request_id}
+                            </Button>
+                          ) : (
+                            '—'
+                          )}
                         </TableCell>
                         <TableCell>
                           {entry.org_id ? `Org ${entry.org_id}` : '—'}{' '}
                           {entry.user_id ? `• User ${entry.user_id}` : ''}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {entry.request_id ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                applyRequestCorrelationFilter(entry.request_id ?? '');
+                              }}
+                            >
+                              View correlated logs
+                            </Button>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

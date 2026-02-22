@@ -22,10 +22,18 @@ type TrashItem = {
   title?: string
   type?: string
   url?: string
+  trash_date?: string | null
+  deleted_at?: string | null
+  trashDate?: string | null
 }
 
 type TrashResponse = {
   items: TrashItem[]
+  retention_days?: number | null
+  retention_policy?: {
+    days?: number | null
+    label?: string | null
+  } | null
   pagination?: {
     page?: number
     results_per_page?: number
@@ -56,11 +64,28 @@ const executeBatchedRequests = async <T,>(
 const isAbortError = (err: unknown) =>
   err instanceof Error && err.message.toLowerCase().includes('abort')
 
+const formatTrashDate = (value?: string | null): string | null => {
+  if (!value) return null
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
+const resolveTrashDate = (item: TrashItem): string | null =>
+  item.deleted_at || item.trash_date || item.trashDate || null
+
 const TrashPageContent: React.FC = () => {
   const { t } = useTranslation(['review', 'common'])
   const message = useAntdMessage()
   const confirmDanger = useConfirmDanger()
   const [page, setPage] = useState(1)
+  const [searchQuery, setSearchQuery] = useState('')
   const [actionId, setActionId] = useState<number | null>(null)
   const [actionType, setActionType] = useState<'restore' | 'delete' | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
@@ -69,10 +94,12 @@ const TrashPageContent: React.FC = () => {
   const bulkActionAbortRef = useRef<AbortController | null>(null)
 
   const fetchTrash = useCallback(async (): Promise<TrashResponse> => {
+    const trimmed = searchQuery.trim()
+    const searchSuffix = trimmed.length > 0 ? `&search=${encodeURIComponent(trimmed)}` : ''
     return await bgRequest<TrashResponse>({
-      path: toAllowedPath(`/api/v1/media/trash?page=${page}&results_per_page=${PAGE_SIZE}`)
+      path: toAllowedPath(`/api/v1/media/trash?page=${page}&results_per_page=${PAGE_SIZE}${searchSuffix}`)
     })
-  }, [page])
+  }, [page, searchQuery])
 
   const {
     data,
@@ -81,13 +108,21 @@ const TrashPageContent: React.FC = () => {
     isError,
     refetch
   } = useQuery({
-    queryKey: ['media-trash', page, PAGE_SIZE],
+    queryKey: ['media-trash', page, PAGE_SIZE, searchQuery.trim()],
     queryFn: fetchTrash,
     placeholderData: keepPreviousData,
     staleTime: 20_000
   })
 
   const items = useMemo(() => data?.items ?? [], [data])
+  const normalizedQuery = searchQuery.trim().toLowerCase()
+  const displayItems = useMemo(() => {
+    if (!normalizedQuery) return items
+    return items.filter((item) => {
+      const haystack = `${item.title || ''} ${item.type || ''} ${item.id} ${item.url || ''}`.toLowerCase()
+      return haystack.includes(normalizedQuery)
+    })
+  }, [items, normalizedQuery])
   const hasData = Boolean(data)
   const pagination = hasData ? data?.pagination : undefined
   const totalItems = hasData ? Number(pagination?.total_items ?? items.length ?? 0) : 0
@@ -95,15 +130,35 @@ const TrashPageContent: React.FC = () => {
     ? Number(pagination?.total_pages ?? (items.length > 0 ? 1 : 0))
     : 0
   const visibleSelectedCount = useMemo(
-    () => items.filter((item) => selectedIds.has(item.id)).length,
-    [items, selectedIds]
+    () => displayItems.filter((item) => selectedIds.has(item.id)).length,
+    [displayItems, selectedIds]
   )
   const selectedCount = visibleSelectedCount
-  const allVisibleSelected = items.length > 0 && visibleSelectedCount === items.length
+  const allVisibleSelected = displayItems.length > 0 && visibleSelectedCount === displayItems.length
   const someVisibleSelected = visibleSelectedCount > 0 && !allVisibleSelected
   const isBulkBusy = bulkAction !== null
   const isAnyActionBusy = isBulkBusy || actionId !== null
   const showLoadingState = (isLoading || isFetching) && !hasData
+  const retentionDays = useMemo(() => {
+    const fromRoot = data?.retention_days
+    if (typeof fromRoot === 'number' && Number.isFinite(fromRoot)) return fromRoot
+    const fromPolicy = data?.retention_policy?.days
+    if (typeof fromPolicy === 'number' && Number.isFinite(fromPolicy)) return fromPolicy
+    return null
+  }, [data?.retention_days, data?.retention_policy?.days])
+  const retentionLabel = useMemo(() => {
+    const label = data?.retention_policy?.label
+    if (typeof label === 'string' && label.trim().length > 0) return label.trim()
+    if (retentionDays != null) {
+      return t('review:trashPage.retentionConfigured', {
+        defaultValue: 'Auto-purge after {{days}} days in trash.',
+        days: retentionDays
+      })
+    }
+    return t('review:trashPage.retentionUnknown', {
+      defaultValue: 'Auto-purge policy is not configured or not reported by this server.'
+    })
+  }, [data?.retention_policy?.label, retentionDays, t])
 
   useEffect(() => {
     return () => {
@@ -123,17 +178,17 @@ const TrashPageContent: React.FC = () => {
     }
   }, [someVisibleSelected])
 
-  // Keep bulk actions scoped to the current page results.
+  // Keep bulk actions scoped to the currently visible results.
   useEffect(() => {
     setSelectedIds((prev) => {
       if (prev.size === 0) return prev
       const next = new Set<number>()
-      items.forEach((item) => {
+      displayItems.forEach((item) => {
         if (prev.has(item.id)) next.add(item.id)
       })
       return next
     })
-  }, [items])
+  }, [displayItems])
 
   const toggleSelected = useCallback((id: number) => {
     setSelectedIds((prev) => {
@@ -150,15 +205,15 @@ const TrashPageContent: React.FC = () => {
   const toggleSelectAllVisible = useCallback(() => {
     setSelectedIds((prev) => {
       const next = new Set(prev)
-      if (items.length === 0) return next
-      if (items.every((item) => next.has(item.id))) {
-        items.forEach((item) => next.delete(item.id))
+      if (displayItems.length === 0) return next
+      if (displayItems.every((item) => next.has(item.id))) {
+        displayItems.forEach((item) => next.delete(item.id))
       } else {
-        items.forEach((item) => next.add(item.id))
+        displayItems.forEach((item) => next.add(item.id))
       }
       return next
     })
-  }, [items])
+  }, [displayItems])
 
   const restoreItem = useCallback(async (item: TrashItem) => {
     if (item.id == null) return
@@ -423,6 +478,41 @@ const TrashPageContent: React.FC = () => {
                 'Items moved to trash stay here until you restore or permanently delete them.'
             })}
           </p>
+          <p
+            className="mt-1 text-xs text-text-muted"
+            data-testid="trash-retention-policy"
+          >
+            {retentionLabel}
+          </p>
+          <div className="mt-3 flex max-w-sm items-center gap-2">
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => {
+                setSearchQuery(event.target.value)
+                setPage(1)
+              }}
+              placeholder={t('review:trashPage.searchPlaceholder', {
+                defaultValue: 'Search trash by title, type, or ID'
+              })}
+              aria-label={t('review:trashPage.searchLabel', {
+                defaultValue: 'Search trash'
+              })}
+              className="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text placeholder:text-text-muted focus:border-primary focus:outline-none"
+            />
+            {searchQuery.trim().length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('')
+                  setPage(1)
+                }}
+                className="rounded-md border border-border px-2 py-1.5 text-xs text-text-muted hover:bg-surface2 hover:text-text"
+              >
+                {t('common:clear', { defaultValue: 'Clear' })}
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -454,7 +544,7 @@ const TrashPageContent: React.FC = () => {
         </div>
       </div>
 
-      {hasData && !isError && items.length > 0 && (
+      {hasData && !isError && displayItems.length > 0 && (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-text-muted">
           <label className="inline-flex items-center gap-2">
             <input
@@ -537,13 +627,29 @@ const TrashPageContent: React.FC = () => {
             })}
             examples={[]}
           />
+        ) : displayItems.length === 0 ? (
+          <FeatureEmptyState
+            title={t('review:trashPage.searchEmptyTitle', {
+              defaultValue: 'No matching trash items'
+            })}
+            description={t('review:trashPage.searchEmptyDescription', {
+              defaultValue: 'Try a broader search or clear the current filter.'
+            })}
+            examples={[]}
+            primaryActionLabel={t('common:clear', { defaultValue: 'Clear' })}
+            onPrimaryAction={() => {
+              setSearchQuery('')
+              setPage(1)
+            }}
+          />
         ) : (
           <div className="space-y-3">
-            {items.map((item) => {
+            {displayItems.map((item) => {
               const isRestoring = actionId === item.id && actionType === 'restore'
               const isDeleting = actionId === item.id && actionType === 'delete'
               const isChecked = selectedIds.has(item.id)
               const isBusy = isAnyActionBusy
+              const trashedAt = formatTrashDate(resolveTrashDate(item))
               return (
                 <div
                   key={item.id}
@@ -570,6 +676,16 @@ const TrashPageContent: React.FC = () => {
                           {item.type || t('review:mediaPage.notAvailable', { defaultValue: 'N/A' })}
                         </span>
                         <span>#{item.id}</span>
+                        <span data-testid={`trash-item-deleted-at-${item.id}`}>
+                          {trashedAt
+                            ? t('review:trashPage.deletedAt', {
+                                defaultValue: 'Deleted: {{date}}',
+                                date: trashedAt
+                              })
+                            : t('review:trashPage.deletedAtUnavailable', {
+                                defaultValue: 'Deleted date unavailable'
+                              })}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -620,7 +736,7 @@ const TrashPageContent: React.FC = () => {
             onPageChange={setPage}
             totalItems={totalItems}
             itemsPerPage={PAGE_SIZE}
-            currentItemsCount={items.length}
+            currentItemsCount={displayItems.length}
           />
         </div>
       )}
@@ -683,7 +799,7 @@ const MediaTrashPage: React.FC = () => {
       <FeatureEmptyState
         title={
           <span className="inline-flex items-center gap-2">
-            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
+            <span className="rounded-full bg-warn/10 px-2 py-0.5 text-[11px] font-medium text-warn">
               {t('review:mediaEmpty.featureUnavailableBadge', {
                 defaultValue: 'Feature unavailable'
               })}

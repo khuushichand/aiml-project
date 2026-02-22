@@ -13,6 +13,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.exceptions import AdapterError
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
@@ -131,7 +132,7 @@ async def run_llm_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
         raise AdapterError("invalid_messages")
 
     # Short-circuit in tests to avoid outbound LLM calls
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if is_test_mode():
         preview = ""
         for msg in reversed(messages):
             if msg.get("role") == "user" and isinstance(msg.get("content"), str):

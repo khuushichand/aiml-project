@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "데이터 테이블 스튜디오"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "베타 기능"
+  },
+  "betaDescription": {
+    "message": "데이터 테이블은 현재 베타입니다. 테이블 생성에는 백엔드 지원이 필요합니다."
+  },
+  "offline": {
+    "message": "서버가 오프라인입니다. 데이터 테이블을 사용하려면 연결하세요."
+  },
+  "tabs_tables": {
+    "message": "내 테이블"
+  },
+  "tabs_create": {
+    "message": "테이블 생성"
+  },
+  "wizard_sources": {
+    "message": "소스 선택"
+  },
+  "wizard_sourcesDesc": {
+    "message": "데이터 소스를 선택하세요"
+  },
+  "wizard_prompt": {
+    "message": "테이블 설명"
+  },
+  "wizard_promptDesc": {
+    "message": "프롬프트를 작성하세요"
+  },
+  "wizard_preview": {
+    "message": "미리보기"
+  },
+  "wizard_previewDesc": {
+    "message": "생성된 테이블을 확인"
+  },
+  "wizard_save": {
+    "message": "저장"
+  },
+  "wizard_saveDesc": {
+    "message": "라이브러리에 저장"
+  },
+  "wizard_tip": {
+    "message": "팁"
+  },
+  "wizard_tipText": {
+    "message": "채팅, 문서를 선택하거나 지식 베이스를 검색해 구조화된 데이터를 추출하세요. 소스가 구체적일수록 결과가 좋아집니다."
+  },
+  "wizard_reset": {
+    "message": "처음부터"
+  },
+  "sourceTypes_chat": {
+    "message": "채팅"
+  },
+  "sourceTypes_document": {
+    "message": "문서"
+  },
+  "sourceTypes_rag": {
+    "message": "RAG 검색"
+  },
+  "selectedSources": {
+    "message": "선택한 소스"
+  },
+  "sourcesSelected": {
+    "message": "선택된 소스"
+  },
+  "searchPlaceholder": {
+    "message": "검색..."
+  },
+  "ragPlaceholder": {
+    "message": "지식 베이스의 검색 쿼리를 입력하세요..."
+  },
+  "ragQuerySnippet": {
+    "message": "지식 베이스 검색 쿼리"
+  },
+  "ragAdded": {
+    "message": "RAG 쿼리를 소스로 추가했습니다"
+  },
+  "ragTip": {
+    "message": "지식 베이스에서 관련 내용을 찾으려면 검색 쿼리를 입력하세요. 각 쿼리는 별도의 소스로 추가됩니다."
+  },
+  "fetchError": {
+    "message": "항목을 불러오지 못했습니다"
+  },
+  "promptLabel": {
+    "message": "만들고 싶은 테이블을 설명하세요"
+  },
+  "promptPlaceholder": {
+    "message": "예: 논의된 주요 주제를 비교하는 테이블을 만들고, 주제, 핵심 포인트, 관련성 점수 열을 포함하세요..."
+  },
+  "examplePrompts": {
+    "message": "예시 프롬프트:"
+  },
+  "advancedOptions": {
+    "message": "고급 옵션"
+  },
+  "columnHints": {
+    "message": "열 힌트(선택 사항)"
+  },
+  "columnHintsDesc": {
+    "message": "LLM을 안내하기 위해 열 이름과 유형을 제안합니다. 지정하지 않으면 프롬프트에서 열이 추론됩니다."
+  },
+  "newColumnName": {
+    "message": "열 이름"
+  },
+  "modelSelection": {
+    "message": "모델"
+  },
+  "selectModel": {
+    "message": "기본 모델 사용"
+  },
+  "maxRows": {
+    "message": "최대 행 수"
+  },
+  "maxRowsHint": {
+    "message": "(1~1000)"
+  },
+  "generating": {
+    "message": "소스에서 테이블을 생성하는 중..."
+  },
+  "generatingNote": {
+    "message": "데이터 양에 따라 시간이 걸릴 수 있습니다."
+  },
+  "generateSuccess": {
+    "message": "테이블이 성공적으로 생성되었습니다!"
+  },
+  "generationFailed": {
+    "message": "생성 실패"
+  },
+  "tryAgain": {
+    "message": "다시 시도"
+  },
+  "warnings": {
+    "message": "경고"
+  },
+  "noPreview": {
+    "message": "미리보기가 없습니다"
+  },
+  "promptUsed": {
+    "message": "사용된 프롬프트:"
+  },
+  "previewModified": {
+    "message": "미리보기를 수정했습니다. 변경 사항이 테이블에 저장됩니다."
+  },
+  "addRow": {
+    "message": "행 추가"
+  },
+  "addColumn": {
+    "message": "열 추가"
+  },
+  "deleteRow": {
+    "message": "행을 삭제할까요?"
+  },
+  "deleteRowConfirm": {
+    "message": "이 작업은 되돌릴 수 없습니다."
+  },
+  "deleteColumn": {
+    "message": "열을 삭제할까요?"
+  },
+  "deleteColumnConfirm": {
+    "message": "이 작업은 되돌릴 수 없습니다."
+  },
+  "discard": {
+    "message": "폐기"
+  },
+  "changesDiscarded": {
+    "message": "변경 사항이 폐기되었습니다"
+  },
+  "save": {
+    "message": "저장"
+  },
+  "saveSuccess": {
+    "message": "변경 사항이 성공적으로 저장되었습니다!"
+  },
+  "unsavedChanges": {
+    "message": "저장되지 않은 변경 사항이 있습니다"
+  },
+  "columnAdded": {
+    "message": "열 '{{name}}'이(가) 추가되었습니다"
+  },
+  "rows": {
+    "message": "행"
+  },
+  "columnsLabel": {
+    "message": "열"
+  },
+  "showingRows": {
+    "message": "{{total}}행 표시"
+  },
+  "tableSummary": {
+    "message": "테이블 요약"
+  },
+  "tableName": {
+    "message": "테이블 이름"
+  },
+  "tableNamePlaceholder": {
+    "message": "테이블 이름을 입력하세요"
+  },
+  "tableDescription": {
+    "message": "설명(선택 사항)"
+  },
+  "tableDescPlaceholder": {
+    "message": "이 테이블이 무엇을 포함하는지 기억할 수 있도록 설명을 추가하세요"
+  },
+  "saveToLibrary": {
+    "message": "라이브러리에 저장"
+  },
+  "tableSaved": {
+    "message": "테이블이 저장되었습니다!"
+  },
+  "tableSavedDesc": {
+    "message": "테이블이 라이브러리에 저장되었습니다. 언제든지 확인하고 내보낼 수 있습니다."
+  },
+  "viewTables": {
+    "message": "내 테이블 보기"
+  },
+  "createAnother": {
+    "message": "다른 테이블 만들기"
+  },
+  "orExport": {
+    "message": "또는 바로 내보내기:"
+  },
+  "export": {
+    "message": "내보내기"
+  },
+  "exportCSV": {
+    "message": "CSV로 내보내기"
+  },
+  "exportExcel": {
+    "message": "Excel로 내보내기"
+  },
+  "exportJSON": {
+    "message": "JSON으로 내보내기"
+  },
+  "exportSuccess": {
+    "message": "테이블을 {{format}}으로 내보냈습니다"
+  },
+  "noTableToSave": {
+    "message": "저장할 테이블이 없습니다"
+  },
+  "goBackToGenerate": {
+    "message": "이전 단계로 돌아가 먼저 테이블을 생성하세요."
+  },
+  "tableDetails": {
+    "message": "테이블 상세"
+  },
+  "tableNotFound": {
+    "message": "테이블을 찾을 수 없습니다"
+  },
+  "noData": {
+    "message": "데이터 없음"
+  },
+  "data": {
+    "message": "데이터"
+  },
+  "editMode": {
+    "message": "편집 모드"
+  },
+  "editModeActive": {
+    "message": "셀을 클릭해 편집"
+  },
+  "regenerate": {
+    "message": "다시 생성"
+  },
+  "regenerateSuccess": {
+    "message": "테이블이 성공적으로 재생성되었습니다!"
+  },
+  "model": {
+    "message": "모델"
+  },
+  "prompt": {
+    "message": "생성 프롬프트"
+  },
+  "sources": {
+    "message": "소스"
+  },
+  "created": {
+    "message": "생성일"
+  },
+  "updated": {
+    "message": "수정일"
+  },
+  "noTables": {
+    "message": "아직 테이블이 없습니다. 첫 테이블을 만들어 보세요!"
+  },
+  "noSearchResults": {
+    "message": "검색과 일치하는 테이블이 없습니다"
+  },
+  "totalTables": {
+    "message": "{{total}}개 테이블"
+  },
+  "view": {
+    "message": "보기"
+  },
+  "delete": {
+    "message": "삭제"
+  },
+  "deleteConfirmTitle": {
+    "message": "테이블 삭제"
+  },
+  "deleteConfirmMessage": {
+    "message": "이 테이블을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다."
+  },
+  "noTable": {
+    "message": "테이블 데이터가 없습니다"
+  },
+  "add": {
+    "message": "추가"
+  },
+  "columnName": {
+    "message": "열 이름"
+  },
+  "columnNamePlaceholder": {
+    "message": "예: 가격, 상태, 날짜"
+  },
+  "columnNameRequired": {
+    "message": "열 이름을 입력하세요"
+  },
+  "columnNameTooLong": {
+    "message": "열 이름은 50자 이하로 입력하세요"
+  },
+  "columnNameExists": {
+    "message": "같은 이름의 열이 이미 있습니다"
+  },
+  "columnType": {
+    "message": "열 유형"
+  },
+  "columnTypeRequired": {
+    "message": "열 유형을 선택하세요"
+  },
+  "columnDescription": {
+    "message": "설명(선택 사항)"
+  },
+  "columnDescriptionHint": {
+    "message": "이 열에 포함되는 내용을 간단히 설명하세요"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "예: 항목의 가격(USD)"
+  },
+  "discardUnsavedChanges": {
+    "message": "저장되지 않은 변경 사항이 있습니다. 닫으시겠습니까?"
+  },
+  "createFromChat": {
+    "message": "채팅에서 테이블 만들기"
+  },
+  "saveFromArtifact": {
+    "message": "데이터 테이블에 저장"
+  },
+  "importedPrompt": {
+    "message": "테이블 아티팩트에서 가져옴"
+  },
+  "columns_name": {
+    "message": "이름"
+  },
+  "columns_rows": {
+    "message": "행"
+  },
+  "columns_columns": {
+    "message": "열"
+  },
+  "columns_sources": {
+    "message": "소스"
+  },
+  "columns_created": {
+    "message": "생성일"
+  },
+  "columns_actions": {
+    "message": "작업"
+  },
+  "dataTablesDescription": {
+    "message": "자연어 프롬프트로 채팅, 문서, 지식 베이스에서 구조화된 테이블을 생성합니다."
+  },
+  "descriptionLabel": {
+    "message": "설명"
+  }
+}

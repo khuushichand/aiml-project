@@ -1,4 +1,5 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "node:path"
 import fs from "node:fs"
 
@@ -123,6 +124,13 @@ test.describe("Extension page review", () => {
       .isVisible()
       .catch(() => false)
 
+    if (routePath === "/persona") {
+      await expect(
+        page.getByTestId("persona-route-root"),
+        "Persona route marker should render on /persona"
+      ).toBeVisible({ timeout: ELEMENT_TIMEOUT })
+    }
+
     if (CAPTURE) {
       const slug = slugify(routePath === "/" ? "root" : routePath)
       const fileName = `${label}-${slug || "root"}.png`
@@ -170,7 +178,7 @@ test.describe("Extension page review", () => {
 
   test.beforeAll(async ({}, testInfo) => {
     testInfo.setTimeout(BOOTSTRAP_TIMEOUT)
-    const launch = await launchWithExtension(EXT_PATH, {
+    const launch = await launchWithExtensionOrSkip(test, EXT_PATH, {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true

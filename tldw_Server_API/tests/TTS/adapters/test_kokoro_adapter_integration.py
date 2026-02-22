@@ -6,7 +6,6 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.legacy_tts]
 import os
 import platform
-import torch
 import asyncio
 RUN_TTS_LEGACY_INTEGRATION = os.getenv("RUN_TTS_LEGACY_INTEGRATION") == "1"
 
@@ -48,12 +47,6 @@ def check_kokoro_model_exists():
 def get_compute_capability():
 
     """Detect compute capabilities"""
-    if platform.system() == "Darwin":
-        # macOS with Apple Silicon
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            return "mps"
-    elif torch.cuda.is_available():
-        return "cuda"
     return "cpu"
 
 #######################################################################################################################

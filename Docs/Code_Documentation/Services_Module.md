@@ -7,8 +7,9 @@ This document summarizes the background services in `tldw_server`, their respons
 - Core workers: Chatbooks Jobs worker, Jobs metrics gauges worker, Claims rebuild worker
 - Aggregators: API request usage aggregator, LLM usage aggregator
 - Quotas: User storage quota service (filesystem + DB)
-- Web scraping: Enhanced scraping service (Playwright-based) with legacy fallback
-- Placeholders (non-production): document/ebook/podcast/XML processors, in-memory ephemeral store
+- Web scraping: Enhanced scraping service (Playwright-based) with compatibility fallback behavior
+- Placeholders (non-production): document/ebook/podcast/XML processors
+- Ephemeral storage: process-local in-memory store with TTL and capacity limits
 
 ## Startup/Shutdown
 
@@ -65,16 +66,20 @@ Each loop supports graceful stop via an `asyncio.Event` and is gated by env flag
 - File: `tldw_Server_API/app/services/enhanced_web_scraping_service.py`
 - Purpose: Production scraping pipeline with queueing, rate limiting, cookie/session support, and rich progress.
 - Notes:
-  - Uses Playwright if available; otherwise raises to trigger legacy fallback (`services/web_scraping_service.py`).
+  - Uses Playwright if available; otherwise raises to trigger compatibility fallback behavior (`services/web_scraping_service.py`).
   - Persists scraped content into Media DB with chunk-level FTS.
-  - Ephemeral mode stores results in an in-memory store (dev-only; see “Known Gaps”).
+  - Ephemeral mode stores results in a bounded in-memory store (`ephemeral_store.py`) with TTL and cap controls.
 
 ## Known Gaps and Recommendations
 
 - Placeholders not production-ready:
   - `document_processing_service.py`, `ebook_processing_service.py`, `podcast_processing_service.py`, `xml_processing_service.py` - keep out of critical paths until completed and tested.
-  - `ephemeral_store.py` is in-memory, non-thread-safe, and has no TTL. Replace with a bounded, TTL-backed store (e.g., Redis or a small SQLite table) for production.
   - Feature flag: set `PLACEHOLDER_SERVICES_ENABLED=1` (env) to enable these placeholders; otherwise they return 503 to prevent accidental use.
+
+- Ephemeral store deployment notes:
+  - `ephemeral_store.py` now enforces expiry and deterministic eviction in-process, but remains process-local (not shared across workers/instances).
+  - Tune with `EPHEMERAL_STORE_TTL_SECONDS`, `EPHEMERAL_STORE_MAX_ENTRIES`, `EPHEMERAL_STORE_MAX_BYTES`.
+  - For horizontally scaled deployments, prefer a shared backend (Redis/DB) if cross-process retrieval is required.
 
 - Async/blocking mix:
   - Some persistence paths (e.g., storing scraped articles) call synchronous DB methods from async contexts. Wrap heavy sync calls with `asyncio.to_thread` to avoid event-loop blocking.

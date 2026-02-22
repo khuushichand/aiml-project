@@ -1,14 +1,16 @@
 import fs from "node:fs"
 import { expect, test } from "@playwright/test"
-import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 import {
   forceConnected,
   setSelectedModel,
   waitForConnectionStore
 } from "./utils/connection"
 import { collectGreetings } from "@tldw/ui/utils/character-greetings"
+
+const DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY =
+  "preferences.chat.default_character_id"
 
 const normalizeServerUrl = (value: string) =>
   value.match(/^https?:\/\//) ? value : `http://${value}`
@@ -83,11 +85,128 @@ const getFirstModelId = (payload: any): string | null => {
   return id ? String(id) : null
 }
 
-const getCharacterTrigger = (page: any) =>
-  page
-    .getByRole("button", { name: /select character/i })
-    .or(page.getByRole("button", { name: /clear character/i }))
-    .first()
+const ensureComposerActionBarVisible = async (page: any) => {
+  const composerInput = page.locator("#textarea-message")
+  await expect(composerInput).toBeVisible({ timeout: 15000 })
+  await composerInput.click({ timeout: 5000 })
+  await composerInput.hover().catch(() => {})
+  await page.waitForTimeout(100)
+}
+
+const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim()
+
+const findVisibleButton = async (locator: any) => {
+  const count = Math.min(await locator.count(), 10)
+  for (let index = 0; index < count; index += 1) {
+    const candidate = locator.nth(index)
+    const visible = await candidate
+      .isVisible({ timeout: 500 })
+      .then(() => true)
+      .catch(() => false)
+    if (visible) return candidate
+  }
+  return null
+}
+
+const findVisibleSearchInput = async (page: any) => {
+  const locator = page.getByPlaceholder(/Search characters/i)
+  return findVisibleButton(locator)
+}
+
+const findCharacterMenuItem = async (page: any, characterName: string) => {
+  const target = normalizeText(characterName)
+  const candidateLists = [
+    page.locator("[role='menuitem']"),
+    page.locator(".ant-dropdown-menu-item")
+  ]
+
+  for (const candidateList of candidateLists) {
+    const count = Math.min(await candidateList.count(), 40)
+    let partialMatch: any = null
+    for (let index = 0; index < count; index += 1) {
+      const candidate = candidateList.nth(index)
+      const visible = await candidate
+        .isVisible({ timeout: 500 })
+        .then(() => true)
+        .catch(() => false)
+      if (!visible) continue
+
+      const label = normalizeText(await candidate.innerText().catch(() => ""))
+      if (!label) continue
+      if (label === target) return candidate
+      if (!partialMatch && label.includes(target)) {
+        partialMatch = candidate
+      }
+    }
+
+    if (partialMatch) return partialMatch
+  }
+
+  return null
+}
+
+const openCharacterSelector = async (page: any) => {
+  await ensureComposerActionBarVisible(page)
+
+  const candidates = [
+    page.getByRole("button", { name: /select( a)? character/i }),
+    page.getByRole("button", { name: /clear character/i }),
+    page.getByTestId("chat-character-select")
+  ]
+
+  for (const locator of candidates) {
+    const visibleButton = await findVisibleButton(locator)
+    if (!visibleButton) continue
+    await visibleButton.click({ timeout: 5000 })
+    return
+  }
+
+  const visibleButtons = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("button"))
+      .map((button) => {
+        const style = window.getComputedStyle(button)
+        const rect = button.getBoundingClientRect()
+        const visible =
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number(style.opacity || "1") > 0 &&
+          rect.width > 0 &&
+          rect.height > 0
+        return {
+          ariaLabel: button.getAttribute("aria-label") || null,
+          title: button.getAttribute("title") || null,
+          text: (button.textContent || "").trim().slice(0, 80),
+          visible
+        }
+      })
+      .filter((entry) => entry.visible)
+      .slice(0, 50)
+  )
+
+  throw new Error(
+    `Character trigger button was not visible. Visible buttons: ${JSON.stringify(visibleButtons)}`
+  )
+}
+
+const createEphemeralCharacters = async (
+  serverUrl: string,
+  apiKey: string,
+  count = 2
+) => {
+  const results: { id: string; name: string; greetings: string[] }[] = []
+  const createdIds: string[] = []
+  const batchSeed = Date.now()
+
+  for (let index = 0; index < count; index += 1) {
+    const suffix = `${batchSeed}-${index + 1}-${Math.floor(Math.random() * 10000)}`
+    const name = `E2E Character ${suffix}`
+    const created = await createCharacter(serverUrl, apiKey, name)
+    createdIds.push(created.id)
+    results.push(created)
+  }
+
+  return { characters: results, createdIds }
+}
 
 const confirmCharacterSwitchIfNeeded = async (
   page: any,
@@ -184,6 +303,42 @@ const waitForGreeting = async (page: any, characterName: string) => {
   return greetingMessage
 }
 
+const dismissWorkflowHubIfVisible = async (page: any) => {
+  const hubHeading = page.getByText(/What would you like to do\?/i).first()
+  const hubDialog = page
+    .locator("[role='dialog']")
+    .filter({ has: hubHeading })
+    .first()
+
+  const visible = await hubDialog
+    .isVisible({ timeout: 3000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!visible) return
+
+  const startChat = hubDialog.getByText(/Start Chatting/i).first()
+  const startChatVisible = await startChat
+    .isVisible({ timeout: 2000 })
+    .then(() => true)
+    .catch(() => false)
+  if (startChatVisible) {
+    await startChat.click().catch(() => {})
+  } else {
+    const closeButton = hubDialog.getByRole("button", { name: /close|x/i }).first()
+    const closeVisible = await closeButton
+      .isVisible({ timeout: 1000 })
+      .then(() => true)
+      .catch(() => false)
+    if (closeVisible) {
+      await closeButton.click().catch(() => {})
+    } else {
+      await page.keyboard.press("Escape").catch(() => {})
+    }
+  }
+
+  await hubDialog.waitFor({ state: "hidden", timeout: 10000 }).catch(() => {})
+}
+
 const createCharacter = async (
   serverUrl: string,
   apiKey: string,
@@ -258,7 +413,11 @@ const ensureCharacters = async (
   )
   const characters = parseListPayload(list)
   const existing = characters.filter(
-    (c: any) => c?.id && c?.name && collectGreetings(c).length > 0
+    (c: any) =>
+      c?.id &&
+      c?.name &&
+      !/^default assistant$/i.test(String(c.name).trim()) &&
+      collectGreetings(c).length > 0
   )
   const results: { id: string; name: string; greetings: string[] }[] = []
   const createdIds: string[] = []
@@ -297,22 +456,50 @@ const deleteCharacter = async (
   }).catch(() => null)
 }
 
+const setDefaultCharacterPreference = async (
+  serverUrl: string,
+  apiKey: string,
+  characterId: string | null
+) =>
+  requestJson(serverUrl, apiKey, "/api/v1/users/me/profile", {
+    method: "PATCH",
+    body: JSON.stringify({
+      updates: [
+        {
+          key: DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
+          value: characterId
+        }
+      ]
+    })
+  })
+
 test.describe("Playground character selection", () => {
   test("sends character_id when chatting as a selected character", async () => {
     test.setTimeout(120000)
     const { serverUrl, apiKey } = requireRealServerConfig(test)
     const normalizedServerUrl = normalizeServerUrl(serverUrl)
 
-    const modelsResponse = await fetchWithTimeout(
-      `${normalizedServerUrl}/api/v1/llm/models/metadata`,
-      { headers: { "x-api-key": apiKey } }
-    )
+    let modelsResponse: Response | null = null
+    try {
+      modelsResponse = await fetchWithTimeout(
+        `${normalizedServerUrl}/api/v1/llm/models/metadata`,
+        { headers: { "x-api-key": apiKey } }
+      )
+    } catch (error) {
+      test.skip(
+        true,
+        `Chat models preflight unreachable in this environment: ${String(error)}`
+      )
+      return
+    }
+    if (!modelsResponse) return
     if (!modelsResponse.ok) {
       const body = await modelsResponse.text().catch(() => "")
       test.skip(
         true,
         `Chat models preflight failed: ${modelsResponse.status} ${modelsResponse.statusText} ${body}`
       )
+      return
     }
     const modelId = getFirstModelId(
       await modelsResponse.json().catch(() => [])
@@ -324,18 +511,34 @@ test.describe("Playground character selection", () => {
       ? modelId
       : `tldw:${modelId}`
 
-    const { characters, createdIds } = await ensureCharacters(
-      normalizedServerUrl,
-      apiKey,
-      2
-    )
+    let characters: { id: string; name: string; greetings: string[] }[] = []
+    let createdIds: string[] = []
+    try {
+      const provisioned = await createEphemeralCharacters(
+        normalizedServerUrl,
+        apiKey,
+        2
+      )
+      characters = provisioned.characters
+      createdIds = provisioned.createdIds
+    } catch {
+      const fallback = await ensureCharacters(normalizedServerUrl, apiKey, 2)
+      characters = fallback.characters
+      createdIds = fallback.createdIds
+    }
     const [character, secondCharacter] = characters
     const createdCharacterIds = [...createdIds]
 
     const { context, page, extensionId, optionsUrl } =
-      await launchWithExtension("", {
+      await launchWithExtensionOrSkip(test, "", {
         seedConfig: {
           __tldw_first_run_complete: true,
+          tldw_skip_landing_hub: true,
+          "tldw:workflow:landing-config": {
+            showOnFirstRun: true,
+            dismissedAt: Date.now(),
+            completedWorkflows: []
+          },
           tldwConfig: {
             serverUrl: normalizedServerUrl,
             authMode: "single-user",
@@ -370,6 +573,7 @@ test.describe("Playground character selection", () => {
         "character-playground:force-connect"
       )
       await setSelectedModel(page, selectedModelId)
+      await dismissWorkflowHubIfVisible(page)
       await page.evaluate(() => {
         const w = window as any
         if (w.__tldwStorageWrapped) return
@@ -403,33 +607,31 @@ test.describe("Playground character selection", () => {
       const composerInput = page.locator("#textarea-message")
       await expect(composerInput).toBeVisible({ timeout: 15000 })
 
-      const trigger = getCharacterTrigger(page)
-      await expect(trigger).toBeVisible({ timeout: 15000 })
-      await trigger.click()
+      await openCharacterSelector(page)
 
-      const searchInput = page.getByPlaceholder(/Search characters/i)
-      if ((await searchInput.count()) > 0) {
+      const searchInput = await findVisibleSearchInput(page)
+      if (searchInput) {
         await searchInput.fill(character.name)
+        await page.waitForTimeout(100)
       }
-      let menuItem = page
-        .locator('[role="menuitem"]', { hasText: character.name })
-        .first()
-      if ((await menuItem.count()) === 0) {
-        menuItem = page
-          .locator(".ant-dropdown-menu-item", { hasText: character.name })
-          .first()
+      const menuItem = await findCharacterMenuItem(page, character.name)
+      if (!menuItem) {
+        throw new Error(
+          `Unable to find character menu item for "${character.name}".`
+        )
       }
       await expect(menuItem).toBeVisible({ timeout: 15000 })
       await menuItem.click()
       await confirmCharacterSwitchIfNeeded(page)
-      await expect(
-        page.getByRole("button", {
-          name: new RegExp(
-            `${character.name}.*clear character`,
-            "i"
-          )
-        })
-      ).toBeVisible({ timeout: 15000 })
+      await expect
+        .poll(
+          async () => {
+            const selection = await readSelectedCharacterFromStorage(page)
+            return selection?.id ? String(selection.id) : ""
+          },
+          { timeout: 15000 }
+        )
+        .toBe(String(character.id))
 
       const storageSnapshot = await readSelectedCharacterFromStorage(page)
       if (!storageSnapshot?.id) {
@@ -446,29 +648,21 @@ test.describe("Playground character selection", () => {
 
       await waitForGreeting(page, character.name)
 
-      await trigger.click()
-      if ((await searchInput.count()) > 0) {
-        await searchInput.fill(secondCharacter.name)
+      await openCharacterSelector(page)
+      const secondSearchInput = await findVisibleSearchInput(page)
+      if (secondSearchInput) {
+        await secondSearchInput.fill(secondCharacter.name)
+        await page.waitForTimeout(100)
       }
-      let secondItem = page
-        .locator('[role="menuitem"]', { hasText: secondCharacter.name })
-        .first()
-      if ((await secondItem.count()) === 0) {
-        secondItem = page
-          .locator(".ant-dropdown-menu-item", { hasText: secondCharacter.name })
-          .first()
+      const secondItem = await findCharacterMenuItem(page, secondCharacter.name)
+      if (!secondItem) {
+        throw new Error(
+          `Unable to find second character menu item for "${secondCharacter.name}".`
+        )
       }
       await expect(secondItem).toBeVisible({ timeout: 15000 })
       await secondItem.click()
       await confirmCharacterSwitchIfNeeded(page)
-      await expect(
-        page.getByRole("button", {
-          name: new RegExp(
-            `${secondCharacter.name}.*clear character`,
-            "i"
-          )
-        })
-      ).toBeVisible({ timeout: 15000 })
       await expect
         .poll(
           async () => {
@@ -502,6 +696,215 @@ test.describe("Playground character selection", () => {
           .catch(() => null)
       }
       await context.close()
+      for (const createdId of createdCharacterIds) {
+        await deleteCharacter(normalizedServerUrl, apiKey, createdId)
+      }
+    }
+  })
+
+  test("preselects server default on fresh load and preserves manual override across reload", async () => {
+    test.setTimeout(120000)
+    const { serverUrl, apiKey } = requireRealServerConfig(test)
+    const normalizedServerUrl = normalizeServerUrl(serverUrl)
+
+    let modelsResponse: Response | null = null
+    try {
+      modelsResponse = await fetchWithTimeout(
+        `${normalizedServerUrl}/api/v1/llm/models/metadata`,
+        { headers: { "x-api-key": apiKey } }
+      )
+    } catch (error) {
+      test.skip(
+        true,
+        `Chat models preflight unreachable in this environment: ${String(error)}`
+      )
+      return
+    }
+    if (!modelsResponse) return
+    if (!modelsResponse.ok) {
+      const body = await modelsResponse.text().catch(() => "")
+      test.skip(
+        true,
+        `Chat models preflight failed: ${modelsResponse.status} ${modelsResponse.statusText} ${body}`
+      )
+      return
+    }
+    const modelId = getFirstModelId(
+      await modelsResponse.json().catch(() => [])
+    )
+    if (!modelId) {
+      test.skip(true, "No chat models returned from tldw_server.")
+    }
+    const selectedModelId = modelId.startsWith("tldw:")
+      ? modelId
+      : `tldw:${modelId}`
+
+    let characters: { id: string; name: string; greetings: string[] }[] = []
+    let createdIds: string[] = []
+    try {
+      const provisioned = await createEphemeralCharacters(
+        normalizedServerUrl,
+        apiKey,
+        2
+      )
+      characters = provisioned.characters
+      createdIds = provisioned.createdIds
+    } catch {
+      const fallback = await ensureCharacters(normalizedServerUrl, apiKey, 2)
+      characters = fallback.characters
+      createdIds = fallback.createdIds
+    }
+    const [defaultCharacter, manualCharacter] = characters
+    const createdCharacterIds = [...createdIds]
+
+    const clearDefaultPreference = async () => {
+      await setDefaultCharacterPreference(normalizedServerUrl, apiKey, null).catch(
+        () => null
+      )
+    }
+
+    try {
+      await setDefaultCharacterPreference(
+        normalizedServerUrl,
+        apiKey,
+        String(defaultCharacter.id)
+      )
+    } catch (error) {
+      await clearDefaultPreference()
+      for (const createdId of createdCharacterIds) {
+        await deleteCharacter(normalizedServerUrl, apiKey, createdId)
+      }
+      test.skip(
+        true,
+        `Unable to set profile default character preference: ${String(error)}`
+      )
+      return
+    }
+
+    const { context, page, extensionId, optionsUrl } =
+      await launchWithExtensionOrSkip(test, "", {
+        seedConfig: {
+          __tldw_first_run_complete: true,
+          tldw_skip_landing_hub: true,
+          "tldw:workflow:landing-config": {
+            showOnFirstRun: true,
+            dismissedAt: Date.now(),
+            completedWorkflows: []
+          },
+          tldwConfig: {
+            serverUrl: normalizedServerUrl,
+            authMode: "single-user",
+            apiKey
+          }
+        }
+      })
+    page.setDefaultTimeout(15000)
+    page.setDefaultNavigationTimeout(20000)
+
+    const origin = new URL(normalizedServerUrl).origin + "/*"
+    const granted = await grantHostPermission(context, extensionId, origin)
+    if (!granted) {
+      await context.close()
+      await clearDefaultPreference()
+      for (const createdId of createdCharacterIds) {
+        await deleteCharacter(normalizedServerUrl, apiKey, createdId)
+      }
+      test.skip(
+        true,
+        "Host permission not granted for tldw_server origin; allow it in chrome://extensions > tldw Assistant > Site access, then re-run"
+      )
+    }
+
+    try {
+      await page.goto(`${optionsUrl}#/`, {
+        waitUntil: "domcontentloaded"
+      })
+      await waitForConnectionStore(page, "character-default-bootstrap:before-check")
+      await forceConnected(
+        page,
+        { serverUrl: normalizedServerUrl },
+        "character-default-bootstrap:force-connect"
+      )
+      await setSelectedModel(page, selectedModelId)
+      await dismissWorkflowHubIfVisible(page)
+
+      await expect
+        .poll(
+          async () => {
+            const selection = await readSelectedCharacterFromStorage(page)
+            return selection?.id ? String(selection.id) : ""
+          },
+          { timeout: 20000 }
+        )
+        .toBe(String(defaultCharacter.id))
+
+      await openCharacterSelector(page)
+      const searchInput = await findVisibleSearchInput(page)
+      if (searchInput) {
+        await searchInput.fill(manualCharacter.name)
+        await page.waitForTimeout(100)
+      }
+      const manualItem = await findCharacterMenuItem(page, manualCharacter.name)
+      if (!manualItem) {
+        throw new Error(
+          `Unable to find manual character menu item for "${manualCharacter.name}".`
+        )
+      }
+      await expect(manualItem).toBeVisible({ timeout: 15000 })
+      await manualItem.click()
+      await confirmCharacterSwitchIfNeeded(page)
+
+      await expect
+        .poll(
+          async () => {
+            const selection = await readSelectedCharacterFromStorage(page)
+            return selection?.id ? String(selection.id) : ""
+          },
+          { timeout: 15000 }
+        )
+        .toBe(String(manualCharacter.id))
+
+      await page.reload({ waitUntil: "domcontentloaded" })
+      await waitForConnectionStore(page, "character-default-bootstrap:after-reload")
+      await forceConnected(
+        page,
+        { serverUrl: normalizedServerUrl },
+        "character-default-bootstrap:after-reload-force-connect"
+      )
+      await setSelectedModel(page, selectedModelId)
+      await dismissWorkflowHubIfVisible(page)
+
+      await expect
+        .poll(
+          async () => {
+            const selection = await readSelectedCharacterFromStorage(page)
+            return selection?.id ? String(selection.id) : ""
+          },
+          { timeout: 20000 }
+        )
+        .toBe(String(manualCharacter.id))
+
+      const postReloadSelection = await readSelectedCharacterFromStorage(page)
+      expect(String(postReloadSelection?.id || "")).not.toBe(
+        String(defaultCharacter.id)
+      )
+    } finally {
+      if (!page.isClosed()) {
+        const finalScreenshotPath = test
+          .info()
+          .outputPath("default-preselect-before-close.png")
+        await page
+          .screenshot({ path: finalScreenshotPath, fullPage: true })
+          .then(() => {
+            test.info().attach("default-preselect-before-close", {
+              path: finalScreenshotPath,
+              contentType: "image/png"
+            })
+          })
+          .catch(() => null)
+      }
+      await context.close()
+      await clearDefaultPreference()
       for (const createdId of createdCharacterIds) {
         await deleteCharacter(normalizedServerUrl, apiKey, createdId)
       }

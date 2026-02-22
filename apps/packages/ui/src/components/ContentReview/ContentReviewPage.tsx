@@ -141,7 +141,8 @@ const buildSafeMetadata = (
 }
 
 const commitDraftToServer = async (
-  draft: ContentDraft
+  draft: ContentDraft,
+  onWarning?: (msg: string) => void
 ): Promise<ContentDraft> => {
   const fields = buildFields(draft)
   let includeOriginalType = false
@@ -226,6 +227,36 @@ const commitDraftToServer = async (
     })
   }
 
+  // Trigger reprocessing when content was edited so chunks and embeddings
+  // reflect the updated text.  Failures here are non-fatal – the content
+  // is already persisted, so we only warn.
+  const contentEdited =
+    draft.content != null &&
+    draft.originalContent != null &&
+    draft.content !== draft.originalContent
+  if (contentEdited) {
+    try {
+      await bgRequest({
+        path: `/api/v1/media/${mediaId}/reprocess`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: {
+          perform_chunking: true,
+          generate_embeddings: true,
+          force_regenerate_embeddings: true
+        }
+      })
+    } catch (reprocessErr) {
+      console.warn(
+        "[ContentReview] Reprocess after content edit failed — chunks/embeddings may be stale:",
+        reprocessErr
+      )
+      onWarning?.(
+        "Content saved but re-indexing failed. Search results may be stale until manually reprocessed."
+      )
+    }
+  }
+
   const now = Date.now()
   return {
     ...draft,
@@ -301,6 +332,8 @@ export const ContentReviewPage: React.FC = () => {
   }, [location.search])
   const batchFromQuery = query.get("batch")
   const draftFromQuery = query.get("draft")
+  const draftFromQueryRef = React.useRef<string | null>(draftFromQuery)
+  draftFromQueryRef.current = draftFromQuery
 
   const refreshBatches = React.useCallback(async () => {
     const data = await getDraftBatches()
@@ -365,12 +398,21 @@ export const ContentReviewPage: React.FC = () => {
       if (batchId) params.set("batch", batchId)
       if (draftId) params.set("draft", draftId)
       const search = params.toString()
-      navigate(`/content-review${search ? `?${search}` : ""}`, {
+      const nextSearch = search ? `?${search}` : ""
+      if (
+        location.pathname === "/content-review" &&
+        location.search === nextSearch
+      ) {
+        return
+      }
+      navigate(`/content-review${nextSearch}`, {
         replace: true
       })
     },
-    [navigate]
+    [location.pathname, location.search, navigate]
   )
+  const syncRouteRef = React.useRef(syncRoute)
+  syncRouteRef.current = syncRoute
 
   React.useEffect(() => {
     let mounted = true
@@ -385,7 +427,7 @@ export const ContentReviewPage: React.FC = () => {
           null
         setActiveBatchId(initialBatch)
         if (initialBatch) {
-          syncRoute(initialBatch, draftFromQuery || null)
+          syncRouteRef.current(initialBatch, draftFromQueryRef.current)
         }
       })
       .finally(() => {
@@ -394,7 +436,7 @@ export const ContentReviewPage: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [batchFromQuery, draftFromQuery, refreshBatches, syncRoute])
+  }, [batchFromQuery, refreshBatches])
 
   React.useEffect(() => {
     if (!activeBatchId) {
@@ -415,7 +457,7 @@ export const ContentReviewPage: React.FC = () => {
           null
         setActiveDraftId(preferred)
         if (activeBatchId) {
-          syncRoute(activeBatchId, preferred)
+          syncRouteRef.current(activeBatchId, preferred)
         }
       })
       .finally(() => {
@@ -424,7 +466,7 @@ export const ContentReviewPage: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [activeBatchId, draftFromQuery, refreshDrafts, syncRoute])
+  }, [activeBatchId, draftFromQuery, refreshDrafts])
 
   React.useEffect(() => {
     if (!activeDraftId) {
@@ -476,29 +518,35 @@ export const ContentReviewPage: React.FC = () => {
     setIsDirty(true)
   }
 
+  // Use a ref for draftContent inside callbacks to break the circular dependency:
+  // saveDraftLocally depends on draftContent → effect depends on saveDraftLocally → loop
+  const draftContentRef = React.useRef(draftContent)
+  draftContentRef.current = draftContent
+
   const saveDraftLocally = React.useCallback(
     async (label?: string) => {
-      if (!draftContent) return
+      const current = draftContentRef.current
+      if (!current) return
       setIsSaving(true)
       const now = Date.now()
       const revisions =
-        label && draftContent.content !== draftContent.originalContent
+        label && current.content !== current.originalContent
           ? [
               {
                 id: crypto.randomUUID(),
-                content: draftContent.content,
+                content: current.content,
                 metadata: {
-                  title: draftContent.title,
-                  keywords: draftContent.keywords
+                  title: current.title,
+                  keywords: current.keywords
                 },
                 timestamp: now,
                 changeDescription: label
               },
-              ...(draftContent.revisions || [])
+              ...(current.revisions || [])
             ].slice(0, 10)
-          : draftContent.revisions || []
+          : current.revisions || []
       const updated: ContentDraft = {
-        ...draftContent,
+        ...current,
         revisions,
         updatedAt: now
       }
@@ -509,7 +557,7 @@ export const ContentReviewPage: React.FC = () => {
       setLastSavedAt(now)
       setIsSaving(false)
     },
-    [draftContent]
+    []
   )
 
   const applyDraftUpdate = React.useCallback(
@@ -518,26 +566,27 @@ export const ContentReviewPage: React.FC = () => {
       label: string,
       extras?: Partial<ContentDraft>
     ) => {
-      if (!draftContent) return
+      const current = draftContentRef.current
+      if (!current) return
       const now = Date.now()
       const revisions =
-        label && nextContent !== draftContent.originalContent
+        label && nextContent !== current.originalContent
           ? [
               {
                 id: crypto.randomUUID(),
                 content: nextContent,
                 metadata: {
-                  title: draftContent.title,
-                  keywords: draftContent.keywords
+                  title: current.title,
+                  keywords: current.keywords
                 },
                 timestamp: now,
                 changeDescription: label
               },
-              ...(draftContent.revisions || [])
+              ...(current.revisions || [])
             ].slice(0, 10)
-          : draftContent.revisions || []
+          : current.revisions || []
       const updated: ContentDraft = {
-        ...draftContent,
+        ...current,
         ...extras,
         content: nextContent,
         revisions,
@@ -549,11 +598,11 @@ export const ContentReviewPage: React.FC = () => {
       setIsDirty(false)
       setLastSavedAt(now)
     },
-    [draftContent]
+    []
   )
 
   React.useEffect(() => {
-    if (!draftContent || !isDirty) return
+    if (!draftContentRef.current || !isDirty) return
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current)
     }
@@ -563,7 +612,7 @@ export const ContentReviewPage: React.FC = () => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
-  }, [draftContent, isDirty, saveDraftLocally])
+  }, [isDirty, saveDraftLocally])
 
   const handleSectionToggle = (section: DraftSection, include: boolean) => {
     if (!draftContent || !draftContent.sections) return
@@ -842,7 +891,9 @@ export const ContentReviewPage: React.FC = () => {
     }
     setIsCommitting(true)
     try {
-      const updated = await commitDraftToServer(draftContent)
+      const updated = await commitDraftToServer(draftContent, (warn) =>
+        messageApi.warning(warn)
+      )
       await upsertContentDraft(updated)
       setDrafts((prev) => prev.map((d) => (d.id === updated.id ? updated : d)))
       setDraftContent(updated)
@@ -860,7 +911,9 @@ export const ContentReviewPage: React.FC = () => {
   }
 
   const handleCommitSingle = async (draft: ContentDraft) => {
-    const updated = await commitDraftToServer(draft)
+    const updated = await commitDraftToServer(draft, (warn) =>
+      messageApi.warning(warn)
+    )
     await upsertContentDraft(updated)
     setDrafts((prev) => prev.map((d) => (d.id === updated.id ? updated : d)))
     if (draftContent?.id === updated.id) {
@@ -1004,21 +1057,20 @@ export const ContentReviewPage: React.FC = () => {
           </Typography.Title>
           <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
             <Tag color="blue">
-              {t(
-                "contentReview.readyToSubmit",
-                "{{count}} ready",
-                { count: reviewedCount }
-              )}
+              {t("contentReview.readyToSubmit", {
+                defaultValue: "{{count}} ready",
+                count: reviewedCount
+              })}
             </Tag>
             <Tag color="green">
-              {t(
-                "contentReview.committedCount",
-                "{{count}} committed",
-                { count: committedCount }
-              )}
+              {t("contentReview.committedCount", {
+                defaultValue: "{{count}} committed",
+                count: committedCount
+              })}
             </Tag>
             <Tag>
-              {t("contentReview.totalCount", "{{count}} total", {
+              {t("contentReview.totalCount", {
+                defaultValue: "{{count}} total",
                 count: totalCount
               })}
             </Tag>
@@ -1438,7 +1490,7 @@ export const ContentReviewPage: React.FC = () => {
                       <Typography.Text strong>
                         {t("contentReview.actionsLabel", "Actions")}
                       </Typography.Text>
-                      <Space direction="vertical" className="mt-3 w-full">
+                      <Space orientation="vertical" className="mt-3 w-full">
                         <Button
                           type="primary"
                           onClick={handleCommit}

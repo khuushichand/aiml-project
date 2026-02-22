@@ -1,0 +1,33 @@
+# docker-compose.webui.yml
+# Overlay to run the Next.js WebUI container alongside the base API stack.
+#
+# Usage (from repo root):
+#   docker compose --env-file tldw_Server_API/Config_Files/.env \
+#     -f Dockerfiles/docker-compose.yml \
+#     -f Dockerfiles/docker-compose.webui.yml up -d --build
+
+services:
+  webui:
+    build:
+      context: ..
+      dockerfile: Dockerfiles/Dockerfile.webui
+      # These NEXT_PUBLIC_* values are embedded into the Next.js client bundle at build time.
+      # NEXT_PUBLIC_API_URL must be browser-reachable (Docker host, reverse proxy, or public domain),
+      # and should not default to localhost in containerized builds.
+      # NEXT_PUBLIC_API_VERSION and NEXT_PUBLIC_X_API_KEY are also build-time public values.
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL to an externally reachable API URL}
+        NEXT_PUBLIC_API_VERSION: ${NEXT_PUBLIC_API_VERSION:-v1}
+        NEXT_PUBLIC_X_API_KEY: ${NEXT_PUBLIC_X_API_KEY:-}
+    image: tldw-webui:prod
+    container_name: tldw-webui
+    restart: unless-stopped
+    ports:
+      - "8080:3000"
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - HOSTNAME=0.0.0.0
+      - PORT=3000

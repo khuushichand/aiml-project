@@ -49,9 +49,9 @@ export JWT_SECRET_KEY=$(openssl rand -hex 32)
 export API_KEY=$(openssl rand -hex 32)
 
 # Rate limiting
-export RATE_LIMIT_ENABLED=true
-export RATE_LIMIT_PER_MINUTE=10
-export RATE_LIMIT_BURST=20
+export RG_ENABLED=true
+export RG_EVALUATIONS_POLICY_ID=evals.default
+# Tune requests.rpm / requests.burst for evals.default in Config_Files/resource_governor_policies.yaml
 
 # Monitoring
 export METRICS_ENABLED=true
@@ -555,7 +555,6 @@ curl http://localhost:8000/api/v1/health/evaluations
 | ENVIRONMENT | Environment mode | development | production |
 | LOG_LEVEL | Logging level | DEBUG | INFO |
 | DATABASE_PATH | Database directory | ./Databases | /var/lib/tldw/databases |
-| RATE_LIMIT_ENABLED | Enable rate limiting | false | true |
 | METRICS_ENABLED | Enable metrics | false | true |
 | JWT_SECRET_KEY | JWT signing key | random | [secure key] |
 

@@ -52,7 +52,7 @@ export const LandingCard: React.FC<LandingCardProps> = ({
           {icon}
         </div>
         <h3 className="text-lg font-semibold text-text">{title}</h3>
-        <p className="text-sm text-textMuted">{description}</p>
+        <p className="text-sm text-text-muted">{description}</p>
       </div>
     </Card>
   )

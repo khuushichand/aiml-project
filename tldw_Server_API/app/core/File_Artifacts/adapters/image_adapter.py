@@ -139,7 +139,7 @@ class ImageAdapter:
         except ImageGenerationError as exc:
             raise FileArtifactsError("image_generation_failed", detail=str(exc)) from exc
         except Exception as exc:
-            logger.warning("image adapter: backend generate failed: %s", exc)
+            logger.warning("image adapter: backend generate failed: {}", exc)
             raise FileArtifactsError("image_generation_failed", detail=str(exc)) from exc
 
         return ExportResult(
@@ -180,6 +180,12 @@ class ImageAdapter:
             return set(config.sd_cpp_allowed_extra_params or [])
         if backend == "swarmui":
             return set(config.swarmui_allowed_extra_params or [])
+        if backend == "openrouter":
+            return set(config.openrouter_image_allowed_extra_params or [])
+        if backend == "novita":
+            return set(config.novita_image_allowed_extra_params or [])
+        if backend == "together":
+            return set(config.together_image_allowed_extra_params or [])
         return set()
 
     def _validate_extra_params(

@@ -26,13 +26,13 @@ def _client_pg(monkeypatch):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
     # Force-include jobs admin router for this test context
     try:
         from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
         app.include_router(jobs_admin_router, prefix=f"/api/v1", tags=["jobs"])  # idempotent
     except Exception:
-        pass
+        _ = None
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     return app, headers
 

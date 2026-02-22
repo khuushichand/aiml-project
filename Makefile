@@ -1,30 +1,106 @@
 # -----------------------------------------------------------------------------
 # Quickstart targets (first-time setup)
 # -----------------------------------------------------------------------------
-.PHONY: quickstart quickstart-docker verify
+.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui verify pypi-build pypi-check
 
-quickstart:
+PYTHON ?= python3
+VENV_DIR ?= .venv
+VENV_PYTHON ?= $(VENV_DIR)/bin/python
+TLDW_ENV_FILE ?= tldw_Server_API/Config_Files/.env
+TLDW_ENV_TEMPLATE ?= tldw_Server_API/Config_Files/.env.quickstart
+DOCKER_BASE_COMPOSE ?= Dockerfiles/docker-compose.yml
+DOCKER_WEBUI_COMPOSE ?= Dockerfiles/docker-compose.webui.yml
+NEXT_PUBLIC_API_URL ?= http://localhost:8000
+PYPI_BUILD_ARGS ?= --no-isolation
+
+quickstart-prereqs:
+	@command -v $(PYTHON) >/dev/null 2>&1 || (echo "[quickstart] $(PYTHON) not found. Install Python 3.10+ and retry." && exit 1)
+	@$(PYTHON) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || (echo "[quickstart] Python 3.10+ is required." && exit 1)
+	@$(PYTHON) -c 'import loguru, fastapi, uvicorn, dotenv' >/dev/null 2>&1 || (echo "[quickstart] Missing Python dependencies. Run: make quickstart-install" && exit 1)
+	@if ! command -v ffmpeg >/dev/null 2>&1; then \
+		echo "[quickstart] Warning: ffmpeg not found; audio/video features will be limited."; \
+		case "$$(uname -s)" in \
+			Darwin) echo "[quickstart] Install on macOS: brew install ffmpeg" ;; \
+			Linux) \
+				. /etc/os-release 2>/dev/null || true; \
+				case "$${ID:-}" in \
+					ubuntu|debian|linuxmint|pop) echo "[quickstart] Install on Ubuntu/Debian: sudo apt update && sudo apt install -y ffmpeg" ;; \
+					fedora|rhel|centos|rocky|almalinux) echo "[quickstart] Install on Fedora/RHEL: sudo dnf install -y ffmpeg (RPM Fusion may be required)" ;; \
+					arch) echo "[quickstart] Install on Arch: sudo pacman -S --needed ffmpeg" ;; \
+					*) echo "[quickstart] Install ffmpeg via your Linux package manager." ;; \
+				esac; \
+				echo "[quickstart] Linux audio note: for PyAudio support install portaudio19-dev/python3-pyaudio (Debian/Ubuntu)." ;; \
+		esac; \
+	fi
+
+quickstart-install:
+	@command -v $(PYTHON) >/dev/null 2>&1 || (echo "[quickstart-install] $(PYTHON) not found. Install Python 3.10+ and retry." && exit 1)
+	@$(PYTHON) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || (echo "[quickstart-install] Python 3.10+ is required." && exit 1)
+	@if [ ! -x "$(VENV_PYTHON)" ]; then \
+		echo "[quickstart-install] Creating virtualenv at $(VENV_DIR)"; \
+		$(PYTHON) -m venv $(VENV_DIR); \
+	fi
+	@echo "[quickstart-install] Installing Python dependencies into $(VENV_DIR)..."
+	@$(VENV_PYTHON) -m pip install --upgrade pip setuptools wheel
+	@$(VENV_PYTHON) -m pip install -e .
+	@if [ "$$(uname -s)" = "Linux" ]; then \
+		echo "[quickstart-install] Linux audio note: if PyAudio build/install fails, install PortAudio headers (e.g., sudo apt install -y portaudio19-dev python3-pyaudio)."; \
+	fi
+	@$(MAKE) quickstart PYTHON=$(VENV_PYTHON)
+
+quickstart: quickstart-prereqs
 	@echo "[quickstart] Setting up tldw_server for first-time use..."
-	@test -f .env || (cp tldw_Server_API/Config_Files/.env.quickstart .env && echo "[quickstart] Created .env from template - edit SINGLE_USER_API_KEY!")
+	@mkdir -p $(dir $(TLDW_ENV_FILE))
+	@test -f $(TLDW_ENV_FILE) || (cp $(TLDW_ENV_TEMPLATE) $(TLDW_ENV_FILE) && echo "[quickstart] Created $(TLDW_ENV_FILE) from template - set SINGLE_USER_API_KEY before exposing beyond localhost.")
 	@echo "[quickstart] Initializing auth (non-interactive)..."
-	python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+	$(PYTHON) -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
 	@echo "[quickstart] Starting server on http://127.0.0.1:8000"
 	@echo "[quickstart] Verify with: curl http://localhost:8000/health"
 	@echo "[quickstart] API docs at: http://127.0.0.1:8000/docs"
-	uvicorn tldw_Server_API.app.main:app --host 127.0.0.1 --port 8000
+	$(PYTHON) -m uvicorn tldw_Server_API.app.main:app --host 127.0.0.1 --port 8000
 
-quickstart-docker:
+quickstart-docker-bootstrap:
+	@echo "[quickstart-docker-bootstrap] Ensuring $(TLDW_ENV_FILE) has safe first-use auth defaults..."
+	@bash Helper_Scripts/docker_prepare_env.sh "$(TLDW_ENV_FILE)" "$(TLDW_ENV_TEMPLATE)"
+
+quickstart-docker: quickstart-docker-bootstrap
 	@echo "[quickstart-docker] Starting tldw_server via Docker Compose..."
-	docker compose -f Dockerfiles/docker-compose.yml up -d --build
-	@echo "[quickstart-docker] Initializing auth..."
-	docker compose -f Dockerfiles/docker-compose.yml exec app python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+	@command -v docker >/dev/null 2>&1 || (echo "[quickstart-docker] docker not found. Install Docker and retry." && exit 1)
+	docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) up -d --build
+	@echo "[quickstart-docker] First-use auth initialization is handled automatically by the app entrypoint."
 	@echo "[quickstart-docker] Server running at http://localhost:8000"
 	@echo "[quickstart-docker] Verify with: curl http://localhost:8000/health"
 	@echo "[quickstart-docker] API docs at: http://localhost:8000/docs"
 
+quickstart-docker-webui: quickstart-docker-bootstrap
+	@echo "[quickstart-docker-webui] Starting API + WebUI via Docker Compose..."
+	@command -v docker >/dev/null 2>&1 || (echo "[quickstart-docker-webui] docker not found. Install Docker and retry." && exit 1)
+	@echo "[quickstart-docker-webui] Using NEXT_PUBLIC_API_URL=$(NEXT_PUBLIC_API_URL)"
+	NEXT_PUBLIC_API_URL="$(NEXT_PUBLIC_API_URL)" docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) -f $(DOCKER_WEBUI_COMPOSE) up -d --build
+	@echo "[quickstart-docker-webui] First-use auth initialization is handled automatically by the app entrypoint."
+	@echo "[quickstart-docker-webui] API:   http://localhost:8000"
+	@echo "[quickstart-docker-webui] WebUI: http://localhost:8080"
+
 verify:
 	@echo "[verify] Checking server health..."
 	@curl -sf http://localhost:8000/health > /dev/null && echo "[verify] Health check PASSED" || (echo "[verify] Health check FAILED - is the server running?" && exit 1)
+
+# -----------------------------------------------------------------------------
+# PyPI packaging helpers
+# -----------------------------------------------------------------------------
+
+pypi-build:
+	@command -v $(PYTHON) >/dev/null 2>&1 || (echo "[pypi-build] $(PYTHON) not found." && exit 1)
+	@$(PYTHON) -m pip show build >/dev/null 2>&1 || (echo "[pypi-build] Missing 'build'. Install with: $(PYTHON) -m pip install build" && exit 1)
+	@echo "[pypi-build] Cleaning previous artifacts..."
+	@rm -rf build dist *.egg-info tldw_server.egg-info
+	@echo "[pypi-build] Building sdist + wheel ($(PYPI_BUILD_ARGS))..."
+	@$(PYTHON) -m build $(PYPI_BUILD_ARGS)
+
+pypi-check: pypi-build
+	@$(PYTHON) -m pip show twine >/dev/null 2>&1 || (echo "[pypi-check] Missing 'twine'. Install with: $(PYTHON) -m pip install twine" && exit 1)
+	@echo "[pypi-check] Validating distributions..."
+	@$(PYTHON) -m twine check dist/*
 
 # -----------------------------------------------------------------------------
 # PostgreSQL backup/restore
@@ -82,6 +158,22 @@ server-up-dev:
 	CHAT_FORCE_MOCK=1 \
 	STREAMS_UNIFIED=1 \
 	uvicorn tldw_Server_API.app.main:app --host $(HOST) --port $(PORT) --reload
+
+# -----------------------------------------------------------------------------
+# Watchlists smoke
+# -----------------------------------------------------------------------------
+.PHONY: watchlists-audio-smoke
+
+WATCHLISTS_BASE_URL ?= http://127.0.0.1:8000
+WATCHLISTS_API_KEY ?= $(SINGLE_USER_API_KEY)
+WATCHLISTS_AUDIO_SMOKE_ARGS ?=
+
+watchlists-audio-smoke:
+	@echo "[watchlists-audio-smoke] Running watchlists audio smoke against $(WATCHLISTS_BASE_URL)"
+	$(PYTHON) Helper_Scripts/watchlists/watchlists_audio_smoke.py \
+		--base-url "$(WATCHLISTS_BASE_URL)" \
+		--api-key "$(WATCHLISTS_API_KEY)" \
+		$(WATCHLISTS_AUDIO_SMOKE_ARGS)
 
 # -----------------------------------------------------------------------------
 # Prompt Studio tests
@@ -274,3 +366,16 @@ stt-golden:
 	TLDW_STT_GOLDEN_ENABLE=1 \
 	TLDW_STT_GOLDEN_AUDIO_DIR="$(STT_GOLDEN_AUDIO_DIR)" \
 	python -m pytest tldw_Server_API/tests/Audio/test_stt_adapters_golden.py -m "stt_golden" -v
+
+# -----------------------------------------------------------------------------
+# Bandit (project-scoped)
+# -----------------------------------------------------------------------------
+.PHONY: bandit-b110-project
+
+BANDIT_INI ?= .bandit
+BANDIT_OUTPUT ?= /tmp/bandit_b110_project.json
+
+bandit-b110-project:
+	@echo "[bandit] Running project-scoped B110 scan with excludes from $(BANDIT_INI)"
+	$(PYTHON) -m bandit --ini "$(BANDIT_INI)" -r . -t B110 -f json -o "$(BANDIT_OUTPUT)"
+	@echo "[bandit] Wrote $(BANDIT_OUTPUT)"

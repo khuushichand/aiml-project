@@ -7,13 +7,13 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 
 def _debug_log(msg: str) -> None:
     """Emit debug logging when budget debug mode or pytest is active."""
     try:
-        debug_flag = os.getenv("BUDGET_MW_DEBUG", "").lower()
-        if debug_flag in {"1", "true", "yes", "on"} or os.getenv("PYTEST_CURRENT_TEST"):
+        if env_flag_enabled("BUDGET_MW_DEBUG") or os.getenv("PYTEST_CURRENT_TEST"):
             logger.debug(msg)
             print(f"[BUDGET_DEBUG] {msg}")
     except (OSError, TypeError) as exc:

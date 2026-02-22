@@ -10,6 +10,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 #
 # Local Imports
+from tldw_Server_API.app.core.Sync.sync_contract import (
+    ALLOWED_SYNC_ENTITIES as _ALLOWED_SYNC_ENTITIES,
+)
+from tldw_Server_API.app.core.Sync.sync_contract import (
+    ALLOWED_SYNC_OPERATIONS as _ALLOWED_SYNC_OPERATIONS,
+)
+from tldw_Server_API.app.core.Sync.sync_contract import (
+    ALLOWED_SYNC_SEND_ENTITIES as _ALLOWED_SYNC_SEND_ENTITIES,
+)
+from tldw_Server_API.app.core.Sync.sync_contract import (
+    SyncEntity,
+    SyncOperation,
+    SyncSendEntity,
+)
+
 #
 ########################################################################################################################
 #
@@ -17,15 +32,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # --- Pydantic Models ---
 
+ALLOWED_SYNC_ENTITIES = _ALLOWED_SYNC_ENTITIES
+ALLOWED_SYNC_OPERATIONS = _ALLOWED_SYNC_OPERATIONS
+ALLOWED_SYNC_SEND_ENTITIES = _ALLOWED_SYNC_SEND_ENTITIES
+
+
 class SyncLogEntry(BaseModel):
     """
     Represents a single entry from the sync_log table.
     Used both in client requests and server responses.
     """
     change_id: int = Field(..., description="The primary key ID of the log entry.")
-    entity: str = Field(..., description="The type of entity that changed (e.g., 'Media', 'Keywords').")
+    entity: SyncEntity = Field(..., description="The type of entity that changed (e.g., 'Media', 'Keywords').")
     entity_uuid: str = Field(..., description="The UUID of the entity that changed.")
-    operation: str = Field(..., description="The type of operation ('create', 'update', 'delete', 'link', 'unlink').")
+    operation: SyncOperation = Field(..., description="The type of operation ('create', 'update', 'delete', 'link', 'unlink').")
     timestamp: str = Field(..., description="Timestamp when the change occurred (ISO 8601 format string or similar). From client for requests, potentially server authoritative for responses.")
     # Optional: Add server_timestamp if you explicitly want to send it back
     server_timestamp: Optional[str] = Field(None, description="Server's authoritative timestamp when the change was processed.")
@@ -34,6 +54,7 @@ class SyncLogEntry(BaseModel):
     payload: str = Field(..., description="A JSON string containing the state of the entity after the change (or minimal info for deletes/links).")
 
     model_config = ConfigDict(
+        use_enum_values=True,
         # Example for generating schema documentation if using OpenAPI/Swagger
         json_schema_extra={
             "example": {
@@ -49,13 +70,50 @@ class SyncLogEntry(BaseModel):
         }
     )
 
+
+class SyncSendLogEntry(BaseModel):
+    """A client-originated sync change accepted by /sync/send."""
+
+    change_id: int = Field(..., description="The primary key ID of the log entry.")
+    entity: SyncSendEntity = Field(
+        ...,
+        description=(
+            "Entity type accepted by /sync/send "
+            "(Media, Keywords, MediaKeywords)."
+        ),
+    )
+    entity_uuid: str = Field(..., description="The UUID of the entity that changed.")
+    operation: SyncOperation = Field(
+        ...,
+        description="The type of operation ('create', 'update', 'delete', 'link', 'unlink').",
+    )
+    timestamp: str = Field(
+        ...,
+        description="Timestamp when the change occurred (ISO 8601 format string or similar).",
+    )
+    client_id: str = Field(..., description="The ID of the client that originated the change.")
+    version: int = Field(..., description="The version number of the entity after this change.")
+    payload: str = Field(
+        ...,
+        description="JSON string containing the entity state after the change.",
+    )
+
+    model_config = ConfigDict(use_enum_values=True)
+
+
 class ClientChangesPayload(BaseModel):
     """
     The payload sent by a client containing its local changes.
     Corresponds to the request body for the /sync/send endpoint.
     """
     client_id: str = Field(..., description="The unique ID of the client device sending these changes.")
-    changes: list[SyncLogEntry] = Field(..., description="A list of sync log entries representing local changes made on the client.")
+    changes: list[SyncSendLogEntry] = Field(
+        ...,
+        description=(
+            "A list of local changes accepted by /sync/send "
+            "(entity must be Media, Keywords, or MediaKeywords)."
+        ),
+    )
     last_processed_server_id: int = Field(0, description="The 'change_id' of the last entry received from the server that this client successfully processed. Helps server determine delta.")
 
     model_config = ConfigDict(

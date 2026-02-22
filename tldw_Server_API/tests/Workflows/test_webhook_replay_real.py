@@ -90,7 +90,7 @@ def admin_client(tmp_path, auth_headers):
                 request_id=None,
             )
         except Exception:
-            pass
+            _ = None
         return principal
 
     def override_db():

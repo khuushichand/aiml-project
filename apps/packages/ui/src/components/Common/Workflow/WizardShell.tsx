@@ -5,8 +5,6 @@ import { useTranslation } from "react-i18next"
 import { useWorkflowsStore } from "@/store/workflows"
 import type { WizardShellProps } from "@/types/workflows"
 
-const { Step } = Steps
-
 /**
  * WizardShell
  *
@@ -118,7 +116,7 @@ export const WizardShell: React.FC<WizardShellProps> = ({
       {/* Error alert */}
       {error && (
         <Alert
-          message={t("workflows:error", "Error")}
+          title={t("workflows:error", "Error")}
           description={error}
           type="error"
           showIcon
@@ -133,7 +131,7 @@ export const WizardShell: React.FC<WizardShellProps> = ({
         <div className="mb-4 px-1">
           <div className="flex items-center gap-2 mb-2">
             <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            <span className="text-sm text-textMuted">
+            <span className="text-sm text-text-muted">
               {processingMessage || t("workflows:processing", "Processing...")}
             </span>
           </div>

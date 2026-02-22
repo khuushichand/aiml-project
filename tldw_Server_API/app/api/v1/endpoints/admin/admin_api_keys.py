@@ -100,6 +100,7 @@ async def admin_update_user_api_key(
         key_id,
         request,
         db,
+        is_pg_fn=_get_is_pg_fn(),
     )
 
 

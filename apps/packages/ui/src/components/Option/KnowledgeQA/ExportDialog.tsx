@@ -2,7 +2,7 @@
  * ExportDialog - Export conversations as markdown/PDF with citations
  */
 
-import React, { useState, useCallback } from "react"
+import React, { useState, useCallback, useEffect, useRef } from "react"
 import {
   Download,
   FileText,
@@ -17,6 +17,9 @@ import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { cn } from "@/lib/utils"
 import type { ExportFormat, ExportOptions } from "./types"
 import type { RagCitationStyle } from "@/services/rag/unified-rag"
+import { useAntdMessage } from "@/hooks/useAntdMessage"
+import { mapKnowledgeQaExportErrorMessage } from "./errorMessages"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 
 type ExportDialogProps = {
   open: boolean
@@ -31,16 +34,55 @@ const DEFAULT_OPTIONS: ExportOptions = {
   citationStyle: "apa",
 }
 
+const CITATION_APPROXIMATION_NOTE =
+  "Citation formatting is approximate and may omit author, year, or publisher fields when metadata is unavailable."
+const SHARE_THREAD_LINKS_ENABLED = true
+const SHARE_THREAD_LINKS_HELP_TEXT =
+  "Share links use a dedicated token with read-only access and an expiry window, independent from normal thread permissions. Extension shared-link routing is currently TBD."
+
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  const focusableSelectors = [
+    'button:not([disabled])',
+    '[href]',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(",")
+
+  return Array.from(container.querySelectorAll(focusableSelectors)) as HTMLElement[]
+}
+
 export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
   const { messages, currentThreadId, results, answer, query } = useKnowledgeQA()
+  const message = useAntdMessage()
   const [options, setOptions] = useState<ExportOptions>(DEFAULT_OPTIONS)
   const [isExporting, setIsExporting] = useState(false)
+  const [isSavingNote, setIsSavingNote] = useState(false)
   const [exportedContent, setExportedContent] = useState<string | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [shareLinkCopied, setShareLinkCopied] = useState(false)
+  const [isPreparingShareLink, setIsPreparingShareLink] = useState(false)
+  const [isRevokingShareLink, setIsRevokingShareLink] = useState(false)
+  const [activeShareLink, setActiveShareLink] = useState<{
+    id: string
+    sharePath: string
+    expiresAt: string
+  } | null>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const previousActiveElement = useRef<HTMLElement | null>(null)
+  const hasExportableContent =
+    query.trim().length > 0 || Boolean(answer) || results.length > 0 || messages.length > 0
+  const hasServerThread = Boolean(
+    currentThreadId && !currentThreadId.startsWith("local-")
+  )
+  const canCopyThreadLink = SHARE_THREAD_LINKS_ENABLED && hasServerThread
 
   const handleExport = useCallback(async () => {
     setIsExporting(true)
     setExportedContent(null)
+    setExportError(null)
 
     try {
       let content = ""
@@ -69,30 +111,70 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
           window.print()
         }, 500)
       } else if (options.format === "chatbook") {
-        // Call the chatbook export API
-        if (currentThreadId) {
-          const response = await fetch("/api/v1/chatbooks/export", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              conversation_ids: [currentThreadId],
-              include_attachments: true,
-            }),
-          })
-          if (response.ok) {
-            const blob = await response.blob()
-            downloadBlob(blob, `knowledge_qa_${Date.now()}.zip`)
-            onClose()
-            return
-          }
+        if (!currentThreadId || currentThreadId.startsWith("local-")) {
+          throw new Error("No server-backed thread selected for export.")
         }
+
+        const trimmedQuery = query.trim()
+        const normalizedQuery =
+          trimmedQuery.length > 96 ? `${trimmedQuery.slice(0, 93)}...` : trimmedQuery
+        const exportResult = await tldwClient.exportChatbook({
+          name: normalizedQuery
+            ? `Knowledge QA: ${normalizedQuery}`
+            : `Knowledge QA Export ${new Date().toLocaleDateString()}`,
+          description: normalizedQuery
+            ? `Knowledge QA export for query: ${normalizedQuery}`
+            : "Knowledge QA chatbook export",
+          content_selections: {
+            conversation: [currentThreadId],
+          },
+          include_media: true,
+          include_embeddings: false,
+          include_generated_content: true,
+          async_mode: false,
+        })
+
+        if (exportResult?.success === false) {
+          throw new Error(String(exportResult?.message || "Export failed"))
+        }
+
+        const jobId = resolveChatbookJobId(exportResult)
+        if (!jobId) {
+          throw new Error("Chatbook export completed but no download job was returned.")
+        }
+
+        const { blob, filename } = await tldwClient.downloadChatbookExport(jobId)
+        downloadBlob(blob, filename || `knowledge_qa_${Date.now()}.zip`)
+        onClose()
+        return
       }
     } catch (error) {
+      const mappedError =
+        options.format === "chatbook"
+          ? mapKnowledgeQaExportErrorMessage(error)
+          : error instanceof Error
+            ? error.message
+            : "Export failed"
+      setExportError(mappedError)
+      message.open({
+        type: "error",
+        content: mappedError,
+        duration: 4,
+      })
       console.error("Export failed:", error)
     } finally {
       setIsExporting(false)
     }
-  }, [options, query, answer, results, messages, currentThreadId, onClose])
+  }, [
+    options,
+    query,
+    answer,
+    results,
+    messages,
+    currentThreadId,
+    onClose,
+    message,
+  ])
 
   const handleDownload = useCallback(() => {
     if (!exportedContent) return
@@ -113,15 +195,201 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
     }
   }, [exportedContent])
 
+  const handleSaveToNotes = useCallback(async () => {
+    if (!hasExportableContent) return
+
+    setIsSavingNote(true)
+    try {
+      const noteContent = generateMarkdown(
+        query,
+        answer,
+        results,
+        messages,
+        { ...options, format: "markdown" }
+      )
+      const trimmedQuery = query.trim()
+      const title =
+        trimmedQuery.length > 0
+          ? `Knowledge QA: ${
+              trimmedQuery.length > 72
+                ? `${trimmedQuery.slice(0, 69)}...`
+                : trimmedQuery
+            }`
+          : "Knowledge QA export"
+      const metadata: Record<string, unknown> = {
+        origin: "knowledge_qa",
+        source: "knowledge_export",
+        citation_style: options.citationStyle,
+        include_source_excerpts: options.includeSourceExcerpts,
+        include_settings_snapshot: options.includeSettingsSnapshot,
+      }
+      if (currentThreadId) {
+        metadata.thread_id = currentThreadId
+      }
+
+      await tldwClient.createNote(noteContent, {
+        title,
+        metadata,
+      })
+      message.open({
+        type: "success",
+        content: "Saved to Notes.",
+        duration: 3,
+      })
+    } catch (error) {
+      const mappedError =
+        error instanceof Error && error.message
+          ? `Failed to save to Notes. ${error.message}`
+          : "Failed to save to Notes."
+      message.open({
+        type: "error",
+        content: mappedError,
+        duration: 4,
+      })
+    } finally {
+      setIsSavingNote(false)
+    }
+  }, [
+    hasExportableContent,
+    query,
+    answer,
+    results,
+    messages,
+    options,
+    currentThreadId,
+    message,
+  ])
+
+  const handleCopyThreadLink = useCallback(async () => {
+    if (!canCopyThreadLink || !currentThreadId) return
+
+    setIsPreparingShareLink(true)
+    try {
+      const shareLink = await tldwClient.createConversationShareLink(currentThreadId, {
+        permission: "view",
+      })
+      const sharePath =
+        typeof shareLink?.share_path === "string" && shareLink.share_path.trim().length > 0
+          ? shareLink.share_path.trim()
+          : `/knowledge/shared/${encodeURIComponent(String(shareLink?.token || ""))}`
+      const shareUrl = `${window.location.origin}${sharePath}`
+      await navigator.clipboard.writeText(shareUrl)
+      setActiveShareLink({
+        id: String(shareLink.share_id),
+        sharePath,
+        expiresAt: String(shareLink.expires_at),
+      })
+      setShareLinkCopied(true)
+      message.open({
+        type: "success",
+        content: "Share link copied.",
+        duration: 3,
+      })
+      setTimeout(() => setShareLinkCopied(false), 2000)
+    } catch (error) {
+      message.open({
+        type: "error",
+        content: "Unable to generate a share link.",
+        duration: 4,
+      })
+      console.error("Share link copy failed:", error)
+    } finally {
+      setIsPreparingShareLink(false)
+    }
+  }, [canCopyThreadLink, currentThreadId, message])
+
+  const handleRevokeShareLink = useCallback(async () => {
+    if (!canCopyThreadLink || !currentThreadId || !activeShareLink?.id) return
+    setIsRevokingShareLink(true)
+    try {
+      await tldwClient.revokeConversationShareLink(currentThreadId, activeShareLink.id)
+      setActiveShareLink(null)
+      message.open({
+        type: "success",
+        content: "Share link revoked.",
+        duration: 3,
+      })
+    } catch (error) {
+      message.open({
+        type: "error",
+        content: "Unable to revoke share link.",
+        duration: 4,
+      })
+      console.error("Share link revoke failed:", error)
+    } finally {
+      setIsRevokingShareLink(false)
+    }
+  }, [activeShareLink?.id, canCopyThreadLink, currentThreadId, message])
+
+  useEffect(() => {
+    if (open) {
+      previousActiveElement.current = document.activeElement as HTMLElement
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open || !panelRef.current) return
+
+    const panel = panelRef.current
+    const focusableElements = getFocusableElements(panel)
+    if (focusableElements.length > 0) {
+      focusableElements[0].focus()
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault()
+        onClose()
+        return
+      }
+
+      if (e.key === "Tab") {
+        const focusable = getFocusableElements(panel)
+        if (focusable.length === 0) return
+
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault()
+            last.focus()
+          }
+        } else if (document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [open, onClose])
+
+  useEffect(() => {
+    if (!open && previousActiveElement.current) {
+      previousActiveElement.current.focus()
+      previousActiveElement.current = null
+    }
+  }, [open])
+
   if (!open) return null
 
   return (
     <>
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/50 z-50" onClick={onClose} />
+      <div
+        className="fixed inset-0 bg-black/50 z-50"
+        onClick={onClose}
+        aria-hidden="true"
+      />
 
       {/* Dialog */}
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="export-dialog-title"
         className={cn(
           "fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2",
           "w-full max-w-lg max-h-[90vh]",
@@ -134,10 +402,14 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div className="flex items-center gap-2">
             <Download className="w-5 h-5 text-primary" />
-            <h2 className="font-semibold text-lg">Export Conversation</h2>
+            <h2 id="export-dialog-title" className="font-semibold text-lg">
+              Export Conversation
+            </h2>
           </div>
           <button
+            type="button"
             onClick={onClose}
+            aria-label="Close export dialog"
             className="p-1.5 rounded-lg hover:bg-muted transition-colors"
           >
             <X className="w-5 h-5" />
@@ -149,7 +421,7 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
           {/* Format selection */}
           <div className="space-y-3">
             <label className="text-sm font-medium">Export Format</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {[
                 {
                   value: "markdown",
@@ -227,6 +499,9 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
                   <option value="harvard">Harvard</option>
                   <option value="ieee">IEEE</option>
                 </select>
+                <p className="text-xs text-text-muted">
+                  {CITATION_APPROXIMATION_NOTE}
+                </p>
               </div>
 
               {/* Include options */}
@@ -266,6 +541,56 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
             </>
           )}
 
+          <div className="space-y-2 rounded-lg border border-border bg-muted/20 px-3 py-3">
+            <p className="text-sm font-medium">Workflow actions</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSaveToNotes}
+                disabled={!hasExportableContent || isSavingNote}
+                className="px-3 py-1.5 text-xs font-medium rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSavingNote ? "Saving..." : "Save to Notes"}
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyThreadLink}
+                disabled={!canCopyThreadLink || isPreparingShareLink}
+                title={SHARE_THREAD_LINKS_HELP_TEXT}
+                className="px-3 py-1.5 text-xs font-medium rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isPreparingShareLink
+                  ? "Generating link..."
+                  : shareLinkCopied
+                    ? "Link copied"
+                    : "Create share link"}
+              </button>
+              <button
+                type="button"
+                onClick={handleRevokeShareLink}
+                disabled={!activeShareLink || isRevokingShareLink}
+                className="px-3 py-1.5 text-xs font-medium rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isRevokingShareLink ? "Revoking..." : "Revoke link"}
+              </button>
+            </div>
+            <p className="text-xs text-text-muted">
+              {SHARE_THREAD_LINKS_HELP_TEXT}
+            </p>
+            {activeShareLink ? (
+              <p className="text-xs text-text-muted">
+                Active link expires{" "}
+                {new Date(activeShareLink.expiresAt).toLocaleString([], {
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                })}
+                .
+              </p>
+            ) : null}
+          </div>
+
           {/* Preview / Result */}
           {exportedContent && (
             <div className="space-y-2">
@@ -273,6 +598,7 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
                 <label className="text-sm font-medium">Preview</label>
                 <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={handleCopy}
                     className="flex items-center gap-1.5 px-2 py-1 text-xs rounded hover:bg-muted transition-colors"
                   >
@@ -289,6 +615,7 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
                     )}
                   </button>
                   <button
+                    type="button"
                     onClick={handleDownload}
                     className="flex items-center gap-1.5 px-2 py-1 text-xs rounded hover:bg-muted transition-colors"
                   >
@@ -303,17 +630,33 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
               </pre>
             </div>
           )}
+
+          {exportError && (
+            <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2">
+              <p className="text-sm text-danger">{exportError}</p>
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={isExporting}
+                className="mt-2 text-xs font-medium text-danger hover:opacity-80 disabled:opacity-60"
+              >
+                Retry export
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-sm rounded-md hover:bg-muted transition-colors"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleExport}
             disabled={isExporting}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-primary text-white hover:bg-primaryStrong transition-colors disabled:opacity-50"
@@ -334,6 +677,31 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
       </div>
     </>
   )
+}
+
+function resolveChatbookJobId(payload: any): string | null {
+  const directJobId =
+    typeof payload?.job_id === "string" && payload.job_id.trim().length > 0
+      ? payload.job_id.trim()
+      : null
+  if (directJobId) return directJobId
+
+  const downloadUrl =
+    typeof payload?.download_url === "string" && payload.download_url.trim().length > 0
+      ? payload.download_url.trim()
+      : null
+  if (!downloadUrl) return null
+
+  const normalizedPath = downloadUrl.split("?")[0].replace(/\/+$/, "")
+  const segments = normalizedPath.split("/").filter(Boolean)
+  if (segments.length === 0) return null
+
+  const rawJobId = segments[segments.length - 1] || ""
+  try {
+    return decodeURIComponent(rawJobId)
+  } catch {
+    return rawJobId
+  }
 }
 
 // Helper function to download a blob
@@ -444,6 +812,10 @@ function generateMarkdown(
   // Bibliography (formatted citations)
   if (results.length > 0) {
     lines.push("## Bibliography")
+    lines.push("")
+    lines.push(
+      "_Citation formatting is approximate and may omit author, year, or publisher details when metadata is unavailable._"
+    )
     lines.push("")
     results.forEach((result, index) => {
       const citation = formatCitation(result, index + 1, options.citationStyle)

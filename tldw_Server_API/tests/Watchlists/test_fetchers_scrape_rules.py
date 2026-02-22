@@ -92,6 +92,16 @@ async def test_fetch_site_items_with_rules_test_mode(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_site_items_with_rules_test_mode_y(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "y")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    rules = {"list_url": "https://example.com/blog", "limit": 1}
+    items = await fetch_site_items_with_rules("https://example.com/blog", rules)
+    assert len(items) == 1
+    assert items[0]["url"] == "https://example.com/blog/test-scrape-1"
+
+
+@pytest.mark.asyncio
 async def test_fetch_site_items_with_rules_pagination(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "0")
 

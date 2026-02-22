@@ -13,7 +13,7 @@ will be added in Phase 2.
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # =============================================================================
 # Common Schemas
@@ -129,6 +129,7 @@ class ListCreate(ListBase):
 class ListUpdate(BaseModel):
     """Schema for updating a list."""
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="New list name")
+    position: Optional[int] = Field(None, ge=0, description="New position in the board")
 
 
 class ListResponse(ListBase):
@@ -155,13 +156,52 @@ class ListsListResponse(BaseModel):
     lists: list[ListResponse] = Field(..., description="List of lists")
 
 
+class ListPositionItem(BaseModel):
+    """Legacy list reorder item."""
+    list_id: int = Field(..., description="List ID")
+    position: int = Field(..., ge=0, description="Position in board")
+
+
+class CardPositionItem(BaseModel):
+    """Legacy card reorder item."""
+    card_id: int = Field(..., description="Card ID")
+    position: int = Field(..., ge=0, description="Position in list")
+
+
 class ReorderRequest(BaseModel):
-    """Schema for reordering items."""
-    ids: list[int] = Field(
-        ...,
+    """Schema for reordering lists/cards with compatibility shims."""
+    ids: Optional[list[int]] = Field(
+        None,
         min_length=1,
         description="Item IDs in the desired order"
     )
+    list_positions: Optional[list[ListPositionItem]] = Field(
+        None,
+        min_length=1,
+        description="Legacy list reorder payload; converted to ids by position"
+    )
+    card_positions: Optional[list[CardPositionItem]] = Field(
+        None,
+        min_length=1,
+        description="Legacy card reorder payload; converted to ids by position"
+    )
+
+    @model_validator(mode="after")
+    def normalize_legacy_payloads(self) -> "ReorderRequest":
+        if self.ids:
+            return self
+
+        if self.list_positions:
+            ordered = sorted(self.list_positions, key=lambda item: item.position)
+            self.ids = [item.list_id for item in ordered]
+            return self
+
+        if self.card_positions:
+            ordered = sorted(self.card_positions, key=lambda item: item.position)
+            self.ids = [item.card_id for item in ordered]
+            return self
+
+        raise ValueError("Provide one of: ids, list_positions, or card_positions")
 
 
 class ReorderResponse(BaseModel):
@@ -201,6 +241,10 @@ class CardCreate(CardBase):
     priority: Optional[PriorityType] = Field(
         None,
         description="Card priority: low, medium, high, or urgent"
+    )
+    label_ids: Optional[list[int]] = Field(
+        None,
+        description="Optional label IDs to assign after card creation"
     )
     metadata: Optional[dict[str, Any]] = Field(None, description="Optional JSON metadata")
 
@@ -290,6 +334,16 @@ class CardSearchRequest(BaseModel):
     board_id: Optional[int] = Field(None, description="Filter by board ID")
     limit: int = Field(50, ge=1, le=200, description="Maximum results")
     offset: int = Field(0, ge=0, description="Results to skip")
+    page: Optional[int] = Field(None, ge=1, description="Legacy page number (1-indexed)")
+    per_page: Optional[int] = Field(None, ge=1, le=200, description="Legacy page size")
+
+    @model_validator(mode="after")
+    def normalize_legacy_pagination(self) -> "CardSearchRequest":
+        if self.per_page is not None:
+            self.limit = self.per_page
+        if self.page is not None:
+            self.offset = (self.page - 1) * self.limit
+        return self
 
 
 class CardSearchResponse(BaseModel):
@@ -728,6 +782,16 @@ class SearchRequest(BaseModel):
     search_mode: SEARCH_MODES = Field("fts", description="Search mode: fts, vector, or hybrid")
     limit: int = Field(20, ge=1, le=100, description="Maximum results")
     offset: int = Field(0, ge=0, description="Results to skip")
+    page: Optional[int] = Field(None, ge=1, description="Legacy page number (1-indexed)")
+    per_page: Optional[int] = Field(None, ge=1, le=100, description="Legacy page size")
+
+    @model_validator(mode="after")
+    def normalize_legacy_pagination(self) -> "SearchRequest":
+        if self.per_page is not None:
+            self.limit = self.per_page
+        if self.page is not None:
+            self.offset = (self.page - 1) * self.limit
+        return self
 
 
 class SearchResultCard(BaseModel):

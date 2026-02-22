@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, UploadFile
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
@@ -31,6 +31,7 @@ router = APIRouter()
     tags=["Media Ingestion & Persistence"],
 )
 async def add_media(
+    request: Request,
     background_tasks: BackgroundTasks,
     form_data: AddMediaForm = Depends(get_add_media_form),
     files: list[UploadFile] | None = File(
@@ -60,6 +61,7 @@ async def add_media(
         current_user=current_user,
         usage_log=usage_log,
         response=None,
+        request=request,
     )
 
 

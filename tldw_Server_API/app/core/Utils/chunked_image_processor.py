@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from typing import Optional
 
 from loguru import logger
+from tldw_Server_API.app.core.Utils.image_validation import validate_mime_type
 
 try:
     from PIL import Image
@@ -94,9 +95,7 @@ async def process_image_chunked(
 
     except Exception as e:
         logger.error(f"Error processing image: {e}")
-        # On error, yield original data
-        for i in range(0, len(image_data), CHUNK_SIZE):
-            yield image_data[i:i + CHUNK_SIZE]
+        raise ValueError(f"Failed to process image payload: {e}") from e
 
 
 async def decode_base64_image_chunked(
@@ -247,7 +246,9 @@ class StreamingImageProcessor:
         try:
             # Parse data URL
             header, base64_data = image_url.split(',', 1)
-            mime_type = header.split(';')[0].split(':')[1]
+            mime_type = header.split(';')[0].split(':')[1].strip().lower()
+            if not validate_mime_type(mime_type):
+                return False, None, mime_type, f"Unsupported image MIME type: {mime_type}"
 
             # Check if we have memory available (wait politely without holding the lock)
             attempts = 0
@@ -277,6 +278,13 @@ class StreamingImageProcessor:
 
                 # Process image if needed
                 if PIL_AVAILABLE:
+                    try:
+                        # Validate decoded payload is actually a parseable image.
+                        with Image.open(io.BytesIO(image_data)) as img:
+                            img.verify()
+                    except Exception as e:
+                        return False, None, mime_type, f"Invalid image format: {e}"
+
                     processed_chunks = []
                     async for chunk in process_image_chunked(image_data, mime_type):
                         processed_chunks.append(chunk)

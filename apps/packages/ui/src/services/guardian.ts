@@ -257,6 +257,19 @@ export interface AuditLogList {
   total: number
 }
 
+export interface DependentGuardian {
+  relationship_id: string
+  relationship_type: string
+  monitoring_active?: boolean
+  policy_count?: number
+  categories?: string[]
+}
+
+export interface DependentStatusResponse {
+  supervised: boolean
+  guardians: DependentGuardian[]
+}
+
 // ---------------------------------------------------------------------------
 // Crisis resource types
 // ---------------------------------------------------------------------------
@@ -544,8 +557,8 @@ export async function getPolicy(id: string): Promise<SupervisedPolicy> {
   })
 }
 
-export async function getDependentStatus(): Promise<{ supervised: boolean; guardians: string[] }> {
-  return bgRequest<{ supervised: boolean; guardians: string[] }>({
+export async function getDependentStatus(): Promise<DependentStatusResponse> {
+  return bgRequest<DependentStatusResponse>({
     path: toAllowedPath("/api/v1/guardian/dependent/status"),
     method: "GET"
   })

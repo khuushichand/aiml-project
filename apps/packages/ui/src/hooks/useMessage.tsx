@@ -1,6 +1,10 @@
 import React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { promptForRag, systemPromptForNonRag } from "~/services/tldw-server"
+import {
+  fetchChatModels,
+  promptForRag,
+  systemPromptForNonRag
+} from "~/services/tldw-server"
 import { useStoreMessageOption, type Message } from "~/store/option"
 import { useStoreMessage } from "~/store"
 import { getContentFromCurrentTab } from "~/libs/get-html"
@@ -17,6 +21,7 @@ import { useTranslation } from "react-i18next"
 import { usePageAssist } from "@/context"
 import { formatDocs } from "@/utils/format-docs"
 import { buildAssistantErrorContent } from "@/utils/chat-error-message"
+import { detectCharacterMood } from "@/utils/character-mood"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useStoreChatModelSettings } from "@/store/model"
 import { getAllDefaultModelSettings } from "@/services/model-settings"
@@ -36,7 +41,10 @@ import { getModelNicknameByID } from "@/db/dexie/nickname"
 import { systemPromptFormatter } from "@/utils/system-message"
 import type { Character } from "@/types/character"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
-import { createBranchMessage } from "./handlers/messageHandlers"
+import {
+  createBranchMessage,
+  createRegenerateLastMessage
+} from "./handlers/messageHandlers"
 import { consumeStreamingChunk } from "@/utils/streaming-chunks"
 import type { ToolCall } from "@/types/tool-calls"
 import {
@@ -62,6 +70,15 @@ import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import type { ChatDocuments } from "@/models/ChatTypes"
 import type { UploadedFile } from "@/db/dexie/types"
 import { applyMcpModuleDisclosureFromToolCalls } from "@/utils/mcp-disclosure"
+import {
+  buildAvailableChatModelIds,
+  findUnavailableChatModel,
+  normalizeChatModelId
+} from "@/utils/chat-model-availability"
+import {
+  collectGreetings,
+  isGreetingMessageType
+} from "@/utils/character-greetings"
 
 const extractToolCalls = (generationInfo: unknown): ToolCall[] | undefined => {
   if (!generationInfo || typeof generationInfo !== "object") return undefined
@@ -150,7 +167,7 @@ export const useMessage = () => {
     setSelectedSystemPrompt,
     useOCR,
     setUseOCR
-  } = useChatBaseState(useStoreMessage)
+  } = useChatBaseState(useStoreMessageOption)
   const { currentURL, setCurrentURL } = useStoreMessage()
   const {
     serverChatId,
@@ -178,6 +195,112 @@ export const useMessage = () => {
   const [speechToTextLanguage, setSpeechToTextLanguage] = useStorage(
     "speechToTextLanguage",
     "en-US"
+  )
+
+  const ensureSelectedChatModelIsAvailable = React.useCallback(
+    async (selectedModelId: string): Promise<boolean> => {
+      const normalizedSelectedModel = normalizeChatModelId(selectedModelId)
+      if (!normalizedSelectedModel) {
+        notification.error({
+          message: t("error"),
+          description: t("validationSelectModel")
+        })
+        return false
+      }
+
+      const describeUnavailableModel = (models: any[]): {
+        unavailableModel: string | null
+        emptyCatalog: boolean
+      } => {
+        const availableIds = buildAvailableChatModelIds(models as any[])
+        if (availableIds.size === 0) {
+          return { unavailableModel: normalizedSelectedModel, emptyCatalog: true }
+        }
+        return {
+          unavailableModel: findUnavailableChatModel(
+            [normalizedSelectedModel],
+            availableIds
+          ),
+          emptyCatalog: false
+        }
+      }
+
+      try {
+        const resolvedProvider = (
+          await resolveApiProviderForModel({
+            modelId: normalizedSelectedModel,
+            explicitProvider: currentChatModelSettings.apiProvider
+          })
+        )
+          .trim()
+          .toLowerCase()
+        const shouldForceOpenRouterRefresh = resolvedProvider === "openrouter"
+
+        const initialModels = shouldForceOpenRouterRefresh
+          ? await fetchChatModels({
+              returnEmpty: true,
+              forceRefresh: true,
+              refreshOpenRouter: true
+            })
+          : await fetchChatModels({ returnEmpty: true })
+        let latestModels = initialModels
+
+        let { unavailableModel, emptyCatalog } =
+          describeUnavailableModel(latestModels)
+
+        if (unavailableModel && !emptyCatalog && !shouldForceOpenRouterRefresh) {
+          latestModels = await fetchChatModels({
+            returnEmpty: true,
+            forceRefresh: true,
+            refreshOpenRouter: false
+          })
+          ;({ unavailableModel, emptyCatalog } =
+            describeUnavailableModel(latestModels))
+        }
+
+        if (!unavailableModel) {
+          return true
+        }
+
+        if (emptyCatalog) {
+          notification.error({
+            message: t("error"),
+            description: t(
+              "playground:composer.validationModelCatalogUnavailableInline",
+              "Unable to verify model availability because no models are currently loaded. Refresh models and try again."
+            )
+          })
+          return false
+        }
+
+        const fallbackModel =
+          latestModels[0]?.model ?? latestModels[0]?.name ?? null
+        if (typeof fallbackModel === "string" && fallbackModel.trim().length > 0) {
+          setSelectedModel(fallbackModel.trim())
+        } else {
+          setSelectedModel(null)
+        }
+        notification.error({
+          message: t("error"),
+          description: t(
+            "playground:composer.validationModelUnavailableInline",
+            "Selected model is not available on this server. Refresh models or choose a different model."
+          )
+        })
+        return false
+      } catch (error) {
+        console.error("Failed to validate selected model availability:", error)
+        notification.error({
+          message: t("error"),
+          description: t(
+            "playground:composer.validationModelCatalogUnavailableInline",
+            "Unable to verify model availability because no models are currently loaded. Refresh models and try again."
+          )
+        })
+        return false
+      }
+    },
+    [currentChatModelSettings.apiProvider, notification, setSelectedModel, t]
   )
 
   const resetServerChatState = () => {
@@ -464,7 +587,7 @@ export const useMessage = () => {
           await tldwClient.initialize()
           // Optionally ensure server has the page content in the media index
           if (embedURL) {
-            try { await tldwClient.addMedia(embedURL, {}) } catch {}
+            try { await tldwClient.addMedia(embedURL) } catch {}
           }
           const ragRes = await tldwClient.ragSearch(query, { top_k: 4, filters: { url: embedURL } })
           const docs = ragRes?.results || ragRes?.documents || ragRes?.docs || []
@@ -992,13 +1115,68 @@ export const useMessage = () => {
     history: ChatHistory,
     signal: AbortSignal,
     model: string,
-    regenerateFromMessage?: Message
+    regenerateFromMessage?: Message,
+    serverChatIdOverride?: string | null
   ) => {
     setStreaming(true)
+    const resolveGreetingText = (): string => {
+      const fromMessages = messages.find(
+        (entry) =>
+          entry.isBot &&
+          isGreetingMessageType(entry.messageType) &&
+          typeof entry.message === "string" &&
+          entry.message.trim().length > 0
+      )
+      if (fromMessages?.message) {
+        return fromMessages.message.trim()
+      }
+
+      const fromHistory = history.find(
+        (entry) =>
+          entry.role === "assistant" &&
+          isGreetingMessageType(entry.messageType) &&
+          typeof entry.content === "string" &&
+          entry.content.trim().length > 0
+      )
+      if (fromHistory?.content) {
+        return fromHistory.content.trim()
+      }
+
+      const fromCharacter = collectGreetings(selectedCharacter as any).find(
+        (candidate) =>
+          typeof candidate === "string" && candidate.trim().length > 0
+      )
+      if (fromCharacter) {
+        return fromCharacter.trim()
+      }
+
+      return ""
+    }
+    const greetingText = resolveGreetingText()
+    const hasGreetingInHistory =
+      greetingText.length > 0 &&
+      history.some(
+        (entry) =>
+          entry.role === "assistant" &&
+          typeof entry.content === "string" &&
+          entry.content.trim() === greetingText
+      )
+    const historyBase: ChatHistory =
+      greetingText.length > 0 && !hasGreetingInHistory
+        ? [
+            {
+              role: "assistant",
+              content: greetingText,
+              messageType: "character:greeting"
+            },
+            ...history
+          ]
+        : history
     let fullText = ""
     let contentToSave = ""
     const resolvedAssistantMessageId = generateID()
     const resolvedUserMessageId = !isRegenerate ? generateID() : undefined
+    let persistedUserServerMessageId: string | undefined
     let generateMessageId = resolvedAssistantMessageId
     const fallbackParentMessageId = getLastUserMessageId(messages)
     const resolvedAssistantParentMessageId = isRegenerate
@@ -1014,6 +1192,21 @@ export const useMessage = () => {
     }
 
     try {
+      const hasImageInput =
+        typeof image === "string" && image.trim().length > 0
+      if (!isRegenerate && message.trim().length === 0 && !hasImageInput) {
+        notification.error({
+          message: t("error"),
+          description: t(
+            "playground:composer.validationMessageRequired",
+            "Type a message before sending."
+          )
+        })
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
       await tldwClient.initialize()
 
       // Visual placeholder
@@ -1023,6 +1216,33 @@ export const useMessage = () => {
       const characterAvatar =
         selectedCharacter?.avatar_url || modelInfo?.model_avatar
       const createdAt = Date.now()
+      const hasGreetingInMessages = messages.some((entry) => {
+        if (!entry?.isBot) return false
+        if (isGreetingMessageType(entry?.messageType)) return true
+        if (!greetingText) return false
+        return (
+          typeof entry.message === "string" &&
+          entry.message.trim() === greetingText
+        )
+      })
+      const greetingSeedMessage: Message | null =
+        greetingText.length > 0 && !hasGreetingInMessages
+          ? {
+              isBot: true,
+              role: "assistant",
+              name: characterName,
+              message: greetingText,
+              messageType: "character:greeting",
+              sources: [],
+              createdAt,
+              id: generateID(),
+              modelImage: characterAvatar,
+              modelName: characterName
+            }
+          : null
+      const chatMessagesBase = greetingSeedMessage
+        ? [greetingSeedMessage, ...messages]
+        : messages
       const assistantStub: Message = {
         isBot: true,
         name: characterName,
@@ -1045,7 +1265,7 @@ export const useMessage = () => {
 
       const newMessageList: Message[] = !isRegenerate
         ? [
-            ...messages,
+            ...chatMessagesBase,
             {
               isBot: false,
               name: "You",
@@ -1058,11 +1278,18 @@ export const useMessage = () => {
             },
             assistantStub
           ]
-        : [...messages, assistantStub]
+        : [...chatMessagesBase, assistantStub]
       setMessages(newMessageList)
 
+      const overrideChatId =
+        typeof serverChatIdOverride === "string" &&
+        serverChatIdOverride.trim().length > 0
+          ? serverChatIdOverride.trim()
+          : null
+
       // Ensure server chat session exists
-      let chatId = serverChatId
+      let chatId = overrideChatId || serverChatId
+      let createdNewChat = false
       if (!chatId) {
         type TldwChatMeta =
           | {
@@ -1131,6 +1358,7 @@ export const useMessage = () => {
           throw new Error('Failed to create character chat session')
         }
         chatId = normalizedId
+        createdNewChat = true
         setServerChatId(normalizedId)
         setServerChatTitle(String((created as any)?.title || ""))
         setServerChatCharacterId(
@@ -1138,6 +1366,42 @@ export const useMessage = () => {
         )
         setServerChatMetaLoaded(true)
         invalidateServerChatHistory()
+      }
+
+      if (createdNewChat && !isRegenerate && greetingText.length > 0) {
+        try {
+          const createdGreeting = (await tldwClient.addChatMessage(chatId, {
+            role: "assistant",
+            content: greetingText
+          })) as { id?: string | number; version?: number } | null
+          if (createdGreeting?.id != null) {
+            setMessages((prev) => {
+              const updated = [...prev] as ServerBackedMessage[]
+              const serverMessageId = String(createdGreeting.id)
+              const serverMessageVersion = createdGreeting.version
+              for (let i = 0; i < updated.length; i += 1) {
+                if (
+                  updated[i]?.isBot &&
+                  isGreetingMessageType(updated[i]?.messageType) &&
+                  !updated[i]?.serverMessageId
+                ) {
+                  updated[i] = {
+                    ...updated[i],
+                    serverMessageId,
+                    serverMessageVersion
+                  }
+                  break
+                }
+              }
+              return updated as Message[]
+            })
+          }
+        } catch (greetingPersistError) {
+          console.warn(
+            "Failed to persist character greeting for new chat:",
+            greetingPersistError
+          )
+        }
       }
 
       // Add user message to server (only if not regenerate)
@@ -1150,34 +1414,53 @@ export const useMessage = () => {
           image_base64?: string
         }
 
-        const payload: TldwChatMessage = { role: "user", content: message }
-        if (image && image.startsWith("data:")) {
-          const b64 = image.includes(",") ? image.split(",")[1] : undefined
+        const payload: TldwChatMessage = { role: "user" }
+        const trimmedUserMessage = message.trim()
+        if (trimmedUserMessage.length > 0) {
+          payload.content = message
+        }
+        let normalizedImage = image
+        if (normalizedImage.length > 0 && !normalizedImage.startsWith("data:")) {
+          const payloadValue = normalizedImage.includes(",")
+            ? normalizedImage.split(",")[1]
+            : normalizedImage
+          if (payloadValue !== undefined && payloadValue.length > 0) {
+            normalizedImage = `data:image/jpeg;base64,${payloadValue}`
+          }
+        }
+        if (normalizedImage && normalizedImage.startsWith("data:")) {
+          const b64 = normalizedImage.includes(",")
+            ? normalizedImage.split(",")[1]
+            : normalizedImage
           if (b64) {
             payload.image_base64 = b64
           }
         }
-        const createdUser = (await tldwClient.addChatMessage(
-          chatId,
-          payload
-        )) as TldwChatMessage | null
-        setMessages((prev) => {
-          const updated = [...prev] as ServerBackedMessage[]
-          const serverMessageId =
+        if (payload.content || payload.image_base64) {
+          const createdUser = (await tldwClient.addChatMessage(
+            chatId,
+            payload
+          )) as TldwChatMessage | null
+          persistedUserServerMessageId =
             createdUser?.id != null ? String(createdUser.id) : undefined
-          const serverMessageVersion = createdUser?.version
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (!updated[i].isBot) {
-              updated[i] = {
-                ...updated[i],
-                serverMessageId,
-                serverMessageVersion
+          setMessages((prev) => {
+            const updated = [...prev] as ServerBackedMessage[]
+            const serverMessageId =
+              createdUser?.id != null ? String(createdUser.id) : undefined
+            const serverMessageVersion = createdUser?.version
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (!updated[i].isBot) {
+                updated[i] = {
+                  ...updated[i],
+                  serverMessageId,
+                  serverMessageVersion
+                }
+                break
               }
-              break
             }
-          }
-          return updated as Message[]
-        })
+            return updated as Message[]
+          })
+        }
       }
 
       // Stream completion from server /chats/{id}/complete-v2
@@ -1263,32 +1546,161 @@ export const useMessage = () => {
       )
 
       // Persist assistant reply on server
-      try {
-        const createdAsst = (await tldwClient.addChatMessage(chatId, {
-          role: "assistant",
-          content: fullText
-        })) as { id?: string | number; version?: number } | null
-        setMessages((prev) =>
-          ((prev as ServerBackedMessage[]).map((m) => {
-            if (m.id !== generateMessageId) return m
-            const serverMessageId =
-              createdAsst?.id != null ? String(createdAsst.id) : undefined
-            return updateActiveVariant(m, {
-              serverMessageId,
-              serverMessageVersion: createdAsst?.version
-            })
-          }) as Message[])
+      const finalPersistedContent = fullText.trim()
+      if (finalPersistedContent.length > 0) {
+        try {
+          const fallbackSpeakerId = Number.parseInt(
+            String(selectedCharacter.id),
+            10
+          )
+          const speakerCharacterId =
+            Number.isFinite(fallbackSpeakerId) && fallbackSpeakerId > 0
+              ? fallbackSpeakerId
+              : undefined
+          const detectedMood = detectCharacterMood({
+            assistantText: finalPersistedContent,
+            userText: message
+          })
+          const resolvedMoodLabel = detectedMood.label
+          const resolvedMoodConfidence =
+            typeof detectedMood.confidence === "number" &&
+            Number.isFinite(detectedMood.confidence)
+              ? detectedMood.confidence
+              : undefined
+          const resolvedMoodTopic =
+            typeof detectedMood.topic === "string" && detectedMood.topic.trim()
+              ? detectedMood.topic.trim()
+              : undefined
+          const persistPayload: Record<string, unknown> = {
+            assistant_content: finalPersistedContent,
+            speaker_character_id: speakerCharacterId,
+            speaker_character_name: characterName
+          }
+          if (resolvedMoodLabel) {
+            persistPayload.mood_label = resolvedMoodLabel
+          }
+          if (typeof resolvedMoodConfidence === "number") {
+            persistPayload.mood_confidence = resolvedMoodConfidence
+          }
+          if (resolvedMoodTopic) {
+            persistPayload.mood_topic = resolvedMoodTopic
+          }
+          if (persistedUserServerMessageId) {
+            persistPayload.user_message_id = persistedUserServerMessageId
+          }
+          const persisted = (await tldwClient.persistCharacterCompletion(
+            chatId,
+            persistPayload
+          )) as
+            | {
+                assistant_message_id?: string | number
+                message_id?: string | number
+                id?: string | number
+                version?: number
+              }
+            | null
+          const createdAsstServerId =
+            persisted?.assistant_message_id ??
+            persisted?.message_id ??
+            persisted?.id
+          const createdAsstVersion = persisted?.version
+          const metadataExtra = {
+            speaker_character_id: speakerCharacterId ?? null,
+            speaker_character_name: characterName,
+            mood_label: resolvedMoodLabel,
+            mood_confidence: resolvedMoodConfidence ?? null,
+            mood_topic: resolvedMoodTopic ?? null
+          }
+          setMessages((prev) =>
+            ((prev as ServerBackedMessage[]).map((m) => {
+              if (m.id !== generateMessageId) return m
+              const serverMessageId =
+                createdAsstServerId != null
+                  ? String(createdAsstServerId)
+                  : undefined
+              return updateActiveVariant(m, {
+                serverMessageId,
+                serverMessageVersion: createdAsstVersion,
+                metadataExtra,
+                speakerCharacterId: speakerCharacterId ?? null,
+                speakerCharacterName: characterName,
+                moodLabel: resolvedMoodLabel,
+                moodConfidence: resolvedMoodConfidence ?? null,
+                moodTopic: resolvedMoodTopic ?? null
+              })
+            }) as Message[])
+          )
+        } catch (e) {
+          console.error(
+            "Failed to persist assistant message via completions/persist:",
+            e
+          )
+          try {
+            const createdAsst = (await tldwClient.addChatMessage(chatId, {
+              role: "assistant",
+              content: finalPersistedContent
+            })) as { id?: string | number; version?: number } | null
+            setMessages((prev) =>
+              ((prev as ServerBackedMessage[]).map((m) => {
+                if (m.id !== generateMessageId) return m
+                const serverMessageId =
+                  createdAsst?.id != null ? String(createdAsst.id) : undefined
+                return updateActiveVariant(m, {
+                  serverMessageId,
+                  serverMessageVersion: createdAsst?.version
+                })
+              }) as Message[])
+            )
+          } catch (fallbackError) {
+            console.error(
+              "Failed fallback assistant persistence with addChatMessage:",
+              fallbackError
+            )
+          }
+        }
+      } else {
+        console.warn(
+          "Skipping assistant persistence because completion content is empty."
         )
-      } catch (e) {
-        console.error("Failed to persist assistant message to server:", e)
       }
 
-      // Update local history as well (keeps local features consistent)
-      setHistory([
-        ...history,
-        { role: 'user', content: message, image },
-        { role: 'assistant', content: fullText }
-      ])
+      const lastEntry = historyBase[historyBase.length - 1]
+      const prevEntry = historyBase[historyBase.length - 2]
+      const endsWithUser =
+        lastEntry?.role === "user" && lastEntry.content === message
+      const endsWithUserAssistant =
+        lastEntry?.role === "assistant" &&
+        prevEntry?.role === "user" &&
+        prevEntry.content === message
+
+      if (isRegenerate) {
+        if (endsWithUser) {
+          setHistory([
+            ...historyBase,
+            { role: "assistant", content: fullText }
+          ])
+        } else if (endsWithUserAssistant) {
+          setHistory(
+            historyBase.map((entry, index) =>
+              index === historyBase.length - 1 && entry.role === "assistant"
+                ? { ...entry, content: fullText }
+                : entry
+            )
+          )
+        } else {
+          setHistory([
+            ...historyBase,
+            { role: "user", content: message, image },
+            { role: "assistant", content: fullText }
+          ])
+        }
+      } else {
+        setHistory([
+          ...historyBase,
+          { role: "user", content: message, image },
+          { role: "assistant", content: fullText }
+        ])
+      }
 
       await saveMessageOnSuccess({
         historyId,
@@ -1323,7 +1735,7 @@ export const useMessage = () => {
       const errorSave = await saveMessageOnError({
         e,
         botMessage: assistantContent,
-        history,
+        history: historyBase,
         historyId,
         image,
         selectedModel: model,
@@ -1657,7 +2069,8 @@ export const useMessage = () => {
     regenerateFromMessage,
     docs,
     uploadedFiles,
-    imageBackendOverride
+    imageBackendOverride,
+    serverChatIdOverride
   }: {
     message: string
     image: string
@@ -1670,6 +2083,7 @@ export const useMessage = () => {
     docs?: ChatDocuments
     uploadedFiles?: UploadedFile[]
     imageBackendOverride?: string
+    serverChatIdOverride?: string | null
   }) => {
     const trimmedImageBackendOverride =
       typeof imageBackendOverride === "string"
@@ -1678,6 +2092,12 @@ export const useMessage = () => {
     const hasExplicitImageBackend = trimmedImageBackendOverride.length > 0
     if (!hasExplicitImageBackend) {
       if (!validateBeforeSubmit(selectedModel || "", t, notification)) {
+        return
+      }
+      const modelAvailable = await ensureSelectedChatModelIsAvailable(
+        selectedModel || ""
+      )
+      if (!modelAvailable) {
         return
       }
     }
@@ -1842,7 +2262,8 @@ export const useMessage = () => {
               memory || history,
               signal,
               model,
-              regenerateFromMessage
+              regenerateFromMessage,
+              serverChatIdOverride
             )
           } else {
             await normalChatMode(
@@ -2063,32 +2484,6 @@ export const useMessage = () => {
     ]
   )
 
-  const regenerateLastMessage = async () => {
-    if (history.length > 0) {
-      const lastMessage = history[history.length - 2]
-      let newHistory = history.slice(0, -2)
-      const currentMessages = messages as ServerBackedMessage[]
-      const lastAssistant = currentMessages[currentMessages.length - 1]
-      if (!lastAssistant || !lastAssistant.isBot) {
-        return
-      }
-      const mewMessages = currentMessages.slice(0, -1)
-      setHistory(newHistory)
-      setMessages(mewMessages)
-      if (lastMessage.role === "user") {
-        const newController = new AbortController()
-        await onSubmit({
-          message: lastMessage.content,
-          image: lastMessage.image || "",
-          isRegenerate: true,
-          memory: newHistory,
-          controller: newController,
-          messageType: lastMessage.messageType,
-          regenerateFromMessage: lastAssistant
-        })
-      }
-    }
-  }
   const createChatBranch = createBranchMessage({
     notification,
     historyId,
@@ -2119,6 +2514,66 @@ export const useMessage = () => {
     messages,
     history
   })
+
+  const createServerOnlyChatBranch = createBranchMessage({
+    notification,
+    historyId,
+    setHistory,
+    setHistoryId,
+    setMessages,
+    setSelectedSystemPrompt,
+    setSystemPrompt: currentChatModelSettings.setSystemPrompt,
+    serverChatId,
+    setServerChatId,
+    setServerChatTitle,
+    setServerChatCharacterId,
+    setServerChatMetaLoaded,
+    serverChatState,
+    setServerChatState,
+    setServerChatVersion,
+    serverChatTopic,
+    setServerChatTopic,
+    serverChatClusterId,
+    setServerChatClusterId,
+    serverChatSource,
+    setServerChatSource,
+    serverChatExternalRef,
+    setServerChatExternalRef,
+    onServerChatMutated: invalidateServerChatHistory,
+    characterId: selectedCharacter?.id ?? null,
+    chatTitle: serverChatTitle ?? null,
+    messages,
+    history,
+    serverOnly: true
+  })
+
+  const regenerateLastMessage = createRegenerateLastMessage({
+    validateBeforeSubmitFn: () => true,
+    history,
+    messages,
+    setHistory,
+    setMessages,
+    onSubmit,
+    beforeSubmit: async ({ nextMessages }) => {
+      if (!serverChatId) return
+      if (selectedCharacter?.id == null && serverChatCharacterId == null) return
+
+      const branchIndex = nextMessages.length - 1
+      if (branchIndex < 0) return
+
+      const branchedChatId = await createServerOnlyChatBranch(branchIndex)
+      if (!branchedChatId) {
+        throw new Error("Failed to create branch for regeneration")
+      }
+
+      return {
+        submitExtras: {
+          serverChatIdOverride: branchedChatId
+        }
+      }
+    }
+  })
+
   return {
     messages,
     setMessages,

@@ -5,6 +5,8 @@ Stripe webhook handler endpoint.
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from loguru import logger
 
@@ -22,6 +24,19 @@ router = APIRouter(
     prefix="/billing/webhooks",
     tags=["billing-webhooks"],
 )
+
+
+def _get_processing_timeout_seconds() -> int:
+    """Get stale processing timeout for webhook claim recovery."""
+    raw = os.environ.get("BILLING_WEBHOOK_PROCESSING_TIMEOUT_SECONDS", "300")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid BILLING_WEBHOOK_PROCESSING_TIMEOUT_SECONDS value {!r}; using default 300",
+            raw,
+        )
+        return 300
 
 
 @router.post(
@@ -107,8 +122,8 @@ async def stripe_webhook(
 
     if not is_new:
         event_status = await billing_repo.get_webhook_event_status(event_id)
-        if event_status in {"processed", "processing"}:
-            # Already processed this event (or currently in progress)
+        if event_status == "processed":
+            # Already processed this event.
             logger.debug(f"Webhook event {event_id} already handled (status={event_status})")
             return WebhookResponse(
                 received=True,
@@ -116,21 +131,59 @@ async def stripe_webhook(
                 handled=True,
             )
 
-    # Atomically claim the event to prevent race conditions
+    # Atomically claim the event to prevent race conditions. Stale 'processing'
+    # events can be reclaimed after a timeout to recover from worker crashes.
     # This handles edge cases where multiple webhook deliveries arrive simultaneously
-    claimed = await billing_repo.try_claim_webhook_event(event_id)
+    processing_timeout_seconds = _get_processing_timeout_seconds()
+    claimed = await billing_repo.try_claim_webhook_event(
+        event_id,
+        processing_timeout_seconds=processing_timeout_seconds,
+    )
     if not claimed:
-        logger.debug(f"Webhook event {event_id} already being processed by another worker")
-        return WebhookResponse(
-            received=True,
-            event_type=event_type,
-            handled=True,
+        latest_status = await billing_repo.get_webhook_event_status(event_id)
+        if latest_status == "processed":
+            logger.debug(f"Webhook event {event_id} already handled (status={latest_status})")
+            return WebhookResponse(
+                received=True,
+                event_type=event_type,
+                handled=True,
+            )
+        logger.warning(
+            "Webhook event {} not claimable (status={}); returning 503 for retry",
+            event_id,
+            latest_status,
+        )
+        # Return a retryable status for in-flight/non-terminal events so Stripe
+        # redelivers if the active worker crashes before completion.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook event is still being processed",
         )
 
     # Process the event
     try:
         service = await get_subscription_service()
         result = await service.handle_webhook_event(event_type, event_data)
+        handled = bool(result.get("handled", False))
+
+        if not handled:
+            reason = str(result.get("reason", "not_handled"))
+            retryable = bool(result.get("retryable", True))
+            if retryable:
+                await billing_repo.mark_webhook_processed(
+                    event_id,
+                    error_message=f"Webhook event not handled: {reason}",
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Webhook processing failed",
+                )
+            await billing_repo.mark_webhook_processed(event_id)
+            return WebhookResponse(
+                received=True,
+                event_type=event_type,
+                handled=False,
+            )
 
         # Mark as processed
         await billing_repo.mark_webhook_processed(event_id)
@@ -138,8 +191,10 @@ async def stripe_webhook(
         return WebhookResponse(
             received=True,
             event_type=event_type,
-            handled=result.get("handled", False),
+            handled=True,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error processing webhook {event_id}: {e}")
         # Mark as failed

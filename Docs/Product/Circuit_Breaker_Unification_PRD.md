@@ -1,6 +1,6 @@
 # Circuit Breaker Unification PRD
 
-Status: Draft
+Status: Implemented (core unification complete; distributed persistence/leases and unified admin endpoint delivered)
 Owner: Core Maintainers
 Target Release: 0.2.x
 
@@ -9,7 +9,7 @@ Unify all circuit breaker implementations under a single Infrastructure module s
 
 ## 2. Problem Statement
 Circuit breakers are implemented multiple times with divergent semantics:
-- Embeddings breaker with metrics and thread locks: `tldw_Server_API/app/core/Embeddings/circuit_breaker.py`
+- Embeddings breaker usage now routed to unified Infrastructure breaker: `tldw_Server_API/app/core/Embeddings/connection_pool.py`
 - Evaluations breaker with async timeouts and per-provider configs: `tldw_Server_API/app/core/Evaluations/circuit_breaker.py`
 - RAG resilience breaker and coordinator: `tldw_Server_API/app/core/RAG/rag_service/resilience.py`
 - MCP Unified inline breaker logic: `tldw_Server_API/app/core/MCP_unified/modules/base.py`
@@ -177,62 +177,67 @@ Definition: "Fully implemented" means all domains are migrated to the shared bre
 - Result-based failures are opt-in via `result_classifier` (default is off).
 
 ## 15. Implementation Plan
+Status update (February 16, 2026): stages 1-10 are implemented; circuit breaker registry persistence and cleanup/deprecation removal are complete. Follow-on hardening delivered in `Docs/Plans/IMPLEMENTATION_PLAN_circuit_breaker_distributed_semantics_admin_endpoint_2026_02_16.md`:
+- optimistic-lock merge/retry persistence semantics
+- distributed HALF_OPEN probe lease coordination across workers
+- unified RBAC-protected admin endpoint `GET /api/v1/admin/circuit-breakers`
+
 ## Stage 1: Core Breaker + Shared Registry Storage
 **Goal**: Implement the Infrastructure circuit breaker with sync/async support, rolling-window mode, and shared registry persistence using existing DB_Management.
 **Success Criteria**: New module compiles; breaker states and transitions match spec; registry state is shared across workers/processes with optimistic locking; DB schema/migrations are in place; in-memory registry only used for dev/tests.
 **Tests**: Unit tests for state transitions, rolling-window rules, timeouts, exception classification, registry persistence, and optimistic locking; integration test simulating multi-worker updates.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Metrics + Legacy Shim
 **Goal**: Wire metrics to Metrics manager and implement legacy label aliasing with cardinality constraints.
 **Success Criteria**: Standard metrics emitted with required labels; legacy alias emitted only during migration; no unbounded labels.
 **Tests**: Metrics unit tests for each counter/gauge and legacy alias mapping behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Embeddings Migration + Parity Tests
 **Goal**: Migrate Embeddings to the shared breaker with config mapping and parity tests.
 **Success Criteria**: Embeddings uses shared breaker; legacy import is shim-only; parity tests cover embeddings behavior.
 **Tests**: Embeddings integration tests for breaker parity and config mapping.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Evaluations Migration + Parity Tests
 **Goal**: Migrate Evaluations to the shared breaker with config mapping and parity tests.
 **Success Criteria**: Evaluations uses shared breaker; legacy import is shim-only; parity tests cover evaluation behavior.
 **Tests**: Evaluations integration tests for breaker parity and config mapping.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: RAG Migration + Parity Tests
 **Goal**: Migrate RAG resilience to the shared breaker with rolling-window mode and parity tests.
 **Success Criteria**: RAG uses shared breaker; legacy import is shim-only; parity tests cover rolling-window behavior.
 **Tests**: RAG integration tests for rolling-window parity and config mapping.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 6: MCP Unified Migration + Parity Tests
 **Goal**: Replace MCP inline breaker logic with the shared breaker and parity tests.
 **Success Criteria**: MCP uses shared breaker; legacy import is shim-only; parity tests cover module breaker behavior.
 **Tests**: MCP integration tests for breaker parity and concurrency interaction.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 7: TTS Migration + Parity Tests
 **Goal**: Migrate TTS to the shared breaker with config mapping and parity tests.
 **Success Criteria**: TTS uses shared breaker; legacy import is shim-only; parity tests cover TTS breaker behavior.
 **Tests**: TTS integration tests for breaker parity and config mapping.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 8: Chat Migration + Parity Tests
 **Goal**: Migrate Chat provider manager to the shared breaker with config mapping and parity tests.
 **Success Criteria**: Chat uses shared breaker; legacy import is shim-only; parity tests cover provider breaker behavior.
 **Tests**: Chat integration tests for breaker parity and config mapping.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 9: Web Scraping Migration + Parity Tests
 **Goal**: Migrate Web Scraping to the shared breaker with config mapping and parity tests.
 **Success Criteria**: Web Scraping uses shared breaker; legacy import is shim-only; parity tests cover web scraping breaker behavior.
 **Tests**: Web Scraping integration tests for breaker parity and config mapping.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 10: Cleanup + Deprecation Removal
 **Goal**: Remove legacy breaker implementations, shims, and legacy metric labels after migration is complete.
-**Success Criteria**: No legacy breaker classes or imports in runtime code; legacy metrics removed; docs updated.
+**Success Criteria**: Legacy breaker shims in migrated runtime paths are removed; legacy metrics aliases are removed; docs updated.
 **Tests**: Full test suite green; parity tests remain.
-**Status**: Not Started
+**Status**: Complete

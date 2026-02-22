@@ -1,14 +1,13 @@
-import dynamic from "next/dynamic"
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
-export default dynamic(async () => {
-  const { useRouter } = await import("next/router")
-  const { useEffect } = await import("react")
-  const Page = () => {
-    const router = useRouter()
-    useEffect(() => {
-      void router.replace("/settings")
-    }, [router])
-    return null
-  }
-  return { default: Page }
-}, { ssr: false })
+export default function ConfigRedirectPage() {
+  return (
+    <RoutePlaceholder
+      title="Configuration Center Is Coming Soon"
+      description="Unified configuration workflows are planned for this route."
+      plannedPath="/config"
+      primaryCtaHref="/settings"
+      primaryCtaLabel="Open Settings"
+    />
+  );
+}

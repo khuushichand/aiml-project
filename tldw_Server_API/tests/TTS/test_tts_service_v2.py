@@ -398,6 +398,116 @@ async def test_provider_opt_in_sanitization(sanitize_enabled):
         assert adapter.last_text == input_text
 
 
+@pytest.mark.asyncio
+async def test_generate_speech_propagates_request_and_correlation_ids():
+    adapter = MockAdapter({"name": "openai"})
+    await adapter.initialize()
+    factory = MagicMock()
+    factory.get_adapter_by_model = AsyncMock(return_value=adapter)
+    factory.get_provider_for_model = MagicMock(return_value=None)
+    factory.registry = MagicMock()
+    factory.registry.get_adapter = AsyncMock(return_value=adapter)
+    factory.registry.config = {"providers": {"openai": {"sanitize_text": False}}}
+
+    service = TTSServiceV2(factory)
+    service.metrics = MetricsStub()
+
+    request = OpenAISpeechRequest(
+        input="Hello observability",
+        model="tts-1",
+        voice="alloy",
+        response_format="mp3",
+        stream=False,
+        extra_params={"correlation_id": "corr-123"},
+    )
+
+    chunks = [chunk async for chunk in service.generate_speech(request, request_id="req-123", fallback=False)]
+    assert b"mock audio data" in b"".join(chunks)
+
+    metadata = getattr(request, "_tts_metadata", {})
+    assert metadata.get("request_id") == "req-123"
+    assert metadata.get("correlation_id") == "corr-123"
+
+
+@pytest.mark.asyncio
+async def test_fallback_outcomes_metric_records_initiated_and_success():
+    primary_adapter = MagicMock()
+    primary_adapter.provider_key = "openai"
+    primary_adapter.provider_name = "openai"
+    primary_adapter.handles_text_chunking = False
+    primary_adapter.generate = AsyncMock(side_effect=TTSProviderError("provider failed", provider="openai"))
+
+    fallback_adapter = MagicMock()
+    fallback_adapter.provider_key = "elevenlabs"
+    fallback_adapter.provider_name = "elevenlabs"
+    fallback_adapter.handles_text_chunking = False
+    fallback_adapter.generate = AsyncMock(return_value=TTSResponse(audio_data=b"fallback-audio", format=AudioFormat.MP3))
+
+    class RecordingMetrics:
+        def __init__(self) -> None:
+            self.increments: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+        def register_metric(self, *args, **kwargs):
+            return None
+
+        def set_gauge(self, *args, **kwargs):
+            return None
+
+        def observe(self, *args, **kwargs):
+            return None
+
+        def increment(self, *args, **kwargs):
+            self.increments.append((args, kwargs))
+
+    class DummyRegistry:
+        def __init__(self):
+            self._adapter_specs = {
+                TTSProvider.OPENAI: object(),
+                TTSProvider.ELEVENLABS: object(),
+            }
+
+        async def get_adapter(self, provider_enum: TTSProvider) -> TTSAdapter:
+            if provider_enum == TTSProvider.OPENAI:
+                return primary_adapter
+            if provider_enum == TTSProvider.ELEVENLABS:
+                return fallback_adapter
+            raise TTSProviderError("provider not configured", provider=str(provider_enum.value))
+
+    class DummyFactory:
+        def __init__(self):
+            self.registry = DummyRegistry()
+
+        async def get_adapter_by_model(self, model: str) -> TTSAdapter:
+            return primary_adapter
+
+        async def get_best_adapter(self, *_, **__) -> TTSAdapter:
+            return fallback_adapter
+
+    service = TTSServiceV2(DummyFactory())
+    metrics = RecordingMetrics()
+    service.metrics = metrics
+    service._get_fallback_adapter = AsyncMock(return_value=fallback_adapter)
+
+    request = OpenAISpeechRequest(
+        input="hello",
+        model="tts-1",
+        voice="alloy",
+        response_format="mp3",
+        stream=False,
+    )
+
+    chunks = [chunk async for chunk in service.generate_speech(request, fallback=True, request_id="req-fallback")]
+    assert b"fallback-audio" in b"".join(chunks)
+
+    fallback_outcome_calls = [
+        kwargs.get("labels", {})
+        for args, kwargs in metrics.increments
+        if args and args[0] == "tts_fallback_outcomes_total"
+    ]
+    assert any(label.get("outcome") == "initiated" for label in fallback_outcome_calls)
+    assert any(label.get("outcome") == "success" for label in fallback_outcome_calls)
+
+
 class TestAudioUtils:
     """Tests for audio processing utilities"""
 
@@ -488,7 +598,7 @@ class TestCircuitBreaker:
             try:
                 await cb.call(failing_func)
             except Exception:
-                pass  # Expected to fail
+                _ = None  # Expected to fail
 
         assert cb.state == CircuitState.OPEN
         assert not cb.is_available
@@ -515,7 +625,7 @@ class TestCircuitBreaker:
             try:
                 await cb.call(failing_func)
             except Exception:
-                pass
+                _ = None
         assert cb.state == CircuitState.OPEN
 
         # Wait for recovery timeout
@@ -544,7 +654,7 @@ class TestCircuitBreaker:
             try:
                 await cb.call(failing_func)
             except Exception:
-                pass
+                _ = None
 
         # Wait and transition to half-open
         await asyncio.sleep(0.2)
@@ -555,7 +665,7 @@ class TestCircuitBreaker:
         try:
             await cb.call(failing_func)
         except Exception:
-            pass  # Expected
+            _ = None  # Expected
         assert cb.state == CircuitState.OPEN
 
 

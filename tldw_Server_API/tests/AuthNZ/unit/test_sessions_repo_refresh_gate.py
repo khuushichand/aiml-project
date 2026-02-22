@@ -17,8 +17,9 @@ class _AcquireCtx:
 
 
 class _Pool:
-    def __init__(self, conn):
+    def __init__(self, conn, *, postgres: bool):
         self._conn = conn
+        self.pool = object() if postgres else None
 
     def acquire(self):
         return _AcquireCtx(self._conn)
@@ -67,7 +68,7 @@ class _SqliteConn:
 @pytest.mark.asyncio
 async def test_refresh_lookup_postgres_query_includes_refresh_expiry_gate():
     conn = _PostgresConn()
-    repo = AuthnzSessionsRepo(_Pool(conn))
+    repo = AuthnzSessionsRepo(_Pool(conn, postgres=True))
 
     found = await repo.find_active_session_by_refresh_hash_candidates(
         ["hash-refresh-expired", "hash-refresh-valid"]
@@ -88,7 +89,7 @@ async def test_refresh_lookup_postgres_query_includes_refresh_expiry_gate():
 @pytest.mark.asyncio
 async def test_refresh_lookup_sqlite_query_includes_refresh_expiry_gate():
     conn = _SqliteConn()
-    repo = AuthnzSessionsRepo(_Pool(conn))
+    repo = AuthnzSessionsRepo(_Pool(conn, postgres=False))
 
     found = await repo.find_active_session_by_refresh_hash_candidates(
         ["hash-refresh-expired", "hash-refresh-valid"]

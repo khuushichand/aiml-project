@@ -55,9 +55,9 @@ def _build_chacha_db_for_user(user_id: int) -> CharactersRAGDB:
 
 async def run_chatbooks_cleanup_loop(stop_event: asyncio.Event | None = None) -> None:
     """Run scheduled cleanup of expired chatbook exports."""
-    interval_sec = int(os.getenv("CHATBOOKS_CLEANUP_INTERVAL_SEC", "0") or "0")
+    interval_sec = int(os.getenv("CHATBOOKS_CLEANUP_INTERVAL_SEC", "3600") or "0")
     if interval_sec <= 0:
-        logger.info("Chatbooks cleanup scheduler disabled by CHATBOOKS_CLEANUP_INTERVAL_SEC")
+        logger.info("Chatbooks cleanup scheduler disabled (CHATBOOKS_CLEANUP_INTERVAL_SEC=0)")
         return
 
     logger.info(f"Starting chatbooks cleanup worker (every {interval_sec}s)")
@@ -67,13 +67,17 @@ async def run_chatbooks_cleanup_loop(stop_event: asyncio.Event | None = None) ->
             logger.info("Stopping chatbooks cleanup worker on shutdown signal")
             return
         try:
-            deleted_total = 0
+            deleted_exports = 0
+            deleted_imports = 0
             for user_id in _enumerate_user_ids():
                 db = _build_chacha_db_for_user(user_id)
                 svc = ChatbookService(str(user_id), db, user_id_int=user_id)
-                deleted_total += svc.cleanup_expired_exports()
-            if deleted_total:
-                logger.info(f"Chatbooks cleanup removed {deleted_total} expired export files")
+                deleted_exports += svc.cleanup_expired_exports()
+                deleted_imports += svc.cleanup_import_orphans()
+            if deleted_exports:
+                logger.info(f"Chatbooks cleanup removed {deleted_exports} expired export files")
+            if deleted_imports:
+                logger.info(f"Chatbooks cleanup removed {deleted_imports} orphaned import files")
         except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Chatbooks cleanup loop error: {exc}")
         await asyncio.sleep(interval_sec)

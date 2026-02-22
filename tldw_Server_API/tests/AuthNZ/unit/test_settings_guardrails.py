@@ -3,9 +3,15 @@ Tests for production guardrails in single-user mode.
 """
 
 import os
+from pathlib import Path
 import pytest
 
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, reset_settings
+from tldw_Server_API.app.core.AuthNZ.settings import (
+    AUTHNZ_DEFAULT_ENV_FILE,
+    Settings,
+    get_settings,
+    reset_settings,
+)
 from tldw_Server_API.app.core.AuthNZ.api_key_crypto import format_api_key
 
 
@@ -32,6 +38,28 @@ def test_single_user_production_rejects_weak_key(monkeypatch):
             API_PREFIX="/api/v1",
         )
     monkeypatch.delenv("tldw_production", raising=False)
+
+
+def test_single_user_non_production_allows_quickstart_default_key(monkeypatch):
+    monkeypatch.delenv("tldw_production", raising=False)
+    settings = Settings(
+        AUTH_MODE="single_user",
+        SINGLE_USER_API_KEY="THIS-IS-A-SECURE-KEY-123-FAKE-KEY",
+        PASSWORD_MIN_LENGTH=8,
+        PASSWORD_REQUIRE_UPPERCASE=True,
+        PASSWORD_REQUIRE_LOWERCASE=True,
+        PASSWORD_REQUIRE_DIGIT=True,
+        PASSWORD_REQUIRE_SPECIAL=False,
+        REGISTRATION_ENABLED=True,
+        REGISTRATION_REQUIRE_CODE=False,
+        REGISTRATION_CODES=[],
+        DEFAULT_USER_ROLE="user",
+        DEFAULT_STORAGE_QUOTA_MB=1000,
+        EMAIL_VERIFICATION_REQUIRED=False,
+        CORS_ORIGINS=["*"],
+        API_PREFIX="/api/v1",
+    )
+    assert settings.SINGLE_USER_API_KEY == "THIS-IS-A-SECURE-KEY-123-FAKE-KEY"
 
 
 def test_single_user_production_accepts_new_format(monkeypatch):
@@ -147,4 +175,13 @@ def test_get_settings_does_not_use_pytest_module_presence_for_test_context(
 
     settings = get_settings()
 
-    assert settings.RATE_LIMIT_ENABLED is True
+    assert settings.AUTH_MODE == "single_user"
+    assert not hasattr(settings, "RATE_LIMIT_ENABLED")
+
+
+def test_authnz_settings_env_file_points_to_config_files() -> None:
+    env_file = Path(Settings.model_config.get("env_file", ""))
+
+    assert env_file == AUTHNZ_DEFAULT_ENV_FILE
+    assert env_file.name == ".env"
+    assert "Config_Files" in str(env_file)

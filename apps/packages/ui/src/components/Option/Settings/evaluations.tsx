@@ -146,7 +146,7 @@ export const EvaluationsSettings = () => {
         <Alert
           type="warning"
           showIcon
-          message={t("settings:evaluationsSettings.offline", {
+          title={t("settings:evaluationsSettings.offline", {
             defaultValue: "Connect to your tldw server to test Evaluations."
           })}
         />
@@ -249,7 +249,7 @@ export const EvaluationsSettings = () => {
             <Alert
               className="mt-3"
               type={testResult.ok ? "success" : "error"}
-              message={testResult.message}
+              title={testResult.message}
               description={testResult.rate || testResult.details}
               showIcon
             />

@@ -1,21 +1,24 @@
 # /Server_API/app/services/xml_processing_service.py
 
 
-# FIXME - This is a placeholder for the actual XML processing logic
+# Legacy placeholder service kept for non-production scaffolding only.
 
 # Parse the file (extract text, chunking, etc.).
 # Optionally summarize.
 # Return all final data in a dictionary.
 
+import os
 import tempfile
 import xml.etree.ElementTree as ET
 from typing import Optional
 
+from defusedxml import ElementTree as DET
+from defusedxml.common import DefusedXmlException
 from fastapi import HTTPException
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Utils.Utils import logger
+from tldw_Server_API.app.services._placeholder_guard import ensure_placeholder_service_enabled
 
 
 async def process_xml_task(
@@ -34,10 +37,9 @@ async def process_xml_task(
     Reads & chunks an XML file, optionally runs summarization,
     and returns a dict with final data.
     """
-    s = get_settings()
-    if not getattr(s, "PLACEHOLDER_SERVICES_ENABLED", False):
-        raise HTTPException(status_code=503, detail="XML placeholder service is disabled. Set PLACEHOLDER_SERVICES_ENABLED=1 to enable.")
+    ensure_placeholder_service_enabled("XML")
 
+    tmp_path: Optional[str] = None
     try:
         logger.info(f"Processing XML file: {filename}")
 
@@ -48,9 +50,9 @@ async def process_xml_task(
 
         # 2) Parse the XML with built-in logic
         try:
-            tree = ET.parse(tmp_path)
+            tree = DET.parse(tmp_path)
             root = tree.getroot()
-        except ET.ParseError as e:
+        except (ET.ParseError, DefusedXmlException) as e:
             raise HTTPException(status_code=400, detail=f"Invalid XML: {str(e)}") from e
 
         # 3) Chunk the XML. For instance:
@@ -68,9 +70,6 @@ async def process_xml_task(
         # 4) Summarization
         summary_text = "No summary provided"
         if auto_summarize and api_name and api_name.lower() != "none" and api_key:
-            # Combine all chunk text
-            '\n'.join(ch['text'] for ch in chunks)
-            (system_prompt or "") + "\n\n" + (custom_prompt or "")
             # summary_text = perform_summarization(api_name, full_text, combined_prompt, api_key)
             summary_text = f"[Auto-summarized with {api_name}]"
 
@@ -103,6 +102,15 @@ async def process_xml_task(
             "system_prompt": system_prompt
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error processing XML file: {filename} -> {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        if tmp_path:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError as cleanup_error:
+                logger.debug(f"Failed to clean up XML temp file '{tmp_path}': {cleanup_error}")

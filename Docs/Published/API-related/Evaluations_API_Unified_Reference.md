@@ -209,7 +209,7 @@ Starts an asynchronous evaluation run.
 **Request:**
 ```json
 {
-  "target_model": "gpt-3.5-turbo",
+  "target_model": "gpt-4o",
   "dataset_override": null,
   "config": {
     "temperature": 0.7,
@@ -226,7 +226,7 @@ Starts an asynchronous evaluation run.
   "id": "run_def456",
   "eval_id": "eval_abc123",
   "status": "pending",
-  "target_model": "gpt-3.5-turbo",
+  "target_model": "gpt-4o",
   "created_at": 1234567890,
   "progress": {
     "completed_samples": 0,
@@ -758,15 +758,17 @@ All errors follow a consistent format:
 - `/api/v1/evals/{id}/runs` → `/api/v1/evaluations/{id}/runs`
 - `/api/v1/runs/{id}` → `/api/v1/evaluations/runs/{id}`
 
+Note: Current server builds expose the unified routes. Legacy aliases may exist in older deployments only.
+
 ### Breaking Changes
 1. Webhook event names standardized (see Webhook Events section)
 2. Rate limit headers now use `X-RateLimit-*` prefix
 3. Dataset samples format standardized to OpenAI format
 
 ### Deprecation Timeline
-- **v0.x**: Both old and new endpoints available
-- **v1.0**: Old endpoints deprecated with warnings
-- **v2.0**: Old endpoints removed
+- **Current**: Unified endpoints are the supported API surface.
+- **Legacy deployments**: May still expose alias routes (`/evals`, `/runs`) behind compatibility shims.
+- **Future**: Alias routes, where present, are subject to removal without feature updates.
 
 ## Examples
 

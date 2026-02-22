@@ -1,6 +1,7 @@
+import uuid as _uuid_mod
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -10,9 +11,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.notes_graph import (
-    GraphLimits,
+    EdgeType,
+    GraphFormat,
     NoteGraphRequest,
-    NoteGraphResponse,
     NoteLinkCreate,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import NOTES_GRAPH_READ, NOTES_GRAPH_WRITE
@@ -22,6 +23,11 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError,
     ConflictError,
     InputError,
+)
+from tldw_Server_API.app.core.Notes_Graph.formatters import to_cytoscape
+from tldw_Server_API.app.core.Notes_Graph.graph_service import (
+    NOTES_GRAPH_ENABLED,
+    NoteGraphService,
 )
 
 router = APIRouter()
@@ -37,6 +43,10 @@ def _normalize_note_id(raw_id: Optional[str]) -> str:
         prefix, value = text.split(":", 1)
         if prefix != "note" or not value:
             raise HTTPException(status_code=400, detail="note_id must be a raw UUID or note:<uuid>")
+        try:
+            _uuid_mod.UUID(value)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {value}") from None
         return value
     return text
 
@@ -51,13 +61,17 @@ def _normalize_edge_id(raw_id: Optional[str]) -> str:
         prefix, value = text.split(":", 1)
         if prefix not in {"e", "edge"} or not value:
             raise HTTPException(status_code=400, detail="edge_id must be a raw UUID or e:<uuid>")
+        try:
+            _uuid_mod.UUID(value)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {value}") from None
         return value
     return text
 
 
 @router.get(
     "/graph",
-    summary="Fetch a graph of notes and related entities (stub)",
+    summary="Fetch a graph of notes and related entities",
     description=(
         "Returns a bounded subgraph of notes, tags, and sources based on filters.\n\n"
         "- Honors enum edge_types: manual, wikilink, backlink, tag_membership, source_membership.\n"
@@ -66,61 +80,6 @@ def _normalize_edge_id(raw_id: Optional[str]) -> str:
         "Cytoscape example (when format=cytoscape) is documented in Docs/Design/Graphing-Notes-PRD.md (§9, §14)."
     ),
     tags=["notes", "notes-graph"],
-    response_model=NoteGraphResponse,
-    responses={
-        200: {
-            "description": "Graph response (default format)",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "nodes": [
-                            {
-                                "id": "note:123",
-                                "type": "note",
-                                "label": "My Note",
-                                "created_at": "2025-01-01T12:00:00Z",
-                                "degree": 2,
-                                "tag_count": 3,
-                                "primary_source_id": "source:yt:abcd",
-                            },
-                            {"id": "tag:ml", "type": "tag", "label": "ml"},
-                            {
-                                "id": "source:yt:abcd",
-                                "type": "source",
-                                "label": "YouTube: abcd",
-                            },
-                        ],
-                        "edges": [
-                            {
-                                "id": "e:1",
-                                "source": "note:123",
-                                "target": "note:456",
-                                "type": "manual",
-                                "directed": False,
-                                "weight": 1.0,
-                            },
-                            {
-                                "id": "e:2",
-                                "source": "note:123",
-                                "target": "tag:ml",
-                                "type": "tag_membership",
-                                "directed": False,
-                            },
-                        ],
-                        "truncated": False,
-                        "truncated_by": [],
-                        "has_more": False,
-                        "cursor": None,
-                        "limits": {
-                            "max_nodes": 300,
-                            "max_edges": 1200,
-                            "max_degree": 40,
-                        },
-                    }
-                }
-            },
-        }
-    },
     openapi_extra={
         "x-codeSamples": [
             {
@@ -137,47 +96,61 @@ def _normalize_edge_id(raw_id: Optional[str]) -> str:
     },
 )
 async def get_notes_graph(
+    request: Request,
     req: NoteGraphRequest = Depends(),
     current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("notes.graph.read")),
     __: None = Depends(require_permissions(NOTES_GRAPH_READ)),
     ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.read")),
-) -> NoteGraphResponse:
-    """
-    Stub response for notes graph. RBAC and token-scope dependencies are enforced.
-    Returns an empty graph structure for now.
-    """
+):
+    """Return a bounded subgraph of notes, tags, and sources."""
+    if not NOTES_GRAPH_ENABLED():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Notes graph is disabled")
     try:
-        # Normalize typed IDs if provided (e.g., note:<uuid>)
+        # FastAPI Depends() may not propagate edge_types correctly; re-parse from query
+        raw_et = request.query_params.getlist("edge_types")
+        if raw_et:
+            parsed = []
+            for val in raw_et:
+                for part in val.split(","):
+                    part = part.strip()
+                    if part:
+                        try:
+                            parsed.append(EdgeType(part))
+                        except ValueError:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Invalid edge_type: '{part}'. Valid: {[e.value for e in EdgeType]}",
+                            ) from None
+            req.edge_types = parsed or None
         if getattr(req, "center_note_id", None):
-            normalized_center = _normalize_note_id(req.center_note_id)
-            req.center_note_id = normalized_center
-        limits = GraphLimits(max_nodes=300, max_edges=1200, max_degree=40)
-        return NoteGraphResponse(
-            nodes=[],
-            edges=[],
-            truncated=False,
-            truncated_by=[],
-            has_more=False,
-            cursor=None,
-            limits=limits,
-        )
+            req.center_note_id = _normalize_note_id(req.center_note_id)
+        service = NoteGraphService(user_id=str(current_user.id_str), db=db)
+        graph = service.generate_graph(req)
+        if req.format == GraphFormat.cytoscape:
+            return to_cytoscape(graph)
+        return graph
     except HTTPException:
         raise
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"notes.graph.read failed: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Graph fetch failed") from e
     except Exception as e:
-        logger.error(f"notes.graph.read stub failed: {e}")
+        logger.error(f"notes.graph.read failed: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Graph fetch failed") from e
 
 
 @router.get(
     "/{note_id}/neighbors",
-    summary="Fetch neighbors for a note (stub)",
+    summary="Fetch neighbors for a note",
     description=(
         "Returns a radius=1 ego network for the given note. Uses the same filters, limits, and ordering as /graph.\n"
         "See Docs/Design/Graphing-Notes-PRD.md (§9, §10, §21)."
     ),
     tags=["notes", "notes-graph"],
-    response_model=NoteGraphResponse,
     openapi_extra={
         "x-codeSamples": [
             {
@@ -190,32 +163,57 @@ async def get_notes_graph(
 )
 async def get_note_neighbors(
     note_id: str,
+    request: Request,
     req: NoteGraphRequest = Depends(),
     current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("notes.graph.read")),
     __: None = Depends(require_permissions(NOTES_GRAPH_READ)),
     ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.read")),
-) -> NoteGraphResponse:
-    """
-    Stub neighbors endpoint; enforces RBAC and token scope.
-    """
-    _normalize_note_id(note_id)
-    # TODO: use normalized_note_id for neighbor lookup
-    limits = GraphLimits(max_nodes=300, max_edges=1200, max_degree=40)
-    return NoteGraphResponse(
-        nodes=[],
-        edges=[],
-        truncated=False,
-        truncated_by=[],
-        has_more=False,
-        cursor=None,
-        limits=limits,
-    )
+):
+    """Return a radius=1 ego network for the given note."""
+    if not NOTES_GRAPH_ENABLED():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Notes graph is disabled")
+    try:
+        # Re-parse edge_types from query params (FastAPI Depends may not handle list[Enum] well)
+        raw_et = request.query_params.getlist("edge_types")
+        if raw_et:
+            parsed = []
+            for val in raw_et:
+                for part in val.split(","):
+                    part = part.strip()
+                    if part:
+                        try:
+                            parsed.append(EdgeType(part))
+                        except ValueError:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Invalid edge_type: '{part}'. Valid: {[e.value for e in EdgeType]}",
+                            ) from None
+            req.edge_types = parsed or None
+        normalized_note_id = _normalize_note_id(note_id)
+        req.center_note_id = normalized_note_id
+        req.radius = 1
+        service = NoteGraphService(user_id=str(current_user.id_str), db=db)
+        graph = service.generate_graph(req)
+        if req.format == GraphFormat.cytoscape:
+            return to_cytoscape(graph)
+        return graph
+    except HTTPException:
+        raise
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"notes.graph.neighbors failed: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Graph fetch failed") from e
+    except Exception as e:
+        logger.error(f"notes.graph.neighbors failed: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Graph fetch failed") from e
 
 
 @router.post(
     "/{note_id}/links",
-    summary="Create a manual link between notes (stub)",
+    summary="Create a manual link between notes",
     description=(
         "Creates a manual link from the given note to another note. Undirected by default (directed=false).\n"
         "See Docs/Design/Graphing-Notes-PRD.md (§8, §9, §10)."
@@ -223,14 +221,12 @@ async def get_note_neighbors(
     tags=["notes", "notes-graph"],
     responses={
         200: {
-            "description": "Creation result (stub)",
+            "description": "Creation result",
             "content": {
                 "application/json": {
                     "example": {
-                        "status": "stub",
-                        "edge": None,
-                        "from": "note:123",
-                        "to": "note:456",
+                        "status": "created",
+                        "edge": {"edge_id": "...", "from_note_id": "123", "to_note_id": "456"},
                     }
                 }
             },
@@ -286,18 +282,18 @@ async def create_manual_link(
 
 @router.delete(
     "/links/{edge_id}",
-    summary="Delete a manual link (stub)",
+    summary="Delete a manual link",
     description=(
-        "Deletes a manual link by id. Stub returns a placeholder payload.\n"
+        "Deletes a manual link by id.\n"
         "See Docs/Design/Graphing-Notes-PRD.md (§9)."
     ),
     tags=["notes", "notes-graph"],
     responses={
         200: {
-            "description": "Deletion result (stub)",
+            "description": "Deletion result",
             "content": {
                 "application/json": {
-                    "example": {"deleted": False, "edge_id": "e:1", "status": "stub"}
+                    "example": {"deleted": True, "edge_id": "e:1"}
                 }
             },
         }

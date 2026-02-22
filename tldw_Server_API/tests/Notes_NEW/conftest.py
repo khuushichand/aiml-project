@@ -52,7 +52,6 @@ def test_env_vars():
 
     # Set test mode
     os.environ["TEST_MODE"] = "true"
-    os.environ["RATE_LIMIT_PER_MINUTE"] = "30"
 
     yield
 
@@ -96,7 +95,7 @@ def test_chacha_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
     try:
         db.close()
     except:
-        pass
+        _ = None
 
 @pytest.fixture
 def populated_chacha_db(test_chacha_db) -> CharactersRAGDB:

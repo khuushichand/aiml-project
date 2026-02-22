@@ -31,7 +31,7 @@ def _principal_override_admin():
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
         return principal
 
     return _override

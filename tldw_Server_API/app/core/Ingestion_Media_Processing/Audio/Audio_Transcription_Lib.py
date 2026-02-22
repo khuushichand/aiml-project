@@ -16,6 +16,7 @@
 import asyncio
 import gc
 import hashlib
+import importlib
 import inspect
 import json
 import multiprocessing
@@ -34,7 +35,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import numpy as np
-import torch
 
 #
 # DEBUG Imports
@@ -70,6 +70,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import CancelCheckError, TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import logging, sanitize_filename
 
 _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS = (
@@ -96,6 +97,42 @@ _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS = (
     CancelCheckError,
     TranscriptionCancelled,
 )
+
+torch: Any | None = None
+_TORCH_IMPORT_ERROR: Exception | None = None
+_TORCH_IMPORT_ATTEMPTED: bool = False
+
+
+def _get_torch(*, allow_import: bool) -> Any | None:
+    global torch, _TORCH_IMPORT_ERROR, _TORCH_IMPORT_ATTEMPTED
+
+    if torch is not None:
+        return torch
+    if _TORCH_IMPORT_ERROR is not None:
+        return None
+    if not allow_import:
+        return None
+    if _TORCH_IMPORT_ATTEMPTED:
+        return None
+
+    _TORCH_IMPORT_ATTEMPTED = True
+    try:
+        torch = importlib.import_module("torch")
+        _TORCH_IMPORT_ERROR = None
+    except Exception as exc:
+        _TORCH_IMPORT_ERROR = exc
+        torch = None
+    return torch
+
+
+def _torch_cuda_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import)
+    if torch_mod is None:
+        return False
+    try:
+        return bool(torch_mod.cuda.is_available())
+    except Exception:
+        return False
 
 #
 #######################################################################################################################
@@ -126,7 +163,7 @@ _cache_cfg = _stt_cache_config()
 
 
 def _to_bool(val) -> bool:
-    return str(val).lower() in {"1", "true", "yes", "on"}
+    return is_truthy(str(val))
 
 
 _env_disable = _to_bool(os.getenv("STT_DISABLE_TRANSCRIPT_CACHE", ""))
@@ -1834,6 +1871,11 @@ def load_qwen2audio():
     """
     global qwen_processor, qwen_model
     if qwen_processor is None or qwen_model is None:
+        torch_mod = _get_torch(allow_import=True)
+        if torch_mod is None:
+            raise RuntimeError(
+                f"[Transcription error] Qwen2Audio unavailable because torch failed to import: {_TORCH_IMPORT_ERROR}"
+            )
         # Gate heavy Qwen2Audio loading behind config so typical installs
         # do not attempt to download/initialize this large model unless
         # explicitly enabled.
@@ -1848,14 +1890,16 @@ def load_qwen2audio():
             raise RuntimeError("[Transcription error] Qwen2Audio is disabled or not configured")
 
         model_id = stt_cfg.get("qwen2audio_model_id", "Qwen/Qwen2-Audio-7B-Instruct")
+        revision = stt_cfg.get("qwen2audio_revision") or os.getenv("QWEN2AUDIO_REVISION")
         logging.info(f"Loading Qwen2Audio model: {model_id}")
 
-        qwen_processor = AutoProcessor.from_pretrained(model_id)
+        qwen_processor = AutoProcessor.from_pretrained(model_id, revision=revision)  # nosec B615
         qwen_model = Qwen2AudioForConditionalGeneration.from_pretrained(
             model_id,
-            torch_dtype=torch.float16,
+            revision=revision,
+            torch_dtype=torch_mod.float16,
             device_map="auto"
-        )
+        )  # nosec B615
     return qwen_processor, qwen_model
 
 def transcribe_with_qwen2audio(audio: np.ndarray, sample_rate: int = 16000) -> str:
@@ -1897,11 +1941,16 @@ def transcribe_with_qwen2audio(audio: np.ndarray, sample_rate: int = 16000) -> s
         sampling_rate=sample_rate
     )
     device = model.device
+    torch_mod = _get_torch(allow_import=True)
+    if torch_mod is None:
+        raise RuntimeError(
+            f"[Transcription error] Qwen2Audio unavailable because torch failed to import: {_TORCH_IMPORT_ERROR}"
+        )
     for k, v in inputs.items():
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch_mod.Tensor):
             inputs[k] = v.to(device)
 
-    with torch.no_grad():
+    with torch_mod.no_grad():
         generated_ids = model.generate(**inputs, max_new_tokens=128)
     # The raw output has prompt + transcription + possibly more text
     transcription = processor.decode(generated_ids[0], skip_special_tokens=True)
@@ -2212,8 +2261,9 @@ def unload_all_transcription_models():
     gc.collect()
 
     # Clear GPU cache if available
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    torch_mod = _get_torch(allow_import=False)
+    if _torch_cuda_available(allow_import=False) and torch_mod is not None:
+        torch_mod.cuda.empty_cache()
 
     logging.info("Unloaded all transcription models from memory")
 
@@ -2356,7 +2406,7 @@ def parse_transcription_model(model_name: str) -> tuple:
     - "nemo-canary-1b" -> ("canary", "canary", "standard")
     - "nemo-parakeet-tdt-1.1b" -> ("parakeet", "parakeet", "standard")
     - "whisper-large-v3" -> ("whisper", "large-v3", None)
-    - "distil-whisper-large-v3" -> ("whisper", "distil-whisper-large-v3", None)
+    - "distil-whisper-large-v3" -> ("whisper", "distil-large-v3", None)
 
     Returns:
         Tuple of (provider, model, variant)
@@ -3001,7 +3051,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Parakeet transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"  # Default fallback model
+            model = "distil-large-v3"  # Default fallback model
 
     elif provider == "canary":
         _check_cancel(cancel_check, label="speech-to-text")
@@ -3021,7 +3071,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Canary transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"
+            model = "distil-large-v3"
 
     elif provider == "qwen2audio":
         _check_cancel(cancel_check, label="speech-to-text")
@@ -3041,7 +3091,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Qwen2Audio transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"
+            model = "distil-large-v3"
 
     elif provider == "qwen3-asr":
         _check_cancel(cancel_check, label="speech-to-text")
@@ -3075,7 +3125,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Qwen3-ASR transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"
+            model = "distil-large-v3"
 
     elif provider == "vibevoice":
         _check_cancel(cancel_check, label="speech-to-text")
@@ -3109,7 +3159,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"VibeVoice-ASR transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"
+            model = "distil-large-v3"
 
     # If we get here, use the original whisper implementation
     # Update whisper_model to use the parsed model name (in case we fell back)
@@ -3269,6 +3319,49 @@ def speech_to_text(
         if file_path is not None:
             raise RuntimeError(f"speech-to-text: Error during transcription of {file_path.name}") from e
         raise RuntimeError("speech-to-text: Error during transcription of in-memory audio") from e
+
+
+def transcribe_audio_with_whisper(
+    audio_file_path: str,
+    diarize: bool = False,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """
+    Backward-compatible helper expected by older workflow adapters/tests.
+
+    Returns a dict with ``segments`` and ``duration`` using the same shape
+    consumed by the diarization workflow fallback.
+    """
+    result = speech_to_text(audio_file_path, diarize=diarize, **kwargs)
+    if isinstance(result, tuple):
+        result = result[0]
+
+    if isinstance(result, dict):
+        return result
+
+    if not isinstance(result, list):
+        return {"segments": [], "duration": 0.0}
+
+    segments: list[dict[str, Any]] = []
+    max_end = 0.0
+    for seg in result:
+        if not isinstance(seg, dict):
+            continue
+        start = float(seg.get("start", seg.get("start_seconds", seg.get("Time_Start", 0.0))) or 0.0)
+        end = float(seg.get("end", seg.get("end_seconds", seg.get("Time_End", start))) or start)
+        text = str(seg.get("text") or seg.get("Text") or "")
+        speaker = str(seg.get("speaker") or "SPEAKER_0")
+        max_end = max(max_end, end)
+        segments.append(
+            {
+                "start": start,
+                "end": end,
+                "speaker": speaker,
+                "text": text,
+            }
+        )
+
+    return {"segments": segments, "duration": max_end}
 
 #
 # End of Faster Whisper related functions

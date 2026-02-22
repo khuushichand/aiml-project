@@ -56,6 +56,7 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.testing import is_truthy
 
 _EMBEDDINGS_DOMAIN = "embeddings"
 _EMBEDDINGS_ROOT_JOB_TYPE = "embeddings_pipeline"
@@ -116,7 +117,7 @@ def _coerce_bool(value: Any) -> bool:
         return False
     if isinstance(value, (int, float)):
         return bool(value)
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(str(value).strip().lower())
 
 
 def _root_job_uuid(payload: dict[str, Any]) -> str | None:

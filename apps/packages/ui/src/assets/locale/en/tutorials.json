@@ -1,0 +1,143 @@
+{
+  "controls": {
+    "back": "Back",
+    "close": "Close",
+    "finish": "Finish",
+    "next": "Next",
+    "skip": "Skip tour",
+    "open": "Open the dialog"
+  },
+  "status": {
+    "completed": "Completed",
+    "inProgress": "In Progress",
+    "notStarted": "Not Started"
+  },
+  "actions": {
+    "start": "Start",
+    "replay": "Replay",
+    "locked": "Locked",
+    "resetProgress": "Reset Progress",
+    "resetProgressConfirm": "This will clear all tutorial completion status. You'll see first-visit prompts again."
+  },
+  "steps": "{count, plural, one {# step} other {# steps}}",
+  "empty": {
+    "noTutorials": "No tutorials available for this page.",
+    "noTutorialsDescription": "Tutorials will appear here when you navigate to pages that have guided tours."
+  },
+  "prompt": {
+    "title": "New to this page?",
+    "description": "Take a quick tour to learn the key features.",
+    "dismiss": "Not now",
+    "startTour": "Start tour"
+  },
+  "playground": {
+    "basics": {
+      "label": "Chat Basics",
+      "description": "Learn how to select models and send your first message",
+      "modelTitle": "Choose a Model",
+      "modelContent": "Select an AI model to chat with. Different models have different capabilities - look for tags like 'Vision' or 'Fast'. Star your favorites for quick access.",
+      "inputTitle": "Start a Conversation",
+      "inputContent": "Type your message here and press Enter to send. You can ask questions, request help with tasks, or have a conversation.",
+      "slashTitle": "Slash Commands",
+      "slashContent": "Type / to see available commands. Try /search to find content in your knowledge base, or /web to search the internet.",
+      "promptTitle": "System Prompts",
+      "promptContent": "Select a system prompt to guide how the AI responds. You can create custom prompts in the Prompts workspace.",
+      "newChatTitle": "Start Fresh",
+      "newChatContent": "Click here to start a new conversation. Your previous chats are saved in the sidebar for easy access."
+    },
+    "tools": {
+      "label": "Tools & Attachments",
+      "description": "Discover knowledge search, file uploads, and advanced tools",
+      "toolsButtonTitle": "Tools & Attachments",
+      "toolsButtonContent": "Access knowledge search, upload files, configure MCP tools, and more advanced features here.",
+      "knowledgeTitle": "Knowledge Search",
+      "knowledgeContent": "Enable knowledge search to let the AI reference your ingested documents, notes, and media. Great for research and fact-checking.",
+      "webSearchTitle": "Web Search",
+      "webSearchContent": "Toggle web search to let the AI search the internet for current information. Perfect for recent news or topics not in your knowledge base.",
+      "uploadTitle": "Attach Files",
+      "uploadContent": "Upload images or documents to discuss them with the AI. Vision-capable models can analyze images directly.",
+      "ingestTitle": "Quick Ingest",
+      "ingestContent": "Use Quick Ingest to add web pages, PDFs, or other content to your knowledge base for later reference.",
+      "mcpTitle": "MCP Tools",
+      "mcpContent": "MCP (Model Context Protocol) tools let the AI interact with external services and execute actions on your behalf."
+    },
+    "voice": {
+      "label": "Voice Chat",
+      "description": "Learn to use voice input and have spoken conversations",
+      "voiceChatTitle": "Voice Chat",
+      "voiceChatContent": "Start a hands-free voice conversation. Speak naturally and hear AI responses aloud.",
+      "dictationTitle": "Dictation",
+      "dictationContent": "Use dictation to speak your messages instead of typing. Great for longer inputs or when your hands are busy.",
+      "ttsTitle": "Text-to-Speech",
+      "ttsContent": "Click on any AI response to have it read aloud. Customize the voice and speed in Settings.",
+      "settingsTitle": "Voice Settings",
+      "settingsContent": "Configure voice chat settings including the voice model, auto-send timing, and trigger phrases."
+    }
+  },
+  "workspacePlayground": {
+    "basics": {
+      "label": "Research Studio Basics",
+      "description": "Learn the three-pane workspace flow: sources, chat, and studio outputs",
+      "headerTitle": "Workspace Header",
+      "headerContent": "Use the header to rename, switch, import, and manage workspaces while tracking system status.",
+      "sourcesTitle": "Sources Pane",
+      "sourcesContent": "Add and select sources here. Your selected source set controls what the chat and studio use.",
+      "chatTitle": "Chat Workspace",
+      "chatContent": "Ask questions against your selected sources and review grounded answers before generating outputs.",
+      "studioTitle": "Studio Outputs",
+      "studioContent": "Turn source context into summaries, reports, quizzes, flashcards, and other artifacts.",
+      "switcherTitle": "Workspace Switcher",
+      "switcherContent": "Open the workspace switcher to jump between saved workspaces and continue different projects."
+    }
+  },
+  "media": {
+    "basics": {
+      "label": "Media Basics",
+      "description": "Search, filter, inspect, and manage ingested media in the library",
+      "searchTitle": "Search Media",
+      "searchContent": "Start with a query here to find items by title or content.",
+      "filtersTitle": "Filter and Scope",
+      "filtersContent": "Refine by media types, metadata, keywords, and collection filters before running searches.",
+      "submitTitle": "Run Search",
+      "submitContent": "Submit your query after adjusting filters to refresh the result set.",
+      "resultsTitle": "Results List",
+      "resultsContent": "Review matched items, select one, and navigate pages to inspect more content.",
+      "viewerTitle": "Content Viewer",
+      "viewerContent": "Inspect selected content, metadata, and navigation details in the main viewer pane.",
+      "toolsTitle": "Library Tools",
+      "toolsContent": "Open library tools for ingest job monitoring and storage/usage statistics."
+    }
+  },
+  "knowledge": {
+    "basics": {
+      "label": "Knowledge Basics",
+      "description": "Search your indexed sources and review grounded answers with citations",
+      "searchTitle": "Ask a Question",
+      "searchContent": "Enter a focused question about your docs, notes, or media to start retrieval.",
+      "sourcesTitle": "Choose Sources",
+      "sourcesContent": "Select which source groups to query so answers stay scoped to what you care about.",
+      "contextTitle": "Search Context Bar",
+      "contextContent": "Adjust retrieval preset and context options before running your search.",
+      "historyTitle": "History and Recovery",
+      "historyContent": "Reuse prior threads and queries from history so you can continue investigations quickly.",
+      "resultsTitle": "Results Workspace",
+      "resultsContent": "Review answer output, cited sources, and evidence once a search completes."
+    }
+  },
+  "characters": {
+    "basics": {
+      "label": "Characters Basics",
+      "description": "Create, filter, and manage reusable character assistants for chat workflows",
+      "newTitle": "Create Character",
+      "newContent": "Start here to create a new character with persona, prompt, greeting, and metadata.",
+      "searchTitle": "Search Characters",
+      "searchContent": "Filter your character library by name, description, tags, or prompt content.",
+      "scopeTitle": "Active vs Deleted",
+      "scopeContent": "Switch between active and deleted characters to recover or permanently remove entries.",
+      "viewTitle": "Table and Gallery Views",
+      "viewContent": "Toggle between table and gallery layouts based on whether you need dense controls or visual browsing.",
+      "libraryTitle": "Character Library",
+      "libraryContent": "Open character actions to chat, quick-chat, edit, duplicate, export, or review version history."
+    }
+  }
+}

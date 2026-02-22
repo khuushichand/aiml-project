@@ -97,7 +97,7 @@ def test_ocr_pdf_endpoint_with_deepseek_backend_local():
                 if token:
                     headers["X-CSRF-Token"] = token
             except Exception:
-                pass
+                _ = None
 
             r = client.post(
                 "/api/v1/evaluations/ocr-pdf",

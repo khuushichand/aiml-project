@@ -1,0 +1,204 @@
+{
+  "tooltip": {
+    "embed": "പേജ് പ്രോസസ്സ് ചെയ്യുന്നതിന് കുറച്ച് മിനിറ്റുകൾ എടുത്തേക്കാം. കാത്തിരിക്കൂ..",
+    "openwebui": "വെബ് യുഐ തുറക്കുക",
+    "clear": "ചാറ്റ് ചരിത്രം മായ്ക്കുക",
+    "history": "ചാറ്റ് ചരിത്രം"
+  },
+  "toolbar": {
+    "ragSearch": "RAG Search"
+  },
+  "errors": {
+    "privateModeTitle": "tldw Assistant ന് ഡാറ്റ സംരക്ഷിക്കാൻ സാധിക്കുന്നില്ല",
+    "privateModeDescription": "Firefox സ്വകാര്യ മോഡിൽ ചാറ്റ് ചരിത്രം സംരക്ഷിക്കാൻ കഴിയില്ല. താൽക്കാലിക ചാറ്റ് സ്വതവേ ഓണാണ്. കൂടുതൽ പരിഹാരങ്ങൾ ഉടൻ വരുന്നു."
+  },
+  "connectionBanner": {
+    "connecting": "നിങ്ങളുടെ tldw സർവറിലേക്ക് കണക്റ്റ് ചെയ്യുന്നു...",
+    "authErrorTitle": "API കീ ശ്രദ്ധിക്കേണ്ടതാണ്",
+    "authErrorBody": "സർവർ ലഭ്യമാണ്, പക്ഷേ API കീ തെറ്റായതോ കാണാതെയോ ആണ്.",
+    "unreachableTitle": "tldw സർവറിലെത്താൻ കഴിയില്ല",
+    "unreachableBody": "സർവർ പ്രവർത്തിക്കുന്നുവെന്നും ലഭ്യമാണെന്നും പരിശോധിക്കുക.",
+    "noUrlBody": "തുടങ്ങാൻ ക്രമീകരണങ്ങളിൽ സർവർ URL ചേർക്കുക.",
+    "disconnectedTitle": "tldw സർവറുമായി കണക്റ്റ് ചെയ്തിട്ടില്ല",
+    "disconnectedBody": "സർവർ കണക്ഷൻ ക്രമീകരിക്കാൻ ക്രമീകരണങ്ങൾ തുറക്കുക.",
+    "setupTitle": "ചാറ്റ് തുടങ്ങാൻ സെറ്റപ്പ് പൂർത്തിയാക്കുക",
+    "setupBody": "കണക്റ്റ് ചെയ്യാൻ ക്രമീകരണങ്ങളിലെ സെറ്റപ്പ് വിസാർഡ് പൂർത്തിയാക്കുക.",
+    "openSettings": "ക്രമീകരണങ്ങൾ തുറക്കുക"
+  },
+  "temporaryBadge": {
+    "title": "താൽക്കാലിക ചാറ്റ്",
+    "label": "താൽക്കാലികം",
+    "description": "ഈ ചാറ്റ് സേവ് ചെയ്യില്ല. നിങ്ങൾ അടയ്ക്കുകയോ പുതിയ ചാറ്റ് തുടങ്ങുകയോ ചെയ്താൽ സന്ദേശങ്ങൾ മായ്ക്കപ്പെടും.",
+    "clickHint": "അപ്രാപ്തമാക്കാൻ ക്ലിക്ക് ചെയ്യുക",
+    "ariaLabel": "താൽക്കാലിക ചാറ്റ് മോഡ് സജീവമാണ്. മാറാൻ ക്ലിക്ക് ചെയ്യുക.",
+    "indicatorTooltip": "ഈ ചാറ്റിലെ സന്ദേശങ്ങൾ സേവ് ചെയ്യില്ല",
+    "indicatorAria": "താൽക്കാലിക ചാറ്റ്"
+  },
+  "header": {
+    "ingest": "ഇൻജെസ്റ്റ്",
+    "saveCurrent": "നിലവിലെ പേജ് സർവറിൽ സംരക്ഷിക്കുക",
+    "processLocal": "നിലവിലെ പേജ് ലോകലായി പ്രോസസ്സ് ചെയ്യുക",
+    "viewProcessed": "പ്രോസസ്സ് ചെയ്തത് കാണുക",
+    "timeoutLabel": "ടൈംഔട്ട് (സെ)",
+    "toggleSidebar": "സൈഡ്ബാർ / ഫുൾ സ്ക്രീൻ ടോഗിൾ ചെയ്യുക",
+    "shortcuts": "ഷോർട്‌കട്ടുകൾ",
+    "showDebug": "സ്റ്റ്രീം ഡീബഗ് കാണിക്കുക",
+    "hideDebug": "സ്റ്റ്രീം ഡീബഗ് മറയ്ക്കുക",
+    "moreOptionsAria": "കൂടുതൽ ഓപ്ഷനുകൾ",
+    "moreOptionsTitle": "ഇൻജെസ്റ്റ്‌വും മറ്റും",
+    "openWebuiAria": "Web UI തുറക്കുക",
+    "newChatAria": "പുതിയ ചാറ്റ്",
+    "tempChatAria": "താൽക്കാലിക ചാറ്റ് ടോഗിൾ ചെയ്യുക",
+    "clearHistoryAria": "ചരിത്രം മായ്ക്കുക",
+    "openHistoryAria": "ചരിത്രം തുറക്കുക",
+    "openModelSettingsAria": "മോഡൽ ക്രമീകരണങ്ങൾ തുറക്കുക",
+    "openSettingsAria": "ക്രമീകരണങ്ങൾ തുറക്കുക",
+    "tempPill": "താൽക്കാലികം",
+    "modesLabel": "Web UIയിൽ മോഡുകൾ തുറക്കുക",
+    "modePlayground": "ചാറ്റ്",
+    "modeReview": "മൾട്ടി-ഐറ്റം റിവ്യൂ",
+    "modeMedia": "മീഡിയ",
+    "modeKnowledge": "അറിവ്",
+    "modeNotes": "കുറിപ്പുകൾ",
+    "modePrompts": "പ്രോംപ്റ്റുകൾ",
+    "modeFlashcards": "ഫ്ലാഷ്കാർഡുകൾ"
+  },
+  "controlRow": {
+    "saveMode": "സംരക്ഷണ മോഡ്",
+    "ephemeral": "താൽക്കാലികം",
+    "searchSection": "തിരച്ചിലും വിഷനും",
+    "webSearch": "വെബ് തിരച്ചിൽ",
+    "vision": "വിഷൻ",
+    "uploadImage": "ചിത്രം അപ്‌ലോഡ് ചെയ്യുക",
+    "quickIngest": "പേജ് പെട്ടെന്ന് പ്രോസസ്സ് ചെയ്യുക",
+    "openInFullUI": "പൂർണ്ണ UI-ൽ തുറക്കുക",
+    "modeChat": "ചാറ്റ്",
+    "modeMedia": "മീഡിയ",
+    "modeNotes": "കുറിപ്പുകൾ",
+    "modeFlashcards": "ഫ്ലാഷ് കാർഡുകൾ",
+    "ragSearch": "RAG തിരച്ചിൽ",
+    "moreTools": "കൂടുതൽ ഉപകരണങ്ങൾ"
+  },
+  "composer": {
+    "connectHint": "സന്ദേശങ്ങൾ അയയ്ക്കാൻ സെറ്റിംഗുകളിൽ നിങ്ങളുടെ tldw സർവറുമായി ബന്ധിപ്പിക്കുക.",
+    "connectingPlaceholder": "ബന്ധിപ്പിക്കുന്നു...",
+    "disconnectedPlaceholder": "സന്ദേശങ്ങൾ അയയ്ക്കാനും മീഡിയ കാണാനുമായി സെറ്റിംഗുകളിൽ നിങ്ങളുടെ tldw സർവറുമായി ബന്ധിപ്പിക്കുക."
+  },
+  "notification": {
+    "ingestSent": "tldw സർവറിലേക്ക് അയച്ചു",
+    "ingestSentDesc": "നിലവിലെ പേജ് ഇൻജെസ്റ്റ് ചെയ്യാൻ സമർപ്പിച്ചു.",
+    "processedLocal": "ലോകലായി പ്രോസസ്സ് ചെയ്തു",
+    "processedLocalDesc": "പ്രോസസ്സ് ചെയ്ത ഉള്ളടക്കം Settings > Processed ൽ ലോകലായി സംഭരിച്ചു.",
+    "transcriptionTitle": "ട്രാൻസ്ക്രിപ്ഷൻ",
+    "transcriptionSummaryTitle": "ട്രാൻസ്ക്രിപ്ഷൻ + സംഗ്രഹം",
+    "transcriptionFallback": "ട്രാൻസ്ക്രിപ്ഷൻ പൂർത്തിയായി. Web UIയിൽ Media തുറന്ന് അത് കാണുക.",
+    "sourceLabel": "ഉറവ്",
+    "transcriptLabel": "ട്രാൻസ്ക്രിപ്റ്റ്",
+    "summaryLabel": "സംഗ്രഹം"
+  },
+  "saveStatus": {
+    "ephemeral": "താൽക്കാലികം: സേവ് ചെയ്യില്ല, അടയ്ക്കുമ്പോൾ മായ്ക്കപ്പെടും",
+    "local": "ഈ ബ്രൗസറിൽ പ്രാദേശികമായി സേവ് ചെയ്തു",
+    "server": "സർവറിൽ സേവ് ചെയ്തു",
+    "saveFailed": "ചാറ്റ് സർവറിൽ സേവ് ചെയ്യാനായില്ല",
+    "saveFailedDescription": "ഇപ്പോൾ ചാറ്റ് പ്രാദേശികമായി മാത്രമാണ് സേവ് ചെയ്യുന്നത്. ബന്ധം പരിശോധിച്ച് വീണ്ടും ശ്രമിക്കുക."
+  },
+  "rag": {
+    "attachedContext": "അറ്റാച്ച് ചെയ്ത കോൺടെക്സ്റ്റ്",
+    "searchPlaceholder": "നിങ്ങളുടെ അറിവ് തിരയുക…",
+    "search": "തിരയുക",
+    "show": "Show RAG search",
+    "hide": "Hide RAG search",
+    "addTagPlaceholder": "ടാഗ് ചേർക്കുക (Enter)",
+    "add": "ചേർക്കുക",
+    "noResults": "ഫലങ്ങളില്ല",
+    "initialState": "ഫലങ്ങളില്ല",
+    "timeout": {
+      "message": "അഭ്യർത്ഥനയുടെ സമയപരിധി കഴിഞ്ഞു.",
+      "increase": "ടൈംഔട്ട് വർധിപ്പിക്കുക",
+      "checkHealth": "സർവർ ഹെൽത്ത് പരിശോധിക്കുക"
+    },
+    "actions": {
+      "insert": "ചേർക്കുക",
+      "ask": "ചോദിക്കുക",
+      "open": "തുറക്കുക",
+      "copy": "പകർത്തുക"
+    },
+    "hint": {
+      "message": "നിങ്ങളുടെ അറിവ് ശേഖരത്തിൽ തിരയുകയും ഫലങ്ങൾ നിങ്ങളുടെ സന്ദേശത്തിൽ ചേർക്കുകയും ചെയ്യുക.",
+      "dismiss": "അടയ്ക്കുക"
+    }
+  },
+  "tabs": {
+    "newChat": "പുതിയ ചാറ്റ്",
+    "newTabAria": "പുതിയ ചാറ്റ് ടാബ്",
+    "closeTabAria": "ചാറ്റ് ടാബ് അടയ്ക്കുക"
+  },
+  "characterSelect": {
+    "label": "കഥാപാത്രം",
+    "tooltip": "ഒരു കഥാപാത്രം തിരഞ്ഞെടുക്കുക",
+    "search": "കഥാപാത്രങ്ങൾ തിരയുക...",
+    "noMatches": "പൊരുത്തമുള്ള കഥാപാത്രങ്ങൾ ഇല്ല",
+    "noCharacters": "കഥാപാത്രങ്ങൾ ലഭ്യമല്ല",
+    "none": "കഥാപാത്രമില്ല",
+    "createNewCharacter": "പുതിയ കഥാപാത്രം സൃഷ്ടിക്കുക+",
+    "importCharacter": "കഥാപാത്രം ഇമ്പോർട്ട് ചെയ്യുക",
+    "favorites": "Favorites",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z"
+    }
+  },
+  "knowledge": {
+    "tabs": {
+      "qaSearch": "QA Search",
+      "fileSearch": "File Search",
+      "label": "Knowledge panel sections",
+      "contextBadge": "{{count}} items attached"
+    }
+  },
+  "qaSearch": {
+    "searching": "Searching knowledge base...",
+    "generatedAnswer": "Generated Answer",
+    "cached": "Cached",
+    "copyAnswer": "Copy answer",
+    "copied": "Copied",
+    "copy": "Copy",
+    "insertAnswer": "Insert answer",
+    "copyChunk": "Copy chunk",
+    "insertChunk": "Insert chunk",
+    "sourceChunks": "Source Chunks ({{count}})",
+    "sourceChunksList": "Source chunks",
+    "strategy": {
+      "standard": "Standard",
+      "agentic": "Agentic"
+    },
+    "sort": {
+      "label": "Sort source chunks",
+      "relevance": "Relevance",
+      "source": "Source"
+    }
+  },
+  "fileSearch": {
+    "filterByType": "Filter by type",
+    "resultsList": "File search results",
+    "attached": "Attached",
+    "alreadyAttached": "Already attached",
+    "attach": "Attach",
+    "openExternal": "Open",
+    "open": "Open",
+    "mediaType": {
+      "video": "Video",
+      "audio": "Audio",
+      "pdf": "PDF",
+      "article": "Article",
+      "note": "Note",
+      "document": "Document",
+      "epub": "EPUB",
+      "html": "HTML",
+      "xml": "XML"
+    }
+  }
+}

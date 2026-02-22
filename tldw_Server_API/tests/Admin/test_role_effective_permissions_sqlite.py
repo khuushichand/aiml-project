@@ -26,14 +26,14 @@ def _fresh_client() -> TestClient:
         import asyncio
         asyncio.run(reset_db_pool())
     except Exception:
-        pass
+        _ = None
 
     # Ensure SQLite AuthNZ schema exists (migrations) for the fresh DB
     try:
         from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
         ensure_authnz_tables(Path(tmp_path))
     except Exception:
-        pass
+        _ = None
 
     from tldw_Server_API.app import main as app_main
     importlib.reload(app_main)
@@ -44,7 +44,7 @@ def _fresh_client() -> TestClient:
         import asyncio
         asyncio.run(ensure_single_user_rbac_seed_if_needed())
     except Exception:
-        pass
+        _ = None
     client._tmp_auth_db_path = tmp_path  # type: ignore[attr-defined]
     return client
 

@@ -2,11 +2,11 @@ import React from 'react';
 import { cn } from '@web/lib/utils';
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn('animate-pulse rounded bg-gray-200', className)} />;
+  return <div className={cn('animate-pulse rounded bg-surface2', className)} />;
 }
 
 export function LineSkeleton({ width = '100%', height = 12, className }: { width?: string | number; height?: number; className?: string }) {
-  return <div className={cn('animate-pulse rounded bg-gray-200', className)} style={{ width, height }} />;
+  return <div className={cn('animate-pulse rounded bg-surface2', className)} style={{ width, height }} />;
 }
 
 export function CardSkeleton() {

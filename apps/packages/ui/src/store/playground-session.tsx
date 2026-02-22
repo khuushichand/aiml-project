@@ -16,7 +16,7 @@ export interface PlaygroundSessionData {
   serverChatId: string | null
 
   // Settings NOT already persisted elsewhere (selectedModel uses useStorage)
-  chatMode: "normal" | "rag"
+  chatMode: "normal" | "rag" | "vision"
   webSearch: boolean
   compareMode: boolean
   compareSelectedModels: string[]

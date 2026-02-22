@@ -8,6 +8,7 @@ from tldw_Server_API.app.core.TTS.adapters.kokoro_adapter import KokoroAdapter
 from tldw_Server_API.app.core.TTS.phoneme_overrides import (
     PhonemeOverrideEntry,
     apply_overrides_to_text,
+    filter_overrides_for_provider,
     load_override_entries,
     merge_override_entries,
     parse_override_entries,
@@ -39,6 +40,46 @@ def test_merge_precedence_request_wins():
     assert merged[0].boundary is True  # request entry falls back to default boundary
 
 
+def test_parse_structured_config_supports_provider_scopes():
+    raw = {
+        "version": 1,
+        "global": [{"term": "SQL", "phonemes": "S-Q-L", "lang": "en"}],
+        "providers": {
+            "kokoro": [{"term": "OpenAI", "phonemes": "oʊ p ən aɪ"}],
+            "openai": [{"term": "OpenAI", "phonemes": "oh-pen-ai"}],
+        },
+    }
+    entries = parse_override_entries(raw)
+    kokoro_entries = filter_overrides_for_provider(entries, "kokoro")
+    openai_entries = filter_overrides_for_provider(entries, "openai")
+
+    assert any(e.term == "SQL" and e.provider is None for e in entries)
+    assert any(e.term == "OpenAI" and e.provider == "kokoro" for e in entries)
+    assert any(e.term == "OpenAI" and e.provider == "openai" for e in entries)
+    assert any(e.term == "SQL" for e in kokoro_entries)  # global applies to all providers
+    assert any(e.term == "OpenAI" and e.phonemes == "oʊ p ən aɪ" for e in kokoro_entries)
+    assert any(e.term == "OpenAI" and e.phonemes == "oh-pen-ai" for e in openai_entries)
+
+
+def test_parse_mapping_ignores_nested_values():
+    entries = parse_override_entries({"demo": {"phonemes": "AAA"}, "ok": "BBB"})
+    assert len(entries) == 1
+    assert entries[0].term == "ok"
+    assert entries[0].phonemes == "BBB"
+
+
+def test_apply_overrides_handles_overlap_with_longer_term_first():
+    entries = [
+        PhonemeOverrideEntry(term="York", phonemes="YORK", boundary=True),
+        PhonemeOverrideEntry(term="New York", phonemes="NEW_YORK", boundary=True),
+    ]
+    text = "I visited New York and York."
+    updated = apply_overrides_to_text(text, entries, lang_hint="en")
+
+    assert "[[NEW_YORK]]" in updated
+    assert updated.count("[[YORK]]") == 1
+
+
 def test_adapter_applies_request_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Write a small JSON override file so load_override_entries can find it
     override_file = tmp_path / "tts_phonemes.json"
@@ -62,3 +103,40 @@ def test_adapter_applies_request_override(tmp_path: Path, monkeypatch: pytest.Mo
     # Request-level flag can disable overrides entirely
     request.extra_params["disable_phoneme_overrides"] = True
     assert adapter._phoneme_overrides_enabled_for_request(request) is False
+
+
+@pytest.mark.asyncio
+async def test_kokoro_generate_applies_overrides_in_generate_flow(monkeypatch: pytest.MonkeyPatch):
+    adapter = KokoroAdapter(
+        {
+            "kokoro_lazy_init": True,
+            "kokoro_phoneme_overrides": {"OpenAI": "provider"},
+        }
+    )
+    adapter.use_onnx = True
+    adapter._deferred_model_load = False
+
+    async def _ensure_initialized() -> bool:
+        return True
+
+    captured: dict[str, str] = {}
+
+    async def _generate_complete_kokoro(text: str, voice: str, lang: str, request: TTSRequest) -> bytes:
+        captured["text"] = text
+        return b"audio-bytes"
+
+    monkeypatch.setattr(adapter, "ensure_initialized", _ensure_initialized)
+    monkeypatch.setattr(adapter, "_ensure_audio_normalizer", lambda: None)
+    monkeypatch.setattr(adapter, "_generate_complete_kokoro", _generate_complete_kokoro)
+
+    request = TTSRequest(
+        text="OpenAI ships tools.",
+        voice="af_bella",
+        format=AudioFormat.MP3,
+        stream=False,
+        extra_params={"phoneme_overrides": {"OpenAI": "request-level"}},
+    )
+
+    response = await adapter.generate(request)
+    assert response.audio_data == b"audio-bytes"
+    assert "[[request-level]]" in captured["text"]

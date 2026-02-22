@@ -30,7 +30,7 @@ async def test_ws_per_ip_cap_enforced(monkeypatch):
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app

@@ -37,6 +37,31 @@ def _seed_prompt_and_tests(db: PromptStudioDatabase, n_tests: int = 2):
     return int(p["id"]), t_ids
 
 
+def _create_mcts_optimization(db: PromptStudioDatabase, *, prompt_id: int, test_case_ids: list[int], n_sims: int) -> int:
+    prompt = db.get_prompt(prompt_id) or {}
+    project_id = int(prompt["project_id"])
+    optimization = db.create_optimization(
+        project_id=project_id,
+        name="mcts-int-opt",
+        initial_prompt_id=prompt_id,
+        optimizer_type="mcts",
+        optimization_config={
+            "optimizer_type": "mcts",
+            "target_metric": "accuracy",
+            "strategy_params": {
+                "mcts_simulations": n_sims,
+                "mcts_max_depth": 2,
+                "prompt_candidates_per_node": 1,
+                "feedback_enabled": False,
+            },
+        },
+        max_iterations=n_sims,
+        status="running",
+    )
+    db.update_optimization(int(optimization["id"]), {"test_case_ids": list(test_case_ids)})
+    return int(optimization["id"])
+
+
 @pytest.mark.asyncio
 async def test_end_to_end_improves_and_ws_events(monkeypatch, temp_ps_db):
     prompt_id, test_ids = _seed_prompt_and_tests(temp_ps_db)
@@ -68,9 +93,16 @@ async def test_end_to_end_improves_and_ws_events(monkeypatch, temp_ps_db):
     monkeypatch.setattr(EventBroadcaster, "broadcast_event", fake_broadcast_event)
     monkeypatch.setattr(EventBroadcaster, "broadcast_optimization_iteration", fake_broadcast_iter)
 
+    optimization_id = _create_mcts_optimization(
+        temp_ps_db,
+        prompt_id=prompt_id,
+        test_case_ids=test_ids,
+        n_sims=5,
+    )
+
     res = await mcts.optimize(
         initial_prompt_id=prompt_id,
-        optimization_id=123,  # enable broadcaster
+        optimization_id=optimization_id,
         test_case_ids=test_ids,
         model_config={"model": "dummy"},
         max_iterations=10,
@@ -135,6 +167,12 @@ async def test_cancellation_responsive(monkeypatch, temp_ps_db):
     async def fake_run_single_test(self, *, prompt_id: int, test_case_id: int, model_config, metrics=None):
         return {"success": True, "scores": {"aggregate_score": 0.1}}
     monkeypatch.setattr(TestRunner, "run_single_test", fake_run_single_test)
+    optimization_id = _create_mcts_optimization(
+        temp_ps_db,
+        prompt_id=prompt_id,
+        test_case_ids=test_ids,
+        n_sims=50,
+    )
 
     # Make db.get_optimization flip to cancelled after first check
     calls = {"n": 0}
@@ -146,7 +184,7 @@ async def test_cancellation_responsive(monkeypatch, temp_ps_db):
 
     res = await mcts.optimize(
         initial_prompt_id=prompt_id,
-        optimization_id=42,
+        optimization_id=optimization_id,
         test_case_ids=test_ids,
         model_config={"model": "dummy"},
         max_iterations=50,
@@ -175,7 +213,15 @@ async def test_runner_python_scores_via_evaluator_toggle(monkeypatch, temp_ps_db
     tr = TestRunner(temp_ps_db)
 
     # Monkeypatch run_test_case to return code output
-    async def fake_run_test_case(self, prompt_id: int, test_case_id: int, model: str = "", temperature: float = 0.0, max_tokens: int = 0):
+    async def fake_run_test_case(
+        self,
+        prompt_id: int,
+        test_case_id: int,
+        model: str = "",
+        temperature: float = 0.0,
+        max_tokens: int = 0,
+        **kwargs,
+    ):
         return {
             "success": True,
             "test_case_id": test_case_id,

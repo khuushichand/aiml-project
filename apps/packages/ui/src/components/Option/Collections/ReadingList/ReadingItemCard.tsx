@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react"
-import { Button, Dropdown, message, Tag, Tooltip } from "antd"
+import { Button, Checkbox, Dropdown, message, Tag, Tooltip } from "antd"
 import type { MenuProps } from "antd"
 import {
   Star,
@@ -20,6 +20,9 @@ import { StatusBadge } from "../common/StatusBadge"
 interface ReadingItemCardProps {
   item: ReadingItemSummary
   onRefresh?: () => void
+  selectionMode?: boolean
+  selected?: boolean
+  onSelectionChange?: (selected: boolean) => void
 }
 
 const formatTimeAgo = (t: TFunction, dateStr: string) => {
@@ -45,7 +48,10 @@ const formatTimeAgo = (t: TFunction, dateStr: string) => {
 
 export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
   item,
-  onRefresh
+  onRefresh,
+  selectionMode = false,
+  selected = false,
+  onSelectionChange
 }) => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
@@ -154,14 +160,28 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
 
   return (
     <div
-      className="group relative rounded-lg border border-zinc-200 bg-white p-4 transition-shadow hover:shadow-md dark:border-zinc-700 dark:bg-zinc-800"
-      onClick={() => openItemDetail(item.id)}
+      className={`group relative rounded-lg border bg-surface p-4 transition-shadow hover:shadow-md ${
+        selected
+          ? "border-primary/30 ring-1 ring-primary/30"
+          : "border-border"
+      }`}
+      onClick={() => {
+        if (selectionMode) {
+          onSelectionChange?.(!selected)
+          return
+        }
+        openItemDetail(item.id)
+      }}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault()
-          openItemDetail(item.id)
+          if (selectionMode) {
+            onSelectionChange?.(!selected)
+          } else {
+            openItemDetail(item.id)
+          }
         }
       }}
     >
@@ -169,19 +189,26 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
         <div className="flex-1 min-w-0">
           {/* Title */}
           <div className="flex items-center gap-2">
-            {item.favorite && (
-              <Star className="h-4 w-4 flex-shrink-0 fill-yellow-400 text-yellow-400" />
+            {selectionMode && (
+              <Checkbox
+                checked={selected}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(event) => onSelectionChange?.(event.target.checked)}
+              />
             )}
-            <h3 className="truncate text-base font-medium text-zinc-900 dark:text-zinc-100">
+            {item.favorite && (
+              <Star className="h-4 w-4 flex-shrink-0 fill-warn text-warn" />
+            )}
+            <h3 className="truncate text-base font-medium text-text">
               {item.title}
             </h3>
           </div>
 
           {/* Domain & Reading Time */}
-          <div className="mt-1 flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+          <div className="mt-1 flex items-center gap-2 text-sm text-text-muted">
             {item.domain && <span>{item.domain}</span>}
             {item.domain && item.reading_time_minutes && (
-              <span className="text-zinc-300 dark:text-zinc-600">·</span>
+              <span className="text-text-subtle">·</span>
             )}
             {item.reading_time_minutes && (
               <span className="flex items-center gap-1">
@@ -195,7 +222,7 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
 
           {/* Summary */}
           {item.summary && (
-            <p className="mt-2 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-300">
+            <p className="mt-2 line-clamp-2 text-sm text-text-muted">
               {item.summary}
             </p>
           )}
@@ -206,13 +233,13 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
               {item.tags.slice(0, 5).map((tag) => (
                 <Tag
                   key={tag}
-                  className="border-0 bg-zinc-100 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
+                  className="border-0 bg-surface text-text-muted"
                 >
                   {tag}
                 </Tag>
               ))}
               {item.tags.length > 5 && (
-                <Tag className="border-0 bg-zinc-100 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
+                <Tag className="border-0 bg-surface text-text-muted">
                   +{item.tags.length - 5}
                 </Tag>
               )}
@@ -224,7 +251,7 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
             <StatusBadge status={item.status} />
-            <span className="text-xs text-zinc-400 dark:text-zinc-500">
+            <span className="text-xs text-text-subtle">
               {item.updated_at ? formatTimeAgo(t, item.updated_at) : null}
             </span>
           </div>
@@ -239,7 +266,7 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
                 size="small"
                 icon={
                   <Star
-                    className={`h-4 w-4 ${item.favorite ? "fill-yellow-400 text-yellow-400" : ""}`}
+                    className={`h-4 w-4 ${item.favorite ? "fill-warn text-warn" : ""}`}
                   />
                 }
                 onClick={handleToggleFavorite}

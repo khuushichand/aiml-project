@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabas
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime, is_test_mode, is_truthy
 
 _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -50,7 +51,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
     v = os.getenv(name, "")
     if not v:
         return default
-    return v.lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(v.lower())
 
 
 def _get_lists_for_tenant(tenant_id: str) -> tuple[list[str], list[str]]:
@@ -113,7 +114,7 @@ def _host_allowed(url: str, tenant_id: str) -> bool:
                 if bool(getattr(res, "allowed", False)):
                     return True
                 # In test contexts (no DNS), allow pattern-only when explicitly allowed
-                if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+                if is_explicit_pytest_runtime() or is_test_mode():
                     try:
                         p = urlparse(url)
                         host = (p.hostname or "").lower().rstrip('.')

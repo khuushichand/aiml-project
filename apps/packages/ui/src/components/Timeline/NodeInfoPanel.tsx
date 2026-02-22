@@ -182,7 +182,7 @@ export const NodeInfoPanel: React.FC = () => {
       : 'gray'
 
   return (
-    <div className="node-info-panel absolute right-0 top-0 bottom-0 w-80 bg-[var(--bg-secondary,#1f1f1f)] border-l border-[var(--border-color,#333)] p-4 overflow-y-auto z-20 flex flex-col">
+    <div className="node-info-panel absolute right-0 top-0 bottom-0 z-20 flex w-80 flex-col overflow-y-auto border-l border-border bg-surface p-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center">
@@ -241,7 +241,7 @@ export const NodeInfoPanel: React.FC = () => {
 
       {/* Actions */}
       <div className="mt-auto">
-        <Space direction="vertical" className="w-full">
+        <Space orientation="vertical" className="w-full">
           {/* Navigate to message */}
           <Button
             type="primary"

@@ -7,6 +7,8 @@ handled throughout the verification report generation and serialization.
 
 import pytest
 from dataclasses import dataclass, field
+from enum import Enum
+from types import SimpleNamespace
 from typing import Any
 
 from tldw_Server_API.app.core.Claims_Extraction.verification_report import (
@@ -313,6 +315,38 @@ class TestBackwardCompatibility:
 
         # Coverage = (verified + refuted) / total = 2/4 = 0.5
         assert report.coverage == 0.5
+
+    @pytest.mark.unit
+    def test_handles_sparse_status_enum_without_refuted_member(self, monkeypatch):
+        """Report generation should not fail when VerificationStatus is missing members."""
+
+        class SparseVerificationStatus(Enum):
+            VERIFIED = "verified"
+            UNVERIFIED = "unverified"
+            CONTESTED = "contested"
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Claims_Extraction.verification_report.VerificationStatus",
+            SparseVerificationStatus,
+        )
+
+        verification = SimpleNamespace(
+            claim=MockClaim(id="1", text="Refuted by label"),
+            status=None,
+            label="refuted",
+            confidence=0.2,
+            evidence=[],
+            citations=[],
+            rationale="legacy label fallback",
+            match_level=MatchLevel.EXACT,
+            source_authority=SourceAuthority.SECONDARY,
+            requires_external_knowledge=False,
+        )
+
+        report = VerificationReport.from_verification_result([verification])
+
+        assert report.refuted_count == 1
+        assert report.unverified_count == 0
 
 
 class TestGenerateVerificationReportHelper:

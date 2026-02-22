@@ -91,7 +91,7 @@ export const QueuedFileRow = React.memo(
                 {sizeLabel} {stub.type ? `\u00b7 ${stub.type}` : ""}
               </span>
               {status.reason ? (
-                <span className="text-orange-600">{status.reason}</span>
+                <span className="text-warn">{status.reason}</span>
               ) : null}
             </div>
           </div>

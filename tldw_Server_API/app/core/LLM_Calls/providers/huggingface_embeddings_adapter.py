@@ -5,6 +5,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .base import EmbeddingsProvider
 
@@ -23,7 +24,7 @@ class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
         import os
         v = os.getenv("LLM_EMBEDDINGS_NATIVE_HTTP_HUGGINGFACE")
         # Off by default; opt-in in CI/tests
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        return is_truthy(v)
 
     def _base_url(self) -> str:
         import os

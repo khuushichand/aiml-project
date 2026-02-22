@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import fs from "node:fs"
 import path from "node:path"
 import { launchWithExtension } from "./utils/extension"
@@ -172,7 +173,7 @@ test.describe("Visual edge QA", () => {
     )
     const apiKey = process.env.TLDW_E2E_API_KEY || ""
 
-    const { context, page } = await launchWithExtension("", {
+    const { context, page } = await launchWithExtensionOrSkip(test, "", {
       seedConfig: withAllFeaturesEnabled({
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true,

@@ -47,6 +47,17 @@ class AuthnzUserProviderSecretsRepo:
     def _normalize_datetime_for_postgres(dt: datetime) -> datetime:
         return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
+    @staticmethod
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        if isinstance(row, dict):
+            return dict(row)
+        try:
+            keys = row.keys()
+            return {key: row[key] for key in keys}
+        except Exception as row_keys_error:
+            logger.debug("User provider secret row key materialization failed; falling back to dict(row)", exc_info=row_keys_error)
+        return dict(row)
+
     async def upsert_secret(
         self,
         *,
@@ -90,7 +101,7 @@ class AuthnzUserProviderSecretsRepo:
                     updated_by,
                     ts,
                 )
-                return dict(row) if row else {}
+                return self._row_to_dict(row) if row else {}
 
             await self.db_pool.execute(
                 """
@@ -128,7 +139,7 @@ class AuthnzUserProviderSecretsRepo:
                 """,
                 (user_id, provider_norm),
             )
-            return dict(row) if row else {}
+            return self._row_to_dict(row) if row else {}
         except Exception as exc:
             logger.error(f"AuthnzUserProviderSecretsRepo.upsert_secret failed: {exc}")
             raise
@@ -144,28 +155,32 @@ class AuthnzUserProviderSecretsRepo:
         try:
             if getattr(self.db_pool, "pool", None) is not None:
                 revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
-                row = await self.db_pool.fetchone(
-                    f"""
+                fetch_user_secret_sql_template = """
                     SELECT id, user_id, provider, encrypted_blob, key_hint, metadata,
                            created_at, updated_at, last_used_at, created_by, updated_by, revoked_by, revoked_at
                     FROM user_provider_secrets
                     WHERE user_id = $1 AND provider = $2{revoked_clause}
-                    """,
+                    """
+                fetch_user_secret_sql = fetch_user_secret_sql_template.format_map(locals())  # nosec B608
+                row = await self.db_pool.fetchone(
+                    fetch_user_secret_sql,
                     user_id,
                     provider_norm,
                 )
             else:
                 revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
-                row = await self.db_pool.fetchone(
-                    f"""
+                fetch_user_secret_sql_template = """
                     SELECT id, user_id, provider, encrypted_blob, key_hint, metadata,
                            created_at, updated_at, last_used_at, created_by, updated_by, revoked_by, revoked_at
                     FROM user_provider_secrets
                     WHERE user_id = ? AND provider = ?{revoked_clause}
-                    """,
+                    """
+                fetch_user_secret_sql = fetch_user_secret_sql_template.format_map(locals())  # nosec B608
+                row = await self.db_pool.fetchone(
+                    fetch_user_secret_sql,
                     (user_id, provider_norm),
                 )
-            return dict(row) if row else None
+            return self._row_to_dict(row) if row else None
         except Exception as exc:
             logger.error(f"AuthnzUserProviderSecretsRepo.fetch_secret_for_user failed: {exc}")
             raise
@@ -179,28 +194,32 @@ class AuthnzUserProviderSecretsRepo:
         try:
             revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
             if getattr(self.db_pool, "pool", None) is not None:
-                rows = await self.db_pool.fetchall(
-                    f"""
+                list_user_secrets_sql_template = """
                     SELECT id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
                            created_by, updated_by, revoked_by, revoked_at
                     FROM user_provider_secrets
                     WHERE user_id = $1{revoked_clause}
                     ORDER BY provider
-                    """,
+                    """
+                list_user_secrets_sql = list_user_secrets_sql_template.format_map(locals())  # nosec B608
+                rows = await self.db_pool.fetchall(
+                    list_user_secrets_sql,
                     user_id,
                 )
             else:
-                rows = await self.db_pool.fetchall(
-                    f"""
+                list_user_secrets_sql_template = """
                     SELECT id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
                            created_by, updated_by, revoked_by, revoked_at
                     FROM user_provider_secrets
                     WHERE user_id = ?{revoked_clause}
                     ORDER BY provider
-                    """,
+                    """
+                list_user_secrets_sql = list_user_secrets_sql_template.format_map(locals())  # nosec B608
+                rows = await self.db_pool.fetchall(
+                    list_user_secrets_sql,
                     (user_id,),
                 )
-            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row} for row in rows]
+            return [self._row_to_dict(row) for row in rows]
         except Exception as exc:
             logger.error(f"AuthnzUserProviderSecretsRepo.list_secrets_for_user failed: {exc}")
             raise

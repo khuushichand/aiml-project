@@ -22,9 +22,16 @@ def client_admin(monkeypatch):
     user_id = 9302
 
     async def override_user():
-        u = User(id=user_id, username="watch-admin", email=None, is_active=True)
-        setattr(u, "is_admin", True)
-        return u
+        return User(
+            id=user_id,
+            username="watch-admin",
+            email=None,
+            role="user",
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=False,
+            is_active=True,
+        )
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_watchlists_scale_api"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -37,7 +44,7 @@ def client_admin(monkeypatch):
         if user_db_path.exists():
             user_db_path.unlink()
     except Exception:
-        pass
+        _ = None
 
     from fastapi import FastAPI
     from tldw_Server_API.app.api.v1.endpoints.watchlists import router as watchlists_router

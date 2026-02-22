@@ -20,9 +20,17 @@ const getCanvasSize = (canvas: HTMLCanvasElement) => {
   return { width: w, height: h, ratio }
 }
 
+const getCssRgba = (cssVar: string, alpha: number): string => {
+  if (typeof document === "undefined") return `rgba(0,0,0,${alpha})`
+  const triple = getComputedStyle(document.documentElement).getPropertyValue(cssVar).trim()
+  if (!triple) return `rgba(0,0,0,${alpha})`
+  const [r, g, b] = triple.split(/\s+/)
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
 const drawIdle = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
   ctx.clearRect(0, 0, width, height)
-  ctx.strokeStyle = "rgba(148, 163, 184, 0.4)"
+  ctx.strokeStyle = getCssRgba("--color-muted", 0.4)
   ctx.lineWidth = 1
   ctx.beginPath()
   ctx.moveTo(0, height / 2)
@@ -38,7 +46,7 @@ const drawWaveform = (
 ) => {
   ctx.clearRect(0, 0, width, height)
   ctx.lineWidth = 2
-  ctx.strokeStyle = "rgba(34, 197, 94, 0.9)"
+  ctx.strokeStyle = getCssRgba("--color-success", 0.9)
   ctx.beginPath()
   const sliceWidth = width / data.length
   let x = 0

@@ -111,7 +111,7 @@ export const MediaSelector: React.FC<MediaSelectorProps> = ({ onSelect }) => {
     return (
       <Alert
         type="error"
-        message={t(
+        title={t(
           "settings:chunkingPlayground.loadMediaListError",
           "Failed to load media library"
         )}
@@ -160,7 +160,7 @@ export const MediaSelector: React.FC<MediaSelectorProps> = ({ onSelect }) => {
       )}
 
       {contentError && (
-        <Alert type="warning" message={contentError} showIcon />
+        <Alert type="warning" title={contentError} showIcon />
       )}
 
       {mediaList?.pagination && (

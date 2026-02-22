@@ -39,7 +39,7 @@ async def debug_schema(
                     return [col[1] for col in cursor.fetchall()]
                 except Exception as exc:  # pragma: no cover - defensive path
                     logger.warning(
-                        "Failed to introspect columns for table %s: %s",
+                        'Failed to introspect columns for table {}: {}',
                         name,
                         exc,
                     )

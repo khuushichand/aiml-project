@@ -7,7 +7,7 @@ Skill Executor
 ==============
 
 Executes skills with:
-- Argument substitution ($ARGUMENTS, $0, $1, etc.)
+- Argument substitution ($ARGUMENTS, ${0}, ${1}, etc.)
 - Tool resolution against MCP registry
 - Inline and fork execution modes
 """
@@ -51,8 +51,8 @@ class RequestContext:
 class SkillExecutor:
     """Execute skills with argument substitution and tool resolution."""
 
-    # Pattern for $ARGUMENTS[N] or $N
-    INDEXED_ARG_PATTERN = re.compile(r'\$ARGUMENTS\[(\d+)\]|\$(\d+)')
+    # Pattern for $ARGUMENTS[N] or ${N} (brace-delimited to avoid collision with dollar amounts)
+    INDEXED_ARG_PATTERN = re.compile(r'\$ARGUMENTS\[(\d+)\]|\$\{(\d+)\}')
 
     def substitute_arguments(self, content: str, arguments: str) -> str:
         """
@@ -61,7 +61,7 @@ class SkillExecutor:
         Supports:
         - $ARGUMENTS - all arguments as a single string
         - $ARGUMENTS[N] - specific argument by index (0-based)
-        - $N - shorthand for $ARGUMENTS[N]
+        - ${N} - shorthand for $ARGUMENTS[N] (brace-delimited to avoid collision with $100 etc.)
 
         Args:
             content: The skill content with placeholders
@@ -462,6 +462,10 @@ class SkillExecutor:
                 except ToolExecutionError as e:
                     result_payload = f"Error: {e}"
                 except Exception as e:
+                    logger.warning(
+                        f"Unexpected error executing tool '{tool_name}' in skill fork '{skill_name}': {e}",
+                        exc_info=True,
+                    )
                     result_payload = f"Error: {e}"
 
                 messages.append({"role": "assistant", "content": None, "tool_calls": [tc]})

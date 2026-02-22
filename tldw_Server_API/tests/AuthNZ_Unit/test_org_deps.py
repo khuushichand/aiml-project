@@ -1,12 +1,22 @@
 import pytest
+from fastapi import HTTPException
 
 from tldw_Server_API.app.api.v1.API_Deps import org_deps
 
 
 class _DummyPrincipal:
-    def __init__(self, user_id: int, *, is_admin: bool = False):
+    def __init__(
+        self,
+        user_id: int,
+        *,
+        is_admin: bool = False,
+        roles: list[str] | None = None,
+        permissions: list[str] | None = None,
+    ):
         self.user_id = user_id
         self.is_admin = is_admin
+        self.roles = list(roles or [])
+        self.permissions = list(permissions or [])
 
 
 @pytest.mark.asyncio
@@ -73,6 +83,49 @@ async def test_get_active_org_id_returns_none_when_no_orgs(monkeypatch):
         org_id=None,
     )
     assert org_id is None
+
+
+@pytest.mark.asyncio
+async def test_get_active_org_id_rejects_boolean_admin_without_claims(monkeypatch):
+    principal = _DummyPrincipal(user_id=4, is_admin=True, roles=["user"], permissions=[])
+
+    async def fake_membership(*_args, **_kwargs):
+        return None
+
+    async def fake_get_user_orgs(_: object):
+        raise AssertionError("get_user_orgs should not be called when explicit org_id is provided")
+
+    monkeypatch.setattr(org_deps, "_get_user_org_membership", fake_membership)
+    monkeypatch.setattr(org_deps, "get_user_orgs", fake_get_user_orgs)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await org_deps.get_active_org_id(
+            principal=principal,
+            x_tldw_org_id=None,
+            org_id=42,
+        )
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_active_org_id_allows_admin_role_claim_without_membership(monkeypatch):
+    principal = _DummyPrincipal(user_id=5, is_admin=False, roles=["admin"], permissions=[])
+
+    async def fake_membership(*_args, **_kwargs):
+        return None
+
+    async def fake_get_user_orgs(_: object):
+        raise AssertionError("get_user_orgs should not be called when explicit org_id is provided")
+
+    monkeypatch.setattr(org_deps, "_get_user_org_membership", fake_membership)
+    monkeypatch.setattr(org_deps, "get_user_orgs", fake_get_user_orgs)
+
+    org_id = await org_deps.get_active_org_id(
+        principal=principal,
+        x_tldw_org_id=None,
+        org_id=42,
+    )
+    assert org_id == 42
 
 
 @pytest.mark.parametrize(

@@ -79,9 +79,11 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
     VectorStoreFactory,
     create_from_settings_for_user,
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 RBAC_VECTOR_ADMIN = rbac_rate_limit("vector.admin")
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 _VECTORSTORE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -103,6 +105,22 @@ _VECTORSTORE_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     HTTPException,
 )
+
+
+def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 # Embeddings batch generator hook. Tests may monkeypatch this attribute directly or
 # replace the provider resolver via _get_embeddings_fn(). We intentionally avoid
@@ -520,6 +538,7 @@ async def list_vector_store_users(current_user: User = Depends(get_request_user)
                     store_count = 0
                 # Count batches
                 try:
+                    init_batches_db(uid)
                     from tldw_Server_API.app.core.Embeddings.vector_store_batches_db import _connect as batches_conn
                     with batches_conn(uid) as conn:
                         try:
@@ -1308,7 +1327,7 @@ async def query_vectors(
         # In test contexts, normalize provider baseline to 'openai' for predictable policy behavior
         try:
             import os as _os
-            if str(_os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
+            if env_flag_enabled("TESTING"):
                 provider = "openai"
         except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             pass
@@ -1503,7 +1522,7 @@ async def list_vector_batches(
         error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
     if user_id is not None and user_id != requested_user_id:
-        if not principal.is_admin:
+        if not _principal_has_admin_claims(principal):
             raise HTTPException(
                 status_code=http_status.HTTP_403_FORBIDDEN,
                 detail="Admin privileges required",

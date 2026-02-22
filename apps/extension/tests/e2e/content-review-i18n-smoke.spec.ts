@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 
@@ -38,7 +39,7 @@ test.describe("Content Review i18n smoke", () => {
   for (const fixture of localeFixtures) {
     test(`renders Content Review in ${fixture.locale}`, async () => {
       const extPath = path.resolve("build/chrome-mv3")
-      const { context, optionsUrl } = await launchWithExtension(extPath)
+      const { context, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
 
       const page = await openContentReview(
         context,

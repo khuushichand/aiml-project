@@ -120,7 +120,7 @@ async def test_mcp_http_requests_use_single_api_key_validation(monkeypatch):
     per request and reuse the resolved metadata (org_id/team_id) without re-validating.
     """
 
-    # Force multi-user API key path so get_current_user uses APIKeyManager instead of
+    # Force multi-user API key path so compat token resolution uses APIKeyManager instead of
     # the single-user shortcut.
     monkeypatch.setattr(mcp_ep, "is_single_user_mode", lambda: False)
     monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: False)
@@ -320,6 +320,67 @@ async def test_modules_health_uses_principal_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_optional_token_data_prefers_claim_first_principal(monkeypatch):
+    from starlette.requests import Request
+
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=42,
+        username="claim-user",
+        roles=["admin"],
+        permissions=["mcp:read"],
+        token_type="access",
+    )
+
+    async def _fail_compat_resolver(**_kwargs):
+        raise AssertionError("claim-first token data path should not call compat token resolver")
+
+    monkeypatch.setattr(mcp_ep, "_resolve_token_data_compat", _fail_compat_resolver)
+
+    request = Request({"type": "http", "headers": []})
+    token = await mcp_ep._get_optional_token_data(
+        request=request,
+        principal=principal,
+        credentials=None,
+        x_api_key=None,
+    )
+
+    assert isinstance(token, mcp_ep.TokenData)
+    assert token.sub == "42"
+    assert token.username == "claim-user"
+    assert token.roles == ["admin"]
+    assert token.permissions == ["mcp:read"]
+
+
+@pytest.mark.asyncio
+async def test_optional_token_data_falls_back_to_legacy_user(monkeypatch):
+    from starlette.requests import Request
+
+    expected = mcp_ep.TokenData(
+        sub="legacy-123",
+        username="legacy",
+        roles=["api_client"],
+        permissions=["read"],
+        token_type="access",
+    )
+
+    async def _fake_compat_resolver(**_kwargs):
+        return expected
+
+    monkeypatch.setattr(mcp_ep, "_resolve_token_data_compat", _fake_compat_resolver)
+
+    request = Request({"type": "http", "headers": []})
+    token = await mcp_ep._get_optional_token_data(
+        request=request,
+        principal=None,
+        credentials=None,
+        x_api_key=None,
+    )
+
+    assert token is expected
+
+
+@pytest.mark.asyncio
 async def test_mcp_single_user_api_key_flag_enabled_uses_compat_shim(monkeypatch):
     """
     When MCP_SINGLE_USER_COMPAT_SHIM is enabled and the runtime is single-user,
@@ -346,7 +407,7 @@ async def test_mcp_single_user_api_key_flag_enabled_uses_compat_shim(monkeypatch
 
         app.dependency_overrides[_ehs] = lambda: None
     except Exception:
-        pass
+        _ = None
 
     headers = {"X-API-KEY": "single-user-admin-key"}
     body = {"jsonrpc": "2.0", "method": "status", "id": 10}
@@ -379,7 +440,7 @@ async def test_mcp_single_user_api_key_respects_ip_allowlist(monkeypatch):
     monkeypatch.setattr(mcp_ep, "get_settings", lambda: _Settings())
 
     request_denied = Request({"type": "http", "client": ("198.51.100.5", 12345)})
-    user_denied = await mcp_ep.get_current_user(
+    user_denied = await mcp_ep._resolve_token_data_compat(
         credentials=None,
         x_api_key="single-user-admin-key",
         request=request_denied,
@@ -387,7 +448,7 @@ async def test_mcp_single_user_api_key_respects_ip_allowlist(monkeypatch):
     assert user_denied is None
 
     request_allowed = Request({"type": "http", "client": ("203.0.113.10", 12345)})
-    user_allowed = await mcp_ep.get_current_user(
+    user_allowed = await mcp_ep._resolve_token_data_compat(
         credentials=None,
         x_api_key="single-user-admin-key",
         request=request_allowed,
@@ -425,7 +486,7 @@ async def test_mcp_single_user_api_key_flag_disabled_uses_api_key_manager(monkey
 
         app.dependency_overrides[_ehs] = lambda: None
     except Exception:
-        pass
+        _ = None
 
     headers = {"X-API-KEY": "test-api-key-123"}
     body = {"jsonrpc": "2.0", "method": "status", "id": 11}
@@ -446,7 +507,7 @@ async def test_mcp_single_user_api_key_flag_disabled_uses_api_key_manager(monkey
 @pytest.mark.asyncio
 async def test_get_current_user_authnz_jwt_failure_falls_back_to_mcp_jwt(monkeypatch):
     """
-    If AuthNZ JWT decode fails but an MCP JWT is valid, get_current_user should
+    If AuthNZ JWT decode fails but an MCP JWT is valid, compat token resolution should
     return the MCP TokenData instead of raising or propagating a 500-style error.
     """
     from fastapi.security.http import HTTPAuthorizationCredentials
@@ -479,7 +540,7 @@ async def test_get_current_user_authnz_jwt_failure_falls_back_to_mcp_jwt(monkeyp
 
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="mcp.jwt.token")
 
-    user = await mcp_ep.get_current_user(credentials=creds, x_api_key=None, request=None)
+    user = await mcp_ep._resolve_token_data_compat(credentials=creds, x_api_key=None, request=None)
 
     assert isinstance(user, mcp_ep.TokenData)
     assert user.sub == expected.sub
@@ -516,7 +577,7 @@ async def test_get_current_user_authnz_revoked_does_not_fallback(monkeypatch):
 
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="revoked.jwt.token")
 
-    user = await mcp_ep.get_current_user(credentials=creds, x_api_key=None, request=None)
+    user = await mcp_ep._resolve_token_data_compat(credentials=creds, x_api_key=None, request=None)
 
     assert user is None
 
@@ -524,7 +585,7 @@ async def test_get_current_user_authnz_revoked_does_not_fallback(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_current_user_authnz_and_mcp_failure_use_api_key_and_set_state(monkeypatch):
     """
-    When both AuthNZ JWT and MCP JWT fail, get_current_user should fall back to
+    When both AuthNZ JWT and MCP JWT fail, compat token resolution should fall back to
     the multi-user API key path, returning a TokenData and attaching API key
     metadata to request.state.mcp_api_key_info.
     """
@@ -571,7 +632,7 @@ async def test_get_current_user_authnz_and_mcp_failure_use_api_key_and_set_state
 
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="bad.jwt")
 
-    user = await mcp_ep.get_current_user(credentials=creds, x_api_key="api-key-xyz", request=request)
+    user = await mcp_ep._resolve_token_data_compat(credentials=creds, x_api_key="api-key-xyz", request=request)
 
     assert isinstance(user, mcp_ep.TokenData)
     assert user.sub == "42"
@@ -625,7 +686,7 @@ async def test_single_user_test_api_key_allowed_in_test_mode_dev_context(monkeyp
     scope = {"type": "http", "client": ("127.0.0.1", 8000)}
     request = Request(scope)
 
-    user = await mcp_ep.get_current_user(credentials=None, x_api_key=test_key, request=request)
+    user = await mcp_ep._resolve_token_data_compat(credentials=None, x_api_key=test_key, request=request)
 
     assert isinstance(user, mcp_ep.TokenData)
     assert user.sub == str(_Settings.SINGLE_USER_FIXED_ID)
@@ -690,7 +751,7 @@ async def test_single_user_test_api_key_uses_api_key_manager_outside_dev_context
     scope = {"type": "http", "client": ("198.51.100.5", 9000)}
     request = Request(scope)
 
-    user = await mcp_ep.get_current_user(credentials=None, x_api_key=test_key, request=request)
+    user = await mcp_ep._resolve_token_data_compat(credentials=None, x_api_key=test_key, request=request)
 
     # The test key should not yield the single-user admin; it should be treated
     # as a regular multi-user API key.

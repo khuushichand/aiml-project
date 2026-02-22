@@ -1,6 +1,7 @@
 # Assistant
 
 https://github.com/GuyTevet/CLoSD
+https://www.home-assistant.io/integrations/mcp_server/
 https://human3daigc.github.io/Textoon_webpage/
 https://huggingface.co/blog/wolfram/home-assistant
 https://huggingface.co/tencent/Hunyuan3D-1

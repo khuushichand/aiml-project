@@ -76,7 +76,7 @@ def test_chacha_db(test_user):
     try:
         os.unlink(db_path)
     except:
-        pass
+        _ = None
 
 
 @pytest.fixture
@@ -95,7 +95,7 @@ def test_media_db(test_user):
     try:
         os.unlink(db_path)
     except:
-        pass
+        _ = None
 
 
 @pytest.fixture

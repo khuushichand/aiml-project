@@ -80,7 +80,7 @@ eval_data = {
 
 # Create the evaluation
 response = requests.post(
-    f"{BASE_URL}/api/v1/evals",  # Note: /api/v1/ prefix
+    f"{BASE_URL}/api/v1/evaluations",
     json=eval_data,
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
@@ -103,7 +103,7 @@ run_data = {
 }
 
 run_response = requests.post(
-    f"{BASE_URL}/api/v1/evals/{eval_id}/runs",
+    f"{BASE_URL}/api/v1/evaluations/{eval_id}/runs",
     json=run_data,
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
@@ -120,28 +120,21 @@ import time
 time.sleep(2)  # Wait for evaluation to complete
 
 status_response = requests.get(
-    f"{BASE_URL}/api/v1/runs/{run_id}",
+    f"{BASE_URL}/api/v1/evaluations/runs/{run_id}",
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
 
 status_data = status_response.json()
 print(f"📊 Status: {status_data['status']}")
 
-# Get results if completed
+# Get results if completed (included in run payload)
 if status_data["status"] == "completed":
-    results_response = requests.get(
-        f"{BASE_URL}/api/v1/runs/{run_id}/results",
-        headers={"Authorization": f"Bearer {API_KEY}"}
-    )
-
-    if results_response.status_code == 200:
-        results = results_response.json()
-        aggregate = results["results"]["aggregate"]
-        print(f"\n📊 Results:")
-        print(f"  Pass Rate: {aggregate['pass_rate']:.0%}")
-        print(f"  Mean Score: {aggregate['mean_score']:.2f}")
-        print(f"  Total Samples: {aggregate['total_samples']}")
-        print(f"  Failed Samples: {aggregate['failed_samples']}")
+    aggregate = status_data["results"]["aggregate"]
+    print(f"\n📊 Results:")
+    print(f"  Pass Rate: {aggregate['pass_rate']:.0%}")
+    print(f"  Mean Score: {aggregate['mean_score']:.2f}")
+    print(f"  Total Samples: {aggregate['total_samples']}")
+    print(f"  Failed Samples: {aggregate['failed_samples']}")
 else:
     print(f"⏳ Run status: {status_data['status']}")
     print(f"   Progress: {status_data.get('progress', {})}")
@@ -213,7 +206,7 @@ summary_eval = {
 }
 
 response = requests.post(
-    f"{BASE_URL}/api/v1/evals",
+    f"{BASE_URL}/api/v1/evaluations",
     json=summary_eval,
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
@@ -224,7 +217,7 @@ if response.status_code == 201:
 
     # Run the evaluation
     run_response = requests.post(
-        f"{BASE_URL}/api/v1/evals/{eval_id}/runs",
+        f"{BASE_URL}/api/v1/evaluations/{eval_id}/runs",
         json={"config": {"temperature": 0}},
         headers={"Authorization": f"Bearer {API_KEY}"}
     )
@@ -328,7 +321,7 @@ dataset_request = {
 }
 
 dataset_response = requests.post(
-    f"{BASE_URL}/api/v1/datasets",
+    f"{BASE_URL}/api/v1/evaluations/datasets",
     json=dataset_request,
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
@@ -345,7 +338,7 @@ eval_with_dataset = {
 }
 
 eval_response = requests.post(
-    f"{BASE_URL}/api/v1/evals",
+    f"{BASE_URL}/api/v1/evaluations",
     json=eval_with_dataset,
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
@@ -370,7 +363,7 @@ All evaluation results include:
 def print_results(run_id):
     """Pretty print evaluation results"""
     response = requests.get(
-        f"{BASE_URL}/api/v1/runs/{run_id}/results",
+        f"{BASE_URL}/api/v1/evaluations/runs/{run_id}",
         headers={"Authorization": f"Bearer {API_KEY}"}
     )
 
@@ -407,7 +400,7 @@ def wait_for_completion(run_id, max_wait=60):
 
     while time.time() - start_time < max_wait:
         response = requests.get(
-            f"{BASE_URL}/api/v1/runs/{run_id}",
+            f"{BASE_URL}/api/v1/evaluations/runs/{run_id}",
             headers={"Authorization": f"Bearer {API_KEY}"}
         )
 
@@ -432,26 +425,23 @@ def wait_for_completion(run_id, max_wait=60):
     return False
 ```
 
-### Option 2: Server-Sent Events (Streaming)
+### Option 2: Poll More Frequently for Near-Real-Time
 
 ```python
-# First install: pip install sseclient-py
-import sseclient
+def stream_like_progress(run_id):
+    """Poll every second to approximate real-time updates."""
+    import time
 
-def stream_progress(run_id):
-    """Stream real-time progress updates"""
-    response = requests.get(
-        f"{BASE_URL}/api/v1/runs/{run_id}/stream",
-        headers={"Authorization": f"Bearer {API_KEY}"},
-        stream=True
-    )
-
-    client = sseclient.SSEClient(response)
-    for event in client.events():
-        print(f"{event.event}: {event.data}")
-
-        if event.event in ["completed", "failed", "cancelled"]:
+    while True:
+        response = requests.get(
+            f"{BASE_URL}/api/v1/evaluations/runs/{run_id}",
+            headers={"Authorization": f"Bearer {API_KEY}"}
+        )
+        data = response.json()
+        print(f"status={data['status']} progress={data.get('progress', {})}")
+        if data["status"] in ["completed", "failed", "cancelled"]:
             break
+        time.sleep(1)
 ```
 
 ## Error Handling
@@ -508,14 +498,14 @@ headers = {"Authorization": "Bearer YOUR_API_KEY"}
 headers = {"Authorization": "Bearer your-actual-api-key"}
 ```
 
-### Issue: 404 Not Found on `/v1/evals`
+### Issue: 404 Not Found on legacy eval paths
 **Solution**: Use the correct API path with `/api/` prefix:
 ```python
 # Wrong:
 url = "http://localhost:8000/v1/evals"
 
 # Correct:
-url = "http://localhost:8000/api/v1/evals"
+url = "http://localhost:8000/api/v1/evaluations"
 ```
 
 ### Issue: "Either dataset_id or dataset must be provided"
@@ -549,7 +539,7 @@ Add delays between requests or batch operations.
 ### Issue: Results show "pending" or "running" indefinitely
 **Solution**: Check the run status for errors:
 ```python
-response = requests.get(f"{BASE_URL}/api/v1/runs/{run_id}", headers=headers)
+response = requests.get(f"{BASE_URL}/api/v1/evaluations/runs/{run_id}", headers=headers)
 data = response.json()
 if "error_message" in data:
     print(f"Run error: {data['error_message']}")
@@ -567,9 +557,9 @@ if "error_message" in data:
 
 ## Next Steps
 
-- **[User Guide](./User_Guides/Evaluations_User_Guide.md)** - Detailed usage patterns and examples
-- **[API Reference](./API-related/Evaluations_API_Reference.md)** - Complete endpoint documentation
-- **[Developer Guide](./Code_Documentation/Evaluations_Developer_Guide.md)** - Extend the evaluation system
+- **[User Guide](../User_Guides/Evaluations_User_Guide.md)** - Detailed usage patterns and examples
+- **[API Reference](../API-related/Evaluations_API_Reference.md)** - Complete endpoint documentation
+- **[Developer Guide](../Code_Documentation/Evaluations_Developer_Guide.md)** - Extend the evaluation system
 - **Interactive API Docs** - http://localhost:8000/docs when server is running
 
 ## Quick Reference Card
@@ -597,14 +587,13 @@ rag_metrics = ["relevance", "faithfulness", "answer_similarity"]
 
 # API endpoints
 endpoints = {
-    "create_eval": "POST /api/v1/evals",
-    "get_eval": "GET /api/v1/evals/{eval_id}",
-    "list_evals": "GET /api/v1/evals",
-    "create_run": "POST /api/v1/evals/{eval_id}/runs",
-    "get_run": "GET /api/v1/runs/{run_id}",
-    "get_results": "GET /api/v1/runs/{run_id}/results",
-    "create_dataset": "POST /api/v1/datasets",
-    "get_dataset": "GET /api/v1/datasets/{dataset_id}"
+    "create_eval": "POST /api/v1/evaluations",
+    "get_eval": "GET /api/v1/evaluations/{eval_id}",
+    "list_evals": "GET /api/v1/evaluations",
+    "create_run": "POST /api/v1/evaluations/{eval_id}/runs",
+    "get_run": "GET /api/v1/evaluations/runs/{run_id}",
+    "create_dataset": "POST /api/v1/evaluations/datasets",
+    "get_dataset": "GET /api/v1/evaluations/datasets/{dataset_id}"
 }
 ```
 

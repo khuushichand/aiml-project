@@ -27,6 +27,8 @@ from threading import Lock
 from typing import Any
 from urllib.parse import urljoin
 
+from defusedxml import ElementTree as DET
+from defusedxml.common import DefusedXmlException
 import regex
 from loguru import logger
 from lxml import html
@@ -34,6 +36,7 @@ from lxml.etree import XPath, XPathError
 from lxml.html import HtmlElement
 
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 
 _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -54,10 +57,10 @@ _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     UnicodeDecodeError,
     ET.ParseError,
+    DefusedXmlException,
     XPathError,
 )
 
-_TEST_MODE_VALUES = {"1", "true", "yes"}
 _SELECTOR_CACHE_MAX = 512
 _XPATH_SELECTOR_CACHE: OrderedDict[str, Any] = OrderedDict()
 _CSS_SELECTOR_CACHE: OrderedDict[str, Any] = OrderedDict()
@@ -65,7 +68,7 @@ _SELECTOR_CACHE_LOCK = Lock()
 
 
 def _in_test_mode() -> bool:
-    return os.getenv("TEST_MODE", "").lower() in _TEST_MODE_VALUES
+    return _is_test_mode()
 
 
 def get_selector_cache_stats() -> dict[str, int]:
@@ -1226,7 +1229,7 @@ async def fetch_rss_items(urls: list[str], *, limit: int = 10, tenant_id: str = 
         return []
 
     # Offline mode for unit tests
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+    if _in_test_mode():
         return [{"title": "Test Item", "url": "https://example.com/x", "summary": "Test", "published": None}][:limit]
 
     try:
@@ -1303,7 +1306,7 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
     if top_n <= 0:
         return []
 
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+    if _in_test_mode():
         # Provide stable deterministic links
         return [base_url] * min(top_n, 3)
 
@@ -1608,7 +1611,7 @@ async def fetch_rss_feed(
             return {"status": status, "items": []}
 
         try:
-            root = ET.fromstring(text)
+            root = DET.fromstring(text)
         except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             return {
                 "status": status,
@@ -1649,7 +1652,7 @@ async def fetch_rss_feed(
                 rel = (node.get("rel") or "").lower()
                 if rel == "alternate" and not preferred_link:
                     preferred_link = candidate
-                elif rel not in {"self"} and not fallback_link or not fallback_link:
+                elif rel not in {"self"} and not fallback_link:
                     fallback_link = candidate
             link = preferred_link or fallback_link or _find_text(it, ["link", atom_link_tag]) or ""
 
@@ -1689,6 +1692,61 @@ async def fetch_rss_feed(
     except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"fetch_rss_feed error: {e}")
         return {"status": 500, "items": []}
+
+
+def discover_hub_url(
+    xml_text: str,
+    response_headers: dict[str, str] | None = None,
+) -> tuple[str | None, str | None]:
+    """Return (hub_url, self_url) from feed XML and/or HTTP Link headers.
+
+    Parses both:
+    - HTTP ``Link`` header: ``<https://hub.example.com>; rel="hub"``
+    - Atom/RSS XML: ``<link rel="hub" href="..." />`` and ``<link rel="self" href="..." />``
+    """
+    hub_url: str | None = None
+    self_url: str | None = None
+
+    # Phase 1: Check HTTP Link headers
+    if response_headers:
+        link_header = response_headers.get("Link") or response_headers.get("link") or ""
+        for part in link_header.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                url_part, *attrs = part.split(";")
+                url_val = url_part.strip().strip("<>").strip()
+                rel_val = ""
+                for attr in attrs:
+                    attr = attr.strip()
+                    if attr.lower().startswith("rel="):
+                        rel_val = attr.split("=", 1)[1].strip().strip('"').strip("'").lower()
+                if rel_val == "hub" and not hub_url:
+                    hub_url = url_val
+                elif rel_val == "self" and not self_url:
+                    self_url = url_val
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
+                continue
+
+    # Phase 2: Parse XML for <link rel="hub"> and <link rel="self">
+    try:
+        root = DET.fromstring(xml_text)
+        atom_link_tag = "{http://www.w3.org/2005/Atom}link"
+        # Search both direct children and descendants (RSS puts atom:link inside <channel>)
+        for ln in list(root.findall(atom_link_tag)) + list(root.findall(".//" + atom_link_tag)) + list(root.findall("link")) + list(root.findall(".//link")):
+            href = (ln.get("href") or (ln.text or "")).strip()
+            if not href:
+                continue
+            rel = (ln.get("rel") or "").strip().lower()
+            if rel == "hub" and not hub_url:
+                hub_url = href
+            elif rel == "self" and not self_url:
+                self_url = href
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    return hub_url, self_url
 
 
 async def fetch_rss_feed_history(

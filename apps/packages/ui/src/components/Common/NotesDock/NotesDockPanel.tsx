@@ -20,6 +20,7 @@ import type { AllowedPath } from "@/services/tldw/openapi-guard"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { classNames } from "@/libs/class-name"
 import { useNavigate } from "react-router-dom"
+import { getQueryClient } from "@/services/query-client"
 
 const { TextArea } = Input
 
@@ -63,6 +64,41 @@ const clampPosition = (
   return {
     x: clamp(x, 0, maxX),
     y: clamp(y, 0, maxY)
+  }
+}
+
+const readObservedBorderBoxSize = (entry: ResizeObserverEntry) => {
+  const borderBoxSize = Array.isArray(entry.borderBoxSize)
+    ? entry.borderBoxSize[0]
+    : entry.borderBoxSize
+
+  if (
+    borderBoxSize &&
+    Number.isFinite(borderBoxSize.inlineSize) &&
+    Number.isFinite(borderBoxSize.blockSize)
+  ) {
+    return {
+      width: borderBoxSize.inlineSize,
+      height: borderBoxSize.blockSize
+    }
+  }
+
+  const rect = entry.target.getBoundingClientRect()
+  if (
+    Number.isFinite(rect.width) &&
+    rect.width > 0 &&
+    Number.isFinite(rect.height) &&
+    rect.height > 0
+  ) {
+    return {
+      width: rect.width,
+      height: rect.height
+    }
+  }
+
+  return {
+    width: entry.contentRect.width,
+    height: entry.contentRect.height
   }
 }
 
@@ -140,6 +176,7 @@ export const NotesDockPanel: React.FC = () => {
   const [unsavedModalOpen, setUnsavedModalOpen] = useState(false)
   const [pendingCloseNoteId, setPendingCloseNoteId] = useState<string | null>(null)
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null)
+  const [syncingNotesList, setSyncingNotesList] = useState(false)
   const [keywordsInput, setKeywordsInput] = useState<Record<string, string>>({})
   const [archiveCollapsed, setArchiveCollapsed] = useState(false)
 
@@ -147,6 +184,8 @@ export const NotesDockPanel: React.FC = () => {
   const dragStateRef = useRef<DragState | null>(null)
   const searchTimeoutRef = useRef<number | null>(null)
   const fetchRequestIdRef = useRef(0)
+  const cacheSyncInFlightRef = useRef(0)
+  const unsavedModalReturnFocusRef = useRef<HTMLElement | null>(null)
 
   const hasDirtyNotes = useMemo(
     () => notes.some((note) => note.isDirty),
@@ -189,6 +228,8 @@ export const NotesDockPanel: React.FC = () => {
 
   const handleRequestClose = useCallback(() => {
     if (hasDirtyNotes) {
+      unsavedModalReturnFocusRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null
       setUnsavedModalOpen(true)
       return
     }
@@ -202,6 +243,14 @@ export const NotesDockPanel: React.FC = () => {
       window.removeEventListener("tldw:notes-dock-request-close", handler)
     }
   }, [handleRequestClose])
+
+  const restoreFocusAfterUnsavedModalClose = useCallback(() => {
+    const target = unsavedModalReturnFocusRef.current
+    if (!target) return
+    window.requestAnimationFrame(() => {
+      if (target.isConnected) target.focus()
+    })
+  }, [])
 
   const handleSaveChoice = async () => {
     const ok = await saveAllDirtyNotes()
@@ -219,6 +268,7 @@ export const NotesDockPanel: React.FC = () => {
 
   const handleCancelChoice = () => {
     setUnsavedModalOpen(false)
+    restoreFocusAfterUnsavedModalClose()
   }
 
   const fetchNotesList = useCallback(
@@ -302,6 +352,26 @@ export const NotesDockPanel: React.FC = () => {
     }
   }
 
+  const syncNotesPageCache = useCallback(async () => {
+    cacheSyncInFlightRef.current += 1
+    setSyncingNotesList(true)
+    try {
+      await getQueryClient().invalidateQueries({ queryKey: ["notes"] })
+    } catch {
+      message.warning(
+        t(
+          "option:notesDock.syncRefreshWarning",
+          "Saved note, but notes page refresh may be delayed."
+        )
+      )
+    } finally {
+      cacheSyncInFlightRef.current = Math.max(0, cacheSyncInFlightRef.current - 1)
+      if (cacheSyncInFlightRef.current === 0) {
+        setSyncingNotesList(false)
+      }
+    }
+  }, [message, t])
+
   const saveNote = async (note: NotesDockNote) => {
     if (editorDisabled) return false
     if (!note.title.trim() && !note.content.trim()) {
@@ -354,6 +424,7 @@ export const NotesDockPanel: React.FC = () => {
         version: saved.version ?? note.version ?? null
       })
 
+      void syncNotesPageCache()
       message.success(t("option:notesDock.saved", "Note saved"))
       return true
     } catch (error: any) {
@@ -471,12 +542,15 @@ export const NotesDockPanel: React.FC = () => {
   }, [position.x, position.y, size.width, size.height, setPosition])
 
   useEffect(() => {
-    if (!dockRef.current) return
+    const dockElement = dockRef.current
+    if (!dockElement) return
+
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
       if (!entry) return
-      const nextWidth = Math.max(MIN_WIDTH, Math.round(entry.contentRect.width))
-      const nextHeight = Math.max(MIN_HEIGHT, Math.round(entry.contentRect.height))
+      const observedSize = readObservedBorderBoxSize(entry)
+      const nextWidth = Math.max(MIN_WIDTH, Math.round(observedSize.width))
+      const nextHeight = Math.max(MIN_HEIGHT, Math.round(observedSize.height))
       if (nextWidth !== size.width || nextHeight !== size.height) {
         setSize({ width: nextWidth, height: nextHeight })
         const clamped = clampPosition(position.x, position.y, nextWidth, nextHeight)
@@ -485,7 +559,11 @@ export const NotesDockPanel: React.FC = () => {
         }
       }
     })
-    observer.observe(dockRef.current)
+    try {
+      observer.observe(dockElement, { box: "border-box" })
+    } catch {
+      observer.observe(dockElement)
+    }
     return () => observer.disconnect()
   }, [position.x, position.y, setPosition, setSize, size.height, size.width])
 
@@ -532,6 +610,7 @@ export const NotesDockPanel: React.FC = () => {
               icon={<Plus className="h-3.5 w-3.5" />}
               onClick={handleNewNote}
               disabled={editorDisabled}
+              aria-label={t("option:notesDock.new", "New note")}
             />
           </Tooltip>
           <Tooltip title={t("option:notesDock.close", "Close") }>
@@ -540,6 +619,8 @@ export const NotesDockPanel: React.FC = () => {
               size="small"
               icon={<X className="h-3.5 w-3.5" />}
               onClick={handleRequestClose}
+              aria-label={t("option:notesDock.close", "Close")}
+              data-testid="notes-dock-close-button"
             />
           </Tooltip>
         </div>
@@ -762,6 +843,11 @@ export const NotesDockPanel: React.FC = () => {
                 {t("option:notesDock.unsaved", "Unsaved changes")}
               </div>
             )}
+            {syncingNotesList && (
+              <div className="mt-2 text-[11px] text-text-subtle" data-testid="notes-dock-sync-indicator">
+                {t("option:notesDock.syncingNotesList", "Syncing notes list...")}
+              </div>
+            )}
           </div>
 
           <div className="min-h-0 flex-1 p-3">
@@ -843,9 +929,14 @@ export const NotesDockPanel: React.FC = () => {
         open={unsavedModalOpen}
         onCancel={handleCancelChoice}
         title={t("option:notesDock.unsavedTitle", "Unsaved notes")}
+        keyboard
+        destroyOnHidden
         footer={
           <div className="flex items-center justify-end gap-2">
-            <Button onClick={handleCancelChoice}>
+            <Button
+              onClick={handleCancelChoice}
+              data-testid="notes-dock-unsaved-cancel-button"
+            >
               {t("common:cancel", "Cancel")}
             </Button>
             <Button danger onClick={handleDiscardChoice}>
@@ -857,7 +948,7 @@ export const NotesDockPanel: React.FC = () => {
           </div>
         }
       >
-        <p className="text-sm text-text-subtle">
+        <p className="text-sm text-text-subtle" data-testid="notes-dock-unsaved-modal-body">
           {t(
             "option:notesDock.unsavedBody",
             "You have unsaved notes. Save them before closing the dock?"

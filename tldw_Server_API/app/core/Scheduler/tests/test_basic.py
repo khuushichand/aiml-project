@@ -235,7 +235,7 @@ async def test_write_buffer_recovery():
         try:
             await buffer.close()
         except:
-            pass  # Expected to fail
+            _ = None  # Expected to fail
 
         # Check for backup file
         backup_files = list(config.emergency_backup_path.parent.glob("buffer_backup_*.json"))

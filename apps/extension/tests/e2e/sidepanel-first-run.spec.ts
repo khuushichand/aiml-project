@@ -3,12 +3,12 @@ import path from "path"
 import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
 import { waitForConnectionStore, forceConnected } from "./utils/connection"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
 test.describe('Sidepanel first-run and connection panel', () => {
   test('shows connection card and Open/Change settings opens tldw settings in a new tab', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, openSidepanel, extensionId } = await launchWithExtension(extPath) as any
+    const { context, openSidepanel, extensionId } = await launchWithExtensionOrSkip(test, extPath) as any
     const page = await openSidepanel()
 
     // First-run: shared connection card visible in Sidepanel
@@ -44,7 +44,7 @@ test.describe('Sidepanel first-run and connection panel', () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
 
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, openSidepanel } = (await launchWithExtension(extPath)) as any
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, extPath)) as any
     const page = await openSidepanel()
 
     // Force connected state via the shared connection store test hook
@@ -65,7 +65,7 @@ test.describe('Sidepanel first-run and connection panel', () => {
 
   test('sidepanel shows the same persistence mode labels as the playground', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, openSidepanel } = (await launchWithExtension(extPath)) as any
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, extPath)) as any
     const page = await openSidepanel()
 
     // Composer should be visible even before the server is connected.
@@ -93,7 +93,7 @@ test.describe('Sidepanel first-run and connection panel', () => {
 
   test('sidepanel header links to Health & diagnostics', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, openSidepanel } = (await launchWithExtension(extPath)) as any
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, extPath)) as any
     const page = await openSidepanel()
 
     const [healthPage] = await Promise.all([

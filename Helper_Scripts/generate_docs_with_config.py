@@ -77,7 +77,7 @@ def get_base_url() -> str:
     port = server_config.get('port', '8000')
 
     # Use localhost for documentation
-    if host == '0.0.0.0':
+    if host == '0.0.0.0':  # nosec B104
         host = 'localhost'
 
     return f"http://{host}:{port}"

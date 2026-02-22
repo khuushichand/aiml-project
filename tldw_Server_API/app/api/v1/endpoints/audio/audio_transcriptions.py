@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from pathlib import Path as PathLib
+from types import ModuleType
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -28,6 +29,7 @@ from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_aud
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter(
     tags=["Audio"],
@@ -60,17 +62,49 @@ _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS = (
 
 
 def _audio_shim_attr(name: str):
-    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
-    try:
-        if name in getattr(audio_shim, "__dict__", {}):
-            return getattr(audio_shim, name)
-    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
-        pass
+    def _is_override(value: Any) -> bool:
+        if value is None or isinstance(value, ModuleType):
+            return False
+        mod_name = getattr(value, "__module__", None)
+        if isinstance(mod_name, str) and mod_name:
+            if mod_name.startswith("tldw_Server_API.tests."):
+                return True
+            return not mod_name.startswith("tldw_Server_API.")
+        return True
+
+    mod_has = False
+    mod_value: Any = None
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
 
         if hasattr(audio_mod, name):
-            return getattr(audio_mod, name)
+            mod_has = True
+            mod_value = getattr(audio_mod, name)
+    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+        mod_has = False
+        mod_value = None
+    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
+    pkg_dict = getattr(audio_shim, "__dict__", {})
+    pkg_has = name in pkg_dict
+    pkg_value = pkg_dict.get(name) if pkg_has else None
+
+    if pkg_has and mod_has and pkg_value is not mod_value:
+        pkg_override = _is_override(pkg_value)
+        mod_override = _is_override(mod_value)
+        if mod_override and not pkg_override:
+            return mod_value
+        if pkg_override and not mod_override:
+            return pkg_value
+        if mod_override and pkg_override:
+            return mod_value
+
+    if pkg_has:
+        return pkg_value
+    if mod_has:
+        return mod_value
+    try:
+        if hasattr(audio_shim, name):
+            return getattr(audio_shim, name)
     except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
         pass
     if not hasattr(audio_shim, name):
@@ -84,6 +118,58 @@ async def _check_daily_minutes_allow(user_id: int, minutes: float):
 
 async def _add_daily_minutes(user_id: int, minutes: float):
     return await _audio_shim_attr("add_daily_minutes")(user_id, minutes)
+
+
+def _stt_provider_envelope(stt_registry: Any, provider_name: str) -> Optional[dict[str, Any]]:
+    """
+    Best-effort lookup for standardized STT provider capability envelope.
+    """
+    try:
+        entries = stt_registry.list_capabilities(include_disabled=True)
+    except TypeError:
+        try:
+            entries = stt_registry.list_capabilities()
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+            return None
+    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+        return None
+
+    if not isinstance(entries, list):
+        return None
+    normalized_name = str(provider_name or "").strip().lower()
+    if not normalized_name:
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        candidate = str(entry.get("provider") or "").strip().lower()
+        if candidate == normalized_name:
+            return entry
+    return None
+
+
+def _stt_provider_availability(
+    stt_registry: Any,
+    provider_name: str,
+    envelope: Optional[dict[str, Any]] = None,
+) -> str:
+    """
+    Resolve provider availability from envelope first, then legacy status API.
+    """
+    if isinstance(envelope, dict):
+        availability = str(envelope.get("availability") or "").strip().lower()
+        if availability:
+            return availability
+
+    get_status = getattr(stt_registry, "get_status", None)
+    if callable(get_status):
+        try:
+            legacy_status = str(get_status(provider_name) or "").strip().lower()
+            if legacy_status:
+                return legacy_status
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+            pass
+    return "unknown"
 
 
 @router.post(
@@ -203,7 +289,7 @@ async def create_transcription(
         limits = await _audio_shim_attr("get_limits_for_user")(current_user.id)
     except EXPECTED_DB_EXC as e:
         logger.exception(
-            "Failed to get limits for user %s during upload, using defaults: %s; request_id=%s",
+            'Failed to get limits for user {} during upload, using defaults: {}; request_id={}',
             current_user.id,
             e,
             rid,
@@ -218,7 +304,7 @@ async def create_transcription(
         max_file_size = int((limits.get("max_file_size_mb") or 25) * 1024 * 1024)
     except (ValueError, TypeError) as e:
         logger.warning(
-            "Could not parse max_file_size_mb for user %s; defaulting to 25MB: %s; request_id=%s",
+            'Could not parse max_file_size_mb for user {}; defaulting to 25MB: {}; request_id={}',
             current_user.id,
             e,
             rid,
@@ -250,7 +336,7 @@ async def create_transcription(
         acquired_job_slot = True
     except EXPECTED_DB_EXC as e:
         logger.exception(
-            "Failed to increment jobs started: user_id=%s, error=%s; request_id=%s",
+            'Failed to increment jobs started: user_id={}, error={}; request_id={}',
             current_user.id,
             e,
             rid,
@@ -287,7 +373,7 @@ async def create_transcription(
             )
         except ImportError as e:
             logger.debug(
-                "convert_to_wav import failed; using original temp file: path=%s, error=%s",
+                'convert_to_wav import failed; using original temp file: path={}, error={}',
                 temp_audio_path,
                 e,
             )
@@ -302,13 +388,13 @@ async def create_transcription(
                 )
             except (ConversionError, OSError, RuntimeError, ValueError) as e:
                 logger.debug(
-                    "convert_to_wav failed; using original temp file: path=%s, error=%s",
+                    'convert_to_wav failed; using original temp file: path={}, error={}',
                     temp_audio_path,
                     e,
                 )
                 canonical_path = temp_audio_path
 
-        if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+        if is_test_mode():
             source_label = "converted" if canonical_path != temp_audio_path else "original"
             logger.debug(f"TEST_MODE: canonical audio path resolved: path={canonical_path}, source={source_label}")
 
@@ -384,6 +470,27 @@ async def create_transcription(
 
         stt_registry = get_stt_provider_registry()
         provider, provider_model_name, provider_variant = stt_registry.resolve_provider_for_model(model or "")
+        provider_envelope = _stt_provider_envelope(stt_registry, provider)
+        provider_availability = _stt_provider_availability(
+            stt_registry,
+            provider,
+            envelope=provider_envelope,
+        )
+        requested_model = (model or provider_model_name or "").strip()
+        if provider_availability in {"disabled", "failed"}:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "status": "provider_unavailable",
+                    "provider": provider,
+                    "availability": provider_availability,
+                    "model": requested_model,
+                    "message": (
+                        f"STT provider '{provider}' is currently {provider_availability}. "
+                        "Check provider configuration/health and retry."
+                    ),
+                },
+            )
 
         def _raise_on_transcription_error(text: Any) -> None:
             if _is_transcription_error_message(text):
@@ -398,7 +505,7 @@ async def create_transcription(
             allow, remaining_after = await _check_daily_minutes_allow(current_user.id, minutes_est)
         except EXPECTED_DB_EXC as e:
             logger.exception(
-                "check_daily_minutes_allow failed; allowing by default: user_id=%s, error=%s; request_id=%s",
+                'check_daily_minutes_allow failed; allowing by default: user_id={}, error={}; request_id={}',
                 current_user.id,
                 e,
                 rid,
@@ -409,7 +516,7 @@ async def create_transcription(
                 await _audio_shim_attr("finish_job")(current_user.id)
             except EXPECTED_DB_EXC as e:
                 logger.exception(
-                    "Failed to release job slot after quota denial: user_id=%s, error=%s; request_id=%s",
+                    'Failed to release job slot after quota denial: user_id={}, error={}; request_id={}',
                     current_user.id,
                     e,
                     rid,
@@ -462,6 +569,17 @@ async def create_transcription(
                         selected_lang_for_stt = language if language else None
 
                     adapter = stt_registry.get_adapter(provider)
+                    if adapter is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail={
+                                "status": "provider_unavailable",
+                                "provider": provider,
+                                "availability": provider_availability,
+                                "model": whisper_model_name,
+                                "message": f"STT provider '{provider}' is unavailable.",
+                            },
+                        )
                     artifact = adapter.transcribe_batch(
                         canonical_path,
                         model=whisper_model_name,
@@ -485,6 +603,33 @@ async def create_transcription(
                 model_for_provider = model or provider_model_name
                 try:
                     adapter = stt_registry.get_adapter(provider)
+                    if adapter is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail={
+                                "status": "provider_unavailable",
+                                "provider": provider,
+                                "availability": provider_availability,
+                                "model": model_for_provider,
+                                "message": f"STT provider '{provider}' is unavailable.",
+                            },
+                        )
+                    adapter_provider = str(getattr(getattr(adapter, "name", None), "value", "")).strip()
+                    if adapter_provider and adapter_provider != provider:
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail={
+                                "status": "provider_unavailable",
+                                "provider": provider,
+                                "availability": provider_availability,
+                                "resolved_provider": adapter_provider,
+                                "model": model_for_provider,
+                                "message": (
+                                    f"STT provider '{provider}' is unavailable; "
+                                    f"fallback to '{adapter_provider}' was prevented for endpoint parity."
+                                ),
+                            },
+                        )
                     artifact = adapter.transcribe_batch(
                         canonical_path,
                         model=model_for_provider,
@@ -500,7 +645,7 @@ async def create_transcription(
                     transcribed_text = artifact.get("text", "")
                 except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(
-                        "Transcription failed for provider=%s, model=%s: %s",
+                        'Transcription failed for provider={}, model={}: {}',
                         provider,
                         model_for_provider,
                         e,
@@ -522,7 +667,7 @@ async def create_transcription(
                     await _audio_shim_attr("finish_job")(current_user.id)
             except EXPECTED_DB_EXC as e:
                 logger.exception(
-                    "Failed to release job slot in finally: user_id=%s, error=%s; request_id=%s",
+                    'Failed to release job slot in finally: user_id={}, error={}; request_id={}',
                     current_user.id,
                     e,
                     rid,
@@ -543,7 +688,7 @@ async def create_transcription(
             await _add_daily_minutes(current_user.id, minutes_est)
         except EXPECTED_DB_EXC as e:
             logger.exception(
-                "Failed to record daily minutes: user_id=%s, error=%s; request_id=%s",
+                'Failed to record daily minutes: user_id={}, error={}; request_id={}',
                 current_user.id,
                 e,
                 rid,

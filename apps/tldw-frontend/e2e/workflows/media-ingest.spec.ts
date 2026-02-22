@@ -10,7 +10,12 @@
  */
 import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from "../utils/fixtures"
 import { MediaPage } from "../utils/page-objects"
-import { seedAuth, generateTestId, waitForConnection } from "../utils/helpers"
+import {
+  seedAuth,
+  generateTestId,
+  waitForConnection,
+  TEST_CONFIG
+} from "../utils/helpers"
 import * as path from "path"
 import * as fs from "fs"
 
@@ -172,7 +177,7 @@ test.describe("Media Ingestion Workflow", () => {
 
       // Look for URL input
       const _urlInput = authedPage.locator(
-        "input[placeholder*='url' i], input[placeholder*='URL'], [data-testid='url-input']"
+        "input[placeholder*='url' i], textarea[placeholder*='url' i], input[placeholder*='URL'], textarea[placeholder*='URL'], [data-testid='url-input']"
       )
 
       // URL input may exist on media page or in a modal
@@ -190,7 +195,7 @@ test.describe("Media Ingestion Workflow", () => {
 
       // Find URL input if available
       const urlInput = authedPage.locator(
-        "input[placeholder*='url' i], [data-testid='url-input']"
+        "input[placeholder*='url' i], textarea[placeholder*='url' i], [data-testid='url-input']"
       ).first()
 
       if ((await urlInput.count()) > 0) {
@@ -229,7 +234,7 @@ test.describe("Media Ingestion Workflow", () => {
 
       // Find URL input if available
       const urlInput = authedPage.locator(
-        "input[placeholder*='url' i], [data-testid='url-input']"
+        "input[placeholder*='url' i], textarea[placeholder*='url' i], [data-testid='url-input']"
       ).first()
 
       if ((await urlInput.count()) > 0 && (await urlInput.isVisible())) {
@@ -364,6 +369,136 @@ test.describe("Media Ingestion Workflow", () => {
       } catch {
         // Quick ingest may not be available on this page
       }
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("should run quick ingest in web ui and show completion summary", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      test.setTimeout(180000)
+      skipIfServerUnavailable(serverInfo)
+
+      await authedPage.context().addInitScript((cfg) => {
+        try {
+          localStorage.setItem(
+            "tldwConfig",
+            JSON.stringify({
+              serverUrl: cfg.serverUrl,
+              apiKey: cfg.apiKey,
+              authMode: "single-user"
+            })
+          )
+          localStorage.setItem("__tldw_first_run_complete", "true")
+          localStorage.setItem("__tldw_allow_offline", "true")
+        } catch {
+          // Ignore localStorage failures in hardened browser contexts.
+        }
+        try {
+          const originalFetch = window.fetch.bind(window)
+          const mockedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url =
+              typeof input === "string"
+                ? input
+                : input instanceof Request
+                  ? input.url
+                  : String(input)
+            if (/\/api\/v1\/media\/(add|process-web-scraping)\/?(?:\?|$)/i.test(url)) {
+              return new Response(
+                JSON.stringify({
+                  media_id: "qi-web-mock-media-id",
+                  title: "Quick ingest web E2E"
+                }),
+                {
+                  status: 200,
+                  headers: {
+                    "Content-Type": "application/json"
+                  }
+                }
+              )
+            }
+            return originalFetch(input, init)
+          }
+          window.fetch = mockedFetch
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ;(globalThis as any).fetch = mockedFetch
+        } catch {
+          // Ignore fetch monkeypatch failures in constrained browser contexts.
+        }
+      }, {
+        serverUrl: TEST_CONFIG.serverUrl,
+        apiKey: TEST_CONFIG.apiKey
+      })
+
+      await authedPage.goto("/setup", { waitUntil: "domcontentloaded" })
+      await waitForConnection(authedPage)
+      await authedPage
+        .getByTestId("onboarding-connect")
+        .evaluate((el: HTMLElement) => el.click())
+      await expect(authedPage.getByTestId("onboarding-success-screen")).toBeVisible({
+        timeout: 30000
+      })
+      await authedPage
+        .getByTestId("onboarding-success-ingest")
+        .evaluate((el: HTMLElement) => el.click())
+
+      await expect(authedPage).toHaveURL(/\/(?:[?#].*)?$/, {
+        timeout: 30000
+      })
+
+      const modal = authedPage
+        .getByRole("dialog", { name: /quick ingest/i })
+        .first()
+      await expect(modal).toBeVisible({ timeout: 30000 })
+
+      const urlsInput = modal.locator("#quick-ingest-url-input")
+      await expect(urlsInput).toBeVisible({ timeout: 20000 })
+
+      const ingestUrl = `http://127.0.0.1:1/qi-web-e2e-${generateTestId("quick-ingest-web")}`
+      await urlsInput.fill(ingestUrl)
+
+      const inspectorDialog = authedPage.getByRole("dialog", { name: /^inspector$/i })
+      if (await inspectorDialog.isVisible().catch(() => false)) {
+        const dismissInspector = inspectorDialog
+          .getByRole("button", { name: /got it|close/i })
+          .first()
+        if (await dismissInspector.isVisible().catch(() => false)) {
+          await dismissInspector.evaluate((el: HTMLElement) => el.click())
+          await expect(inspectorDialog).toBeHidden({ timeout: 10000 })
+        }
+      }
+
+      const addUrlsButton = modal.getByRole("button", { name: /add urls/i })
+      await expect(addUrlsButton).toBeEnabled({ timeout: 15000 })
+      await addUrlsButton.evaluate((el: HTMLElement) => el.click())
+
+      await expect
+        .poll(async () => {
+          const sourceValues = await modal
+            .getByRole("textbox", { name: /source url/i })
+            .evaluateAll((elements) =>
+              elements.map((el) =>
+                (el as HTMLInputElement)?.value?.trim() || ""
+              )
+            )
+          return sourceValues.includes(ingestUrl)
+        }, { timeout: 15000 })
+        .toBeTruthy()
+
+      const runButton = modal.locator('[data-testid="quick-ingest-run"]')
+      await expect(runButton).toBeVisible({ timeout: 20000 })
+      await expect(runButton).toBeEnabled({ timeout: 30000 })
+      await runButton.evaluate((el: HTMLElement) => el.click())
+
+      const resultsTab = modal.locator("#quick-ingest-tab-results")
+      await expect(resultsTab).toBeVisible({ timeout: 60000 })
+      await resultsTab.evaluate((el: HTMLElement) => el.click())
+
+      const completionCard = modal.locator('[data-testid="quick-ingest-complete"]')
+      await expect(completionCard).toBeVisible({ timeout: 120000 })
+      await expect(completionCard).toContainText(/quick ingest completed/i)
 
       await assertNoCriticalErrors(diagnostics)
     })

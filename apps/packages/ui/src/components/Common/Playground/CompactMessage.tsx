@@ -31,7 +31,9 @@ import { cn } from "@/libs/utils"
 import { translateMessage } from "@/i18n/translateMessage"
 import { useStorage } from "@plasmohq/storage/hook"
 import type { Character } from "@/types/character"
+import type { FeedbackThumb } from "@/store/feedback"
 import type { Source, GenerationInfo } from "./types"
+import { FeedbackButtons } from "@/components/Sidepanel/Chat/FeedbackButtons"
 
 const Markdown = React.lazy(() => import("../../Common/Markdown"))
 
@@ -66,6 +68,15 @@ interface CompactMessageProps {
   onDelete?: () => void | Promise<void>
   characterIdentity?: Character | null
   characterIdentityEnabled?: boolean
+  showFeedbackControls?: boolean
+  feedbackSelected?: FeedbackThumb
+  feedbackDisabled?: boolean
+  feedbackDisabledReason?: string
+  isFeedbackSubmitting?: boolean
+  showThanks?: boolean
+  onThumbUp?: () => void
+  onThumbDown?: () => void
+  onOpenDetails?: () => void
 }
 
 /**
@@ -103,6 +114,15 @@ export function CompactMessage({
   onDelete,
   characterIdentity,
   characterIdentityEnabled = false,
+  showFeedbackControls = false,
+  feedbackSelected,
+  feedbackDisabled = false,
+  feedbackDisabledReason = "",
+  isFeedbackSubmitting = false,
+  showThanks = false,
+  onThumbUp,
+  onThumbDown,
+  onOpenDetails,
 }: CompactMessageProps) {
   const { t, i18n } = useTranslation(["common", "playground"])
   const [copied, setCopied] = useState(false)
@@ -122,6 +142,7 @@ export function CompactMessage({
   const actionBarVisibility = isProMode
     ? "opacity-100"
     : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+  const showLeftFeedback = !editMode && showFeedbackControls
 
   // Keep edited text in sync with message prop when not actively editing
   useEffect(() => {
@@ -494,6 +515,7 @@ export function CompactMessage({
                         key={idx}
                         message={block.content}
                         searchQuery={searchQuery}
+                        codeBlockVariant="github"
                       />
                     )
                   })}
@@ -580,98 +602,118 @@ export function CompactMessage({
           )}
 
           {/* Action buttons (hover reveal in Casual, always visible in Pro) */}
-          <div className={`mt-2 flex items-center gap-1 transition-opacity ${actionBarVisibility}`}>
-            {/* Copy */}
-            <Tooltip title={copied ? t("common:copied", "Copied!") : t("common:copy", "Copy")}>
-              <button
-                onClick={handleCopy}
-                aria-label={copied ? t("common:copied", "Copied!") : t("common:copy", "Copy")}
-                className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
-              >
-                {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
-              </button>
-            </Tooltip>
+          <div
+            className={`mt-2 flex items-start gap-2 transition-opacity ${actionBarVisibility} ${
+              showLeftFeedback ? "justify-between" : "justify-end"
+            }`}>
+            {showLeftFeedback && (
+              <FeedbackButtons
+                compact
+                selected={feedbackSelected}
+                disabled={feedbackDisabled}
+                disabledReason={feedbackDisabledReason}
+                isSubmitting={isFeedbackSubmitting}
+                onThumbUp={onThumbUp}
+                onThumbDown={onThumbDown}
+                onOpenDetails={onOpenDetails}
+                showThanks={showThanks}
+                className="mr-auto"
+              />
+            )}
 
-            {/* Edit (user messages only) */}
-            {!isBot && onEditFormSubmit && (
-              <Tooltip title={t("common:edit", "Edit")}>
+            <div className="ml-auto flex items-center gap-1">
+              {/* Copy */}
+              <Tooltip title={copied ? t("common:copied", "Copied!") : t("common:copy", "Copy")}>
                 <button
-                  onClick={() => {
-                    setEditedText(message)
-                    setEditMode(true)
-                  }}
-                  aria-label={t("common:edit", "Edit")}
+                  onClick={handleCopy}
+                  aria-label={copied ? t("common:copied", "Copied!") : t("common:copy", "Copy")}
                   className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
                 >
-                  <Edit3 className="size-3.5" />
+                  {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
                 </button>
               </Tooltip>
-            )}
 
-            {/* Regenerate (bot messages only) */}
-            {isBot && onRegenerate && !isStreaming && (
-              <Tooltip title={t("common:regenerate", "Regenerate")}>
-                <button
-                  onClick={onRegenerate}
-                  aria-label={t("common:regenerate", "Regenerate")}
-                  className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
-                >
-                  <RotateCcw className="size-3.5" />
-                </button>
-              </Tooltip>
-            )}
+              {/* Edit (user messages only) */}
+              {!isBot && onEditFormSubmit && (
+                <Tooltip title={t("common:edit", "Edit")}>
+                  <button
+                    onClick={() => {
+                      setEditedText(message)
+                      setEditMode(true)
+                    }}
+                    aria-label={t("common:edit", "Edit")}
+                    className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
+                  >
+                    <Edit3 className="size-3.5" />
+                  </button>
+                </Tooltip>
+              )}
 
-            {/* TTS */}
-            {isBot && isTTSEnabled && (
-              <Tooltip title={isSpeaking ? t("common:stop", "Stop") : t("common:speak", "Speak")}>
-                <button
-                  onClick={handleSpeak}
-                  aria-label={isSpeaking ? t("common:stop", "Stop") : t("common:speak", "Speak")}
-                  className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
-                >
-                  {isSpeaking ? <Square className="size-3.5" /> : <Volume2 className="size-3.5" />}
-                </button>
-              </Tooltip>
-            )}
+              {/* Regenerate (bot messages only) */}
+              {isBot && onRegenerate && !isStreaming && (
+                <Tooltip title={t("common:regenerate", "Regenerate")}>
+                  <button
+                    onClick={onRegenerate}
+                    aria-label={t("common:regenerate", "Regenerate")}
+                    className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
+                  >
+                    <RotateCcw className="size-3.5" />
+                  </button>
+                </Tooltip>
+              )}
 
-            {/* Branch */}
-            {onNewBranch && (
-              <Tooltip title={t("common:branch", "Create branch")}>
-                <button
-                  onClick={onNewBranch}
-                  aria-label={t("common:branch", "Create branch")}
-                  className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
-                >
-                  <GitBranch className="size-3.5" />
-                </button>
-              </Tooltip>
-            )}
+              {/* TTS */}
+              {isBot && isTTSEnabled && (
+                <Tooltip title={isSpeaking ? t("common:stop", "Stop") : t("common:speak", "Speak")}>
+                  <button
+                    onClick={handleSpeak}
+                    aria-label={isSpeaking ? t("common:stop", "Stop") : t("common:speak", "Speak")}
+                    className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
+                  >
+                    {isSpeaking ? <Square className="size-3.5" /> : <Volume2 className="size-3.5" />}
+                  </button>
+                </Tooltip>
+              )}
 
-            {/* Stop streaming */}
-            {isBot && isStreaming && onStopStreaming && (
-              <Tooltip title={t("common:stop", "Stop")}>
-                <button
-                  onClick={onStopStreaming}
-                  aria-label={t("common:stop", "Stop")}
-                  className="rounded p-1 text-danger hover:bg-surface2"
-                >
-                  <Square className="size-3.5" />
-                </button>
-              </Tooltip>
-            )}
+              {/* Branch */}
+              {onNewBranch && (
+                <Tooltip title={t("common:branch", "Create branch")}>
+                  <button
+                    onClick={onNewBranch}
+                    aria-label={t("common:branch", "Create branch")}
+                    className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
+                  >
+                    <GitBranch className="size-3.5" />
+                  </button>
+                </Tooltip>
+              )}
 
-            {/* Delete */}
-            {onDelete && (
-              <Tooltip title={t("common:delete", "Delete")}>
-                <button
-                  onClick={handleDelete}
-                  aria-label={t("common:delete", "Delete")}
-                  className="rounded p-1 text-danger hover:bg-surface2"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              </Tooltip>
-            )}
+              {/* Stop streaming */}
+              {isBot && isStreaming && onStopStreaming && (
+                <Tooltip title={t("common:stop", "Stop")}>
+                  <button
+                    onClick={onStopStreaming}
+                    aria-label={t("common:stop", "Stop")}
+                    className="rounded p-1 text-danger hover:bg-surface2"
+                  >
+                    <Square className="size-3.5" />
+                  </button>
+                </Tooltip>
+              )}
+
+              {/* Delete */}
+              {onDelete && (
+                <Tooltip title={t("common:delete", "Delete")}>
+                  <button
+                    onClick={handleDelete}
+                    aria-label={t("common:delete", "Delete")}
+                    className="rounded p-1 text-danger hover:bg-surface2"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </Tooltip>
+              )}
+            </div>
           </div>
         </div>
       </div>

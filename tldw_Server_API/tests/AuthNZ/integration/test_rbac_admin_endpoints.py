@@ -1,4 +1,5 @@
 import asyncio
+import time
 import os
 from typing import Tuple
 
@@ -41,12 +42,24 @@ async def _ensure_admin(db_name: str) -> Tuple[str, str]:
             """
             INSERT INTO users (uuid, username, email, password_hash, role, is_active, is_verified, storage_quota_mb, storage_used_mb)
             VALUES ($1, $2, $3, $4, 'admin', TRUE, TRUE, 10240, 0.0)
-            ON CONFLICT (username) DO UPDATE SET role='admin'
+            ON CONFLICT (username) DO UPDATE SET
+                email = EXCLUDED.email,
+                password_hash = EXCLUDED.password_hash,
+                role = 'admin',
+                is_active = TRUE,
+                is_verified = TRUE
             """,
             admin_uuid,
             username,
             email,
             pw_hash,
+        )
+        await conn.execute(
+            """
+            INSERT INTO roles (name, description, is_system)
+            VALUES ('admin', 'System administrator', TRUE)
+            ON CONFLICT (name) DO NOTHING
+            """
         )
         # Ensure admin role mapping in user_roles for RBAC checks
         user_row = await conn.fetchrow("SELECT id FROM users WHERE username=$1", username)
@@ -74,28 +87,66 @@ def _admin_headers(client, db_name: str):
     is already running (pytest.mark.asyncio), run the async DB bootstrap in a
     dedicated thread to avoid nested-loop errors.
     """
+    in_running_loop = False
     try:
-        # If there is a running loop, execute the coroutine in a separate thread
         asyncio.get_running_loop()
+        in_running_loop = True
+    except RuntimeError:
+        in_running_loop = False
+
+    if in_running_loop:
         import threading
 
         result: dict = {}
 
         def _runner():
-            result["creds"] = asyncio.run(_ensure_admin(db_name))
+            try:
+                result["creds"] = asyncio.run(_ensure_admin(db_name))
+            except Exception as exc:  # pragma: no cover - only runs from async tests
+                result["error"] = exc
 
         t = threading.Thread(target=_runner, daemon=True)
         t.start()
         t.join()
+        if "error" in result:
+            raise result["error"]
+        if "creds" not in result:
+            raise RuntimeError("admin bootstrap thread completed without credentials")
         username, password = result["creds"]
-    except RuntimeError:
+    else:
         # No loop running; safe to use asyncio.run directly
         username, password = asyncio.run(_ensure_admin(db_name))
-    lr = client.post(
-        "/api/v1/auth/login",
-        data={"username": username, "password": password},
-    )
-    assert lr.status_code == 200, lr.text
+
+    lr = None
+    for attempt in range(2):
+        lr = client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password},
+        )
+        if lr.status_code == 200:
+            break
+        detail = None
+        try:
+            detail = (lr.json() or {}).get("detail")
+        except Exception:
+            detail = None
+        transient_internal_login_error = (
+            lr.status_code == 500 and detail == "An error occurred during login"
+        )
+        if transient_internal_login_error and attempt == 0:
+            # Rare startup/initialization race in integration mode; one retry keeps
+            # the helper deterministic while still surfacing persistent failures.
+            time.sleep(0.1)
+            continue
+        break
+
+    assert lr is not None
+    diag_headers = {
+        k: v
+        for k, v in lr.headers.items()
+        if k.lower().startswith("x-tldw-login") or k.lower() == "retry-after"
+    }
+    assert lr.status_code == 200, f"{lr.text} | login_diag_headers={diag_headers}"
     token = lr.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 

@@ -32,8 +32,8 @@ from loguru import logger
 
 from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.testing import is_truthy
 
-_TRUTHY = {"1", "true", "yes", "y", "on"}
 _DEFAULT_RETENTION_DAYS: dict[str, int] = {
     "completed": 30,
     "failed": 60,
@@ -63,7 +63,7 @@ def _raw_setting(env_name: str, config_key: str, default: str | None = None) -> 
 def _is_truthy(val: str | None) -> bool:
     if val is None:
         return False
-    return str(val).strip().lower() in _TRUTHY
+    return is_truthy(str(val).strip().lower())
 
 
 def _int_optional(env_name: str, config_key: str) -> int | None:

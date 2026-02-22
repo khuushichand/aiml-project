@@ -22,7 +22,7 @@ def test_runtime_overrides_parse_false_string():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -52,4 +52,4 @@ def test_runtime_overrides_ignore_invalid_string():
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None

@@ -1,10 +1,7 @@
 import pytest
 from unittest.mock import patch
 
-from tldw_Server_API.app.core.LLM_Calls.local_chat_calls import (
-    chat_with_custom_openai,
-    chat_with_custom_openai_2,
-)
+from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 from tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter import CustomOpenAIAdapter2
 
 
@@ -36,8 +33,9 @@ def test_custom_openai_handler_accepts_topp(monkeypatch):
         "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.http_client_factory",
         lambda *a, **k: FakeClient(),
     ):
-        chat_with_custom_openai(
-            input_data=[{"role": "user", "content": "ping"}],
+        perform_chat_api_call(
+            api_provider="custom-openai-api",
+            messages=[{"role": "user", "content": "ping"}],
             api_key="test-key",
             model="test-model",
             topp=0.33,
@@ -74,8 +72,9 @@ def test_custom_openai_handler_prefers_maxp_when_both_provided(monkeypatch):
         "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.http_client_factory",
         lambda *a, **k: FakeClient(),
     ):
-        chat_with_custom_openai(
-            input_data=[{"role": "user", "content": "ping"}],
+        perform_chat_api_call(
+            api_provider="custom-openai-api",
+            messages=[{"role": "user", "content": "ping"}],
             api_key="test-key",
             model="test-model",
             topp=0.12,
@@ -113,8 +112,9 @@ def test_custom_openai_2_handler_accepts_topp(monkeypatch):
         "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.http_client_factory",
         lambda *a, **k: FakeClient(),
     ):
-        chat_with_custom_openai_2(
-            input_data=[{"role": "user", "content": "ping"}],
+        perform_chat_api_call(
+            api_provider="custom-openai-api-2",
+            messages=[{"role": "user", "content": "ping"}],
             api_key="key-2",
             model="model-2",
             topp=0.27,

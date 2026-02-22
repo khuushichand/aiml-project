@@ -42,7 +42,10 @@ export const createSaveMessageOnSuccess = (
 ) => {
   return async (e: any): Promise<string | null> => {
     if (!temporaryChat) {
-      return await saveSuccess(e)
+      return await saveSuccess({
+        ...e,
+        setHistoryId: e?.setHistoryId ?? setHistoryId
+      })
     } else {
       setHistoryId("temp")
       return null
@@ -58,22 +61,34 @@ export const createSaveMessageOnError = (
 ) => {
   return async (e: any): Promise<string | null> => {
     if (!temporaryChat) {
-      return await saveError(e)
+      return await saveError({
+        ...e,
+        history: e?.history ?? history,
+        setHistory: e?.setHistory ?? setHistory,
+        setHistoryId: e?.setHistoryId ?? setHistoryId
+      })
     } else {
-      setHistory([
-        ...history,
+      const historyToUpdate = Array.isArray(e?.history) ? e.history : history
+      const setHistoryTarget =
+        typeof e?.setHistory === "function" ? e.setHistory : setHistory
+      const setHistoryIdTarget =
+        typeof e?.setHistoryId === "function" ? e.setHistoryId : setHistoryId
+      setHistoryTarget([
+        ...historyToUpdate,
         {
           role: "user",
           content: e.userMessage,
-          image: e.image
+          image: e.image,
+          messageType: e.userMessageType ?? e.message_type
         },
         {
           role: "assistant",
-          content: e.botMessage
+          content: e.botMessage,
+          messageType: e.assistantMessageType ?? e.message_type
         }
       ])
 
-      setHistoryId("temp")
+      setHistoryIdTarget("temp")
       return null
     }
   }

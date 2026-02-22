@@ -78,6 +78,14 @@ class OpenAISpeechRequest(BaseModel):
         default=True,  # Default to streaming for OpenAI compatibility
         description="If true (default), audio will be streamed as it's generated. Each chunk will be a complete sentence.",
     )
+    target_sample_rate: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional target sample rate (Hz) for generated audio. The server honors this when "
+            "the selected provider/adapter supports sample-rate control."
+        ),
+    )
     return_download_link: bool = Field(
         default=False,
         description="If true, returns a download link in X-Download-Path header after streaming completes",

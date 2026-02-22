@@ -21,10 +21,12 @@ import {
 import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
+import { useNavigate } from "react-router-dom"
 import { DOCUMENTATION_URL } from "@/config/constants"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { tldwAuth } from "@/services/tldw/TldwAuth"
 import { mapMultiUserLoginErrorMessage } from "@/services/auth-errors"
+import { emitSplashAfterSingleUserAuthSuccess } from "@/services/splash-auth"
 import {
   getTldwServerURL,
   DEFAULT_TLDW_API_KEY,
@@ -33,14 +35,18 @@ import {
 import {
   useConnectionState,
   useConnectionActions,
-  useConnectionUxState,
 } from "@/hooks/useConnectionState"
 import { useConnectionStore } from "@/store/connection"
 import { useDemoMode } from "@/context/demo-mode"
 import { openSidepanelForActiveTab } from "@/utils/sidepanel"
 import { requestOptionalHostPermission } from "@/utils/extension-permissions"
+import { useQuickIngestStore } from "@/store/quick-ingest"
 import { cn } from "@/libs/utils"
 import { getProviderDisplayName, normalizeProviderKey } from "@/utils/provider-registry"
+import {
+  trackOnboardingFirstIngestSuccess,
+  trackOnboardingSuccessReached
+} from "@/utils/onboarding-ingestion-telemetry"
 import {
   validateApiKey,
   validateMultiUserAuth,
@@ -157,6 +163,8 @@ interface Props {
   onFinish?: () => void
 }
 
+const QUICK_INGEST_OPEN_DELAY_MS = 120
+
 /**
  * Single-step onboarding form for the new UX redesign.
  * Features:
@@ -167,11 +175,13 @@ interface Props {
  */
 export function OnboardingConnectForm({ onFinish }: Props) {
   const { t } = useTranslation(["settings", "common"])
+  const navigate = useNavigate()
   const { setDemoEnabled } = useDemoMode()
   const connectionState = useConnectionState()
-  const { uxState } = useConnectionUxState()
   const actions = useConnectionActions()
   const hostPermissionPromptKeyRef = useRef<string | null>(null)
+  const hasTrackedOnboardingSuccessRef = useRef(false)
+  const hasTrackedFirstIngestRef = useRef(false)
 
   // Form state
   const [serverUrl, setServerUrl] = useState("")
@@ -415,6 +425,11 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           "settings:onboarding.errors.timeout",
           "Connection timed out. The server may be slow or unreachable."
         )
+      case "cors_blocked":
+        return t(
+          "settings:onboarding.errors.cors",
+          "Browser blocked the request (CORS). Add this app origin to ALLOWED_ORIGINS on your server, or disable CORS for local development."
+        )
       case "ssl_error":
         return t(
           "settings:onboarding.errors.ssl",
@@ -559,6 +574,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
       try {
         await actions.testConnectionFromOnboarding()
+        const latestConnection = useConnectionStore.getState().state
+        emitSplashAfterSingleUserAuthSuccess(authMode, latestConnection.isConnected)
       } catch (error) {
         // If full connection test fails, reflect auth error if we're still in that phase
         dispatchUi({
@@ -719,15 +736,54 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     onFinish?.()
   }, [setDemoEnabled, actions, onFinish])
 
-  // Handle finish
-  const handleFinish = useCallback(async () => {
+  const finalizeOnboarding = useCallback(async (invokeOnFinish: boolean) => {
     try {
       await actions.markFirstRunComplete()
     } catch {
       // ignore persistence errors; UI has already completed onboarding
     }
-    onFinish?.()
+    if (invokeOnFinish) {
+      onFinish?.()
+    }
   }, [actions, onFinish])
+
+  const completeOnboarding = useCallback(async () => {
+    await finalizeOnboarding(true)
+  }, [finalizeOnboarding])
+
+  const finishAndNavigate = useCallback(
+    async (path: string, options?: { openQuickIngestIntro?: boolean }) => {
+      await finalizeOnboarding(false)
+      navigate(path)
+      if (options?.openQuickIngestIntro && typeof window !== "undefined") {
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest-intro"))
+        }, QUICK_INGEST_OPEN_DELAY_MS)
+      }
+    },
+    [finalizeOnboarding, navigate]
+  )
+
+  const handleOpenIngestFlow = useCallback(async () => {
+    await finishAndNavigate("/", { openQuickIngestIntro: true })
+  }, [finishAndNavigate])
+
+  const handleOpenMediaFlow = useCallback(async () => {
+    await finishAndNavigate("/media")
+  }, [finishAndNavigate])
+
+  const handleOpenChatFlow = useCallback(async () => {
+    try {
+      await openSidepanelForActiveTab()
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] Failed to open sidepanel", err)
+    }
+    await finishAndNavigate("/chat")
+  }, [finishAndNavigate])
+
+  const handleOpenSettingsFlow = useCallback(async () => {
+    await finishAndNavigate("/settings/tldw")
+  }, [finishAndNavigate])
 
   // Copy server command
   const handleCopyCommand = useCallback(
@@ -750,22 +806,80 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     window.open(DOCUMENTATION_URL, "_blank", "noopener,noreferrer")
   }, [])
 
+  const quickIngestLastRun = useQuickIngestStore((s) => s.lastRunSummary)
+  const hasSuccessfulIngest =
+    quickIngestLastRun.status === "success" && quickIngestLastRun.successCount > 0
+  const hasFailedIngest = quickIngestLastRun.status === "error"
+  const shouldPrioritizeMedia = hasSuccessfulIngest
+  const primarySourcePreview = useMemo(() => {
+    const label = quickIngestLastRun.primarySourceLabel
+    if (!label) return null
+    return label.length > 68 ? `${label.slice(0, 65)}...` : label
+  }, [quickIngestLastRun.primarySourceLabel])
+
+  useEffect(() => {
+    if (!showSuccess) {
+      hasTrackedOnboardingSuccessRef.current = false
+      hasTrackedFirstIngestRef.current = false
+      return
+    }
+    if (hasTrackedOnboardingSuccessRef.current) return
+    hasTrackedOnboardingSuccessRef.current = true
+    void trackOnboardingSuccessReached("setup")
+  }, [showSuccess])
+
+  useEffect(() => {
+    if (!showSuccess || !hasSuccessfulIngest) return
+    if (hasTrackedFirstIngestRef.current) return
+    hasTrackedFirstIngestRef.current = true
+    void trackOnboardingFirstIngestSuccess({
+      successCount: quickIngestLastRun.successCount,
+      attemptedAt: quickIngestLastRun.attemptedAt,
+      firstMediaId: quickIngestLastRun.firstMediaId,
+      primarySourceLabel: quickIngestLastRun.primarySourceLabel
+    })
+  }, [
+    quickIngestLastRun.attemptedAt,
+    hasSuccessfulIngest,
+    quickIngestLastRun.firstMediaId,
+    quickIngestLastRun.primarySourceLabel,
+    quickIngestLastRun.successCount,
+    showSuccess
+  ])
+
   // Success screen
   if (showSuccess) {
     return (
-      <div className="mx-auto w-full max-w-2xl rounded-3xl border border-border/70 bg-surface/95 p-8 shadow-lg shadow-black/5 backdrop-blur">
+      <div
+        className="mx-auto w-full max-w-2xl rounded-3xl border border-border/70 bg-surface/95 p-8 shadow-lg shadow-black/5 backdrop-blur"
+        data-testid="onboarding-success-screen"
+        data-ingest-status={quickIngestLastRun.status}
+      >
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-success/10">
             <Check className="size-7 text-success" />
           </div>
           <h2 className="text-2xl font-semibold text-text tracking-tight">
-            {t("settings:onboarding.success.title", "You're connected!")}
+            {hasSuccessfulIngest
+              ? t(
+                  "settings:onboarding.success.titlePostIngest",
+                  "Connected and ingest is working. Continue to verification."
+                )
+              : t(
+                  "settings:onboarding.success.title",
+                  "You're connected. Start by ingesting one source."
+                )}
           </h2>
           <p className="mt-2 text-sm text-text-muted">
-            {t(
-              "settings:onboarding.success.subtitle",
-              "Your tldw server is ready. What would you like to do first?"
-            )}
+            {hasSuccessfulIngest
+              ? t(
+                  "settings:onboarding.success.subtitlePostIngest",
+                  "Great start. Next, verify the result in Media, then ask Chat for a summary."
+                )
+              : t(
+                  "settings:onboarding.success.subtitle",
+                  "Follow this sequence to complete your first-value loop: ingest -> verify -> ask."
+                )}
           </p>
         </div>
 
@@ -860,47 +974,178 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           )}
         </div>
 
+        <div className="mb-4 rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+            {t("settings:onboarding.success.guidedFlow", "Recommended first run")}
+          </div>
+          <ol className="mt-1 space-y-1 text-xs text-text-muted">
+            <li>
+              {hasSuccessfulIngest
+                ? t(
+                    "settings:onboarding.success.guidedFlowIngestDone",
+                    "1. Ingest one URL, document, or recording. Completed."
+                  )
+                : t(
+                    "settings:onboarding.success.guidedFlowIngest",
+                    "1. Ingest one URL, document, or recording."
+                  )}
+            </li>
+            <li>
+              {t(
+                "settings:onboarding.success.guidedFlowVerify",
+                "2. Verify it appears in Media."
+              )}
+            </li>
+            <li>
+              {t(
+                "settings:onboarding.success.guidedFlowChat",
+                "3. Ask Chat to summarize or analyze it."
+              )}
+            </li>
+          </ol>
+        </div>
+
         <div className="grid gap-4">
           <button
-            onClick={async () => {
-              try {
-                await openSidepanelForActiveTab()
-              } catch (err) {
-                console.debug(
-                  "[OnboardingConnectForm] Failed to open sidepanel",
-                  err
-                )
-                message.warning(
-                  t(
-                    "settings:onboarding.success.sidepanelOpenFailed",
-                    "Could not open sidepanel automatically. Please try opening it manually from the extension icon."
-                  )
-                )
-              }
-              handleFinish()
-            }}
-            className="flex items-center gap-3 rounded-2xl border border-border/70 bg-surface p-4 text-left transition-colors hover:bg-surface2"
+            onClick={handleOpenIngestFlow}
+            className={cn(
+              "flex items-center gap-3 rounded-2xl border p-4 text-left transition-colors",
+              shouldPrioritizeMedia
+                ? "border-border/70 bg-surface hover:bg-surface2"
+                : "border-primary/40 bg-primary/5 hover:bg-primary/10"
+            )}
+            data-testid="onboarding-success-ingest"
           >
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent/10">
-              <Sparkles className="size-5 text-accent" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+              <Server className="size-5 text-primary" />
             </div>
             <div className="flex-1">
               <div className="font-medium text-text">
-                {t("settings:onboarding.success.chat", "Start chatting")}
+                {hasSuccessfulIngest
+                  ? t(
+                      "settings:onboarding.success.ingestAgain",
+                      "Ingest another source"
+                    )
+                  : hasFailedIngest
+                    ? t(
+                        "settings:onboarding.success.ingestRetry",
+                        "Retry ingest"
+                      )
+                    : t(
+                        "settings:onboarding.success.ingest",
+                        "Ingest first source"
+                      )}
               </div>
               <div className="text-xs text-text-subtle">
-                {t(
-                  "settings:onboarding.success.chatDesc",
-                  "Open the sidepanel and ask your first question"
-                )}
+                {hasSuccessfulIngest && primarySourcePreview
+                  ? t(
+                      "settings:onboarding.success.ingestDescWithSource",
+                      "Last successful source: {{source}}",
+                      { source: primarySourcePreview }
+                    )
+                  : hasSuccessfulIngest
+                    ? t(
+                        "settings:onboarding.success.ingestDescAfterSuccess",
+                        "Your latest run succeeded. Add more sources any time."
+                      )
+                    : hasFailedIngest
+                      ? t(
+                          "settings:onboarding.success.ingestDescRetry",
+                          "Latest ingest run failed. Reopen Quick Ingest and try again."
+                        )
+                      : t(
+                          "settings:onboarding.success.ingestDesc",
+                          "Open Quick Ingest and add your first URL, file, or recording."
+                        )}
+              </div>
+            </div>
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                hasSuccessfulIngest
+                  ? "bg-success/15 text-success"
+                  : hasFailedIngest
+                    ? "bg-warning/20 text-warning"
+                    : "bg-primary/15 text-primary"
+              )}
+              data-testid="onboarding-ingest-status"
+            >
+              {hasSuccessfulIngest
+                ? t("settings:onboarding.success.stateCompleted", "Completed")
+                : hasFailedIngest
+                  ? t("settings:onboarding.success.stateRetry", "Retry")
+                  : t("settings:onboarding.success.stateStart", "Start")}
+            </span>
+            <ArrowRight className="size-4 text-text-subtle" />
+          </button>
+
+          <button
+            onClick={handleOpenMediaFlow}
+            className={cn(
+              "flex items-center gap-3 rounded-2xl border p-4 text-left transition-colors",
+              shouldPrioritizeMedia
+                ? "border-primary/40 bg-primary/5 hover:bg-primary/10"
+                : "border-border/70 bg-surface hover:bg-surface2"
+            )}
+            data-testid="onboarding-success-media"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+              <Server className="size-5 text-primary" />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-text">
+                {t("settings:onboarding.success.media", "Verify in Media")}
+              </div>
+              <div className="text-xs text-text-subtle">
+                {hasSuccessfulIngest
+                  ? t(
+                      "settings:onboarding.success.mediaDescReady",
+                      "You have {{count}} successful item(s). Confirm they are ready to review.",
+                      { count: quickIngestLastRun.successCount }
+                    )
+                  : t(
+                      "settings:onboarding.success.mediaDesc",
+                      "Confirm your ingested source appears and is ready to review."
+                    )}
               </div>
             </div>
             <ArrowRight className="size-4 text-text-subtle" />
           </button>
 
           <button
-            onClick={handleFinish}
+            onClick={handleOpenChatFlow}
+            className={cn(
+              "flex items-center gap-3 rounded-2xl border border-border/70 bg-surface p-4 text-left transition-colors hover:bg-surface2",
+              hasSuccessfulIngest ? "ring-1 ring-transparent" : ""
+            )}
+            data-testid="onboarding-success-chat"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent/10">
+              <Sparkles className="size-5 text-accent" />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-text">
+                {t("settings:onboarding.success.chat", "Ask in Chat")}
+              </div>
+              <div className="text-xs text-text-subtle">
+                {hasSuccessfulIngest
+                  ? t(
+                      "settings:onboarding.success.chatDescAfterIngest",
+                      "Use Chat to summarize or analyze what you just ingested."
+                    )
+                  : t(
+                      "settings:onboarding.success.chatDesc",
+                      "Use chat to summarize, extract action items, or query your ingested source."
+                    )}
+              </div>
+            </div>
+            <ArrowRight className="size-4 text-text-subtle" />
+          </button>
+
+          <button
+            onClick={handleOpenSettingsFlow}
             className="flex items-center gap-3 rounded-2xl border border-border/70 bg-surface p-4 text-left transition-colors hover:bg-surface2"
+            data-testid="onboarding-success-settings"
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
               <Server className="size-5 text-primary" />
@@ -912,7 +1157,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               <div className="text-xs text-text-subtle">
                 {t(
                   "settings:onboarding.success.exploreDesc",
-                  "Configure models, prompts, and more"
+                  "Adjust models, prompts, and workspace defaults."
                 )}
               </div>
             </div>
@@ -922,7 +1167,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
         <div className="mt-6 text-center">
           <button
-            onClick={handleFinish}
+            onClick={completeOnboarding}
             className="text-sm text-text-subtle hover:text-text"
           >
             {t("common:done", "Done")}
@@ -949,11 +1194,11 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
       {/* Demo Mode - Prominent placement for users without a server */}
       <div className="mb-6 rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-accent/10 to-surface p-5">
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-white shadow-sm shadow-primary/20">
             <Sparkles className="size-5" />
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="min-w-0 sm:flex-1">
             <h3 className="font-medium text-text">
               {t("settings:onboarding.demo.titleNoServer", "No server? Try Demo Mode")}
             </h3>
@@ -967,7 +1212,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           <Button
             type="primary"
             onClick={handleDemoMode}
-            className="shrink-0 rounded-full border-0 bg-primary px-4 font-medium text-white hover:bg-primaryStrong"
+            className="w-full rounded-full border-0 bg-primary px-4 font-medium text-white hover:bg-primaryStrong sm:w-auto"
           >
             {t("settings:onboarding.demo.buttonTry", "Try Demo")}
           </Button>
@@ -996,6 +1241,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           <div className="relative">
             <Input
               ref={urlInputRef}
+              data-testid="onboarding-server-url"
               placeholder={t(
                 "settings:onboarding.serverUrl.placeholder",
                 "http://127.0.0.1:8000"
@@ -1044,7 +1290,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             </p>
           )}
           {serverUrl && urlValidation.valid && !isConnecting && progress.serverReachable === "idle" && (
-            <p className="mt-1 text-xs text-success">
+            <p className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-text">
+              <Check className="size-3.5 text-success" aria-hidden="true" />
               {t("settings:onboarding.serverUrl.validUrl", "URL format is valid. Click Connect to test the connection.")}
             </p>
           )}
@@ -1095,6 +1342,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
               {t("settings:onboarding.apiKey.label", "API Key")}
             </label>
             <Input.Password
+              data-testid="onboarding-api-key"
               placeholder={t(
                 "settings:onboarding.apiKey.placeholder",
                 "Enter your API key"
@@ -1402,6 +1650,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           size="large"
           block
           onClick={handleConnect}
+          data-testid="onboarding-connect"
           disabled={!urlValidation.valid || isConnecting}
           loading={isConnecting}
           icon={isConnecting ? undefined : <ArrowRight className="size-4" />}
@@ -1499,8 +1748,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       {/* Skip link */}
       <div className="mt-6 text-center">
         <button
-          onClick={handleFinish}
-          className="text-sm text-text-subtle hover:text-text"
+          onClick={completeOnboarding}
+          className="text-sm text-text-muted underline decoration-text-muted/80 underline-offset-4 transition-colors hover:text-text"
         >
           {t("settings:onboarding.buttons.skip", "Skip for now")}
         </button>

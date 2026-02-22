@@ -24,7 +24,7 @@ except Exception:
             if not loop.is_running():
                 return loop.run_until_complete(coro)  # type: ignore[misc]
         except RuntimeError:
-            pass
+            _ = None
         return _asyncio.run(coro)
 
     @pytest.fixture
@@ -40,14 +40,14 @@ except Exception:
             _run_async(_reset_db_pool())
             _reset_settings()
         except Exception:
-            pass
+            _ = None
         try:
             from tldw_Server_API.app.core.AuthNZ.initialize import (
                 ensure_authnz_schema_ready_once as _ensure_once,
             )
             _run_async(_ensure_once())
         except Exception:
-            pass
+            _ = None
         return None
 
     try:
@@ -65,15 +65,15 @@ except Exception:
                 await _reset_db_pool()
                 _reset_settings()
             except Exception:
-                pass
+                _ = None
             try:
                 from tldw_Server_API.app.core.AuthNZ.initialize import (
                     ensure_authnz_schema_ready_once as _ensure_once,
                 )
                 await _ensure_once()
             except Exception:
-                pass
+                _ = None
             return None
     except Exception:
         # If pytest-asyncio isn't available, only the sync fixture will exist.
-        pass
+        _ = None

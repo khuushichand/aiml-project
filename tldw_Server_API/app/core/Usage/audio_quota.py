@@ -23,12 +23,6 @@ from functools import lru_cache
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-
-try:
-    from redis import asyncio as redis_async  # type: ignore
-except ImportError:  # pragma: no cover
-    redis_async = None  # type: ignore
 
 try:
     from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricType, get_metrics_registry
@@ -130,13 +124,6 @@ TIER_LIMITS = {
 }
 
 
-_active_streams: dict[int, int] = {}
-_active_jobs: dict[int, int] = {}
-_lock = asyncio.Lock()
-
-_redis_client = None
-
-
 def _rg_audio_enabled() -> bool:
     """
     Return True when audio quotas should use the shared Resource Governor for
@@ -228,7 +215,7 @@ async def _log_rg_audio_init_failure(exc: Exception) -> None:
             return
         _rg_audio_init_error_logged = True
         logger.opt(exception=exc).error(
-            "Audio ResourceGovernor init failed; falling back to legacy behavior. "
+            "Audio ResourceGovernor init failed; using diagnostics-only compatibility shim (no enforcement/counters). "
             "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
             "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
             "reload_interval={policy_reload_interval} cwd={cwd}",
@@ -245,7 +232,7 @@ async def _log_rg_audio_fallback(reason: str) -> None:
         _rg_audio_fallback_logged = True
         init_error = _rg_audio_init_error
         logger.error(
-            "Audio ResourceGovernor unavailable; falling back to legacy behavior. "
+            "Audio ResourceGovernor unavailable; using diagnostics-only compatibility shim (no enforcement/counters). "
             "reason={} init_error={} backend={backend} policy_path={policy_path} "
             "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
             "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
@@ -257,15 +244,12 @@ async def _log_rg_audio_fallback(reason: str) -> None:
 
 def _reset_in_process_counters_for_tests() -> None:
     """
-    Reset in-process concurrency tracking state for tests.
+    Reset in-process RG handle tracking state for tests.
 
-    This helper clears the local counters and handle registries used for
-    stream and job concurrency so that integration tests can start from a
-    clean slate without reaching into module internals such as _active_jobs
-    directly. It is not intended for application runtime use.
+    This helper clears in-process handle registries used for stream and job
+    concurrency so integration tests can start from a clean slate. It is not
+    intended for application runtime use.
     """
-    _active_streams.clear()
-    _active_jobs.clear()
     _rg_stream_handles.clear()
     _rg_job_handles.clear()
     _rg_job_handle_locks.clear()
@@ -276,13 +260,13 @@ async def _get_audio_rg_governor():
     Lazily initialize a process-local ResourceGovernor instance for audio
     streams/jobs using the same configuration helpers as app.main.
 
-    On failure, returns None and callers treat concurrency limiting as disabled
+    On failure, returns None and callers continue in diagnostics-only mode
     (fail-open), even when RG is enabled.
     """
     global _rg_audio_governor, _rg_audio_loader
     if not _rg_audio_enabled():
         return None
-    # If RG is not available in this environment, keep legacy behavior.
+    # If RG is not available in this environment, continue fail-open.
     if RGRequest is None or PolicyLoader is None or PolicyReloadConfig is None or rg_policy_store is None:
         await _log_rg_audio_fallback("rg_components_unavailable")
         return None
@@ -409,43 +393,6 @@ def clear_stream_ttl_cache() -> None:
     except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
         # If decoration is missing for any reason, ignore
         pass
-
-
-def _use_redis() -> bool:
-    """
-    Determine whether Redis should be used for audio quota operations.
-
-    Checks whether the redis_async package is available, a Redis URL is configured in settings, and the AUDIO_QUOTA_USE_REDIS environment flag does not disable Redis.
-
-    Returns:
-        bool: `True` if Redis is available and enabled by configuration and environment, `False` otherwise.
-    """
-    if not redis_async:
-        return False
-    try:
-        s = get_settings()
-        if not getattr(s, "REDIS_URL", None):
-            return False
-        return os.getenv("AUDIO_QUOTA_USE_REDIS", "true").lower() not in {"0", "false", "no", "off"}
-    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
-        return False
-
-
-async def _get_redis():
-    global _redis_client
-    if _redis_client is not None:
-        return _redis_client
-    if not _use_redis():
-        return None
-    try:
-        s = get_settings()
-        _redis_client = redis_async.from_url(s.REDIS_URL)  # type: ignore[attr-defined]
-        await _redis_client.ping()
-        return _redis_client
-    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
-        logger.warning(f"Redis unavailable for audio quotas: {e}")
-        _redis_client = None
-        return None
 
 
 def _metrics_set_gauge(name: str, value: float, labels: dict[str, str]) -> None:

@@ -12,14 +12,30 @@ type ClassifiedError = {
   raw: string
 }
 
+const extractStatusFromError = (error: unknown): number | undefined => {
+  const explicit = (error as { status?: unknown } | null)?.status
+  if (typeof explicit === "number" && Number.isFinite(explicit)) {
+    return explicit
+  }
+  if (typeof explicit === "string") {
+    const parsed = Number(explicit)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+
+  const raw = String((error as { message?: unknown } | null)?.message || "")
+  const match = raw.match(/\b(\d{3})\b/)
+  if (!match) {
+    return undefined
+  }
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
 const classifyAuthError = (error: unknown): ClassifiedError => {
   const raw = (error as any)?.message || ""
-  let status: number | undefined
-  const match = typeof raw === "string" ? raw.match(/(\d{3})/) : null
-  if (match) {
-    const parsed = Number(match[1])
-    if (Number.isFinite(parsed)) status = parsed
-  }
+  const status = extractStatusFromError(error)
 
   const networkLike =
     typeof raw === "string" &&
@@ -38,6 +54,23 @@ const classifyAuthError = (error: unknown): ClassifiedError => {
   }
 
   return { kind: "generic", status, raw }
+}
+
+export const isRecoverableAuthConfigError = (error: unknown): boolean => {
+  const status = extractStatusFromError(error)
+  if (status === 401 || status === 403) {
+    return true
+  }
+
+  const raw = String((error as { message?: unknown } | null)?.message || "").toLowerCase()
+  if (!raw) return false
+
+  return (
+    raw.includes("invalid api key") ||
+    raw.includes("unauthorized") ||
+    raw.includes("forbidden") ||
+    raw.includes("server not configured")
+  )
 }
 
 /**
@@ -92,4 +125,3 @@ export const mapMultiUserLoginErrorMessage = (
   }
   return friendly
 }
-

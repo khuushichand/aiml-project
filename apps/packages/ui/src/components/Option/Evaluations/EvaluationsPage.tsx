@@ -7,6 +7,7 @@
 
 import React, { useEffect } from "react"
 import { Alert, Tabs } from "antd"
+import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
 import { BarChart3, Database, History, Play, Webhook } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -56,12 +57,14 @@ export const EvaluationsPage: React.FC = () => {
     }
   }, [searchParams, setActiveTab, setSelectedEvalId, setSelectedRunId])
 
-  // Reset store on unmount
+  // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
+  const resetStoreRef = React.useRef(resetStore)
+  resetStoreRef.current = resetStore
   useEffect(() => {
     return () => {
-      resetStore()
+      resetStoreRef.current()
     }
-  }, [resetStore])
+  }, [])
 
   useEffect(() => {
     if (typeof document === "undefined") return
@@ -166,10 +169,10 @@ export const EvaluationsPage: React.FC = () => {
   return (
     <PageShell className="py-6" maxWidthClassName="max-w-6xl">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+        <h1 className="text-2xl font-semibold text-text">
           {t("evaluations:title", "Evaluations")}
         </h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-text-muted">
           {t(
             "evaluations:subtitle",
             "Define evaluations against your tldw server and inspect recent runs."
@@ -177,14 +180,13 @@ export const EvaluationsPage: React.FC = () => {
         </p>
       </div>
 
-      <Alert
+      <DismissibleBetaAlert
+        storageKey="beta-dismissed:evaluations"
         message={t("evaluations:betaNotice", "Beta Feature")}
         description={t(
           "evaluations:betaDescription",
           "Evaluations is currently in beta. Some features may be incomplete or change."
         )}
-        type="info"
-        showIcon
         className="mb-6"
       />
 
@@ -192,7 +194,7 @@ export const EvaluationsPage: React.FC = () => {
         <Alert
           type="info"
           showIcon
-          message={t("evaluations:tourTitle", {
+          title={t("evaluations:tourTitle", {
             defaultValue: "Evaluations tour"
           })}
           description={t("evaluations:tourDescription", {

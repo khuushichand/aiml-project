@@ -44,6 +44,19 @@ const FORMAT_COLORS: Record<TemplateFormat, string> = {
   mp3: "purple"
 }
 
+const formatTemplateUpdatedAt = (updatedAt?: string): string | null => {
+  if (!updatedAt) return null
+  const parsed = new Date(updatedAt)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  })
+}
+
 export const TemplatesList: React.FC = () => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
@@ -162,7 +175,7 @@ export const TemplatesList: React.FC = () => {
         <div className="flex flex-1 items-center gap-2 sm:max-w-md">
           <Input
             placeholder={t("collections:templates.searchPlaceholder", "Search templates...")}
-            prefix={<Search className="h-4 w-4 text-gray-400" />}
+            prefix={<Search className="h-4 w-4 text-text-subtle" />}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             allowClear
@@ -272,6 +285,7 @@ const TemplateCard: React.FC<TemplateCardProps> = ({
   onDuplicate
 }) => {
   const { t } = useTranslation("collections")
+  const updatedAtLabel = formatTemplateUpdatedAt(template.updated_at)
 
   return (
     <Card
@@ -279,26 +293,51 @@ const TemplateCard: React.FC<TemplateCardProps> = ({
       className="group transition-shadow hover:shadow-md"
       actions={[
         <Tooltip key="preview" title={t("collections:templates.preview", "Preview")}>
-          <Button type="text" size="small" icon={<Eye className="h-4 w-4" />} onClick={onPreview} />
+          <Button
+            type="text"
+            size="small"
+            icon={<Eye className="h-4 w-4" />}
+            onClick={onPreview}
+            aria-label={t("collections:templates.preview", "Preview")}
+          />
         </Tooltip>,
         <Tooltip key="edit" title={t("common:edit", "Edit")}>
-          <Button type="text" size="small" icon={<Edit className="h-4 w-4" />} onClick={onEdit} />
+          <Button
+            type="text"
+            size="small"
+            icon={<Edit className="h-4 w-4" />}
+            onClick={onEdit}
+            aria-label={t("common:edit", "Edit")}
+          />
         </Tooltip>,
         <Tooltip key="duplicate" title={t("collections:templates.duplicate", "Duplicate")}>
-          <Button type="text" size="small" icon={<Copy className="h-4 w-4" />} onClick={onDuplicate} />
+          <Button
+            type="text"
+            size="small"
+            icon={<Copy className="h-4 w-4" />}
+            onClick={onDuplicate}
+            aria-label={t("collections:templates.duplicate", "Duplicate")}
+          />
         </Tooltip>,
         <Tooltip key="delete" title={t("common:delete", "Delete")}>
-          <Button type="text" size="small" danger icon={<Trash2 className="h-4 w-4" />} onClick={onDelete} />
+          <Button
+            type="text"
+            size="small"
+            danger
+            icon={<Trash2 className="h-4 w-4" />}
+            onClick={onDelete}
+            aria-label={t("common:delete", "Delete")}
+          />
         </Tooltip>
       ]}
     >
       <div className="flex items-start gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-100 dark:bg-zinc-800">
-          <FileText className="h-5 w-5 text-zinc-500" />
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface">
+          <FileText className="h-5 w-5 text-text-muted" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h4 className="truncate font-medium text-zinc-900 dark:text-zinc-100">
+            <h4 className="truncate font-medium text-text">
               {template.name}
             </h4>
             {template.is_default && (
@@ -308,7 +347,7 @@ const TemplateCard: React.FC<TemplateCardProps> = ({
             )}
           </div>
           {template.description && (
-            <p className="mt-1 line-clamp-2 text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="mt-1 line-clamp-2 text-sm text-text-muted">
               {template.description}
             </p>
           )}
@@ -316,10 +355,17 @@ const TemplateCard: React.FC<TemplateCardProps> = ({
             <Tag color={FORMAT_COLORS[template.format]} className="text-xs">
               {template.format.toUpperCase()}
             </Tag>
-            <span className="text-xs text-zinc-400">
+            <span className="text-xs text-text-subtle">
               {t(`collections:templateTypes.${template.type}`, template.type)}
             </span>
           </div>
+          {updatedAtLabel && (
+            <div className="mt-2 text-xs text-text-subtle">
+              {t("collections:templates.updatedAt", "Updated {{date}}", {
+                date: updatedAtLabel
+              })}
+            </div>
+          )}
         </div>
       </div>
     </Card>

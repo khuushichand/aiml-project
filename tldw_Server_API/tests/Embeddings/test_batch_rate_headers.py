@@ -13,7 +13,7 @@ def test_batch_endpoint_adds_rate_headers(disable_heavy_startup, admin_user, mon
             request.state.rate_limit_limit = 10
             request.state.rate_limit_remaining = 7
         except Exception:
-            pass
+            _ = None
         return None
 
     monkeypatch.setattr(emb_mod, "_check_backpressure_and_quotas", _stub_check)

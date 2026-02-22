@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from tldw_Server_API.app.core.testing import is_truthy
+
 DEFAULT_ALLOWED_SCHEMES = {"http", "https"}
 ALLOWLIST_ENV = "WORKFLOWS_EGRESS_ALLOWLIST"
 DENYLIST_ENV = "WORKFLOWS_EGRESS_DENYLIST"
@@ -169,7 +171,7 @@ def _should_block_private_env(block_private_override: bool | None = None) -> boo
     if block_private_override is not None:
         return block_private_override
     env_value = os.getenv(BLOCK_PRIVATE_ENV, "true").lower()
-    return env_value in {"1", "true", "yes", "on"}
+    return is_truthy(env_value)
 
 
 def evaluate_url_policy(

@@ -187,7 +187,7 @@ def pytest_configure(config):
                     try:
                         self._db_instance.close_connection()
                     except Exception:
-                        pass
+                        _ = None
         # Register shim on the actual module for importers
         import importlib
         mod = importlib.import_module('tldw_Server_API.app.core.Prompt_Management.Prompts_Interop')
@@ -222,7 +222,7 @@ def test_env_vars(tmp_path_factory):
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
         reset_settings()
     except Exception:
-        pass
+        _ = None
 
     yield
 
@@ -233,7 +233,7 @@ def test_env_vars(tmp_path_factory):
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
         reset_settings()
     except Exception:
-        pass
+        _ = None
 
 # =====================================================================
 # Database Fixtures
@@ -337,7 +337,7 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
                             kws = self._inner.fetch_keywords_for_prompt(pid, include_deleted=False)
                             it['keywords'] = list(kws)
                     except Exception:
-                        pass
+                        _ = None
                 all_items.extend(items)
                 if current_page >= total_pages or not items:
                     break
@@ -358,7 +358,7 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
                     pid = int(prompt_id)
                     self._original_names[pid] = kwargs['name']
                 except Exception:
-                    pass
+                    _ = None
             # Append to version history
             try:
                 pid = int(prompt_id)
@@ -371,7 +371,7 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
                     'comment': version_comment or 'Update'
                 }]
             except Exception:
-                pass
+                _ = None
             return {"success": True}
 
         def delete_prompt(self, prompt_id):
@@ -438,7 +438,7 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
             try:
                 self._inner.close_connection()
             except Exception:
-                pass
+                _ = None
 
     adapter = PromptsDBAdapter(real)
     try:
@@ -567,7 +567,7 @@ def job_system(test_db_path) -> Generator[JobSystem, None, None]:
     try:
         job_sys.close()
     except:
-        pass
+        _ = None
 
 @pytest.fixture
 def mock_job_system():

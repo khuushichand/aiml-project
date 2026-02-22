@@ -51,25 +51,6 @@ jobs:
 
       - name: Cache pip
         uses: actions/cache@v5
-
-      - name: Print server log (single-user)
-        if: failure()
-        env:
-          SERVER_LABEL: single
-        shell: bash
-        run: |
-          python - <<'PY'
-          import pathlib, os
-          label = os.environ.get("SERVER_LABEL", "server")
-          log_path = pathlib.Path(f"server-{label}.log")
-          if log_path.exists():
-              print("===== server log (single-user) =====")
-              print(log_path.read_text(encoding="utf-8"))
-          PY
-      - name: Upload server log (single-user)
-        if: failure()
-        uses: actions/upload-artifact@v5
-
         with:
           path: |
             ~/.cache/pip
@@ -87,6 +68,27 @@ jobs:
       - name: Run critical e2e smoke tests (in-process)
         run: |
           python -m pytest tldw_Server_API/tests/e2e/ --critical-only -q
+
+      - name: Print server log (single-user)
+        if: failure()
+        env:
+          SERVER_LABEL: single
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib, os
+          label = os.environ.get("SERVER_LABEL", "server")
+          log_path = pathlib.Path(f"server-{label}.log")
+          if log_path.exists():
+              print("===== server log (single-user) =====")
+              print(log_path.read_text(encoding="utf-8"))
+          PY
+      - name: Upload server log (single-user)
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: server-log-single-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: server-single.log
 
       - name: Run E2E tests (multi-user) - exclude Jobs
         env:
@@ -124,7 +126,7 @@ jobs:
           PY
       - name: Upload server log (multi-user)
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
-          name: server-log-multi
+          name: server-log-multi-${{ matrix.os }}-py${{ matrix.python-version }}
           path: server-multi.log

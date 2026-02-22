@@ -411,7 +411,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
       <div className="flex h-full items-center justify-center p-4">
         <Alert
           type="warning"
-          message="No document URL"
+          title="No document URL"
           description="Please select a document to view"
           showIcon
         />
@@ -450,7 +450,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
         error={
           <Alert
             type="error"
-            message="Failed to load PDF"
+            title="Failed to load PDF"
             description={error || "An error occurred while loading the document"}
             showIcon
           />

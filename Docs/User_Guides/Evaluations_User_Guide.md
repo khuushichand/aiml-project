@@ -240,7 +240,7 @@ dataset = {
 }
 
 response = requests.post(
-    "http://localhost:8000/v1/datasets",
+    "http://localhost:8000/api/v1/evaluations/datasets",
     json=dataset,
     headers={"Authorization": f"Bearer {API_KEY}"}
 )
@@ -332,22 +332,20 @@ while True:
 
 ### Stream Progress (Server-Sent Events)
 ```python
-import sseclient
+# Streaming is not available on the unified router.
+# Poll the run endpoint at a shorter interval for near-real-time updates.
+import time
 
-response = requests.get(
-    # Streaming is not available on the unified router; poll the run status instead.
-    # f"http://localhost:8000/api/v1/evaluations/runs/{run_id}/stream",
-    headers={"Authorization": f"Bearer {API_KEY}"},
-    stream=True
-)
-
-client = sseclient.SSEClient(response)
-for event in client.events():
-    if event.event == "progress":
-        print(f"Progress: {event.data}")
-    elif event.event == "completed":
-        print(f"Completed: {event.data}")
+while True:
+    response = requests.get(
+        f"http://localhost:8000/api/v1/evaluations/runs/{run_id}",
+        headers={"Authorization": f"Bearer {API_KEY}"}
+    )
+    payload = response.json()
+    print(f"status={payload['status']} progress={payload.get('progress', {})}")
+    if payload["status"] in {"completed", "failed", "cancelled"}:
         break
+    time.sleep(1)
 ```
 
 ## Interpreting Results

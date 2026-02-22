@@ -27,8 +27,8 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_auth_rate_limit,
-    get_current_active_user,
-    get_current_user,
+    get_auth_principal,
+    get_current_active_user,  # compat export used by integration tests
     get_db_transaction,
     get_jwt_service_dep,
     get_password_service_dep,
@@ -36,6 +36,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_registration_service_dep,
     get_session_manager_dep,
 )
+from tldw_Server_API.app.api.v1.utils.deprecation import build_deprecation_headers
 
 #
 # Local imports
@@ -57,7 +58,10 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
     global_settings as _csrf_globals,
 )
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import (
+    get_db_pool,
+    is_postgres_backend as _is_postgres_backend_core,
+)
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
     DuplicateOrganizationError,
@@ -77,7 +81,8 @@ from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_profile, get_settings
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
@@ -86,12 +91,25 @@ from tldw_Server_API.app.core.Resource_Governance.policy_loader import default_p
 from tldw_Server_API.app.core.Resource_Governance.tenant import hash_entity
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.services.auth_service import (
+    apply_password_reset as _svc_apply_password_reset,
     fetch_active_user_by_id,
+    fetch_password_reset_token_record as _svc_fetch_password_reset_token_record,
+    fetch_user_by_email_for_password_reset as _svc_fetch_user_by_email_for_password_reset,
+    fetch_user_by_email_for_verification as _svc_fetch_user_by_email_for_verification,
     fetch_user_by_login_identifier,
+    mark_user_verified as _svc_mark_user_verified,
+    store_password_reset_token as _svc_store_password_reset_token,
+    verify_user_email_once as _svc_verify_user_email_once,
     update_user_last_login,
     update_user_password_hash,
 )
 from tldw_Server_API.app.services.registration_service import RegistrationService
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled as _env_flag_enabled,
+    is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    is_test_mode as _is_test_mode,
+    is_truthy as _is_truthy,
+)
 
 _AUTH_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -132,18 +150,7 @@ router = APIRouter(
     responses={404: {"description": "Not found"}}
 )
 _AUTH_ENDPOINT_RG_LOCK: Optional[asyncio.Lock] = None
-
-_AUTH_RG_FALLBACK_LIMITS: dict[str, tuple[int, int]] = {
-    # policy_id -> (limit, window_minutes)
-    "authnz.default": (60, 1),
-    "authnz.forgot_password": (10, 1),
-    "authnz.reset_password": (4, 1),
-    "authnz.resend_verification": (10, 1),
-    "authnz.magic_link.request": (10, 1),
-    "authnz.magic_link.email": (3, 10),
-    "authnz.mfa.verify": (10, 1),
-    "authnz.mfa.login": (10, 1),
-}
+_AUTH_RG_DIAGNOSTICS_SHIM_LOGGED: set[str] = set()
 
 def _extract_bearer_token(auth_header: Optional[str]) -> str:
     """Parse Authorization header and return Bearer token (case-insensitive)."""
@@ -157,24 +164,19 @@ def _extract_bearer_token(auth_header: Optional[str]) -> str:
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         return ""
 
-def _build_deprecation_headers(successor: str) -> dict[str, str]:
-    try:
-        sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "120"))
-        sunset = (datetime.now(timezone.utc) + timedelta(days=sunset_days)).strftime(
-            "%a, %d %b %Y %H:%M:%S GMT"
-        )
-    except _AUTH_NONCRITICAL_EXCEPTIONS:
-        sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
-    return {
-        "Deprecation": "true",
-        "Sunset": sunset,
-        "Link": f"<{successor}>; rel=successor-version",
-    }
+
+async def is_postgres_backend() -> bool:
+    """
+    Compatibility shim for tests that monkeypatch backend detection on auth endpoints.
+
+    Canonical backend routing lives in ``core.AuthNZ.database.is_postgres_backend``.
+    """
+    return await _is_postgres_backend_core()
 
 
 def _legacy_user_me_enabled() -> bool:
     raw = os.getenv("ENABLE_LEGACY_USER_ME_ENDPOINTS", "true")
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _is_truthy(str(raw).strip().lower())
 
 
 def _legacy_warning_payload(successor: str) -> dict[str, str]:
@@ -192,6 +194,23 @@ def _get_mfa_service():
     return module.get_mfa_service()
 
 
+async def _is_mfa_backend_supported() -> bool:
+    """Return True when MFA storage is supported by the active AuthNZ backend."""
+    try:
+        mfa_service = _get_mfa_service()
+        initializer = getattr(mfa_service, "initialize", None)
+        if callable(initializer):
+            await initializer()
+        supports_backend = getattr(mfa_service, "supports_backend", None)
+        if callable(supports_backend):
+            return bool(supports_backend())
+        # Test stubs may omit supports_backend(); fall back to canonical backend detection.
+        return await is_postgres_backend()
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        logger.debug("Failed to resolve MFA service backend support flag", exc_info=True)
+    return False
+
+
 async def _ensure_mfa_available():
     """Validate MFA endpoints are allowed under current configuration."""
     settings = get_settings()
@@ -200,12 +219,7 @@ async def _ensure_mfa_available():
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="MFA is only available in multi-user deployments",
         )
-    try:
-        is_pg = await is_postgres_backend()
-    except _AUTH_NONCRITICAL_EXCEPTIONS:
-        logger.debug("Failed to determine database backend for MFA check", exc_info=True)
-        is_pg = False
-    if not is_pg:
+    if not await _is_mfa_backend_supported():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="MFA requires a PostgreSQL database backend",
@@ -256,6 +270,121 @@ def _current_user_id(user: Any) -> Optional[int]:
         return None
 
 
+_PLATFORM_ADMIN_ROLES = frozenset({"admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _normalized_claim_values(values: Any) -> set[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return set()
+    return {
+        str(value).strip().lower()
+        for value in values
+        if str(value).strip()
+    }
+
+
+def _current_user_has_admin_claims(user: Any) -> bool:
+    role = str(_current_user_value(user, "role", "") or "").strip().lower()
+    if role in _PLATFORM_ADMIN_ROLES:
+        return True
+
+    roles = _normalized_claim_values(_current_user_value(user, "roles", []))
+    if roles & _PLATFORM_ADMIN_ROLES:
+        return True
+
+    permissions = _normalized_claim_values(_current_user_value(user, "permissions", []))
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
+def _principal_primary_role(principal: AuthPrincipal) -> str:
+    roles = [
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    ]
+    if any(role in _PLATFORM_ADMIN_ROLES for role in roles):
+        return "admin"
+    permissions = _normalized_claim_values(principal.permissions)
+    if permissions & _ADMIN_CLAIM_PERMISSIONS:
+        return "admin"
+    return roles[0] if roles else "user"
+
+
+async def _fetch_user_by_email_for_password_reset(db: Any, email: str) -> dict[str, Any] | None:
+    return await _svc_fetch_user_by_email_for_password_reset(db, email)
+
+
+async def _store_password_reset_token(
+    db: Any,
+    *,
+    user_id: int,
+    token_hash: str,
+    expires_at: datetime,
+    ip_address: str,
+) -> None:
+    await _svc_store_password_reset_token(
+        db,
+        user_id=user_id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+        ip_address=ip_address,
+    )
+
+
+async def _fetch_password_reset_token_record(
+    db: Any,
+    *,
+    user_id: int,
+    hash_candidates: list[str],
+) -> tuple[Optional[int], Optional[Any]]:
+    return await _svc_fetch_password_reset_token_record(
+        db,
+        user_id=user_id,
+        hash_candidates=hash_candidates,
+    )
+
+
+async def _apply_password_reset(
+    db: Any,
+    *,
+    user_id: int,
+    new_password_hash: str,
+    token_record_id: int,
+    now_utc: datetime,
+) -> None:
+    await _svc_apply_password_reset(
+        db,
+        user_id=user_id,
+        new_password_hash=new_password_hash,
+        token_record_id=token_record_id,
+        now_utc=now_utc,
+    )
+
+
+async def _verify_user_email_once(
+    db: Any,
+    *,
+    user_id: int,
+    email: str,
+    now_utc: datetime,
+) -> int:
+    return await _svc_verify_user_email_once(
+        db,
+        user_id=user_id,
+        email=email,
+        now_utc=now_utc,
+    )
+
+
+async def _fetch_user_by_email_for_verification(db: Any, email: str) -> dict[str, Any] | None:
+    return await _svc_fetch_user_by_email_for_verification(db, email)
+
+
+async def _mark_user_verified(db: Any, user_id: int, now_utc: datetime) -> None:
+    await _svc_mark_user_verified(db, user_id, now_utc)
+
+
 def _current_user_username(user: Any) -> str:
     username = _current_user_value(user, "username", None)
     if username:
@@ -265,6 +394,23 @@ def _current_user_username(user: Any) -> str:
         return str(email).split("@", 1)[0]
     uid = _current_user_id(user)
     return f"user-{uid}" if uid is not None else "user"
+
+
+def _current_user_primary_role(user: Any) -> str:
+    role = _current_user_value(user, "role", None)
+    if role:
+        role_text = str(role).strip().lower()
+        if role_text:
+            return role_text
+    raw_roles = _current_user_value(user, "roles", [])
+    if isinstance(raw_roles, (list, tuple, set)):
+        for raw_role in raw_roles:
+            role_text = str(raw_role).strip().lower()
+            if role_text:
+                return role_text
+    if _current_user_has_admin_claims(user):
+        return "admin"
+    return "user"
 
 
 def _derive_username_from_email(email: str) -> str:
@@ -329,12 +475,12 @@ async def _ensure_user_org_membership(user_id: int, username: Optional[str] = No
 def _is_pytest_context() -> bool:
     """Return True when running under pytest or explicit test-mode flags."""
     try:
-        if os.getenv("PYTEST_CURRENT_TEST") is not None:
+        if _is_explicit_pytest_runtime():
             return True
-        for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
-            raw = os.getenv(flag, "")
-            if str(raw).strip().lower() in {"1", "true", "yes", "on"}:
-                return True
+        if _is_test_mode():
+            return True
+        if _env_flag_enabled("TESTING"):
+            return True
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         return False
     return False
@@ -364,11 +510,31 @@ def _auth_hashed_entity(raw_value: str) -> str:
         return raw_value
 
 
-def _auth_rg_rate_limits_enabled() -> bool:
-    try:
-        return bool(get_settings().RATE_LIMIT_ENABLED)
-    except _AUTH_NONCRITICAL_EXCEPTIONS:
-        return True
+def _log_auth_rg_diagnostics_only_shim(
+    *,
+    reason: str,
+    policy_id: str,
+    exc: Optional[Exception] = None,
+) -> None:
+    """Emit a one-shot warning when AuthNZ ingress falls back to diagnostics-only mode."""
+    if reason in _AUTH_RG_DIAGNOSTICS_SHIM_LOGGED:
+        return
+    _AUTH_RG_DIAGNOSTICS_SHIM_LOGGED.add(reason)
+    if exc is None:
+        logger.warning(
+            "Auth endpoint ResourceGovernor unavailable for policy {} (reason={}); "
+            "allowing request via diagnostics-only shim.",
+            policy_id,
+            reason,
+        )
+        return
+    logger.warning(
+        "Auth endpoint ResourceGovernor unavailable for policy {} (reason={}); "
+        "allowing request via diagnostics-only shim. error={}",
+        policy_id,
+        reason,
+        exc,
+    )
 
 
 def _auth_rg_policy_defined(request: Request, policy_id: str, governor: Any) -> bool:
@@ -438,47 +604,18 @@ async def _reserve_auth_rg_requests(
     tags: Optional[dict[str, str]] = None,
     fail_open: bool = True,
 ) -> tuple[bool, Optional[int]]:
-    if not _auth_rg_rate_limits_enabled():
-        return True, None
+    _ = fail_open  # Compatibility parameter; legacy fallback limiter is retired.
 
     rg_entity = entity or f"ip:{_auth_request_client_ip(request)}"
-    fallback_limit, fallback_window = _AUTH_RG_FALLBACK_LIMITS.get(
-        policy_id,
-        _AUTH_RG_FALLBACK_LIMITS["authnz.default"],
-    )
-
-    async def _fallback_rate_limit(*, reason: str) -> tuple[bool, Optional[int]]:
-        limiter = get_rate_limiter()
-        allowed, meta = await limiter.check_rate_limit_fallback(
-            identifier=rg_entity,
-            endpoint=f"auth:{policy_id}",
-            limit=fallback_limit,
-            window_minutes=fallback_window,
-            fail_open=fail_open,
-        )
-        if allowed:
-            if reason:
-                logger.debug(
-                    "Auth endpoint fallback limiter allowed request for policy={} reason={}",
-                    policy_id,
-                    reason,
-                )
-            return True, None
-        retry_after = 1
-        if isinstance(meta, dict):
-            try:
-                retry_after = max(1, int(meta.get("retry_after", 1) or 1))
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                retry_after = 1
-        return False, retry_after
 
     governor = await _get_auth_endpoint_rg_governor(request)
     if governor is None:
-        return await _fallback_rate_limit(reason="governor_unavailable")
+        _log_auth_rg_diagnostics_only_shim(reason="governor_unavailable", policy_id=policy_id)
+        return True, None
 
     if not _auth_rg_policy_defined(request, policy_id, governor):
-        logger.debug("Auth endpoint RG policy missing; using fallback limiter for policy_id={}", policy_id)
-        return await _fallback_rate_limit(reason="policy_missing")
+        _log_auth_rg_diagnostics_only_shim(reason="policy_missing", policy_id=policy_id)
+        return True, None
 
     op_id = f"auth-rg-{policy_id}-{time.time_ns()}"
     metadata = {
@@ -505,8 +642,8 @@ async def _reserve_auth_rg_requests(
             return True, None
         return False, int(decision.retry_after or 1)
     except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("Auth endpoint RG reserve failed for policy {}: {}", policy_id, exc)
-        return await _fallback_rate_limit(reason="rg_reserve_failed")
+        _log_auth_rg_diagnostics_only_shim(reason="rg_reserve_failed", policy_id=policy_id, exc=exc)
+        return True, None
 
 
 async def _ensure_mfa_cache_available(session_manager: SessionManager, settings: Settings) -> None:
@@ -624,7 +761,7 @@ async def _register_runtime_diag(request: Request, response: Response):
     - X-TLDW-CSRF-Enabled: 'true' or 'false' from runtime settings
     - X-TLDW-Register-Duration-ms: handler duration in ms (set after return)
     """
-    test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+    test_mode = _is_test_mode()
     if not test_mode:
         # No-op when not in test mode
         return
@@ -662,7 +799,7 @@ def _finalize_register_diag(request: Request, response: Response):
 
 async def _login_runtime_diag(request: Request, response: Response):
     """Diagnostics for login (TEST_MODE only): annotate DB backend and CSRF state, capture start time."""
-    test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+    test_mode = _is_test_mode()
     if not test_mode:
         return
     import time as _t
@@ -705,7 +842,7 @@ class SelfVirtualKeyRequest(BaseModel):
 @router.post("/virtual-key")
 async def mint_self_virtual_key(
     body: SelfVirtualKeyRequest,
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     settings: Settings = Depends(get_settings),
 ):
     """Mint a short-lived, scoped JWT for the current user.
@@ -716,6 +853,16 @@ async def mint_self_virtual_key(
     """
     if settings.AUTH_MODE != "multi_user":
         raise HTTPException(status_code=400, detail="Virtual keys require multi-user mode")
+    try:
+        user_id = int(current_user.user_id) if current_user.user_id is not None else 0
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid user context") from exc
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid user context")
+
+    username = str(current_user.username or current_user.email or "user")
+    role = _principal_primary_role(current_user)
+
     try:
         svc = JWTService(settings)
         add_claims: dict[str, Any] = {}
@@ -729,7 +876,7 @@ async def mint_self_virtual_key(
             add_claims["max_calls"] = int(body.max_calls)
         if body.max_runs is not None:
             add_claims["max_runs"] = int(body.max_runs)
-        scope_claims = await _build_scope_claims(int(current_user.get("id")))
+        scope_claims = await _build_scope_claims(user_id)
         if scope_claims:
             add_claims.update(scope_claims)
         if body.not_before:
@@ -741,9 +888,9 @@ async def mint_self_virtual_key(
             except _AUTH_NONCRITICAL_EXCEPTIONS:
                 pass
         token = svc.create_virtual_access_token(
-            user_id=int(current_user.get("id")),
-            username=str(current_user.get("username") or current_user.get("email") or "user"),
-            role=("admin" if bool(current_user.get("is_admin")) else str(current_user.get("role") or "user")),
+            user_id=user_id,
+            username=username,
+            role=role,
             scope=str(body.scope or "workflows"),
             ttl_minutes=int(body.ttl_minutes),
             schedule_id=(str(body.schedule_id) if body.schedule_id else None),
@@ -765,7 +912,7 @@ async def mint_self_virtual_key(
         else:
             logger.exception(
                 "Failed to mint self virtual key for user_id={} scope={} ttl_minutes={} error_type={}",
-                current_user.get("id"),
+                user_id,
                 body.scope,
                 body.ttl_minutes,
                 type(e).__name__,
@@ -864,8 +1011,8 @@ async def login(
                     success=success,
                 )
                 # Persist immediately for observability (tests/admin tools) without relying on background loops.
-                flush_on_login = os.getenv("AUDIT_FLUSH_ON_LOGIN", "").lower() in {"1", "true", "yes", "on"}
-                test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+                flush_on_login = _env_flag_enabled("AUDIT_FLUSH_ON_LOGIN")
+                test_mode = _is_test_mode()
                 if flush_on_login or test_mode:
                     await svc.flush()
             except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
@@ -901,7 +1048,7 @@ async def login(
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 _finalize_login_diag(request, response)
             extra_headers = {"WWW-Authenticate": "Bearer"}
-            if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            if _is_test_mode():
                 extra_headers["X-TLDW-Login-Reason"] = "user-not-found"
                 # Stage marker to aid triage in test runs
                 extra_headers["X-TLDW-Login-Stage"] = "user_fetch"
@@ -948,7 +1095,7 @@ async def login(
                 )
 
         # Verify password
-        is_test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+        is_test_mode = _is_test_mode()
         is_valid, needs_rehash = password_service.verify_password(form_data.password, user['password_hash'])
         # In TEST_MODE, double-check with a fresh PasswordService to rule out stale settings
         if not is_valid and is_test_mode:
@@ -1013,7 +1160,7 @@ async def login(
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 _finalize_login_diag(request, response)
             extra_headers = {"WWW-Authenticate": "Bearer"}
-            if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            if _is_test_mode():
                 extra_headers["X-TLDW-Login-Reason"] = "invalid-password"
                 # Stage marker to aid triage in test runs
                 extra_headers["X-TLDW-Login-Stage"] = "verify_password"
@@ -1046,22 +1193,16 @@ async def login(
 
         # Determine whether MFA is required (multi-user + PostgreSQL only).
         mfa_required = False
-        if settings.AUTH_MODE == "multi_user":
+        if settings.AUTH_MODE == "multi_user" and await _is_mfa_backend_supported():
             try:
-                is_pg = await is_postgres_backend()
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                logger.debug("Failed to determine database backend for MFA login check", exc_info=True)
-                is_pg = False
-            if is_pg:
-                try:
-                    mfa_service = _get_mfa_service()
-                    mfa_status = await mfa_service.get_user_mfa_status(int(user["id"]))
-                    mfa_required = bool(mfa_status.get("enabled"))
-                except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.debug(
-                        "MFA status lookup failed during login; treating as disabled: {}",
-                        exc,
-                    )
+                mfa_service = _get_mfa_service()
+                mfa_status = await mfa_service.get_user_mfa_status(int(user["id"]))
+                mfa_required = bool(mfa_status.get("enabled"))
+            except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(
+                    "MFA status lookup failed during login; treating as disabled: {}",
+                    exc,
+                )
 
         # Create session first to get session_id
         user_agent = request.headers.get("User-Agent", "Unknown")
@@ -1220,7 +1361,7 @@ async def login(
         logger.exception("Login error")
         log_counter("auth_login_unexpected_error")
         log_histogram("auth_login_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):  # expose details in tests
+        if _is_test_mode():  # expose details in tests
             try:
                 response.headers["X-TLDW-Login-Error"] = "internal-error"
                 _finalize_login_diag(request, response)
@@ -1244,7 +1385,7 @@ async def login(
 async def logout(
     request: Request,
     data: Optional[LogoutRequest] = None,
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
 ) -> MessageResponse:
@@ -1259,11 +1400,15 @@ async def logout(
         all_devices = bool(getattr(data, "all_devices", False)) if data is not None else False
 
         def _user_id_from(obj: Any) -> int:
+            if isinstance(obj, AuthPrincipal):
+                return int(obj.user_id or 0)
             if isinstance(obj, dict):
                 return int(obj.get("id") or obj.get("user_id") or 0)
-            return int(getattr(obj, "id", 0) or 0)
+            return int(getattr(obj, "user_id", 0) or getattr(obj, "id", 0) or 0)
 
         user_id = _user_id_from(current_user)
+        if user_id <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
 
         if all_devices:
             try:
@@ -1290,7 +1435,7 @@ async def logout(
                 try:
                     # NOTE: Using sync verify_token() here is acceptable - we're extracting
                     # claims for revocation cleanup, not making authorization decisions.
-                    # The user has already been authenticated via the current_user dependency.
+                    # The user has already been authenticated via the claim-first dependency.
                     payload = jwt_service.verify_token(token)
                 except _AUTH_NONCRITICAL_EXCEPTIONS:
                     payload = {}
@@ -1378,14 +1523,20 @@ async def logout(
 
 @router.get("/sessions", response_model=list[SessionResponse])
 async def list_user_sessions(
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> list[SessionResponse]:
     """
     List all active sessions for the current user.
     """
     try:
-        sessions = await session_manager.get_user_sessions(current_user['id'])
+        user_id = _current_user_id(current_user)
+        if user_id is None or user_id <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        sessions = await session_manager.get_user_sessions(user_id)
 
         return [
             SessionResponse(
@@ -1402,7 +1553,7 @@ async def list_user_sessions(
     except _AUTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list user sessions: {e}")
         # In test mode, surface the underlying error to aid debugging
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to retrieve sessions: {e}"
@@ -1416,21 +1567,29 @@ async def list_user_sessions(
 @router.delete("/sessions/{session_id}", response_model=MessageResponse)
 async def revoke_session(
     session_id: int,
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
     Revoke a specific session for the current user.
     """
     try:
+        user_id = _current_user_id(current_user)
+        if user_id is None or user_id <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        username = _current_user_username(current_user)
+
         # Get session to verify ownership
-        sessions = await session_manager.get_user_sessions(current_user['id'])
+        sessions = await session_manager.get_user_sessions(user_id)
         session_ids = [s['id'] for s in sessions]
 
         if session_id not in session_ids:
             # Return success for idempotency - session is already not active
             logger.info(
-                f"Session {session_id} not found for user {current_user['id']} - treating as already revoked"
+                f"Session {session_id} not found for user {user_id} - treating as already revoked"
             )
             return MessageResponse(
                 message="Session revoked successfully",
@@ -1440,11 +1599,11 @@ async def revoke_session(
         # Revoke the session
         await session_manager.revoke_session(
             session_id,
-            revoked_by=current_user['id'],
+            revoked_by=user_id,
             reason="User requested revocation"
         )
 
-        logger.info(f"User {current_user['username']} revoked session {session_id}")
+        logger.info(f"User {username} revoked session {session_id}")
 
         return MessageResponse(
             message="Session revoked successfully",
@@ -1469,20 +1628,28 @@ async def revoke_session(
 
 @router.post("/sessions/revoke-all", response_model=MessageResponse)
 async def revoke_all_sessions(
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
     Revoke all sessions for the current user.
     """
     try:
+        user_id = _current_user_id(current_user)
+        if user_id is None or user_id <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        username = _current_user_username(current_user)
+
         count = await session_manager.revoke_all_user_sessions(
-            user_id=current_user['id'],
+            user_id=user_id,
             reason="User requested logout from all devices"
         )
         revoked_count = int(count)
 
-        logger.info(f"User {current_user['username']} revoked all {revoked_count} sessions")
+        logger.info(f"User {username} revoked all {revoked_count} sessions")
 
         return MessageResponse(
             message=f"Successfully revoked {revoked_count} sessions",
@@ -1528,7 +1695,7 @@ async def refresh_token(
     log_counter("auth_refresh_attempt")
     try:
         # TEST_MODE diagnostics (set DB and CSRF headers for easier triage)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             try:
                 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_pool
                 pool = await _get_pool()
@@ -1553,7 +1720,7 @@ async def refresh_token(
                     raise InvalidTokenError("Invalid refresh token format")
                 user_id = int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
             else:
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "validate"
                         response.headers["X-TLDW-Refresh-Reason"] = "invalid-format"
@@ -1565,7 +1732,7 @@ async def refresh_token(
             try:
                 token_payload = jwt_service.decode_refresh_token(payload.refresh_token)
             except _AUTH_NONCRITICAL_EXCEPTIONS as _e:
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "decode"
                         response.headers["X-TLDW-Refresh-Reason"] = f"invalid-token:{type(_e).__name__}"
@@ -1575,7 +1742,7 @@ async def refresh_token(
 
             # Check if token is blacklisted
             if await session_manager.is_token_blacklisted(payload.refresh_token, token_payload.get("jti")):
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "blacklist"
                         response.headers["X-TLDW-Refresh-Reason"] = "revoked"
@@ -1586,7 +1753,7 @@ async def refresh_token(
             # JWT standard uses 'sub' for subject (user ID)
             user_id = token_payload.get("sub") or token_payload.get("user_id")
             if not user_id:
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "decode"
                         response.headers["X-TLDW-Refresh-Reason"] = "missing-user-id"
@@ -1598,7 +1765,7 @@ async def refresh_token(
             try:
                 user_id = int(user_id)
             except (ValueError, TypeError):
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "decode"
                         response.headers["X-TLDW-Refresh-Reason"] = "invalid-user-id"
@@ -1612,7 +1779,7 @@ async def refresh_token(
         user = await fetch_active_user_by_id(db, user_id)
 
         if not user:
-            if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            if _is_test_mode():
                 try:
                     response.headers["X-TLDW-Refresh-Stage"] = "fetch-user"
                     response.headers["X-TLDW-Refresh-Reason"] = "user-not-found"
@@ -1676,7 +1843,7 @@ async def refresh_token(
                 )
             except _AUTH_NONCRITICAL_EXCEPTIONS as _sess_e:
                 # Treat missing/invalid session mapping as invalid token usage
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers.setdefault("X-TLDW-Refresh-Stage", "session")
                         response.headers.setdefault("X-TLDW-Refresh-Reason", f"session-error:{type(_sess_e).__name__}")
@@ -1716,7 +1883,7 @@ async def refresh_token(
         log_counter("auth_refresh_success")
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
         # TEST_MODE: include simple duration metric header (non-breaking)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Refresh-Duration-ms"] = str(int((time.perf_counter() - start_time) * 1000))
         return TokenResponse(
@@ -1730,7 +1897,7 @@ async def refresh_token(
         logger.warning(f"Token refresh failed: {e}")
         log_counter("auth_refresh_token_error", labels={"type": type(e).__name__})
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             try:
                 response.headers.setdefault("X-TLDW-Refresh-Stage", "error")
                 response.headers.setdefault("X-TLDW-Refresh-Reason", type(e).__name__)
@@ -1745,7 +1912,7 @@ async def refresh_token(
         logger.error(f"Token refresh error: {e}")
         log_counter("auth_refresh_unexpected_error")
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             try:
                 response.headers["X-TLDW-Refresh-Stage"] = "unexpected"
                 response.headers["X-TLDW-Refresh-Reason"] = "internal-error"
@@ -1795,28 +1962,7 @@ async def forgot_password(
             return {"message": "If the email exists, a reset link has been sent"}
 
         # Check if user exists
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            # PostgreSQL
-            user = await db.fetchrow(
-                "SELECT id, username, email, is_active FROM users WHERE lower(email) = $1",
-                data.email.lower(),
-            )
-        else:
-            # SQLite
-            cursor = await db.execute(
-                "SELECT id, username, email, is_active FROM users WHERE lower(email) = ?",
-                (data.email.lower(),),
-            )
-            user = await cursor.fetchone()
-            if user:
-                # Convert tuple to dict for SQLite
-                user = {
-                    "id": user[0],
-                    "username": user[1],
-                    "email": user[2],
-                    "is_active": user[3],
-                }
+        user = await _fetch_user_by_email_for_password_reset(db, data.email)
 
         if user and user["is_active"]:
             # Generate reset token
@@ -1827,34 +1973,13 @@ async def forgot_password(
             )
 
             # Store token in database for validation
-            is_pg_store = await is_postgres_backend()
-            if is_pg_store:
-                # PostgreSQL
-                await db.execute(
-                    """
-                    INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, ip_address)
-                    VALUES ($1, $2, $3, $4)
-                    """,
-                    user["id"],
-                    jwt_service.hash_password_reset_token(reset_token),
-                    datetime.utcnow() + timedelta(hours=1),
-                    client_ip,
-                )
-            else:
-                # SQLite
-                await db.execute(
-                    """
-                    INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, ip_address)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        user["id"],
-                        jwt_service.hash_password_reset_token(reset_token),
-                        (datetime.utcnow() + timedelta(hours=1)).isoformat(),
-                        client_ip,
-                    ),
-                )
-                await db.commit()
+            await _store_password_reset_token(
+                db,
+                user_id=int(user["id"]),
+                token_hash=jwt_service.hash_password_reset_token(reset_token),
+                expires_at=datetime.utcnow() + timedelta(hours=1),
+                ip_address=client_ip,
+            )
 
             # Send email
             email_service = _get_email_service()
@@ -1934,43 +2059,11 @@ async def reset_password(
             )
 
         # Check if token was already used
-        is_pg = await is_postgres_backend()
-        token_record_id: Optional[int] = None
-        token_used_at: Optional[Any] = None
-        if is_pg:
-            # PostgreSQL
-            record = await db.fetchrow(
-                """
-                SELECT id, used_at
-                FROM password_reset_tokens
-                WHERE user_id = $1 AND token_hash = ANY($2::text[])
-                ORDER BY expires_at DESC
-                LIMIT 1
-                """,
-                user_id,
-                hash_candidates,
-            )
-            if record:
-                token_record_id = record["id"]
-                token_used_at = record["used_at"]
-        else:
-            # SQLite
-            placeholders = ",".join("?" for _ in hash_candidates)
-            params = [user_id, *hash_candidates]
-            cursor = await db.execute(
-                f"""
-                SELECT id, used_at
-                FROM password_reset_tokens
-                WHERE user_id = ? AND token_hash IN ({placeholders})
-                ORDER BY expires_at DESC
-                LIMIT 1
-                """,
-                tuple(params),
-            )
-            row = await cursor.fetchone()
-            if row:
-                token_record_id = row[0]
-                token_used_at = row[1]
+        token_record_id, token_used_at = await _fetch_password_reset_token_record(
+            db,
+            user_id=user_id,
+            hash_candidates=hash_candidates,
+        )
 
         if not token_record_id:
             raise HTTPException(
@@ -1996,32 +2089,14 @@ async def reset_password(
         # Hash new password
         new_password_hash = password_service.hash_password(data.new_password)
 
-        # Update password
-        if is_pg:
-            # PostgreSQL
-            await db.execute(
-                "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
-                new_password_hash,
-                datetime.utcnow(),
-                user_id,
-            )
-            # Mark token as used
-            await db.execute(
-                "UPDATE password_reset_tokens SET used_at = $1 WHERE id = $2",
-                datetime.utcnow(),
-                token_record_id,
-            )
-        else:
-            # SQLite
-            await db.execute(
-                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
-                (new_password_hash, datetime.utcnow().isoformat(), user_id),
-            )
-            await db.execute(
-                "UPDATE password_reset_tokens SET used_at = ? WHERE id = ?",
-                (datetime.utcnow().isoformat(), token_record_id),
-            )
-            await db.commit()
+        now_utc = datetime.utcnow()
+        await _apply_password_reset(
+            db,
+            user_id=user_id,
+            new_password_hash=new_password_hash,
+            token_record_id=int(token_record_id),
+            now_utc=now_utc,
+        )
 
         # Revoke all existing sessions for security
         blacklist = get_token_blacklist()
@@ -2079,49 +2154,12 @@ async def verify_email(
             )
 
         # Update user's verification status only when it is currently unverified.
-        updated_rows = 0
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            # PostgreSQL
-            updated = await db.fetchrow(
-                """
-                UPDATE users
-                   SET is_verified = true, updated_at = $1
-                 WHERE id = $2
-                   AND lower(email) = lower($3)
-                   AND COALESCE(is_verified, false) = false
-                 RETURNING id
-                """,
-                datetime.utcnow(),
-                user_id,
-                email,
-            )
-            updated_rows = 1 if updated else 0
-        else:
-            # SQLite
-            update_cursor = await db.execute(
-                """
-                UPDATE users
-                   SET is_verified = 1, updated_at = ?
-                 WHERE id = ?
-                   AND lower(email) = lower(?)
-                   AND COALESCE(is_verified, 0) != 1
-                """,
-                (datetime.utcnow().isoformat(), user_id, email),
-            )
-            rowcount = getattr(update_cursor, "rowcount", None)
-            try:
-                if rowcount is not None and int(rowcount) >= 0:
-                    updated_rows = int(rowcount)
-                else:
-                    raise ValueError("sqlite rowcount unavailable")
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                # Fallback for adapters/backends where cursor.rowcount is unset.
-                changes_cursor = await db.execute("SELECT changes()")
-                changes_row = await changes_cursor.fetchone()
-                if changes_row:
-                    updated_rows = int(changes_row[0])
-            await db.commit()
+        updated_rows = await _verify_user_email_once(
+            db,
+            user_id=user_id,
+            email=email,
+            now_utc=datetime.utcnow(),
+        )
 
         if updated_rows < 1:
             raise HTTPException(
@@ -2169,27 +2207,7 @@ async def resend_verification(
         if not allowed:
             return {"message": "If the account exists and needs verification, an email has been sent"}
         # Check if user exists and needs verification
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            # PostgreSQL
-            user = await db.fetchrow(
-                "SELECT id, username, email, is_verified FROM users WHERE lower(email) = $1",
-                data.email.lower(),
-            )
-        else:
-            # SQLite
-            cursor = await db.execute(
-                "SELECT id, username, email, is_verified FROM users WHERE lower(email) = ?",
-                (data.email.lower(),),
-            )
-            user = await cursor.fetchone()
-            if user:
-                user = {
-                    "id": user[0],
-                    "username": user[1],
-                    "email": user[2],
-                    "is_verified": user[3],
-                }
+        user = await _fetch_user_by_email_for_verification(db, data.email)
 
         if user and not user["is_verified"]:
             # Generate verification token
@@ -2400,19 +2418,7 @@ async def verify_magic_link(
         if not user and user_info:
             user_id = int(user_info["user_id"])
             # Mark user verified (magic link serves as email verification)
-            is_pg = await is_postgres_backend()
-            if is_pg:
-                await db.execute(
-                    "UPDATE users SET is_verified = true, updated_at = $1 WHERE id = $2",
-                    datetime.utcnow(),
-                    user_id,
-                )
-            else:
-                await db.execute(
-                    "UPDATE users SET is_verified = 1, updated_at = ? WHERE id = ?",
-                    (datetime.utcnow().isoformat(), user_id),
-                )
-                await db.commit()
+            await _mark_user_verified(db, user_id, datetime.utcnow())
             user = await fetch_active_user_by_id(db, user_id)
 
     if not user:
@@ -2429,19 +2435,7 @@ async def verify_magic_link(
     # If an existing account wasn't verified, magic link serves as verification
     try:
         if user.get("is_verified") is False:
-            is_pg = await is_postgres_backend()
-            if is_pg:
-                await db.execute(
-                    "UPDATE users SET is_verified = true, updated_at = $1 WHERE id = $2",
-                    datetime.utcnow(),
-                    int(user["id"]),
-                )
-            else:
-                await db.execute(
-                    "UPDATE users SET is_verified = 1, updated_at = ? WHERE id = ?",
-                    (datetime.utcnow().isoformat(), int(user["id"])),
-                )
-                await db.commit()
+            await _mark_user_verified(db, int(user["id"]), datetime.utcnow())
             user["is_verified"] = True
     except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Magic link verification: failed to mark user verified: {}", exc)
@@ -2520,7 +2514,7 @@ async def verify_magic_link(
 
 @router.post("/mfa/setup", response_model=MFASetupResponse)
 async def setup_mfa(
-    current_user=Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
     session_manager: SessionManager = Depends(get_session_manager_dep),
 ) -> MFASetupResponse:
@@ -2602,7 +2596,7 @@ async def setup_mfa(
 async def verify_mfa_setup(
     data: MFAVerifyRequest,
     request: Request,
-    current_user=Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep),
 ) -> dict[str, Any]:
     """
@@ -2711,7 +2705,7 @@ async def verify_mfa_setup(
 
 @router.post("/mfa/disable", status_code=status.HTTP_200_OK)
 async def disable_mfa(
-    current_user=Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     password: str = Form(..., description="Current password for verification"),
     db=Depends(get_db_transaction),
     password_service: PasswordService = Depends(get_password_service_dep),
@@ -2723,9 +2717,7 @@ async def disable_mfa(
     """
     try:
         await _ensure_mfa_available()
-        user_id = getattr(current_user, "id", None)
-        if user_id is None and isinstance(current_user, dict):
-            user_id = current_user.get("id")
+        user_id = _current_user_id(current_user)
         if user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
@@ -2902,8 +2894,8 @@ async def mfa_login(
                     user_agent=ua,
                     success=success,
                 )
-                flush_on_login = os.getenv("AUDIT_FLUSH_ON_LOGIN", "").lower() in {"1", "true", "yes", "on"}
-                test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+                flush_on_login = _env_flag_enabled("AUDIT_FLUSH_ON_LOGIN")
+                test_mode = _is_test_mode()
                 if flush_on_login or test_mode:
                     await svc.flush()
             except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
@@ -3091,7 +3083,7 @@ async def register(
         log_counter("auth_register_duplicate")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         # Attach diagnostics (if enabled)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "duplicate-user"
         _finalize_register_diag(http_request, response)
@@ -3110,7 +3102,7 @@ async def register(
         logger.warning(f"Registration failed - weak password: {e}")
         log_counter("auth_register_weak_password")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "weak-password"
         _finalize_register_diag(http_request, response)
@@ -3122,7 +3114,7 @@ async def register(
         logger.warning(f"Registration failed - invalid code: {e}")
         log_counter("auth_register_invalid_code")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "invalid-registration-code"
         _finalize_register_diag(http_request, response)
@@ -3134,7 +3126,7 @@ async def register(
         logger.error(f"Registration error: {e}")
         log_counter("auth_register_error")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "registration-error"
         _finalize_register_diag(http_request, response)
@@ -3151,12 +3143,12 @@ async def register(
         logger.error(f"Unexpected registration error: {e}")
         log_counter("auth_register_unexpected_error")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "internal-error"
         duration = time.perf_counter() - start_time
         _finalize_register_diag(http_request, response)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             try:
                 pool = await get_db_pool()
                 db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"
@@ -3185,7 +3177,7 @@ async def register(
 
 @router.get("/me", response_model=DeprecatedUserResponse, deprecated=True)
 async def get_current_user_info(
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     response: Response = None,
 ) -> DeprecatedUserResponse:
     """
@@ -3204,23 +3196,31 @@ async def get_current_user_info(
         )
     try:
         if response is not None:
-            response.headers.update(_build_deprecation_headers(successor))
+            response.headers.update(build_deprecation_headers(successor))
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         pass
+
+    user_id = _current_user_id(current_user)
+    if user_id is None or user_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+
     return DeprecatedUserResponse(
         warning="deprecated_endpoint",
         successor=successor,
-        id=current_user['id'],
-        uuid=current_user.get('uuid') or None,
-        username=current_user['username'],
-        email=current_user.get('email') or "",
-        role=current_user['role'],
-        is_active=current_user.get('is_active', True),
-        is_verified=current_user.get('is_verified', True),
-        created_at=current_user.get('created_at', datetime.utcnow()),
-        last_login=current_user.get('last_login'),
-        storage_quota_mb=current_user.get('storage_quota_mb', 1000),
-        storage_used_mb=current_user.get('storage_used_mb', 0.0)
+        id=user_id,
+        uuid=_current_user_value(current_user, "uuid", None) or None,
+        username=_current_user_username(current_user),
+        email=str(_current_user_value(current_user, "email", "") or ""),
+        role=_current_user_primary_role(current_user),
+        is_active=bool(_current_user_value(current_user, "is_active", True)),
+        is_verified=bool(_current_user_value(current_user, "is_verified", True)),
+        created_at=_current_user_value(current_user, "created_at", datetime.utcnow()),
+        last_login=_current_user_value(current_user, "last_login"),
+        storage_quota_mb=_current_user_value(current_user, "storage_quota_mb", 1000),
+        storage_used_mb=_current_user_value(current_user, "storage_used_mb", 0.0),
     )
 
 

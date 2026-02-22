@@ -7,7 +7,9 @@ from fastapi import status
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.endpoints import feedback as feedback_endpoint
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
 
 
 def _row_to_dict(row, cursor):
@@ -141,6 +143,46 @@ def test_explicit_feedback_idempotent_merge_updates_issues_and_notes(feedback_se
 
 
 @pytest.mark.integration
+def test_explicit_feedback_persists_idempotency_state_in_db(feedback_setup):
+    client, db, conversation_id, message_id = feedback_setup
+
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": False,
+        "issues": ["missing_details"],
+        "user_notes": "Initial notes",
+        "idempotency_key": "feedback-idem-key-1",
+    }
+    first = client.post("/api/v1/feedback/explicit", json=payload)
+    assert first.status_code == status.HTTP_200_OK
+    feedback_id = first.json()["feedback_id"]
+    assert feedback_id
+
+    payload_update = dict(payload)
+    payload_update["issues"] = ["incorrect_information"]
+    payload_update["user_notes"] = "Merged notes"
+
+    second = client.post("/api/v1/feedback/explicit", json=payload_update)
+    assert second.status_code == status.HTTP_200_OK
+    assert second.json()["feedback_id"] == feedback_id
+
+    cursor = db.execute_query(
+        "SELECT feedback_id, pending, issues, user_notes FROM feedback_idempotency WHERE dedupe_key = ?",
+        ("idem:1:feedback-idem-key-1",),
+    )
+    row = cursor.fetchone()
+    assert row is not None
+    record = _row_to_dict(row, cursor)
+    issues = json.loads(record["issues"]) if record.get("issues") else []
+    assert record["feedback_id"] == feedback_id
+    assert set(issues) == {"missing_details", "incorrect_information"}
+    assert record["user_notes"] == "Merged notes"
+    assert int(record["pending"]) == 0
+
+
+@pytest.mark.integration
 def test_explicit_feedback_rag_only_accepts_query(feedback_setup):
     client, _db, _conversation_id, _message_id = feedback_setup
 
@@ -176,3 +218,190 @@ def test_explicit_feedback_rejects_empty_query(feedback_setup):
         assert expected in messages
     else:
         assert detail == expected
+
+
+# ---------------------------------------------------------------------------
+# GET  /api/v1/feedback  – list feedback
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_list_feedback_returns_entries(feedback_setup):
+    client, db, conversation_id, message_id = feedback_setup
+
+    # Submit feedback first
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": True,
+        "issues": ["not_relevant"],
+        "user_notes": "Test note",
+    }
+    resp = client.post("/api/v1/feedback/explicit", json=payload)
+    assert resp.status_code == status.HTTP_200_OK
+
+    # List feedback
+    resp = client.get("/api/v1/feedback", params={"conversation_id": conversation_id})
+    assert resp.status_code == status.HTTP_200_OK
+    data = resp.json()
+    assert data["ok"] is True
+    assert len(data["feedback"]) >= 1
+    entry = data["feedback"][0]
+    assert entry["conversation_id"] == conversation_id
+    assert entry["user_notes"] == "Test note"
+
+
+@pytest.mark.integration
+def test_list_feedback_not_found_for_missing_conversation(feedback_setup):
+    client, _db, _conversation_id, _message_id = feedback_setup
+
+    resp = client.get("/api/v1/feedback", params={"conversation_id": "C_nonexistent"})
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# DELETE  /api/v1/feedback/{feedback_id}
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_delete_feedback_removes_record(feedback_setup):
+    client, db, conversation_id, message_id = feedback_setup
+
+    # Submit
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": False,
+    }
+    resp = client.post("/api/v1/feedback/explicit", json=payload)
+    assert resp.status_code == status.HTTP_200_OK
+    feedback_id = resp.json()["feedback_id"]
+    assert feedback_id
+
+    # Delete
+    resp = client.delete(f"/api/v1/feedback/{feedback_id}")
+    assert resp.status_code == status.HTTP_200_OK
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["deleted"] is True
+
+    # Verify gone
+    cursor = db.execute_query(
+        "SELECT COUNT(*) AS count FROM conversation_feedback WHERE id = ?",
+        (feedback_id,),
+    )
+    row = cursor.fetchone()
+    record = _row_to_dict(row, cursor)
+    assert record["count"] == 0
+
+
+@pytest.mark.integration
+def test_delete_feedback_not_found(feedback_setup):
+    client, _db, _conversation_id, _message_id = feedback_setup
+
+    resp = client.delete("/api/v1/feedback/fb_nonexistent")
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# PATCH  /api/v1/feedback/{feedback_id}
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_patch_feedback_updates_notes(feedback_setup):
+    client, db, conversation_id, message_id = feedback_setup
+
+    # Submit
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": True,
+        "user_notes": "Original",
+    }
+    resp = client.post("/api/v1/feedback/explicit", json=payload)
+    assert resp.status_code == status.HTTP_200_OK
+    feedback_id = resp.json()["feedback_id"]
+
+    # Patch
+    resp = client.patch(
+        f"/api/v1/feedback/{feedback_id}",
+        json={"user_notes": "Updated via PATCH"},
+    )
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.json()["feedback_id"] == feedback_id
+
+    # Verify
+    cursor = db.execute_query(
+        "SELECT user_notes FROM conversation_feedback WHERE id = ?",
+        (feedback_id,),
+    )
+    row = cursor.fetchone()
+    record = _row_to_dict(row, cursor)
+    assert record["user_notes"] == "Updated via PATCH"
+
+
+@pytest.mark.integration
+def test_patch_feedback_not_found(feedback_setup):
+    client, _db, _conversation_id, _message_id = feedback_setup
+
+    resp = client.patch(
+        "/api/v1/feedback/fb_nonexistent",
+        json={"user_notes": "Won't work"},
+    )
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.integration
+def test_explicit_feedback_finalizes_pending_idempotency_merges(feedback_setup, monkeypatch):
+    client, db, conversation_id, message_id = feedback_setup
+
+    captured_dedupe_key: dict[str, str] = {}
+    original_reserve = feedback_endpoint._reserve_idempotency_record
+
+    async def _capture_reserve(db, key: str, issues: list[str], user_notes: str | None):
+        reserved, record = await original_reserve(db, key, issues, user_notes)
+        if reserved:
+            captured_dedupe_key["value"] = key
+        return reserved, record
+
+    original_submit = UnifiedFeedbackSystem.submit_feedback
+
+    async def _submit_with_pending_merge(self, **kwargs):
+        dedupe_key = captured_dedupe_key.get("value")
+        if dedupe_key:
+            await feedback_endpoint._update_idempotency_record(
+                db,
+                dedupe_key,
+                ["missing_details", "incorrect_information"],
+                "Merged while pending",
+            )
+        return await original_submit(self, **kwargs)
+
+    monkeypatch.setattr(feedback_endpoint, "_reserve_idempotency_record", _capture_reserve)
+    monkeypatch.setattr(UnifiedFeedbackSystem, "submit_feedback", _submit_with_pending_merge)
+
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": False,
+        "issues": ["missing_details"],
+        "user_notes": "Original notes",
+    }
+
+    resp = client.post("/api/v1/feedback/explicit", json=payload)
+    assert resp.status_code == status.HTTP_200_OK
+    feedback_id = resp.json()["feedback_id"]
+
+    cursor = db.execute_query(
+        "SELECT issues, user_notes FROM conversation_feedback WHERE id = ?",
+        (feedback_id,),
+    )
+    row = cursor.fetchone()
+    assert row is not None
+    record = _row_to_dict(row, cursor)
+    issues = json.loads(record["issues"]) if record.get("issues") else []
+    assert set(issues) == {"missing_details", "incorrect_information"}
+    assert record["user_notes"] == "Merged while pending"

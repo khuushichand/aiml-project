@@ -145,10 +145,11 @@ if check_all_permissions(user, ["system.configure", "system.backup"]):
 
 ### Using Decorators (Non-FastAPI)
 
+Note: decorators from `app.core.AuthNZ.permissions` are non-FastAPI helpers for direct Python call sites, not the removed API-dependency shims from `app/api/v1/API_Deps/auth_deps.py`.
+
 ```python
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     require_permission,
-    require_role,
     require_any_permission,
     require_all_permissions
 )
@@ -156,11 +157,6 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 @require_permission("media.delete")
 def delete_media_item(user: User, media_id: int):
     # Function only executes if user has permission
-    pass
-
-@require_role("admin")
-def admin_function(user: User):
-    # Function only executes for admin users
     pass
 
 @require_any_permission(["media.read", "media.update"])

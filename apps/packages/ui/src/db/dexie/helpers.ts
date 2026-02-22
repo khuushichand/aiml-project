@@ -101,6 +101,14 @@ export const updateMessage = async (
   await db.updateMessage(history_id, message_id, content)
 }
 
+export const updateMessageMedia = async (
+  message_id: string,
+  updates: { images?: string[]; generationInfo?: any }
+) => {
+  const db = new PageAssistDatabase()
+  await db.updateMessageMedia(message_id, updates)
+}
+
 export const updateMessageDiscoSkillComment = async (
   message_id: string,
   discoSkillComment: Message["discoSkillComment"] | null
@@ -412,11 +420,14 @@ export const getAllPrompts = async () => {
     const db = new PageAssistDatabase()
     return await db.getAllPrompts()
   } catch (e) {
-    if (isDatabaseClosedError(e)) {
+    try {
       return await getAllPromptsFB()
+    } catch {
+      if (!isDatabaseClosedError(e)) {
+        console.error("Failed to load prompts from Dexie and fallback storage:", e)
+      }
+      return []
     }
-
-    return []
   }
 }
 
@@ -428,6 +439,12 @@ export const savePrompt = async ({
   details,
   system_prompt,
   user_prompt,
+  fewShotExamples,
+  modulesConfig,
+  versionNumber,
+  changeDescription,
+  parentVersionId,
+  serverParentVersionId,
   is_system = false,
   tags = [],
   keywords,
@@ -440,6 +457,12 @@ export const savePrompt = async ({
   details?: string
   system_prompt?: string
   user_prompt?: string
+  fewShotExamples?: Prompt["fewShotExamples"]
+  modulesConfig?: Prompt["modulesConfig"]
+  versionNumber?: Prompt["versionNumber"]
+  changeDescription?: Prompt["changeDescription"]
+  parentVersionId?: Prompt["parentVersionId"]
+  serverParentVersionId?: Prompt["serverParentVersionId"]
   is_system?: boolean
   tags?: string[]
   keywords?: string[]
@@ -468,10 +491,18 @@ export const savePrompt = async ({
     tags: resolvedKeywords,
     keywords: resolvedKeywords,
     favorite,
+    usageCount: 0,
+    lastUsedAt: null,
     author,
     details,
     system_prompt: system_prompt ?? (is_system ? resolvedContent : undefined),
     user_prompt: user_prompt ?? (!is_system ? resolvedContent : undefined),
+    fewShotExamples: fewShotExamples ?? null,
+    modulesConfig: modulesConfig ?? null,
+    versionNumber: versionNumber ?? null,
+    changeDescription: changeDescription ?? null,
+    parentVersionId: parentVersionId ?? null,
+    serverParentVersionId: serverParentVersionId ?? null,
     // Default sync values for new prompts
     syncStatus: 'local' as const,
     sourceSystem: 'workspace' as const
@@ -549,10 +580,18 @@ export const updatePrompt = async ({
   details,
   system_prompt,
   user_prompt,
+  fewShotExamples,
+  modulesConfig,
+  versionNumber,
+  changeDescription,
+  parentVersionId,
+  serverParentVersionId,
   is_system,
   tags = [],
   keywords,
-  favorite
+  favorite,
+  usageCount,
+  lastUsedAt
 }: {
   id: string
   title?: string
@@ -562,10 +601,18 @@ export const updatePrompt = async ({
   details?: string
   system_prompt?: string
   user_prompt?: string
+  fewShotExamples?: Prompt["fewShotExamples"]
+  modulesConfig?: Prompt["modulesConfig"]
+  versionNumber?: Prompt["versionNumber"]
+  changeDescription?: Prompt["changeDescription"]
+  parentVersionId?: Prompt["parentVersionId"]
+  serverParentVersionId?: Prompt["serverParentVersionId"]
   is_system?: boolean
   tags?: string[]
   keywords?: string[]
   favorite?: boolean
+  usageCount?: number
+  lastUsedAt?: number | null
 }) => {
   const db = new PageAssistDatabase()
   const resolvedKeywords = keywords ?? tags
@@ -583,10 +630,18 @@ export const updatePrompt = async ({
     tags: resolvedKeywords,
     keywords: resolvedKeywords,
     favorite,
+    usageCount,
+    lastUsedAt,
     author,
     details,
     system_prompt,
-    user_prompt
+    user_prompt,
+    fewShotExamples,
+    modulesConfig,
+    versionNumber,
+    changeDescription,
+    parentVersionId,
+    serverParentVersionId
   }
 
   await db.updatePrompt(id, payload)
@@ -595,6 +650,12 @@ export const updatePrompt = async ({
     ...payload
   })
   return id
+}
+
+export const incrementPromptUsage = async (id: string) => {
+  if (!id || id.trim().length === 0) return null
+  const db = new PageAssistDatabase()
+  return db.incrementPromptUsage(id)
 }
 
 export const getPromptById = async (id: string) => {

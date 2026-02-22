@@ -20,11 +20,11 @@ import contextlib
 import hashlib
 import json
 import os
-import pickle
 import re
 import time
 import uuid
-from collections import defaultdict, deque
+import warnings
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
@@ -51,6 +51,7 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_gauge,
     log_histogram,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import get_database_dir
 from tldw_Server_API.app.core.Web_Scraping.filters import (
     ContentTypeFilter,
@@ -73,6 +74,7 @@ from tldw_Server_API.app.core.Web_Scraping.scoring import (
 from tldw_Server_API.app.core.Web_Scraping.scraper_router import DEFAULT_HANDLER, ScraperRouter
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import build_browser_headers, profile_to_impersonate
 from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
+from tldw_Server_API.app.core.Security.safe_pickle import safe_pickle_loads
 
 _WEBSCRAPE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -122,6 +124,28 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 BEST_FIRST_BATCH_SIZE = 10
+
+# Stable skip reasons for crawl observability. Keep this list small and
+# explicit to prevent accidental metric cardinality growth.
+CRAWL_SKIP_REASON_VISITED = "visited"
+CRAWL_SKIP_REASON_MAX_DEPTH = "max_depth"
+CRAWL_SKIP_REASON_DUPLICATE = "duplicate"
+CRAWL_SKIP_REASON_FILTER_CHAIN = "filter_chain"
+CRAWL_SKIP_REASON_PATH_DEPTH = "path_depth"
+CRAWL_SKIP_REASON_ROBOTS = "robots"
+CRAWL_SKIP_REASON_BELOW_THRESHOLD = "below_threshold"
+CRAWL_SKIP_REASON_CUSTOM_FILTER = "custom_filter"
+CRAWL_SKIP_REASON_OTHER = "other"
+CRAWL_SKIP_REASON_LABELS = {
+    CRAWL_SKIP_REASON_VISITED,
+    CRAWL_SKIP_REASON_MAX_DEPTH,
+    CRAWL_SKIP_REASON_DUPLICATE,
+    CRAWL_SKIP_REASON_FILTER_CHAIN,
+    CRAWL_SKIP_REASON_PATH_DEPTH,
+    CRAWL_SKIP_REASON_ROBOTS,
+    CRAWL_SKIP_REASON_BELOW_THRESHOLD,
+    CRAWL_SKIP_REASON_CUSTOM_FILTER,
+}
 
 
 def _default_rules_path() -> str:
@@ -187,68 +211,81 @@ class ScrapingJob:
         }
 
 
+_WEB_SCRAPING_DEPRECATION_WARNED = False
+
+
+def _emit_web_scraping_legacy_deprecation(context: str) -> None:
+    global _WEB_SCRAPING_DEPRECATION_WARNED
+    if _WEB_SCRAPING_DEPRECATION_WARNED:
+        return
+    _WEB_SCRAPING_DEPRECATION_WARNED = True
+    msg = (
+        "Web scraping legacy rate limiter is deprecated (Phase 2). "
+        f"Context: {context}. Enable RG_ENABLED=true for enforcement. "
+        "This shim will be removed in a future release."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
+
+
 class RateLimiter:
-    """Rate limiting for scraping requests"""
+    """Rate limiting for scraping requests.
+
+    **Phase 2 Deprecation Notice**:
+    Primary enforcement is handled by ``RGSimpleMiddleware`` and the per-module
+    ``_maybe_enforce_with_rg_web_scraping``. When RG is unavailable or disabled,
+    this shim fails open (no sleeps or counters). This shim will be removed in a
+    future release.
+    """
 
     def __init__(self, max_requests_per_second: float = 2.0,
                  max_requests_per_minute: int = 60,
                  max_requests_per_hour: int = 1000):
+        # Parameters preserved for API compatibility; no internal state.
         self.max_rps = max_requests_per_second
         self.max_rpm = max_requests_per_minute
         self.max_rph = max_requests_per_hour
-        self._request_times: deque = deque(maxlen=max_requests_per_hour)
         self._lock = asyncio.Lock()
 
     async def acquire(self):
         """Acquire permission to make a request"""
         async with self._lock:
-            rg_decision = await _maybe_enforce_with_rg_web_scraping()
-            if rg_decision is not None and not rg_decision["allowed"]:
-                retry_after = rg_decision.get("retry_after") or 1
-                logger.info(
-                    "Web scraping request delayed by ResourceGovernor: retry_after={}s",
-                    retry_after,
-                )
-                # For scraping, we model RG denials as backoff rather than hard 429s.
-                await asyncio.sleep(retry_after)
+            rg_active = _rg_web_scraping_enabled()
+            rg_decision = await _maybe_enforce_with_rg_web_scraping() if rg_active else None
+            if rg_active:
+                if rg_decision is None:
+                    _log_rg_web_fallback("rg_decision_unavailable")
+                    _emit_web_scraping_legacy_deprecation("rg_decision_unavailable")
+                elif not rg_decision["allowed"]:
+                    retry_after = rg_decision.get("retry_after") or 1
+                    logger.info(
+                        "Web scraping request delayed by ResourceGovernor: retry_after={}s",
+                        retry_after,
+                    )
+                    # For scraping, we model RG denials as backoff rather than hard 429s.
+                    await asyncio.sleep(retry_after)
+                return
 
-            now = time.time()
-
-            # Clean old request times
-            cutoff_hour = now - 3600
-            while self._request_times and self._request_times[0] < cutoff_hour:
-                self._request_times.popleft()
-
-            # Check hourly limit
-            if len(self._request_times) >= self.max_rph:
-                wait_time = 3600 - (now - self._request_times[0])
-                if wait_time > 0:
-                    logger.info(f"Rate limit: waiting {wait_time:.1f}s for hourly limit")
-                    await asyncio.sleep(wait_time)
-
-            # Check minute limit
-            minute_ago = now - 60
-            recent_times = [t for t in self._request_times if t > minute_ago]
-            recent_minute = len(recent_times)
-            if recent_minute >= self.max_rpm:
-                oldest_recent = min(recent_times) if recent_times else now
-                wait_time = 60 - (now - oldest_recent)
-                if wait_time > 0:
-                    logger.info(f"Rate limit: waiting {wait_time:.1f}s for minute limit")
-                    await asyncio.sleep(wait_time)
-
-            # Check second limit
-            if self._request_times and (now - self._request_times[-1]) < (1.0 / self.max_rps):
-                wait_time = (1.0 / self.max_rps) - (now - self._request_times[-1])
-                await asyncio.sleep(wait_time)
-
-            # Record request time
-            self._request_times.append(now)
+            # RG disabled: fail-open (no sleeps, no counters).
+            _emit_web_scraping_legacy_deprecation("rg_disabled")
 
 
 _rg_web_governor = None
 _rg_web_loader = None
 _rg_web_lock = asyncio.Lock()
+_rg_web_fallback_logged = False
+
+
+def _log_rg_web_fallback(reason: str) -> None:
+    global _rg_web_fallback_logged
+    if _rg_web_fallback_logged:
+        return
+    _rg_web_fallback_logged = True
+    logger.warning(
+        "Web scraping ResourceGovernor unavailable; using diagnostics-only compatibility shim (no sleeps/counters). "
+        "reason={}",
+        reason,
+    )
 
 
 def _rg_web_scraping_enabled() -> bool:
@@ -301,7 +338,8 @@ async def _get_web_scraping_rg_governor():
             return gov
         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - optional path
             logger.debug(
-                "Web scraping RG governor init failed; using legacy RateLimiter: {}", exc
+                "Web scraping RG governor init failed; using diagnostics-only compatibility shim: {}",
+                exc,
             )
             return None
 
@@ -396,12 +434,18 @@ class CookieManager:
 class ContentDeduplicator:
     """Handles content deduplication"""
 
+    _LEGACY_PICKLE_ENV_VAR = "WEBSCRAPER_ALLOW_LEGACY_PICKLE_HASHES"
+
     def __init__(self, storage_path: Optional[Path] = None):
         if storage_path is None:
             base = Path(get_database_dir()) / "webscraper"
             base.mkdir(parents=True, exist_ok=True)
-            storage_path = base / "content_hashes.pkl"
-        self.storage_path = storage_path
+            storage_path = base / "content_hashes.json"
+        self.storage_path = Path(storage_path)
+        self._legacy_storage_path = self.storage_path.with_suffix(".pkl")
+        self._allow_legacy_pickle_hashes = is_truthy(
+            os.getenv(self._LEGACY_PICKLE_ENV_VAR, "false")
+        )
         self._hashes: dict[str, dict[str, Any]] = {}
         self._load_hashes()
 
@@ -409,19 +453,70 @@ class ContentDeduplicator:
         """Load content hashes from storage"""
         if self.storage_path.exists():
             try:
-                with open(self.storage_path, 'rb') as f:
-                    self._hashes = pickle.load(f)
+                with open(self.storage_path, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                self._hashes = self._normalize_hash_data(loaded)
                 logger.info(f"Loaded {len(self._hashes)} content hashes")
+                return
             except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to load hashes: {e}")
+                # If the configured path itself is the legacy .pkl file, continue
+                # to optional compatibility loading below.
+                if self.storage_path != self._legacy_storage_path:
+                    return
+
+        if self._legacy_storage_path.exists():
+            if not self._allow_legacy_pickle_hashes:
+                logger.warning(
+                    "Legacy dedupe hash file detected at {} but loading is disabled. "
+                    "Set {}=true to migrate it.",
+                    self._legacy_storage_path,
+                    self._LEGACY_PICKLE_ENV_VAR,
+                )
+                return
+
+            try:
+                with open(self._legacy_storage_path, 'rb') as f:
+                    loaded = safe_pickle_loads(f.read())
+                self._hashes = self._normalize_hash_data(loaded)
+                self._save_hashes()
+                logger.info(
+                    "Loaded and migrated {} legacy content hashes from {}",
+                    len(self._hashes),
+                    self._legacy_storage_path,
+                )
+            except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as e:
+                logger.error(f"Failed to load legacy hashes: {e}")
 
     def _save_hashes(self):
         """Save content hashes to storage"""
         try:
-            with open(self.storage_path, 'wb') as f:
-                pickle.dump(self._hashes, f)
+            self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self.storage_path.with_name(f"{self.storage_path.name}.tmp")
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(self._hashes, f, ensure_ascii=True, indent=2)
+            tmp_path.replace(self.storage_path)
         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to save hashes: {e}")
+
+    def _normalize_hash_data(self, data: Any) -> dict[str, dict[str, Any]]:
+        """Normalize persisted hash data into the expected dictionary shape."""
+        if not isinstance(data, dict):
+            return {}
+
+        normalized: dict[str, dict[str, Any]] = {}
+        for key, value in data.items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+
+            normalized[key] = {
+                "url": str(value.get("url", "")),
+                "title": str(value.get("title", "")),
+                "first_seen": str(value.get("first_seen", "")),
+                "last_seen": str(value.get("last_seen", "")),
+            }
+
+        return normalized
 
     def compute_hash(self, content: str) -> str:
         """Compute hash for content"""
@@ -470,7 +565,13 @@ class ContentDeduplicator:
 class ScrapingJobQueue:
     """Priority job queue for scraping tasks"""
 
-    def __init__(self, max_concurrent: int = 5, parent_scraper=None):
+    def __init__(
+        self,
+        max_concurrent: int = 5,
+        parent_scraper=None,
+        *,
+        completed_retention: int = 1000,
+    ):
         self.max_concurrent = max_concurrent
         self.parent_scraper = parent_scraper  # Store reference to parent scraper
         self._queues: dict[JobPriority, asyncio.Queue] = {
@@ -483,6 +584,20 @@ class ScrapingJobQueue:
         self._workers: list[asyncio.Task] = []
         self._shutdown = False
         self._lock = asyncio.Lock()
+        self._completed_retention = max(0, int(completed_retention))
+
+    def _trim_completed_jobs(self) -> None:
+        """Bound completed-job memory by retaining only the most recent entries."""
+        if self._completed_retention <= 0:
+            self._completed_jobs.clear()
+            return
+        while len(self._completed_jobs) > self._completed_retention:
+            oldest_job_id = next(iter(self._completed_jobs))
+            self._completed_jobs.pop(oldest_job_id, None)
+
+    def _record_completed_job(self, job: ScrapingJob) -> None:
+        self._completed_jobs[job.job_id] = job
+        self._trim_completed_jobs()
 
     async def start(self):
         """Start worker tasks"""
@@ -504,7 +619,7 @@ class ScrapingJobQueue:
                     job.cancel_requested = True
                     job.completed_at = datetime.now()
                     self._pending_jobs.pop(job.job_id, None)
-                    self._completed_jobs[job.job_id] = job
+                    self._record_completed_job(job)
                     future = self._job_futures.pop(job.job_id, None)
                     if future and not future.done():
                         future.set_exception(Exception("Job cancelled due to shutdown"))
@@ -556,7 +671,7 @@ class ScrapingJobQueue:
                         job.status = JobStatus.CANCELLED
                         job.completed_at = datetime.now()
                         self._pending_jobs.pop(job.job_id, None)
-                        self._completed_jobs[job.job_id] = job
+                        self._record_completed_job(job)
                         future = self._job_futures.pop(job.job_id, None)
                         if future and not future.done():
                             future.set_exception(Exception("Job cancelled"))
@@ -600,7 +715,7 @@ class ScrapingJobQueue:
 
                     # Move to completed
                     self._active_jobs.pop(job.job_id, None)
-                    self._completed_jobs[job.job_id] = job
+                    self._record_completed_job(job)
 
                     # Resolve future
                     if job.job_id in self._job_futures:
@@ -627,7 +742,7 @@ class ScrapingJobQueue:
                             job.error = str(e)
                         if job.job_id in self._active_jobs:
                             del self._active_jobs[job.job_id]
-                        self._completed_jobs[job.job_id] = job
+                        self._record_completed_job(job)
                         future = self._job_futures.pop(job.job_id, None)
                     if future and not future.done():
                         if job.cancel_requested:
@@ -695,7 +810,7 @@ class ScrapingJobQueue:
                 job.cancel_requested = True
                 job.completed_at = datetime.now()
                 self._pending_jobs.pop(job_id, None)
-                self._completed_jobs[job_id] = job
+                self._record_completed_job(job)
                 future = self._job_futures.pop(job_id, None)
                 if future and not future.done():
                     future.set_exception(Exception("Job cancelled"))
@@ -735,9 +850,11 @@ class EnhancedWebScraper:
         per_host_limit = _as_int(self.config.get('connector_limit_per_host', 2), 2)
         self.cookie_manager = CookieManager(connector_limit=connector_limit, per_host_limit=per_host_limit)
         self.deduplicator = ContentDeduplicator()
+        max_completed_jobs = _as_int(self.config.get('max_completed_jobs', 1000), 1000)
         self.job_queue = ScrapingJobQueue(
             max_concurrent=_as_int(self.config.get('max_concurrent', 5), 5),
-            parent_scraper=self  # Pass self reference to job queue
+            parent_scraper=self,  # Pass self reference to job queue
+            completed_retention=max_completed_jobs,
         )
 
         # Playwright browser
@@ -756,7 +873,7 @@ class EnhancedWebScraper:
         if isinstance(value, (int, float)):
             return bool(value)
         if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+            return is_truthy(value)
         return default
 
     @staticmethod
@@ -954,7 +1071,7 @@ class EnhancedWebScraper:
         ua_mode = str(ws_cfg.get("web_scraper_ua_mode", "fixed") or "fixed")
         respect_robots_default = ws_cfg.get("web_scraper_respect_robots", True)
         if isinstance(respect_robots_default, str):
-            respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on"}
+            respect_robots_default = is_truthy(respect_robots_default)
         router = ScraperRouter(rules, ua_mode=ua_mode, default_respect_robots=bool(respect_robots_default))
         plan = router.resolve(url)
 
@@ -1935,6 +2052,68 @@ class EnhancedWebScraper:
             }
         visited: set[str] = set()
         base_norm = normalize_for_crawl(base_url, base_url)
+        # Path depth guards are evaluated relative to the base URL path so
+        # nested entry points do not get unexpectedly pruned.
+        def _path_segment_count(url: str) -> int:
+            try:
+                parsed = urlparse(url)
+                return len([seg for seg in (parsed.path or '/').split('/') if seg])
+            except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
+                return 0
+
+        base_path_segments = _path_segment_count(base_norm)
+
+        def _relative_path_depth(url: str) -> int:
+            return max(0, _path_segment_count(url) - base_path_segments)
+
+        def _record_skip(
+            *,
+            reason: str,
+            strategy: str,
+            url: str,
+            depth: int,
+            detail: Optional[str] = None,
+        ) -> None:
+            safe_reason = reason if reason in CRAWL_SKIP_REASON_LABELS else CRAWL_SKIP_REASON_OTHER
+            with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
+                log_counter("webscraping.crawl.urls_skipped", labels={"reason": safe_reason})
+            if detail:
+                logger.debug(
+                    "Skip URL [{}:{} depth={}]: {} ({})",
+                    strategy,
+                    safe_reason,
+                    depth,
+                    url,
+                    detail,
+                )
+            else:
+                logger.debug(
+                    "Skip URL [{}:{} depth={}]: {}",
+                    strategy,
+                    safe_reason,
+                    depth,
+                    url,
+                )
+
+        def _log_accept(
+            *,
+            strategy: str,
+            url: str,
+            depth: int,
+            relevance_score: float,
+            ordering_score: float,
+            parent_url: Optional[str],
+        ) -> None:
+            logger.debug(
+                "Accept URL [{} depth={}]: {} (score={:.3f}, ordering_score={:.3f}, parent={})",
+                strategy,
+                depth,
+                url,
+                relevance_score,
+                ordering_score,
+                parent_url,
+            )
+
         # Build filter chain based on config (include_external, allow/deny, patterns, content types)
         # Prefer instance config provided at construction; do not override with
         # on-disk config unless necessary. Tests pass config={} to exercise
@@ -1970,7 +2149,7 @@ class EnhancedWebScraper:
         # Optional robots filter controlled by config (default: respect robots)
         respect_robots_default = wc.get('web_scraper_respect_robots', True)
         if isinstance(respect_robots_default, str):
-            respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on", "y"}
+            respect_robots_default = is_truthy(respect_robots_default)
         robots_filter: Optional[RobotsFilter] = None
         if bool(respect_robots_default):
             robots_ua = user_agent or DEFAULT_USER_AGENT
@@ -2025,7 +2204,7 @@ class EnhancedWebScraper:
 
         results = []
 
-        # Determine effective strategy (default to best_first)
+        # Determine effective strategy (explicit request override or config default).
         eff_strategy = (crawl_strategy or str(wc.get('web_crawl_strategy', 'best_first'))).strip().lower()
 
         if eff_strategy in {"best_first", "best-first", "bestfirst"}:
@@ -2037,11 +2216,7 @@ class EnhancedWebScraper:
             except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
                 start_score = 0.0
             # Use path segment count for tie-breaks (deeper paths first)
-            try:
-                from urllib.parse import urlparse as _urlparse
-                _ps = len([seg for seg in (_urlparse(base_url).path or '/').split('/') if seg])
-            except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                _ps = 0
+            _ps = _path_segment_count(base_url)
             heappush(pq, (-float(start_score), 0, -_ps, base_url, None))
             seen.add(base_norm)
             # Initial metrics
@@ -2061,14 +2236,22 @@ class EnhancedWebScraper:
                 while pq and len(batch) < batch_n:
                     neg_s, depth, _tie, url, parent = heappop(pq)
                     cur = normalize_for_crawl(url, base_norm)
-                    if cur in visited or depth > max_depth:
-                        # Count URL skipped due to visited or exceeding depth
-                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                            log_counter("webscraping.crawl.urls_skipped", labels={"reason": "visited_or_depth"})
-                        if cur in visited:
-                            logger.debug(f"Skip URL (visited): {cur}")
-                        elif depth > max_depth:
-                            logger.debug(f"Skip URL (depth>{max_depth}): {cur}")
+                    if cur in visited:
+                        _record_skip(
+                            reason=CRAWL_SKIP_REASON_VISITED,
+                            strategy="best_first",
+                            url=cur,
+                            depth=depth,
+                        )
+                        continue
+                    if depth > max_depth:
+                        _record_skip(
+                            reason=CRAWL_SKIP_REASON_MAX_DEPTH,
+                            strategy="best_first",
+                            url=cur,
+                            depth=depth,
+                            detail=f"max_depth={max_depth}",
+                        )
                         continue
                     # Keep original URL string for scraping/results; use 'cur' only for visited checks
                     batch.append((neg_s, depth, _tie, url, parent))
@@ -2099,19 +2282,41 @@ class EnhancedWebScraper:
                     neg_score, depth, parent = meta_map.get(r_url, (0.0, 0, None))
                     # Attach traversal metadata
                     res.setdefault('metadata', {})
-                    # Score is derived from queue priority (negated)
+                    # Best-first ordering score (queue priority) and relevance score
+                    # are tracked separately so downstream consumers can reason
+                    # about why a page was ordered vs. why it was retained.
                     try:
-                        computed_score = float(-neg_score)
+                        ordering_score = float(-neg_score)
                     except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                        # Fallback compute on demand
                         try:
-                            computed_score = float(composite.score(r_url))
+                            ordering_score = float(order_scorer.score(r_url))
                         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                            computed_score = 0.0
-                    res['metadata'].update({'depth': depth, 'parent_url': parent, 'score': computed_score})
+                            ordering_score = 0.0
+                    try:
+                        relevance_score = float(composite.score(r_url))
+                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
+                            log_histogram("webscraping.crawl.score", relevance_score, labels={"stage": "visit"})
+                    except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
+                        relevance_score = 0.0
+                    res['metadata'].update({
+                        'depth': depth,
+                        'parent_url': parent,
+                        'score': relevance_score,
+                        'ordering_score': ordering_score,
+                        'score_type': 'composite_relevance',
+                        'ordering_score_type': 'path_depth',
+                        'crawl_strategy': 'best_first',
+                    })
 
                     if res.get('extraction_successful'):
-                        logger.debug(f"Crawled page success: {r_url} depth={depth} score={computed_score:.3f}")
+                        _log_accept(
+                            strategy="best_first",
+                            url=r_url,
+                            depth=depth,
+                            relevance_score=relevance_score,
+                            ordering_score=ordering_score,
+                            parent_url=parent,
+                        )
                         with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
                             log_counter("webscraping.crawl.pages_crawled")
                         results.append(res)
@@ -2129,25 +2334,35 @@ class EnhancedWebScraper:
                                     break
                                 cand = normalize_for_crawl(link, r_url)
                                 if cand in visited or cand in seen:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "dup_seen"})
-                                    logger.debug(f"Skip URL (duplicate): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_DUPLICATE,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
                                 if not filter_chain.apply(cand):
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "filter_chain"})
-                                    logger.debug(f"Skip URL (filters reject): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_FILTER_CHAIN,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
-                                # Enforce path-depth limit relative to site root to align with expectations
-                                try:
-                                    from urllib.parse import urlparse as _urlparse
-                                    _ps_cand = len([seg for seg in (_urlparse(cand).path or '/').split('/') if seg])
-                                except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                                    _ps_cand = 0
-                                if _ps_cand > max_depth:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "path_depth"})
-                                    logger.debug(f"Skip URL (path depth>{max_depth}): {cand}")
+                                # Enforce path-depth limit relative to base URL path.
+                                cand_rel_depth = _relative_path_depth(cand)
+                                if cand_rel_depth > max_depth:
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_PATH_DEPTH,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=(
+                                            f"relative_path_depth={cand_rel_depth}, "
+                                            f"max_depth={max_depth}, base_segments={base_path_segments}, "
+                                            f"candidate_segments={_path_segment_count(cand)}"
+                                        ),
+                                    )
                                     continue
                                 # Optional robots gating (execute only for egress-allowed hosts)
                                 if robots_filter is not None:
@@ -2161,9 +2376,12 @@ class EnhancedWebScraper:
                                             increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                                         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
                                             pass
-                                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                            log_counter("webscraping.crawl.urls_skipped", labels={"reason": "robots"})
-                                        logger.debug(f"Skip URL (robots disallow): {cand}")
+                                        _record_skip(
+                                            reason=CRAWL_SKIP_REASON_ROBOTS,
+                                            strategy="best_first",
+                                            url=cand,
+                                            depth=depth + 1,
+                                        )
                                         continue
                                 try:
                                     s_val = composite.score(cand)
@@ -2173,21 +2391,24 @@ class EnhancedWebScraper:
                                 with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
                                     log_histogram("webscraping.crawl.score", float(s_val))
                                 if s_val < score_threshold:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "below_threshold"})
-                                    logger.debug(f"Skip URL (score {s_val:.3f} < threshold {score_threshold:.3f}): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_BELOW_THRESHOLD,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=f"score={s_val:.3f}, threshold={score_threshold:.3f}",
+                                    )
                                     continue
                                 if url_filter and not url_filter(cand):
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "custom_filter"})
-                                    logger.debug(f"Skip URL (custom filter): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_CUSTOM_FILTER,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
                                 # Tie-break on path segment count (deeper paths first)
-                                try:
-                                    from urllib.parse import urlparse as _urlparse
-                                    _ps2 = len([seg for seg in (_urlparse(cand).path or '/').split('/') if seg])
-                                except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                                    _ps2 = 0
+                                _ps2 = _path_segment_count(cand)
                                 try:
                                     ord_val = float(order_scorer.score(cand))
                                 except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
@@ -2224,13 +2445,22 @@ class EnhancedWebScraper:
                 while q and len(batch_fifo) < batch_n:
                     depth, url, parent = q.popleft()
                     cur = normalize_for_crawl(url, base_norm)
-                    if cur in visited or depth > max_depth:
-                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                            log_counter("webscraping.crawl.urls_skipped", labels={"reason": "visited_or_depth"})
-                        if cur in visited:
-                            logger.debug(f"Skip URL (visited): {cur}")
-                        elif depth > max_depth:
-                            logger.debug(f"Skip URL (depth>{max_depth}): {cur}")
+                    if cur in visited:
+                        _record_skip(
+                            reason=CRAWL_SKIP_REASON_VISITED,
+                            strategy=eff_strategy,
+                            url=cur,
+                            depth=depth,
+                        )
+                        continue
+                    if depth > max_depth:
+                        _record_skip(
+                            reason=CRAWL_SKIP_REASON_MAX_DEPTH,
+                            strategy=eff_strategy,
+                            url=cur,
+                            depth=depth,
+                            detail=f"max_depth={max_depth}",
+                        )
                         continue
                     # Preserve original 'url' string for scraping/results; use 'cur' only for visited checks
                     batch_fifo.append((depth, url, parent))
@@ -2259,14 +2489,33 @@ class EnhancedWebScraper:
                     depth, parent = meta_map_fifo.get(r_url, (0, None))
                     res.setdefault('metadata', {})
                     try:
-                        computed_score = float(composite.score(r_url))
-                        log_histogram("webscraping.crawl.score", computed_score, labels={"stage": "visit"})
+                        relevance_score = float(composite.score(r_url))
+                        log_histogram("webscraping.crawl.score", relevance_score, labels={"stage": "visit"})
                     except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                        computed_score = 0.0
-                    res['metadata'].update({'depth': depth, 'parent_url': parent, 'score': computed_score})
+                        relevance_score = 0.0
+                    try:
+                        ordering_score = float(order_scorer.score(r_url))
+                    except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
+                        ordering_score = relevance_score
+                    res['metadata'].update({
+                        'depth': depth,
+                        'parent_url': parent,
+                        'score': relevance_score,
+                        'ordering_score': ordering_score,
+                        'score_type': 'composite_relevance',
+                        'ordering_score_type': 'path_depth',
+                        'crawl_strategy': eff_strategy,
+                    })
 
                     if res.get('extraction_successful'):
-                        logger.debug(f"Crawled page success: {r_url} depth={depth} score={computed_score:.3f}")
+                        _log_accept(
+                            strategy=eff_strategy,
+                            url=r_url,
+                            depth=depth,
+                            relevance_score=relevance_score,
+                            ordering_score=ordering_score,
+                            parent_url=parent,
+                        )
                         with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
                             log_counter("webscraping.crawl.pages_crawled")
                         results.append(res)
@@ -2283,14 +2532,36 @@ class EnhancedWebScraper:
                                     break
                                 cand = normalize_for_crawl(link, r_url)
                                 if cand in visited or cand in seen_fifo:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "dup_seen"})
-                                    logger.debug(f"Skip URL (duplicate): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_DUPLICATE,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
                                 if not filter_chain.apply(cand):
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "filter_chain"})
-                                    logger.debug(f"Skip URL (filters reject): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_FILTER_CHAIN,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
+                                    continue
+                                # Enforce path-depth limit relative to base URL path for parity
+                                # with best-first strategy and stable observability.
+                                cand_rel_depth = _relative_path_depth(cand)
+                                if cand_rel_depth > max_depth:
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_PATH_DEPTH,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=(
+                                            f"relative_path_depth={cand_rel_depth}, "
+                                            f"max_depth={max_depth}, base_segments={base_path_segments}, "
+                                            f"candidate_segments={_path_segment_count(cand)}"
+                                        ),
+                                    )
                                     continue
                                 if robots_filter is not None:
                                     try:
@@ -2303,9 +2574,12 @@ class EnhancedWebScraper:
                                             increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                                         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
                                             pass
-                                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                            log_counter("webscraping.crawl.urls_skipped", labels={"reason": "robots"})
-                                        logger.debug(f"Skip URL (robots disallow): {cand}")
+                                        _record_skip(
+                                            reason=CRAWL_SKIP_REASON_ROBOTS,
+                                            strategy=eff_strategy,
+                                            url=cand,
+                                            depth=depth + 1,
+                                        )
                                         continue
                                 try:
                                     s_val = float(composite.score(cand))
@@ -2313,14 +2587,21 @@ class EnhancedWebScraper:
                                 except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
                                     s_val = 0.0
                                 if s_val < score_threshold:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "below_threshold"})
-                                    logger.debug(f"Skip URL (score {s_val:.3f} < threshold {score_threshold:.3f}): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_BELOW_THRESHOLD,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=f"score={s_val:.3f}, threshold={score_threshold:.3f}",
+                                    )
                                     continue
                                 if url_filter and not url_filter(cand):
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "custom_filter"})
-                                    logger.debug(f"Skip URL (custom filter): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_CUSTOM_FILTER,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
                                 q.append((depth + 1, cand, r_url))
                                 seen_fifo.add(cand)

@@ -147,8 +147,11 @@ async def migrate_collection(
         if drop_dest:
             try:
                 await adapter.delete_collection(dest_name)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(
+                    f"Warning: failed to drop destination collection '{dest_name}': {exc}",
+                    file=sys.stderr,
+                )
 
         await adapter.create_collection(dest_name, metadata=dest_meta)
 
@@ -198,8 +201,8 @@ async def migrate_collection(
     finally:
         try:
             manager.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"Warning: failed to close Chroma manager cleanly: {exc}", file=sys.stderr)
 
 
 def _get_existing_collection(manager: Any, client: Any, name: str) -> Any:
@@ -209,8 +212,11 @@ def _get_existing_collection(manager: Any, client: Any, name: str) -> Any:
             collection = get_fn(name=name)
             if _safe_count(collection) > 0:
                 return collection
-        except Exception:
-            pass
+        except Exception as exc:
+            print(
+                f"Warning: primary lookup failed for collection '{name}': {exc}",
+                file=sys.stderr,
+            )
 
     # Attempt persistent client fallback if files exist on disk
     path = Path(getattr(manager, "user_chroma_path", "") or "")
@@ -223,8 +229,11 @@ def _get_existing_collection(manager: Any, client: Any, name: str) -> Any:
             if _safe_count(collection) > 0:
                 print(f"Using persistent Chroma collection at {path} for '{name}'")
                 return collection
-        except Exception:
-            pass
+        except Exception as exc:
+            print(
+                f"Warning: persistent Chroma lookup failed for '{name}' at {path}: {exc}",
+                file=sys.stderr,
+            )
 
     # Fall back to manager accessor (which may create if missing)
     collection = manager.get_or_create_collection(name)
@@ -283,8 +292,8 @@ def _ensure_seed_demo(manager: Any, collection_name: str, embedding_dim: int) ->
                     "embedder_version": "demo_v1",
                 }
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"Warning: failed to update demo collection metadata: {exc}", file=sys.stderr)
 
 
 def _safe_count(collection: Any) -> int:
@@ -293,7 +302,7 @@ def _safe_count(collection: Any) -> int:
         if callable(count_fn):
             return int(count_fn())
     except Exception:
-        pass
+        return 0
     return 0
 
 

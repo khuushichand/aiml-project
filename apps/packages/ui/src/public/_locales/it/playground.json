@@ -1,0 +1,1469 @@
+{
+  "formError_noModel": {
+    "message": "Seleziona un modello"
+  },
+  "formError_noEmbeddingModel": {
+    "message": "Imposta un modello di embedding da Impostazioni > RAG"
+  },
+  "form_textarea_placeholder": {
+    "message": "Scrivi un messaggio..."
+  },
+  "form_webSearch_on": {
+    "message": "Attivo"
+  },
+  "form_webSearch_off": {
+    "message": "Disattivato"
+  },
+  "tooltip_searchInternet": {
+    "message": "Cerca su Internet"
+  },
+  "tooltip_speechToText": {
+    "message": "Speech-to-Text"
+  },
+  "tooltip_uploadImage": {
+    "message": "Carica immagine"
+  },
+  "tooltip_stopStreaming": {
+    "message": "Ferma lo Streaming"
+  },
+  "tooltip_knowledge": {
+    "message": "Conoscenza"
+  },
+  "tooltip_clearContext": {
+    "message": "Cancella Contesto"
+  },
+  "tooltip_speechToTextServer": {
+    "message": "Dettatura tramite il tuo server tldw"
+  },
+  "tooltip_speechToTextBrowser": {
+    "message": "Dettatura tramite il riconoscimento vocale del browser"
+  },
+  "tooltip_speechToTextDetails": {
+    "message": "Usa {{model}} · {{task}} · {{format}}. Configura in Impostazioni → Generale → Speech-to-Text."
+  },
+  "tooltip_vision": {
+    "message": "[Sperimentale] Chat con visione"
+  },
+  "tooltip_uploadDocuments": {
+    "message": "Carica documenti (beta)"
+  },
+  "sendWhenEnter": {
+    "message": "Invia subito dopo Enter"
+  },
+  "welcome": {
+    "message": "Ciao! Come posso aiutarti oggi?"
+  },
+  "useOCR": {
+    "message": "Estrai testo dall'immagine (OCR)"
+  },
+  "tips_title": {
+    "message": "Suggerimenti"
+  },
+  "tips_quickIngest": {
+    "message": "Usa Quick Ingest per aggiungere documenti e pagine web."
+  },
+  "tips_pickModelPrompt": {
+    "message": "Scegli un modello e un prompt dall'intestazione."
+  },
+  "tips_startChatFocus": {
+    "message": "Quando sei connesso, “Inizia a chattare” mette a fuoco il compositore."
+  },
+  "tldwState_searching": {
+    "message": "Sto cercando il tuo tldw server"
+  },
+  "tldwState_running": {
+    "message": "tldw è attivo"
+  },
+  "tldwState_notRunning": {
+    "message": "Impossibile connettersi a tldw server"
+  },
+  "tldwState_connectionError": {
+    "message": "C'è stato un problema di connessione. Controlla la <anchor>documentazione</anchor> per investigare."
+  },
+  "tldwState_openTldwSettings": {
+    "message": "Apri impostazioni tldw"
+  },
+  "tldwState_cancelSearch": {
+    "message": "Annulla ricerca"
+  },
+  "tldwState_connectionFailedWithCode": {
+    "message": "Connessione non riuscita (HTTP {{code}})"
+  },
+  "tldwState_connectionFailed": {
+    "message": "Connessione non riuscita"
+  },
+  "tldwState_errorDetailsLabel": {
+    "message": "Dettagli:"
+  },
+  "tldwState_title": {
+    "message": "In attesa del tuo server tldw"
+  },
+  "tldwState_subtitle": {
+    "message": "Stiamo pingando {{host}} per verificare la connessione."
+  },
+  "tldwState_missing": {
+    "message": "URL del server non configurato"
+  },
+  "tldwState_noServer": {
+    "message": "Aggiungi il tuo server tldw per iniziare a chattare."
+  },
+  "tldwState_connectedSubtitle": {
+    "message": "Connesso a {{host}}. Inizia a chattare quando sei pronto."
+  },
+  "tldwState_errorSubtitle": {
+    "message": "Non siamo ancora riusciti a contattare {{host}}. Riprova o aggiorna le impostazioni del server."
+  },
+  "tldwState_openSettings": {
+    "message": "Apri impostazioni"
+  },
+  "tldwState_changeServer": {
+    "message": "Cambia server"
+  },
+  "tldwState_elapsed": {
+    "message": "Verifica… {{seconds}} s"
+  },
+  "tldwState_connectedHint": {
+    "message": "Connesso a {{host}}."
+  },
+  "tldwState_lastChecked": {
+    "message": "Controllato {{seconds}} s fa"
+  },
+  "tldwState_recheck": {
+    "message": "Controlla di nuovo"
+  },
+  "tldwState_errorToast": {
+    "message": "Non siamo riusciti a contattare {{host}}"
+  },
+  "tldwState_missingHelp": {
+    "message": "Apri Impostazioni → Server tldw per aggiungere l'URL o connetterti alla pagina Opzioni."
+  },
+  "tldwState_troubleshoot": {
+    "message": "Verifica che il server sia in esecuzione e che il browser possa raggiungerlo, poi riprova dalla pagina Opzioni."
+  },
+  "errors_privateModeDescription": {
+    "message": "La modalità privata di Firefox non consente di salvare la chat. La chat temporanea è attiva per impostazione predefinita. Altri miglioramenti in arrivo."
+  },
+  "tts_playErrorTitle": {
+    "message": "Errore"
+  },
+  "tts_playErrorDescription": {
+    "message": "Si è verificato un errore durante la riproduzione dell'audio"
+  },
+  "tts_browserInfoTitle": {
+    "message": "Il TTS del browser usa l'audio di sistema"
+  },
+  "tts_browserInfoDescription": {
+    "message": "Il TTS del browser riproduce usando il sintetizzatore di sistema e non fornisce un file audio scaricabile. Usa i controlli dei segmenti qui sotto, oppure cambia provider per un elenco tracce e un player."
+  },
+  "tts_unsupportedProviderTitle": {
+    "message": "Provider TTS non supportato"
+  },
+  "tts_unsupportedProviderDescription": {
+    "message": "Il provider \"{{provider}}\" non è ancora supportato nel player del playground."
+  },
+  "tts_unsupportedFormatTitle": {
+    "message": "Formato audio non supportato"
+  },
+  "tts_unsupportedFormatDescription": {
+    "message": "Il formato di risposta \"{{format}}\" non è supportato. Ripiego su MP3."
+  },
+  "tts_elevenLabsMissingTitle": {
+    "message": "ElevenLabs richiede una chiave API"
+  },
+  "tts_elevenLabsMissingBody": {
+    "message": "Aggiungi la tua chiave API di ElevenLabs nelle Impostazioni per caricare voci e modelli."
+  },
+  "tts_elevenLabsUnavailableTitle": {
+    "message": "Voci ElevenLabs non disponibili"
+  },
+  "tts_elevenLabsUnavailableBody": {
+    "message": "Impossibile caricare voci o modelli. Controlla la tua chiave API e riprova."
+  },
+  "tts_elevenLabsMissingCta": {
+    "message": "Imposta la chiave API nelle Impostazioni"
+  },
+  "tts_generateErrorTitle": {
+    "message": "Errore nella generazione audio"
+  },
+  "tts_generateErrorDescription": {
+    "message": "Si è verificato un problema durante la generazione dell'audio TTS."
+  },
+  "tts_sampleText": {
+    "message": "Inserisci testo di esempio"
+  },
+  "tts_playHelper": {
+    "message": "Riproduci usa il provider, la voce e la velocità selezionati."
+  },
+  "tts_playDisabledNoText": {
+    "message": "Inserisci del testo per abilitare Riproduci."
+  },
+  "tts_playDisabledTtsOff": {
+    "message": "Abilita il text-to-speech sopra per riprodurre l'audio."
+  },
+  "tts_playDisabledElevenLabs": {
+    "message": "Aggiungi una chiave API ElevenLabs, una voce e un modello per abilitare Play."
+  },
+  "tts_stopDisabled": {
+    "message": "Stop si attiva dopo l'avvio dell'audio."
+  },
+  "tts_providerChangeHelper": {
+    "message": "Apri il selettore dei provider qui sotto per passare tra Browser, tldw, OpenAI o Supersonic."
+  },
+  "tts_changeProvider": {
+    "message": "Cambia provider"
+  },
+  "tts_title": {
+    "message": "Playground TTS"
+  },
+  "tts_subtitle": {
+    "message": "Prova il text-to-speech e regola provider, modelli e voci."
+  },
+  "tts_currentProvider": {
+    "message": "Provider corrente"
+  },
+  "tts_settingsIntro": {
+    "message": "Regola provider TTS, modello e voce. Queste impostazioni sono riutilizzate quando riproduci audio da chat o media."
+  },
+  "tts_providerCapabilities": {
+    "message": "Capacità del provider"
+  },
+  "tts_voicesPreview": {
+    "message": "Voci del server"
+  },
+  "tts_providerDetails": {
+    "message": "Visualizza configurazione grezza del provider"
+  },
+  "tts_providerDetailsTitle": {
+    "message": "Dettagli del provider"
+  },
+  "tts_inputLabel": {
+    "message": "Inserisci del testo per ascoltarlo."
+  },
+  "tts_inputPlaceholder": {
+    "message": "Digita o incolla il testo qui, poi usa Riproduci per ascoltare."
+  },
+  "tts_play": {
+    "message": "Riproduci"
+  },
+  "tts_playing": {
+    "message": "Riproduzione…"
+  },
+  "tts_stop": {
+    "message": "Ferma"
+  },
+  "tts_browserSegmentsTitle": {
+    "message": "Segmenti TTS del browser"
+  },
+  "tts_browserSegmentsHelp": {
+    "message": "Metti in coda i segmenti o riproduci un singolo segmento usando l'audio di sistema."
+  },
+  "tts_browserQueueAll": {
+    "message": "Metti in coda tutto"
+  },
+  "tts_browserQueueFromHere": {
+    "message": "Metti in coda da qui"
+  },
+  "tts_browserSegmentPlay": {
+    "message": "Riproduci segmento"
+  },
+  "tts_browserStatusSpeaking": {
+    "message": "Riproduzione del segmento {{current}}/{{total}}"
+  },
+  "tts_browserStatusPaused": {
+    "message": "In pausa"
+  },
+  "tts_browserPause": {
+    "message": "Pausa"
+  },
+  "tts_browserResume": {
+    "message": "Riprendi"
+  },
+  "tts_tldwStatusOnline": {
+    "message": "API audio tldw rilevata (audio/speech)"
+  },
+  "tts_tldwStatusOffline": {
+    "message": "API audio non rilevata; controlla la versione del server tldw."
+  },
+  "tts_tldwWarningTitle": {
+    "message": "API audio/speech tldw non rilevata"
+  },
+  "tts_tldwWarningBody": {
+    "message": "Assicurati che la versione del tuo tldw_server includa /api/v1/audio/speech e che l'estensione sia connessa con una chiave API valida."
+  },
+  "tts_speechErrorTitle": {
+    "message": "Dettatura non riuscita"
+  },
+  "tts_speechErrorBody": {
+    "message": "Richiesta di trascrizione non riuscita. Controlla lo stato del server tldw."
+  },
+  "tts_speechNoText": {
+    "message": "La trascrizione non ha restituito testo."
+  },
+  "tts_speechMicError": {
+    "message": "Impossibile accedere al microfono. Controlla le autorizzazioni del browser e riprova."
+  },
+  "tts_savedToNotes": {
+    "message": "Trascrizione salvata come nota."
+  },
+  "empty_title": {
+    "message": "Avvia una nuova chat"
+  },
+  "empty_description": {
+    "message": "Sperimenta qui con modelli, prompt e fonti di conoscenza."
+  },
+  "empty_demoDescription": {
+    "message": "Sei in modalità demo: prova a fare una domanda per vedere come risponde l'assistente. Puoi collegare il tuo server tldw più tardi."
+  },
+  "empty_example1": {
+    "message": "Fai una domanda, poi trascina documenti o pagine web di cui vuoi discutere."
+  },
+  "empty_example2": {
+    "message": "Usa Quick Ingest per aggiungere trascrizioni o note, poi riferiscile in chat."
+  },
+  "empty_example3": {
+    "message": "Try different prompts or models, or open Model Playground to compare answers."
+  },
+  "empty_primaryCta": {
+    "message": "Inizia a chattare"
+  },
+  "empty_secondaryCta": {
+    "message": "Apri impostazioni server"
+  },
+  "drop_hint": {
+    "message": "Rilascia i file per allegarli al tuo messaggio"
+  },
+  "drop_readySingle": {
+    "message": "{{name}} pronto per l'invio"
+  },
+  "drop_readyMultiple": {
+    "message": "{{count}} file pronti per l'invio"
+  },
+  "drop_unsupported": {
+    "message": "Questo tipo di file non è supportato. Prova immagini o file di testo."
+  },
+  "drop_defaultFileName": {
+    "message": "File"
+  },
+  "drop_imageOnly": {
+    "message": "Al momento qui è possibile rilasciare solo immagini."
+  },
+  "drop_imageHint": {
+    "message": "Rilascia un'immagine per includerla nel messaggio"
+  },
+  "drop_overlayInstruction": {
+    "message": "Rilascia l'immagine per allegarla alla prossima risposta"
+  },
+  "aria_chatTranscript": {
+    "message": "Messaggi della chat"
+  },
+  "more_history": {
+    "message": "Salvataggio chat"
+  },
+  "more_searchKnowledge": {
+    "message": "Ricerca e RAG"
+  },
+  "more_voice": {
+    "message": "Altre opzioni vocali"
+  },
+  "more_uploads": {
+    "message": "Caricamenti e ingestione"
+  },
+  "fileRetrievalEnabled": {
+    "message": "Abilita RAG per i documenti"
+  },
+  "stt_title": {
+    "message": "Playground STT"
+  },
+  "stt_subtitle": {
+    "message": "Prova modelli di trascrizione, avvia sessioni di dettatura più lunghe e salva le trascrizioni in Note."
+  },
+  "stt_currentModelLabel": {
+    "message": "Modello di trascrizione corrente"
+  },
+  "stt_defaultModel": {
+    "message": "Predefinito da Impostazioni"
+  },
+  "stt_settingsNotice": {
+    "message": "Lingua, attività, formato risposta, segmentazione e prompt riutilizzano i valori predefiniti Speech-to-Text in Impostazioni."
+  },
+  "stt_sessionMode": {
+    "message": "Modalità sessione"
+  },
+  "stt_modeLong": {
+    "message": "Lunga durata (registrazione a blocchi)"
+  },
+  "stt_modeShort": {
+    "message": "Dettatura breve (clip singola)"
+  },
+  "stt_languageTag": {
+    "message": "Lingua"
+  },
+  "stt_taskTag": {
+    "message": "Attività"
+  },
+  "stt_formatTag": {
+    "message": "Formato"
+  },
+  "stt_segmentationEnabled": {
+    "message": "Segmentazione abilitata"
+  },
+  "stt_recordButton": {
+    "message": "Registra"
+  },
+  "stt_stopButton": {
+    "message": "Ferma"
+  },
+  "stt_startTooltip": {
+    "message": "Avvia la registrazione audio per la trascrizione"
+  },
+  "stt_stopTooltip": {
+    "message": "Ferma e invia al server"
+  },
+  "stt_transcribingButton": {
+    "message": "Trascrizione..."
+  },
+  "stt_transcribingTooltip": {
+    "message": "Trascrizione audio..."
+  },
+  "stt_transcribingPlaceholder": {
+    "message": "Trascrizione audio..."
+  },
+  "stt_historyTitle": {
+    "message": "Cronologia trascrizioni"
+  },
+  "stt_clearAll": {
+    "message": "Cancella tutto"
+  },
+  "stt_emptyHistory": {
+    "message": "Avvia una registrazione per vedere qui le trascrizioni. Puoi salvare qualsiasi elemento in Note."
+  },
+  "stt_saveToNotes": {
+    "message": "Salva in Note"
+  },
+  "stt_delete": {
+    "message": "Elimina"
+  },
+  "stt_durationTag": {
+    "message": "Durata"
+  },
+  "stt_modelTag": {
+    "message": "Modello"
+  },
+  "stt_currentTranscriptTitle": {
+    "message": "Trascrizione della sessione corrente"
+  },
+  "stt_currentTranscriptPlaceholder": {
+    "message": "La trascrizione live apparirà qui durante la registrazione."
+  },
+  "actions_temporaryOn": {
+    "message": "Chat temporanea (non salvata)"
+  },
+  "actions_temporaryOff": {
+    "message": "Salva chat nella cronologia"
+  },
+  "actions_webSearchOn": {
+    "message": "Ricerca web attiva"
+  },
+  "actions_webSearchOff": {
+    "message": "Ricerca web disattiva"
+  },
+  "actions_speechStart": {
+    "message": "Avvia dettatura"
+  },
+  "actions_speechStop": {
+    "message": "Ferma dettatura"
+  },
+  "actions_streamStart": {
+    "message": "Sottotitoli live"
+  },
+  "actions_streamStop": {
+    "message": "Ferma sottotitoli"
+  },
+  "actions_visionOn": {
+    "message": "Visione attiva"
+  },
+  "actions_visionOff": {
+    "message": "Visione disattiva"
+  },
+  "actions_upload": {
+    "message": "Allega immagine"
+  },
+  "actions_ingest": {
+    "message": "Quick Ingest"
+  },
+  "actions_ingestDisabled": {
+    "message": "Connetti il tuo server tldw per l'ingestione."
+  },
+  "actions_ingestHint": {
+    "message": "Carica URL o file con opzioni avanzate."
+  },
+  "actions_ingestSub": {
+    "message": "Usa URL/file; scarica o archivia."
+  },
+  "actions_streamErrorTitle": {
+    "message": "Sottotitoli live non disponibili"
+  },
+  "composer_toolsButton": {
+    "message": "+Strumenti"
+  },
+  "composer_queuedBanner_title": {
+    "message": "In coda quando offline"
+  },
+  "composer_queuedBanner_body": {
+    "message": "Terremo questi messaggi e li invieremo quando il tuo server tldw sarà connesso."
+  },
+  "composer_queuedBanner_sendNow": {
+    "message": "Invia messaggi in coda"
+  },
+  "composer_queuedBanner_clear": {
+    "message": "Svuota coda"
+  },
+  "composer_coreTools": {
+    "message": "Opzioni conversazione"
+  },
+  "composer_captureTools": {
+    "message": "Strumenti di acquisizione e assistenza"
+  },
+  "composer_actions": {
+    "message": "Opzioni di invio"
+  },
+  "composer_moreTools": {
+    "message": "Altri strumenti"
+  },
+  "composer_scrollToLatest": {
+    "message": "Scorri agli ultimi messaggi"
+  },
+  "composer_submitAria": {
+    "message": "Invia messaggio"
+  },
+  "composer_openModelSettings": {
+    "message": "Apri impostazioni della chat corrente"
+  },
+  "composer_stopStreaming": {
+    "message": "Ferma risposta in streaming"
+  },
+  "composer_connectionPlaceholder": {
+    "message": "Connettiti al tuo server tldw nelle Impostazioni per inviare messaggi e visualizzare i media."
+  },
+  "composer_connectNotice": {
+    "message": "Connettiti al tuo server tldw nelle Impostazioni per inviare messaggi e visualizzare i media."
+  },
+  "composer_connectionChipDisconnected": {
+    "message": "Server: Non connesso"
+  },
+  "composer_contextLabel": {
+    "message": "Contesto:"
+  },
+  "composer_contextKnowledgeEmpty": {
+    "message": "Nessuna conoscenza selezionata"
+  },
+  "composer_contextTabs": {
+    "message": "{{count}} schede"
+  },
+  "composer_contextFiles": {
+    "message": "{{count}} file"
+  },
+  "composer_contextMedia": {
+    "message": "Media e note"
+  },
+  "composer_contextMediaHint": {
+    "message": "Allega media e note che dovrebbero orientare la risposta."
+  },
+  "composer_contextMediaSelected": {
+    "message": "Media o nota"
+  },
+  "composer_contextMediaEmpty": {
+    "message": "Nessun media o nota selezionati."
+  },
+  "composer_addKnowledge": {
+    "message": "Aggiungi media e note"
+  },
+  "composer_contextTabsTitle": {
+    "message": "Schede nel contesto"
+  },
+  "composer_contextTabsHint": {
+    "message": "Rivedi o rimuovi le schede referenziate, oppure aggiungine altre dalle schede aperte."
+  },
+  "composer_contextManager": {
+    "message": "Gestione contesto"
+  },
+  "composer_contextManagerTitle": {
+    "message": "Gestione contesto"
+  },
+  "composer_contextKnowledge": {
+    "message": "Contesto e conoscenza"
+  },
+  "composer_contextKnowledgeClose": {
+    "message": "Chiudi Contesto e conoscenza"
+  },
+  "composer_knowledgeSearch": {
+    "message": "Ricerca conoscenze"
+  },
+  "composer_knowledgeSearchClose": {
+    "message": "Chiudi ricerca conoscenze"
+  },
+  "composer_persistence_ephemeral": {
+    "message": "Non salvato nella cronologia; si cancella quando chiudi questa scheda."
+  },
+  "composer_persistence_local": {
+    "message": "Salvato solo in questo browser."
+  },
+  "composer_persistence_server": {
+    "message": "Salvato localmente + server"
+  },
+  "composer_persistence_ephemeralPill": {
+    "message": "Temporaneo"
+  },
+  "composer_persistence_localPill": {
+    "message": "Solo locale"
+  },
+  "composer_persistence_serverPill": {
+    "message": "Locale + server"
+  },
+  "composer_ephemeralLabel": {
+    "message": "Temporaneo"
+  },
+  "composer_savedLabel": {
+    "message": "Salvato"
+  },
+  "composer_persistence_saveToServer": {
+    "message": "Salva anche questa chat sul server"
+  },
+  "composer_persistence_connectToSave": {
+    "message": "Connetti il server per salvare le chat lì."
+  },
+  "composer_persistence_serverDefaultTitle": {
+    "message": "Chat dell'estensione"
+  },
+  "composer_persistence_serverSavedTitle": {
+    "message": "Chat ora salvata sul server"
+  },
+  "composer_persistence_serverSaved": {
+    "message": "I messaggi futuri di questa chat si sincronizzeranno con il tuo server tldw."
+  },
+  "composer_persistence_serverCharacterRequired": {
+    "message": "Impossibile trovare o creare un personaggio assistente predefinito sul server. Riprova dalla pagina Personaggi."
+  },
+  "composer_connectToSend": {
+    "message": "Connettiti al tuo server tldw in Impostazioni per inviare messaggi e visualizzare media."
+  },
+  "composer_compareTag": {
+    "message": "Confronta"
+  },
+  "composer_compareLabel": {
+    "message": "Modalità confronto"
+  },
+  "composer_compareButton": {
+    "message": "Confronta modelli"
+  },
+  "composer_compareButtonActive": {
+    "message": "Confronto: {{count}} modelli"
+  },
+  "composer_compareButtonOn": {
+    "message": "Confronto attivato"
+  },
+  "composer_compareSettingsTitle": {
+    "message": "Impostazioni confronto"
+  },
+  "composer_compareSettingsToggle": {
+    "message": "Abilita modalità confronto"
+  },
+  "composer_compareSettingsToggleHint": {
+    "message": "Invia il prossimo messaggio a più modelli."
+  },
+  "composer_compareNoneSelected": {
+    "message": "Nessun modello selezionato per il confronto"
+  },
+  "composer_compareSingle": {
+    "message": "Confronto di 1 modello"
+  },
+  "composer_compareMany": {
+    "message": "Confronto di {{count}} modelli"
+  },
+  "composer_compareActiveSummary": {
+    "message": "Modelli attivi al prossimo invio: {{label}}"
+  },
+  "composer_compareModelPickerLabel": {
+    "message": "Seleziona modelli"
+  },
+  "composer_compareModelPickerPlaceholder": {
+    "message": "Scegli i modelli da confrontare"
+  },
+  "composer_compareActiveModelsLabel": {
+    "message": "Modelli attivi"
+  },
+  "composer_compareActiveModelsHint": {
+    "message": "Il tuo prossimo messaggio sarà inviato a ogni modello attivo."
+  },
+  "composer_compareSendToModels": {
+    "message": "Invia a {{count}} modelli"
+  },
+  "composer_compareMaxModelsTitle": {
+    "message": "Limite di confronto raggiunto"
+  },
+  "composer_compareMaxModels": {
+    "message": "Puoi confrontare fino a {{limit}} modelli per turno."
+  },
+  "composer_compareMaxModelsTrimmed": {
+    "message": "Il confronto è limitato a {{limit}} modelli per turno. Utilizzo dei primi {{limit}} modelli selezionati."
+  },
+  "composer_compareMaxLabel": {
+    "message": "Numero massimo di modelli per turno"
+  },
+  "composer_compareMaxHelper": {
+    "message": "Selezionati {{current}} / {{limit}}"
+  },
+  "composer_compareSelectedLabel": {
+    "message": "Selezionato come risposta:"
+  },
+  "composer_compareContinueHint": {
+    "message": "Continua questa chat con il modello selezionato."
+  },
+  "composer_compareContinue": {
+    "message": "Continua con questo modello"
+  },
+  "composer_compareThreadShared": {
+    "message": "Tu (condiviso)"
+  },
+  "composer_compareBulkSplitSuccess": {
+    "message": "Creati {{count}} chat"
+  },
+  "composer_compareBulkSplitPartialFail": {
+    "message": "Impossibile creare {{count}} chat"
+  },
+  "composer_validationCompareSelectModelsInline": {
+    "message": "Seleziona almeno un modello per la modalità Confronto."
+  },
+  "speech_title": {
+    "message": "Playground vocale"
+  },
+  "speech_subtitle": {
+    "message": "Registra voce, modifica trascrizioni e sintetizza audio in un unico posto."
+  },
+  "speech_modeLabel": {
+    "message": "Modalità"
+  },
+  "speech_modeRoundTrip": {
+    "message": "Andata e ritorno"
+  },
+  "speech_modeSpeak": {
+    "message": "Parla"
+  },
+  "speech_modeListen": {
+    "message": "Ascolta"
+  },
+  "speech_modeHint": {
+    "message": "L’ultima modalità viene ricordata su questo dispositivo."
+  },
+  "speech_recordingWaveform": {
+    "message": "Forma d’onda di registrazione live"
+  },
+  "speech_playbackWaveform": {
+    "message": "Forma d’onda di riproduzione"
+  },
+  "speech_sendToTts": {
+    "message": "Invia a TTS"
+  },
+  "speech_sendHint": {
+    "message": "Usa l’ultima trascrizione come bozza TTS."
+  },
+  "speech_download": {
+    "message": "Scarica"
+  },
+  "speech_downloadCurrent": {
+    "message": "Scarica il segmento corrente"
+  },
+  "speech_downloadAll": {
+    "message": "Scarica tutti i segmenti"
+  },
+  "speech_segmentFormat": {
+    "message": "Formato"
+  },
+  "speech_historyTitle": {
+    "message": "Cronologia vocale"
+  },
+  "speech_historyAll": {
+    "message": "Tutte"
+  },
+  "speech_historyStt": {
+    "message": "STT"
+  },
+  "speech_historyTts": {
+    "message": "TTS"
+  },
+  "speech_historySearch": {
+    "message": "Cerca trascrizioni"
+  },
+  "speech_historyRetentionHint": {
+    "message": "Conserva gli ultimi {{count}} elementi. Usa \"Cancella tutto\" per rimuovere tutto."
+  },
+  "speech_useInTts": {
+    "message": "Usa in TTS"
+  },
+  "speech_copy": {
+    "message": "Copia"
+  },
+  "speech_copySuccess": {
+    "message": "Copiato negli appunti"
+  },
+  "speech_copyError": {
+    "message": "Impossibile copiare la trascrizione."
+  },
+  "speech_providerTag": {
+    "message": "Provider"
+  },
+  "speech_voiceTag": {
+    "message": "Voce"
+  },
+  "speech_emptyHistory": {
+    "message": "Avvia una registrazione o genera audio per vedere la cronologia qui."
+  },
+  "speech_downloadDisabledBrowser": {
+    "message": "Il TTS del browser non crea audio scaricabile."
+  },
+  "speech_downloadDisabledEmpty": {
+    "message": "Genera audio per abilitare i download."
+  },
+  "speech_transcriptLock": {
+    "message": "Blocca"
+  },
+  "speech_transcriptUnlock": {
+    "message": "Sblocca"
+  },
+  "speech_transcriptEditHint": {
+    "message": "Modifica abilitata per questa trascrizione."
+  },
+  "speech_transcriptLockedHint": {
+    "message": "Bloccato agli aggiornamenti di trascrizione in tempo reale."
+  },
+  "speech_transcriptRecordingHint": {
+    "message": "Registrazione in corso; la trascrizione è bloccata."
+  },
+  "actor_title": {
+    "message": "Regista di scena (Actor)"
+  },
+  "actor_help": {
+    "message": "Configura il contesto di scena per chat: ruoli, umore, mondo, obiettivi e note."
+  },
+  "actor_addLabel": {
+    "message": "Aggiungi o rimuovi aspetti per focalizzare la scena."
+  },
+  "actor_user": {
+    "message": "Utente"
+  },
+  "actor_char": {
+    "message": "Personaggio"
+  },
+  "actor_world": {
+    "message": "Mondo"
+  },
+  "actor_newAspectPlaceholder": {
+    "message": "Nome dell'aspetto (es. Umore, Ruolo, Luogo)"
+  },
+  "actor_addButton": {
+    "message": "Aggiungi aspetto"
+  },
+  "actor_aspectPlaceholder": {
+    "message": "Descrivi brevemente (opzionale)"
+  },
+  "actor_notes": {
+    "message": "Note di scena"
+  },
+  "actor_notesHelp": {
+    "message": "Note opzionali inviate al modello. Supporta Markdown e LaTeX."
+  },
+  "actor_position": {
+    "message": "Posizione del prompt Actor"
+  },
+  "actor_before": {
+    "message": "Prima del prompt/storia principale"
+  },
+  "actor_after": {
+    "message": "Dopo il prompt/storia principale"
+  },
+  "actor_depth": {
+    "message": "In chat in profondità"
+  },
+  "actor_depthLabel": {
+    "message": "Profondità (messaggi non di sistema)"
+  },
+  "actor_depthPlaceholder": {
+    "message": "0 = in cima alla chat"
+  },
+  "actor_depthHelp": {
+    "message": "Usato solo quando la posizione è \"In chat in profondità\". Conta i messaggi non di sistema dall'inizio della chat."
+  },
+  "actor_roleLabel": {
+    "message": "Ruolo del messaggio Actor"
+  },
+  "actor_roleSystem": {
+    "message": "Sistema"
+  },
+  "actor_roleUser": {
+    "message": "Utente"
+  },
+  "actor_roleAssistant": {
+    "message": "Assistente"
+  },
+  "actor_positionHelp": {
+    "message": "La profondità è usata solo quando la posizione è \"In chat in profondità\". Il ruolo controlla se Actor appare come sistema, utente o assistente."
+  },
+  "actor_preview": {
+    "message": "Anteprima del prompt Actor"
+  },
+  "actor_tokens": {
+    "message": "Token: {{count}}"
+  },
+  "actor_previewEmpty": {
+    "message": "Nulla da inviare per ora."
+  },
+  "actor_offlineHintTitle": {
+    "message": "World Books non disponibili per Actor"
+  },
+  "actor_offlineHintBody": {
+    "message": "Connetti il tuo server tldw dalle Impostazioni per usare World Books negli aspetti Actor, oppure continua a usare valori di testo libero."
+  },
+  "actor_loreWorldBookMissing": {
+    "message": "Il precedente collegamento al World Book non è stato trovato; uso del testo libero."
+  },
+  "actor_loreEntryMissing": {
+    "message": "La precedente voce del World Book non è stata trovata; uso del testo libero."
+  },
+  "actor_sourceFree": {
+    "message": "Testo libero"
+  },
+  "actor_sourceLore": {
+    "message": "World Book"
+  },
+  "actor_worldBookPlaceholder": {
+    "message": "World Book"
+  },
+  "actor_entryPlaceholder": {
+    "message": "Voce"
+  },
+  "actor_loreValuePlaceholder": {
+    "message": "Seleziona un'opzione (opzionale)"
+  },
+  "actor_tokenLabel": {
+    "message": "Token"
+  },
+  "actor_tokensTitle": {
+    "message": "Token del dizionario Actor"
+  },
+  "actor_tokensHelp": {
+    "message": "Usa questi token nei prompt e nei messaggi di sistema."
+  },
+  "actor_keyChangeTitle": {
+    "message": "Cambiare la chiave del token Actor?"
+  },
+  "actor_keyChangeBody": {
+    "message": "Questo cambierà il token da {{old}} a {{next}}. I prompt che usano il vecchio token non si aggiorneranno automaticamente."
+  },
+  "actor_keyCollisionTitle": {
+    "message": "Chiave Actor già in uso"
+  },
+  "actor_keyCollisionBody": {
+    "message": "Un altro aspetto usa già questa chiave. Le chiavi devono essere uniche per chat."
+  },
+  "actor_copy": {
+    "message": "Copia"
+  },
+  "actor_copied": {
+    "message": "Copiato"
+  },
+  "actor_copySuccess": {
+    "message": "Token copiato negli appunti"
+  },
+  "actor_copyError": {
+    "message": "Impossibile copiare il token"
+  },
+  "actor_notesPreviewTitle": {
+    "message": "Anteprima delle note di scena"
+  },
+  "actor_notesPreviewToggle": {
+    "message": "Mostra anteprima Markdown + LaTeX"
+  },
+  "actor_aspectLimitWarningTitle": {
+    "message": "Molti aspetti configurati per questa chat"
+  },
+  "actor_aspectLimitWarningBody": {
+    "message": "Hai {{count}} aspetti (limite soft {{limit}}). Valuta di ridurli per focalizzare la scena e risparmiare token."
+  },
+  "actor_tokenWarning": {
+    "message": "Il prompt Actor è lungo ({{count}} token; limite soft {{limit}}). Valuta di ridurre aspetti o note per risparmiare contesto."
+  },
+  "actor_depthRangeHelp": {
+    "message": "La profondità deve essere tra 0 e 999; i valori oltre la lunghezza della cronologia vengono limitati."
+  },
+  "actor_presetLabel": {
+    "message": "Preset"
+  },
+  "actor_presetPlaceholder": {
+    "message": "Scegli un preset"
+  },
+  "actor_preset.sliceOfLife": {
+    "message": "Spaccato di vita"
+  },
+  "actor_preset.dungeonCrawl": {
+    "message": "Esplorazione del dungeon"
+  },
+  "actor_preset.romance": {
+    "message": "Romanticismo"
+  },
+  "actor_preset.workSession": {
+    "message": "Sessione di lavoro"
+  },
+  "actor_applyPreset": {
+    "message": "Applica"
+  },
+  "actor_resetChat": {
+    "message": "Reimposta per questa chat"
+  },
+  "actor_saveAsCharacterDefault": {
+    "message": "Salva come predefinito di {{name}}"
+  },
+  "actor_applyCharacterDefault": {
+    "message": "Applica il predefinito di {{name}}"
+  },
+  "actor_notesGmOnly": {
+    "message": "Solo GM: non inviare le note al modello"
+  },
+  "actor_templateModeLabel": {
+    "message": "Interazione con i template di scena"
+  },
+  "actor_templateModeHelp": {
+    "message": "Controlla come Actor interagisce con i template di scena attivi. Unisci mantiene entrambi; Sovrascrivi consente ad Actor di sostituire i campi sovrapposti; Ignora salta Actor quando i template sono attivi."
+  },
+  "actor_templateMode.merge": {
+    "message": "Unisci con i template"
+  },
+  "actor_templateMode.override": {
+    "message": "Sovrascrivi i template"
+  },
+  "actor_templateMode.ignore": {
+    "message": "Ignora quando i template sono attivi"
+  },
+  "actor_bladeAspectsTitle": {
+    "message": "Aspetti"
+  },
+  "actor_bladeNotesTitle": {
+    "message": "Note di scena"
+  },
+  "actor_bladePlacementTitle": {
+    "message": "Posizionamento e template"
+  },
+  "actor_bladeTokensTitle": {
+    "message": "Token e anteprima"
+  },
+  "actor_summaryAspectsEmpty": {
+    "message": "Nessun aspetto configurato."
+  },
+  "actor_summaryAspectsCount": {
+    "message": "{{count}} aspetti configurati."
+  },
+  "actor_summaryNotesEmpty": {
+    "message": "Nessuna nota di scena per ora."
+  },
+  "actor_summaryNotes": {
+    "message": "{{chars}} caratteri{{gmSuffix}}."
+  },
+  "actor_summaryNotesGmOnly": {
+    "message": " · Solo GM"
+  },
+  "actor_summaryPlacementBefore": {
+    "message": "Prima del prompt/storia principale."
+  },
+  "actor_summaryPlacementAfter": {
+    "message": "Dopo il prompt/storia principale."
+  },
+  "actor_summaryPlacementDepth": {
+    "message": "Profondità {{depth}} · Ruolo: {{role}}."
+  },
+  "actor_summaryTokensEmpty": {
+    "message": "Nessun token definito; imposta i valori degli aspetti."
+  },
+  "actor_summaryTokensCount": {
+    "message": "{{tokens}} token · ~{{estimate}} token nel prompt."
+  },
+  "actor_sceneTemplateActive": {
+    "message": "Template di scena attivo: Actor rispetta le impostazioni di interazione con i template."
+  },
+  "composer_compareFeatureToggle": {
+    "message": "Attiva modalità Confronto"
+  },
+  "composer_compareFeatureToggleHint": {
+    "message": "Sblocca le funzioni sperimentali di confronto multi‑modello."
+  },
+  "composer_compareDisabled": {
+    "message": "La modalità Confronto è disattivata nelle impostazioni."
+  },
+  "composer_compareChosenHint": {
+    "message": "Continua con la risposta scelta oppure confronta di nuovo."
+  },
+  "composer_compareChosenLabel": {
+    "message": "Scelta"
+  },
+  "composer_compareLatency": {
+    "message": "Latenza"
+  },
+  "composer_compareHistoryPrefix": {
+    "message": "Confronto: {{title}}"
+  },
+  "composer_compareHistorySuffix": {
+    "message": "(da confronto)"
+  },
+  "composer_compareClusterLabel": {
+    "message": "Risposte multi‑modello"
+  },
+  "composer_compareClusterCount": {
+    "message": "{{count}} modelli"
+  },
+  "composer_compareBulkSplitHint": {
+    "message": "Modelli selezionati: {{count}}"
+  },
+  "composer_compareBulkSplit": {
+    "message": "Apri ogni risposta selezionata come chat separata"
+  },
+  "composer_compareThreadLabel": {
+    "message": "Thread per modello"
+  },
+  "composer_compareThreadYou": {
+    "message": "Tu"
+  },
+  "composer_compareOpenFullChat": {
+    "message": "Apri come chat completa"
+  },
+  "composer_compareSpawnedChat": {
+    "message": "Apri chat separata"
+  },
+  "composer_compareCanonicalOn": {
+    "message": "Canonica"
+  },
+  "composer_compareCanonicalOff": {
+    "message": "Fissa come canonica"
+  },
+  "composer_compareCanonicalLabel": {
+    "message": "Risposta canonica"
+  },
+  "composer_compareFilterLabel": {
+    "message": "Filtra modelli"
+  },
+  "composer_compareFilterClear": {
+    "message": "Mostra tutti"
+  },
+  "composer_compareFilterCount": {
+    "message": "Mostrati {{visible}} / {{total}}"
+  },
+  "composer_compareTokens": {
+    "message": "Token: {{count}}"
+  },
+  "feedback_prompt": {
+    "message": "È stato utile?"
+  },
+  "feedback_thumbsUp": {
+    "message": "Utile"
+  },
+  "feedback_thumbsDown": {
+    "message": "Non utile"
+  },
+  "feedback_more": {
+    "message": "Altri commenti"
+  },
+  "feedback_thanks": {
+    "message": "Grazie per il feedback"
+  },
+  "feedback_disabled": {
+    "message": "Il feedback è disponibile dopo la fine della risposta."
+  },
+  "feedback_unavailable": {
+    "message": "Il feedback non è disponibile per questo messaggio."
+  },
+  "feedback_modalTitle": {
+    "message": "Feedback"
+  },
+  "feedback_modalRatingLabel": {
+    "message": "Come valuteresti questa risposta?"
+  },
+  "feedback_modalIssuesLabel": {
+    "message": "Qual è stato il problema? (seleziona tutto ciò che si applica)"
+  },
+  "feedback_modalNotesLabel": {
+    "message": "Commenti aggiuntivi (opzionali)"
+  },
+  "feedback_modalSubmit": {
+    "message": "Invia feedback"
+  },
+  "feedback_errorTitle": {
+    "message": "Invio feedback non riuscito"
+  },
+  "feedback_errorBody": {
+    "message": "Impossibile inviare il feedback."
+  },
+  "feedback_errorSource": {
+    "message": "Impossibile inviare il feedback sulla fonte."
+  },
+  "feedback_issues_incorrect": {
+    "message": "Informazioni errate"
+  },
+  "feedback_issues_notRelevant": {
+    "message": "Non pertinente alla mia domanda"
+  },
+  "feedback_issues_missingDetails": {
+    "message": "Mancano dettagli importanti"
+  },
+  "feedback_issues_badSources": {
+    "message": "Le fonti non sono state utili"
+  },
+  "feedback_issues_tooVerbose": {
+    "message": "Troppo prolisso"
+  },
+  "feedback_issues_tooBrief": {
+    "message": "Troppo breve"
+  },
+  "feedback_issues_other": {
+    "message": "Altro"
+  },
+  "feedback_sourceHelpful": {
+    "message": "Fonte utile"
+  },
+  "feedback_sourceUnhelpful": {
+    "message": "Fonte poco utile"
+  },
+  "actor_uploadedFiles": {
+    "message": "File caricati ({{count}})"
+  },
+  "actor_fileRetrieval": {
+    "message": "Recupero file"
+  },
+  "actor_fileStatusProcessed": {
+    "message": "Elaborato"
+  },
+  "actor_fileStatusProcessing": {
+    "message": "In elaborazione..."
+  },
+  "documentGenerator_title": {
+    "message": "Generatore di documenti"
+  },
+  "documentGenerator_unavailable": {
+    "message": "La generazione di documenti non è disponibile su questo server."
+  },
+  "documentGenerator_noConversation": {
+    "message": "Avvia una chat collegata al server per generare documenti."
+  },
+  "documentGenerator_source": {
+    "message": "Fonte"
+  },
+  "documentGenerator_sourceId": {
+    "message": "Conversazione {{id}}"
+  },
+  "documentGenerator_sourceMissing": {
+    "message": "Nessuna conversazione attiva al momento."
+  },
+  "documentGenerator_sourceMessageId": {
+    "message": "Messaggio {{id}}"
+  },
+  "documentGenerator_documentType": {
+    "message": "Tipo di documento"
+  },
+  "documentGenerator_model": {
+    "message": "Modello"
+  },
+  "documentGenerator_modelPlaceholder": {
+    "message": "ID del modello"
+  },
+  "documentGenerator_providerPlaceholder": {
+    "message": "Nome del provider"
+  },
+  "documentGenerator_providerLabel": {
+    "message": "Provider: {{provider}}"
+  },
+  "documentGenerator_specificMessage": {
+    "message": "Concentra su un messaggio specifico"
+  },
+  "documentGenerator_specificMessagePlaceholder": {
+    "message": "Opzionale: incolla un estratto del messaggio su cui concentrarti."
+  },
+  "documentGenerator_customPrompt": {
+    "message": "Prompt personalizzato"
+  },
+  "documentGenerator_customPromptPlaceholder": {
+    "message": "Istruzioni opzionali per il documento generato."
+  },
+  "documentGenerator_asyncGeneration": {
+    "message": "Genera in modo asincrono"
+  },
+  "documentGenerator_promptPresetTitle": {
+    "message": "Preset del prompt"
+  },
+  "documentGenerator_promptPresetHint": {
+    "message": "Personalizza i prompt di sistema/utente usati per questo tipo di documento."
+  },
+  "documentGenerator_promptReload": {
+    "message": "Ricarica dal server"
+  },
+  "documentGenerator_systemPrompt": {
+    "message": "Prompt di sistema"
+  },
+  "documentGenerator_userPrompt": {
+    "message": "Prompt utente"
+  },
+  "documentGenerator_temperature": {
+    "message": "Temperatura"
+  },
+  "documentGenerator_maxTokens": {
+    "message": "Max token"
+  },
+  "documentGenerator_jobQueued": {
+    "message": "Generazione del documento in coda."
+  },
+  "documentGenerator_generated": {
+    "message": "Documento generato."
+  },
+  "documentGenerator_deleteTitle": {
+    "message": "Eliminare il documento?"
+  },
+  "documentGenerator_deleteBody": {
+    "message": "Questo rimuoverà definitivamente il documento generato."
+  },
+  "documentGenerator_jobCancelled": {
+    "message": "Operazione annullata."
+  },
+  "documentGenerator_promptSaved": {
+    "message": "Preset del prompt salvato."
+  },
+  "documentGenerator_documentsTitle": {
+    "message": "Documenti generati"
+  },
+  "documentGenerator_loading": {
+    "message": "Caricamento…"
+  },
+  "documentGenerator_noDocuments": {
+    "message": "Nessun documento ancora."
+  },
+  "documentGenerator_jobsTitle": {
+    "message": "Job di generazione"
+  },
+  "documentGenerator_progress": {
+    "message": "{{percent}}% completato"
+  },
+  "documentGenerator_noContent": {
+    "message": "Nessun contenuto disponibile."
+  },
+  "documentGenerator_errors_missingModel": {
+    "message": "Seleziona prima un modello e un provider."
+  },
+  "documentGenerator_types_summary": {
+    "message": "Riepilogo"
+  },
+  "documentGenerator_types_timeline": {
+    "message": "Cronologia"
+  },
+  "documentGenerator_types_briefing": {
+    "message": "Briefing"
+  },
+  "documentGenerator_types_study_guide": {
+    "message": "Guida di studio"
+  },
+  "documentGenerator_types_q_and_a": {
+    "message": "Domande e risposte"
+  },
+  "documentGenerator_types_meeting_notes": {
+    "message": "Note riunione"
+  },
+  "composer_contextTabsEmpty": {
+    "message": "Nessuna scheda selezionata."
+  },
+  "composer_contextFilesTitle": {
+    "message": "File nel contesto"
+  },
+  "composer_contextFilesEmpty": {
+    "message": "Nessun file allegato."
+  },
+  "composer_addFile": {
+    "message": "Aggiungi file"
+  },
+  "composer_contextTabsAvailable": {
+    "message": "Schede aperte"
+  },
+  "composer_noTabsFound": {
+    "message": "Nessuna scheda aperta idonea trovata."
+  },
+  "errors_loadLocalHistoryPrefix": {
+    "message": "Impossibile caricare la cronologia chat locale"
+  },
+  "errors_loadLocalHistoryDefault": {
+    "message": "Si è verificato un problema durante il caricamento della cronologia chat locale."
+  },
+  "ttsClips_title": {
+    "message": "TTS clips"
+  },
+  "ttsClips_empty": {
+    "message": "Generate chat audio to save it here."
+  },
+  "ttsClips_clearAll": {
+    "message": "Clear all"
+  },
+  "ttsClips_clearConfirm": {
+    "message": "Clear all saved TTS clips?"
+  },
+  "ttsClips_deleteConfirm": {
+    "message": "Delete this clip?"
+  },
+  "ttsClips_download": {
+    "message": "Download"
+  },
+  "ttsClips_downloadAll": {
+    "message": "Download all segments"
+  },
+  "ttsClips_segmentsLabel": {
+    "message": "{{count}} segments"
+  },
+  "composer_modelSearchPlaceholder": {
+    "message": "Search models"
+  },
+  "composer_noModelsMatch": {
+    "message": "No models match your search."
+  },
+  "composer_favorites": {
+    "message": "Favorites"
+  },
+  "composer_favoriteAdd": {
+    "message": "Add to favorites"
+  },
+  "composer_favoriteRemove": {
+    "message": "Remove from favorites"
+  },
+  "composer_sort_favorites": {
+    "message": "Favorites"
+  },
+  "composer_sort_az": {
+    "message": "A-Z"
+  },
+  "composer_sort_provider": {
+    "message": "Provider"
+  },
+  "composer_sort_localFirst": {
+    "message": "Local-first"
+  },
+  "composer_mcpAriaUnavailable": {
+    "message": "MCP tools unavailable"
+  },
+  "composer_mcpAriaLabel": {
+    "message": "Strumenti MCP: {{choice}}, {{summary}}"
+  },
+  "composer_mcpConfigure": {
+    "message": "Configura strumenti"
+  },
+  "composer_mcpSettingsTitle": {
+    "message": "Impostazioni strumenti MCP"
+  },
+  "acp_workspace_selectSession": {
+    "message": "Seleziona una sessione per aprire il terminale dell'area di lavoro."
+  },
+  "acp_workspace_unavailable": {
+    "message": "Il terminale dell'area di lavoro non è disponibile per questa sessione."
+  },
+  "acp_workspace_title": {
+    "message": "Terminale dell'area di lavoro"
+  }
+}

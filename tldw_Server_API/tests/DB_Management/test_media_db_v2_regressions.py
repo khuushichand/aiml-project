@@ -220,3 +220,25 @@ def test_add_media_with_keywords_overwrite_preserves_sharing_state():
     assert after["org_id"] == 42
     assert after["team_id"] == 7
     assert after["owner_user_id"] == 1
+
+
+def test_search_media_db_returns_tuple_when_matches_exist():
+
+    db = _make_media_db()
+    media_id, _, _ = db.add_media_with_keywords(
+        title="Query Decomposition for RAG",
+        media_type="pdf",
+        content="A paper that discusses search query decomposition techniques.",
+        keywords=[],
+    )
+
+    results, total = db.search_media_db(
+        search_query="query",
+        search_fields=["title", "content"],
+        page=1,
+        results_per_page=50,
+    )
+
+    assert total == 1
+    assert len(results) == 1
+    assert results[0]["id"] == media_id

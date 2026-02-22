@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # Adjust impor
     SchemaError,
 )
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 #######################################################################################################################
 
@@ -66,7 +67,7 @@ def _get_db_path_for_user(user_id: int) -> Path:
     """
     base_dir_env = os.environ.get("USER_DB_BASE_DIR")
     # Test-mode safety: isolate user DBs to a per-process temp dir unless explicitly overridden
-    if not base_dir_env and str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
+    if not base_dir_env and env_flag_enabled("TESTING"):
         run_tag = (
             os.getenv("TLDW_TEST_RUN_ID")
             or os.getenv("PYTEST_XDIST_WORKER")
@@ -92,7 +93,7 @@ def _get_db_path_for_user(user_id: int) -> Path:
             os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
         except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(
-                "TESTING mode: failed to derive project-root user DB dir; falling back to temp dir. Error: %s",
+                'TESTING mode: failed to derive project-root user DB dir; falling back to temp dir. Error: {}',
                 e,
                 exc_info=True,
             )
@@ -141,7 +142,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
         db_instance = _user_db_instances.get(user_id)
     # TEST_MODE: log cache hit/miss visibility for debugging
     try:
-        if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+        if is_test_mode():
             logger.warning(
                 f"TEST_MODE: DB_Deps cache {'hit' if db_instance else 'miss'} for user_id={user_id}"
             )
@@ -159,7 +160,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
         if db_instance:
             logger.debug(f"DB instance for user {user_id} created concurrently.")
             try:
-                if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+                if is_test_mode():
                     _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
                     logger.warning(f"TEST_MODE: DB_Deps returning concurrently-created cached instance user_id={user_id} db_path={_dbp}")
             except (OSError, RuntimeError, TypeError, ValueError):
@@ -184,7 +185,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
             _user_db_instances[user_id] = db_instance
             logger.info(f"Database instance created and cached successfully for user {user_id}")
             try:
-                if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+                if is_test_mode():
                     _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
                     logger.warning(f"TEST_MODE: DB_Deps cached new instance user_id={user_id} db_path={_dbp} shared_backend={use_shared_backend}")
             except (OSError, RuntimeError, TypeError, ValueError):

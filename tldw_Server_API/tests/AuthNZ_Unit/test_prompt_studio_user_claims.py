@@ -78,3 +78,26 @@ def test_prompt_studio_user_claims_non_admin(monkeypatch):
     assert data.get("user_id") == "2"
     assert data.get("is_admin") is False
     assert data.get("permissions") == ["prompt_studio.read"]
+
+
+def test_prompt_studio_user_ignores_legacy_is_admin_without_admin_claims(monkeypatch):
+    async def fake_get_request_user(request, api_key=None, token=None, legacy_token_header=None):
+        return User(
+            id=3,
+            username="legacy-admin-flag",
+            is_active=True,
+            roles=["user"],
+            permissions=["prompt_studio.read"],
+            is_admin=True,
+        )
+
+    monkeypatch.setattr(deps, "get_request_user", fake_get_request_user, raising=True)
+
+    app = _make_app()
+    client = TestClient(app)
+    r = client.get("/ps/me", headers={"Authorization": "Bearer tok-legacy"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+
+    assert data.get("user_id") == "3"
+    assert data.get("is_admin") is False

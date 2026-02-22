@@ -187,17 +187,35 @@ async def get_llm_usage(
 async def get_llm_usage_summary(
     start: str | None = Query(None, description="ISO timestamp inclusive"),
     end: str | None = Query(None, description="ISO timestamp inclusive"),
-    group_by: str = Query("user", pattern="^(user|provider|model|operation|day)$"),
+    group_by: list[str] = Query(default=["user"], description="One or two groupings: user|provider|model|operation|day"),
+    provider: str | None = Query(None, description="Optional provider filter (supports trend queries with group_by=day)"),
     org_id: int | None = Query(None, description="Restrict to a specific organization"),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> LLMUsageSummaryResponse:
+    allowed_groupings = {"user", "provider", "model", "operation", "day"}
+    normalized_group_by = [entry.strip().lower() for entry in group_by if entry and entry.strip()]
+    if not normalized_group_by:
+        normalized_group_by = ["user"]
+    if len(normalized_group_by) > 2:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="group_by supports at most two values",
+        )
+    invalid_groupings = [entry for entry in normalized_group_by if entry not in allowed_groupings]
+    if invalid_groupings:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid group_by values: {', '.join(invalid_groupings)}",
+        )
+
     return await admin_usage_service.get_llm_usage_summary(
         principal=principal,
         db=db,
         start=start,
         end=end,
-        group_by=group_by,
+        group_by=normalized_group_by,
+        provider=provider,
         org_id=org_id,
     )
 

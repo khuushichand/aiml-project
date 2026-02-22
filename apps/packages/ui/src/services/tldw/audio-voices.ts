@@ -67,7 +67,13 @@ const extractVoices = (source: unknown): TldwVoice[] => {
   })
 }
 
-export const fetchTldwVoices = async (): Promise<TldwVoice[]> => {
+type FetchTldwVoicesOptions = {
+  throwOnError?: boolean
+}
+
+export const fetchTldwVoices = async (
+  options?: FetchTldwVoicesOptions
+): Promise<TldwVoice[]> => {
   try {
     const res = await bgRequestClient<any>({
       path: "/api/v1/audio/voices",
@@ -75,13 +81,17 @@ export const fetchTldwVoices = async (): Promise<TldwVoice[]> => {
     })
     if (!res) return []
     return extractVoices(res)
-  } catch {
+  } catch (error) {
+    if (options?.throwOnError) {
+      throw error
+    }
     return []
   }
 }
 
 export const fetchTldwVoiceCatalog = async (
-  provider: string
+  provider: string,
+  options?: FetchTldwVoicesOptions
 ): Promise<TldwVoice[]> => {
   const p = String(provider || "").trim()
   if (!p) return []
@@ -92,7 +102,10 @@ export const fetchTldwVoiceCatalog = async (
     })
     if (!res) return []
     return extractVoices(res)
-  } catch {
+  } catch (error) {
+    if (options?.throwOnError) {
+      throw error
+    }
     return []
   }
 }

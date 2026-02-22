@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -30,6 +29,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     CODE_FILE_EXTENSIONS,
 )
+from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter()
 
@@ -88,14 +88,10 @@ async def process_code_endpoint(
 
             # TEST_MODE diagnostics for upload validation behavior
             try:
-                if (
-                    str(os.getenv("TEST_MODE", "")).lower()
-                    in {"1", "true", "yes", "on"}
-                    and upload_errors
-                ):
+                if is_test_mode() and upload_errors:
                     logger.warning(f"TEST_MODE: process-code upload_errors={upload_errors}")
-            except Exception:
-                pass
+            except Exception as test_mode_log_error:
+                logger.debug("Failed to emit TEST_MODE upload diagnostics", exc_info=test_mode_log_error)
 
             for err in upload_errors:
                 batch["results"].append(
@@ -215,18 +211,13 @@ async def process_code_endpoint(
                 except Exception as exc:
                     # TEST_MODE diagnostics for read errors after successful save
                     try:
-                        if str(os.getenv("TEST_MODE", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "on",
-                        }:
+                        if is_test_mode():
                             logger.warning(
                                 "TEST_MODE: process-code read-error "
                                 f"file='{filename}' path='{local_path}': {type(exc).__name__}: {exc}"
                             )
-                    except Exception:
-                        pass
+                    except Exception as test_mode_log_error:
+                        logger.debug("Failed to emit TEST_MODE read-error diagnostics", exc_info=test_mode_log_error)
                     results.append(
                         {
                             "status": "Error",
@@ -305,8 +296,8 @@ async def process_code_endpoint(
                                             md["start_line"] = int(min(starts))
                                         if ends:
                                             md["end_line"] = int(max(ends))
-                                    except Exception:
-                                        pass
+                                    except Exception as metadata_bounds_error:
+                                        logger.debug("Failed to derive code chunk line bounds", exc_info=metadata_bounds_error)
                                 md["chunk_index"] = idx + 1
                                 md["total_chunks"] = total
                                 chunks.append({"text": cr.text, "metadata": md})

@@ -15,6 +15,8 @@ import socket
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tldw_Server_API.app.core.testing import is_truthy
+
 if TYPE_CHECKING:
     from loguru import Logger
 
@@ -29,8 +31,9 @@ DEFAULT_SECRET_DENYLIST: set[str] = {
     "anthropic_api_key",
 }
 
+# Wildcard bind sentinels used only for client-host normalization logic.
 WILDCARD_HOSTS: set[str] = {
-    "0.0.0.0",
+    "0.0.0.0",  # nosec B104
     "::",
     "0:0:0:0:0:0:0:0",
 }
@@ -80,7 +83,7 @@ def env_bool(name: str) -> bool | None:
     if v is None:
         return None
     v_lower = str(v).strip().lower()
-    if v_lower in {"1", "true", "yes", "on"}:
+    if is_truthy(v_lower):
         return True
     if v_lower in {"0", "false", "no", "off"}:
         return False
@@ -271,9 +274,9 @@ def safe_log(
         log_fn = getattr(log, level, None)
         if callable(log_fn):
             log_fn(msg, *args)
-    except Exception:
+    except Exception as log_error:
         # Swallow logging errors on interpreter shutdown / closed sinks
-        pass
+        _ = log_error
 
 
 def apply_env_overrides(config: Any) -> None:

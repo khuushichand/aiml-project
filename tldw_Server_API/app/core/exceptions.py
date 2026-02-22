@@ -4,11 +4,10 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-DEFAULT_VALIDATION_STATUS = getattr(
-    status,
-    "HTTP_422_UNPROCESSABLE_CONTENT",
-    status.HTTP_422_UNPROCESSABLE_ENTITY,
-)
+if hasattr(status, "HTTP_422_UNPROCESSABLE_CONTENT"):
+    DEFAULT_VALIDATION_STATUS = status.HTTP_422_UNPROCESSABLE_CONTENT
+else:
+    DEFAULT_VALIDATION_STATUS = status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
 class VideoProcessingError(Exception):
@@ -142,6 +141,59 @@ class InvalidRetentionRangeError(AdminDataOpsError):
     """Raised when a retention policy update is out of range."""
 
 
+class BundleError(AdminDataOpsError):
+    """Base exception for backup bundle operations."""
+
+    error_code: str = "bundle_error"
+
+    def __init__(self, message: str = "", *, error_code: str | None = None):
+        super().__init__(message)
+        if error_code is not None:
+            self.error_code = error_code
+
+
+class BundleExportError(BundleError):
+    """Raised when bundle export fails."""
+
+    error_code: str = "export_error"
+
+
+class BundleImportError(BundleError):
+    """Raised when bundle import fails."""
+
+    error_code: str = "import_error"
+
+
+class BundleNotFoundError(BundleError):
+    """Raised when a bundle ID cannot be resolved to a file."""
+
+    error_code: str = "bundle_not_found"
+
+
+class BundleSchemaIncompatibleError(BundleError):
+    """Raised when a bundle's schema version is incompatible with the current app."""
+
+    error_code: str = "schema_incompatible"
+
+
+class BundleDiskSpaceError(BundleError):
+    """Raised when insufficient disk space is available for a bundle operation."""
+
+    error_code: str = "insufficient_disk_space"
+
+
+class BundleRateLimitError(BundleError):
+    """Raised when a bundle operation exceeds the rate limit."""
+
+    error_code: str = "rate_limit_exceeded"
+
+
+class BundleConcurrencyError(BundleError):
+    """Raised when another bundle operation is already in progress."""
+
+    error_code: str = "bundle_operation_in_progress"
+
+
 class TemplateStoreError(Exception):
     """Base exception for watchlist template store errors."""
 
@@ -188,12 +240,12 @@ FILE_ARTIFACTS_ERROR_STATUS: dict[str, int] = {
     "image_backend_unavailable": status.HTTP_400_BAD_REQUEST,
     "storage_quota_exceeded": status.HTTP_507_INSUFFICIENT_STORAGE,
     "storage_persist_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
-    "unsupported_export_format": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "invalid_export_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "invalid_async_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "export_size_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "row_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "cell_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "unsupported_export_format": DEFAULT_VALIDATION_STATUS,
+    "invalid_export_mode": DEFAULT_VALIDATION_STATUS,
+    "invalid_async_mode": DEFAULT_VALIDATION_STATUS,
+    "export_size_exceeded": DEFAULT_VALIDATION_STATUS,
+    "row_limit_exceeded": DEFAULT_VALIDATION_STATUS,
+    "cell_limit_exceeded": DEFAULT_VALIDATION_STATUS,
     "export_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
     "export_job_enqueue_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
     "image_generation_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -205,7 +257,7 @@ def file_artifacts_http_status(exc: FileArtifactsError) -> int:
     status_code = FILE_ARTIFACTS_ERROR_STATUS.get(exc.code)
     if status_code is None:
         if isinstance(exc, FileArtifactsValidationError):
-            return status.HTTP_422_UNPROCESSABLE_ENTITY
+            return DEFAULT_VALIDATION_STATUS
         return status.HTTP_500_INTERNAL_SERVER_ERROR
     return status_code
 

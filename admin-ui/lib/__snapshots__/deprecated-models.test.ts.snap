@@ -1,0 +1,42 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`deprecated model notices > matches snapshot 1`] = `
+[
+  {
+    "id": "openai-gpt-3-5-turbo",
+    "matcher": {
+      "type": "prefix",
+      "value": "gpt-3.5-turbo",
+    },
+    "note": "GPT-3.5 family should be migrated to GPT-4.1 or newer.",
+    "replacement": "gpt-4.1-mini",
+  },
+  {
+    "id": "openai-text-davinci-003",
+    "matcher": {
+      "type": "exact",
+      "value": "text-davinci-003",
+    },
+    "note": "Legacy completion models should migrate to chat-capable models.",
+    "replacement": "gpt-4.1-mini",
+  },
+  {
+    "id": "anthropic-claude-2",
+    "matcher": {
+      "type": "prefix",
+      "value": "claude-2",
+    },
+    "note": "Claude 2 family is superseded by Claude 3.5/4 models.",
+    "replacement": "claude-sonnet-4-20250514",
+  },
+  {
+    "id": "anthropic-claude-instant-1",
+    "matcher": {
+      "type": "prefix",
+      "value": "claude-instant-1",
+    },
+    "note": "Claude Instant models should move to Haiku for low-latency workloads.",
+    "replacement": "claude-haiku-4-20250514",
+  },
+]
+`;

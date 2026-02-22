@@ -99,8 +99,7 @@ class AuthnzBillingRepo:
         try:
             async with self.db_pool.acquire() as conn:
                 if self._is_postgres(conn):
-                    rows = await conn.fetch(
-                        f"""
+                    list_plans_sql_template = """
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
                                stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
                                is_public,
@@ -109,11 +108,13 @@ class AuthnzBillingRepo:
                         {where_clause}
                         ORDER BY sort_order ASC, created_at ASC
                         """
+                    list_plans_sql = list_plans_sql_template.format_map(locals())  # nosec B608
+                    rows = await conn.fetch(
+                        list_plans_sql
                     )
                     return [self._plan_row_to_dict(dict(r)) for r in rows]
                 else:
-                    cur = await conn.execute(
-                        f"""
+                    list_plans_sql_template = """
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
                                stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
                                is_public,
@@ -122,6 +123,9 @@ class AuthnzBillingRepo:
                         {where_clause}
                         ORDER BY sort_order ASC, created_at ASC
                         """
+                    list_plans_sql = list_plans_sql_template.format_map(locals())  # nosec B608
+                    cur = await conn.execute(
+                        list_plans_sql
                     )
                     rows = await cur.fetchall()
                     row_dicts = self._rows_to_dicts(cur, rows)
@@ -458,14 +462,14 @@ class AuthnzBillingRepo:
                     set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
                     params = [org_id] + list(updates.values())
                     await conn.execute(
-                        f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = $1",
+                        f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = $1",  # nosec B608
                         *params,
                     )
                 else:
                     set_clause = ", ".join(f"{k} = ?" for k in updates)
                     params = list(updates.values()) + [org_id]
                     await conn.execute(
-                        f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = ?",
+                        f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = ?",  # nosec B608
                         tuple(params),
                     )
 
@@ -733,43 +737,98 @@ class AuthnzBillingRepo:
     async def try_claim_webhook_event(
         self,
         stripe_event_id: str,
+        *,
+        processing_timeout_seconds: int | None = None,
     ) -> bool:
         """
         Atomically try to claim a webhook event for processing.
 
         Uses UPDATE ... WHERE status IN ('pending', 'failed') to ensure only one
         processor can claim the event, preventing race conditions and allowing
-        manual retries of failed events.
+        manual retries of failed events. Optionally allows reclaiming stale
+        events stuck in 'processing' past a timeout.
 
         Returns True if successfully claimed, False if already claimed/processed.
         """
+        timeout_seconds: int | None = None
+        if processing_timeout_seconds is not None:
+            try:
+                timeout_seconds = max(1, int(processing_timeout_seconds))
+            except (TypeError, ValueError):
+                timeout_seconds = None
+
         try:
             async with self.db_pool.transaction() as conn:
                 if self._is_postgres(conn):
-                    # Atomic claim: only succeeds if status is still 'pending'
-                    result = await conn.execute(
-                        """
-                        UPDATE stripe_webhook_events
-                        SET status = 'processing',
-                            processed_at = CURRENT_TIMESTAMP,
-                            error_message = NULL
-                        WHERE stripe_event_id = $1 AND status IN ('pending', 'failed')
-                        """,
-                        stripe_event_id,
-                    )
+                    if timeout_seconds is None:
+                        # Atomic claim: only succeeds if status is still pending/failed.
+                        result = await conn.execute(
+                            """
+                            UPDATE stripe_webhook_events
+                            SET status = 'processing',
+                                processed_at = CURRENT_TIMESTAMP,
+                                error_message = NULL
+                            WHERE stripe_event_id = $1 AND status IN ('pending', 'failed')
+                            """,
+                            stripe_event_id,
+                        )
+                    else:
+                        # Allow stale processing claims to be reclaimed.
+                        result = await conn.execute(
+                            """
+                            UPDATE stripe_webhook_events
+                            SET status = 'processing',
+                                processed_at = CURRENT_TIMESTAMP,
+                                error_message = NULL
+                            WHERE stripe_event_id = $1
+                              AND (
+                                    status IN ('pending', 'failed')
+                                    OR (
+                                        status = 'processing'
+                                        AND COALESCE(processed_at, TIMESTAMP 'epoch')
+                                            <= CURRENT_TIMESTAMP - ($2::integer * INTERVAL '1 second')
+                                    )
+                                  )
+                            """,
+                            stripe_event_id,
+                            timeout_seconds,
+                        )
                     # PostgreSQL returns "UPDATE N" - extract row count
                     return result and "UPDATE 1" in result
                 else:
-                    cur = await conn.execute(
-                        """
-                        UPDATE stripe_webhook_events
-                        SET status = 'processing',
-                            processed_at = CURRENT_TIMESTAMP,
-                            error_message = NULL
-                        WHERE stripe_event_id = ? AND status IN ('pending', 'failed')
-                        """,
-                        (stripe_event_id,),
-                    )
+                    if timeout_seconds is None:
+                        cur = await conn.execute(
+                            """
+                            UPDATE stripe_webhook_events
+                            SET status = 'processing',
+                                processed_at = CURRENT_TIMESTAMP,
+                                error_message = NULL
+                            WHERE stripe_event_id = ? AND status IN ('pending', 'failed')
+                            """,
+                            (stripe_event_id,),
+                        )
+                    else:
+                        timeout_modifier = f"-{timeout_seconds} seconds"
+                        cur = await conn.execute(
+                            """
+                            UPDATE stripe_webhook_events
+                            SET status = 'processing',
+                                processed_at = CURRENT_TIMESTAMP,
+                                error_message = NULL
+                            WHERE stripe_event_id = ?
+                              AND (
+                                    status IN ('pending', 'failed')
+                                    OR (
+                                        status = 'processing'
+                                        AND (
+                                            processed_at IS NULL
+                                            OR datetime(processed_at) <= datetime('now', ?)
+                                        )
+                                    )
+                                  )
+                            """,
+                            (stripe_event_id, timeout_modifier),
+                        )
                     return cur.rowcount > 0
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.try_claim_webhook_event failed: {exc}")
@@ -857,12 +916,28 @@ class AuthnzBillingRepo:
         subscription = await self.get_org_subscription(org_id)
 
         if not subscription:
-            # Fall back to free plan
+            base_limits = get_plan_limits("free")
+            # Fall back to free plan from DB if present, merged over canonical defaults
+            # so newly introduced categories are not silently treated as unlimited.
             free_plan = await self.get_plan_by_name("free")
             if free_plan:
-                return free_plan.get("limits", {})
-            # Ultimate fallback to canonical defaults
-            return get_plan_limits("free")
+                free_plan_limits = self._normalize_storage_limits(free_plan.get("limits", {}) or {})
+                return {**base_limits, **free_plan_limits}
+            # Ultimate fallback to canonical defaults.
+            return base_limits
+
+        # Only billable/active subscriptions should retain paid limits.
+        # Other statuses (e.g. pending, past_due, canceled) fall back to free-tier
+        # limits to avoid stale paid access after billing failures.
+        status = str(subscription.get("status", "active")).strip().lower()
+        paid_statuses = {"active", "trialing", "canceling"}
+        if status not in paid_statuses:
+            base_limits = get_plan_limits("free")
+            free_plan = await self.get_plan_by_name("free")
+            if free_plan:
+                free_plan_limits = self._normalize_storage_limits(free_plan.get("limits", {}) or {})
+                return {**base_limits, **free_plan_limits}
+            return base_limits
 
         plan_name = subscription.get("plan_name", "free")
         base_limits = get_plan_limits(plan_name)

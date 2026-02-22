@@ -62,3 +62,14 @@ def test_extractor_max_workers_env(monkeypatch):
 
     assert captured["max_workers"] == 3
     assert result == ["ok"]
+
+
+def test_regex_pii_mask_flag_accepts_y(monkeypatch):
+    monkeypatch.setenv("REGEX_PII_MASK", "y")
+    assert extractor_lib._regex_pii_mask_enabled() is True
+
+
+def test_clear_caches_flag_accepts_y_end_only(monkeypatch):
+    monkeypatch.setenv("EXTRACTOR_CLEAR_CACHES", "y")
+    assert extractor_lib._should_clear_caches("start") is False
+    assert extractor_lib._should_clear_caches("end") is True

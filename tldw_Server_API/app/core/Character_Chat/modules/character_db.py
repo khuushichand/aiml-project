@@ -99,7 +99,7 @@ def _prepare_character_data_for_db_storage(
                             if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
                                 img.thumbnail(max_size, Image.Resampling.LANCZOS)
                                 logger.info(
-                                    "Resized character image from %s to fit within %s",
+                                    'Resized character image from {} to fit within {}',
                                     img.size,
                                     max_size,
                                 )
@@ -123,7 +123,7 @@ def _prepare_character_data_for_db_storage(
                                 )
                             db_data["image"] = output.getvalue()
                             logger.info(
-                                "Optimized character image: %s -> %s bytes",
+                                'Optimized character image: {} -> {} bytes',
                                 len(image_bytes),
                                 len(db_data["image"]),
                             )
@@ -150,13 +150,13 @@ def _prepare_character_data_for_db_storage(
                 db_data[field_name] = json.loads(db_data[field_name])
                 if not isinstance(db_data[field_name], list):
                     logger.warning(
-                        "Field '%s' was a JSON string but not a list. Resetting to empty list.",
+                        "Field '{}' was a JSON string but not a list. Resetting to empty list.",
                         field_name,
                     )
                     db_data[field_name] = []
             except json.JSONDecodeError:
                 logger.warning(
-                    "Field '%s' is not valid JSON string. Defaulting to empty list.",
+                    "Field '{}' is not valid JSON string. Defaulting to empty list.",
                     field_name,
                 )
                 db_data[field_name] = []
@@ -236,7 +236,7 @@ def update_existing_character_details(
     try:
         if not update_payload:
             logger.info(
-                "No specific fields to update for character ID %s, DB layer will touch if version matches.",
+                'No specific fields to update for character ID {}, DB layer will touch if version matches.',
                 character_id,
             )
             return bool(db.update_character_card(character_id, {}, expected_version))
@@ -282,11 +282,21 @@ def delete_character_from_db(db: CharactersRAGDB, character_id: int, expected_ve
         raise CharactersRAGDBError(f"Unexpected error deleting character: {exc}") from exc
 
 
-def restore_character_from_db(db: CharactersRAGDB, character_id: int, expected_version: int) -> bool:
+def restore_character_from_db(
+    db: CharactersRAGDB,
+    character_id: int,
+    expected_version: int,
+    *,
+    retention_days: int | None = None,
+) -> bool:
     """Restore a soft-deleted character from the database."""
 
     try:
-        success = db.restore_character_card(character_id, expected_version)
+        success = db.restore_character_card(
+            character_id,
+            expected_version,
+            retention_days=retention_days,
+        )
         if success:
             logger.info("Character ID {} restored successfully.", character_id)
         return bool(success)
@@ -382,8 +392,8 @@ def load_character_and_image(
             try:
                 image_field = image_field.tobytes()  # type: ignore[attr-defined]
                 char_data["image"] = image_field
-            except Exception:
-                pass
+            except Exception as image_bytes_error:
+                logger.debug("Character DB failed to normalize image field bytes", exc_info=image_bytes_error)
 
         if isinstance(image_field, bytes) and image_field:
             try:
@@ -401,7 +411,7 @@ def load_character_and_image(
         return None, [], None
     except Exception as exc:
         logger.error(
-            "Unexpected error in load_character_and_image for ID %s: %s",
+            'Unexpected error in load_character_and_image for ID {}: {}',
             character_id,
             exc,
             exc_info=True,
@@ -430,7 +440,7 @@ def load_character_wrapper(
         raise
     except Exception as exc:
         logger.error(
-            "Unexpected error in load_character_wrapper for '%s': %s",
+            "Unexpected error in load_character_wrapper for '{}': {}",
             character_id_or_ui_choice,
             exc,
             exc_info=True,

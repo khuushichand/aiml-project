@@ -88,7 +88,7 @@ Indexes are created on usage tables for performance:
 - Leave `USAGE_LOG_ENABLED=true` in dev/staging to get insights; tune exclusions as needed.
 - In production, set sensible retention to keep DB size in check.
 - Keep pricing overrides current for accurate cost tracking.
-- Ensure admin endpoints are restricted (they are under `require_admin`).
+- Ensure admin endpoints are restricted with claim-first admin dependencies (`require_roles("admin")` and/or `require_permissions(...)`).
 
 ## Troubleshooting
 

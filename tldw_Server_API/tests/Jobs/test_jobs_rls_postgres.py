@@ -38,7 +38,7 @@ def _dsn_or_skip(monkeypatch):
                 try:
                     cur.execute(_sql.SQL("ALTER ROLE {} LOGIN PASSWORD {}").format(role_ident, pwd_literal))
                 except Exception:
-                    pass
+                    _ = None
             cur.execute("SELECT current_schema()")
             schema_row = cur.fetchone()
             schema_name = (schema_row[0] if schema_row else None) or "public"

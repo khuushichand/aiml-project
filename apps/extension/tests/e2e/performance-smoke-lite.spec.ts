@@ -6,6 +6,7 @@
  */
 
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 import { injectSyntheticMessages } from "./utils/synthetic-messages"
@@ -17,7 +18,7 @@ const SERVER_URL = process.env.TLDW_E2E_SERVER_URL || DEFAULT_SERVER_URL
 
 test.describe("Performance smoke (no API)", () => {
   test("renders synthetic long history without server", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         __tldw_allow_offline: true,
         __tldw_first_run_complete: true,

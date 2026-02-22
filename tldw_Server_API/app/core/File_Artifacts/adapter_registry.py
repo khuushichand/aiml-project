@@ -31,7 +31,7 @@ class FileAdapterRegistry:
             adapter_name = adapter.__name__  # type: ignore[attr-defined]
         except AttributeError:
             adapter_name = str(adapter)
-        logger.info("Registered file adapter %s for file_type '%s'", adapter_name, name)
+        logger.info("Registered file adapter {} for file_type '{}'", adapter_name, name)
 
     def _resolve_adapter_class(self, spec: Any) -> type[FileAdapter]:
         if isinstance(spec, str):
@@ -48,7 +48,7 @@ class FileAdapterRegistry:
 
         spec = self._adapter_specs.get(name)
         if not spec:
-            logger.debug("No adapter spec registered for file_type '%s'", name)
+            logger.debug("No adapter spec registered for file_type '{}'", name)
             return None
 
         try:
@@ -57,7 +57,7 @@ class FileAdapterRegistry:
             self._adapters[name] = adapter
             return adapter
         except Exception as exc:
-            logger.error("Failed to initialize adapter for '%s' (spec=%r): %s", name, spec, exc)
+            logger.error("Failed to initialize adapter for '{}' (spec={}): {}", name, spec, exc)
             raise AdapterInitializationError(name, spec, exc) from exc
 
     def list_types(self) -> list[str]:

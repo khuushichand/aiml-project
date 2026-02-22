@@ -46,9 +46,9 @@ class LLMInferenceManager:
 
             try:
                 from tldw_Server_API.app.core.Local_LLM.Huggingface_Handler import HuggingFaceHandler
-            except ImportError as e:
+            except Exception as e:
                 self.logger.warning(
-                    f"HuggingFace handler unavailable; install transformers/torch to enable it: {e}"
+                    f"HuggingFace handler unavailable; install/repair transformers and torch to enable it: {e}"
                 )
             else:
                 self.huggingface = HuggingFaceHandler(hf_cfg, self.config.app_config)

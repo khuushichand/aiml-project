@@ -85,6 +85,7 @@ def _build_key_mappings() -> KeyMapping:
         ("Search-Engines", "search_engine_id_google"): "GOOGLE_SEARCH_ENGINE_ID",
         ("Search-Engines", "search_engine_api_key_kagi"): "KAGI_API_KEY",
         ("Search-Engines", "search_engine_api_key_tavily"): "TAVILY_API_KEY",
+        ("Search-Engines", "search_engine_api_key_serper"): "SERPER_API_KEY",
         ("Search-Engines", "search_engine_api_key_baidu"): "BAIDU_API_KEY",
         ("Search-Engines", "search_engine_api_key_yandex"): "YANDEX_API_KEY",
         ("Search-Engines", "search_engine_id_yandex"): "YANDEX_SEARCH_ID",

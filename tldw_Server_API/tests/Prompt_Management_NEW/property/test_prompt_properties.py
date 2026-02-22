@@ -544,7 +544,7 @@ class PromptStateMachine(RuleBasedStateMachine):
             try:
                 shutil.rmtree(self.temp_dir)
             except:
-                pass
+                _ = None
 
 
 @pytest.mark.property

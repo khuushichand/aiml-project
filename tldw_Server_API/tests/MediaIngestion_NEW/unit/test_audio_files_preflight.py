@@ -1,3 +1,5 @@
+import wave
+
 import pytest
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
@@ -59,7 +61,11 @@ def test_default_title_from_audio_path_keeps_non_hex_suffix():
 @pytest.mark.unit
 def test_process_audio_files_url_uses_sanitized_default_title(monkeypatch, tmp_path):
     downloaded_wav = tmp_path / "session_ab12cd34.wav"
-    downloaded_wav.write_bytes(b"\x00" * 2048)
+    with wave.open(str(downloaded_wav), "wb") as wave_file:
+        wave_file.setnchannels(1)
+        wave_file.setsampwidth(2)
+        wave_file.setframerate(8000)
+        wave_file.writeframes(b"\x00\x00" * 8)
 
     monkeypatch.setattr(
         audio_files,
@@ -94,3 +100,45 @@ def test_process_audio_files_url_uses_sanitized_default_title(monkeypatch, tmp_p
     item = result["results"][0]
     assert item["status"] == "Success"
     assert item["metadata"]["title"] == "session"
+
+
+@pytest.mark.unit
+def test_process_audio_files_url_post_download_validation_rejected(monkeypatch, tmp_path):
+    downloaded_payload = tmp_path / "session_payload.exe"
+    downloaded_payload.write_bytes(b"MZ")
+
+    monkeypatch.setattr(
+        audio_files,
+        "download_audio_file",
+        lambda *args, **kwargs: str(downloaded_payload),
+    )
+    monkeypatch.setattr(
+        audio_files,
+        "check_transcription_model_status",
+        lambda _model_name: {
+            "available": True,
+            "message": "ok",
+            "model": "base",
+        },
+    )
+
+    def _unexpected_stt(**_kwargs):
+        raise AssertionError("speech_to_text should not run when URL validation fails")
+
+    monkeypatch.setattr(audio_files, "speech_to_text", _unexpected_stt)
+
+    result = audio_files.process_audio_files(
+        inputs=["https://example.com/audio.mp3"],
+        transcription_model="base",
+        transcription_language="en",
+        perform_chunking=False,
+        perform_analysis=False,
+        temp_dir=str(tmp_path),
+    )
+
+    assert result["processed_count"] == 0
+    assert result["errors_count"] == 1
+    assert result["results"][0]["status"] == "Error"
+    assert "downloaded file failed validation" in str(
+        result["results"][0].get("error", "")
+    ).lower()

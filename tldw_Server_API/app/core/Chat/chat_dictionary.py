@@ -18,6 +18,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Templating.template_renderer import (
     TemplateContext,
     TemplateEnv,
@@ -44,7 +45,7 @@ def _truthy_env(name: str, default: bool = False) -> bool:
     val = os.getenv(name)
     if val is None:
         return default
-    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+    return is_truthy(val)
 
 
 def _templates_enabled() -> bool:
@@ -55,7 +56,7 @@ def _templates_enabled() -> bool:
         cp = load_comprehensive_config()
         if cp and cp.has_section('Chat-Templating'):
             raw = cp.get('Chat-Templating', 'enable_templates', fallback='false')
-            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(raw)
     except _CHAT_DICT_NONCRITICAL_EXCEPTIONS:
         pass
     return False
@@ -63,7 +64,9 @@ def _templates_enabled() -> bool:
 
 def _has_template_syntax(text: str) -> bool:
     try:
-        return ("{{" in text) or ("{%" in text)
+        # Template auto-detection is expression-only; block tags are not
+        # considered valid syntax for this feature.
+        return "{{" in text
     except TypeError:
         return False
 
@@ -203,6 +206,7 @@ class ChatDictionary:
         group: str | None = None,
         timed_effects: dict[str, int] | None = None,
         max_replacements: int = 1,
+        enable_templates: bool | None = None,
     ):
         self.key_raw = key
         self.key = self.compile_key(key)
@@ -212,6 +216,7 @@ class ChatDictionary:
         self.timed_effects = timed_effects or {"sticky": 0, "cooldown": 0, "delay": 0}
         self.last_triggered: datetime | None = None
         self.max_replacements = max_replacements
+        self.enable_templates = enable_templates
 
     @staticmethod
     def compile_key(key: str) -> str | re.Pattern:
@@ -378,10 +383,20 @@ def apply_replacement_once(text: str, entry: ChatDictionary) -> tuple[str, int]:
     """
     replacements_done = 0
 
-    # Fast path: when templating is disabled or no template syntax is present,
-    # use original logic for performance.
-    templating_on = _templates_enabled()
-    has_tpl = _has_template_syntax(entry.content) if templating_on else False
+    # Templating precedence:
+    # 1) Global feature flag off -> disabled for all entries.
+    # 2) Entry/dictionary override False -> disabled for that entry.
+    # 3) Entry/dictionary override True -> force rendering.
+    # 4) Otherwise auto-detect with "{{" syntax.
+    templating_globally_on = _templates_enabled()
+    if not templating_globally_on:
+        has_tpl = False
+    elif entry.enable_templates is False:
+        has_tpl = False
+    elif entry.enable_templates is True:
+        has_tpl = True
+    else:
+        has_tpl = _has_template_syntax(entry.content)
 
     if isinstance(entry.key, re.Pattern):
         if has_tpl:

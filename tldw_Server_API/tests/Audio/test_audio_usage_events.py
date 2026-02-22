@@ -27,6 +27,8 @@ class _FakeTTSService:
         voice_to_voice_start=None,
         voice_to_voice_route="audio.speech",
         user_id=None,
+        metadata_only=False,
+        request_id=None,
     ):
         yield b"audio-bytes"
 
@@ -61,6 +63,7 @@ def test_tts_usage_event_logged(client_with_overrides):
 
 
     client, dummy = client_with_overrides
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     payload = {
         "model": "tts-1",
         "input": "hello",
@@ -68,7 +71,11 @@ def test_tts_usage_event_logged(client_with_overrides):
         "response_format": "mp3",
         "stream": False
     }
-    r = client.post("/api/v1/audio/speech", json=payload)
+    r = client.post(
+        "/api/v1/audio/speech",
+        json=payload,
+        headers={"X-API-KEY": get_settings().SINGLE_USER_API_KEY},
+    )
     assert r.status_code == 200, r.text
     # Ensure a usage event was logged
     assert any(e[0] == "audio.tts" for e in dummy.events)

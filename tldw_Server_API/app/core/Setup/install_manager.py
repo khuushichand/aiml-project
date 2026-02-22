@@ -64,7 +64,7 @@ def _resolve_status_file() -> Path | None:
                 probe.unlink()
             return root / STATUS_FILENAME
         except Exception:  # noqa: BLE001
-            logger.debug('Install status directory %s not writable', root, exc_info=True)
+            logger.debug('Install status directory {} not writable', root, exc_info=True)
 
     logger.warning('No writable location found for setup install status; running without persistence.')
     return None
@@ -120,7 +120,7 @@ def _install_backend_dependencies(category: str, engine: str, status: Installati
         status.step(step_name, 'skipped', str(exc))
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Dependency install failed for %s:%s", category, engine)
+        logger.exception("Dependency install failed for {}:{}", category, engine)
         status.step(step_name, 'failed', str(exc))
         errors.append(f"{engine} dependencies: {exc}")
         raise
@@ -141,7 +141,7 @@ def _install_embedding_dependencies(target: str, status: InstallationStatus, err
         status.step(step_name, 'skipped', str(exc))
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Dependency install failed for embeddings:%s", target)
+        logger.exception("Dependency install failed for embeddings:{}", target)
         status.step(step_name, 'failed', str(exc))
         errors.append(f"embeddings:{target} deps: {exc}")
         raise
@@ -159,23 +159,23 @@ def _ensure_requirement(requirement: PipRequirement) -> None:
 
     platforms = requirement.platforms
     if platforms and sys.platform not in platforms:
-        logger.info('Skipping %s due to platform restriction', package_name)
+        logger.info('Skipping {} due to platform restriction', package_name)
         return
 
     if package_name in _INSTALLED_DEPENDENCIES:
-        logger.debug('Requirement %s already processed this session', package_name)
+        logger.debug('Requirement {} already processed this session', package_name)
         return
 
     import_name = requirement.import_name
     if import_name and importlib.util.find_spec(import_name) is not None:
-        logger.info('Dependency %s already available (import %s)', package_name, import_name)
+        logger.info('Dependency {} already available (import {})', package_name, import_name)
         _INSTALLED_DEPENDENCIES.add(package_name)
         return
 
     if not _pip_allowed():
         raise PipInstallBlockedError('Package installs disabled via TLDW_SETUP_SKIP_PIP')
 
-    logger.info('Installing dependency %s', package_name)
+    logger.info('Installing dependency {}', package_name)
     # Prefer python -m pip when available; fall back to `uv pip` if pip isn't available
     def _pip_available() -> bool:
         try:
@@ -221,13 +221,13 @@ def _ensure_requirement(requirement: PipRequirement) -> None:
     last_err: Exception | None = None
     for cmd in tried_commands:
         try:
-            logger.info('Attempting installer: %s', ' '.join(cmd[:3]))
+            logger.info('Attempting installer: {}', ' '.join(cmd[:3]))
             _run_subprocess(cmd)
             last_err = None
             break
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            logger.warning('Installer command failed: %s', exc)
+            logger.warning('Installer command failed: {}', exc)
     if last_err is not None:
         raise last_err
     _INSTALLED_DEPENDENCIES.add(package_name)
@@ -320,7 +320,7 @@ class InstallationStatus:
         except Exception:  # noqa: BLE001
             if not self._persist_failed:
                 logger.warning(
-                    'Failed to persist setup install status to %s; continuing in-memory.',
+                    'Failed to persist setup install status to {}; continuing in-memory.',
                     self.path,
                     exc_info=True,
                 )
@@ -403,7 +403,7 @@ def get_install_status_snapshot() -> dict[str, Any] | None:
             _record_latest_status(data)
             return json.loads(json.dumps(data))
         except Exception:  # noqa: BLE001
-            logger.exception('Failed to read install status from %s', path)
+            logger.exception('Failed to read install status from {}', path)
 
     if _LATEST_STATUS_DATA is not None:
         return json.loads(json.dumps(_LATEST_STATUS_DATA))
@@ -466,10 +466,10 @@ def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: list[str
                 _install_nemo_canary()
             status.step(step_name, 'completed')
         except DownloadBlockedError as exc:
-            logger.info('Skipping STT install %s: %s', entry.engine, exc)
+            logger.info('Skipping STT install {}: {}', entry.engine, exc)
             status.step(step_name, 'skipped', str(exc))
         except Exception as exc:  # noqa: BLE001
-            logger.exception("STT install failed for %s", entry.engine)
+            logger.exception("STT install failed for {}", entry.engine)
             status.step(step_name, 'failed', str(exc))
             errors.append(f"{entry.engine}: {exc}")
 
@@ -482,7 +482,7 @@ def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: list[str
             _install_silero_vad()
             status.step(step_name, "completed")
         except DownloadBlockedError as exc:
-            logger.info("Skipping Silero VAD install: %s", exc)
+            logger.info("Skipping Silero VAD install: {}", exc)
             status.step(step_name, "skipped", str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Silero VAD install failed")
@@ -504,10 +504,10 @@ def _install_tts(plan: InstallPlan, status: InstallationStatus, errors: list[str
                 _install_vibevoice(entry.variants)
             status.step(step_name, 'completed')
         except DownloadBlockedError as exc:
-            logger.info('Skipping TTS install %s: %s', entry.engine, exc)
+            logger.info('Skipping TTS install {}: {}', entry.engine, exc)
             status.step(step_name, 'skipped', str(exc))
         except Exception as exc:  # noqa: BLE001
-            logger.exception("TTS install failed for %s", entry.engine)
+            logger.exception("TTS install failed for {}", entry.engine)
             status.step(step_name, 'failed', str(exc))
             errors.append(f"{entry.engine}: {exc}")
 
@@ -519,7 +519,7 @@ def _install_embeddings(plan: InstallPlan, status: InstallationStatus, errors: l
             _download_huggingface_models(plan.embeddings.huggingface)
             status.step(step_name, 'completed')
         except DownloadBlockedError as exc:
-            logger.info('Skipping Hugging Face embeddings download: %s', exc)
+            logger.info('Skipping Hugging Face embeddings download: {}', exc)
             status.step(step_name, 'skipped', str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to download huggingface embeddings")
@@ -533,7 +533,7 @@ def _install_embeddings(plan: InstallPlan, status: InstallationStatus, errors: l
             _append_trusted_embeddings(plan.embeddings.custom)
             status.step(step_name, 'completed')
         except DownloadBlockedError as exc:
-            logger.info('Skipping custom embedding downloads: %s', exc)
+            logger.info('Skipping custom embedding downloads: {}', exc)
             status.step(step_name, 'skipped', str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to process custom embedding models")
@@ -550,7 +550,7 @@ def _install_faster_whisper(models: list[str]) -> None:
         raise RuntimeError('faster-whisper not available. Ensure dependency is installed.') from exc
 
     for model_name in models or DEFAULT_WHISPER_MODELS:
-        logger.info("Downloading faster-whisper checkpoint %s", model_name)
+        logger.info("Downloading faster-whisper checkpoint {}", model_name)
         try:
             instance = WhisperModel(model_name, device='cpu')
             del instance
@@ -593,11 +593,17 @@ def _install_qwen2_audio() -> None:
         raise RuntimeError('transformers (with Qwen2Audio) is required for Qwen installs.') from exc
 
     repo = 'Qwen/Qwen2-Audio-7B-Instruct'
-    logger.info("Fetching Qwen2Audio assets from %s", repo)
+    repo_revision = _resolve_hf_revision(repo)
+    logger.info("Fetching Qwen2Audio assets from {}", repo)
     try:
-        AutoProcessor.from_pretrained(repo)
+        AutoProcessor.from_pretrained(repo, revision=repo_revision)  # nosec B615
         dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-        Qwen2AudioForConditionalGeneration.from_pretrained(repo, torch_dtype=dtype, device_map='cpu')
+        Qwen2AudioForConditionalGeneration.from_pretrained(  # nosec B615
+            repo,
+            revision=repo_revision,
+            torch_dtype=dtype,
+            device_map='cpu',
+        )
     except Exception as exc:  # noqa: BLE001
         if _is_httpx_network_error(exc):
             raise DownloadBlockedError(f'Network unavailable while downloading {repo}.') from exc
@@ -613,7 +619,7 @@ def _install_nemo_parakeet(variant: str) -> None:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError('nemo_toolkit is required for NeMo installations.') from exc
 
-    logger.info("Loading NeMo Parakeet variant %s to trigger download", variant)
+    logger.info("Loading NeMo Parakeet variant {} to trigger download", variant)
     model = load_parakeet_model(variant)
     if model is None:
         raise RuntimeError(f'Failed to load Parakeet variant {variant}; check nemo dependencies.')
@@ -683,7 +689,7 @@ def _install_vibevoice(variants: list[str]) -> None:
 
 def _download_huggingface_models(models: list[str]) -> None:
     for model_id in models:
-        logger.info('Downloading embedding model %s', model_id)
+        logger.info('Downloading embedding model {}', model_id)
         _snapshot_repo(model_id)
 
 
@@ -722,15 +728,17 @@ def _download_hf_file(repo_id: str, filename: str, destination: Path) -> None:
     force = _force_downloads()
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and not force:
-        logger.info('Skip existing file %s', destination)
+        logger.info('Skip existing file {}', destination)
         return
     try:
         # Download into cache, then copy to the exact destination path
+        repo_revision = _resolve_hf_revision(repo_id)
         src_fp = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
+            revision=repo_revision,
             force_download=force,
-        )
+        )  # nosec B615
         shutil.copy2(src_fp, destination)
     except Exception as exc:  # noqa: BLE001
         if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
@@ -748,19 +756,21 @@ def _download_hf_dir(repo_id: str, subdir: str, destination: Path) -> None:
 
     force = _force_downloads()
     if destination.exists() and any(destination.iterdir()) and not force:
-        logger.info('Skip existing directory %s', destination)
+        logger.info('Skip existing directory {}', destination)
         return
 
     try:
         # Download snapshot into a temporary folder then copy requested subdir
+        repo_revision = _resolve_hf_revision(repo_id)
         import tempfile
         with tempfile.TemporaryDirectory(prefix="tldw_hf_") as _td:
             snapshot_path = Path(snapshot_download(
                 repo_id=repo_id,
                 local_dir=str(_td),
+                revision=repo_revision,
                 allow_patterns=[f"{subdir}", f"{subdir}/*", f"{subdir}/**"],
                 force_download=force,
-            ))
+            ))  # nosec B615
             src = snapshot_path / subdir
             if not src.exists():
                 raise FileNotFoundError(f'Subdirectory {subdir!r} not found in snapshot of {repo_id}')
@@ -786,6 +796,16 @@ def _force_downloads() -> bool:
             return True
     return False
 
+
+def _resolve_hf_revision(repo_id: str) -> str | None:
+    """Resolve optional pinned HF revision from environment."""
+    normalized = "".join(ch if ch.isalnum() else "_" for ch in str(repo_id)).upper()
+    return (
+        os.getenv(f"HF_REVISION_{normalized}")
+        or os.getenv("HF_DEFAULT_REVISION")
+        or None
+    )
+
 def _snapshot_repo(repo_id: str) -> None:
     _ensure_downloads_allowed(f'{repo_id} snapshot')
     try:
@@ -795,7 +815,11 @@ def _snapshot_repo(repo_id: str) -> None:
 
     try:
         # Prefetch into cache; no local_dir required and no symlink flag
-        snapshot_download(repo_id=repo_id, force_download=_force_downloads())
+        snapshot_download(  # nosec B615
+            repo_id=repo_id,
+            revision=_resolve_hf_revision(repo_id),
+            force_download=_force_downloads(),
+        )
     except Exception as exc:  # noqa: BLE001
         if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
             raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
@@ -803,7 +827,7 @@ def _snapshot_repo(repo_id: str) -> None:
 
 
 def _run_subprocess(command: list[str]) -> None:
-    logger.info('Running command: %s', ' '.join(command))
+    logger.info('Running command: {}', ' '.join(command))
     result = subprocess.run(command, check=False, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f'Command failed with exit code {result.returncode}')

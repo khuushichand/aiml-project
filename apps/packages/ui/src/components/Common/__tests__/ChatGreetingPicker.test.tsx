@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import type { Character } from "@/types/character"
 import { ChatGreetingPicker } from "../ChatGreetingPicker"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
+import { normalizeChatSettingsRecord } from "@/services/chat-settings"
+import type { ChatSettingsRecord } from "@/types/chat-session-settings"
 import {
   buildGreetingOptionsFromEntries,
   buildGreetingsChecksumFromOptions,
@@ -63,9 +65,10 @@ const defaultGreetingId = greetingOptions[0]?.id ?? null
 const alternateGreetingId = greetingOptions[1]?.id ?? null
 
 const renderPicker = (
-  settings: Record<string, unknown>,
-  updateSettings: ReturnType<typeof vi.fn>
+  settingsPatch: Partial<ChatSettingsRecord>,
+  updateSettings: (patch: Partial<ChatSettingsRecord>) => Promise<ChatSettingsRecord | null>
 ) => {
+  const settings = normalizeChatSettingsRecord(settingsPatch)
   vi.mocked(useChatSettingsRecord).mockReturnValue({
     settings,
     updateSettings,
@@ -89,7 +92,9 @@ describe("ChatGreetingPicker", () => {
   })
 
   it("falls back to current selection when disabling default without stored selection", () => {
-    const updateSettings = vi.fn().mockResolvedValue(null)
+    const updateSettings = vi.fn(
+      async (_patch: Partial<ChatSettingsRecord>) => null
+    )
     renderPicker(
       {
         useCharacterDefault: true,
@@ -110,7 +115,9 @@ describe("ChatGreetingPicker", () => {
   })
 
   it("keeps stored greeting selection when disabling default", () => {
-    const updateSettings = vi.fn().mockResolvedValue(null)
+    const updateSettings = vi.fn(
+      async (_patch: Partial<ChatSettingsRecord>) => null
+    )
     renderPicker(
       {
         useCharacterDefault: true,
@@ -128,5 +135,45 @@ describe("ChatGreetingPicker", () => {
       greetingSelectionId: alternateGreetingId,
       greetingsChecksum: checksum
     })
+  })
+
+  it("updates selection when picking a different greeting", () => {
+    const updateSettings = vi.fn(
+      async (_patch: Partial<ChatSettingsRecord>) => null
+    )
+    renderPicker(
+      {
+        useCharacterDefault: false,
+        greetingSelectionId: defaultGreetingId,
+        greetingsChecksum: checksum
+      },
+      updateSettings
+    )
+
+    const select = screen.getByTestId("greeting-select")
+    fireEvent.change(select, { target: { value: alternateGreetingId } })
+
+    expect(updateSettings).toHaveBeenCalledWith({
+      greetingSelectionId: alternateGreetingId,
+      greetingsChecksum: checksum,
+      useCharacterDefault: false
+    })
+  })
+
+  it("resolves legacy index-based selection ids to the matching option", () => {
+    const updateSettings = vi.fn(
+      async (_patch: Partial<ChatSettingsRecord>) => null
+    )
+    renderPicker(
+      {
+        useCharacterDefault: false,
+        greetingSelectionId: "greeting:1:selected",
+        greetingsChecksum: checksum
+      },
+      updateSettings
+    )
+
+    const select = screen.getByTestId("greeting-select") as HTMLSelectElement
+    expect(select.value).toBe(alternateGreetingId)
   })
 })

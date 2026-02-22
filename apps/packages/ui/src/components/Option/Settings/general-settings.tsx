@@ -1,6 +1,4 @@
-import { useDarkMode } from "~/hooks/useDarkmode"
 import { Alert, Modal, Select, Switch } from "antd"
-import { MoonIcon, SunIcon } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { SearchModeSettings } from "./search-mode"
 import { useTranslation } from "react-i18next"
@@ -8,11 +6,13 @@ import { useI18n } from "@/hooks/useI18n"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { SystemSettings } from "./system-settings"
+import { ThemePicker } from "@/components/Common/Settings/ThemePicker"
 import { getDefaultOcrLanguage, ocrLanguages } from "@/data/ocr-language"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useConnectionActions } from "@/hooks/useConnectionState"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
+import { useTutorialCompletion } from "@/store/tutorials"
 
 export const GeneralSettings = () => {
   // Persisted preference: auto-finish onboarding when connection & RAG are healthy
@@ -43,13 +43,13 @@ export const GeneralSettings = () => {
     false
   )
 
-  const { mode, toggleDarkMode } = useDarkMode()
   const { t } = useTranslation("settings")
   const notification = useAntdNotification()
   const { changeLocale, locale, supportLanguage } = useI18n()
   const isOnline = useServerOnline()
   const navigate = useNavigate()
   const { beginOnboarding } = useConnectionActions()
+  const { completedTutorials, resetProgress: resetTutorialProgress } = useTutorialCompletion()
 
   return (
     <dl className="flex flex-col space-y-6 text-sm">
@@ -235,6 +235,59 @@ export const GeneralSettings = () => {
         </button>
       </div>
 
+      <div className="flex flex-row justify-between">
+        <div className="inline-flex items-center gap-2">
+          <span className="text-text">
+            {t(
+              "generalSettings.settings.resetTutorials.label",
+              "Reset tutorial progress"
+            )}
+          </span>
+          {completedTutorials.length > 0 && (
+            <span className="text-xs text-text-muted">
+              ({completedTutorials.length}{" "}
+              {t(
+                "generalSettings.settings.resetTutorials.completed",
+                "completed"
+              )}
+              )
+            </span>
+          )}
+        </div>
+
+        <button
+          type="button"
+          className="text-xs text-primary hover:text-primaryStrong disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={completedTutorials.length === 0}
+          onClick={() => {
+            Modal.confirm({
+              title: t(
+                "generalSettings.settings.resetTutorials.confirmTitle",
+                "Reset tutorial progress?"
+              ),
+              content: t(
+                "generalSettings.settings.resetTutorials.confirmMessage",
+                "This will mark all tutorials as incomplete so you can replay them."
+              ),
+              onOk: () => {
+                resetTutorialProgress()
+                notification.success({
+                  message: t(
+                    "generalSettings.settings.resetTutorials.toast",
+                    "Tutorial progress has been reset"
+                  )
+                })
+              }
+            })
+          }}
+        >
+          {t(
+            "generalSettings.settings.resetTutorials.button",
+            "Reset tutorials"
+          )}
+        </button>
+      </div>
+
       <div className="space-y-2">
         <div className="flex flex-row justify-between">
           <span className="text-text">
@@ -251,7 +304,7 @@ export const GeneralSettings = () => {
           <Alert
             type="info"
             showIcon
-            message={t(
+            title={t(
               "generalSettings.settings.enableOcrAssets.downloadNotice",
               "Enable to download OCR language assets for image text recognition"
             )}
@@ -262,7 +315,7 @@ export const GeneralSettings = () => {
           <Alert
             type="success"
             showIcon
-            message={t(
+            title={t(
               "generalSettings.settings.enableOcrAssets.assetsEnabled",
               "OCR assets enabled and ready"
             )}
@@ -293,25 +346,7 @@ export const GeneralSettings = () => {
         />
       </div>
 
-      <div className="flex flex-row justify-between">
-        <span className="text-text">
-          {t("generalSettings.settings.darkMode.label")}
-        </span>
-
-        <button
-          onClick={toggleDarkMode}
-          className="mt-4 inline-flex items-center rounded-md border border-transparent bg-primary px-2 py-2 text-sm font-medium leading-4 text-white shadow-sm hover:bg-primaryStrong focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50 whitespace-nowrap"
-        >
-          {mode === "dark" ? (
-            <SunIcon className="w-4 h-4 mr-2" />
-          ) : (
-            <MoonIcon className="w-4 h-4 mr-2" />
-          )}
-          {mode === "dark"
-            ? t("generalSettings.settings.darkMode.options.light")
-            : t("generalSettings.settings.darkMode.options.dark")}
-        </button>
-      </div>
+      <ThemePicker />
       <SearchModeSettings />
       <SystemSettings />
     </dl>

@@ -773,7 +773,7 @@ class SQLiteStore(SandboxStore):
             where.append("started_at <= ?")
             params.append(started_at_to)
         sql = (
-            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "
+            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "  # nosec B608
             f"FROM sandbox_runs WHERE {' AND '.join(where)} ORDER BY started_at {order} LIMIT ? OFFSET ?"
         )
         params.extend([int(limit), int(offset)])
@@ -824,7 +824,7 @@ class SQLiteStore(SandboxStore):
         if started_at_to:
             where.append("started_at <= ?")
             params.append(started_at_to)
-        sql = f"SELECT COUNT(*) AS c FROM sandbox_runs WHERE {' AND '.join(where)}"
+        sql = f"SELECT COUNT(*) AS c FROM sandbox_runs WHERE {' AND '.join(where)}"  # nosec B608
         with self._lock, self._conn() as con:
             cur = con.execute(sql, tuple(params))
             row = cur.fetchone()
@@ -861,7 +861,7 @@ class SQLiteStore(SandboxStore):
             where.append("created_at <= ?")
             params.append(self._coerce_created_at(created_at_to))
         sql = (
-            "SELECT endpoint,user_key,key,fingerprint,object_id,created_at FROM sandbox_idempotency "
+            "SELECT endpoint,user_key,key,fingerprint,object_id,created_at FROM sandbox_idempotency "  # nosec B608
             f"WHERE {' AND '.join(where)} ORDER BY created_at {order} LIMIT ? OFFSET ?"
         )
         params.extend([int(limit), int(offset)])
@@ -910,7 +910,7 @@ class SQLiteStore(SandboxStore):
         if created_at_to is not None:
             where.append("created_at <= ?")
             params.append(self._coerce_created_at(created_at_to))
-        sql = f"SELECT COUNT(*) FROM sandbox_idempotency WHERE {' AND '.join(where)}"
+        sql = f"SELECT COUNT(*) FROM sandbox_idempotency WHERE {' AND '.join(where)}"  # nosec B608
         with self._lock, self._conn() as con:
             cur = con.execute(sql, tuple(params))
             row = cur.fetchone()
@@ -1278,7 +1278,7 @@ class PostgresStore(SandboxStore):
             where.append("started_at <= %s")
             params.append(started_at_to)
         sql = (
-            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "
+            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "  # nosec B608
             f"FROM sandbox_runs WHERE {' AND '.join(where)} ORDER BY started_at {order} LIMIT %s OFFSET %s"
         )
         params.extend([int(limit), int(offset)])
@@ -1329,7 +1329,7 @@ class PostgresStore(SandboxStore):
         if started_at_to:
             where.append("started_at <= %s")
             params.append(started_at_to)
-        sql = f"SELECT COUNT(*) AS c FROM sandbox_runs WHERE {' AND '.join(where)}"
+        sql = f"SELECT COUNT(*) AS c FROM sandbox_runs WHERE {' AND '.join(where)}"  # nosec B608
         with self._lock, self._conn() as con, con.cursor() as cur:
             cur.execute(sql, tuple(params))
             row = cur.fetchone()
@@ -1369,7 +1369,7 @@ class PostgresStore(SandboxStore):
             where.append("created_at <= %s")
             params.append(self._coerce_created_at(created_at_to))
         sql = (
-            "SELECT endpoint,user_key,key,fingerprint,object_id,created_at FROM sandbox_idempotency "
+            "SELECT endpoint,user_key,key,fingerprint,object_id,created_at FROM sandbox_idempotency "  # nosec B608
             f"WHERE {' AND '.join(where)} ORDER BY created_at {order} LIMIT %s OFFSET %s"
         )
         params.extend([int(limit), int(offset)])
@@ -1419,7 +1419,7 @@ class PostgresStore(SandboxStore):
         if created_at_to:
             where.append("created_at <= %s")
             params.append(self._coerce_created_at(created_at_to))
-        sql = f"SELECT COUNT(*) AS c FROM sandbox_idempotency WHERE {' AND '.join(where)}"
+        sql = f"SELECT COUNT(*) AS c FROM sandbox_idempotency WHERE {' AND '.join(where)}"  # nosec B608
         with self._lock, self._conn() as con, con.cursor() as cur:
             cur.execute(sql, tuple(params))
             row = cur.fetchone()

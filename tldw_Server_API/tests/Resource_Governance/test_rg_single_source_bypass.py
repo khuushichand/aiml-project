@@ -1,8 +1,11 @@
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps, prompt_studio_deps
+from tldw_Server_API.app.api.v1.endpoints import auth as auth_endpoints
+from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth
 from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware
 from tldw_Server_API.app.core.Resource_Governance.governor import RGDecision
 
@@ -84,3 +87,54 @@ async def test_prompt_studio_check_rate_limit_bypasses_when_rg_policy_present(mo
         security_config=sec,
     )
     assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_evaluations_check_rate_limit_is_diagnostics_only_shim(monkeypatch):
+    app = FastAPI()
+
+    @app.get("/api/v1/evaluations/geval", dependencies=[Depends(evaluations_auth.check_evaluation_rate_limit)])
+    async def eval_route():
+        return {"ok": True}
+
+    async def _fake_rate_limiter():
+        return _DenyLimiter()
+
+    app.dependency_overrides[evaluations_auth.get_rate_limiter_dep] = _fake_rate_limiter
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/evaluations/geval")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_endpoint_reserve_uses_diagnostics_only_shim_when_governor_unavailable(monkeypatch):
+    async def _no_governor(_request):
+        return None
+
+    monkeypatch.setattr(auth_endpoints, "_get_auth_endpoint_rg_governor", _no_governor)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/v1/auth/magic-link/request",
+        "raw_path": b"/api/v1/auth/magic-link/request",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "state": {},
+        "app": FastAPI(),
+    }
+    request = Request(scope)
+
+    allowed, retry_after = await auth_endpoints._reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.magic_link.request",
+    )
+
+    assert allowed is True
+    assert retry_after is None

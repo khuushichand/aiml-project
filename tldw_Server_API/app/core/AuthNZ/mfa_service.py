@@ -107,6 +107,19 @@ class MFAService:
         self._repo = AuthnzMfaRepo(self._ensure_db_pool())
         return self._repo
 
+    def supports_backend(self) -> bool:
+        """
+        Return True when MFA storage is supported by the current DB backend.
+
+        MFA persistence depends on PostgreSQL-backed AuthNZ tables. Returning
+        False allows callers to short-circuit gracefully (for example, in
+        sqlite-based development/test environments) without issuing failing
+        repo queries on every request.
+        """
+        if not self.db_pool:
+            return False
+        return bool(getattr(self.db_pool, "pool", None))
+
     def _ensure_cipher_candidates(self) -> list[Fernet]:
         """Return Fernet instances for all active/legacy key materials."""
         key_candidates = tuple(derive_hmac_key_candidates(self.settings))

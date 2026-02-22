@@ -29,6 +29,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_truthy
+
 try:
     # Lazy config mapping (avoids heavy imports at startup)
     from tldw_Server_API.app.core.config import loaded_config_data
@@ -40,7 +42,7 @@ def _as_bool(val: object, default: bool) -> bool:
     if val is None:
         return default
     s = str(val).strip().lower()
-    if s in {"1", "true", "yes", "on", "y"}:
+    if is_truthy(s):
         return True
     if s in {"0", "false", "no", "off", "n"}:
         return False

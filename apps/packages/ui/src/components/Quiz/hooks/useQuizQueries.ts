@@ -22,15 +22,44 @@ import {
   type QuestionCreate,
   type QuestionUpdate,
   type QuizGenerateRequest,
-  type QuizAnswer,
+  type QuizAnswerInput,
   type QuizListParams,
-  type AttemptListParams
+  type AttemptListParams,
+  type QuizAttempt
 } from "@/services/quizzes"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 
 export interface UseQuizQueriesOptions {
   enabled?: boolean
+}
+
+const QUIZ_QUERY_STALE_TIME_MS = 30_000
+const ATTEMPT_QUERY_STALE_TIME_MS = 30_000
+
+type QuizListCacheValue = {
+  items: Quiz[]
+  count: number
+}
+
+type OptimisticQuizContext = {
+  previousLists: Array<[readonly unknown[], QuizListCacheValue | undefined]>
+  previousDetail: Quiz | undefined
+  tempId?: number
+}
+
+const extractQuizListParams = (queryKey: readonly unknown[]): QuizListParams => {
+  if (!Array.isArray(queryKey) || queryKey[0] !== "quizzes:list") return {}
+  const rawParams = queryKey[1]
+  if (!rawParams || typeof rawParams !== "object") return {}
+  return rawParams as QuizListParams
+}
+
+const sanitizeQuizPatch = (patch: QuizUpdate): Partial<Quiz> => {
+  const { expected_version: _ignoredExpectedVersion, ...rest } = patch
+  return Object.fromEntries(
+    Object.entries(rest).filter(([, value]) => value !== undefined)
+  ) as Partial<Quiz>
 }
 
 /**
@@ -60,7 +89,9 @@ export function useQuizzesQuery(params: QuizListParams = {}, options?: UseQuizQu
   return useQuery({
     queryKey: ["quizzes:list", params],
     queryFn: () => listQuizzes(params),
-    enabled: options?.enabled ?? quizzesEnabled
+    enabled: options?.enabled ?? quizzesEnabled,
+    staleTime: QUIZ_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false
   })
 }
 
@@ -73,7 +104,9 @@ export function useQuizQuery(quizId: number | null | undefined, options?: UseQui
   return useQuery({
     queryKey: ["quizzes:detail", quizId],
     queryFn: () => getQuiz(quizId!),
-    enabled: (options?.enabled ?? quizzesEnabled) && quizId != null
+    enabled: (options?.enabled ?? quizzesEnabled) && quizId != null,
+    staleTime: QUIZ_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false
   })
 }
 
@@ -90,7 +123,9 @@ export function useQuestionsQuery(
   return useQuery({
     queryKey: ["quizzes:questions", quizId, params],
     queryFn: () => listQuestions(quizId!, params),
-    enabled: (options?.enabled ?? quizzesEnabled) && quizId != null
+    enabled: (options?.enabled ?? quizzesEnabled) && quizId != null,
+    staleTime: QUIZ_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false
   })
 }
 
@@ -105,8 +140,67 @@ export function useCreateQuizMutation() {
   return useMutation({
     mutationKey: ["quizzes:create"],
     mutationFn: (payload: QuizCreate) => createQuiz(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["quizzes:list"] })
+    onMutate: async (payload): Promise<OptimisticQuizContext> => {
+      await qc.cancelQueries({ queryKey: ["quizzes:list"] })
+      const previousLists = qc.getQueriesData<QuizListCacheValue>({ queryKey: ["quizzes:list"] })
+      const tempId = -Date.now()
+      const optimisticQuiz: Quiz = {
+        id: tempId,
+        name: payload.name,
+        description: payload.description ?? null,
+        workspace_tag: payload.workspace_tag ?? null,
+        media_id: payload.media_id ?? null,
+        total_questions: 0,
+        time_limit_seconds: payload.time_limit_seconds ?? null,
+        passing_score: payload.passing_score ?? null,
+        deleted: false,
+        client_id: "optimistic",
+        version: 0,
+        created_at: new Date().toISOString(),
+        last_modified: new Date().toISOString()
+      }
+
+      previousLists.forEach(([queryKey, previous]) => {
+        if (!previous) return
+        const params = extractQuizListParams(queryKey)
+        const offset = typeof params.offset === "number" ? params.offset : 0
+        if (offset > 0) return
+
+        const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined
+        const nextItems = [optimisticQuiz, ...previous.items]
+        qc.setQueryData(queryKey, {
+          ...previous,
+          items: limit ? nextItems.slice(0, limit) : nextItems,
+          count: previous.count + 1
+        } satisfies QuizListCacheValue)
+      })
+
+      return {
+        previousLists,
+        previousDetail: undefined,
+        tempId
+      }
+    },
+    onError: (_error, _payload, context) => {
+      context?.previousLists?.forEach(([queryKey, previous]) => {
+        qc.setQueryData(queryKey, previous)
+      })
+    },
+    onSuccess: (quiz, _payload, context) => {
+      qc.setQueriesData<QuizListCacheValue>({ queryKey: ["quizzes:list"] }, (current) => {
+        if (!current) return current
+        const replaced = current.items.map((item) =>
+          item.id === context?.tempId ? quiz : item
+        )
+        return {
+          ...current,
+          items: replaced
+        }
+      })
+      qc.setQueryData(["quizzes:detail", quiz.id], quiz)
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["quizzes:list"], refetchType: "active" })
     }
   })
 }
@@ -121,9 +215,41 @@ export function useUpdateQuizMutation() {
     mutationKey: ["quizzes:update"],
     mutationFn: (params: { quizId: number; update: QuizUpdate }) =>
       updateQuiz(params.quizId, params.update),
-    onSuccess: (_, variables) => {
-      qc.invalidateQueries({ queryKey: ["quizzes:list"] })
-      qc.invalidateQueries({ queryKey: ["quizzes:detail", variables.quizId] })
+    onMutate: async (variables): Promise<OptimisticQuizContext> => {
+      await qc.cancelQueries({ queryKey: ["quizzes:list"] })
+      await qc.cancelQueries({ queryKey: ["quizzes:detail", variables.quizId] })
+
+      const previousLists = qc.getQueriesData<QuizListCacheValue>({ queryKey: ["quizzes:list"] })
+      const previousDetail = qc.getQueryData<Quiz>(["quizzes:detail", variables.quizId])
+      const patch = sanitizeQuizPatch(variables.update)
+
+      qc.setQueryData(["quizzes:detail", variables.quizId], (current: Quiz | undefined) => (
+        current ? { ...current, ...patch } : current
+      ))
+      qc.setQueriesData<QuizListCacheValue>({ queryKey: ["quizzes:list"] }, (current) => {
+        if (!current) return current
+        return {
+          ...current,
+          items: current.items.map((quiz) =>
+            quiz.id === variables.quizId ? { ...quiz, ...patch } : quiz
+          )
+        }
+      })
+
+      return {
+        previousLists,
+        previousDetail
+      }
+    },
+    onError: (_error, variables, context) => {
+      context?.previousLists?.forEach(([queryKey, previous]) => {
+        qc.setQueryData(queryKey, previous)
+      })
+      qc.setQueryData(["quizzes:detail", variables.quizId], context?.previousDetail)
+    },
+    onSettled: (_data, _error, variables) => {
+      qc.invalidateQueries({ queryKey: ["quizzes:list"], refetchType: "active" })
+      qc.invalidateQueries({ queryKey: ["quizzes:detail", variables.quizId], refetchType: "active" })
     }
   })
 }
@@ -138,8 +264,40 @@ export function useDeleteQuizMutation() {
     mutationKey: ["quizzes:delete"],
     mutationFn: (params: { quizId: number; version: number }) =>
       deleteQuiz(params.quizId, params.version),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["quizzes:list"] })
+    onMutate: async (variables): Promise<OptimisticQuizContext> => {
+      await qc.cancelQueries({ queryKey: ["quizzes:list"] })
+      await qc.cancelQueries({ queryKey: ["quizzes:detail", variables.quizId] })
+
+      const previousLists = qc.getQueriesData<QuizListCacheValue>({ queryKey: ["quizzes:list"] })
+      const previousDetail = qc.getQueryData<Quiz>(["quizzes:detail", variables.quizId])
+
+      qc.setQueriesData<QuizListCacheValue>({ queryKey: ["quizzes:list"] }, (current) => {
+        if (!current) return current
+        const nextItems = current.items.filter((quiz) => quiz.id !== variables.quizId)
+        return {
+          ...current,
+          items: nextItems,
+          count: Math.max(0, current.count - (nextItems.length === current.items.length ? 0 : 1))
+        }
+      })
+      qc.removeQueries({ queryKey: ["quizzes:detail", variables.quizId], exact: true })
+
+      return {
+        previousLists,
+        previousDetail
+      }
+    },
+    onError: (_error, variables, context) => {
+      context?.previousLists?.forEach(([queryKey, previous]) => {
+        qc.setQueryData(queryKey, previous)
+      })
+      if (context?.previousDetail) {
+        qc.setQueryData(["quizzes:detail", variables.quizId], context.previousDetail)
+      }
+    },
+    onSettled: (_data, _error, variables) => {
+      qc.invalidateQueries({ queryKey: ["quizzes:list"], refetchType: "active" })
+      qc.invalidateQueries({ queryKey: ["quizzes:detail", variables.quizId], refetchType: "active" })
     }
   })
 }
@@ -207,20 +365,75 @@ export function useAttemptsQuery(params: AttemptListParams = {}, options?: UseQu
   return useQuery({
     queryKey: ["quizzes:attempts", params],
     queryFn: () => listAttempts(params),
-    enabled: options?.enabled ?? quizzesEnabled
+    enabled: options?.enabled ?? quizzesEnabled,
+    staleTime: ATTEMPT_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false
+  })
+}
+
+/**
+ * Hook for fetching all attempts (auto-paginates through the attempts API)
+ */
+export function useAllAttemptsQuery(params: Omit<AttemptListParams, "limit" | "offset"> = {}, options?: UseQuizQueriesOptions) {
+  const { quizzesEnabled } = useQuizzesEnabled()
+
+  return useQuery({
+    queryKey: ["quizzes:attempts:all", params],
+    queryFn: async () => {
+      const pageSize = 200
+      let offset = 0
+      let total = 0
+      const items: QuizAttempt[] = []
+
+      do {
+        const page = await listAttempts({
+          ...params,
+          limit: pageSize,
+          offset
+        })
+        total = page.count
+        items.push(...page.items)
+
+        if (page.items.length === 0) {
+          break
+        }
+
+        offset += page.items.length
+      } while (items.length < total)
+
+      return {
+        items,
+        count: total
+      }
+    },
+    enabled: options?.enabled ?? quizzesEnabled,
+    staleTime: ATTEMPT_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false
   })
 }
 
 /**
  * Hook for fetching a single attempt
  */
-export function useAttemptQuery(attemptId: number | null | undefined, options?: UseQuizQueriesOptions) {
+export function useAttemptQuery(
+  attemptId: number | null | undefined,
+  params: {
+    includeQuestions?: boolean
+    includeAnswers?: boolean
+  } = {},
+  options?: UseQuizQueriesOptions
+) {
   const { quizzesEnabled } = useQuizzesEnabled()
 
   return useQuery({
-    queryKey: ["quizzes:attempt", attemptId],
-    queryFn: () => getAttempt(attemptId!),
-    enabled: (options?.enabled ?? quizzesEnabled) && attemptId != null
+    queryKey: ["quizzes:attempt", attemptId, params],
+    queryFn: () => getAttempt(attemptId!, {
+      include_questions: params.includeQuestions ? true : undefined,
+      include_answers: params.includeAnswers ? true : undefined
+    }),
+    enabled: (options?.enabled ?? quizzesEnabled) && attemptId != null,
+    staleTime: ATTEMPT_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false
   })
 }
 
@@ -247,7 +460,7 @@ export function useSubmitAttemptMutation() {
 
   return useMutation({
     mutationKey: ["quizzes:attempt:submit"],
-    mutationFn: (params: { attemptId: number; answers: Omit<QuizAnswer, "is_correct">[] }) =>
+    mutationFn: (params: { attemptId: number; answers: QuizAnswerInput[] }) =>
       submitAttempt(params.attemptId, params.answers),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["quizzes:attempts"] })
@@ -265,7 +478,8 @@ export function useGenerateQuizMutation() {
 
   return useMutation({
     mutationKey: ["quizzes:generate"],
-    mutationFn: (request: QuizGenerateRequest) => generateQuiz(request),
+    mutationFn: (params: { request: QuizGenerateRequest; signal?: AbortSignal }) =>
+      generateQuiz(params.request, { signal: params.signal }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["quizzes:list"] })
     }

@@ -1,18 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Pagination } from '@/components/ui/pagination';
-import { FileText, RefreshCw, Filter, Eye, Clipboard } from 'lucide-react';
+import { FileText, RefreshCw, Filter, Eye, Clipboard, Trash2, Bell } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { AuditLog } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
@@ -29,6 +31,36 @@ type AuditFilters = {
   resource: string;
   start: string;
   end: string;
+};
+
+type SavedAuditSearch = {
+  id: string;
+  name: string;
+  filters: AuditFilters;
+  alertOnPattern: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastCheckedAt?: string;
+  lastMatchedEventId?: string;
+  lastMatchCount?: number;
+};
+
+type ComplianceReportType = 'activity_summary' | 'access_review' | 'data_access';
+
+type ComplianceReportSummary = {
+  categoryCounts: Array<{ category: string; count: number }>;
+  userCounts: Array<{ userLabel: string; count: number }>;
+  anomalies: string[];
+};
+
+const SAVED_SEARCHES_STORAGE_KEY = 'admin.audit.saved-searches.v1';
+const ALERT_CHECK_INTERVAL_MS = 60_000;
+const COMPLIANCE_REPORT_LIMIT = 5000;
+
+const COMPLIANCE_REPORT_TYPE_LABELS: Record<ComplianceReportType, string> = {
+  activity_summary: 'Activity Summary',
+  access_review: 'Access Review',
+  data_access: 'Data Access',
 };
 
 const parseDateInput = (value: string) => {
@@ -58,6 +90,236 @@ const parseUserFilter = (value: string) => {
   return /^\d+$/.test(trimmed) ? trimmed : null;
 };
 
+const normalizeAuditFilters = (filters: AuditFilters): AuditFilters => ({
+  user: filters.user.trim(),
+  action: filters.action.trim(),
+  resource: filters.resource.trim(),
+  start: filters.start.trim(),
+  end: filters.end.trim(),
+});
+
+const hasAnyFilterValue = (filters: AuditFilters) =>
+  Boolean(filters.user || filters.action || filters.resource || filters.start || filters.end);
+
+const escapeHtml = (value: string) =>
+  value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
+const summarizeComplianceReport = (entries: AuditLog[]): ComplianceReportSummary => {
+  const categoryMap = new Map<string, number>();
+  const userMap = new Map<string, number>();
+  let destructiveEventCount = 0;
+  let failedAuthCount = 0;
+
+  entries.forEach((entry) => {
+    const normalizedAction = entry.action?.trim().toLowerCase() || 'unknown';
+    const category = normalizedAction.includes('.')
+      ? normalizedAction.split('.')[0]
+      : normalizedAction || 'unknown';
+    categoryMap.set(category, (categoryMap.get(category) || 0) + 1);
+
+    const userLabel = entry.username
+      ? `${entry.username} (${entry.user_id})`
+      : entry.user_id
+        ? `User ${entry.user_id}`
+        : 'System/Unknown';
+    userMap.set(userLabel, (userMap.get(userLabel) || 0) + 1);
+
+    if (
+      normalizedAction.includes('delete')
+      || normalizedAction.includes('revoke')
+      || normalizedAction.includes('disable')
+      || normalizedAction.includes('reset')
+    ) {
+      destructiveEventCount += 1;
+    }
+    if (normalizedAction.includes('failed') || normalizedAction.includes('denied')) {
+      failedAuthCount += 1;
+    }
+  });
+
+  const categoryCounts = Array.from(categoryMap.entries())
+    .map(([category, count]) => ({ category, count }))
+    .sort((a, b) => b.count - a.count);
+  const userCounts = Array.from(userMap.entries())
+    .map(([userLabel, count]) => ({ userLabel, count }))
+    .sort((a, b) => b.count - a.count);
+
+  const anomalies: string[] = [];
+  if (destructiveEventCount > 0) {
+    anomalies.push(`${destructiveEventCount} high-impact modification events detected.`);
+  }
+  if (failedAuthCount > 0) {
+    anomalies.push(`${failedAuthCount} failed or denied actions detected.`);
+  }
+  const mostActiveUser = userCounts[0];
+  if (mostActiveUser && mostActiveUser.count >= 20) {
+    anomalies.push(`High concentration: ${mostActiveUser.userLabel} performed ${mostActiveUser.count} actions.`);
+  }
+  if (anomalies.length === 0) {
+    anomalies.push('No anomaly signals detected for the selected period.');
+  }
+
+  return { categoryCounts, userCounts, anomalies };
+};
+
+const buildComplianceReportHtml = ({
+  reportType,
+  reportPeriodLabel,
+  selectedOrgId,
+  generatedAt,
+  totalEvents,
+  categoryCounts,
+  userCounts,
+  anomalies,
+}: {
+  reportType: ComplianceReportType;
+  reportPeriodLabel: string;
+  selectedOrgId?: number;
+  generatedAt: string;
+  totalEvents: number;
+  categoryCounts: Array<{ category: string; count: number }>;
+  userCounts: Array<{ userLabel: string; count: number }>;
+  anomalies: string[];
+}) => {
+  const categoryRows = categoryCounts.length > 0
+    ? categoryCounts
+      .map((entry) => `<tr><td>${escapeHtml(entry.category)}</td><td>${entry.count}</td></tr>`)
+      .join('')
+    : '<tr><td colspan="2">No events found.</td></tr>';
+  const userRows = userCounts.length > 0
+    ? userCounts
+      .slice(0, 20)
+      .map((entry) => `<tr><td>${escapeHtml(entry.userLabel)}</td><td>${entry.count}</td></tr>`)
+      .join('')
+    : '<tr><td colspan="2">No user activity found.</td></tr>';
+  const anomalyItems = anomalies
+    .map((entry) => `<li>${escapeHtml(entry)}</li>`)
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Compliance Report - ${escapeHtml(COMPLIANCE_REPORT_TYPE_LABELS[reportType])}</title>
+    <style>
+      body { font-family: "IBM Plex Sans", Arial, sans-serif; margin: 24px; color: #111827; }
+      h1, h2 { margin: 0 0 12px; }
+      .meta { margin: 0 0 16px; font-size: 14px; color: #374151; }
+      .card { border: 1px solid #d1d5db; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+      th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; font-size: 14px; }
+      th { background: #f3f4f6; }
+      ul { margin: 8px 0 0 20px; }
+    </style>
+  </head>
+  <body>
+    <h1>Compliance Report</h1>
+    <p class="meta"><strong>Type:</strong> ${escapeHtml(COMPLIANCE_REPORT_TYPE_LABELS[reportType])}</p>
+    <p class="meta"><strong>Period:</strong> ${escapeHtml(reportPeriodLabel)}</p>
+    <p class="meta"><strong>Generated:</strong> ${escapeHtml(generatedAt)}</p>
+    <p class="meta"><strong>Organization:</strong> ${selectedOrgId ? `Org ${selectedOrgId}` : 'All organizations in scope'}</p>
+
+    <section class="card">
+      <h2>Summary</h2>
+      <p>Total events: <strong>${totalEvents}</strong></p>
+    </section>
+
+    <section class="card">
+      <h2>Events by Category</h2>
+      <table>
+        <thead><tr><th>Category</th><th>Events</th></tr></thead>
+        <tbody>${categoryRows}</tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>User Activity Summary</h2>
+      <table>
+        <thead><tr><th>User</th><th>Events</th></tr></thead>
+        <tbody>${userRows}</tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Anomaly Highlights</h2>
+      <ul>${anomalyItems}</ul>
+    </section>
+  </body>
+</html>`;
+};
+
+const buildAuditParams = (
+  activeFilters: AuditFilters,
+  page: number,
+  size: number,
+  selectedOrgId?: number,
+): Record<string, string> => {
+  const normalized = normalizeAuditFilters(activeFilters);
+  const params: Record<string, string> = {
+    limit: String(size),
+    offset: String((page - 1) * size),
+  };
+
+  if (selectedOrgId) {
+    params.org_id = String(selectedOrgId);
+  }
+
+  const userIdParam = parseUserFilter(normalized.user);
+  if (userIdParam) params.user_id = userIdParam;
+  if (normalized.action) params.action = normalized.action;
+  if (normalized.resource) params.resource = normalized.resource;
+  if (normalized.start) params.start = normalized.start;
+  if (normalized.end) params.end = normalized.end;
+
+  return params;
+};
+
+const generateSavedSearchId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const parseSavedSearches = (value: string | null): SavedAuditSearch[] => {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.reduce<SavedAuditSearch[]>((acc, entry) => {
+      if (typeof entry !== 'object' || entry === null) return acc;
+      const candidate = entry as Partial<SavedAuditSearch> & { filters?: Partial<AuditFilters> };
+      if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string') return acc;
+      const filters: AuditFilters = {
+        user: String(candidate.filters?.user ?? ''),
+        action: String(candidate.filters?.action ?? ''),
+        resource: String(candidate.filters?.resource ?? ''),
+        start: String(candidate.filters?.start ?? ''),
+        end: String(candidate.filters?.end ?? ''),
+      };
+      acc.push({
+        id: candidate.id,
+        name: candidate.name,
+        filters: normalizeAuditFilters(filters),
+        alertOnPattern: Boolean(candidate.alertOnPattern),
+        createdAt: String(candidate.createdAt ?? new Date().toISOString()),
+        updatedAt: String(candidate.updatedAt ?? candidate.createdAt ?? new Date().toISOString()),
+        lastCheckedAt: candidate.lastCheckedAt ? String(candidate.lastCheckedAt) : undefined,
+        lastMatchedEventId: candidate.lastMatchedEventId ? String(candidate.lastMatchedEventId) : undefined,
+        lastMatchCount: candidate.lastMatchCount !== undefined ? Number(candidate.lastMatchCount) : undefined,
+      });
+      return acc;
+    }, []);
+  } catch {
+    return [];
+  }
+};
+
 function AuditPageContent() {
   const { selectedOrg } = useOrgContext();
   const { success, error: showError } = useToast();
@@ -66,6 +328,19 @@ function AuditPageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
+  const [savedSearches, setSavedSearches] = useState<SavedAuditSearch[]>([]);
+  const [savedSearchName, setSavedSearchName] = useState('');
+  const [activeSavedSearchId, setActiveSavedSearchId] = useState<string | null>(null);
+  const [reportType, setReportType] = useState<ComplianceReportType>('activity_summary');
+  const [reportStartDate, setReportStartDate] = useState(() => {
+    const start = new Date();
+    start.setDate(start.getDate() - 29);
+    return start.toISOString().slice(0, 10);
+  });
+  const [reportEndDate, setReportEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [reportGenerating, setReportGenerating] = useState(false);
+  const storageHydratedRef = useRef(false);
+  const savedSearchesRef = useRef<SavedAuditSearch[]>([]);
 
   // URL state for filters
   const [filters, setFilters, clearFilters] = useUrlMultiState<AuditFilters>({
@@ -98,6 +373,19 @@ function AuditPageContent() {
     return () => window.clearTimeout(handle);
   }, [filters]);
 
+  useEffect(() => {
+    const parsed = parseSavedSearches(window.localStorage.getItem(SAVED_SEARCHES_STORAGE_KEY));
+    setSavedSearches(parsed);
+    savedSearchesRef.current = parsed;
+    storageHydratedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!storageHydratedRef.current) return;
+    savedSearchesRef.current = savedSearches;
+    window.localStorage.setItem(SAVED_SEARCHES_STORAGE_KEY, JSON.stringify(savedSearches));
+  }, [savedSearches]);
+
   const loadLogs = useCallback(async (activeFilters: AuditFilters, page: number, size: number) => {
     try {
       setLoading(true);
@@ -110,33 +398,7 @@ function AuditPageContent() {
         return;
       }
 
-      const params: Record<string, string> = {
-        limit: String(size),
-        offset: String((page - 1) * size),
-      };
-      if (selectedOrg) {
-        params.org_id = String(selectedOrg.id);
-      }
-      const userIdParam = parseUserFilter(activeFilters.user);
-      if (userIdParam) {
-        params.user_id = userIdParam;
-      }
-      const actionFilter = activeFilters.action.trim();
-      if (actionFilter) {
-        params.action = actionFilter;
-      }
-      const resourceFilter = activeFilters.resource.trim();
-      if (resourceFilter) {
-        params.resource = resourceFilter;
-      }
-      const startFilter = activeFilters.start.trim();
-      if (startFilter) {
-        params.start = startFilter;
-      }
-      const endFilter = activeFilters.end.trim();
-      if (endFilter) {
-        params.end = endFilter;
-      }
+      const params = buildAuditParams(activeFilters, page, size, selectedOrg?.id);
       const data = await api.getAuditLogs(params);
       const items = Array.isArray(data) ? data : data.entries ?? [];
       setLogs(items);
@@ -162,13 +424,261 @@ function AuditPageContent() {
 
   const handleClearFilters = () => {
     clearFilters();
+    setActiveSavedSearchId(null);
     resetPagination();
   };
 
   const dateRangeError = useMemo(() => getDateRangeError(filters.start, filters.end), [filters.end, filters.start]);
+  const complianceDateRangeError = useMemo(
+    () => getDateRangeError(reportStartDate, reportEndDate),
+    [reportEndDate, reportStartDate]
+  );
+
+  const handleSaveCurrentSearch = () => {
+    const trimmedName = savedSearchName.trim();
+    if (!trimmedName) {
+      showError('Saved search name required', 'Enter a name before saving.');
+      return;
+    }
+
+    const normalizedFilters = normalizeAuditFilters(filters);
+    if (!hasAnyFilterValue(normalizedFilters)) {
+      showError('No filters to save', 'Set at least one filter value before saving.');
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    setSavedSearches((previous) => {
+      const existing = previous.find((entry) => entry.name.toLowerCase() === trimmedName.toLowerCase());
+      if (existing) {
+        return previous.map((entry) =>
+          entry.id === existing.id
+            ? {
+                ...entry,
+                name: trimmedName,
+                filters: normalizedFilters,
+                updatedAt: nowIso,
+              }
+            : entry
+        );
+      }
+
+      return [
+        {
+          id: generateSavedSearchId(),
+          name: trimmedName,
+          filters: normalizedFilters,
+          alertOnPattern: false,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        },
+        ...previous,
+      ];
+    });
+
+    setSavedSearchName('');
+    success('Saved search stored');
+  };
+
+  const handleApplySavedSearch = (search: SavedAuditSearch) => {
+    setFilters(search.filters);
+    setDebouncedFilters(search.filters);
+    setActiveSavedSearchId(search.id);
+    resetPagination();
+  };
+
+  const handleDeleteSavedSearch = (searchId: string) => {
+    setSavedSearches((previous) => previous.filter((entry) => entry.id !== searchId));
+    if (activeSavedSearchId === searchId) {
+      setActiveSavedSearchId(null);
+    }
+  };
+
+  const handleAlertToggle = (searchId: string, enabled: boolean) => {
+    setSavedSearches((previous) =>
+      previous.map((entry) =>
+        entry.id === searchId
+          ? {
+              ...entry,
+              alertOnPattern: enabled,
+              // Reset baseline when enabling so first check doesn't immediately alert.
+              lastMatchedEventId: enabled ? undefined : entry.lastMatchedEventId,
+              updatedAt: new Date().toISOString(),
+            }
+          : entry
+      )
+    );
+  };
+
+  const alertSearchDependencyKey = useMemo(
+    () =>
+      JSON.stringify(
+        savedSearches.map((entry) => ({
+          id: entry.id,
+          alertOnPattern: entry.alertOnPattern,
+          lastMatchedEventId: entry.lastMatchedEventId ?? null,
+          filters: normalizeAuditFilters(entry.filters),
+        }))
+      ),
+    [savedSearches]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkSavedSearches = async () => {
+      const enabledSearches = savedSearchesRef.current.filter((entry) => entry.alertOnPattern);
+      if (enabledSearches.length === 0) return;
+
+      const updates = new Map<string, Partial<SavedAuditSearch>>();
+
+      await Promise.all(enabledSearches.map(async (search) => {
+        try {
+          const params = buildAuditParams(search.filters, 1, 1, selectedOrg?.id);
+          const result = await api.getAuditLogs(params);
+          const entries = Array.isArray(result) ? result : result.entries ?? [];
+          const latest = entries[0];
+          const latestId = latest?.id ? String(latest.id) : undefined;
+          const totalMatches = Number((result as { total?: number }).total ?? entries.length ?? 0);
+          const checkedAt = new Date().toISOString();
+
+          if (!latestId) {
+            updates.set(search.id, {
+              lastCheckedAt: checkedAt,
+              lastMatchCount: totalMatches,
+            });
+            return;
+          }
+
+          if (!search.lastMatchedEventId) {
+            updates.set(search.id, {
+              lastMatchedEventId: latestId,
+              lastCheckedAt: checkedAt,
+              lastMatchCount: totalMatches,
+            });
+            return;
+          }
+
+          if (search.lastMatchedEventId !== latestId) {
+            success(
+              'Audit pattern matched',
+              `${search.name} found new matching events (${totalMatches}).`
+            );
+            void api.testNotification().catch(() => {
+              // Notification channels may not be configured; UI toast is the fallback signal.
+            });
+            updates.set(search.id, {
+              lastMatchedEventId: latestId,
+              lastCheckedAt: checkedAt,
+              lastMatchCount: totalMatches,
+            });
+            return;
+          }
+
+          updates.set(search.id, {
+            lastCheckedAt: checkedAt,
+            lastMatchCount: totalMatches,
+          });
+        } catch {
+          // Keep polling even if an individual query fails.
+        }
+      }));
+
+      if (cancelled || updates.size === 0) return;
+
+      setSavedSearches((previous) =>
+        previous.map((entry) => {
+          const update = updates.get(entry.id);
+          if (!update) return entry;
+          return {
+            ...entry,
+            ...update,
+            updatedAt: new Date().toISOString(),
+          };
+        })
+      );
+    };
+
+    void checkSavedSearches();
+    const intervalId = window.setInterval(() => {
+      void checkSavedSearches();
+    }, ALERT_CHECK_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [alertSearchDependencyKey, selectedOrg, success]);
 
   const handleExport = (format: ExportFormat) => {
     exportAuditLogs(logs, format);
+  };
+
+  const handleGenerateComplianceReport = async () => {
+    if (complianceDateRangeError) {
+      showError('Invalid compliance report date range', complianceDateRangeError);
+      return;
+    }
+    try {
+      setReportGenerating(true);
+      const params: Record<string, string> = {
+        limit: String(COMPLIANCE_REPORT_LIMIT),
+        offset: '0',
+      };
+      if (selectedOrg?.id) {
+        params.org_id = String(selectedOrg.id);
+      }
+      if (reportStartDate) {
+        params.start = reportStartDate;
+      }
+      if (reportEndDate) {
+        params.end = reportEndDate;
+      }
+      if (!reportStartDate && !reportEndDate) {
+        params.days = '30';
+      }
+
+      const response = await api.getAuditLogs(params);
+      const entries = Array.isArray(response) ? response : response.entries ?? [];
+      const summary = summarizeComplianceReport(entries);
+      const generatedAt = new Date().toISOString();
+      const periodLabel = reportStartDate && reportEndDate
+        ? `${reportStartDate} to ${reportEndDate}`
+        : 'Last 30 days';
+      const reportHtml = buildComplianceReportHtml({
+        reportType,
+        reportPeriodLabel: periodLabel,
+        selectedOrgId: selectedOrg?.id,
+        generatedAt,
+        totalEvents: entries.length,
+        categoryCounts: summary.categoryCounts,
+        userCounts: summary.userCounts,
+        anomalies: summary.anomalies,
+      });
+      const blob = new Blob([reportHtml], { type: 'text/html;charset=utf-8' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const suffix = new Date().toISOString().slice(0, 10);
+      link.href = url;
+      link.download = `compliance-report-${reportType.replaceAll('_', '-')}-${suffix}.html`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      success(
+        'Compliance report generated',
+        `${COMPLIANCE_REPORT_TYPE_LABELS[reportType]} exported with ${entries.length} events.`
+      );
+    } catch (err: unknown) {
+      console.error('Failed to generate compliance report:', err);
+      showError(
+        'Compliance report generation failed',
+        err instanceof Error && err.message ? err.message : 'Unable to build compliance report.'
+      );
+    } finally {
+      setReportGenerating(false);
+    }
   };
 
   const handleCopyRaw = async () => {
@@ -226,9 +736,11 @@ function AuditPageContent() {
                 <Button
                   variant="outline"
                   onClick={() => loadLogs(debouncedFilters, currentPage, pageSize)}
-                  disabled={loading || Boolean(dateRangeError)}
+                  disabled={Boolean(dateRangeError)}
+                  loading={loading}
+                  loadingText="Refreshing..."
                 >
-                  <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                  <RefreshCw className="mr-2 h-4 w-4" />
                   Refresh
                 </Button>
                 <ExportMenu
@@ -260,15 +772,151 @@ function AuditPageContent() {
               </CardContent>
             </Card>
 
+            <Card className="mb-6">
+              <CardHeader>
+                <CardTitle>Compliance Reports</CardTitle>
+                <CardDescription>
+                  Generate a downloadable HTML report with activity summary, category distribution, user activity, and anomaly highlights.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="complianceReportType">Report Type</Label>
+                    <Select
+                      id="complianceReportType"
+                      value={reportType}
+                      onChange={(event) => setReportType(event.target.value as ComplianceReportType)}
+                    >
+                      <option value="activity_summary">Activity Summary</option>
+                      <option value="access_review">Access Review</option>
+                      <option value="data_access">Data Access</option>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="complianceReportStartDate">Report Start Date</Label>
+                    <Input
+                      id="complianceReportStartDate"
+                      type="date"
+                      value={reportStartDate}
+                      onChange={(event) => setReportStartDate(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="complianceReportEndDate">Report End Date</Label>
+                    <Input
+                      id="complianceReportEndDate"
+                      type="date"
+                      value={reportEndDate}
+                      onChange={(event) => setReportEndDate(event.target.value)}
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      onClick={handleGenerateComplianceReport}
+                      loading={reportGenerating}
+                      loadingText="Generating..."
+                      disabled={Boolean(complianceDateRangeError)}
+                    >
+                      Generate Compliance Report
+                    </Button>
+                  </div>
+                </div>
+                {complianceDateRangeError ? (
+                  <Alert variant="destructive" className="mt-4">
+                    <AlertDescription>{complianceDateRangeError}</AlertDescription>
+                  </Alert>
+                ) : null}
+              </CardContent>
+            </Card>
+
             {/* Filters */}
             <Card className="mb-6">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Filter className="h-5 w-5" />
-                  Filters
+                  Filters & Saved Searches
                 </CardTitle>
+                <CardDescription>
+                  Save common filter combinations and optionally alert on new matching events.
+                </CardDescription>
               </CardHeader>
               <CardContent>
+                <div className="mb-6 space-y-3 rounded-md border p-4">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(240px,1fr)_auto]">
+                    <div className="space-y-2">
+                      <Label htmlFor="savedSearchName">Saved search name</Label>
+                      <Input
+                        id="savedSearchName"
+                        placeholder="e.g., Failed logins (today)"
+                        value={savedSearchName}
+                        onChange={(event) => setSavedSearchName(event.target.value)}
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <Button
+                        onClick={handleSaveCurrentSearch}
+                        variant="outline"
+                        data-testid="save-audit-search"
+                      >
+                        Save Current Filters
+                      </Button>
+                    </div>
+                  </div>
+
+                  {savedSearches.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No saved searches yet.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {savedSearches.map((search) => (
+                        <div
+                          key={search.id}
+                          className="flex flex-wrap items-center gap-2 rounded-full border px-3 py-2"
+                          data-testid={`saved-search-${search.id}`}
+                        >
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={activeSavedSearchId === search.id ? 'default' : 'outline'}
+                            className="rounded-full"
+                            onClick={() => handleApplySavedSearch(search)}
+                          >
+                            {search.name}
+                          </Button>
+                          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Checkbox
+                              checked={search.alertOnPattern}
+                              onCheckedChange={(checked) => handleAlertToggle(search.id, checked)}
+                              aria-label={`Enable alert on pattern for ${search.name}`}
+                            />
+                            <Bell className="h-3 w-3" />
+                            Alert on pattern
+                          </label>
+                          {typeof search.lastMatchCount === 'number' ? (
+                            <Badge variant="secondary">
+                              {search.lastMatchCount} match{search.lastMatchCount === 1 ? '' : 'es'}
+                            </Badge>
+                          ) : null}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleDeleteSavedSearch(search.id)}
+                            aria-label={`Delete saved search ${search.name}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Alert checks run every 60 seconds and trigger in-app notifications (plus monitoring notification test when configured).
+                  </p>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="userFilter">User ID (exact)</Label>

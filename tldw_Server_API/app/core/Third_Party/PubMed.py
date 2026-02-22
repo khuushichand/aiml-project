@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
+from defusedxml import ElementTree as DET
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -194,10 +195,7 @@ def get_pubmed_by_id(pmid: str) -> tuple[dict[str, Any] | None, str | None]:
         # Simple XML parsing for AbstractText nodes
         abstract_text = None
         try:
-            # Lightweight parse to avoid extra deps
-            from xml.etree import ElementTree as ET
-
-            root = ET.fromstring(xml_text)
+            root = DET.fromstring(xml_text)
             # Path: PubmedArticle/MedlineCitation/Article/Abstract/AbstractText
             for abst in root.findall('.//Abstract/AbstractText'):
                 part = ''.join(abst.itertext()).strip()

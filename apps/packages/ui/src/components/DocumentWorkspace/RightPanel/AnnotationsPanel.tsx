@@ -36,7 +36,7 @@ import type { Annotation, AnnotationColor, AnnotationType, DocumentType } from "
 
 const { TextArea } = Input
 
-// Color badges for annotations
+// theme-exempt: user annotation colors
 const COLOR_BADGES: Record<AnnotationColor, { bg: string; border: string; label: string }> = {
   yellow: { bg: "bg-yellow-100 dark:bg-yellow-900/30", border: "border-yellow-300 dark:border-yellow-700", label: "Yellow" },
   green: { bg: "bg-green-100 dark:bg-green-900/30", border: "border-green-300 dark:border-green-700", label: "Green" },
@@ -127,7 +127,7 @@ const AnnotationCard: React.FC<AnnotationCardProps> = ({
             okButtonProps={{ danger: true }}
           >
             <button className="rounded p-1 hover:bg-hover">
-              <Trash2 className="h-3.5 w-3.5 text-text-secondary hover:text-red-500" />
+              <Trash2 className="h-3.5 w-3.5 text-text-secondary hover:text-danger" />
             </button>
           </Popconfirm>
         </div>
@@ -429,7 +429,7 @@ export const AnnotationsPanel: React.FC = () => {
   if (error) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
-        <p className="text-sm text-red-500">
+        <p className="text-sm text-danger">
           {t("option:documentWorkspace.loadAnnotationsError", "Failed to load annotations")}
         </p>
       </div>

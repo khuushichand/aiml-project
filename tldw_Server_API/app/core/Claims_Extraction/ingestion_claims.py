@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import re
 import sqlite3
 import time
 import uuid
@@ -23,18 +22,36 @@ from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     ClaimsJobContext,
     estimate_claims_tokens,
 )
+from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
 from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import (
     LLM_PROVIDER_MODES,
     detect_claims_language,
-    get_spacy_pipeline,
     resolve_claims_extractor_mode,
-    resolve_ner_model_name,
-    split_claims_sentences,
+)
+from tldw_Server_API.app.core.Claims_Extraction.extractor_registry import (
+    extract_heuristic_claims_texts,
+    extract_ner_claims_texts,
+    run_sync_claims_strategy,
+)
+from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
+    ClaimsOutputParseError,
+    coerce_llm_response_text,
+    extract_claim_texts,
+    parse_claims_llm_output,
+    resolve_claims_response_format,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
+    resolve_claims_alignment_config,
+    resolve_claims_json_parse_mode,
+    resolve_claims_llm_config,
 )
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     estimate_claims_cost,
+    record_claims_fallback,
     record_claims_budget_exhausted,
+    record_claims_output_parse_event,
     record_claims_provider_request,
+    record_claims_response_format_selection,
     record_claims_throttle,
     should_throttle_claims_provider,
 )
@@ -56,11 +73,7 @@ _CLAIMS_IMPORT_EXCEPTIONS = (
     RuntimeError,
 )
 
-_CLAIMS_COERCE_EXCEPTIONS = (
-    TypeError,
-    ValueError,
-    OverflowError,
-)
+_CLAIMS_COERCE_EXCEPTIONS = (TypeError, ValueError, OverflowError)
 
 _CLAIMS_TEMPLATE_FORMAT_EXCEPTIONS = (
     KeyError,
@@ -98,6 +111,22 @@ except _CLAIMS_IMPORT_EXCEPTIONS:  # pragma: no cover
     MediaDatabase = None  # type: ignore
 
 
+_INGESTION_CLAIMS_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+                "additionalProperties": True,
+            },
+        },
+    },
+    "required": ["claims"],
+    "additionalProperties": True,
+}
 
 
 def extract_claims_for_chunks(
@@ -124,257 +153,299 @@ def extract_claims_for_chunks(
         )
         resolved_mode, resolved_language = resolve_claims_extractor_mode(resolved_mode, combined_text)
 
+    parse_mode = resolve_claims_json_parse_mode(_settings, default_mode="lenient")
+    alignment_mode, alignment_threshold = resolve_claims_alignment_config(
+        _settings,
+        default_mode="fuzzy",
+        default_threshold=0.75,
+    )
+    current_mode = resolved_mode
+
+    def _llm_extract_claim_texts(txt: str, max_items: int, _language_hint: str | None) -> list[str]:
+        nonlocal current_mode
+        cost_estimate = None
+        default_provider, model_override, temperature = resolve_claims_llm_config(
+            _settings,
+            default_provider="openai",
+            default_temperature=0.1,
+        )
+        provider = current_mode if current_mode in LLM_PROVIDER_MODES else default_provider
+        provider_name = normalize_provider(provider)
+        response_format = resolve_claims_response_format(
+            provider,
+            schema_name="ingestion_claims_extraction",
+            json_schema=_INGESTION_CLAIMS_RESPONSE_SCHEMA,
+        )
+        record_claims_response_format_selection(
+            provider=provider,
+            model=model_override or "",
+            mode="ingestion",
+            response_format=response_format,
+        )
+
+        system = load_prompt("ingestion", "claims_extractor_system") or (
+            "You extract specific, verifiable, decontextualized factual propositions. Output strict JSON."
+        )
+        base = load_prompt("ingestion", "claims_extractor_prompt") or (
+            "Extract up to {max_claims} atomic factual propositions from the ANSWER. "
+            "Each proposition should stand alone without the surrounding context, be specific and checkable. "
+            "Return JSON: {{\"claims\":[{{\"text\": str}}]}}. Do not include explanations.\n\nANSWER:\n{answer}"
+        )
+        try:
+            prompt = base.format(max_claims=max_items, answer=txt)
+        except _CLAIMS_TEMPLATE_FORMAT_EXCEPTIONS:
+            _tmpl = base.replace("{", "{{").replace("}", "}}")
+            _tmpl = _tmpl.replace("{{max_claims}}", "{max_claims}").replace("{{answer}}", "{answer}")
+            prompt = _tmpl.format(max_claims=max_items, answer=txt)
+
+        messages = [{"role": "user", "content": prompt}]
+        timeout_sec = 8.0
+        try:
+            timeout_sec = float(_settings.get("CLAIMS_LLM_TIMEOUT_SEC", 8.0))
+        except _CLAIMS_COERCE_EXCEPTIONS:
+            timeout_sec = 8.0
+
+        def _call_provider() -> Any:
+            override = globals().get("chat_api_call")
+            if callable(override):
+                return override(
+                    api_endpoint=provider,
+                    messages_payload=messages,
+                    api_key=None,
+                    temp=temperature,
+                    system_message=system,
+                    streaming=False,
+                    model=model_override,
+                    response_format=response_format,
+                )
+
+            adapter = get_registry().get_adapter(provider_name)
+            if adapter is not None:
+                app_config = ensure_app_config()
+                resolved_model = model_override or resolve_provider_model(provider_name, app_config)
+                if not resolved_model:
+                    raise ChatConfigurationError(
+                        provider=provider_name,
+                        message="Model is required for provider.",
+                    )
+                system_message, cleaned_messages = split_system_message(
+                    [{"role": "system", "content": system}] + messages if system else messages
+                )
+                request: dict[str, Any] = {
+                    "messages": cleaned_messages,
+                    "system_message": system_message,
+                    "model": resolved_model,
+                    "api_key": resolve_provider_api_key_from_config(provider_name, app_config),
+                    "temperature": temperature,
+                    "app_config": app_config,
+                }
+                if response_format is not None:
+                    request["response_format"] = response_format
+                return adapter.chat(request, timeout=timeout_sec)
+
+            from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call as _cac  # type: ignore
+
+            return _cac(
+                api_endpoint=provider,
+                messages_payload=messages,
+                api_key=None,
+                temp=temperature,
+                system_message=system,
+                streaming=False,
+                model=model_override,
+                response_format=response_format,
+            )
+
+        cost_estimate = estimate_claims_cost(
+            provider=provider,
+            model=model_override or "",
+            text=prompt,
+        )
+        budget_ratio = budget.remaining_ratio() if budget is not None else None
+        throttle, reason = should_throttle_claims_provider(
+            provider=provider,
+            model=model_override or "",
+            budget_ratio=budget_ratio,
+        )
+        if throttle:
+            record_claims_throttle(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                reason=reason or "throttle",
+            )
+            record_claims_fallback(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                reason=reason or "throttle",
+            )
+            return []
+        if budget is not None:
+            prompt_tokens = estimate_claims_tokens(prompt)
+            if not budget.reserve(cost_usd=cost_estimate, tokens=prompt_tokens):
+                record_claims_budget_exhausted(
+                    provider=provider,
+                    model=model_override or "",
+                    mode="ingestion",
+                    reason=budget.exhausted_reason or "budget",
+                )
+                record_claims_fallback(
+                    provider=provider,
+                    model=model_override or "",
+                    mode="ingestion",
+                    reason=budget.exhausted_reason or "budget",
+                )
+                return []
+
+        try:
+            import concurrent.futures as _futures
+
+            start_time = time.time()
+            with _futures.ThreadPoolExecutor(max_workers=1) as _exec:
+                fut = _exec.submit(_call_provider)
+                try:
+                    resp = fut.result(timeout=timeout_sec)
+                except _futures.TimeoutError:
+                    with contextlib.suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
+                        fut.cancel()
+                    record_claims_provider_request(
+                        provider=provider,
+                        model=model_override or "",
+                        mode="ingestion",
+                        latency_s=None,
+                        error="timeout",
+                        estimated_cost=cost_estimate,
+                    )
+                    record_claims_fallback(
+                        provider=provider,
+                        model=model_override or "",
+                        mode="ingestion",
+                        reason="timeout",
+                    )
+                    return []
+            record_claims_provider_request(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                latency_s=time.time() - start_time,
+                estimated_cost=cost_estimate,
+            )
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
+            record_claims_provider_request(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                latency_s=None,
+                error=str(exc),
+                estimated_cost=cost_estimate,
+            )
+            record_claims_fallback(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                reason="provider_error",
+            )
+            logger.debug(f"LLM-based claim extraction failed ({current_mode}): {exc}")
+            return []
+
+        text = coerce_llm_response_text(resp)
+        if budget is not None:
+            budget.add_usage(tokens=estimate_claims_tokens(text))
+
+        try:
+            parsed = parse_claims_llm_output(
+                text,
+                parse_mode=parse_mode,
+                strip_think_tags=True,
+            )
+            claim_texts = extract_claim_texts(
+                parsed,
+                wrapper_key="claims",
+                parse_mode=parse_mode,
+                max_claims=max_items,
+            )
+            if claim_texts:
+                record_claims_output_parse_event(
+                    provider=provider,
+                    model=model_override or "",
+                    mode="ingestion",
+                    parse_mode=parse_mode,
+                    outcome="success",
+                )
+                return claim_texts
+            record_claims_output_parse_event(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                parse_mode=parse_mode,
+                outcome="empty",
+                reason="no_claims",
+            )
+            record_claims_fallback(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                reason="empty_claims",
+            )
+            return []
+        except ClaimsOutputParseError as exc:
+            record_claims_output_parse_event(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                parse_mode=parse_mode,
+                outcome="error",
+                reason=exc.__class__.__name__,
+            )
+            record_claims_fallback(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                reason="parse_error",
+            )
+            logger.debug(f"Failed to parse LLM claims JSON ({current_mode}): {exc}")
+            return []
+
+    strategy_map = {
+        "heuristic": extract_heuristic_claims_texts,
+        "ner": extract_ner_claims_texts,
+        "aps": _llm_extract_claim_texts,
+        "llm": _llm_extract_claim_texts,
+    }
+
     for ch in chunks or []:
         txt = (ch or {}).get("text") or (ch or {}).get("content") or ""
         meta = (ch or {}).get("metadata", {}) or {}
         idx = int(meta.get("chunk_index") or meta.get("index") or 0)
-        mode = resolved_mode
         lang_hint = resolved_language or detect_claims_language(txt)
+        current_mode = resolved_mode
 
-        # Heuristic (default)
-        if mode in {"heuristic", "simple"}:
-            # Deterministic sync path with language-aware sentence splitting
-            sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
-        elif mode == "ner":
-            # NER-assisted selection: keep sentences with named entities
-            sents = []
-            try:
-                model_name = resolve_ner_model_name(lang_hint)
-                nlp = get_spacy_pipeline(model_name, lang_hint)
-                if nlp is None or not nlp.has_pipe("ner"):
-                    raise RuntimeError("spaCy NER pipeline unavailable")
-                doc = nlp(txt)
-                for sent in getattr(doc, "sents", [doc]):
-                    has_ent = any(getattr(ent, "label_", "") for ent in getattr(sent, "ents", []))
-                    if has_ent:
-                        st = sent.text.strip()
-                        if len(st) >= 12:
-                            sents.append(st)
-                    if len(sents) >= max_per_chunk:
-                        break
-                if not sents:
-                    # fallback to heuristic
-                    sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS as e:
-                logger.debug(f"NER-assisted extraction failed: {e}; falling back to heuristic")
-                sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
+        dispatch = run_sync_claims_strategy(
+            requested_mode=current_mode,
+            text=txt,
+            max_claims=max_per_chunk,
+            strategy_map=strategy_map,
+            fallback_mode="heuristic",
+            language=lang_hint,
+            catch_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+        )
 
-        # LLM-based extractor via unified chat API (LLM_Calls)
-        else:
-            sents = []
-            try:
-                cost_estimate = None
-                import concurrent.futures as _futures
-
-                # Determine provider: explicit mode may be a provider name; otherwise use config
-                provider = mode if mode in LLM_PROVIDER_MODES else str(_settings.get("CLAIMS_LLM_PROVIDER", "openai")).lower()
-                provider_name = normalize_provider(provider)
-
-                model_override = str(_settings.get("CLAIMS_LLM_MODEL", "") or "") or None
-                try:
-                    temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
-                except _CLAIMS_COERCE_EXCEPTIONS:
-                    temperature = 0.1
-
-                system = load_prompt("ingestion", "claims_extractor_system") or (
-                    "You extract specific, verifiable, decontextualized factual propositions. Output strict JSON."
-                )
-                base = load_prompt("ingestion", "claims_extractor_prompt") or (
-                    "Extract up to {max_claims} atomic factual propositions from the ANSWER. "
-                    "Each proposition should stand alone without the surrounding context, be specific and checkable. "
-                    "Return JSON: {{\"claims\":[{{\"text\": str}}]}}. Do not include explanations.\n\nANSWER:\n{answer}"
-                )
-                # Safely format template that may contain JSON braces
-                try:
-                    prompt = base.format(max_claims=max_per_chunk, answer=txt)
-                except _CLAIMS_TEMPLATE_FORMAT_EXCEPTIONS:
-                    _tmpl = base.replace('{', '{{').replace('}', '}}')
-                    _tmpl = _tmpl.replace('{{max_claims}}', '{max_claims}').replace('{{answer}}', '{answer}')
-                    prompt = _tmpl.format(max_claims=max_per_chunk, answer=txt)
-
-                # Sync call to provider
-                messages = [{"role": "user", "content": prompt}]
-                # Minimal timeout guard around provider call
-                timeout_sec = 8.0
-                try:
-                    timeout_sec = float(_settings.get("CLAIMS_LLM_TIMEOUT_SEC", 8.0))
-                except _CLAIMS_COERCE_EXCEPTIONS:
-                    timeout_sec = 8.0
-
-                def _call_provider(
-                    provider=provider,
-                    messages=messages,
-                    temperature=temperature,
-                    system=system,
-                    model_override=model_override,
-                    provider_name=provider_name,
-                    timeout_sec=timeout_sec,
-                ):
-                    override = globals().get("chat_api_call")
-                    if callable(override):
-                        return override(
-                            api_endpoint=provider,
-                            messages_payload=messages,
-                            api_key=None,
-                            temp=temperature,
-                            system_message=system,
-                            streaming=False,
-                            model=model_override,
-                        )
-
-                    adapter = get_registry().get_adapter(provider_name)
-                    if adapter is not None:
-                        app_config = ensure_app_config()
-                        resolved_model = model_override or resolve_provider_model(provider_name, app_config)
-                        if not resolved_model:
-                            raise ChatConfigurationError(
-                                provider=provider_name,
-                                message="Model is required for provider.",
-                            )
-                        system_message, cleaned_messages = split_system_message(
-                            [{"role": "system", "content": system}] + messages if system else messages
-                        )
-                        request = {
-                            "messages": cleaned_messages,
-                            "system_message": system_message,
-                            "model": resolved_model,
-                            "api_key": resolve_provider_api_key_from_config(provider_name, app_config),
-                            "temperature": temperature,
-                            "app_config": app_config,
-                        }
-                        return adapter.chat(request, timeout=timeout_sec)
-
-                    from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call as _cac  # type: ignore
-                    return _cac(
-                        api_endpoint=provider,
-                        messages_payload=messages,
-                        api_key=None,
-                        temp=temperature,
-                        system_message=system,
-                        streaming=False,
-                        model=model_override,
-                    )
-
-                cost_estimate = estimate_claims_cost(
-                    provider=provider,
-                    model=model_override or "",
-                    text=prompt,
-                )
-                skip_llm = False
-                budget_ratio = budget.remaining_ratio() if budget is not None else None
-                throttle, reason = should_throttle_claims_provider(
-                    provider=provider,
-                    model=model_override or "",
-                    budget_ratio=budget_ratio,
-                )
-                if throttle:
-                    record_claims_throttle(
-                        provider=provider,
-                        model=model_override or "",
-                        mode="ingestion",
-                        reason=reason or "throttle",
-                    )
-                    skip_llm = True
-                if not skip_llm and budget is not None:
-                    prompt_tokens = estimate_claims_tokens(prompt)
-                    if not budget.reserve(cost_usd=cost_estimate, tokens=prompt_tokens):
-                        record_claims_budget_exhausted(
-                            provider=provider,
-                            model=model_override or "",
-                            mode="ingestion",
-                            reason=budget.exhausted_reason or "budget",
-                        )
-                        skip_llm = True
-                if skip_llm:
-                    sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
-                else:
-                    start_time = time.time()
-                    with _futures.ThreadPoolExecutor(max_workers=1) as _exec:
-                        fut = _exec.submit(_call_provider)
-                        try:
-                            resp = fut.result(timeout=timeout_sec)
-                            record_claims_provider_request(
-                                provider=provider,
-                                model=model_override or "",
-                                mode="ingestion",
-                                latency_s=time.time() - start_time,
-                                estimated_cost=cost_estimate,
-                            )
-                        except _futures.TimeoutError:
-                            with contextlib.suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-                                fut.cancel()
-                            record_claims_provider_request(
-                                provider=provider,
-                                model=model_override or "",
-                                mode="ingestion",
-                                latency_s=None,
-                                error="timeout",
-                                estimated_cost=cost_estimate,
-                            )
-                            raise TimeoutError(
-                                f"LLM extraction timed out after {timeout_sec:.1f}s for provider '{provider}'."
-                            ) from None
-
-                    # Normalize response to string
-                    if isinstance(resp, str):
-                        text = resp
-                    elif isinstance(resp, dict):
-                        try:
-                            choices = resp.get("choices") or []
-                            if choices:
-                                msg = choices[0].get("message") or {}
-                                content = msg.get("content")
-                                text = content if isinstance(content, str) else str(resp)
-                            else:
-                                text = str(resp)
-                        except _CLAIMS_RESPONSE_PARSE_EXCEPTIONS:
-                            text = str(resp)
-                    else:
-                        try:
-                            text = "".join(list(resp))
-                        except _CLAIMS_RESPONSE_PARSE_EXCEPTIONS:
-                            text = str(resp)
-                    if budget is not None:
-                        budget.add_usage(tokens=estimate_claims_tokens(text))
-
-                if not skip_llm:
-                    # Extract JSON block (supports fenced code blocks and trailing text)
-                    import json as _json
-                    jtxt = None
-                    # Prefer fenced blocks marked as json
-                    fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
-                    for block in fence_json or []:
-                        try:
-                            _ = _json.loads(block)
-                            jtxt = block
-                            break
-                        except _CLAIMS_COERCE_EXCEPTIONS:
-                            continue
-                    if jtxt is None:
-                        # Fallback: last JSON-looking object in text
-                        m = re.search(r"\{[\s\S]*\}\s*$", text)
-                        jtxt = m.group(0) if m else text
-                    data = _json.loads(jtxt)
-                    for c in (data.get("claims") or [])[:max_per_chunk]:
-                        t = (c or {}).get("text")
-                        if isinstance(t, str) and t.strip():
-                            sents.append(t.strip())
-                    if not sents:
-                        # fallback to heuristic
-                        sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS as e:
-                record_claims_provider_request(
-                    provider=provider,
-                    model=model_override or "",
-                    mode="ingestion",
-                    latency_s=None,
-                    error=str(e),
-                    estimated_cost=cost_estimate,
-                )
-                logger.debug(f"LLM-based claim extraction failed ({mode}): {e}; falling back to heuristic")
-                sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
-        for s in sents:
-            claims.append({"chunk_index": idx, "claim_text": s})
+        for sent in dispatch.claim_texts:
+            span = align_claim_span(
+                txt,
+                sent,
+                mode=alignment_mode,
+                threshold=alignment_threshold,
+            )
+            claims.append(
+                {
+                    "chunk_index": idx,
+                    "claim_text": sent,
+                    "span": list(span) if span is not None else None,
+                    "extractor_mode": dispatch.mode,
+                }
+            )
     return claims
 
 
@@ -402,11 +473,24 @@ def store_claims(
         c["uuid"] = claim_uuid
         chunk_txt = chunk_texts_by_index.get(idx, "")
         chash = hashlib.sha256(chunk_txt.encode()).hexdigest() if chunk_txt else hashlib.sha256(b"").hexdigest()
+        span_start = None
+        span_end = None
+        span_value = c.get("span")
+        if isinstance(span_value, (list, tuple)) and len(span_value) == 2:
+            try:
+                maybe_start = int(span_value[0])
+                maybe_end = int(span_value[1])
+                if maybe_start >= 0 and maybe_end >= maybe_start:
+                    span_start = maybe_start
+                    span_end = maybe_end
+            except _CLAIMS_COERCE_EXCEPTIONS:
+                span_start = None
+                span_end = None
         rows.append({
             "media_id": int(media_id),
             "chunk_index": idx,
-            "span_start": None,
-            "span_end": None,
+            "span_start": span_start,
+            "span_end": span_end,
             "claim_text": ctext,
             "confidence": None,
             "extractor": extractor,

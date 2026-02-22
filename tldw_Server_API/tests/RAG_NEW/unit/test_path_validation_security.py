@@ -174,3 +174,19 @@ class TestPathValidationValidPaths:
         db_file.touch()
         result = retriever_instance._validate_path(f"file://{db_file}")
         assert result == str(db_file.resolve())
+
+    def test_memory_sentinel_preserved(self, retriever_instance: MediaDBRetriever):
+        """':memory:' must remain in-memory and never resolve to a filesystem path."""
+        result = retriever_instance._validate_path(":memory:")
+        assert result == ":memory:"
+
+    def test_memory_uri_preserved(self, retriever_instance: MediaDBRetriever):
+        """file::memory URI must remain in-memory and keep URI semantics."""
+        memory_uri = "file::memory:?cache=shared"
+        result = retriever_instance._validate_path(memory_uri)
+        assert result == memory_uri
+
+    def test_file_uri_memory_normalized(self, retriever_instance: MediaDBRetriever):
+        """file:///:memory: URIs should normalize to SQLite's memory URI form."""
+        result = retriever_instance._validate_path("file:///:memory:?cache=shared")
+        assert result == "file::memory:?cache=shared"

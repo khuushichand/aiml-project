@@ -75,7 +75,7 @@ def _resolve_transcription_model_or_default(
     default_model = resolve_default_transcription_model(fallback_whisper_model)
     if model and model not in TRANSCRIPTION_MODEL_ENUM:
         logger.warning(
-            "Invalid transcription_model '%s' for %s; defaulting to %s",
+            "Invalid transcription_model '{}' for {}; defaulting to {}",
             model,
             context,
             default_model,

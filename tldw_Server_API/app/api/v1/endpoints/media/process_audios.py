@@ -27,9 +27,6 @@ from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessAudiosForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Ingestion_Media_Processing.audio_batch import (
-    run_audio_batch,
-)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
@@ -75,9 +72,9 @@ async def process_audios_endpoint(
             tags=["no_db"],
             metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
         )
-    except Exception:
+    except Exception as usage_log_error:
         # Usage logging is best-effort; do not fail the request.
-        pass
+        logger.debug("Audio process endpoint usage logging failed", exc_info=usage_log_error)
 
     # Normalize the "urls=['']" sentinel used by some clients.
     if form_data.urls and form_data.urls == [""]:
@@ -101,6 +98,11 @@ async def process_audios_endpoint(
         "errors": [],
         "results": [],
     }
+
+    # Lazy import to avoid import-time hard failures from optional STT backends.
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.audio_batch import (
+        run_audio_batch,
+    )
 
     # Map temporary path -> original filename for uploads.
     temp_path_to_original_name: dict[str, str] = {}
@@ -244,9 +246,9 @@ async def process_audios_endpoint(
                         "download/egress error: {}",
                         errors_joined,
                     )
-            except Exception:
+            except Exception as endpoint_log_error:
                 # Logging must never affect endpoint behavior.
-                pass
+                logger.debug("Audio process endpoint warning log formatting failed", exc_info=endpoint_log_error)
 
     # Optional template/hierarchical re-chunking of transcripts (best-effort).
     try:

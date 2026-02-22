@@ -15,6 +15,7 @@ from pathlib import Path as PathlibPath
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.schemas.storage_schemas import (
     BulkDeleteRequest,
     BulkDeleteResponse,
@@ -48,6 +49,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 )
 from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import FILE_CATEGORY_VOICE_CLONE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
 
@@ -61,6 +63,35 @@ router = APIRouter(prefix="/storage", tags=["storage"])
 async def _get_service():
     """Get initialized storage quota service."""
     return await get_storage_service()
+
+
+def _principal_is_storage_admin(principal: AuthPrincipal) -> bool:
+    """Storage admin compatibility check.
+
+    Storage admin endpoints intentionally preserve legacy `is_admin` support in
+    addition to claim-first admin role/permission checks.
+    """
+    roles = {str(role).strip().lower() for role in (principal.roles or []) if str(role).strip()}
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    if bool(getattr(principal, "is_admin", False)):
+        return True
+    if "admin" in roles:
+        return True
+    return bool(permissions & {"*", "system.configure"})
+
+
+async def require_storage_admin(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:
+    """Authorize storage admin endpoints with legacy `is_admin` compatibility."""
+    if _principal_is_storage_admin(principal):
+        return principal
+    raise HTTPException(
+        status_code=403,
+        detail="Access denied. Required role(s): admin",
+    )
 
 
 def _to_generated_file(record: dict) -> GeneratedFile:
@@ -633,13 +664,9 @@ async def permanently_delete_file(
 async def set_user_quota(
     user_id: int,
     request: SetQuotaRequest,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Set storage quota for a user (admin only)."""
-    # Check admin permission
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
 
     try:
@@ -666,13 +693,9 @@ async def set_user_quota(
 async def set_team_quota(
     team_id: int,
     request: SetQuotaRequest,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Set storage quota for a team (admin only)."""
-    # Check admin permission
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
 
     await service.set_team_quota(
@@ -694,13 +717,9 @@ async def set_team_quota(
 async def set_org_quota(
     org_id: int,
     request: SetQuotaRequest,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Set storage quota for an organization (admin only)."""
-    # Check admin permission
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
 
     await service.set_org_quota(
@@ -721,12 +740,9 @@ async def set_org_quota(
 @router.get("/admin/quotas/team/{team_id}", response_model=TeamQuotaResponse)
 async def get_team_quota(
     team_id: int,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Get storage quota for a team (admin only)."""
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
     quota_status = await service.get_team_quota(team_id)
 
@@ -739,12 +755,9 @@ async def get_team_quota(
 @router.get("/admin/quotas/org/{org_id}", response_model=OrgQuotaResponse)
 async def get_org_quota(
     org_id: int,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Get storage quota for an organization (admin only)."""
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
     quota_status = await service.get_org_quota(org_id)
 

@@ -76,7 +76,7 @@ def _normalize_query(q: str) -> str:
 def _cluster_id(query: str, intent: str | None = None, corpus: str | None = None) -> str:
     base = _normalize_query(query)
     key = f"{intent or 'unknown'}|{corpus or 'default'}|{base}"
-    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha1(key.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 @dataclass

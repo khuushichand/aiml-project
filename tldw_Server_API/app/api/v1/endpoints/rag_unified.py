@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import os
 import time
 import types
 from typing import Any, Optional
@@ -55,6 +56,7 @@ from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
 )
 from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
 from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
+from tldw_Server_API.app.core.config import get_config_value
 
 # Unified Pipeline
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
@@ -66,6 +68,147 @@ from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
 )
 
 
+_SEARCH_AGENT_BOOL_DEFAULTS: tuple[tuple[str, str, str], ...] = (
+    ("enable_query_classification", "SEARCH_QUERY_CLASSIFICATION", "search_query_classification"),
+    ("enable_query_reformulation", "SEARCH_QUERY_REFORMULATION", "search_query_reformulation"),
+    ("enable_research_loop", "SEARCH_RESEARCH_LOOP", "search_research_loop"),
+    ("enable_discussion_search", "SEARCH_DISCUSSIONS_ENABLED", "search_discussions_enabled"),
+    ("enable_research_progress", "SEARCH_PROGRESS_STREAMING", "search_progress_streaming"),
+    ("search_url_scraping", "SEARCH_URL_SCRAPING", "search_url_scraping"),
+    ("enable_suggestions", "SEARCH_SUGGESTIONS", "search_suggestions"),
+    ("enable_structured_response", "SEARCH_STRUCTURED_RESPONSE", "search_structured_response"),
+    ("enable_image_search", "SEARCH_IMAGE_SEARCH", "search_image_search"),
+    ("enable_video_search", "SEARCH_VIDEO_SEARCH", "search_video_search"),
+)
+_SEARCH_AGENT_INT_DEFAULTS: tuple[tuple[str, str, str], ...] = (
+    ("research_max_iterations", "SEARCH_MAX_ITERATIONS", "search_max_iterations"),
+    ("research_max_iterations_speed", "SEARCH_MAX_ITERATIONS_SPEED", "search_max_iterations_speed"),
+    ("research_max_iterations_balanced", "SEARCH_MAX_ITERATIONS_BALANCED", "search_max_iterations_balanced"),
+    ("research_max_iterations_quality", "SEARCH_MAX_ITERATIONS_QUALITY", "search_max_iterations_quality"),
+)
+_SEARCH_AGENT_MODE_VALUES = {"speed", "balanced", "quality"}
+_BATCH_ROUND2_DEFAULT_FIELDS = {
+    "enable_suggestions",
+    "enable_structured_response",
+    "enable_image_search",
+    "enable_video_search",
+}
+
+
+def _request_fields_set(request: Any) -> set[str]:
+    """Return fields explicitly provided by the caller."""
+    raw_fields = getattr(request, "model_fields_set", None)
+    if raw_fields is None:
+        raw_fields = getattr(request, "__fields_set__", None)
+    if raw_fields is None:
+        return set()
+    try:
+        return {str(name) for name in raw_fields}
+    except (TypeError, ValueError):
+        return set()
+
+
+def _is_truthy_value(raw: Any) -> bool:
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _search_agent_setting(env_key: str, config_key: str) -> Optional[str]:
+    """Read Search-Agent setting with env-over-config precedence."""
+    env_value = os.getenv(env_key)
+    if env_value is not None:
+        return env_value
+    try:
+        return get_config_value("Search-Agent", config_key, default=None)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_csv_or_json_list(raw: Any) -> Optional[list[str]]:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                values = [str(item).strip() for item in parsed if str(item).strip()]
+                return values or None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    values = [item.strip() for item in text.split(",") if item.strip()]
+    return values or None
+
+
+def _parse_int_or_none(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_search_agent_defaults(
+    request: Any,
+    payload: dict[str, Any],
+    *,
+    allowed_fields: Optional[set[str]] = None,
+) -> None:
+    """Apply Search-Agent defaults for fields omitted by the caller."""
+    explicit_fields = _request_fields_set(request)
+
+    for field_name, env_key, cfg_key in _SEARCH_AGENT_BOOL_DEFAULTS:
+        if allowed_fields is not None and field_name not in allowed_fields:
+            continue
+        if field_name in explicit_fields:
+            continue
+        raw_value = _search_agent_setting(env_key, cfg_key)
+        if raw_value is None:
+            continue
+        payload[field_name] = _is_truthy_value(raw_value)
+
+    if (allowed_fields is None or "search_depth_mode" in allowed_fields) and "search_depth_mode" not in explicit_fields:
+        raw_mode = _search_agent_setting("SEARCH_DEFAULT_MODE", "search_default_mode")
+        if raw_mode is not None:
+            mode = str(raw_mode).strip().lower()
+            if mode in _SEARCH_AGENT_MODE_VALUES:
+                payload["search_depth_mode"] = mode
+
+    if (allowed_fields is None or "discussion_platforms" in allowed_fields) and "discussion_platforms" not in explicit_fields:
+        raw_platforms = _search_agent_setting("SEARCH_DISCUSSION_PLATFORMS", "search_discussion_platforms")
+        parsed_platforms = _parse_csv_or_json_list(raw_platforms)
+        if parsed_platforms is not None:
+            payload["discussion_platforms"] = parsed_platforms
+
+    if (allowed_fields is None or "classifier_provider" in allowed_fields) and "classifier_provider" not in explicit_fields:
+        raw_provider = _search_agent_setting("SEARCH_CLASSIFIER_PROVIDER", "search_classifier_provider")
+        if raw_provider is not None and str(raw_provider).strip():
+            payload["classifier_provider"] = str(raw_provider).strip()
+
+    if (allowed_fields is None or "classifier_model" in allowed_fields) and "classifier_model" not in explicit_fields:
+        raw_model = _search_agent_setting("SEARCH_CLASSIFIER_MODEL", "search_classifier_model")
+        if raw_model is not None and str(raw_model).strip():
+            payload["classifier_model"] = str(raw_model).strip()
+
+    for field_name, env_key, cfg_key in _SEARCH_AGENT_INT_DEFAULTS:
+        if allowed_fields is not None and field_name not in allowed_fields:
+            continue
+        if field_name in explicit_fields:
+            continue
+        raw_value = _search_agent_setting(env_key, cfg_key)
+        parsed_value = _parse_int_or_none(raw_value)
+        if parsed_value is None:
+            continue
+        if field_name == "research_max_iterations":
+            if parsed_value > 0:
+                payload[field_name] = parsed_value
+            continue
+        if parsed_value >= 0:
+            payload[field_name] = parsed_value
+
+
 def _build_unified_pipeline_kwargs(
     request: UnifiedRAGRequest,
     db_paths: dict[str, Optional[str]],
@@ -74,6 +217,7 @@ def _build_unified_pipeline_kwargs(
     current_user: Optional[User],
 ) -> dict[str, Any]:
     payload = model_dump_compat(request)
+    _apply_search_agent_defaults(request, payload)
     payload["media_db_path"] = db_paths.get("media_db_path")
     payload["notes_db_path"] = db_paths.get("notes_db_path")
     payload["character_db_path"] = db_paths.get("character_db_path")
@@ -81,10 +225,16 @@ def _build_unified_pipeline_kwargs(
     payload["media_db"] = media_db
     payload["chacha_db"] = chacha_db
     payload["index_namespace"] = request.index_namespace or request.corpus
-    payload["feedback_user_id"] = payload.get("feedback_user_id") or (
-        current_user.username if current_user else None
+    resolved_storage_user_id = _resolve_implicit_feedback_user_id(None, current_user)
+    if resolved_storage_user_id is None:
+        resolved_storage_user_id = _resolve_implicit_feedback_user_id(
+            payload.get("user_id"), current_user
+        )
+    payload["user_id"] = resolved_storage_user_id
+    payload["feedback_user_id"] = (
+        _resolve_implicit_feedback_user_id(payload.get("feedback_user_id"), current_user)
+        or resolved_storage_user_id
     )
-    payload["user_id"] = current_user.username if current_user else payload.get("user_id")
     signature = inspect.signature(unified_rag_pipeline)
     params = list(signature.parameters.values())
     if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
@@ -113,6 +263,50 @@ def _sync_retriever_overrides_to_pipeline() -> None:
             up.RetrievalConfig = RetrievalConfig  # type: ignore[assignment]
     except (ImportError, AttributeError, TypeError):
         logger.debug("Failed to sync retriever overrides to unified pipeline", exc_info=True)
+
+
+def _resolve_implicit_feedback_user_id(
+    request_user_id: Optional[str],
+    current_user: Optional[User],
+) -> Optional[str]:
+    """
+    Resolve a stable user identifier for implicit-feedback personalization state.
+
+    Prefer explicit request user_id when provided, but normalize legacy
+    ``single_user`` aliases to a numeric user id to avoid filesystem-path
+    validation failures.
+    """
+    raw_request = str(request_user_id).strip() if request_user_id is not None else ""
+    if raw_request:
+        if raw_request.lower() == "single_user":
+            if current_user is not None:
+                current_id = getattr(current_user, "id_int", None)
+                if isinstance(current_id, int):
+                    return str(current_id)
+                fallback_id = getattr(current_user, "id", None)
+                if fallback_id is not None:
+                    fallback_raw = str(fallback_id).strip()
+                    if fallback_raw:
+                        return fallback_raw
+            try:
+                return str(DatabasePaths.get_single_user_id())
+            except (RuntimeError, ValueError, OSError, TypeError):
+                pass
+        return raw_request
+
+    if current_user is None:
+        return None
+
+    current_id = getattr(current_user, "id_int", None)
+    if isinstance(current_id, int):
+        return str(current_id)
+
+    fallback_id = getattr(current_user, "id", None)
+    if fallback_id is None:
+        return None
+
+    fallback_raw = str(fallback_id).strip()
+    return fallback_raw or None
 
 
 def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optional[str] = None) -> Optional[str]:
@@ -269,8 +463,8 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
         if hasattr(obj, key):
             try:
                 return getattr(obj, key)
-            except Exception:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
-                pass
+            except Exception as accessor_error:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
+                logger.debug(f"RAG attribute access failed for key '{key}'; continuing fallback", exc_info=accessor_error)
         # Nested `.document` attribute that may itself be an object
         if hasattr(obj, 'document'):
             doc_obj = obj.document
@@ -281,8 +475,8 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
                 if hasattr(doc_obj, key):
                     try:
                         return getattr(doc_obj, key)
-                    except Exception:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
-                        pass
+                    except Exception as accessor_error:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
+                        logger.debug(f"RAG nested attribute access failed for key '{key}'; continuing fallback", exc_info=accessor_error)
         # Dict access (obj may be a dict)
         if isinstance(obj, dict):
             # Direct
@@ -335,6 +529,15 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
         factuality=getattr(result, 'factuality', None),
         retrieval_metrics=_meta.get("retrieval_metrics"),
         faithfulness=_meta.get("faithfulness"),
+        # Search agent / research fields
+        query_classification=_meta.get("query_classification"),
+        reformulated_query=_meta.get("reformulated_query"),
+        research_summary=_meta.get("research"),
+        # Follow-up suggestions
+        suggestions=_meta.get("suggestions"),
+        # Media search results
+        images=_meta.get("images"),
+        videos=_meta.get("videos"),
     )
 
 
@@ -926,8 +1129,8 @@ async def unified_search_endpoint(
                 if hasattr(request_raw, 'state'):
                     team_ids = getattr(request_raw.state, 'team_ids', None)
                     org_ids = getattr(request_raw.state, 'org_ids', None)
-            except Exception:  # noqa: BLE001 - topic monitoring should not break requests
-                pass
+            except Exception as topic_context_error:  # noqa: BLE001 - topic monitoring should not break requests
+                logger.debug("Topic monitoring request-state extraction failed; continuing", exc_info=topic_context_error)
             if request.query:
                 mon.schedule_evaluate_and_alert(
                     user_id=str(uid) if uid else None,
@@ -938,8 +1141,8 @@ async def unified_search_endpoint(
                     team_ids=team_ids,
                     org_ids=org_ids,
                 )
-        except Exception:  # noqa: BLE001 - topic monitoring should not break requests
-            pass
+        except Exception as topic_schedule_error:  # noqa: BLE001 - topic monitoring should not break requests
+            logger.debug("Topic monitoring scheduling failed; continuing", exc_info=topic_schedule_error)
 
         # Set up database paths
         db_paths = {
@@ -1004,6 +1207,7 @@ async def unified_search_endpoint(
                     agentic=agentic_cfg,
                     enable_generation=request.enable_generation,
                     generation_model=request.generation_model,
+                    generation_provider=request.generation_provider,
                     generation_prompt=request.generation_prompt,
                     max_generation_tokens=request.max_generation_tokens,
                     enable_citations=request.enable_citations,
@@ -1024,7 +1228,7 @@ async def unified_search_endpoint(
                     low_confidence_behavior=str(getattr(request, 'low_confidence_behavior', 'continue')),
                 )
             except Exception as exc:  # noqa: BLE001 - agentic pipeline fallback must be resilient
-                logger.error("Agentic RAG pipeline failed: {}", exc, exc_info=True)
+                logger.exception("Agentic RAG pipeline failed: {}", exc)
                 fallback_doc = {
                     "id": f"agentic-error:{uuid4().hex[:8]}",
                     "content": "Agentic pipeline error fallback content.",
@@ -1075,12 +1279,14 @@ async def unified_search_endpoint(
             logger.warning(f"Errors during processing: {result.errors}")
 
     except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
-        logger.error(f"Unified search error: {e}", exc_info=True)
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
+        logger.exception("Unified search error: {}", e)
+        detail = "Search failed due to an internal error."
+        # Expose root cause only when explicitly requested by caller.
+        if bool(getattr(request, "debug_mode", False)):
+            detail = f"{type(e).__name__}: {e}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Search failed due to an internal error."
+            detail=detail,
         ) from e
     else:
         return response
@@ -1100,7 +1306,7 @@ async def rag_implicit_feedback(
         from tldw_Server_API.app.core.config import implicit_feedback_enabled
         if not implicit_feedback_enabled():
             return {"ok": True, "disabled": True}
-        user_id = request.user_id or (current_user.username if current_user else None)
+        user_id = _resolve_implicit_feedback_user_id(request.user_id, current_user)
         collector = UnifiedFeedbackSystem()
         await collector.record_implicit_interaction(
             user_id=user_id,
@@ -1195,6 +1401,11 @@ async def unified_batch_endpoint(
             request,
             exclude={"queries", "max_concurrent", "enable_checkpoint"},
         )
+        _apply_search_agent_defaults(
+            request,
+            kwargs,
+            allowed_fields=_BATCH_ROUND2_DEFAULT_FIELDS,
+        )
         checkpoint_id: Optional[str] = None
         checkpoint_manager = None
         checkpoint_state = None
@@ -1212,7 +1423,16 @@ async def unified_batch_endpoint(
             )
             checkpoint_id = checkpoint_state.checkpoint_id
         kwargs.update(db_paths)
-        kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
+        resolved_storage_user_id = _resolve_implicit_feedback_user_id(None, current_user)
+        if resolved_storage_user_id is None:
+            resolved_storage_user_id = _resolve_implicit_feedback_user_id(
+                kwargs.get("user_id"), current_user
+            )
+        kwargs["user_id"] = resolved_storage_user_id
+        kwargs["feedback_user_id"] = (
+            _resolve_implicit_feedback_user_id(kwargs.get("feedback_user_id"), current_user)
+            or resolved_storage_user_id
+        )
 
         # Process batch
         on_query_done = None
@@ -1357,7 +1577,7 @@ async def simple_search_endpoint(
     """
     try:
         try:
-            _qh = hashlib.md5((query or "").encode("utf-8")).hexdigest()[:8]
+            _qh = hashlib.md5((query or "").encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
             logger.info(f"Simple search: query_hash={_qh} len={len(query or '')}")
         except (AttributeError, TypeError, ValueError):
             logger.info("Simple search request received")
@@ -1373,8 +1593,8 @@ async def simple_search_endpoint(
                 scope_type="user",
                 scope_id=uid,
             )
-        except Exception:  # noqa: BLE001 - topic monitoring should not break requests
-            pass
+        except Exception as topic_monitoring_error:  # noqa: BLE001 - topic monitoring should not break requests
+            logger.debug("Topic monitoring in simple search failed; continuing", exc_info=topic_monitoring_error)
 
         # Use the simple_search wrapper
         effective_sources = sources or ["media_db", "notes", "characters"]
@@ -1388,7 +1608,7 @@ async def simple_search_endpoint(
             notes_db_path=(chacha_db.db_path if chacha_db else None),
             character_db_path=(chacha_db.db_path if chacha_db else None),
             kanban_db_path=_resolve_kanban_db_path(current_user),
-            user_id=current_user.username if current_user else None,
+            user_id=_resolve_implicit_feedback_user_id(None, current_user),
         )
 
         # Best-effort RAG query logging (counts as a single query).
@@ -1509,7 +1729,16 @@ async def resume_batch_endpoint(
             "character_db_path": chacha_db.db_path if chacha_db else None,
         }
         kwargs.update(db_paths)
-        kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
+        resolved_storage_user_id = _resolve_implicit_feedback_user_id(None, current_user)
+        if resolved_storage_user_id is None:
+            resolved_storage_user_id = _resolve_implicit_feedback_user_id(
+                kwargs.get("user_id"), current_user
+            )
+        kwargs["user_id"] = resolved_storage_user_id
+        kwargs["feedback_user_id"] = (
+            _resolve_implicit_feedback_user_id(kwargs.get("feedback_user_id"), current_user)
+            or resolved_storage_user_id
+        )
 
         start_time = time.time()
 
@@ -1653,28 +1882,88 @@ async def unified_search_stream_endpoint(
                 db_paths["kanban_db"] = kanban_db_path
 
             docs = []
-            try:
-                if db_paths:
-                    _sync_retriever_overrides_to_pipeline()
-                    kwargs = _build_unified_pipeline_kwargs(
-                        request=request,
-                        db_paths={
-                            "media_db_path": media_db.db_path if media_db else None,
-                            "notes_db_path": chacha_db.db_path if chacha_db else None,
-                            "character_db_path": chacha_db.db_path if chacha_db else None,
-                            "kanban_db_path": kanban_db_path,
-                        },
-                        media_db=media_db,
-                        chacha_db=chacha_db,
-                        current_user=current_user,
+
+            def _normalize_research_event(event: Any) -> dict[str, Any]:
+                event_type_raw = getattr(event, "event_type", "research_update")
+                event_type = str(event_type_raw) if event_type_raw is not None else "research_update"
+                if not event_type.startswith("research_"):
+                    event_type = f"research_{event_type}"
+                data = getattr(event, "data", {})
+                if not isinstance(data, dict):
+                    data = {"value": data}
+                return {"type": event_type, "data": data}
+
+            async def _run_streaming_retrieval(
+                *,
+                progress_queue: Optional[asyncio.Queue[Any]] = None,
+                done_marker: Any = None,
+            ) -> None:
+                nonlocal docs
+                try:
+                    if db_paths:
+                        _sync_retriever_overrides_to_pipeline()
+                        kwargs = _build_unified_pipeline_kwargs(
+                            request=request,
+                            db_paths={
+                                "media_db_path": media_db.db_path if media_db else None,
+                                "notes_db_path": chacha_db.db_path if chacha_db else None,
+                                "character_db_path": chacha_db.db_path if chacha_db else None,
+                                "kanban_db_path": kanban_db_path,
+                            },
+                            media_db=media_db,
+                            chacha_db=chacha_db,
+                            current_user=current_user,
+                        )
+                        kwargs["enable_generation"] = False
+
+                        if (
+                            progress_queue is not None
+                            and bool(getattr(request, "enable_research_progress", False))
+                        ):
+                            async def _stream_research_progress(event: Any) -> None:
+                                await progress_queue.put(_normalize_research_event(event))
+
+                            kwargs["research_progress_callback"] = _stream_research_progress
+                            kwargs["enable_research_progress"] = True
+
+                        retrieval_result = await unified_rag_pipeline(**kwargs)
+                        docs = _normalize_documents_for_generation(
+                            getattr(retrieval_result, "documents", []) or []
+                        )
+                except Exception:  # noqa: BLE001 - streaming prefetch should be best-effort
+                    docs = []
+                finally:
+                    if progress_queue is not None and done_marker is not None:
+                        await progress_queue.put(done_marker)
+
+            if bool(getattr(request, "enable_research_progress", False)) and db_paths:
+                progress_queue: asyncio.Queue[Any] = asyncio.Queue()
+                done_marker = object()
+                retrieval_task = asyncio.create_task(
+                    _run_streaming_retrieval(
+                        progress_queue=progress_queue,
+                        done_marker=done_marker,
                     )
-                    kwargs["enable_generation"] = False
-                    retrieval_result = await unified_rag_pipeline(**kwargs)
-                    docs = _normalize_documents_for_generation(
-                        getattr(retrieval_result, "documents", []) or []
-                    )
-            except Exception:  # noqa: BLE001 - streaming prefetch should be best-effort
-                docs = []
+                )
+                try:
+                    while True:
+                        queued = await progress_queue.get()
+                        if queued is done_marker:
+                            break
+                        yield json.dumps(queued) + "\n"
+                finally:
+                    if not retrieval_task.done():
+                        retrieval_task.cancel()
+                        try:
+                            await retrieval_task
+                        except asyncio.CancelledError:
+                            pass
+                try:
+                    await retrieval_task
+                except asyncio.CancelledError:
+                    pass
+            else:
+                await _run_streaming_retrieval()
 
             # If strategy=agentic, assemble ephemeral chunk and emit plan + spans first
             if getattr(request, 'strategy', 'standard') == 'agentic':
@@ -1736,8 +2025,8 @@ async def unified_search_stream_endpoint(
                         yield json.dumps({"type": "spans", "count": len(prov), "provenance": prov[:50]}) + "\n"
                     # Use synthetic chunk as the sole document for streaming generation
                     docs = _normalize_documents_for_generation(ares.documents)
-                except Exception:  # noqa: BLE001 - agentic streaming should be best-effort
-                    pass
+                except Exception as agentic_stream_error:  # noqa: BLE001 - agentic streaming should be best-effort
+                    logger.debug("Agentic streaming prefetch failed; continuing standard stream", exc_info=agentic_stream_error)
 
             # Emit initial contexts (top-k with minimal fields) + a safe rationale plan (standard path)
             try:
@@ -1778,8 +2067,8 @@ async def unified_search_stream_endpoint(
                     ]
                 }
                 yield json.dumps({"type": "reasoning", **rationale}) + "\n"
-            except Exception:  # noqa: BLE001 - safe rationale should never break stream
-                pass
+            except Exception as rationale_error:  # noqa: BLE001 - safe rationale should never break stream
+                logger.debug("Streaming rationale payload failed; continuing without rationale", exc_info=rationale_error)
 
             # Minimal context for generation
             try:
@@ -1789,8 +2078,11 @@ async def unified_search_stream_endpoint(
                 cfg = {}
 
             import os as _os
+            request_provider = request.generation_provider if isinstance(request.generation_provider, str) else None
             env_provider = _os.getenv("RAG_DEFAULT_LLM_PROVIDER")
-            provider_value = env_provider if env_provider is not None else cfg.get("RAG_DEFAULT_LLM_PROVIDER")
+            provider_value = request_provider if request_provider is not None else (
+                env_provider if env_provider is not None else cfg.get("RAG_DEFAULT_LLM_PROVIDER")
+            )
             provider = (
                 provider_value.strip()
                 if isinstance(provider_value, str) and provider_value.strip()
@@ -1900,8 +2192,8 @@ async def advanced_search_endpoint(
                 scope_type="user",
                 scope_id=uid,
             )
-        except Exception:  # noqa: BLE001 - topic monitoring should not break requests
-            pass
+        except Exception as topic_monitoring_error:  # noqa: BLE001 - topic monitoring should not break requests
+            logger.debug("Topic monitoring in advanced search failed; continuing", exc_info=topic_monitoring_error)
 
         # Set up database paths
         db_paths = {
@@ -1959,7 +2251,7 @@ async def list_features():
         },
         "generation": {
                 "description": "Generate answers from retrieved context",
-                "parameters": ["enable_generation", "generation_model", "generation_prompt"]
+                "parameters": ["enable_generation", "generation_provider", "generation_model", "generation_prompt"]
         },
         "reranking": {
                 "description": "Rerank documents for better relevance",

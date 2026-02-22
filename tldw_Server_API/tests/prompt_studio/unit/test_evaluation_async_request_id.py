@@ -21,7 +21,7 @@ def test_db():
         if os.path.exists(db_path):
             os.unlink(db_path)
     except Exception:
-        pass
+        _ = None
     db = PromptStudioDatabase(db_path, "test-client")
     # Seed minimal project/prompt to satisfy FK constraints for evaluations
     try:
@@ -29,7 +29,7 @@ def test_db():
         pid = int(proj.get("id", 1)) if isinstance(proj, dict) else 1
         db.create_prompt(project_id=pid, name="Seed Prompt", system_prompt="", user_prompt="Hello")
     except Exception:
-        pass
+        _ = None
     try:
         yield db
     finally:
@@ -39,12 +39,12 @@ def test_db():
             try:
                 db.conn.close()
             except Exception:
-                pass
+                _ = None
         try:
             if os.path.exists(db_path):
                 os.unlink(db_path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture

@@ -25,3 +25,32 @@ groups:
         annotations:
           summary: "tldw_server 5xx burst"
           description: "5xx > 2 rps for 2m (current {{ $value }} rps)."
+  - name: tldw_server_email_sync
+    rules:
+      - alert: TLDWEmailSyncFailureRateHigh
+        expr: |
+          (
+            sum(rate(email_sync_runs_total{provider="gmail",status="failed"}[15m]))
+            /
+            clamp_min(sum(rate(email_sync_runs_total{provider="gmail"}[15m])), 0.001)
+          ) > 0.20
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "Gmail sync failure rate is elevated"
+          description: "Failed Gmail sync runs exceed 20% over the last 15m."
+      - alert: TLDWEmailSyncLagP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(email_sync_lag_seconds_bucket{provider="gmail"}[30m]))
+          ) > 600
+        for: 15m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "Gmail sync lag p95 is above threshold"
+          description: "p95 email sync lag is above 10 minutes for at least 15m."

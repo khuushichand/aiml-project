@@ -688,6 +688,7 @@ async def start_metrics_tracking(context: Any, **kwargs) -> Any:
     # Generate query ID
     query_id = hashlib.md5(
         f"{context.query}_{time.time()}".encode()
+        , usedforsecurity=False
     ).hexdigest()[:12]
 
     # Start tracking

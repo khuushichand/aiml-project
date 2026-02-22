@@ -1,13 +1,15 @@
 import OptionLayout from "@web/components/layout/WebLayout"
 import { DictionariesWorkspace } from "~/components/Option/Dictionaries/DictionariesWorkspace"
+import { RouteErrorBoundary } from "@/components/Common/RouteErrorBoundary"
 
 const OptionDictionariesWorkspaceRoute = () => {
   return (
-    <OptionLayout>
-      <DictionariesWorkspace />
-    </OptionLayout>
+    <RouteErrorBoundary routeId="dictionaries" routeLabel="Dictionaries">
+      <OptionLayout>
+        <DictionariesWorkspace />
+      </OptionLayout>
+    </RouteErrorBoundary>
   )
 }
 
 export default OptionDictionariesWorkspaceRoute
-

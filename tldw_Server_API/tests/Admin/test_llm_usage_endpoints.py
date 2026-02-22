@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,11 +8,10 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 
 
-def _setup_env():
-
-
+def _setup_env(tmp_path):
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key-llm"
+    os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path / 'users_test_llm_usage_endpoints.db'}"
 
 
 async def _ensure_llm_tables_and_seed():
@@ -118,11 +116,11 @@ async def _ensure_llm_tables_and_seed():
 
 
 @pytest.mark.asyncio
-async def test_llm_usage_endpoints_sqlite(monkeypatch):
-    _setup_env()
+async def test_llm_usage_endpoints_sqlite(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
-    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
     await reset_db_pool()
     reset_settings()
@@ -145,6 +143,18 @@ async def test_llm_usage_endpoints_sqlite(monkeypatch):
         s = r2.json()
         assert isinstance(s.get('items'), list)
         assert any('requests' in row for row in s['items'])
+
+        # Summary by provider/day with provider filter (used by provider trend sparklines)
+        r2b = client.get("/api/v1/admin/llm-usage/summary?group_by=provider&group_by=day&provider=openai")
+        assert r2b.status_code == 200
+        s2 = r2b.json()
+        assert isinstance(s2.get('items'), list)
+        assert all(row.get('group_value') == 'openai' for row in s2['items'])
+        assert all('group_value_secondary' in row for row in s2['items'])
+
+        # Reject more than two group_by dimensions
+        r2c = client.get("/api/v1/admin/llm-usage/summary?group_by=user&group_by=provider&group_by=day")
+        assert r2c.status_code == 422
 
         # CSV export
         r3 = client.get("/api/v1/admin/llm-usage/export.csv?operation=chat&limit=5")

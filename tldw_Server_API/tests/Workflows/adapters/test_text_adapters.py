@@ -906,6 +906,247 @@ class TestTextCleanAdapter:
 
         assert result.get("__status__") == "cancelled"
 
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_markdown_headers(self):
+        """Test strip_markdown removes markdown headers."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "# Title\n## Subtitle\n### H3\nPlain text", "operations": ["strip_markdown"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert result["text"].startswith("Title")
+        assert "# " not in result["text"]
+        assert "## " not in result["text"]
+        assert "### " not in result["text"]
+        assert "Plain text" in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_markdown_bold_italic(self):
+        """Test strip_markdown removes bold and italic markers."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "This is **bold** and *italic* text", "operations": ["strip_markdown"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "**" not in result["text"]
+        assert "*" not in result["text"]
+        assert "bold" in result["text"]
+        assert "italic" in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_markdown_links(self):
+        """Test strip_markdown converts links to text only."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "Visit [Example](https://example.com) for more", "operations": ["strip_markdown"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "Example" in result["text"]
+        assert "https://example.com" not in result["text"]
+        assert "[" not in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_markdown_code_blocks(self):
+        """Test strip_markdown removes code blocks and inline code."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {
+            "text": "Use `print()` or:\n```python\nprint('hi')\n```\nDone",
+            "operations": ["strip_markdown"],
+        }
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "```" not in result["text"]
+        assert "`" not in result["text"]
+        assert "print()" in result["text"]
+        assert "Done" in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_markdown_list_markers(self):
+        """Test strip_markdown removes list markers."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "- Item one\n* Item two\n1. Item three", "operations": ["strip_markdown"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "Item one" in result["text"]
+        assert "Item two" in result["text"]
+        assert "Item three" in result["text"]
+        # Markers removed
+        assert not any(line.startswith("- ") for line in result["text"].split("\n") if line.strip())
+
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_markdown_blockquotes(self):
+        """Test strip_markdown removes blockquote markers."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "> This is a quote\n> Another line", "operations": ["strip_markdown"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "This is a quote" in result["text"]
+        assert "> " not in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_markdown_images(self):
+        """Test strip_markdown removes image tags."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "See ![alt text](image.png) here", "operations": ["strip_markdown"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "![" not in result["text"]
+        assert "image.png" not in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_markdown_horizontal_rules(self):
+        """Test strip_markdown removes horizontal rules."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "Above\n---\nBelow", "operations": ["strip_markdown"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "Above" in result["text"]
+        assert "Below" in result["text"]
+        assert "---" not in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_normalize_unicode_smart_quotes(self):
+        """Test normalize_unicode converts smart quotes to ASCII."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "\u201cHello\u201d \u2018world\u2019", "operations": ["normalize_unicode"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert '"Hello"' in result["text"]
+        assert "'world'" in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_normalize_unicode_dashes(self):
+        """Test normalize_unicode converts em/en dashes to hyphens."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "en\u2013dash and em\u2014dash", "operations": ["normalize_unicode"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "en-dash" in result["text"]
+        assert "em-dash" in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_normalize_unicode_ellipsis(self):
+        """Test normalize_unicode converts ellipsis to three dots."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "Wait for it\u2026", "operations": ["normalize_unicode"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "Wait for it..." in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_combined_markdown_and_unicode(self):
+        """Test strip_markdown and normalize_unicode chain correctly."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {
+            "text": "## \u201cBreaking\u201d **News**\n- Story with em\u2014dash\u2026",
+            "operations": ["strip_markdown", "normalize_unicode"],
+        }
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "## " not in result["text"]
+        assert "**" not in result["text"]
+        assert '"Breaking"' in result["text"]
+        assert "News" in result["text"]
+        assert "em-dash..." in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_markdown_empty_text(self):
+        """Test strip_markdown handles empty text gracefully."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {"text": "", "operations": ["strip_markdown", "normalize_unicode"]}
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert result["text"] == ""
+
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_reasoning_blocks(self):
+        """Test strip_reasoning_blocks removes hidden reasoning segments."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {
+            "text": "Visible <think>hidden</think> text <reasoning>internal</reasoning> done",
+            "operations": ["strip_reasoning_blocks", "normalize_whitespace"],
+        }
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "<think>" not in result["text"].lower()
+        assert "<reasoning>" not in result["text"].lower()
+        assert "hidden" not in result["text"].lower()
+        assert "internal" not in result["text"].lower()
+        assert "Visible" in result["text"]
+        assert "done" in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_tts_normalize(self):
+        """Test tts_normalize applies speech-friendly symbol cleanup."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {
+            "text": "Line 1\nLine 2 + A&B \u2014 done",
+            "operations": ["tts_normalize"],
+        }
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "\n" not in result["text"]
+        assert "plus" in result["text"]
+        assert " and " in result["text"]
+        assert "\u2014" not in result["text"]
+
 
 # =============================================================================
 # NLP Adapters Tests

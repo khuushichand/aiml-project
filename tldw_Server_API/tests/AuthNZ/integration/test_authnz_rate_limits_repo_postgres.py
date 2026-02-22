@@ -22,7 +22,6 @@ async def test_authnz_rate_limits_repo_lockout_postgres(test_db_pool):
     settings = Settings(
         AUTH_MODE="multi_user",
         JWT_SECRET_KEY="x" * 64,
-        RATE_LIMIT_ENABLED=True,
         MAX_LOGIN_ATTEMPTS=3,
         LOCKOUT_DURATION_MINUTES=5,
     )

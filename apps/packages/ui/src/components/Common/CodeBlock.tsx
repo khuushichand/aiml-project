@@ -73,14 +73,16 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   const isDiagramLanguage = ["mermaid", "diagram", "graphviz", "dot"].includes(
     normalizedLanguage
   )
+  const artifactId = computeKey()
   const artifactKind = isDiagramLanguage ? "diagram" : "code"
+  const artifactOriginId = `artifact-origin-${artifactId}`
   const viewLabel = isDiagramLanguage
     ? t("view", "View")
     : t("artifactsView", "View code")
   const downloadLabel = t("downloadCode", "Download code")
   const copyLabel = t("copyToClipboard", "Copy to clipboard")
   
-  const computeKey = () => {
+  function computeKey() {
     const content = value ?? ""
     const base =
       typeof blockIndex === "number"
@@ -93,7 +95,6 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     return hash.toString(36)
   }
   const keyRef = useRef<string>(computeKey())
-  const artifactId = computeKey()
   const previewMapRef = useRef<Map<string, boolean> | null>(null)
   const collapsedMapRef = useRef<Map<string, boolean> | null>(null)
   const autoOpenMapRef = useRef<Map<string, boolean> | null>(null)
@@ -377,7 +378,11 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
 
   return (
     <>
-      <div className="not-prose">
+      <div
+        id={artifactOriginId}
+        data-artifact-origin={artifactId}
+        className="not-prose"
+      >
         <div className=" [&_div+div]:!mt-0 my-4 bg-surface rounded-xl">
           <div className="flex flex-row px-4 py-2 rounded-t-xl gap-3 bg-surface2 items-center justify-between">
             <div className="flex items-center gap-3">

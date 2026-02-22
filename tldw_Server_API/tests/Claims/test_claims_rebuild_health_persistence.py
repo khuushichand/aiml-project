@@ -14,6 +14,11 @@ def test_claims_rebuild_health_reads_persisted(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAIMS_MONITORING_SYSTEM_USER_ID", "1")
     settings["USER_DB_BASE_DIR"] = str(base_dir)
     settings["CLAIMS_MONITORING_SYSTEM_USER_ID"] = 1
+    monkeypatch.setattr(
+        claims_service,
+        "create_media_database",
+        lambda client_id, db_path: MediaDatabase(db_path=db_path, client_id=client_id),
+    )
 
     db_path = get_user_media_db_path(1)
     db = MediaDatabase(db_path=db_path, client_id="test")

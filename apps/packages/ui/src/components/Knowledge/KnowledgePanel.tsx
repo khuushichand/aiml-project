@@ -7,20 +7,26 @@ import type { TabInfo } from "@/hooks/useTabMentions"
 import type { RagPinnedResult } from "@/utils/rag-format"
 import { formatRagResult } from "@/utils/rag-format"
 import { KnowledgeTabs } from "./KnowledgeTabs"
-import { SearchTab } from "./SearchTab"
+import { QASearchTab } from "./QASearchTab"
+import { FileSearchTab } from "./FileSearchTab"
 import { SettingsTab } from "./SettingsTab"
 import { ContextTab } from "./ContextTab"
 import {
   useKnowledgeSettings,
   useKnowledgeSearch,
   toPinnedResult,
+  withFullMediaTextIfAvailable,
+  qaDocumentToRagResult,
   type RagResult
 } from "./hooks"
+import { useFileSearch } from "./hooks/useFileSearch"
+import { useQASearch, type QADocument } from "./hooks/useQASearch"
 
 /**
- * Tab identifiers for the 3-tab architecture
+ * Tab identifiers for the 4-tab architecture.
+ * "search" is kept as a backward-compat alias that maps to "qa-search".
  */
-export type KnowledgeTab = "search" | "settings" | "context"
+export type KnowledgeTab = "qa-search" | "file-search" | "settings" | "context" | "search"
 
 /**
  * Props for KnowledgePanel - matches RagSearchBar props for compatibility
@@ -62,10 +68,11 @@ const normalizeUrl = (value?: string) => value?.trim().toLowerCase()
 const noop = () => {}
 
 /**
- * KnowledgePanel - Main container for the 3-tab RAG interface
+ * KnowledgePanel - Main container for the 4-tab RAG interface
  *
- * Implements the 3-tab architecture:
- * - Search tab: Query input, source filters, results list, pinned results
+ * Implements the 4-tab architecture:
+ * - QA Search tab: Full RAG pipeline with generated answers and source chunks
+ * - File Search tab: Media library search for document discovery and attachment
  * - Settings tab: All RAG settings organized in collapsible sections
  * - Context tab: Manage attached tabs, files, and pinned results
  */
@@ -99,22 +106,30 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 }) => {
   const { t } = useTranslation(["sidepanel"])
 
-  // Tab state - default to search tab (or requested tab)
+  // Normalize "search" alias to "qa-search" for backward compat
+  const normalizeTab = (tab: KnowledgeTab): KnowledgeTab =>
+    tab === "search" ? "qa-search" : tab
+
+  // Tab state - default to qa-search tab (or requested tab)
   const [activeTab, setActiveTab] = React.useState<KnowledgeTab>(
-    openTab ?? "search"
+    normalizeTab(openTab ?? "qa-search")
   )
   const lastOpenTabRequestRef = React.useRef<number | null>(null)
+
+  const handleTabChange = React.useCallback((tab: KnowledgeTab) => {
+    setActiveTab(normalizeTab(tab))
+  }, [])
 
   React.useEffect(() => {
     if (!openTab) return
     if (typeof openTabRequestId === "number") {
       if (openTabRequestId !== lastOpenTabRequestRef.current) {
-        setActiveTab(openTab)
+        setActiveTab(normalizeTab(openTab))
         lastOpenTabRequestRef.current = openTabRequestId
       }
       return
     }
-    setActiveTab(openTab)
+    setActiveTab(normalizeTab(openTab))
   }, [openTab, openTabRequestId])
 
   // Open/close state (controlled or uncontrolled)
@@ -141,7 +156,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   // Settings state (from hook)
   const settings = useKnowledgeSettings(currentMessage)
 
-  // Search state (from hook)
+  // Search state (from hook) — used for pinned results and legacy compatibility
   const search = useKnowledgeSearch({
     resolvedQuery: settings.resolvedQuery,
     draftSettings: settings.draftSettings,
@@ -150,10 +165,37 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     onAsk
   })
 
-  // Handle preview action
+  // File search state (from hook)
+  const fileSearch = useFileSearch({
+    resolvedQuery: settings.resolvedQuery,
+    draftSettings: settings.draftSettings,
+    applySettings: settings.applySettings,
+    onInsert,
+    pinnedResults: search.pinnedResults,
+    onPin: search.handlePin
+  })
+
+  // QA search state (from hook)
+  const qaSearch = useQASearch({
+    resolvedQuery: settings.resolvedQuery,
+    draftSettings: settings.draftSettings,
+    applySettings: settings.applySettings,
+    onInsert,
+    pinnedResults: search.pinnedResults,
+    onPin: search.handlePin
+  })
+
+  // Handle preview action (shared across tabs)
   const handlePreview = React.useCallback((result: RagResult) => {
     setPreviewItem(toPinnedResult(result))
   }, [])
+
+  const handlePreviewChunk = React.useCallback(
+    (doc: QADocument) => {
+      handlePreview(qaDocumentToRagResult(doc))
+    },
+    [handlePreview]
+  )
 
   // Discard staged settings on close
   const previousOpen = React.useRef(isOpen)
@@ -229,6 +271,18 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     return () => window.removeEventListener("tldw:toggle-rag", handler)
   }, [isOpen, setOpenState])
 
+  const handleApplyAndSearch = React.useCallback(() => {
+    if (activeTab === "file-search") {
+      void fileSearch.runSearch({ applyFirst: true })
+      return
+    }
+
+    void qaSearch.runQASearch({ applyFirst: true })
+    if (activeTab !== "qa-search") {
+      handleTabChange("qa-search")
+    }
+  }, [activeTab, fileSearch.runSearch, handleTabChange, qaSearch.runQASearch])
+
   // Don't render if closed
   if (!isOpen) {
     if (showToggle) {
@@ -250,6 +304,8 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
       ? "panel-elevated relative"
       : "panel-card mb-2 relative"
 
+  const showApplyActions = settings.isDirty
+
   return (
     <div className={wrapperClassName}>
       <div className={panelClassName}>
@@ -270,43 +326,75 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
         {/* Tabs */}
         <KnowledgeTabs
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={handleTabChange}
           contextCount={contextCount}
         />
 
         {/* Tab content */}
-        {activeTab === "search" && (
-          <SearchTab
+        {activeTab === "qa-search" && (
+          <QASearchTab
             query={settings.draftSettings.query}
             onQueryChange={(q) =>
               settings.updateSetting("query", q, { transient: true })
             }
             useCurrentMessage={settings.useCurrentMessage}
             onUseCurrentMessageChange={settings.setUseCurrentMessage}
+            preset={settings.preset}
+            onPresetChange={settings.applyPreset}
+            strategy={settings.draftSettings.strategy ?? "standard"}
+            onStrategyChange={(strategy) =>
+              settings.updateSetting("strategy", strategy)
+            }
             selectedSources={settings.draftSettings.sources}
             onSourcesChange={(sources) =>
               settings.updateSetting("sources", sources)
             }
-            preset={settings.preset}
-            onPresetChange={settings.applyPreset}
-            onSearch={search.runSearch}
-            loading={search.loading}
-            queryError={search.queryError}
-            results={search.results}
-            sortMode={search.sortMode}
-            onSortModeChange={search.setSortMode}
-            sortResults={search.sortResults}
-            hasAttemptedSearch={search.hasAttemptedSearch}
-            timedOut={search.timedOut}
-            highlightTerms={settings.draftSettings.highlight_query_terms}
+            onSearch={qaSearch.runQASearch}
+            loading={qaSearch.loading}
+            queryError={qaSearch.queryError}
+            response={qaSearch.response}
+            hasAttemptedSearch={qaSearch.hasAttemptedSearch}
+            timedOut={qaSearch.timedOut}
             pinnedResults={search.pinnedResults}
-            onPin={search.handlePin}
-            onInsert={search.handleInsert}
-            onAsk={handleAsk}
-            onPreview={handlePreview}
+            onCopyAnswer={qaSearch.copyAnswer}
+            onInsertAnswer={qaSearch.insertAnswer}
+            onCopyChunk={qaSearch.copyChunk}
+            onInsertChunk={qaSearch.insertChunk}
+            onPinChunk={qaSearch.pinChunk}
+            onPreviewChunk={handlePreviewChunk}
             isConnected={isConnected}
             autoFocus={autoFocus}
-            onOpenContext={() => setActiveTab("context")}
+            onOpenContext={() => handleTabChange("context")}
+          />
+        )}
+
+        {activeTab === "file-search" && (
+          <FileSearchTab
+            query={settings.draftSettings.query}
+            onQueryChange={(q) =>
+              settings.updateSetting("query", q, { transient: true })
+            }
+            useCurrentMessage={settings.useCurrentMessage}
+            onUseCurrentMessageChange={settings.setUseCurrentMessage}
+            onSearch={fileSearch.runSearch}
+            loading={fileSearch.loading}
+            queryError={fileSearch.queryError}
+            results={fileSearch.results}
+            sortMode={fileSearch.sortMode}
+            onSortModeChange={fileSearch.setSortMode}
+            sortResults={fileSearch.sortResults}
+            hasAttemptedSearch={fileSearch.hasAttemptedSearch}
+            timedOut={fileSearch.timedOut}
+            mediaTypes={fileSearch.mediaTypes}
+            onMediaTypesChange={fileSearch.setMediaTypes}
+            attachedMediaIds={fileSearch.attachedMediaIds}
+            pinnedResults={search.pinnedResults}
+            onPin={search.handlePin}
+            onAttach={fileSearch.handleAttach}
+            onPreview={handlePreview}
+            onOpen={fileSearch.handleOpen}
+            isConnected={isConnected}
+            onOpenContext={() => handleTabChange("context")}
           />
         )}
 
@@ -344,25 +432,24 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
           />
         )}
 
-        {/* Apply actions (visible across tabs) */}
-        <div className="flex items-center justify-end gap-2 px-3 py-3 border-t border-border bg-surface">
-          <button
-            onClick={settings.applySettings}
-            disabled={!settings.isDirty}
-            className="px-3 py-1.5 text-sm text-text bg-surface2 rounded hover:bg-surface3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {t("sidepanel:rag.apply", "Apply")}
-          </button>
-          <button
-            onClick={() => {
-              search.runSearch({ applyFirst: true })
-              setActiveTab("search")
-            }}
-            className="px-3 py-1.5 text-sm text-white bg-accent rounded hover:bg-accent/90 transition-colors"
-          >
-            {t("sidepanel:rag.applyAndSearch", "Apply & Search")}
-          </button>
-        </div>
+        {/* Apply actions (shown only while staged settings are dirty) */}
+        {showApplyActions && (
+          <div className="flex items-center justify-end gap-2 px-3 py-3 border-t border-border bg-surface">
+            <button
+              onClick={settings.applySettings}
+              disabled={activeTab === "file-search"}
+              className="px-3 py-1.5 text-sm text-text bg-surface2 rounded hover:bg-surface3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {t("sidepanel:rag.apply", "Apply")}
+            </button>
+            <button
+              onClick={handleApplyAndSearch}
+              className="px-3 py-1.5 text-sm text-white bg-accent rounded hover:bg-accent/90 transition-colors"
+            >
+              {t("sidepanel:rag.applyAndSearch", "Apply & Search")}
+            </button>
+          </div>
+        )}
 
         {/* Preview Modal */}
         <Modal
@@ -385,8 +472,13 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
               <div className="flex gap-2 pt-2 border-t border-border">
                 <button
                   onClick={() => {
-                    onInsert(formatRagResult(previewItem, "markdown"))
-                    setPreviewItem(null)
+                    void (async () => {
+                      const resolved = await withFullMediaTextIfAvailable(
+                        previewItem
+                      )
+                      onInsert(formatRagResult(resolved, "markdown"))
+                      setPreviewItem(null)
+                    })()
                   }}
                   className="px-3 py-1.5 text-sm bg-accent text-white rounded hover:bg-accent/90"
                 >

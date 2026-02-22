@@ -224,13 +224,13 @@ export const OutputPanel: React.FC = () => {
   const getStatusIcon = (status: AudioChapter["status"]) => {
     switch (status) {
       case "completed":
-        return <Check className="h-4 w-4 text-green-500" />
+        return <Check className="h-4 w-4 text-success" />
       case "generating":
-        return <Clock className="h-4 w-4 text-blue-500 animate-pulse" />
+        return <Clock className="h-4 w-4 text-primary animate-pulse" />
       case "error":
-        return <AlertCircle className="h-4 w-4 text-red-500" />
+        return <AlertCircle className="h-4 w-4 text-danger" />
       default:
-        return <Clock className="h-4 w-4 text-gray-400" />
+        return <Clock className="h-4 w-4 text-text-subtle" />
     }
   }
 
@@ -405,7 +405,7 @@ export const OutputPanel: React.FC = () => {
           <Progress
             percent={combineProgress}
             status="active"
-            strokeColor={{ from: "#108ee9", to: "#87d068" }}
+            strokeColor={{ from: "rgb(var(--color-primary))", to: "rgb(var(--color-success))" }}
             className="mb-4"
           />
         )}

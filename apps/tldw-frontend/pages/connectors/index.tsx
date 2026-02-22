@@ -1,14 +1,13 @@
-import dynamic from "next/dynamic"
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
-export default dynamic(async () => {
-  const { useRouter } = await import("next/router")
-  const { useEffect } = await import("react")
-  const Page = () => {
-    const router = useRouter()
-    useEffect(() => {
-      void router.replace("/settings")
-    }, [router])
-    return null
-  }
-  return { default: Page }
-}, { ssr: false })
+export default function ConnectorsRedirectPage() {
+  return (
+    <RoutePlaceholder
+      title="Connectors Hub Is Coming Soon"
+      description="Connector onboarding and management will live on this route. Use Settings for current server configuration."
+      plannedPath="/connectors"
+      primaryCtaHref="/settings"
+      primaryCtaLabel="Open Settings"
+    />
+  );
+}

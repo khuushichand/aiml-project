@@ -193,7 +193,7 @@ async def run_json_to_csv_adapter(config: dict[str, Any], context: dict[str, Any
     records = config.get("records") or config.get("data")
     if records is None:
         prev = context.get("prev") or context.get("last") or {}
-        records = prev.get("records") or prev.get("data") or prev if isinstance(prev, list) else []
+        records = prev.get("records") or prev.get("data") or (prev if isinstance(prev, list) else [])
 
     if not isinstance(records, list) or not records:
         return {"error": "missing_records", "csv": "", "count": 0}

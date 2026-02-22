@@ -45,3 +45,14 @@ def test_default_provider_uses_test_mode_local_llm(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
     assert chat._get_default_provider() == "local-llm"
     _clear_cached_provider()
+
+
+@pytest.mark.unit
+def test_default_provider_uses_tldw_test_mode_single_letter_y(monkeypatch):
+    _clear_cached_provider()
+    monkeypatch.setattr(chat, "load_and_log_configs", lambda: {}, raising=False)
+    monkeypatch.delenv("DEFAULT_LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "y")
+    assert chat._get_default_provider() == "local-llm"
+    _clear_cached_provider()

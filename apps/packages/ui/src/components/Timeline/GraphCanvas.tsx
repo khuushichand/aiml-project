@@ -10,6 +10,7 @@ import cytoscape, { Core, NodeSingular, EdgeSingular } from 'cytoscape'
 import dagre from 'cytoscape-dagre'
 import { useTimelineStore } from '@/store/timeline'
 import type { TimelineNode, TimelineEdge } from '@/services/timeline'
+import { getComputedTokens } from '@/themes/runtime-tokens'
 
 // Register dagre layout
 cytoscape.use(dagre)
@@ -18,7 +19,7 @@ cytoscape.use(dagre)
 // Styles
 // ============================================================================
 
-const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getState>['settings']) => [
+const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getState>['settings'], colors: ReturnType<typeof getComputedTokens>) => [
   // Cytoscape's typed stylesheet helpers are fairly limited, so we define
   // styles with plain objects and cast to `any` at the leaf level. If this
   // becomes hard to maintain, consider introducing a small wrapper with
@@ -27,12 +28,12 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
   {
     selector: 'node',
     style: {
-      'background-color': '#666',
+      'background-color': colors.muted,
       'label': 'data(label)',
       'text-valign': 'center',
       'text-halign': 'center',
       'font-size': '10px',
-      'color': '#fff',
+      'color': colors.surface,
       'text-wrap': 'ellipsis',
       'text-max-width': `${settings.nodeWidth - 20}px`,
       'width': settings.nodeWidth,
@@ -41,7 +42,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
       'border-width': 2,
       'border-color': 'transparent',
       'text-outline-width': 1,
-      'text-outline-color': '#000'
+      'text-outline-color': colors.text
     } as any
   },
 
@@ -49,7 +50,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
   {
     selector: 'node[type="root"]',
     style: {
-      'background-color': '#374151',
+      'background-color': colors.text,
       'label': 'Start',
       'shape': 'diamond',
       'width': 60,
@@ -70,9 +71,9 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'node[role="assistant"]',
     style: {
       'background-color': settings.assistantNodeColor,
-      'color': '#000',
-      'text-outline-color': '#fff',
-      'border-color': '#ccc',
+      'color': colors.text,
+      'text-outline-color': colors.surface,
+      'border-color': colors.border,
       'border-width': 1
     } as any
   },
@@ -91,7 +92,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     style: {
       'border-width': 3,
       'border-style': 'dashed',
-      'border-color': '#f59e0b',
+      'border-color': colors.warn,
       'opacity': 0.85
     } as any
   },
@@ -101,7 +102,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'node[has_swipes="true"]',
     style: {
       'border-width': 3,
-      'border-color': '#f59e0b'
+      'border-color': colors.warn
     } as any
   },
 
@@ -110,7 +111,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'node:selected',
     style: {
       'border-width': 4,
-      'border-color': '#22c55e',
+      'border-color': colors.success,
       'background-blacken': -0.1
     } as any
   },
@@ -120,7 +121,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'node.highlighted',
     style: {
       'border-width': 4,
-      'border-color': '#fbbf24',
+      'border-color': colors.accent,
       'background-blacken': -0.2
     } as any
   },
@@ -130,7 +131,7 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'node:active',
     style: {
       'overlay-opacity': 0.2,
-      'overlay-color': '#fff'
+      'overlay-color': colors.surface
     } as any
   },
 
@@ -160,8 +161,8 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'edge[is_swipe_edge="true"]',
     style: {
       'line-style': 'dashed',
-      'line-color': '#f59e0b',
-      'target-arrow-color': '#f59e0b',
+      'line-color': colors.warn,
+      'target-arrow-color': colors.warn,
       'opacity': 0.7
     } as any
   },
@@ -171,8 +172,8 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'edge:selected',
     style: {
       'width': 3,
-      'line-color': '#22c55e',
-      'target-arrow-color': '#22c55e'
+      'line-color': colors.success,
+      'target-arrow-color': colors.success
     } as any
   },
 
@@ -181,8 +182,8 @@ const getCytoscapeStyles = (settings: ReturnType<typeof useTimelineStore.getStat
     selector: 'edge.highlighted',
     style: {
       'width': 3,
-      'line-color': '#fbbf24',
-      'target-arrow-color': '#fbbf24'
+      'line-color': colors.accent,
+      'target-arrow-color': colors.accent
     } as any
   }
 ]
@@ -253,10 +254,11 @@ export const GraphCanvas: React.FC = () => {
   useEffect(() => {
     if (!containerRef.current) return
 
+    const colors = getComputedTokens()
     const cy = cytoscape({
       container: containerRef.current,
       elements: buildElements(),
-      style: getCytoscapeStyles(settings),
+      style: getCytoscapeStyles(settings, colors),
       layout: {
         name: 'dagre',
         rankDir: settings.layoutDirection,
@@ -386,7 +388,7 @@ export const GraphCanvas: React.FC = () => {
   // Update styles when settings change
   useEffect(() => {
     if (!cyRef.current) return
-    cyRef.current.style(getCytoscapeStyles(settings))
+    cyRef.current.style(getCytoscapeStyles(settings, getComputedTokens()))
   }, [
     settings.nodeWidth,
     settings.nodeHeight,

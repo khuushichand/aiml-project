@@ -59,7 +59,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
   const [dropdownOpen, setDropdownOpen] = React.useState(false)
   const { data } = useQuery<ChatModel[]>({
     queryKey: ["getAllModelsForSelect"],
-    queryFn: () => fetchChatModels({ returnEmpty: false })
+    queryFn: () => fetchChatModels({ returnEmpty: true })
   })
 
   const favoriteSet = React.useMemo(

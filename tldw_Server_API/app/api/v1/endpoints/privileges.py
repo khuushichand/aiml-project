@@ -11,7 +11,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.schemas.privileges import (
     PrivilegeDetailResponse,
     PrivilegeOrgResponse,
@@ -26,21 +26,39 @@ from tldw_Server_API.app.api.v1.schemas.privileges import (
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 from tldw_Server_API.app.core.PrivilegeMaps import (
+    PaginationLimitExceeded,
     PrivilegeMapService,
     PrivilegeSnapshotStore,
     get_privilege_map_service,
     get_privilege_snapshot_store,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 router = APIRouter(prefix="/privileges", tags=["privileges"])
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _has_privilege_admin_claim(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if roles & {"admin", "owner", "platform_admin"}:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 async def require_privilege_admin(
-    current_user: dict[str, Any] = Depends(get_current_active_user),
-) -> dict[str, Any]:
-    role = (current_user or {}).get("role")
-    if current_user.get("is_admin") or role in {"admin", "owner", "platform_admin"}:
-        return current_user
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AuthPrincipal:
+    if _has_privilege_admin_claim(principal):
+        return principal
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Administrator privileges required to access privilege maps.",
@@ -49,10 +67,12 @@ async def require_privilege_admin(
 
 async def require_privilege_admin_or_self(
     user_id: str,
-    current_user: dict[str, Any] = Depends(get_current_active_user),
-) -> dict[str, Any]:
-    if current_user.get("is_admin") or str(current_user.get("id")) == str(user_id):
-        return current_user
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AuthPrincipal:
+    if _has_privilege_admin_claim(principal):
+        return principal
+    if principal.user_id is not None and str(principal.user_id) == str(user_id):
+        return principal
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Insufficient privileges to inspect requested user.",
@@ -63,14 +83,19 @@ async def require_privilege_admin_or_self(
 async def get_self_privilege_map(
     *,
     resource: str | None = Query(None),
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeSelfResponse:
-    user_id = str(current_user.get("id"))
+    if principal.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User principal required to inspect self privilege map.",
+        )
+    user_id = str(principal.user_id)
     try:
         return await service.get_self_map(user_id=user_id, resource=resource)
     except ValueError as exc:
-        logger.warning("Invalid self privilege request: %s", exc)
+        logger.warning("Invalid self privilege request: {}", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
@@ -86,10 +111,11 @@ async def get_org_privilege_map(
     resource: str | None = Query(None),
     role: str | None = Query(None),
     dependency: str | None = Query(None),
-    current_user: dict[str, Any] = Depends(require_privilege_admin),
+    org_id: str | None = Query(None, description="Filter to a specific organization"),
+    principal: AuthPrincipal = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeOrgResponse:
-    del current_user  # dependency enforcement only
+    del principal  # dependency enforcement only
     try:
         if view == "detail":
             return await service.get_org_detail(
@@ -98,14 +124,18 @@ async def get_org_privilege_map(
                 resource=resource,
                 dependency=dependency,
                 role_filter=role,
+                org_id=org_id,
             )
         return await service.get_org_summary(
             group_by=group_by,
             include_trends=include_trends,
             since=since,
+            org_id=org_id,
         )
+    except PaginationLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
-        logger.warning("Invalid privilege detail request: %s", exc)
+        logger.warning("Invalid privilege detail request: {}", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
@@ -122,10 +152,10 @@ async def get_team_privilege_map(
     dependency: str | None = Query(None),
     include_trends: bool = Query(False),
     since: datetime | None = Query(None),
-    current_user: dict[str, Any] = Depends(require_privilege_admin),
+    principal: AuthPrincipal = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeOrgResponse:
-    del current_user
+    del principal
     try:
         if view == "detail":
             return await service.get_team_detail(
@@ -142,8 +172,10 @@ async def get_team_privilege_map(
             include_trends=include_trends,
             since=since,
         )
+    except PaginationLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
-        logger.warning("Invalid team privilege request: %s", exc)
+        logger.warning("Invalid team privilege request: {}", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
@@ -154,10 +186,10 @@ async def get_user_privilege_map(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
     resource: str | None = Query(None),
-    current_user: dict[str, Any] = Depends(require_privilege_admin_or_self),
+    principal: AuthPrincipal = Depends(require_privilege_admin_or_self),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeDetailResponse:
-    del current_user
+    del principal
     try:
         return await service.get_user_detail(
             user_id=user_id,
@@ -165,8 +197,10 @@ async def get_user_privilege_map(
             page_size=page_size,
             resource=resource,
         )
+    except PaginationLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
-        logger.warning("Invalid user privilege request: %s", exc)
+        logger.warning("Invalid user privilege request: {}", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
@@ -183,10 +217,10 @@ async def list_privilege_snapshots(
     catalog_version: str | None = Query(None),
     scope: str | None = Query(None),
     include_counts: bool = Query(False),
-    current_user: dict[str, Any] = Depends(require_privilege_admin),
+    principal: AuthPrincipal = Depends(require_privilege_admin),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
 ) -> PrivilegeSnapshotListResponse:
-    del current_user
+    del principal
     if org_id and team_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -216,13 +250,18 @@ async def get_privilege_snapshot(
     snapshot_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(500, ge=1, le=500),
-    current_user: dict[str, Any] = Depends(require_privilege_admin),
+    principal: AuthPrincipal = Depends(require_privilege_admin),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
 ) -> PrivilegeSnapshotDetailResponse:
-    del current_user
+    del principal
     snapshot = await store.get_snapshot(snapshot_id=snapshot_id, page=page, page_size=page_size)
     if not snapshot:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found.")
+    if snapshot.get("_downsampled"):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Snapshot detail has been downsampled to a weekly summary and is no longer available.",
+        )
     return snapshot
 
 
@@ -230,10 +269,10 @@ async def get_privilege_snapshot(
 async def export_privilege_snapshot_json(
     *,
     snapshot_id: str,
-    current_user: dict[str, Any] = Depends(require_privilege_admin),
+    principal: AuthPrincipal = Depends(require_privilege_admin),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
 ) -> JSONResponse:
-    del current_user
+    del principal
     export_data = await store.export_snapshot(snapshot_id=snapshot_id)
     if not export_data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found.")
@@ -273,10 +312,10 @@ async def export_privilege_snapshot_json(
 async def export_privilege_snapshot_csv(
     *,
     snapshot_id: str,
-    current_user: dict[str, Any] = Depends(require_privilege_admin),
+    principal: AuthPrincipal = Depends(require_privilege_admin),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
 ) -> StreamingResponse:
-    del current_user
+    del principal
     export_data = await store.export_snapshot(snapshot_id=snapshot_id)
     if not export_data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found.")
@@ -377,16 +416,22 @@ async def export_privilege_snapshot_csv(
     "/snapshots",
     response_model=PrivilegeSnapshotRecord,
     status_code=status.HTTP_201_CREATED,
+    responses={
+        202: {
+            "model": PrivilegeSnapshotAcceptedResponse,
+            "description": "Snapshot generation queued for async processing.",
+        },
+    },
 )
 async def create_privilege_snapshot(
     *,
     payload: PrivilegeSnapshotCreateRequest,
-    current_user: dict[str, Any] = Depends(require_privilege_admin),
+    principal: AuthPrincipal = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
     request: Request,
 ):
-    generated_by = str(current_user.get("id") or "system")
+    generated_by = str(principal.user_id if principal.user_id is not None else (principal.subject or "system"))
     user_ids = list(payload.user_ids or [])
     if payload.target_scope == "user" and not user_ids:
         user_ids = [generated_by]

@@ -51,7 +51,7 @@ async def test_category_limits_ingestion_vs_read(monkeypatch):
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     server = MCPServer()
     await server.initialize()

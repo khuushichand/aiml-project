@@ -91,7 +91,7 @@ class DistributedPrivilegeCache:
         try:
             payload = self._redis.get(redis_key)
         except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging only
-            logger.debug("Privilege cache redis get failed: %s", exc)
+            logger.debug("Privilege cache redis get failed: {}", exc)
             self._record_miss(layer="backend")
             return None
         if not payload:
@@ -113,7 +113,7 @@ class DistributedPrivilegeCache:
             else:
                 self._redis_ttl = None
         except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Privilege cache redis payload decode failed: %s", exc)
+            logger.debug("Privilege cache redis payload decode failed: {}", exc)
             self._record_miss(layer="backend")
             return None
         if self._sliding_ttl and self._redis_ttl and self._redis_ttl > 0:
@@ -144,7 +144,7 @@ class DistributedPrivilegeCache:
             else:
                 self._redis.set(redis_key, json.dumps(payload, separators=(",", ":")))
         except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - best-effort logging
-            logger.debug("Privilege cache redis set failed: %s", exc)
+            logger.debug("Privilege cache redis set failed: {}", exc)
 
     def invalidate(self) -> None:
         """Clear local cache and broadcast invalidation to peer workers."""
@@ -159,7 +159,7 @@ class DistributedPrivilegeCache:
             new_generation = self._redis.incr(self._generation_key())
             self._generation = int(new_generation)
         except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Privilege cache generation increment failed: %s", exc)
+            logger.debug("Privilege cache generation increment failed: {}", exc)
         try:
             channel = self._invalidate_channel()
             self._redis.publish(channel, str(self._generation))
@@ -197,7 +197,7 @@ class DistributedPrivilegeCache:
                 decode_responses=True,
             )
         except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
-            logger.warning("Unable to initialize privilege cache redis client: %s", exc)
+            logger.warning("Unable to initialize privilege cache redis client: {}", exc)
             return None
 
     def _bootstrap_generation(self) -> None:
@@ -209,7 +209,7 @@ class DistributedPrivilegeCache:
             else:
                 self._generation = int(raw)
         except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Privilege cache generation bootstrap failed: %s", exc)
+            logger.debug("Privilege cache generation bootstrap failed: {}", exc)
         self._set_generation_gauge()
 
     def _sync_generation(self, force: bool = False) -> None:
@@ -229,7 +229,7 @@ class DistributedPrivilegeCache:
                     self._local.clear()
                     self._update_entry_gauge()
         except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Privilege cache generation sync failed: %s", exc)
+            logger.debug("Privilege cache generation sync failed: {}", exc)
         finally:
             self._last_generation_sync = now
             self._set_generation_gauge()
@@ -244,7 +244,7 @@ class DistributedPrivilegeCache:
             channel = self._invalidate_channel()
             self._pubsub.subscribe(channel)
         except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Privilege cache pubsub subscribe failed: %s", exc)
+            logger.debug("Privilege cache pubsub subscribe failed: {}", exc)
             self._pubsub = None
             return
 
@@ -268,7 +268,7 @@ class DistributedPrivilegeCache:
                         self._generation = new_generation
                         self._set_generation_gauge()
             except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
-                logger.debug("Privilege cache pubsub listener exited: %s", exc)
+                logger.debug("Privilege cache pubsub listener exited: {}", exc)
 
         self._pubsub_thread = threading.Thread(target=_listen, name="privmap-cache-pubsub", daemon=True)
         self._pubsub_thread.start()

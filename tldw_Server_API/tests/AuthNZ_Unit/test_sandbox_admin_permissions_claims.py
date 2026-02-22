@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from typing import List
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
@@ -159,3 +159,44 @@ async def test_sandbox_admin_runs_allowed_for_admin_principal(monkeypatch):
     body = resp.json()
     assert isinstance(body.get("items"), list)
     assert body.get("total") == 0
+
+
+@pytest.mark.unit
+def test_sandbox_run_owner_rejects_legacy_admin_flag_without_claims(monkeypatch):
+    fake_service = SimpleNamespace(
+        _orch=SimpleNamespace(
+            get_run_owner=lambda _run_id: "2",
+        )
+    )
+    monkeypatch.setattr(sandbox_mod, "_service", fake_service, raising=True)
+
+    legacy_admin_user = SimpleNamespace(
+        id=1,
+        roles=["user"],
+        permissions=[],
+        is_admin=True,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        sandbox_mod._require_run_owner("run-1", legacy_admin_user)
+    assert excinfo.value.status_code == 404
+
+
+@pytest.mark.unit
+def test_sandbox_run_owner_allows_admin_permission_claim(monkeypatch):
+    fake_service = SimpleNamespace(
+        _orch=SimpleNamespace(
+            get_run_owner=lambda _run_id: "2",
+        )
+    )
+    monkeypatch.setattr(sandbox_mod, "_service", fake_service, raising=True)
+
+    permission_admin_user = SimpleNamespace(
+        id=1,
+        roles=["user"],
+        permissions=["system.configure"],
+        is_admin=False,
+    )
+
+    owner_id = sandbox_mod._require_run_owner("run-1", permission_admin_user)
+    assert owner_id == "2"

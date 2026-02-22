@@ -1,6 +1,6 @@
 import { FileIcon, X } from "lucide-react"
 import React from "react"
-import { Form, Input, InputNumber, Select } from "antd"
+import { Button, Form, Input, InputNumber, Select } from "antd"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
@@ -31,6 +31,7 @@ interface ConversationTabProps {
   historyId: string | null
   selectedSystemPrompt: string | null
   onSystemPromptChange: (value: string) => void
+  onResetSystemPrompt?: () => void | Promise<void>
   uploadedFiles: UploadedFile[]
   onRemoveFile: (id: string) => void
   serverChatId: string | null
@@ -339,6 +340,7 @@ export function ConversationTab({
   historyId,
   selectedSystemPrompt,
   onSystemPromptChange,
+  onResetSystemPrompt,
   uploadedFiles,
   onRemoveFile,
   serverChatId,
@@ -378,6 +380,8 @@ export function ConversationTab({
     null
   )
   const [memoryNoteDraft, setMemoryNoteDraft] = React.useState("")
+  const [isResettingSystemPrompt, setIsResettingSystemPrompt] =
+    React.useState(false)
   const summarySettings =
     chatSettings?.summary && typeof chatSettings.summary === "object"
       ? (chatSettings.summary as Record<string, unknown>)
@@ -763,11 +767,9 @@ export function ConversationTab({
     const normalized = normalizeDirectedCharacterId(value)
     await updateSettings({
       directedCharacterId:
-        normalized === null
-          ? null
-          : /^\d+$/.test(normalized)
-            ? Number.parseInt(normalized, 10)
-            : normalized
+        normalized !== null && /^\d+$/.test(normalized)
+          ? Number.parseInt(normalized, 10)
+          : null
     })
   }
   const persistCharacterMemoryNote = async (
@@ -904,33 +906,67 @@ export function ConversationTab({
     ]
   )
 
+  const handleResetSystemPrompt = React.useCallback(async () => {
+    if (!onResetSystemPrompt) return
+    try {
+      setIsResettingSystemPrompt(true)
+      await onResetSystemPrompt()
+    } finally {
+      setIsResettingSystemPrompt(false)
+    }
+  }, [onResetSystemPrompt])
+
   return (
     <div className="space-y-4">
-      {useDrawer && (
-        <Form.Item
-          name="systemPrompt"
-          help={t("common:modelSettings.form.systemPrompt.help")}
-          label={t("common:modelSettings.form.systemPrompt.label")}>
-          <div className="space-y-1">
-            <Input.TextArea
-              rows={4}
-              placeholder={t("common:modelSettings.form.systemPrompt.placeholder")}
-              onChange={(e) => onSystemPromptChange(e.target.value)}
-            />
-            {selectedSystemPrompt && (
-              <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />
-                <span>
-                  {t(
-                    "playground:composer.sceneTemplateActive",
-                    "Scene template active: Actor respects template interaction settings."
-                  )}
-                </span>
-              </div>
+      <Form.Item
+        name="systemPrompt"
+        help={t("common:modelSettings.form.systemPrompt.help", {
+          defaultValue:
+            "Applies persistently to this conversation and overrides the selected system prompt template until you reset it."
+        })}
+        label={t("common:modelSettings.form.systemPrompt.label", {
+          defaultValue: "Conversation System Prompt"
+        })}>
+        <div className="space-y-1">
+          <Input.TextArea
+            rows={useDrawer ? 4 : 6}
+            placeholder={t(
+              "common:modelSettings.form.systemPrompt.placeholder",
+              { defaultValue: "Enter System Prompt" }
             )}
+            onChange={(e) => onSystemPromptChange(e.target.value)}
+          />
+          <div className="flex items-center justify-end">
+            <Button
+              type="link"
+              size="small"
+              className="px-0"
+              loading={isResettingSystemPrompt}
+              onClick={() => {
+                void handleResetSystemPrompt()
+              }}>
+              {selectedSystemPrompt
+                ? t("common:modelSettings.form.systemPrompt.resetTemplate", {
+                    defaultValue: "Reset to template"
+                  })
+                : t("common:modelSettings.form.systemPrompt.resetDefault", {
+                    defaultValue: "Reset to default"
+                  })}
+            </Button>
           </div>
-        </Form.Item>
-      )}
+          {selectedSystemPrompt && (
+            <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />
+              <span>
+                {t(
+                  "playground:composer.sceneTemplateActive",
+                  "Scene template active: Actor respects template interaction settings."
+                )}
+              </span>
+            </div>
+          )}
+        </div>
+      </Form.Item>
 
       {uploadedFiles.length > 0 && (
         <div className="mb-4">

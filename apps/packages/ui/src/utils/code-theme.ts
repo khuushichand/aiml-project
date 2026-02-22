@@ -7,6 +7,7 @@ export const normalizeLanguage = (language: string): string => {
   if (lang === "ts" || lang === "tsx") return "typescript"
   if (lang === "sh" || lang === "bash") return "bash"
   if (lang === "py") return "python"
+  if (lang === "text" || lang === "txt" || lang === "plain") return "plaintext"
   if (lang === "md" || lang === "markdown") return "markdown"
   if (lang === "yml") return "yaml"
   if (!lang) return "plaintext"

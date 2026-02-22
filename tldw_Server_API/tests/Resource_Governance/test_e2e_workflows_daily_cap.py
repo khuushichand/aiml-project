@@ -7,6 +7,12 @@ from fastapi.testclient import TestClient
 pytestmark = pytest.mark.rate_limit
 
 
+@pytest.fixture(params=["memory", "redis"], ids=["rg-memory", "rg-redis"])
+def rg_backend(request) -> str:
+    """Exercise workflows daily-cap behavior under both RG backends."""
+    return str(request.param)
+
+
 def _reset_rg_state(app):
 
 
@@ -38,7 +44,7 @@ def _with_rg_middleware(app):
             try:
                 app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
         yield
     finally:
         if changed:
@@ -46,7 +52,7 @@ def _with_rg_middleware(app):
                 app.user_middleware = original_user_middleware
                 app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
 
 
 async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
@@ -59,31 +65,31 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         await reset_db_pool()
         reset_settings()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
 
         await ensure_authnz_schema_ready_once()
     except Exception:
-        pass
+        _ = None
     # Reset cached RG daily ledger between tests when DATABASE_URL changes.
     try:
         import tldw_Server_API.app.core.Resource_Governance.daily_caps as _dc
 
         _dc._daily_ledger = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     try:
         import tldw_Server_API.app.core.Workflows.daily_ledger as _dl
 
         _dl._workflows_daily_ledger = None  # type: ignore[attr-defined]
         _dl._workflows_backfill_done = set()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.mark.asyncio
-async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path):
+async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path, rg_backend):
     # Ensure ledger is available for enforcement.
     db_path = tmp_path / "authnz_wf_e2e.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
@@ -121,7 +127,7 @@ async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path
     # Minimal app + RG middleware.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
 
@@ -142,18 +148,19 @@ async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path
         }
         reset_content_backend(config=cfg, reload=False)
     except Exception:
-        pass
+        _ = None
 
+    policy_id = f"workflows.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  workflows.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 100000, burst: 1.0 }\n"
         "    workflows_runs: { daily_cap: 1 }\n"
         "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    \"/api/v1/workflows/*\": workflows.small\n"
+        f"    \"/api/v1/workflows/*\": {policy_id}\n"
     )
     p = tmp_path / "rg_workflows.yaml"
     p.write_text(policy, encoding="utf-8")

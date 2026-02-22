@@ -39,6 +39,7 @@ class UserProviderKeyStatusItem(BaseModel):
     has_key: bool
     source: Literal["user", "team", "org", "server_default", "none", "disabled"]
     key_hint: str | None = None
+    auth_source: Literal["api_key", "oauth"] | None = None
     last_used_at: datetime | None = None
 
 
@@ -107,3 +108,60 @@ class AdminUserKeyStatusItem(BaseModel):
 class AdminUserKeysResponse(BaseModel):
     user_id: int
     items: list[AdminUserKeyStatusItem]
+
+
+class OpenAIOAuthAuthorizeRequest(BaseModel):
+    credential_fields: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional OpenAI credential fields (org_id/project_id).",
+    )
+    return_path: str | None = Field(
+        default=None,
+        description="Optional app-relative path used by frontend post-callback handling.",
+    )
+
+
+class OpenAIOAuthAuthorizeResponse(BaseModel):
+    provider: Literal["openai"] = "openai"
+    auth_url: str
+    auth_session_id: str
+    expires_at: datetime
+
+
+class OpenAIOAuthCallbackResponse(BaseModel):
+    provider: Literal["openai"] = "openai"
+    status: Literal["stored"] = "stored"
+    auth_source: Literal["oauth"] = "oauth"
+    key_hint: str = "oauth"
+    updated_at: datetime
+    expires_at: datetime | None = None
+
+
+class OpenAIOAuthStatusResponse(BaseModel):
+    provider: Literal["openai"] = "openai"
+    connected: bool
+    auth_source: Literal["api_key", "oauth", "none"] = "none"
+    updated_at: datetime | None = None
+    last_used_at: datetime | None = None
+    expires_at: datetime | None = None
+    scope: str | None = None
+
+
+class OpenAIOAuthRefreshResponse(BaseModel):
+    provider: Literal["openai"] = "openai"
+    status: Literal["refreshed"] = "refreshed"
+    updated_at: datetime
+    expires_at: datetime | None = None
+
+
+class OpenAICredentialSourceSwitchRequest(BaseModel):
+    auth_source: Literal["api_key", "oauth"] = Field(
+        ...,
+        description="Preferred OpenAI credential source to activate.",
+    )
+
+
+class OpenAICredentialSourceSwitchResponse(BaseModel):
+    provider: Literal["openai"] = "openai"
+    auth_source: Literal["api_key", "oauth"]
+    updated_at: datetime

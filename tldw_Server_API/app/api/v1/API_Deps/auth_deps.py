@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -29,6 +30,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
+    DatabaseLockError,
     InvalidTokenError,
     RegistrationError,
     TokenExpiredError,
@@ -46,11 +48,10 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_l
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
-    is_single_user_mode,
-    is_single_user_profile_mode,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     authenticate_api_key_user,
+    get_request_user,
     verify_jwt_and_fetch_user,
 )
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
@@ -59,6 +60,7 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import get_pol
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
 from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
 from tldw_Server_API.app.core.testing import (
+    env_flag_enabled as _env_flag_enabled,
     is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
     is_production_like_env as _is_production_like_env,
 )
@@ -98,6 +100,82 @@ _SENSITIVE_USER_KEY_PATTERN = re.compile(
     r"(password|secret|token|api[_-]?key|ssn|totp|otp|mfa|backup_codes|recovery_codes)",
     re.IGNORECASE,
 )
+_AUTH_DEPS_RG_DIAGNOSTICS_ONLY_LOGGED: set[str] = set()
+_AUTH_DEPS_FALLBACK_RATE_WINDOWS: dict[tuple[str, str], deque[float]] = {}
+_AUTH_DEPS_FALLBACK_RATE_WINDOWS_LOCK = threading.Lock()
+
+
+def _read_non_negative_int_env(name: str, default: int) -> int:
+    """Read an integer environment variable and clamp to non-negative."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid integer env for {}: {!r}; using default={}",
+            name,
+            raw,
+            default,
+        )
+        return default
+    return max(parsed, 0)
+
+
+def _read_non_negative_float_env(name: str, default: float) -> float:
+    """Read a float environment variable and clamp to non-negative."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid float env for {}: {!r}; using default={}",
+            name,
+            raw,
+            default,
+        )
+        return default
+    return max(parsed, 0.0)
+
+
+def _authnz_sqlite_lock_retry_config() -> tuple[int, float, float, int]:
+    """Return retry/backoff config for transient AuthNZ SQLite lock contention."""
+    max_retries = _read_non_negative_int_env(
+        "AUTHNZ_SQLITE_LOCK_MAX_RETRIES",
+        2,
+    )
+    retry_after_seconds = _read_non_negative_int_env(
+        "AUTHNZ_SQLITE_LOCK_RETRY_AFTER_SECONDS",
+        1,
+    )
+    base_backoff_seconds = _read_non_negative_float_env(
+        "AUTHNZ_SQLITE_LOCK_RETRY_BASE_SECONDS",
+        0.05,
+    )
+    max_backoff_seconds = _read_non_negative_float_env(
+        "AUTHNZ_SQLITE_LOCK_RETRY_MAX_SECONDS",
+        0.25,
+    )
+    if max_backoff_seconds < base_backoff_seconds:
+        max_backoff_seconds = base_backoff_seconds
+    return (
+        max_retries,
+        base_backoff_seconds,
+        max_backoff_seconds,
+        retry_after_seconds,
+    )
+
+
+def _authnz_busy_http_exception(retry_after_seconds: int) -> HTTPException:
+    """Create a consistent 503 response for temporary AuthNZ DB contention."""
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Authentication database is busy. Please retry shortly.",
+        headers={"Retry-After": str(max(retry_after_seconds, 0))},
+    )
 
 
 def _public_user_dict(user: Mapping[str, Any]) -> dict[str, Any]:
@@ -124,12 +202,12 @@ def _looks_like_jwt(token: Optional[str]) -> bool:
 
 
 async def _authenticate_api_key_from_request(request: Request, api_key: str) -> dict[str, Any]:
-    test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+    test_mode = _is_test_mode()
     if test_mode:
         # SECURITY: Warn loudly about TEST_MODE and block in production unless explicitly allowed
-        allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
+        allow_test_in_prod = _env_flag_enabled("ALLOW_TEST_MODE_IN_PRODUCTION")
         environment = os.getenv("ENVIRONMENT", "").strip().lower()
-        prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
+        prod_flag = _env_flag_enabled("tldw_production")
         is_production = environment in {"production", "prod"} or prod_flag
         if is_production:
             if not allow_test_in_prod:
@@ -303,7 +381,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
     # Decide whether to use the lightweight adapter (explicit test mode) or a real transaction
     use_adapter = False
     try:
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             use_adapter = True
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
         # If any detection fails, fall back to default transaction behavior
@@ -311,6 +389,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
 
     if use_adapter:
         # Keep a single connection open for the request lifetime so cursors remain valid
+        is_postgres_backend = bool(getattr(db_pool, "pool", None) is not None)
         conn_cm = db_pool.acquire()
         conn = await conn_cm.__aenter__()
 
@@ -318,10 +397,9 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
         # query/return semantics for tests. If other modules need similar behavior,
         # it can be extracted into the DB_Management layer.
         class _ConnAdapter:
-            def __init__(self, _conn: Any) -> None:
+            def __init__(self, _conn: Any, *, is_postgres: bool) -> None:
                 self._conn = _conn
-                # Heuristic: asyncpg connection exposes fetchrow; aiosqlite does not
-                self._is_sqlite = not hasattr(self._conn, "fetchrow")
+                self._is_sqlite = not is_postgres
                 self._dollar_param = re.compile(r"\$\d+")
 
             def _normalize_sqlite_sql(self, query: str) -> str:
@@ -370,10 +448,16 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     q = self._normalize_sqlite_sql(query)
                     cur = await self._conn.execute(q, params)
                     rows = await cur.fetchall()
-                    try:
-                        return [{key: r[key] for key in r} for r in rows]
-                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-                        return rows
+                    normalized_rows: list[Any] = []
+                    for row in rows:
+                        try:
+                            keys = row.keys()  # sqlite3.Row / aiosqlite.Row
+                            normalized_rows.append({key: row[key] for key in keys})
+                            continue
+                        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+                            pass
+                        normalized_rows.append(row)
+                    return normalized_rows
 
             async def fetchrow(self, query: str, *args: object) -> Any | None:
                 if not self._is_sqlite:
@@ -385,7 +469,10 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     cur = await self._conn.execute(q, params)
                     row = await cur.fetchone()
                     try:
-                        return {key: row[key] for key in row} if row else None
+                        if not row:
+                            return None
+                        keys = row.keys()  # sqlite3.Row / aiosqlite.Row
+                        return {key: row[key] for key in keys}
                     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         return row
 
@@ -400,15 +487,55 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                         )
                         raise
 
-        adapter = _ConnAdapter(conn)
+        adapter = _ConnAdapter(conn, is_postgres=is_postgres_backend)
         try:
             yield adapter
         finally:
             await conn_cm.__aexit__(None, None, None)
     else:
-        # Default: yield a request-scoped transaction so writes commit reliably
-        async with db_pool.transaction() as conn:
+        # Default: yield a request-scoped transaction so writes commit reliably.
+        # For SQLite lock contention, retry only transaction-entry failures.
+        max_retries, backoff_base, backoff_max, retry_after = _authnz_sqlite_lock_retry_config()
+        entry_attempt = 0
+        txn_cm = None
+        conn = None
+
+        while True:
+            txn_cm = db_pool.transaction()
+            try:
+                conn = await txn_cm.__aenter__()
+                break
+            except DatabaseLockError as lock_exc:
+                if entry_attempt >= max_retries:
+                    logger.warning(
+                        "AuthNZ DB lock contention exhausted entry retries (attempts={})",
+                        entry_attempt + 1,
+                    )
+                    raise _authnz_busy_http_exception(retry_after) from lock_exc
+                sleep_seconds = min(backoff_base * (2 ** entry_attempt), backoff_max)
+                logger.debug(
+                    "AuthNZ DB lock contention on transaction entry; retrying (attempt={} sleep={}s)",
+                    entry_attempt + 1,
+                    sleep_seconds,
+                )
+                entry_attempt += 1
+                await asyncio.sleep(sleep_seconds)
+
+        assert txn_cm is not None
+
+        try:
             yield conn
+        except BaseException as exc:
+            try:
+                await txn_cm.__aexit__(type(exc), exc, exc.__traceback__)
+            except DatabaseLockError as lock_exc:
+                raise _authnz_busy_http_exception(retry_after) from lock_exc
+            raise
+        else:
+            try:
+                await txn_cm.__aexit__(None, None, None)
+            except DatabaseLockError as lock_exc:
+                raise _authnz_busy_http_exception(retry_after) from lock_exc
 
 
 async def get_password_service_dep() -> PasswordService:
@@ -426,15 +553,13 @@ async def get_session_manager_dep() -> SessionManager:
     # In explicit pytest runtime + test mode, return a lightweight stub to avoid heavy init.
     # Never use this stub in production-like environments.
     try:
-        import os as _os
-
-        force_real = _os.getenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "").lower() in ("1", "true", "yes")
+        force_real = _env_flag_enabled("AUTHNZ_FORCE_REAL_SESSION_MANAGER")
         in_production_like = bool(_is_production_like_env())
         if (
             not force_real
             and not in_production_like
             and _is_explicit_pytest_runtime()
-            and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"))
+            and _is_test_mode()
         ):
             class _StubSessionManager:
                 enabled = True
@@ -611,7 +736,7 @@ async def get_current_user(
     """
     # TEST_MODE diagnostics: log auth header presence
     try:
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             logger.info(
                 "get_current_user: has_bearer={} has_api_key={} path={}",
                 bool(credentials),
@@ -679,7 +804,8 @@ async def get_current_user(
                         user_id=getattr(principal, "user_id", None),
                         org_ids=org_ids if org_ids is not None else getattr(request.state, "org_ids", None),
                         team_ids=team_ids if team_ids is not None else getattr(request.state, "team_ids", None),
-                        is_admin=bool(getattr(principal, "is_admin", False)),
+                        # Stage 4 claim-first: admin scope context derives from claims, not boolean flags.
+                        is_admin=_principal_has_admin_bypass_claims(principal),
                     )
                 except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
@@ -719,7 +845,7 @@ async def get_current_user(
     if not credentials:
         # TEST_MODE: surface why we failed
         extra_headers = {"WWW-Authenticate": "Bearer"}
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             try:
                 present_headers = ",".join(h for h in ("Authorization", "X-API-KEY") if request.headers.get(h)) or "none"
                 extra_headers["X-TLDW-Auth-Reason"] = "missing-bearer"
@@ -758,7 +884,7 @@ async def get_current_user(
             # Normalize 401 semantics for callers: detail must contain
             # "Authentication required" and include WWW-Authenticate header.
             extra_headers = {"WWW-Authenticate": "Bearer"}
-            if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            if _is_test_mode():
                 try:
                     extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{exc.detail}"
                 except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as inner_exc:  # noqa: BLE001
@@ -782,7 +908,7 @@ async def get_current_user(
                 type(e).__name__,
             )
         extra_headers = {"WWW-Authenticate": "Bearer"}
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             try:
                 extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
             except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
@@ -828,6 +954,238 @@ async def get_current_user(
 # Claim-First Principal Dependencies
 
 
+def _coerce_optional_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_claim_values(values: Any) -> list[str]:
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value).strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(text)
+    return normalized
+
+
+def _mapping_from_user_like(user_obj: Any) -> dict[str, Any]:
+    if isinstance(user_obj, Mapping):
+        return dict(user_obj)
+    if hasattr(user_obj, "model_dump"):
+        try:
+            dumped = user_obj.model_dump()  # type: ignore[attr-defined]
+            if isinstance(dumped, Mapping):
+                return dict(dumped)
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+            pass
+    if hasattr(user_obj, "dict"):
+        try:
+            dumped = user_obj.dict()  # type: ignore[attr-defined]
+            if isinstance(dumped, Mapping):
+                return dict(dumped)
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+            pass
+
+    return {
+        "id": getattr(user_obj, "id", None),
+        "user_id": getattr(user_obj, "user_id", None),
+        "username": getattr(user_obj, "username", None),
+        "email": getattr(user_obj, "email", None),
+        "role": getattr(user_obj, "role", None),
+        "roles": getattr(user_obj, "roles", []),
+        "permissions": getattr(user_obj, "permissions", []),
+        "is_admin": getattr(user_obj, "is_admin", None),
+        "org_ids": getattr(user_obj, "org_ids", []),
+        "team_ids": getattr(user_obj, "team_ids", []),
+        "active_org_id": getattr(user_obj, "active_org_id", None),
+        "active_team_id": getattr(user_obj, "active_team_id", None),
+        "subject": getattr(user_obj, "subject", None),
+        "token_type": getattr(user_obj, "token_type", None),
+        "jti": getattr(user_obj, "jti", None),
+    }
+
+
+def _principal_from_legacy_active_user_override(
+    request: Request,
+    user_obj: Any,
+) -> AuthPrincipal:
+    data = _mapping_from_user_like(user_obj)
+    user_id = _coerce_optional_int(data.get("id"))
+    if user_id is None:
+        user_id = _coerce_optional_int(data.get("user_id"))
+
+    roles = _normalize_claim_values(data.get("roles"))
+    legacy_role = str(data.get("role") or "").strip()
+    if legacy_role:
+        roles = _normalize_claim_values([legacy_role, *roles])
+
+    permissions = _normalize_claim_values(data.get("permissions"))
+    permissions_lc = {str(value).strip().lower() for value in permissions}
+
+    is_admin = bool(data.get("is_admin"))
+    if not is_admin:
+        roles_lc = {str(value).strip().lower() for value in roles}
+        is_admin = ("admin" in roles_lc) or bool(permissions_lc & {"*", "system.configure"})
+
+    org_ids = [
+        int(org_id)
+        for org_id in (data.get("org_ids") or getattr(request.state, "org_ids", []) or [])
+        if _coerce_optional_int(org_id) is not None
+    ]
+    team_ids = [
+        int(team_id)
+        for team_id in (data.get("team_ids") or getattr(request.state, "team_ids", []) or [])
+        if _coerce_optional_int(team_id) is not None
+    ]
+    active_org_id = _coerce_optional_int(
+        data.get("active_org_id", getattr(request.state, "active_org_id", None))
+    )
+    active_team_id = _coerce_optional_int(
+        data.get("active_team_id", getattr(request.state, "active_team_id", None))
+    )
+    api_key_id = _coerce_optional_int(data.get("api_key_id"))
+
+    username = data.get("username")
+    email = data.get("email")
+    subject = data.get("subject")
+    token_type = data.get("token_type")
+    jti = data.get("jti")
+
+    return AuthPrincipal(
+        kind="user",
+        user_id=user_id,
+        api_key_id=api_key_id,
+        username=str(username) if username is not None else None,
+        email=str(email) if email is not None else None,
+        subject=str(subject) if subject else None,
+        token_type=str(token_type) if token_type else "access",
+        jti=str(jti) if jti else None,
+        roles=roles,
+        permissions=permissions,
+        is_admin=is_admin,
+        org_ids=org_ids,
+        team_ids=team_ids,
+        active_org_id=active_org_id,
+        active_team_id=active_team_id,
+    )
+
+
+def _build_auth_context_from_principal(
+    request: Request,
+    principal: AuthPrincipal,
+) -> AuthContext:
+    try:
+        ip = request.client.host if request.client else None  # type: ignore[union-attr]
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+        ip = None
+    try:
+        user_agent = request.headers.get("User-Agent")
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+        user_agent = None
+    try:
+        request_id = (
+            request.headers.get("X-Request-ID")
+            or getattr(request.state, "request_id", None)
+        )
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+        request_id = None
+    return AuthContext(
+        principal=principal,
+        ip=ip,
+        user_agent=user_agent,
+        request_id=request_id,
+    )
+
+
+async def _get_legacy_active_user_override_principal(
+    request: Request,
+) -> AuthPrincipal | None:
+    """
+    Compatibility shim for tests overriding ``get_current_active_user``.
+
+    Some legacy tests still monkeypatch get_current_active_user while newer
+    routes depend directly on get_auth_principal. When an explicit dependency
+    override for get_current_active_user is present, honor it and synthesize a
+    principal from the override payload.
+    """
+    app = getattr(request, "app", None)
+    if app is None:
+        return None
+    overrides = getattr(app, "dependency_overrides", None)
+    if not isinstance(overrides, Mapping):
+        return None
+    override_fn = overrides.get(get_current_active_user)
+    if override_fn is None:
+        return None
+
+    try:
+        sig = inspect.signature(override_fn)
+        has_no_params = len(sig.parameters) == 0
+    except (TypeError, ValueError):
+        has_no_params = False
+
+    try:
+        result = override_fn() if has_no_params else override_fn(request)
+    except TypeError:
+        result = override_fn()
+
+    if inspect.isawaitable(result):
+        result = await result
+    if result is None:
+        return None
+
+    principal = (
+        result
+        if isinstance(result, AuthPrincipal)
+        else _principal_from_legacy_active_user_override(request, result)
+    )
+    ctx = _build_auth_context_from_principal(request, principal)
+    try:
+        request.state.auth = ctx
+        request.state._auth_user = result
+        request.state.user_id = principal.user_id
+        request.state.api_key_id = principal.api_key_id
+        request.state.org_ids = list(principal.org_ids or [])
+        request.state.team_ids = list(principal.team_ids or [])
+        request.state.active_org_id = principal.active_org_id
+        request.state.active_team_id = principal.active_team_id
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as state_exc:
+        logger.debug(
+            "Legacy active-user override principal context attach failed: {}",
+            state_exc,
+        )
+    return principal
+
+
+def _has_legacy_request_user_override(request: Request) -> bool:
+    """
+    Return True when tests explicitly override get_request_user.
+
+    This preserves compatibility for tests that inject user context via
+    dependency overrides while exercising routes that also include
+    route-level require_token_scope dependencies.
+    """
+    app = getattr(request, "app", None)
+    if app is None:
+        return False
+    overrides = getattr(app, "dependency_overrides", None)
+    if not isinstance(overrides, Mapping):
+        return False
+    return overrides.get(get_request_user) is not None
+
+
 async def get_auth_principal(
     request: Request,
 ) -> AuthPrincipal:
@@ -837,6 +1195,10 @@ async def get_auth_principal(
     This delegates to the core auth_principal_resolver and reuses any existing
     AuthContext attached to request.state.auth when present.
     """
+    legacy_override_principal = await _get_legacy_active_user_override_principal(request)
+    if legacy_override_principal is not None:
+        return legacy_override_principal
+
     principal = await _resolve_auth_principal(request)
     try:
         from tldw_Server_API.app.services.admin_system_ops_service import (
@@ -845,7 +1207,7 @@ async def get_auth_principal(
 
         state = _get_maintenance_state()
         if state.get("enabled"):
-            if principal.is_admin:
+            if _principal_has_admin_bypass_claims(principal):
                 return principal
             allowlist_ids = set()
             for val in state.get("allowlist_user_ids") or []:
@@ -879,8 +1241,9 @@ def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitabl
     """
     Dependency factory that enforces required permission claims on the principal.
 
-    Admin principals (principal.is_admin) are allowed regardless of specific
-    permissions. On failure, raises HTTP 403 with a descriptive message.
+    Admin-style principals (explicit role/permission claims) are allowed
+    regardless of specific permissions. On failure, raises HTTP 403 with a
+    descriptive message.
 
     Note: Uses AND semantics - the principal must have all specified
     permissions (unlike require_roles, which uses OR semantics for roles).
@@ -889,7 +1252,7 @@ def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitabl
     perms = [str(p) for p in permissions if str(p).strip()]
 
     async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:  # noqa: B008
-        if principal.is_admin:
+        if _principal_has_admin_bypass_claims(principal):
             return principal
         missing = [p for p in perms if p not in principal.permissions]
         if missing:
@@ -921,7 +1284,8 @@ def require_api_key_scope(
         *scopes: One or more scope strings that satisfy the requirement (OR logic).
                  Valid values: "read", "write", "admin", "service"
         allow_jwt_bypass: If True, JWT-authenticated users bypass this check (default: True)
-        allow_admin_bypass: If True, principals with is_admin=True bypass this check (default: True)
+        allow_admin_bypass: If True, principals with explicit admin role/permission
+            claims bypass this check (default: True)
 
     Returns:
         Dependency function that raises HTTP 403 if scope requirement not met
@@ -953,7 +1317,7 @@ def require_api_key_scope(
             return principal
 
         # Admin bypass
-        if allow_admin_bypass and principal.is_admin:
+        if allow_admin_bypass and _principal_has_admin_bypass_claims(principal):
             # AUDIT: Log when admin bypasses API key scope check for security visibility
             logger.info(
                 "Admin user {} bypassing API key scope check for scopes {} on endpoint {}",
@@ -1003,8 +1367,9 @@ def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrinci
     """
     Dependency factory that enforces required role claims on the principal.
 
-    Admin principals (principal.is_admin) are allowed regardless of specific
-    roles. On failure, raises HTTP 403 with a descriptive message.
+    Admin-style principals (explicit role/permission claims) are allowed
+    regardless of specific roles. On failure, raises HTTP 403 with a
+    descriptive message.
 
     Note: Uses OR semantics - the principal must have at least one of the
     specified roles (unlike require_permissions, which requires all listed
@@ -1014,7 +1379,7 @@ def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrinci
     role_list = [str(r) for r in roles if str(r).strip()]
 
     async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:  # noqa: B008
-        if principal.is_admin:
+        if _principal_has_admin_bypass_claims(principal):
             return principal
         if not role_list:
             return principal
@@ -1083,7 +1448,7 @@ async def get_current_active_user(
 async def get_user_org_policy(
     db: Any = Depends(get_db_transaction),  # noqa: B008
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
+    current_user: dict[str, Any] | None = None,  # compat arg for legacy call sites/tests
 ) -> dict[str, Any]:
     """
     Deprecated compatibility shim for user-dict org policy lookups.
@@ -1092,10 +1457,10 @@ async def get_user_org_policy(
     now delegates to the claim-first resolver so org policy resolution stays
     consistent across all authentication flows.
     """
+    _ = current_user
     return await get_org_policy_from_principal(
         db=db,
         principal=principal,
-        current_user=current_user,
     )
 
 
@@ -1123,49 +1488,25 @@ async def _load_org_policy(db: Any, org_id: int) -> dict[str, Any]:
 async def get_org_policy_from_principal(
     db: Any = Depends(get_db_transaction),  # noqa: B008
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
 ) -> dict[str, Any]:
     """
-    Resolve organization policy primarily from ``AuthPrincipal``, with fallbacks.
+    Resolve organization policy from ``AuthPrincipal`` org claims.
 
     Preference order:
     1. First org_id in ``principal.org_ids`` (claim-first).
-    2. First org_id from ``current_user["org_memberships"]`` (legacy user dict).
-    3. Synthetic org_id=1 in single-user mode (for environments without orgs).
-    4. HTTP 400 when no organization can be resolved.
+    2. Synthetic org_id=1 for explicit single-user principals (subject=single_user).
+    3. HTTP 400 when no organization can be resolved.
 
     This helper is the principal-first counterpart to ``get_user_org_policy`` and
     is intended for new code paths that already depend on ``get_auth_principal``.
     """
     def _should_use_synthetic_single_user_org(p: AuthPrincipal) -> bool:
         """
-        Decide whether to fall back to a synthetic org_id=1 for single-user.
+        Decide whether to fall back to synthetic org_id=1.
 
-        Behaviour:
-        - When ORG_POLICY_SINGLE_USER_PRINCIPAL is unset/true:
-          prefer principal/profile-driven behaviour and only treat the
-          environment as single-user for org-policy purposes when:
-            * PROFILE indicates a single-user profile, and
-            * the principal is explicitly marked as the single-user profile (subject/helper).
-        - When the flag is explicitly disabled (\"0\"/\"false\"/\"off\"):
-          preserve legacy behaviour using mode/profile helpers
-          (is_single_user_mode or is_single_user_profile_mode).
+        Stage 4 claim-first tightening: org-policy fallback is derived from
+        principal identity only (no mode/profile helper branch).
         """
-        flag = os.getenv("ORG_POLICY_SINGLE_USER_PRINCIPAL", "").strip().lower()
-        if flag in {"0", "false", "off"}:
-            # Explicit compatibility mode: defer to legacy mode/profile helpers.
-            try:
-                return bool(is_single_user_mode() or is_single_user_profile_mode())
-            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-                return False
-
-        try:
-            single_profile = is_single_user_profile_mode()
-        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-            single_profile = False
-
-        if not single_profile:
-            return False
         # Principal-first: only explicit single-user principals qualify. For the
         # org-policy fallback, we deliberately require the principal to be
         # tagged with subject \"single_user\" instead of relying on numeric
@@ -1181,11 +1522,7 @@ async def get_org_policy_from_principal(
     if org_ids:
         org_id = org_ids[0]
     else:
-        # 2) Fallback to user org_memberships for compatibility.
-        memberships = current_user.get("org_memberships") or []
-        if memberships:
-            org_id = memberships[0].get("org_id")
-        elif _should_use_synthetic_single_user_org(principal):
+        if _should_use_synthetic_single_user_org(principal):
             # Single-user environment: synthetic org_id=1 to mirror legacy behaviour.
             org_id = 1
         else:
@@ -1202,79 +1539,39 @@ async def get_org_policy_from_principal(
     return await _load_org_policy(db, org_id)
 
 
-async def require_admin(
-    current_user: dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
-) -> dict[str, Any]:
-    """
-    Require admin role for access (legacy shim).
-
-    This dependency is retained for backwards compatibility with older
-    routes and tests that still rely on a user-dict based admin check.
-    New endpoints MUST NOT use this helper and should instead depend on
-    `get_auth_principal` together with `require_roles("admin")` and/or
-    `require_permissions(...)` for claim-first authorization.
-
-    Args:
-        current_user: Current active user
-
-    Returns:
-        User dictionary if admin
-
-    Raises:
-        HTTPException: If user is not admin
-    """
-    # Prefer explicit admin-style claims over global mode checks so that both
-    # single-user and multi-user profiles rely on the same RBAC surface:
-    # - is_admin flag
-    # - primary role == 'admin'
-    # - roles list contains 'admin'
-    is_admin_flag = bool(
-        current_user.get("is_admin")
-        or current_user.get("role") == "admin"
-        or ("admin" in (current_user.get("roles") or []))
-    )
-    if not is_admin_flag:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-
-    return current_user
+_ADMIN_BYPASS_PERMISSIONS = frozenset({"*"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
-def require_role(role: str):
-    # Legacy shim - do not use in new code.
-    # Prefer claim-first helpers (get_auth_principal, require_roles, require_permissions)
-    # for new endpoints. This dependency is retained only for existing routes that
-    # still rely on get_current_active_user user dicts.
-    """
-    Create a dependency that requires a specific role
+def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | None) -> set[str]:
+    return {
+        str(value).strip().lower()
+        for value in (values or [])
+        if str(value).strip()
+    }
 
-    Args:
-        role: Required role name
 
-    Returns:
-        Dependency function that checks for the role
-    """
-    async def role_checker(
-        current_user: dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
-    ) -> dict[str, Any]:
-        user_role = current_user.get("role", "user")
+def _principal_has_admin_bypass_claims(principal: AuthPrincipal | None) -> bool:
+    if principal is None:
+        return False
+    # Claim-first behavior: do not treat the legacy boolean `is_admin` flag as
+    # an authorization bypass on its own. Require explicit admin role/permission
+    # claims for bypass.
+    roles = _normalized_claim_values(principal.roles)
+    permissions = _normalized_claim_values(principal.permissions)
+    if "admin" in roles:
+        return True
+    return bool(permissions & _ADMIN_BYPASS_PERMISSIONS)
 
-        # Admin can access everything
-        if user_role == "admin":
-            return current_user
 
-        # Check specific role
-        if user_role != role:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Requires {role} role"
-            )
-
-        return current_user
-
-    return role_checker
+def _principal_has_admin_claims(principal: AuthPrincipal | None) -> bool:
+    if principal is None:
+        return False
+    roles = _normalized_claim_values(principal.roles)
+    permissions = _normalized_claim_values(principal.permissions)
+    if "admin" in roles:
+        return True
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 async def get_optional_current_user(
@@ -1329,22 +1626,94 @@ def _rg_enabled_for_request(request: Request) -> bool:
     return bool(state is not None and getattr(state, "rg_policy_id", None))
 
 
-async def check_rate_limit(request: Request, rate_limiter=None) -> None:
-    """
-    RG-first rate limit dependency with legacy fallback.
+def _rg_enabled_flag() -> bool:
+    raw = os.getenv("RG_ENABLED", "")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
-    When Resource Governor (RG) has already governed this request, this is a
-    no-op. Otherwise it calls the legacy AuthNZ limiter shim (user-scoped when
-    available, else IP-scoped). That shim is intentionally a compatibility
-    no-op in RG cutover mode and primarily preserves call contracts/metadata.
-    """
-    # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
+
+def _log_auth_deps_rg_diagnostics_only_shim(
+    *,
+    dependency: str,
+    endpoint: str,
+    reason: str,
+) -> None:
+    key = f"{dependency}:{reason}"
+    if key in _AUTH_DEPS_RG_DIAGNOSTICS_ONLY_LOGGED:
+        return
+    _AUTH_DEPS_RG_DIAGNOSTICS_ONLY_LOGGED.add(key)
+    logger.warning(
+        "Auth dependency {} using diagnostics-only shim (reason={}); endpoint={}",
+        dependency,
+        reason,
+        endpoint,
+    )
+
+
+def _auth_deps_rate_limit_identifier(request: Request, endpoint: str) -> str:
+    """Build a stable fallback limiter key from request principal/user/ip."""
+    try:
+        state = getattr(request, "state", None)
+        if state is not None:
+            auth_ctx = getattr(state, "auth", None)
+            if isinstance(auth_ctx, AuthContext):
+                principal = getattr(auth_ctx, "principal", None)
+                principal_id = str(getattr(principal, "principal_id", "") or "").strip()
+                if principal_id:
+                    return f"principal:{principal_id}:{endpoint}"
+            user_id = str(getattr(state, "user_id", "") or "").strip()
+            if user_id:
+                return f"user:{user_id}:{endpoint}"
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    try:
+        client = getattr(request, "client", None)
+        host = str(getattr(client, "host", "") or "").strip()
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+        host = ""
+    if host:
+        return f"ip:{host}:{endpoint}"
+    return f"anonymous:{endpoint}"
+
+
+def _consume_auth_deps_fallback_rate_token(
+    *,
+    dependency: str,
+    identifier: str,
+    limit: int,
+    window_seconds: float,
+) -> tuple[bool, int]:
+    """Consume one token from an in-process fallback fixed-window limiter."""
+    safe_limit = max(1, int(limit))
+    safe_window = max(1.0, float(window_seconds))
+    now = time.monotonic()
+    cutoff = now - safe_window
+    key = (dependency, identifier)
+
+    with _AUTH_DEPS_FALLBACK_RATE_WINDOWS_LOCK:
+        bucket = _AUTH_DEPS_FALLBACK_RATE_WINDOWS.get(key)
+        if bucket is None:
+            bucket = deque()
+            _AUTH_DEPS_FALLBACK_RATE_WINDOWS[key] = bucket
+
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+
+        if len(bucket) >= safe_limit:
+            retry_after = int(max(1.0, (bucket[0] + safe_window) - now))
+            return False, retry_after
+
+        bucket.append(now)
+        return True, 0
+
+
+async def check_rate_limit(request: Request, rate_limiter=None) -> None:
+    """General ingress compatibility shim with fail-closed fallback enforcement."""
+    _ = rate_limiter
     if _rg_enabled_for_request(request):
         return
 
-    settings = get_settings()
-    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
-        return
+    endpoint = request.url.path if getattr(request, "url", None) else "unknown"
 
     principal = None
     try:
@@ -1365,82 +1734,41 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     try:
-        if rate_limiter is None:
-            rate_limiter = get_rate_limiter()
-    except asyncio.CancelledError:
-        raise
+        fallback_limit = _read_non_negative_int_env("AUTH_DEPS_FALLBACK_RATE_LIMIT", 120)
+        fallback_window = _read_non_negative_float_env("AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS", 60.0)
+        identifier = _auth_deps_rate_limit_identifier(request, endpoint)
+        allowed, retry_after = _consume_auth_deps_fallback_rate_token(
+            dependency="check_rate_limit",
+            identifier=identifier,
+            limit=fallback_limit,
+            window_seconds=fallback_window,
+        )
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        metrics.record_rate_limit_fallback()
-        logger.warning(
-            "Legacy rate limiter unavailable; skipping rate limit check; error={}",
+        logger.error(
+            "Auth dependency check_rate_limit fallback enforcement failed (endpoint={}): {}",
+            endpoint,
             exc,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiter unavailable.",
-        ) from exc
-
-    if not getattr(rate_limiter, "enabled", False):
-        return
-
-    endpoint = request.url.path if getattr(request, "url", None) else "unknown"
-    client_ip = (
-        resolve_client_ip(request, settings)
-        or (request.client.host if getattr(request, "client", None) else None)
-        or "unknown"
-    )
-    user_id = getattr(request.state, "user_id", None)
-    user_id_int: Optional[int] = None
-    if user_id is not None:
-        try:
-            user_id_int = int(user_id)
-        except (TypeError, ValueError):
-            user_id_int = None
-    try:
-        if user_id_int is not None:
-            allowed, meta = await rate_limiter.check_user_rate_limit(
-                user_id_int,
-                endpoint,
-                limit=settings.RATE_LIMIT_PER_MINUTE,
-                window_minutes=1,
-            )
-        else:
-            allowed, meta = await rate_limiter.check_rate_limit(
-                identifier=f"ip:{client_ip}",
-                endpoint=endpoint,
-                limit=settings.RATE_LIMIT_PER_MINUTE,
-                window_minutes=1,
-            )
-    except asyncio.CancelledError:
-        raise
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        metrics.record_rate_limit_fallback()
-        logger.warning(
-            "Legacy rate limiter check failed; skipping rate limit check; error={}",
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiter unavailable.",
+            detail="Rate limiting temporarily unavailable",
         ) from exc
 
     if not allowed:
-        detail = meta.get("error") if isinstance(meta, dict) else None
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=detail or "Rate limit exceeded.",
+            detail=f"Rate limit exceeded for endpoint: {endpoint}",
+            headers={"Retry-After": str(retry_after)},
         )
 
 
 async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
-    """RG-first auth rate limit dependency with legacy fallback (IP-scoped no-op shim)."""
-    # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
+    """Auth ingress compatibility shim with fail-closed fallback enforcement."""
+    _ = rate_limiter
     if _rg_enabled_for_request(request):
         return
 
-    settings = get_settings()
-    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
-        return
+    endpoint = request.url.path if getattr(request, "url", None) else "auth"
 
     principal = None
     try:
@@ -1461,74 +1789,31 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     try:
-        if rate_limiter is None:
-            rate_limiter = get_rate_limiter()
-    except asyncio.CancelledError:
-        raise
+        fallback_limit = _read_non_negative_int_env("AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT", 30)
+        fallback_window = _read_non_negative_float_env("AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS", 60.0)
+        identifier = _auth_deps_rate_limit_identifier(request, endpoint)
+        allowed, retry_after = _consume_auth_deps_fallback_rate_token(
+            dependency="check_auth_rate_limit",
+            identifier=identifier,
+            limit=fallback_limit,
+            window_seconds=fallback_window,
+        )
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        metrics.record_rate_limit_fallback()
-        logger.warning(
-            "Legacy rate limiter unavailable; skipping auth rate limit check; error={}",
+        logger.error(
+            "Auth dependency check_auth_rate_limit fallback enforcement failed (endpoint={}): {}",
+            endpoint,
             exc,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiter unavailable.",
-        ) from exc
-
-    if not getattr(rate_limiter, "enabled", False):
-        return
-
-    endpoint = request.url.path if getattr(request, "url", None) else "auth"
-    client_ip = (
-        resolve_client_ip(request, settings)
-        or (request.client.host if getattr(request, "client", None) else None)
-        or "unknown"
-    )
-    identifier = f"ip:{client_ip}"
-    fallback_check = getattr(rate_limiter, "check_rate_limit_fallback", None)
-    try:
-        if callable(fallback_check):
-            metrics.record_rate_limit_fallback(backend="authnz_fallback_db")
-            allowed, meta = await fallback_check(
-                identifier=identifier,
-                endpoint=f"auth:{endpoint}",
-                limit=settings.RATE_LIMIT_PER_MINUTE,
-                window_minutes=1,
-            )
-            if isinstance(meta, dict) and meta.get("error") == "fallback_limiter_unavailable":
-                logger.warning(
-                    "Auth fallback rate limiter unavailable while RG ingress is inactive; "
-                    "failing open for availability; endpoint={}",
-                    endpoint,
-                )
-        else:
-            allowed, meta = await rate_limiter.check_rate_limit(
-                identifier=identifier,
-                endpoint=f"auth:{endpoint}",
-                limit=settings.RATE_LIMIT_PER_MINUTE,
-                window_minutes=1,
-            )
-    except asyncio.CancelledError:
-        raise
-    except HTTPException:
-        raise
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        metrics.record_rate_limit_fallback()
-        logger.warning(
-            "Legacy auth rate limiter check failed; skipping auth rate limit check; error={}",
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiter unavailable.",
+            detail="Rate limiting temporarily unavailable",
         ) from exc
 
     if not allowed:
-        detail = meta.get("error") if isinstance(meta, dict) else None
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=detail or "Rate limit exceeded.",
+            detail=f"Auth rate limit exceeded for endpoint: {endpoint}",
+            headers={"Retry-After": str(retry_after)},
         )
 
 
@@ -1726,8 +2011,31 @@ def require_token_scope(
 
         token = credentials.credentials if credentials else None
         token_is_jwt = _looks_like_jwt(token) if token else False
+        legacy_request_user_override = False
+        if not token:
+            try:
+                legacy_request_user_override = _has_legacy_request_user_override(request)
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(
+                    "require_token_scope: override detection failed; continuing with normal auth: {}",
+                    exc,
+                )
+                legacy_request_user_override = False
 
-        # Optional admin bypass based on the resolved principal (not token claims).
+        try:
+            if endpoint_id is not None:
+                request.state._auth_endpoint_id = str(endpoint_id)
+            if count_as is not None:
+                request.state._auth_action = str(count_as)
+            if endpoint_id is not None or count_as is not None:
+                request.state._auth_scope_name = str(scope)
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
+            logger.debug(
+                "require_token_scope: unable to attach endpoint/action context to request.state: {}",
+                exc,
+            )
+
+        # Optional admin bypass based on explicit principal claims (not token claims).
         if allow_admin_bypass:
             principal = None
             try:
@@ -1767,7 +2075,7 @@ def require_token_scope(
                     principal = None
                 except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                     principal = None
-            if principal is not None and principal.is_admin:
+            if _principal_has_admin_bypass_claims(principal):
                 return None
 
         # If we have Authorization bearer and it looks like a JWT, apply JWT-based checks.
@@ -1919,6 +2227,11 @@ def require_token_scope(
         if not api_key and token and not token_is_jwt:
             api_key = token
         if not api_key:
+            if legacy_request_user_override:
+                logger.debug(
+                    "require_token_scope: allowing missing credentials due test override of get_request_user"
+                )
+                return None
             if require_if_present:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1948,8 +2261,34 @@ def require_token_scope(
                         return "write"
                     return None
 
+                # Single-user compatibility: allow the configured primary/test API key
+                # without requiring a persisted API key record in AuthNZ tables.
+                # Keep the same IP allowlist guard as regular single-user auth paths.
+                settings = get_settings()
+                if getattr(settings, "AUTH_MODE", None) == "single_user":
+                    allowed_keys: set[str] = set()
+                    primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+                    if primary_key:
+                        allowed_keys.add(primary_key)
+                    env_primary_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
+                    if env_primary_key:
+                        allowed_keys.add(env_primary_key)
+                    if _is_test_mode():
+                        test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                        if test_key:
+                            allowed_keys.add(test_key)
+                    if api_key in allowed_keys:
+                        client_ip = resolve_client_ip(request, settings)
+                        if not is_single_user_ip_allowed(client_ip, settings):
+                            raise HTTPException(
+                                status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail="Invalid or missing API Key",
+                            )
+                        if allow_admin_bypass:
+                            return None
+
                 api_mgr = await get_api_key_manager()
-                client_ip = resolve_client_ip(request, get_settings())
+                client_ip = resolve_client_ip(request, settings)
                 info = await api_mgr.validate_api_key(
                     api_key=api_key,
                     ip_address=client_ip,
@@ -2082,6 +2421,7 @@ def require_token_scope(
 
     try:
         _checker._tldw_endpoint_id = endpoint_id
+        _checker._tldw_count_as = count_as
         _checker._tldw_scope_name = scope
         _checker._tldw_token_scope = True
         _checker._tldw_token_scope_required = str(scope)

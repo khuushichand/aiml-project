@@ -61,9 +61,9 @@ def model_dump_compat(
                 if exclude_none:
                     return {k: v for k, v in payload.items() if v is not None}
                 return payload
-        except Exception:
+        except Exception as json_dump_error:
             # Continue to encoder-based handling if JSON dump fails
-            pass
+            _ = json_dump_error
 
     if isinstance(obj, dict):
         data = dict(obj)

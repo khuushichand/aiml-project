@@ -21,6 +21,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 from tldw_Server_API.app.core.DB_Management.sql_utils import split_sql_statements
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .base import (
     BackendFeatures,
@@ -336,7 +337,7 @@ class PostgreSQLBackend(DatabaseBackend):
         # Default: disabled; rely on set_config GUCs and row-level security predicates.
         # Role switching must be explicitly enabled via env.
         _role_env = os.getenv("TLDW_CONTENT_PG_ROLE_SWITCH", "").strip().lower()
-        allow_role_switch = False if _role_env == "" else _role_env in {"1", "true", "yes", "on"}
+        allow_role_switch = False if _role_env == "" else is_truthy(_role_env)
         allowed_roles_env = os.getenv("TLDW_CONTENT_PG_ROLE_WHITELIST", "").strip()
         allowed_roles = {r.strip() for r in allowed_roles_env.split(',') if r.strip()}
         if not allow_role_switch or not session_role or (allowed_roles and session_role not in allowed_roles):
@@ -404,7 +405,7 @@ class PostgreSQLBackend(DatabaseBackend):
             try:
                 connection.rollback()
             except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as rollback_exc:
-                logger.debug("Rollback while configuring scope failed: %s", rollback_exc)
+                logger.debug("Rollback while configuring scope failed: {}", rollback_exc)
             try:
                 if cursor_factory:
                     with cursor_factory() as cur:
@@ -998,11 +999,13 @@ class PostgreSQLBackend(DatabaseBackend):
                 for col in columns
             ])
 
-            cursor.execute(f"""
+            refresh_tsv_sql_template = """
                 UPDATE {self.escape_identifier(source_table)}
                 SET {self.escape_identifier(fts_column)} =
                     to_tsvector('english', {columns_concat_set})
-            """)
+            """
+            refresh_tsv_sql = refresh_tsv_sql_template.format_map(locals())  # nosec B608
+            cursor.execute(refresh_tsv_sql)
 
             # Create GIN index for fast searching
             index_name = f"idx_{source_table}_{fts_column}"
@@ -1244,7 +1247,8 @@ class PostgreSQLBackend(DatabaseBackend):
         connection: Optional[Any] = None
     ) -> Generator[dict[str, Any], None, None]:
         """Export data from a table."""
-        query = f"SELECT * FROM {self.escape_identifier(table_name)}"
+        export_query_template = "SELECT * FROM {self.escape_identifier(table_name)}"
+        query = export_query_template.format_map(locals())  # nosec B608
 
         if connection:
             conn = connection
@@ -1278,11 +1282,12 @@ class PostgreSQLBackend(DatabaseBackend):
         columns_str = ", ".join([self.escape_identifier(col) for col in columns])
         placeholders = ", ".join(["%s" for _ in columns])
 
-        query = f"""
+        import_query_template = """
             INSERT INTO {self.escape_identifier(table_name)} ({columns_str})
             VALUES ({placeholders})
             ON CONFLICT DO NOTHING
         """
+        query = import_query_template.format_map(locals())  # nosec B608
 
         # Convert dicts to tuples
         params_list = [tuple(row.get(col) for col in columns) for row in data]

@@ -70,11 +70,11 @@ def test_sse_disconnect_increments_counter(disable_heavy_startup, redis_client, 
         try:
             await agen.__anext__()
         except StopAsyncIteration:
-            pass
+            _ = None
         try:
             await agen.aclose()
         except Exception:
-            pass
+            _ = None
 
     redis_client.run(_run_once_and_close())
 

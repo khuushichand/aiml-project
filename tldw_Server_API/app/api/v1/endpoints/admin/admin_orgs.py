@@ -23,7 +23,9 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgMembershipItem,
     TeamCreateRequest,
     TeamMemberAddRequest,
+    TeamMemberRoleUpdateRequest,
     TeamMemberRemoveResponse,
+    TeamMembershipItem,
     TeamMemberResponse,
     TeamResponse,
 )
@@ -167,6 +169,23 @@ async def admin_remove_team_member(
     return await admin_orgs_service.remove_team_member(team_id, user_id, request, principal)
 
 
+@router.patch("/teams/{team_id}/members/{user_id}", response_model=TeamMemberResponse)
+async def admin_update_team_member_role(
+    team_id: int,
+    user_id: int,
+    payload: TeamMemberRoleUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> TeamMemberResponse:
+    return await admin_orgs_service.update_team_member_role(
+        team_id,
+        user_id,
+        payload,
+        request,
+        principal,
+    )
+
+
 @router.post("/orgs/{org_id}/members", response_model=OrgMemberResponse)
 async def admin_add_org_member(
     org_id: int,
@@ -229,3 +248,11 @@ async def admin_list_user_org_memberships(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> list[OrgMembershipItem]:
     return await admin_orgs_service.list_user_org_memberships(user_id, principal)
+
+
+@router.get("/users/{user_id}/team-memberships", response_model=list[TeamMembershipItem])
+async def admin_list_user_team_memberships(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> list[TeamMembershipItem]:
+    return await admin_orgs_service.list_user_team_memberships(user_id, principal)

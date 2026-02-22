@@ -109,9 +109,9 @@ class MigrationManager:
             logger.info(
                 f"MigrationManager.migrate: start current={current_version}, target={target_version}, pending={pending_versions}"
             )
-        except Exception:
+        except Exception as metrics_log_error:
             # Ensure instrumentation never breaks migrations
-            pass
+            logger.debug("Migration instrumentation logging failed", exc_info=metrics_log_error)
 
         if current_version >= target_version:
             logger.info(f"Database already at version {current_version}, no migrations needed")

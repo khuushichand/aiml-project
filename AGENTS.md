@@ -235,11 +235,12 @@ Default choice:
 - Database location configurable via `DATABASE_URL` (AuthNZ) and config helpers
 
 ### Required Setup
-1. **Dependencies**: `pip install -e .` (add extras as needed, e.g., `.[dev]`, `.[multiplayer]`)
-2. **FFmpeg**: Required for audio/video processing
-3. **Auth Setup**: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
-4. **Provider Keys**: Add to `.env` or `Config_Files/config.txt`
-5. **Optional**: CUDA for accelerated STT
+1. **Activate venv first**: `source .venv/bin/activate` (do this before running `python`, `pip`, or `pytest` commands)
+2. **Dependencies**: `pip install -e .` (add extras as needed, e.g., `.[dev]`, `.[multiplayer]`)
+3. **FFmpeg**: Required for audio/video processing
+4. **Auth Setup**: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
+5. **Provider Keys**: Add to `.env` or `Config_Files/config.txt`
+6. **Optional**: CUDA for accelerated STT
 
 ## Common Tasks
 
@@ -253,6 +254,9 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 
 ### Running Tests
 ```bash
+# Activate project virtual environment first
+source .venv/bin/activate
+
 # All tests (from repo root)
 python -m pytest -v
 
@@ -370,6 +374,9 @@ The project follows these core principles (from Project_Guidelines.md):
 
 ### Useful Commands
 ```bash
+# Activate project virtual environment first
+source .venv/bin/activate
+
 # Run specific test markers
 python -m pytest -m "unit" -v
 python -m pytest -m "integration" -v
@@ -513,9 +520,18 @@ When multiple valid approaches exist, choose based on:
 - [ ] Tests written and passing
 - [ ] Code follows project conventions
 - [ ] No linter/formatter warnings
+- [ ] No new security findings introduced in touched code
 - [ ] Commit messages are clear
 - [ ] Implementation matches plan
 - [ ] No TODOs without issue numbers
+
+### Security Validation
+
+- Run Bandit on the touched scope before considering work complete.
+- Use the project virtual environment when running Bandit.
+- Fix new findings in changed code before finishing; do not defer silently.
+- Recommended command pattern:
+  `source .venv/bin/activate && python -m bandit -r <touched_paths> -f json -o /tmp/bandit_<task>.json`
 
 ### Test Guidelines
 

@@ -60,6 +60,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import get_allowed_fields
+from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter()
 
@@ -348,7 +349,7 @@ DEFAULT_WORDCLOUD_STOPWORDS = {
 
 
 def _is_test_mode() -> bool:
-    return bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TEST_MODE", "").lower() == "true")
+    return bool(os.getenv("PYTEST_CURRENT_TEST") or is_test_mode())
 
 
 def _normalize_wordcloud_options(options: WritingWordcloudOptions | None) -> WritingWordcloudOptions:

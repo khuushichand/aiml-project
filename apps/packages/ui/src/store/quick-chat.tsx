@@ -7,6 +7,8 @@ export type QuickChatMessage = {
   timestamp: number
 }
 
+export type QuickChatAssistantMode = "chat" | "docs_rag" | "browse_guides"
+
 type QuickChatStore = {
   // Modal visibility
   isOpen: boolean
@@ -26,15 +28,24 @@ type QuickChatStore = {
   modelOverride: string | null
   setModelOverride: (model: string | null) => void
 
+  // Assistant mode (standard chat, docs-rag, or guide browsing)
+  assistantMode: QuickChatAssistantMode
+  setAssistantMode: (mode: QuickChatAssistantMode) => void
+
   // Pop-out window reference
   popoutWindow: Window | null
   setPopoutWindow: (win: Window | null) => void
 
   // For state transfer to pop-out
-  getSerializableState: () => { messages: QuickChatMessage[]; modelOverride: string | null }
+  getSerializableState: () => {
+    messages: QuickChatMessage[]
+    modelOverride: string | null
+    assistantMode: QuickChatAssistantMode
+  }
   restoreFromState: (state: {
     messages: QuickChatMessage[]
     modelOverride?: string | null
+    assistantMode?: QuickChatAssistantMode
   }) => void
 }
 
@@ -43,6 +54,7 @@ export const useQuickChatStore = createWithEqualityFn<QuickChatStore>((set, get)
   messages: [],
   isStreaming: false,
   modelOverride: null,
+  assistantMode: "chat",
   popoutWindow: null,
 
   setIsOpen: (open) => {
@@ -91,6 +103,10 @@ export const useQuickChatStore = createWithEqualityFn<QuickChatStore>((set, get)
     set({ modelOverride: model })
   },
 
+  setAssistantMode: (mode) => {
+    set({ assistantMode: mode })
+  },
+
   setPopoutWindow: (win) => {
     set({ popoutWindow: win })
   },
@@ -99,14 +115,21 @@ export const useQuickChatStore = createWithEqualityFn<QuickChatStore>((set, get)
     const state = get()
     return {
       messages: state.messages,
-      modelOverride: state.modelOverride
+      modelOverride: state.modelOverride,
+      assistantMode: state.assistantMode
     }
   },
 
   restoreFromState: (restoredState) => {
+    const parsedMode = restoredState.assistantMode
+    const assistantMode: QuickChatAssistantMode =
+      parsedMode === "docs_rag" || parsedMode === "browse_guides"
+        ? parsedMode
+        : "chat"
     set({
       messages: restoredState.messages || [],
-      modelOverride: restoredState.modelOverride ?? null
+      modelOverride: restoredState.modelOverride ?? null,
+      assistantMode
     })
   }
 }))

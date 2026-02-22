@@ -13,29 +13,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-try:
-    from tldw_Server_API.app.core.RAG.rag_service.types import (
-        ClaimType,
-        MatchLevel,
-        SourceAuthority,
-        VerificationStatus,
-    )
-except Exception:
-    from enum import Enum
-
-    class ClaimType(Enum):  # type: ignore
-        GENERAL = "general"
-
-    class VerificationStatus(Enum):  # type: ignore
-        VERIFIED = "verified"
-        UNVERIFIED = "unverified"
-        CONTESTED = "contested"
-
-    class MatchLevel(Enum):  # type: ignore
-        EXACT = "exact"
-
-    class SourceAuthority(Enum):  # type: ignore
-        SECONDARY = 1
+from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+    ClaimType,
+    MatchLevel,
+    SourceAuthority,
+    VerificationStatus,
+)
 
 
 def _enum_to_str(val: Any) -> str:
@@ -156,31 +139,29 @@ class VerificationReport:
                 # Fallback for old-style label
                 label = getattr(v, "label", "nei")
                 if label == "supported":
-                    status = VerificationStatus.VERIFIED
-                    verified += 1
+                    status = "verified"
                 elif label == "refuted":
-                    status = VerificationStatus.REFUTED
-                    refuted += 1
+                    status = "refuted"
                 else:
-                    status = VerificationStatus.UNVERIFIED
-                    unverified += 1
+                    status = "unverified"
+
+            status_value = _enum_to_str(status).lower()
+            if status_value == "verified":
+                verified += 1
+            elif status_value == "refuted":
+                refuted += 1
+            elif status_value == "hallucination":
+                hallucination += 1
+            elif status_value == "numerical_error":
+                numerical_error += 1
+            elif status_value == "misquoted":
+                misquoted += 1
+            elif status_value == "citation_not_found":
+                citation_not_found += 1
+            elif status_value == "contested":
+                contested += 1
             else:
-                if status == VerificationStatus.VERIFIED:
-                    verified += 1
-                elif status == VerificationStatus.REFUTED:
-                    refuted += 1
-                elif status == VerificationStatus.HALLUCINATION:
-                    hallucination += 1
-                elif status == VerificationStatus.NUMERICAL_ERROR:
-                    numerical_error += 1
-                elif status == VerificationStatus.MISQUOTED:
-                    misquoted += 1
-                elif status == VerificationStatus.CITATION_NOT_FOUND:
-                    citation_not_found += 1
-                elif status == VerificationStatus.CONTESTED:
-                    contested += 1
-                else:
-                    unverified += 1
+                unverified += 1
 
             # Build evidence reports
             evidence_reports = []

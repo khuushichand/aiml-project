@@ -47,7 +47,7 @@ def _make_principal(
     )
 
 
-def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
+def _build_app_with_overrides(principal: AuthPrincipal, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     """Build a FastAPI app wired with fake auth/principal adapters for testing."""
     app = FastAPI()
     app.include_router(vs_mod.router)
@@ -92,16 +92,16 @@ def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
     async def _fake_get_adapter_for_user(_user, _dim):
         return _FakeAdapter()
 
-    app.dependency_overrides[vs_mod._get_adapter_for_user] = _fake_get_adapter_for_user
+    monkeypatch.setattr(vs_mod, "_get_adapter_for_user", _fake_get_adapter_for_user)
     return app
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_vector_stores_admin_health_forbidden_without_admin_role():
+async def test_vector_stores_admin_health_forbidden_without_admin_role(monkeypatch):
     """User-role principal without permissions should receive 403 on /vector_stores/admin/health."""
     principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
-    app = _build_app_with_overrides(principal)
+    app = _build_app_with_overrides(principal, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/vector_stores/admin/health")
@@ -110,10 +110,10 @@ async def test_vector_stores_admin_health_forbidden_without_admin_role():
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_vector_stores_admin_health_allowed_with_admin_role():
+async def test_vector_stores_admin_health_allowed_with_admin_role(monkeypatch):
     """Admin principal with admin role and is_admin=True receives 200 from /vector_stores/admin/health."""
     principal = _make_principal(roles=["admin"], permissions=[], is_admin=True)
-    app = _build_app_with_overrides(principal)
+    app = _build_app_with_overrides(principal, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/vector_stores/admin/health")
@@ -127,7 +127,7 @@ async def test_vector_stores_admin_health_allowed_with_admin_role():
 async def test_vector_stores_batches_non_admin_cannot_override_user_id(monkeypatch):
     """Non-admin principals may list only their own batches; user_id override should be forbidden."""
     principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
-    app = _build_app_with_overrides(principal)
+    app = _build_app_with_overrides(principal, monkeypatch)
 
     # Patch db_list_batches to avoid touching real storage and to capture the user_id used.
     captured: dict[str, Any] = {}
@@ -153,10 +153,22 @@ async def test_vector_stores_batches_non_admin_cannot_override_user_id(monkeypat
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_vector_stores_batches_rejects_boolean_admin_without_claims(monkeypatch):
+    """Boolean admin flag alone must not permit cross-user batch inspection."""
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=True)
+    app = _build_app_with_overrides(principal, monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.get("/vector_stores/batches", params={"user_id": "42"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_vector_stores_batches_admin_can_override_user_id(monkeypatch):
     """Admin principals may override user_id and inspect other users' batches."""
     principal = _make_principal(roles=["admin"], permissions=["*"], is_admin=True)
-    app = _build_app_with_overrides(principal)
+    app = _build_app_with_overrides(principal, monkeypatch)
 
     captured: dict[str, Any] = {}
 

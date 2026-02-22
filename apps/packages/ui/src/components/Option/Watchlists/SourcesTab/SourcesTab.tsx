@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import {
+  Alert,
   Button,
+  Empty,
   Input,
-  Popconfirm,
+  Modal,
   Select,
   Space,
   Switch,
@@ -14,22 +16,45 @@ import {
 import type { ColumnsType } from "antd/es/table"
 import { Download, Edit2, ExternalLink, Eye, Plus, RefreshCw, Trash2, UploadCloud } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
+  checkWatchlistSourcesNow,
   createWatchlistSource,
   deleteWatchlistSource,
   exportOpml,
+  fetchWatchlistJobs,
+  getSourceSeenStats,
   fetchWatchlistSources,
   fetchWatchlistGroups,
   fetchWatchlistTags,
+  restoreWatchlistSource,
   updateWatchlistSource
 } from "@/services/watchlists"
-import type { WatchlistSource, SourceType } from "@/types/watchlists"
+import type { SourceSeenStats, WatchlistJob, WatchlistSource, SourceType } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { SourceFormModal } from "./SourceFormModal"
 import { GroupsTree } from "./GroupsTree"
 import { SourcesBulkImport } from "./SourcesBulkImport"
 import { SourceSeenDrawer } from "./SourceSeenDrawer"
+import {
+  getSourcesTableEmptyDescription,
+  shouldShowUnifiedWatchlistsEmptyState
+} from "./empty-state"
+import {
+  normalizeSourceIds,
+  resolveCheckNowTargets,
+  shouldConfirmMultiSourceCheck
+} from "./check-now-utils"
+import { countToggleImpact, summarizeSourceSelection } from "./bulk-action-summary"
+import {
+  restoreDeletedSources,
+  SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+  toSourceRestoreId
+} from "./source-undo"
+import { getSourceStatusVisual } from "./sourceStatus"
+import { findActiveSourceUsage, mapActiveSourceUsage } from "./source-usage"
+import { mapWatchlistsError } from "../shared/watchlists-error"
 
 const { Search } = Input
 
@@ -38,11 +63,25 @@ const SOURCE_TYPE_COLORS: Record<SourceType, string> = {
   site: "green",
   forum: "purple"
 }
+type SourceHealthSnapshot = Pick<SourceSeenStats, "defer_until" | "consec_not_modified">
 const CLIENT_FILTER_PAGE_SIZE = 200
 const CLIENT_FILTER_MAX_ITEMS = 1000
+const SOURCE_USAGE_LOOKUP_PAGE_SIZE = 200
+const SOURCE_USAGE_LOOKUP_MAX_PAGES = 10
+const BULK_MOVE_NO_GROUP_VALUE = "__none__"
+
+type BulkMoveTargetValue = number | typeof BULK_MOVE_NO_GROUP_VALUE | null
+
+const toNormalizedGroupIds = (source: WatchlistSource): number[] => {
+  if (!Array.isArray(source.group_ids)) return []
+  return source.group_ids
+    .map((groupId) => Number(groupId))
+    .filter((groupId) => Number.isFinite(groupId))
+}
 
 export const SourcesTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
+  const { showUndoNotification } = useUndoNotification()
 
   // Store state
   const sources = useWatchlistsStore((s) => s.sources)
@@ -68,6 +107,7 @@ export const SourcesTab: React.FC = () => {
   const setTags = useWatchlistsStore((s) => s.setTags)
   const setGroups = useWatchlistsStore((s) => s.setGroups)
   const setGroupsLoading = useWatchlistsStore((s) => s.setGroupsLoading)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const setSelectedGroupId = useWatchlistsStore((s) => s.setSelectedGroupId)
   const setSelectedTagName = useWatchlistsStore((s) => s.setSelectedTagName)
   const openSourceForm = useWatchlistsStore((s) => s.openSourceForm)
@@ -82,13 +122,65 @@ export const SourcesTab: React.FC = () => {
   )
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [bulkWorking, setBulkWorking] = useState(false)
+  const [bulkMoveTargetValue, setBulkMoveTargetValue] = useState<BulkMoveTargetValue>(null)
+  const [checkingSourceIds, setCheckingSourceIds] = useState<number[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [seenDrawerSourceId, setSeenDrawerSourceId] = useState<number | null>(null)
+  const [sourceHealthById, setSourceHealthById] = useState<Record<number, SourceHealthSnapshot>>({})
+  const [sourcesLoadError, setSourcesLoadError] = useState<ReturnType<typeof mapWatchlistsError> | null>(null)
 
   const selectedSources = useMemo(
     () => sources.filter((source) => selectedRowKeys.includes(source.id)),
     [sources, selectedRowKeys]
   )
+  const selectedSourceIds = useMemo(
+    () => selectedSources.map((source) => source.id),
+    [selectedSources]
+  )
+  const selectedSourceSummary = useMemo(
+    () => summarizeSourceSelection(selectedSources),
+    [selectedSources]
+  )
+  const hasActiveFilters = useMemo(
+    () =>
+      Boolean(
+        selectedGroupId ||
+          selectedTagName ||
+          selectedTypeFilter ||
+          sourcesSearch.trim().length > 0
+      ),
+    [selectedGroupId, selectedTagName, selectedTypeFilter, sourcesSearch]
+  )
+  const unifiedEmptyState = shouldShowUnifiedWatchlistsEmptyState({
+    groupsCount: groups.length,
+    sourcesCount: sources.length,
+    hasActiveFilters,
+    groupsLoading,
+    sourcesLoading
+  })
+  const tableEmptyDescription = getSourcesTableEmptyDescription(hasActiveFilters)
+
+  const loadSourceHealth = useCallback(async (items: WatchlistSource[]) => {
+    if (!Array.isArray(items) || items.length === 0) {
+      setSourceHealthById({})
+      return
+    }
+
+    const results = await Promise.allSettled(
+      items.map((source) => getSourceSeenStats(source.id, { keys_limit: 1 }))
+    )
+
+    const next: Record<number, SourceHealthSnapshot> = {}
+    results.forEach((result, index) => {
+      if (result.status !== "fulfilled") return
+      next[items[index].id] = {
+        defer_until: result.value.defer_until,
+        consec_not_modified: result.value.consec_not_modified
+      }
+    })
+
+    setSourceHealthById(next)
+  }, [])
 
   // Fetch sources
   const loadSources = useCallback(async () => {
@@ -154,9 +246,17 @@ export const SourcesTab: React.FC = () => {
         : items
 
       setSources(pagedItems, total)
+      setSourcesLoadError(null)
+      void loadSourceHealth(pagedItems)
     } catch (err) {
       console.error("Failed to fetch sources:", err)
-      message.error(t("watchlists:sources.fetchError", "Failed to load sources"))
+      setSourcesLoadError(
+        mapWatchlistsError(err, {
+          t,
+          context: t("watchlists:sources.title", "Feeds"),
+          fallbackMessage: t("watchlists:sources.fetchError", "Failed to load feeds")
+        })
+      )
     } finally {
       setSourcesLoading(false)
     }
@@ -169,6 +269,7 @@ export const SourcesTab: React.FC = () => {
     sourcesPageSize,
     setSources,
     setSourcesLoading,
+    loadSourceHealth,
     t
   ])
 
@@ -203,6 +304,12 @@ export const SourcesTab: React.FC = () => {
     loadGroups()
   }, [loadSources, loadTags, loadGroups])
 
+  useEffect(() => {
+    if (selectedRowKeys.length === 0 && bulkMoveTargetValue !== null) {
+      setBulkMoveTargetValue(null)
+    }
+  }, [bulkMoveTargetValue, selectedRowKeys.length])
+
   // Handle toggle active
   const handleToggleActive = async (source: WatchlistSource) => {
     try {
@@ -221,79 +328,653 @@ export const SourcesTab: React.FC = () => {
     }
   }
 
+  const loadJobsForSourceUsageCheck = useCallback(async () => {
+    const allJobs: WatchlistJob[] = []
+    let page = 1
+
+    while (page <= SOURCE_USAGE_LOOKUP_MAX_PAGES) {
+      const response = await fetchWatchlistJobs({
+        page,
+        size: SOURCE_USAGE_LOOKUP_PAGE_SIZE
+      })
+      const pageItems = Array.isArray(response.items) ? response.items : []
+      allJobs.push(...pageItems)
+      if (
+        pageItems.length < SOURCE_USAGE_LOOKUP_PAGE_SIZE ||
+        allJobs.length >= Number(response.total || 0)
+      ) {
+        break
+      }
+      page += 1
+    }
+
+    return allJobs
+  }, [])
+
   // Handle delete
   const handleDelete = async (sourceId: number) => {
+    const deletedSource = sources.find((source) => source.id === sourceId)
     try {
-      await deleteWatchlistSource(sourceId)
+      const deleteResult = await deleteWatchlistSource(sourceId)
       removeSource(sourceId)
-      message.success(t("watchlists:sources.deleted", "Source deleted"))
+      if (!deletedSource) {
+        message.success(t("watchlists:sources.deleted", "Feed deleted"))
+        return
+      }
+      const undoWindowSeconds =
+        Number(deleteResult?.restore_window_seconds) > 0
+          ? Number(deleteResult.restore_window_seconds)
+          : SOURCE_DELETE_UNDO_WINDOW_SECONDS
+
+      showUndoNotification({
+        title: t("watchlists:sources.undoDeleteTitle", "Feed deleted"),
+        description: t(
+          "watchlists:sources.undoDeleteDescription",
+          "Undo restores this feed for {{seconds}} seconds.",
+          { seconds: undoWindowSeconds }
+        ),
+        duration: undoWindowSeconds,
+        onDismiss: () => {
+          void loadSources()
+        },
+        onUndo: async () => {
+          await restoreWatchlistSource(toSourceRestoreId(deletedSource))
+          await loadSources()
+        }
+      })
     } catch (err) {
       console.error("Failed to delete source:", err)
       message.error(t("watchlists:sources.deleteError", "Failed to delete source"))
     }
   }
 
+  const requestDeleteConfirmation = useCallback(async (source: WatchlistSource) => {
+    let activeUsage: Array<{ id: number; name: string }> = []
+    try {
+      const jobs = await loadJobsForSourceUsageCheck()
+      activeUsage = findActiveSourceUsage(jobs, source.id)
+    } catch (err) {
+      console.error("Failed to check source usage:", err)
+      message.warning(
+        t(
+          "watchlists:sources.deleteUsageLookupError",
+          "Could not verify active monitor usage before deletion."
+        )
+      )
+    }
+
+    const usageCount = activeUsage.length
+    Modal.confirm({
+      title: usageCount > 0
+        ? t("watchlists:sources.deleteConfirmInUseTitle", "Feed is used by active monitors")
+        : t("watchlists:sources.deleteConfirm", "Delete this feed?"),
+      content: usageCount > 0 ? (
+        <div className="space-y-2">
+          <p>
+            {t(
+              "watchlists:sources.deleteConfirmInUseDescription",
+              "This feed is referenced by {{count}} active monitor{{plural}}. Deleting it may break scheduled runs.",
+              {
+                count: usageCount,
+                plural: usageCount === 1 ? "" : "s"
+              }
+            )}
+          </p>
+          <ul className="list-disc pl-5">
+            {activeUsage.slice(0, 5).map((job) => (
+              <li key={job.id}>{job.name}</li>
+            ))}
+          </ul>
+          {usageCount > 5 && (
+            <p className="text-xs text-text-muted">
+              {t(
+                "watchlists:sources.deleteConfirmInUseMore",
+                "+{{count}} more active monitor{{plural}}",
+                {
+                  count: usageCount - 5,
+                  plural: usageCount - 5 === 1 ? "" : "s"
+                }
+              )}
+            </p>
+          )}
+        </div>
+      ) : (
+        t("watchlists:sources.deleteConfirmDescription", "This action cannot be undone.")
+      ),
+      okText: usageCount > 0
+        ? t("watchlists:sources.deleteConfirmForce", "Delete anyway")
+        : t("watchlists:sources.delete", "Delete"),
+      cancelText: t("common:cancel", "Cancel"),
+      okButtonProps: { danger: true },
+      onOk: () => handleDelete(source.id)
+    })
+  }, [handleDelete, loadJobsForSourceUsageCheck, t])
+
   const handleBulkToggle = async (active: boolean) => {
     if (selectedSources.length === 0) return
+    const toggledSources = [...selectedSources]
     setBulkWorking(true)
     try {
       const results = await Promise.allSettled(
-        selectedSources.map((source) =>
+        toggledSources.map((source) =>
           updateWatchlistSource(source.id, { active })
         )
       )
       let successCount = 0
+      const previouslyToggledSources: WatchlistSource[] = []
       results.forEach((result, idx) => {
         if (result.status === "fulfilled") {
-          updateSourceInList(selectedSources[idx].id, result.value)
+          const source = toggledSources[idx]
+          updateSourceInList(source.id, result.value)
+          previouslyToggledSources.push(source)
           successCount += 1
         }
       })
-      message.success(
-        t(
-          "watchlists:sources.bulkUpdated",
-          "{{count}} sources updated",
-          { count: successCount }
+      const failedCount = toggledSources.length - successCount
+
+      if (successCount > 0) {
+        showUndoNotification({
+          title: t(
+            "watchlists:sources.undoBulkToggleTitle",
+            "Updated {{count}} feeds",
+            { count: successCount }
+          ),
+          description: t(
+            "watchlists:sources.undoBulkToggleDescription",
+            "Undo restores previous feed states for {{seconds}} seconds.",
+            { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+          ),
+          duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+          onDismiss: () => {
+            void loadSources()
+          },
+          onUndo: async () => {
+            const restoreResults = await Promise.allSettled(
+              previouslyToggledSources.map((source) =>
+                updateWatchlistSource(source.id, { active: source.active })
+              )
+            )
+            let restoredCount = 0
+            let restoreFailures = 0
+            restoreResults.forEach((result, idx) => {
+              if (result.status === "fulfilled") {
+                updateSourceInList(previouslyToggledSources[idx].id, result.value)
+                restoredCount += 1
+              } else {
+                restoreFailures += 1
+              }
+            })
+
+            if (restoreFailures > 0) {
+              throw new Error(
+                t(
+                  "watchlists:sources.undoBulkTogglePartialError",
+                  "{{restored}} restored, {{failed}} failed to restore",
+                  {
+                    restored: restoredCount,
+                    failed: restoreFailures
+                  }
+                )
+              )
+            }
+          }
+        })
+      }
+
+      if (failedCount > 0) {
+        message.warning(
+          t(
+            "watchlists:sources.bulkUpdatePartial",
+            "Updated {{success}} feeds, {{failed}} failed",
+            { success: successCount, failed: failedCount }
+          )
         )
-      )
+      }
+
+      if (successCount === 0) {
+        message.error(t("watchlists:sources.bulkError", "Bulk update failed"))
+      }
     } catch (err) {
       console.error("Bulk update failed:", err)
       message.error(t("watchlists:sources.bulkError", "Bulk update failed"))
     } finally {
       setBulkWorking(false)
       setSelectedRowKeys([])
+      setBulkMoveTargetValue(null)
     }
   }
 
   const handleBulkDelete = async () => {
     if (selectedSources.length === 0) return
+    const deletedSources = [...selectedSources]
     setBulkWorking(true)
     try {
       const results = await Promise.allSettled(
-        selectedSources.map((source) => deleteWatchlistSource(source.id))
+        deletedSources.map((source) => deleteWatchlistSource(source.id))
       )
       let successCount = 0
+      const removedSources: WatchlistSource[] = []
       results.forEach((result, idx) => {
         if (result.status === "fulfilled") {
-          removeSource(selectedSources[idx].id)
+          const removedSource = deletedSources[idx]
+          removeSource(removedSource.id)
+          removedSources.push(removedSource)
           successCount += 1
         }
       })
-      message.success(
-        t(
-          "watchlists:sources.bulkDeleted",
-          "{{count}} sources deleted",
-          { count: successCount }
+      const failedCount = deletedSources.length - successCount
+
+      if (successCount > 0) {
+        showUndoNotification({
+          title: t(
+            "watchlists:sources.undoBulkDeleteTitle",
+            "{{count}} feeds deleted",
+            { count: successCount }
+          ),
+          description: t(
+            "watchlists:sources.undoBulkDeleteDescription",
+            "Undo restores deleted feeds for {{seconds}} seconds.",
+            { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+          ),
+          duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+          onDismiss: () => {
+            void loadSources()
+          },
+          onUndo: async () => {
+            const restoreSummary = await restoreDeletedSources(
+              removedSources,
+              restoreWatchlistSource
+            )
+            await loadSources()
+            if (restoreSummary.failed > 0) {
+              throw new Error(
+                t(
+                  "watchlists:sources.undoBulkRestorePartialError",
+                  "{{restored}} restored, {{failed}} failed to restore",
+                  {
+                    restored: restoreSummary.restored,
+                    failed: restoreSummary.failed
+                  }
+                )
+              )
+            }
+          }
+        })
+      }
+
+      if (failedCount > 0) {
+        message.warning(
+          t(
+            "watchlists:sources.bulkDeletePartial",
+            "Deleted {{success}} feeds, {{failed}} failed",
+            { success: successCount, failed: failedCount }
+          )
         )
-      )
+      }
+
+      if (successCount === 0) {
+        message.error(t("watchlists:sources.bulkDeleteError", "Bulk delete failed"))
+      }
     } catch (err) {
       console.error("Bulk delete failed:", err)
       message.error(t("watchlists:sources.bulkDeleteError", "Bulk delete failed"))
     } finally {
       setBulkWorking(false)
       setSelectedRowKeys([])
+      setBulkMoveTargetValue(null)
     }
   }
+
+  const requestBulkToggle = useCallback((active: boolean) => {
+    if (selectedSources.length === 0) return
+    const impacted = countToggleImpact(selectedSources, active)
+    Modal.confirm({
+      title: active
+        ? t("watchlists:sources.bulkEnableConfirmTitle", "Enable selected feeds?")
+        : t("watchlists:sources.bulkDisableConfirmTitle", "Disable selected feeds?"),
+      content: t(
+        "watchlists:sources.bulkToggleConfirmDescription",
+        "{{total}} selected ({{active}} active, {{inactive}} inactive). {{impacted}} will change state.",
+        {
+          total: selectedSourceSummary.total,
+          active: selectedSourceSummary.active,
+          inactive: selectedSourceSummary.inactive,
+          impacted
+        }
+      ),
+      okText: active
+        ? t("watchlists:sources.bulkEnable", "Enable")
+        : t("watchlists:sources.bulkDisable", "Disable"),
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => handleBulkToggle(active)
+    })
+  }, [selectedSourceSummary, selectedSources, t])
+
+  const requestBulkDelete = useCallback(async () => {
+    if (selectedSources.length === 0) return
+
+    const selectedIds = selectedSources.map((source) => source.id)
+    let usageMap = new Map<number, Array<{ id: number; name: string }>>()
+
+    try {
+      const jobs = await loadJobsForSourceUsageCheck()
+      usageMap = mapActiveSourceUsage(jobs, selectedIds)
+    } catch (err) {
+      console.error("Failed to check selected source usage:", err)
+      message.warning(
+        t(
+          "watchlists:sources.deleteUsageLookupError",
+          "Could not verify active monitor usage before deletion."
+        )
+      )
+    }
+
+    const impactedSourcesCount = selectedIds.filter((id) => (usageMap.get(id)?.length ?? 0) > 0).length
+    const impactedJobs = Array.from(
+      new Map(
+        selectedIds.flatMap((id) => (usageMap.get(id) || []).map((job) => [job.id, job]))
+      ).values()
+    )
+
+    Modal.confirm({
+      title: t(
+        "watchlists:sources.bulkDeleteConfirmTitle",
+        "Delete {{count}} selected feeds?",
+        { count: selectedSourceSummary.total }
+      ),
+      content: (
+        <div className="space-y-2">
+          <p>
+            {t(
+              "watchlists:sources.bulkDeleteConfirmDescription",
+              "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive).",
+              {
+                count: selectedSourceSummary.total,
+                active: selectedSourceSummary.active,
+                inactive: selectedSourceSummary.inactive
+              }
+            )}
+          </p>
+          {impactedSourcesCount > 0 && (
+            <>
+              <p>
+                {t(
+                  "watchlists:sources.bulkDeleteConfirmInUseSummary",
+                  "{{sources}} selected feed{{sourcesPlural}} are referenced by {{jobs}} active monitor{{jobsPlural}}.",
+                  {
+                    sources: impactedSourcesCount,
+                    sourcesPlural: impactedSourcesCount === 1 ? "" : "s",
+                    jobs: impactedJobs.length,
+                    jobsPlural: impactedJobs.length === 1 ? "" : "s"
+                  }
+                )}
+              </p>
+              <ul className="list-disc pl-5">
+                {impactedJobs.slice(0, 5).map((job) => (
+                  <li key={job.id}>{job.name}</li>
+                ))}
+              </ul>
+              {impactedJobs.length > 5 && (
+                <p className="text-xs text-text-muted">
+                  {t(
+                    "watchlists:sources.bulkDeleteConfirmInUseMore",
+                    "+{{count}} more active monitor{{plural}}",
+                    {
+                      count: impactedJobs.length - 5,
+                      plural: impactedJobs.length - 5 === 1 ? "" : "s"
+                    }
+                  )}
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      ),
+      okText: t("watchlists:sources.bulkDelete", "Delete"),
+      cancelText: t("common:cancel", "Cancel"),
+      okButtonProps: { danger: true },
+      onOk: () => handleBulkDelete()
+    })
+  }, [handleBulkDelete, loadJobsForSourceUsageCheck, selectedSourceSummary, selectedSources, t])
+
+  const handleBulkMoveToGroup = useCallback(async (targetGroupId: number | null) => {
+    if (selectedSources.length === 0) return
+    const movedSources = [...selectedSources]
+    const previousGroupIdsBySourceId = new Map<number, number[]>()
+    movedSources.forEach((source) => {
+      previousGroupIdsBySourceId.set(source.id, toNormalizedGroupIds(source))
+    })
+
+    setBulkWorking(true)
+    try {
+      const results = await Promise.allSettled(
+        movedSources.map((source) =>
+          updateWatchlistSource(source.id, {
+            group_ids: targetGroupId == null ? [] : [targetGroupId]
+          })
+        )
+      )
+
+      const updatedSources: WatchlistSource[] = []
+      let successCount = 0
+      results.forEach((result, idx) => {
+        if (result.status !== "fulfilled") return
+        const source = movedSources[idx]
+        updateSourceInList(source.id, result.value)
+        updatedSources.push(source)
+        successCount += 1
+      })
+      const failedCount = movedSources.length - successCount
+
+      if (successCount > 0) {
+        showUndoNotification({
+          title: t("watchlists:sources.undoBulkMoveTitle", "Moved {{count}} feeds", {
+            count: successCount
+          }),
+          description: t(
+            "watchlists:sources.undoBulkMoveDescription",
+            "Undo restores previous group assignments for {{seconds}} seconds.",
+            { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+          ),
+          duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+          onDismiss: () => {
+            void loadSources()
+          },
+          onUndo: async () => {
+            const restoreResults = await Promise.allSettled(
+              updatedSources.map((source) =>
+                updateWatchlistSource(source.id, {
+                  group_ids: previousGroupIdsBySourceId.get(source.id) || []
+                })
+              )
+            )
+            let restoredCount = 0
+            let restoreFailures = 0
+            restoreResults.forEach((result, idx) => {
+              if (result.status === "fulfilled") {
+                updateSourceInList(updatedSources[idx].id, result.value)
+                restoredCount += 1
+              } else {
+                restoreFailures += 1
+              }
+            })
+            if (restoreFailures > 0) {
+              throw new Error(
+                t(
+                  "watchlists:sources.undoBulkMovePartialError",
+                  "{{restored}} restored, {{failed}} failed to restore",
+                  {
+                    restored: restoredCount,
+                    failed: restoreFailures
+                  }
+                )
+              )
+            }
+          }
+        })
+      }
+
+      if (failedCount > 0) {
+        message.warning(
+          t(
+            "watchlists:sources.bulkMovePartial",
+            "Moved {{success}} feeds, {{failed}} failed",
+            { success: successCount, failed: failedCount }
+          )
+        )
+      }
+
+      if (successCount === 0) {
+        message.error(t("watchlists:sources.bulkMoveError", "Bulk move failed"))
+      }
+    } catch (err) {
+      console.error("Failed to bulk move sources:", err)
+      message.error(t("watchlists:sources.bulkMoveError", "Bulk move failed"))
+    } finally {
+      setBulkWorking(false)
+      setSelectedRowKeys([])
+      setBulkMoveTargetValue(null)
+    }
+  }, [loadSources, selectedSources, showUndoNotification, t, updateSourceInList])
+
+  const requestBulkMoveToGroup = useCallback(() => {
+    if (selectedSources.length === 0 || bulkMoveTargetValue == null) return
+    const parsedTargetGroupId = bulkMoveTargetValue === BULK_MOVE_NO_GROUP_VALUE
+      ? null
+      : Number(bulkMoveTargetValue)
+
+    if (parsedTargetGroupId !== null && !Number.isFinite(parsedTargetGroupId)) {
+      message.error(t("watchlists:sources.bulkMoveError", "Bulk move failed"))
+      return
+    }
+
+    const targetGroupName = parsedTargetGroupId == null
+      ? t("watchlists:sources.moveTargetNone", "No group")
+      : groups.find((group) => group.id === parsedTargetGroupId)?.name ||
+        t("watchlists:sources.moveUnknownGroup", "Selected group")
+
+    Modal.confirm({
+      title: t(
+        "watchlists:sources.bulkMoveConfirmTitle",
+        "Move {{count}} selected feeds?",
+        { count: selectedSourceSummary.total }
+      ),
+      content: t(
+        "watchlists:sources.bulkMoveConfirmDescription",
+        "Feeds will be assigned to {{group}}.",
+        { group: targetGroupName }
+      ),
+      okText: t("watchlists:sources.bulkMove", "Move"),
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => handleBulkMoveToGroup(parsedTargetGroupId)
+    })
+  }, [
+    bulkMoveTargetValue,
+    groups,
+    handleBulkMoveToGroup,
+    selectedSourceSummary.total,
+    selectedSources.length,
+    t
+  ])
+
+  const executeCheckNow = useCallback(async (sourceIds: number[]) => {
+    const normalizedIds = normalizeSourceIds(sourceIds)
+    if (normalizedIds.length === 0) return
+
+    setCheckingSourceIds((prev) => Array.from(new Set([...prev, ...normalizedIds])))
+    try {
+      const result = await checkWatchlistSourcesNow(normalizedIds)
+      const successCount = typeof result.success === "number"
+        ? result.success
+        : (Array.isArray(result.items) ? result.items.filter((item) => item.status === "ok").length : 0)
+      const failedCount = typeof result.failed === "number"
+        ? result.failed
+        : Math.max(normalizedIds.length - successCount, 0)
+      const viewRunsAction = (
+        <Button
+          type="link"
+          size="small"
+          className="px-0"
+          onClick={() => setActiveTab("runs")}
+        >
+          {t("watchlists:sources.viewRuns", "View Runs")}
+        </Button>
+      )
+
+      if (failedCount === 0) {
+        message.success({
+          content: (
+            <span>
+              {t(
+                "watchlists:sources.checkNowSuccess",
+                "Checked {{count}} source{{plural}}",
+                {
+                  count: successCount,
+                  plural: successCount === 1 ? "" : "s"
+                }
+              )}{" "}
+              {viewRunsAction}
+            </span>
+          )
+        })
+      } else if (successCount > 0) {
+        message.warning({
+          content: (
+            <span>
+              {t(
+                "watchlists:sources.checkNowPartial",
+                "Checked {{success}} source{{successPlural}}, {{failed}} failed",
+                {
+                  success: successCount,
+                  successPlural: successCount === 1 ? "" : "s",
+                  failed: failedCount
+                }
+              )}{" "}
+              {viewRunsAction}
+            </span>
+          )
+        })
+      } else {
+        message.error(t("watchlists:sources.checkNowError", "Failed to check selected sources"))
+      }
+
+      await loadSources()
+    } catch (err) {
+      console.error("Failed to check sources now:", err)
+      message.error(t("watchlists:sources.checkNowError", "Failed to check selected sources"))
+    } finally {
+      setCheckingSourceIds((prev) => prev.filter((id) => !normalizedIds.includes(id)))
+    }
+  }, [loadSources, setActiveTab, t])
+
+  const requestCheckNow = useCallback((sourceIds: number[]) => {
+    const normalizedIds = normalizeSourceIds(sourceIds)
+    if (normalizedIds.length === 0) return
+
+    if (shouldConfirmMultiSourceCheck(normalizedIds)) {
+      Modal.confirm({
+        title: t(
+          "watchlists:sources.checkNowMultiConfirmTitle",
+          "Check {{count}} sources now?",
+          { count: normalizedIds.length }
+        ),
+        content: t(
+          "watchlists:sources.checkNowMultiConfirmDescription",
+          "This will manually force a refresh for all selected sources."
+        ),
+        okText: t("watchlists:sources.checkNow", "Check Now"),
+        cancelText: t("common:cancel", "Cancel"),
+        onOk: () => executeCheckNow(normalizedIds)
+      })
+      return
+    }
+
+    void executeCheckNow(normalizedIds)
+  }, [executeCheckNow, t])
+
+  const resolveCheckNowTargetIds = useCallback((sourceId: number): number[] => {
+    return resolveCheckNowTargets(sourceId, selectedSourceIds)
+  }, [selectedSourceIds])
 
   // Handle form submit
   const handleFormSubmit = async (
@@ -361,7 +1042,7 @@ export const SourcesTab: React.FC = () => {
                 href={record.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-zinc-400 hover:text-zinc-600"
+                className="text-text-subtle hover:text-text-muted"
                 onClick={(e) => e.stopPropagation()}
               >
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -381,6 +1062,40 @@ export const SourcesTab: React.FC = () => {
           {type.toUpperCase()}
         </Tag>
       )
+    },
+    {
+      title: t("watchlists:sources.columns.status", "Status"),
+      key: "status",
+      width: 300,
+      render: (_, record) => {
+        const statusVisual = getSourceStatusVisual(record.status, record.active)
+        const health = sourceHealthById[record.id]
+        const deferUntil = health?.defer_until
+        const consecutiveNotModified = health?.consec_not_modified ?? 0
+        const hasBackoff = typeof deferUntil === "string" && deferUntil.length > 0
+
+        return (
+          <div className="flex flex-wrap items-center gap-1">
+            <Tag color={statusVisual.color}>{statusVisual.label}</Tag>
+            {consecutiveNotModified > 0 && (
+              <Tag color={consecutiveNotModified >= 5 ? "red" : "gold"}>
+                {t("watchlists:sources.staleCount", "Stale x{{count}}", {
+                  count: consecutiveNotModified
+                })}
+              </Tag>
+            )}
+            {hasBackoff && (
+              <Tooltip title={new Date(deferUntil).toLocaleString()}>
+                <Tag color="gold">
+                  {t("watchlists:sources.backoffUntil", "Backoff {{time}}", {
+                    time: formatRelativeTime(deferUntil, t, { compact: true })
+                  })}
+                </Tag>
+              </Tooltip>
+            )}
+          </div>
+        )
+      }
     },
     {
       title: t("watchlists:sources.columns.tags", "Tags"),
@@ -404,17 +1119,46 @@ export const SourcesTab: React.FC = () => {
       title: t("watchlists:sources.columns.lastScraped", "Last Scraped"),
       dataIndex: "last_scraped_at",
       key: "last_scraped_at",
-      width: 150,
-      render: (date: string | null) =>
-        date ? (
-          <span className="text-sm text-zinc-500">
-            {formatRelativeTime(date, t)}
-          </span>
-        ) : (
-          <span className="text-sm text-zinc-400">
-            {t("watchlists:sources.never", "Never")}
-          </span>
+      width: 190,
+      render: (date: string | null, record) => {
+        const targetIds = resolveCheckNowTargetIds(record.id)
+        const checkNowLoading = targetIds.some((id) => checkingSourceIds.includes(id))
+        const checkNowTooltip = targetIds.length > 1
+          ? t(
+              "watchlists:sources.checkNowSelectedTooltip",
+              "Check now for {{count}} selected sources",
+              { count: targetIds.length }
+            )
+          : t("watchlists:sources.checkNowTooltip", "Check now")
+
+        return (
+          <div className="flex items-center gap-1.5">
+            {date ? (
+              <span className="text-sm text-text-muted">
+                {formatRelativeTime(date, t)}
+              </span>
+            ) : (
+              <span className="text-sm text-text-subtle">
+                {t("watchlists:sources.never", "Never")}
+              </span>
+            )}
+            <Tooltip title={checkNowTooltip}>
+              <Button
+                type="text"
+                size="small"
+                shape="circle"
+                icon={<RefreshCw className="h-3.5 w-3.5" />}
+                loading={checkNowLoading}
+                aria-label={checkNowTooltip}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  requestCheckNow(targetIds)
+                }}
+              />
+            </Tooltip>
+          </div>
         )
+      }
     },
     {
       title: t("watchlists:sources.columns.active", "Active"),
@@ -441,33 +1185,30 @@ export const SourcesTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("common:edit", "Edit")}
               icon={<Edit2 className="h-4 w-4" />}
               onClick={() => openSourceForm(record.id)}
             />
           </Tooltip>
-          <Tooltip title={t("watchlists:sources.seenInfo", "Dedup / Seen")}>
+          <Tooltip title={t("watchlists:sources.seenInfo", "Source Health & Dedup Stats")}>
             <Button
               type="text"
               size="small"
+              aria-label={t("watchlists:sources.seenInfo", "Source Health & Dedup Stats")}
               icon={<Eye className="h-4 w-4" />}
               onClick={() => setSeenDrawerSourceId(record.id)}
             />
           </Tooltip>
-          <Popconfirm
-            title={t("watchlists:sources.deleteConfirm", "Delete this source?")}
-            onConfirm={() => handleDelete(record.id)}
-            okText={t("common:yes", "Yes")}
-            cancelText={t("common:no", "No")}
-          >
-            <Tooltip title={t("common:delete", "Delete")}>
-              <Button
-                type="text"
-                size="small"
-                danger
-                icon={<Trash2 className="h-4 w-4" />}
-              />
-            </Tooltip>
-          </Popconfirm>
+          <Tooltip title={t("common:delete", "Delete")}>
+            <Button
+              type="text"
+              size="small"
+              danger
+              aria-label={t("common:delete", "Delete")}
+              icon={<Trash2 className="h-4 w-4" />}
+              onClick={() => void requestDeleteConfirmation(record)}
+            />
+          </Tooltip>
         </Space>
       )
     }
@@ -543,73 +1284,167 @@ export const SourcesTab: React.FC = () => {
         </div>
       </div>
 
+      {sourcesLoadError && (
+        <Alert
+          type={sourcesLoadError.severity}
+          showIcon
+          title={sourcesLoadError.title}
+          description={sourcesLoadError.description}
+          action={(
+            <Button
+              size="small"
+              onClick={() => void loadSources()}
+              loading={sourcesLoading}
+            >
+              {t("watchlists:errors.retry", "Retry")}
+            </Button>
+          )}
+        />
+      )}
+
       {selectedRowKeys.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700 p-3 text-sm">
-          <span className="text-zinc-600 dark:text-zinc-300">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border p-3 text-sm">
+          <span className="text-text-muted">
             {t("watchlists:sources.selectedCount", "{{count}} selected", { count: selectedRowKeys.length })}
           </span>
-          <Button size="small" onClick={() => handleBulkToggle(true)} loading={bulkWorking}>
+          <Button
+            size="small"
+            icon={<RefreshCw className="h-3.5 w-3.5" />}
+            onClick={() => requestCheckNow(selectedSourceIds)}
+            loading={selectedSourceIds.some((id) => checkingSourceIds.includes(id))}
+            disabled={bulkWorking}
+          >
+            {t("watchlists:sources.checkNow", "Check Now")}
+          </Button>
+          <Button size="small" onClick={() => requestBulkToggle(true)} loading={bulkWorking}>
             {t("watchlists:sources.bulkEnable", "Enable")}
           </Button>
-          <Button size="small" onClick={() => handleBulkToggle(false)} loading={bulkWorking}>
+          <Button size="small" onClick={() => requestBulkToggle(false)} loading={bulkWorking}>
             {t("watchlists:sources.bulkDisable", "Disable")}
           </Button>
-          <Popconfirm
-            title={t("watchlists:sources.bulkDeleteConfirm", "Delete selected sources?")}
-            onConfirm={handleBulkDelete}
-            okText={t("common:yes", "Yes")}
-            cancelText={t("common:no", "No")}
+          <Select
+            size="small"
+            allowClear
+            className="w-52"
+            placeholder={t("watchlists:sources.moveSelectGroup", "Move to group")}
+            value={bulkMoveTargetValue}
+            onChange={(value) => setBulkMoveTargetValue((value as BulkMoveTargetValue) ?? null)}
+            options={[
+              {
+                value: BULK_MOVE_NO_GROUP_VALUE,
+                label: t("watchlists:sources.moveTargetNone", "No group")
+              },
+              ...(Array.isArray(groups) ? groups : []).map((group) => ({
+                value: group.id,
+                label: group.name
+              }))
+            ]}
+            disabled={bulkWorking}
+          />
+          <Button
+            size="small"
+            onClick={requestBulkMoveToGroup}
+            loading={bulkWorking}
+            disabled={bulkMoveTargetValue == null}
           >
-            <Button size="small" danger loading={bulkWorking}>
-              {t("watchlists:sources.bulkDelete", "Delete")}
-            </Button>
-          </Popconfirm>
+            {t("watchlists:sources.bulkMove", "Move")}
+          </Button>
+          <Button size="small" danger loading={bulkWorking} onClick={() => void requestBulkDelete()}>
+            {t("watchlists:sources.bulkDelete", "Delete")}
+          </Button>
           <Button size="small" onClick={() => setSelectedRowKeys([])}>
             {t("common:clear", "Clear")}
           </Button>
         </div>
       )}
 
-      <div className="flex flex-col gap-4 lg:flex-row">
-        <div className="w-full lg:w-72 shrink-0 space-y-4">
-          <GroupsTree
-            groups={groups}
-            selectedGroupId={selectedGroupId}
-            loading={groupsLoading}
-            onSelect={setSelectedGroupId}
-            onRefresh={loadGroups}
-          />
+      {unifiedEmptyState ? (
+        <div className="rounded-lg border border-dashed border-border bg-surface p-8">
+          <Empty
+            description={
+              <div className="space-y-2">
+                <p className="text-text-muted">
+                  {t("watchlists:sources.emptyInitialTitle", "No watchlist sources yet")}
+                </p>
+                <p className="text-sm text-text-subtle">
+                  {t(
+                    "watchlists:sources.emptyInitialDescription",
+                    "Add a source or import OPML to start monitoring updates."
+                  )}
+                </p>
+              </div>
+            }
+          >
+            <Space>
+              <Button
+                type="primary"
+                icon={<Plus className="h-4 w-4" />}
+                onClick={() => openSourceForm()}
+              >
+                {t("watchlists:sources.addSource", "Add Source")}
+              </Button>
+              <Button
+                icon={<UploadCloud className="h-4 w-4" />}
+                onClick={() => setImportOpen(true)}
+              >
+                {t("watchlists:sources.import", "Import OPML")}
+              </Button>
+            </Space>
+          </Empty>
         </div>
+      ) : (
+        <div className="flex flex-col gap-4 lg:flex-row">
+          <div className="w-full lg:w-72 shrink-0 space-y-4">
+            <GroupsTree
+              groups={groups}
+              selectedGroupId={selectedGroupId}
+              loading={groupsLoading}
+              onSelect={setSelectedGroupId}
+              onRefresh={loadGroups}
+            />
+          </div>
 
-        <div className="flex-1">
-          <Table
-            dataSource={Array.isArray(sources) ? sources : []}
-            columns={columns}
-            rowKey="id"
-            loading={sourcesLoading}
-            rowSelection={{
-              selectedRowKeys,
-              onChange: setSelectedRowKeys
-            }}
-            pagination={{
-              current: sourcesPage,
-              pageSize: sourcesPageSize,
-              total: sourcesTotal,
-              showSizeChanger: true,
-              showTotal: (total) =>
-                t("watchlists:sources.totalItems", "{{total}} sources", { total }),
-              onChange: (page, pageSize) => {
-                setSourcesPage(page)
-                if (pageSize !== sourcesPageSize) {
-                  setSourcesPageSize(pageSize)
+          <div className="flex-1">
+            <Table
+              dataSource={Array.isArray(sources) ? sources : []}
+              columns={columns}
+              rowKey="id"
+              loading={sourcesLoading}
+              locale={{
+                emptyText: (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description={t(
+                      "watchlists:sources.emptyTableDescription",
+                      tableEmptyDescription
+                    )}
+                  />
+                )
+              }}
+              rowSelection={{
+                selectedRowKeys,
+                onChange: setSelectedRowKeys
+              }}
+              pagination={{
+                current: sourcesPage,
+                pageSize: sourcesPageSize,
+                total: sourcesTotal,
+                showSizeChanger: true,
+                showTotal: (total) =>
+                  t("watchlists:sources.totalItems", "{{total}} sources", { total }),
+                onChange: (page, pageSize) => {
+                  setSourcesPage(page)
+                  if (pageSize !== sourcesPageSize) {
+                    setSourcesPageSize(pageSize)
+                  }
                 }
-              }
-            }}
-            size="middle"
-            scroll={{ x: 800 }}
-          />
+              }}
+              size="middle"
+              scroll={{ x: 800 }}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       <SourceFormModal
         open={sourceFormOpen}

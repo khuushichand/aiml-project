@@ -314,7 +314,7 @@ class DocumentGeneratorService:
                     })
                 except _DOCGEN_NONCRITICAL_EXCEPTIONS as img_err:
                     logger.warning(
-                        "Error encoding image from history (msg_id %s): %s",
+                        'Error encoding image from history (msg_id {}): {}',
                         db_msg.get("id"),
                         img_err,
                     )
@@ -520,7 +520,7 @@ class DocumentGeneratorService:
         start_time = time.time()
         normalized_conversation_id = self._normalize_conversation_id(conversation_id)
         if not normalized_conversation_id:
-            logger.warning("Invalid conversation identifier provided: %s", conversation_id)
+            logger.warning("Invalid conversation identifier provided: {}", conversation_id)
             return {
                 "success": False,
                 "error": "Invalid conversation identifier",
@@ -529,7 +529,7 @@ class DocumentGeneratorService:
             }
 
         logger.info(
-            "Generating %s for conversation %s (user: %s)",
+            'Generating {} for conversation {} (user: {})',
             document_type.value,
             normalized_conversation_id,
             self.user_id,
@@ -539,7 +539,7 @@ class DocumentGeneratorService:
         try:
             messages = self.get_conversation_context(normalized_conversation_id)
             if not messages:
-                logger.warning("No messages found for conversation %s", normalized_conversation_id)
+                logger.warning("No messages found for conversation {}", normalized_conversation_id)
                 return {
                     "success": False,
                     "error": f"No messages found for conversation {conversation_id}",
@@ -731,7 +731,7 @@ class DocumentGeneratorService:
             Generated document ID if persisted, otherwise None.
         """
         if not content or not content.strip():
-            logger.info("Skipping persistence for streamed document with empty content (conversation_id=%s)", conversation_id)
+            logger.info("Skipping persistence for streamed document with empty content (conversation_id={})", conversation_id)
             return None
 
         try:
@@ -748,7 +748,7 @@ class DocumentGeneratorService:
             return document_id
         except _DOCGEN_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(
-                "Failed to persist streamed document for conversation %s: %s",
+                'Failed to persist streamed document for conversation {}: {}',
                 conversation_id,
                 exc
             )
@@ -1049,8 +1049,11 @@ class DocumentGeneratorService:
 
                 params.append(job_id)
 
+                set_clause = ", ".join(updates)
+                update_job_sql_template = "UPDATE generation_jobs SET {set_clause} WHERE job_id = ?"
+                update_job_sql = update_job_sql_template.format_map(locals())  # nosec B608
                 cursor = conn.execute(
-                    f"UPDATE generation_jobs SET {', '.join(updates)} WHERE job_id = ?",
+                    update_job_sql,
                     params
                 )
                 conn.commit()

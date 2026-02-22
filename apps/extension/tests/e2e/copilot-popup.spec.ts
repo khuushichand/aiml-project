@@ -1,6 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { launchWithExtension } from "./utils/extension"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 import { grantHostPermission } from "./utils/permissions"
 import { setSelectedModel } from "./utils/connection"
 
@@ -25,16 +24,27 @@ test.describe("Contextual popup", () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
     const normalizedServerUrl = normalizeServerUrl(serverUrl)
 
-    const modelsResponse = await fetch(
-      `${normalizedServerUrl}/api/v1/llm/models/metadata`,
-      { headers: { "x-api-key": apiKey } }
-    )
+    let modelsResponse: Response | null = null
+    try {
+      modelsResponse = await fetch(
+        `${normalizedServerUrl}/api/v1/llm/models/metadata`,
+        { headers: { "x-api-key": apiKey } }
+      )
+    } catch (error) {
+      test.skip(
+        true,
+        `Chat models preflight unreachable in this environment: ${String(error)}`
+      )
+      return
+    }
+    if (!modelsResponse) return
     if (!modelsResponse.ok) {
       const body = await modelsResponse.text().catch(() => "")
       test.skip(
         true,
         `Chat models preflight failed: ${modelsResponse.status} ${modelsResponse.statusText} ${body}`
       )
+      return
     }
     const modelId = getFirstModelId(
       await modelsResponse.json().catch(() => [])
@@ -46,7 +56,7 @@ test.describe("Contextual popup", () => {
       ? modelId
       : `tldw:${modelId}`
 
-    const { context, page, extensionId } = await launchWithExtension("", {
+    const { context, page, extensionId } = await launchWithExtensionOrSkip(test, "", {
       seedConfig: {
         tldwConfig: {
           serverUrl: normalizedServerUrl,

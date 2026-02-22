@@ -248,16 +248,19 @@ nav:
       - RAG & Evaluations:
           - RAG Deployment Guide: User_Guides/RAG_Deployment_Guide.md
           - RAG Production Configuration: User_Guides/RAG_Production_Configuration_Guide.md
+          - RAG Evals Playbook: User_Guides/RAG_Evals_Playbook.md
           - Evaluations User Guide: User_Guides/Evaluations_User_Guide.md
           - Evaluations Deployment Guide: User_Guides/Evaluations_Deployment_Guide.md
           - Evaluations End User Guide: User_Guides/Evaluations_End_User_Guide.md
           - Evaluations Production Deployment: User_Guides/Evaluations_Production_Deployment_Guide.md
       - Chat & AI:
           - Chat Pages: User_Guides/Chat_Pages.md
+          - Quick Chat Docs Assistant: User_Guides/Quick_Chat_Docs_Assistant_Guide.md
           - Setting up a local LLM: User_Guides/Setting_up_a_local_LLM.md
           - Prompt Engineering Notes: User_Guides/Prompt_Engineering_Notes.md
           - Context MCP Search: User_Guides/context_mcp_search.md
       - Audio & TTS:
+          - Voice Agent Setup Guide: User_Guides/Voice_Agent_Setup_Guide.md
           - TTS Getting Started: User_Guides/TTS_Getting_Started.md
       - Organizations & Admin:
           - Organizations and Sharing: User_Guides/Organizations_and_Sharing.md

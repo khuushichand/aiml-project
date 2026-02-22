@@ -22,7 +22,7 @@ export class MediaReviewPage {
     await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
     // Wait for the media list or empty state
     const container = this.page.locator(
-      ".ant-table, .ant-empty, [data-testid*='media-list'], .ant-pagination"
+      "[data-testid='media-review-results-list'], .ant-empty, .ant-pagination"
     )
     await container.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {})
   }
@@ -59,7 +59,7 @@ export class MediaReviewPage {
 
   async getMediaItems(): Promise<Locator> {
     return this.page.locator(
-      "[data-testid*='media-item'], .media-item, .ant-table-row"
+      "[data-testid='media-review-results-list'] [role='button'][aria-selected]"
     )
   }
 
@@ -84,16 +84,15 @@ export class MediaReviewPage {
   }
 
   async getSelectedCount(): Promise<number> {
-    // Look for selection indicators
     const selectedItems = this.page.locator(
-      "[data-selected='true'], .ring-primary, .ring-2, .ant-checkbox-checked"
+      "[data-testid='media-review-results-list'] [role='button'][aria-selected='true']"
     )
     return selectedItems.count()
   }
 
   async getSelectionCountDisplay(): Promise<string> {
     const countDisplay = this.page.locator(
-      "[data-testid*='selection-count'], .selection-count"
+      ":text-matches('\\\\d+\\\\s*/\\\\s*\\\\d+')"
     )
     if (await countDisplay.first().isVisible().catch(() => false)) {
       return (await countDisplay.first().textContent()) ?? ""
@@ -104,6 +103,14 @@ export class MediaReviewPage {
   // ── View Modes ──────────────────────────────────────────────────────
 
   async setViewMode(mode: "spread" | "list" | "all"): Promise<void> {
+    const byValueInput = this.page.locator(
+      `input[type='radio'][value='${mode}']`
+    ).first()
+    if ((await byValueInput.count()) > 0) {
+      await byValueInput.check({ force: true })
+      return
+    }
+
     // Ant Design Radio.Group buttons
     const modeLabels: Record<string, string> = {
       spread: "Compare",
@@ -114,7 +121,7 @@ export class MediaReviewPage {
     const radioBtn = this.page.locator(`.ant-radio-button-wrapper:has-text("${label}")`).or(
       this.page.getByRole("radio", { name: new RegExp(label, "i") })
     )
-    await radioBtn.first().click()
+    await radioBtn.first().click({ timeout: 5_000 })
   }
 
   async getCurrentViewMode(): Promise<string> {
@@ -127,12 +134,20 @@ export class MediaReviewPage {
   }
 
   async setOrientation(orientation: "vertical" | "horizontal"): Promise<void> {
+    const byValueInput = this.page.locator(
+      `input[type='radio'][value='${orientation}']`
+    ).first()
+    if ((await byValueInput.count()) > 0) {
+      await byValueInput.check({ force: true })
+      return
+    }
+
     const radioBtn = this.page.locator(
       `.ant-radio-button-wrapper:has-text("${orientation}")`
     ).or(
       this.page.getByRole("radio", { name: new RegExp(orientation, "i") })
     )
-    await radioBtn.first().click()
+    await radioBtn.first().click({ timeout: 5_000 })
   }
 
   // ── Navigation Controls ─────────────────────────────────────────────
@@ -160,20 +175,49 @@ export class MediaReviewPage {
   // ── Filtering & Search ──────────────────────────────────────────────
 
   async fillSearchQuery(query: string): Promise<void> {
-    const input = this.page.locator(
-      "[placeholder*='search' i], [placeholder*='filter' i], input[type='search']"
-    ).first()
-    await input.fill(query)
-    await input.press("Enter")
+    const candidates = [
+      this.page.locator("input.ant-input"),
+      this.page.locator("[placeholder*='search' i], [placeholder*='filter' i]"),
+      this.page.getByRole("textbox")
+    ]
+
+    for (const candidateSet of candidates) {
+      const count = await candidateSet.count()
+      for (let idx = 0; idx < count; idx++) {
+        const input = candidateSet.nth(idx)
+        const isVisible = await input.isVisible().catch(() => false)
+        const isDisabled = await input.isDisabled().catch(() => false)
+        if (!isVisible || isDisabled) continue
+        await input.fill(query)
+        await input.press("Enter").catch(() => {})
+        return
+      }
+    }
   }
 
   async filterByMediaType(type: string): Promise<void> {
-    // Look for type filter select/dropdown
-    const typeSelect = this.page.locator(
-      "[data-testid*='type-filter'], .ant-select:has-text('Type')"
-    ).first()
-    await typeSelect.click()
-    await this.page.locator(`.ant-select-item:has-text("${type}")`).click()
+    const filterToggle = this.page.locator("button[aria-controls='filter-section']").first()
+    if ((await filterToggle.count()) > 0) {
+      const expanded = await filterToggle.getAttribute("aria-expanded")
+      if (expanded === "false") {
+        await filterToggle.click()
+      }
+    }
+
+    const select = this.page.locator("#filter-section .ant-select").first()
+    if ((await select.count()) === 0 || !(await select.isVisible().catch(() => false))) return
+
+    await select.click()
+    const option = this.page
+      .locator(".ant-select-item-option")
+      .filter({ hasText: new RegExp(`^\\s*${type}\\s*$`, "i") })
+      .first()
+
+    if ((await option.count()) > 0 && (await option.isVisible().catch(() => false))) {
+      await option.click()
+    } else {
+      await this.page.keyboard.press("Escape").catch(() => {})
+    }
   }
 
   async clearFilters(): Promise<void> {
@@ -207,7 +251,7 @@ export class MediaReviewPage {
 
   async getViewerItemCount(): Promise<number> {
     const cards = this.page.locator(
-      "[data-testid*='review-card'], .review-card, .media-detail-card"
+      ".shadow-sm"
     )
     return cards.count()
   }
@@ -223,13 +267,20 @@ export class MediaReviewPage {
 
   async goToPage(pageNum: number): Promise<void> {
     const pagination = this.page.locator(".ant-pagination")
+    if ((await pagination.count()) === 0 || !(await pagination.first().isVisible().catch(() => false))) {
+      return
+    }
     const pageBtn = pagination.locator(`[title='${pageNum}'], li:has-text("${pageNum}")`)
-    await pageBtn.click()
+    if ((await pageBtn.count()) === 0) return
+    await pageBtn.first().click()
   }
 
   async getCurrentPage(): Promise<number> {
     const active = this.page.locator(".ant-pagination-item-active")
-    const text = await active.textContent()
+    if ((await active.count()) === 0 || !(await active.first().isVisible().catch(() => false))) {
+      return 1
+    }
+    const text = await active.first().textContent()
     return text ? parseInt(text, 10) : 1
   }
 

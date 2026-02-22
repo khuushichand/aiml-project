@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import threading
 import time
 import uuid
@@ -14,6 +15,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Workflows.adapters import get_adapter
 
 _WF_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
@@ -57,6 +59,53 @@ except _WF_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - safety
         return None
     def record_span_exception(*args, **kwargs):
         return None
+
+
+_TEMPLATE_EXPR_RE = re.compile(r'^\s*\{\{(.+?)\}\}\s*$', re.DOTALL)
+
+
+def _resolve_config_templates(cfg: Any, context: dict[str, Any]) -> Any:
+    """Recursively resolve Jinja2 template expressions in step config values.
+
+    For config values that are *pure* template expressions (the entire string
+    is ``{{ expr }}``), the resolved Python object is returned directly rather
+    than its string representation.  This allows list/dict values such as
+    ``{{ inputs.items }}`` to pass through as actual lists/dicts.
+
+    Mixed strings like ``"prefix {{ expr }} suffix"`` are rendered via Jinja2
+    and returned as strings.
+    """
+    if isinstance(cfg, dict):
+        return {k: _resolve_config_templates(v, context) for k, v in cfg.items()}
+    if isinstance(cfg, list):
+        return [_resolve_config_templates(v, context) for v in cfg]
+    if isinstance(cfg, str) and "{{" in cfg:
+        # Pure expression: extract the Python object directly from context
+        m = _TEMPLATE_EXPR_RE.match(cfg)
+        if m:
+            expr = m.group(1).strip()
+            # Resolve dotted paths like ``inputs.items`` or ``compose_script.sections``
+            parts = expr.split(".")
+            obj: Any = context
+            for part in parts:
+                if isinstance(obj, dict):
+                    obj = obj.get(part)
+                else:
+                    obj = None
+                    break
+            if obj is not None:
+                return obj
+        # Fallback: render as Jinja2 template string
+        try:
+            from tldw_Server_API.app.core.Chat.prompt_template_manager import (
+                apply_template_to_string,
+            )
+            rendered = apply_template_to_string(cfg, context)
+            if rendered is not None and rendered != cfg:
+                return rendered
+        except _WF_NONCRITICAL_EXCEPTIONS:
+            pass
+    return cfg
 
 
 class RunMode(str, Enum):
@@ -366,14 +415,16 @@ class WorkflowEngine:
                         # Honor pause before attempting execution
                         await self._wait_if_paused(run_id, step_run_id)
                         try:
-                            # Ensure adapters see timeout_seconds in cfg
-                            step_cfg_eff = dict(step_cfg)
+                            # Resolve template expressions in config before passing to adapter
+                            step_cfg_eff = _resolve_config_templates(dict(step_cfg), context)
+                            if not isinstance(step_cfg_eff, dict):
+                                step_cfg_eff = dict(step_cfg)
                             step_cfg_eff.setdefault("timeout_seconds", step_timeout)
                             # Test-friendly forced error for prompt steps
                             if step_type == "prompt":
                                 fe = step_cfg.get("force_error") if isinstance(step_cfg, dict) else None
                                 if isinstance(fe, str):
-                                    fe = fe.strip().lower() in {"1", "true", "yes", "on"}
+                                    fe = is_truthy(fe.strip())
                                 tmpl = ""
                                 try:
                                     tmpl = str(step_cfg.get("template", ""))
@@ -467,6 +518,9 @@ class WorkflowEngine:
                     # Success path or waiting handled inside adapter helper
                     last_outputs = outputs or {}
                     context.update({"last": last_outputs})
+                    # Store outputs by step_id so later steps can reference
+                    # prior outputs via template expressions like {{ compose_script.sections }}
+                    context[step_id] = last_outputs
                     # If adapter returned special status
                     status_flag = last_outputs.get("__status__") if isinstance(last_outputs, dict) else None
                     if status_flag in {"waiting_human", "waiting_approval"}:
@@ -516,7 +570,10 @@ class WorkflowEngine:
                             next_id = str(step.get("on_success") or "").strip() or None
                         except _WF_NONCRITICAL_EXCEPTIONS:
                             next_id = None
-                    if next_id and next_id in id_to_idx:
+                    if next_id == "_end":
+                        # Explicit early completion — skip remaining steps
+                        idx = len(steps)
+                    elif next_id and next_id in id_to_idx:
                         idx = id_to_idx[next_id]
                     else:
                         idx += 1
@@ -1110,7 +1167,7 @@ class WorkflowEngine:
                     meta_to_store = metadata or {}
                     try:
                         import os as _os
-                        if str(_os.getenv("WORKFLOWS_ARTIFACT_ENCRYPTION", "false")).lower() in {"1", "true", "yes", "on"}:
+                        if is_truthy(_os.getenv("WORKFLOWS_ARTIFACT_ENCRYPTION", "false")):
                             from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
                             env = encrypt_json_blob(meta_to_store)
                             if env is not None:
@@ -1291,7 +1348,7 @@ class WorkflowEngine:
         try:
             # Global disable
             import os as _os
-            if str(_os.getenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "false")).lower() in {"1", "true", "yes", "on"}:
+            if is_truthy(_os.getenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "false")):
                 return
             hook = definition.get("on_completion_webhook") if isinstance(definition, dict) else None
             if not hook:

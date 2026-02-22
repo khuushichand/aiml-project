@@ -6,6 +6,7 @@ import asyncio
 import math
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from threading import Lock
 from typing import Any, Optional
 
 #
@@ -31,10 +32,14 @@ from tldw_Server_API.app.api.v1.schemas.websearch_schemas import (
     WebSearchRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user  # For User dependency
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Third_Party.Arxiv import convert_xml_to_markdown, fetch_arxiv_xml, search_arxiv_custom_api
 from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import search_papers_semantic_scholar
 from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs
+
+_WEBSEARCH_EXECUTOR: ThreadPoolExecutor | None = None
+_WEBSEARCH_EXECUTOR_LOCK = Lock()
 
 
 def generate_and_search(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -45,6 +50,28 @@ def generate_and_search(*args: Any, **kwargs: Any) -> dict[str, Any]:
 async def analyze_and_aggregate(*args: Any, **kwargs: Any) -> dict[str, Any]:
     """Async wrapper around the aggregation stage for the same monkeypatch semantics."""
     return await WebSearch_APIs.analyze_and_aggregate(*args, **kwargs)
+
+
+def _get_websearch_executor() -> ThreadPoolExecutor:
+    """Lazily initialize and return the shared websearch executor."""
+    global _WEBSEARCH_EXECUTOR
+    if _WEBSEARCH_EXECUTOR is None:
+        with _WEBSEARCH_EXECUTOR_LOCK:
+            if _WEBSEARCH_EXECUTOR is None:
+                _WEBSEARCH_EXECUTOR = ThreadPoolExecutor(
+                    max_workers=4,
+                    thread_name_prefix="ThreadPoolExecutor",
+                )
+    return _WEBSEARCH_EXECUTOR
+
+
+def shutdown_websearch_executor(*, wait: bool = True, cancel_futures: bool = True) -> None:
+    """Shut down the shared websearch executor, if initialized."""
+    global _WEBSEARCH_EXECUTOR
+    executor = _WEBSEARCH_EXECUTOR
+    _WEBSEARCH_EXECUTOR = None
+    if executor is not None:
+        executor.shutdown(wait=wait, cancel_futures=cancel_futures)
 
 #
 #########################################################################################################################
@@ -296,6 +323,17 @@ async def websearch_endpoint(
     runs relevance evaluation and generates a final answer.
     """
     try:
+        resolved_relevance_llm = payload.relevance_analysis_llm
+        if payload.aggregate and not resolved_relevance_llm:
+            # Default to final answer provider when available; otherwise fail fast with a clear
+            # configuration error instead of silently degrading to empty relevance output.
+            if payload.final_answer_llm:
+                resolved_relevance_llm = payload.final_answer_llm
+            else:
+                raise ValueError(
+                    "aggregate=true requires `relevance_analysis_llm` or `final_answer_llm`."
+                )
+
         search_params = {
             "engine": payload.engine,
             "content_country": payload.content_country,
@@ -314,22 +352,26 @@ async def websearch_endpoint(
             "searx_url": payload.searx_url,
             "searx_json_mode": payload.searx_json_mode,
             "google_domain": payload.google_domain,
+            "boards": payload.boards,
+            "max_threads_per_board": payload.max_threads_per_board,
+            "max_archived_threads_per_board": payload.max_archived_threads_per_board,
+            "include_archived": payload.include_archived,
             "subquery_generation": payload.subquery_generation,
             "subquery_generation_llm": payload.subquery_generation_llm,
             "user_review": payload.user_review,
-            "relevance_analysis_llm": payload.relevance_analysis_llm,
+            "relevance_analysis_llm": resolved_relevance_llm,
             "final_answer_llm": payload.final_answer_llm,
         }
 
         # Run potentially blocking provider calls off the event loop
         # Use an explicit ThreadPoolExecutor for stable thread naming expected by tests
         loop = asyncio.get_running_loop()
-        global _WEBSEARCH_EXECUTOR
-        try:
-            _WEBSEARCH_EXECUTOR  # type: ignore[name-defined]  # noqa: B018
-        except NameError:
-            _WEBSEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ThreadPoolExecutor")  # type: ignore[assignment]
-        phase1 = await loop.run_in_executor(_WEBSEARCH_EXECUTOR, generate_and_search, payload.query, search_params)
+        phase1 = await loop.run_in_executor(
+            _get_websearch_executor(),
+            generate_and_search,
+            payload.query,
+            search_params,
+        )
 
         if payload.aggregate:
             # Cancellation propagates if client disconnects
@@ -349,9 +391,9 @@ async def websearch_endpoint(
                             # If the underlying server doesn't support disconnect checks, stop monitoring
                             break
                         await asyncio.sleep(0.5)
-                except Exception:
+                except Exception as monitor_error:
                     # Never let the monitor crash the endpoint
-                    pass
+                    logger.debug("Research request disconnect monitor failed; stopping monitor task", exc_info=monitor_error)
 
             monitor = asyncio.create_task(_watch_disconnect())
             aggregated = await analyze_and_aggregate(
@@ -367,6 +409,11 @@ async def websearch_endpoint(
 
         return phase1
 
+    except HTTPException:
+        raise
+    except (ValueError, ChatConfigurationError) as e:
+        logger.warning(f"websearch endpoint config validation failed: {e}")
+        raise HTTPException(status_code=422, detail=f"Websearch configuration error: {str(e)}") from e
     except Exception as e:
         logger.error(f"websearch endpoint failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Websearch failed: {str(e)}") from e

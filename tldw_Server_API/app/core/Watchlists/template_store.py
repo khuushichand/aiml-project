@@ -241,7 +241,118 @@ def _sanitize_name(name: str) -> str:
     return name
 
 
+_BUILTIN_BRIEFING_MARKDOWN = """\
+# {{ title }}
+
+**Generated:** {{ generated_at }}
+**Job:** {{ job_name }} | **Run:** {{ run_id }}
+
+---
+
+{% for item in items %}
+## {{ item.title or 'Untitled' }}
+
+{% if item.llm_summary %}{{ item.llm_summary }}{% elif item.summary %}{{ item.summary }}{% endif %}
+
+{% if item.url %}[Read more]({{ item.url }}){% endif %}
+{% if item.published_at %}*Published: {{ item.published_at }}*{% endif %}
+
+---
+
+{% endfor %}
+
+*{{ items | length }} item(s) in this briefing.*
+"""
+
+_BUILTIN_NEWSLETTER_MARKDOWN = """\
+# {{ title }}
+
+> Curated newsletter — {{ generated_at }}
+
+{% for item in items %}
+### {{ loop.index }}. {{ item.title or 'Untitled' }}
+
+{% if item.llm_summary %}{{ item.llm_summary }}{% elif item.summary %}{{ item.summary }}{% endif %}
+
+{% if item.url %}[Link]({{ item.url }}){% endif %}
+
+{% endfor %}
+"""
+
+_BUILTIN_MECE_MARKDOWN = """\
+# {{ title }} — MECE Categorized
+
+**Generated:** {{ generated_at }}
+
+{% set categorized = {} %}
+{% for item in items %}
+{% set cat = item.tags[0] if item.tags else 'Uncategorized' %}
+{% if cat not in categorized %}{% set _ = categorized.update({cat: []}) %}{% endif %}
+{% set _ = categorized[cat].append(item) %}
+{% endfor %}
+
+{% for category, cat_items in categorized.items() %}
+## {{ category }}
+
+{% for item in cat_items %}
+- **{{ item.title or 'Untitled' }}** {% if item.url %}([link]({{ item.url }})){% endif %}
+  {% if item.llm_summary %}{{ item.llm_summary }}{% elif item.summary %}{{ item.summary }}{% endif %}
+{% endfor %}
+
+{% endfor %}
+"""
+
+_BUILTIN_NEWSLETTER_HTML = """\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{{ title }}</title></head>
+<body>
+<h1>{{ title }}</h1>
+<p><em>Generated: {{ generated_at }}</em></p>
+<hr>
+{% for item in items %}
+<h2>{{ item.title or 'Untitled' }}</h2>
+{% if item.llm_summary %}<p>{{ item.llm_summary }}</p>{% elif item.summary %}<p>{{ item.summary }}</p>{% endif %}
+{% if item.url %}<p><a href="{{ item.url }}">Read more</a></p>{% endif %}
+{% if item.published_at %}<p><small>Published: {{ item.published_at }}</small></p>{% endif %}
+<hr>
+{% endfor %}
+<p><em>{{ items | length }} item(s)</em></p>
+</body>
+</html>
+"""
+
+_BUILTIN_TEMPLATES: dict[str, tuple[str, str, str]] = {
+    "briefing_markdown": ("md", _BUILTIN_BRIEFING_MARKDOWN, "Default markdown briefing template"),
+    "newsletter_markdown": ("md", _BUILTIN_NEWSLETTER_MARKDOWN, "Default markdown newsletter template"),
+    "mece_markdown": ("md", _BUILTIN_MECE_MARKDOWN, "Default MECE categorized briefing template"),
+    "newsletter_html": ("html", _BUILTIN_NEWSLETTER_HTML, "Default HTML newsletter template"),
+}
+
+_defaults_seeded = False
+
+
+def _seed_defaults() -> None:
+    global _defaults_seeded
+    if _defaults_seeded:
+        return
+    _defaults_seeded = True
+    directory = _resolved_dir()
+    for name, (fmt, content, description) in _BUILTIN_TEMPLATES.items():
+        suffix = ".md" if fmt == "md" else ".html"
+        path = directory / f"{name}{suffix}"
+        if path.exists():
+            continue
+        try:
+            path.write_text(content, encoding="utf-8")
+            meta_path = directory / f"{name}.meta.json"
+            _save_metadata(meta_path, description=description, current_version=1, history=[])
+        except (OSError, PermissionError) as exc:
+            logger.warning(f"Failed to seed built-in template {name}: {exc}")
+
+
 def list_templates() -> list[TemplateRecord]:
+    _seed_defaults()
     directory = _resolved_dir()
     records: list[TemplateRecord] = []
     for path in sorted(directory.glob("*")):
@@ -271,6 +382,7 @@ def list_templates() -> list[TemplateRecord]:
 
 
 def load_template(name: str, *, version: int | None = None) -> TemplateRecord:
+    _seed_defaults()
     name = _sanitize_name(name)
     directory = _resolved_dir()
     for suffix in sorted(_SUPPORTED_SUFFIXES):

@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+import warnings
 import weakref
 from functools import wraps
 from pathlib import Path
@@ -39,7 +40,7 @@ def _import_torch():
     try:
         import torch  # type: ignore
         return torch
-    except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
+    except Exception as e:
         # Defer error to call site with a clearer message
         raise ImportError("'torch' is required for this embeddings provider. Install torch to proceed.") from e
 
@@ -52,6 +53,24 @@ def _import_transformers():
     except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
         raise ImportError(
             "'transformers' is required for this embeddings provider. Install transformers to proceed."
+        ) from e
+
+
+_OPTIMUM_IMPORT_ERROR: Exception | None = None
+
+
+def _import_optimum_ort_model():
+    """Lazily import optimum ORT model class only when conversion is needed."""
+    global _OPTIMUM_IMPORT_ERROR
+    try:
+        from optimum.onnxruntime import ORTModelForFeatureExtraction as _ORTModelForFeatureExtraction  # type: ignore
+
+        _OPTIMUM_IMPORT_ERROR = None
+        return _ORTModelForFeatureExtraction
+    except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
+        _OPTIMUM_IMPORT_ERROR = e
+        raise ImportError(
+            "'optimum[onnxruntime]' is required for ONNX conversion. Install optimum with onnxruntime support."
         ) from e
 
 
@@ -90,6 +109,7 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import get_openai_embeddings_batch
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
@@ -114,15 +134,8 @@ _EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
 ########################################################################################################################
 #
 # Stuff:
-try:
-    from optimum.onnxruntime import ORTModelForFeatureExtraction
-    OPTIMUM_AVAILABLE = True
-except _EMBEDDINGS_IMPORT_EXCEPTIONS:
-    # Catch broad exceptions to avoid import-time crashes in environments
-    # where optional deps pull in heavy libs (e.g., transformers/torch) that
-    # tests may stub out.
-    ORTModelForFeatureExtraction = None
-    OPTIMUM_AVAILABLE = False
+# NOTE: Do not import `optimum` at module import time.
+# Some environments crash when optional torch-backed deps initialize eagerly.
 
 COMMIT_HASHES: dict[str, str] = {
     "jinaai/jina-embeddings-v3": "4be32c2f5d65b95e4bcce473545b7883ec8d2edd",
@@ -187,7 +200,7 @@ def _model_cache_subdir_name(model_id: str) -> str:
         sanitized = sanitized[:80].rstrip("._-")
         if not sanitized:
             sanitized = "model"
-    digest = hashlib.sha1(model_id.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha1(model_id.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
     return f"{sanitized}-{digest}"
 
 
@@ -569,51 +582,43 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: str | None) -> No
         raise RuntimeError(f"Failed to verify model revision for {model_name_or_path}: {e}") from e
 
 
+_EMB_SERVER_DEPRECATION_WARNED = False
+
+
+def _emit_emb_server_legacy_deprecation(context: str) -> None:
+    global _EMB_SERVER_DEPRECATION_WARNED
+    if _EMB_SERVER_DEPRECATION_WARNED:
+        return
+    _EMB_SERVER_DEPRECATION_WARNED = True
+    msg = (
+        "Embeddings server legacy rate limiter is deprecated (Phase 2). "
+        f"Context: {context}. Enable RG_ENABLED=true for enforcement. "
+        "This shim will be removed in a future release."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
+
+
 class TokenBucketLimiter:
+    """Inline token-bucket rate limiter for the embeddings server.
+
+    **Phase 2 Deprecation Notice**:
+    Primary enforcement is handled by ``RGSimpleMiddleware`` and the per-module
+    RG integration. When RG is disabled, this shim fails open (no sleeps or
+    counters). When RG is enabled but unavailable, it fails closed with a
+    ``RuntimeError``. This shim will be removed in a future release.
+    """
+
     def __init__(self, capacity: int, period: int):
+        # Parameters preserved for API compatibility; no internal state.
         self.capacity = capacity
         self.period = period  # seconds
-        self.tokens = float(capacity)
-        self.last_refill_time = time.monotonic()
-        self.lock = threading.Lock()
-        logger.info(f"TokenBucketLimiter initialized with capacity {capacity} tokens per {period} seconds.")
-
-    def _acquire(self) -> None:
-        while True:
-            with self.lock:
-                now = time.monotonic()
-                elapsed_time = now - self.last_refill_time
-                # Calculate tokens to add based on rate (tokens per second)
-                # Ensure period is not zero to avoid division by zero
-                rate = self.capacity / self.period if self.period > 0 else float('inf')
-
-                tokens_to_add = elapsed_time * rate
-                self.tokens = min(self.capacity, self.tokens + tokens_to_add)
-                self.last_refill_time = now
-
-                if self.tokens >= 1:
-                    self.tokens -= 1
-                    return  # Token acquired
-
-                # Calculate wait time if no token is available
-                # This is the time until one full token is generated
-                wait_time = (1 - self.tokens) / rate if rate > 0 else float('inf')
-
-            if wait_time == float('inf'):  # Should not happen if capacity/period are sane
-                logger.error("TokenBucketLimiter: Cannot acquire token, rate is zero or invalid.")
-                time.sleep(self.period)  # Fallback wait
-            elif wait_time > 0:
-                logger.debug(f"TokenBucketLimiter: Waiting {wait_time:.2f}s for token.")
-                time.sleep(wait_time)
-            # Loop again to re-evaluate after waiting
+        logger.info(f"TokenBucketLimiter initialized (Phase 2 shim) with capacity {capacity} tokens per {period} seconds.")
 
     def acquire(self) -> None:
         """Acquire a token, honoring ResourceGovernor if enabled."""
-        # When ResourceGovernor is enabled, prefer ResourceGovernor as
-        # the primary enforcement path. The legacy in-process token bucket
-        # is retained as a fallback when RG is disabled.
         if not _rg_embeddings_server_enabled():
-            self._acquire()
+            _emit_emb_server_legacy_deprecation("rg_disabled")
             return
 
         # RG enforcement with simple backoff based on retry_after.
@@ -692,7 +697,8 @@ def _log_rg_emb_server_init_failure(exc: Exception) -> None:
         _rg_emb_server_init_error_logged = True
     ctx = _rg_emb_server_context()
     logger.exception(
-        "Embeddings server ResourceGovernor init failed; falling back to legacy limiter. "
+        "Embeddings server ResourceGovernor init failed; legacy token-bucket fallback is retired. "
+        "RG-enabled paths may fail closed until configuration is fixed. "
         "backend={} policy_path={} policy_path_resolved={} policy_store={} "
         "reload_enabled={} reload_interval={} cwd={}",
         ctx["backend"],
@@ -713,7 +719,8 @@ def _log_rg_emb_server_fallback(reason: str) -> None:
         _rg_emb_server_fallback_logged = True
     ctx = _rg_emb_server_context()
     logger.error(
-        "Embeddings server ResourceGovernor unavailable; falling back to legacy limiter. "
+        "Embeddings server ResourceGovernor unavailable; legacy token-bucket fallback is retired. "
+        "RG-enabled paths fail closed. "
         "reason={} init_error={} backend={} policy_path={} policy_path_resolved={} "
         "policy_store={} reload_enabled={} reload_interval={} cwd={}",
         reason,
@@ -768,7 +775,7 @@ def _should_enforce_rg_in_production() -> bool:
     env = (os.getenv("ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENV") or "dev").lower()
     if env not in {"prod", "production"}:
         return False
-    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    test_mode = is_test_mode()
     pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST"))
     return not (test_mode or pytest_active)
 
@@ -1209,7 +1216,7 @@ class HuggingFaceEmbedder:
                 # Ensure AutoTokenizer and AutoModel are the classes from transformers (lazy import)
                 AutoModel, AutoTokenizer = _import_transformers()
                 # These lines assign INSTANCES to self.tokenizer and self.model
-                self.tokenizer = AutoTokenizer.from_pretrained(
+                self.tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
                     self.config.model_name_or_path,
                     cache_dir=self.hf_cache_dir,
                     revision=self.revision,
@@ -1217,7 +1224,7 @@ class HuggingFaceEmbedder:
                 )
                 # AutoModel.from_pretrained returns an instance of a model class (e.g., BertModel, RobertaModel)
                 # which is a subclass of PreTrainedModel, which is a torch.nn.Module.
-                loaded_model = AutoModel.from_pretrained(
+                loaded_model = AutoModel.from_pretrained(  # nosec B615
                     self.config.model_name_or_path,
                     cache_dir=self.hf_cache_dir,
                     revision=self.revision,
@@ -1479,7 +1486,7 @@ class ONNXEmbedder:
 
         # Tokenizer is usually stored with the ONNX model by optimum (lazy import)
         _, AutoTokenizer = _import_transformers()
-        self.tokenizer = AutoTokenizer.from_pretrained(
+        self.tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
             config.model_name_or_path,  # Original HF name for tokenizer
             cache_dir=self.model_specific_onnx_dir,  # Store/load tokenizer from the model's ONNX directory
             revision=self.revision,
@@ -1495,10 +1502,12 @@ class ONNXEmbedder:
             logger.debug(f"ONNX model file already exists at {self.onnx_model_file_path} for {self.model_identifier}")
             return
 
-        if not OPTIMUM_AVAILABLE or ORTModelForFeatureExtraction is None:
+        try:
+            ORTModelForFeatureExtraction = _import_optimum_ort_model()
+        except ImportError as exc:
             msg = "`optimum` library is not available. Cannot convert model to ONNX on-the-fly."
-            logger.error(msg)
-            raise RuntimeError(msg)
+            logger.error("{} Error: {}", msg, exc)
+            raise RuntimeError(msg) from exc
 
         logger.warning(
             f"ONNX model file not found at {self.onnx_model_file_path} for {self.model_identifier}. "
@@ -1688,21 +1697,6 @@ class ONNXEmbedder:
 
 
 
-_LIMITER_CACHE: dict[tuple[int, int], TokenBucketLimiter] = {}
-_LIMITER_CACHE_LOCK = threading.Lock()
-
-
-def _get_token_bucket_limiter(capacity: int, period: int) -> TokenBucketLimiter:
-    cap = max(1, int(capacity))
-    per = max(1, int(period))
-    key = (cap, per)
-    with _LIMITER_CACHE_LOCK:
-        limiter = _LIMITER_CACHE.get(key)
-        if limiter is None:
-            limiter = TokenBucketLimiter(capacity=cap, period=per)
-            _LIMITER_CACHE[key] = limiter
-        return limiter
-
 
 # Exponential backoff decorator with fixed parameters.
 # To make this dynamic per model_config, apply similarly to limiter.
@@ -1793,16 +1787,7 @@ def create_embeddings_batch(
 
     provider = model_spec.provider
 
-    # Apply per-config rate limiter (fallback to defaults if unset).
-    try:
-        limiter_cfg = embedding_service_config.rate_limiter
-        limiter = _get_token_bucket_limiter(
-            getattr(limiter_cfg, "max_calls", 20),
-            getattr(limiter_cfg, "period", 60),
-        )
-        limiter.acquire()
-    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
-        logger.debug(f"Rate limiter acquisition failed or skipped: {e}")
+    # Phase 2: RG middleware handles ingress rate limiting
 
     # Ensure model_storage_base_dir exists and stays under the allowlist root
     base_dir = _normalize_model_storage_base_dir(embedding_service_config.model_storage_base_dir)

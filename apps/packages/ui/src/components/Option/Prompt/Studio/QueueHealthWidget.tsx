@@ -3,6 +3,10 @@ import { Activity, Clock, CheckCircle2, AlertCircle } from "lucide-react"
 import React from "react"
 import { useTranslation } from "react-i18next"
 import type { PromptStudioStatus } from "@/services/prompt-studio"
+import {
+  getQueueSuccessPercent,
+  summarizeQueueHealth
+} from "./queue-health-utils"
 
 type QueueHealthWidgetProps = {
   status?: PromptStudioStatus | null
@@ -17,15 +21,46 @@ export const QueueHealthWidget: React.FC<QueueHealthWidgetProps> = ({
     return null
   }
 
-  const successRate = status.success_rate ?? 1
-  const successPercent = Math.round(successRate * 100)
-  const hasIssues = successPercent < 90 || status.queue_depth > 10
+  const successPercent = getQueueSuccessPercent(status)
+  const summary = summarizeQueueHealth(status)
+  const hasIssues = summary.level === "degraded"
 
   const getHealthColor = () => {
     if (successPercent >= 95 && status.queue_depth <= 5) return "text-success"
     if (successPercent >= 80 && status.queue_depth <= 15) return "text-warn"
     return "text-danger"
   }
+
+  const summaryText = (() => {
+    switch (summary.code) {
+      case "healthy_processing":
+        return t("managePrompts.studio.queueHealth.summary.healthyProcessing", {
+          defaultValue: "Healthy - {{processing}} jobs processing normally.",
+          processing: summary.values.processing
+        })
+      case "degraded_failures":
+        return t("managePrompts.studio.queueHealth.summary.degradedFailures", {
+          defaultValue: "Degraded - {{failedCount}} failures recently ({{successPercent}}% success).",
+          failedCount: summary.values.failedCount,
+          successPercent: summary.values.successPercent
+        })
+      case "degraded_backlog":
+        return t("managePrompts.studio.queueHealth.summary.degradedBacklog", {
+          defaultValue: "Degraded - queue backlog at {{queueDepth}} jobs.",
+          queueDepth: summary.values.queueDepth
+        })
+      case "degraded_success_rate":
+        return t("managePrompts.studio.queueHealth.summary.degradedSuccessRate", {
+          defaultValue: "Degraded - success rate dropped to {{successPercent}}%.",
+          successPercent: summary.values.successPercent
+        })
+      case "healthy_idle":
+      default:
+        return t("managePrompts.studio.queueHealth.summary.healthyIdle", {
+          defaultValue: "Healthy - all jobs processing normally."
+        })
+    }
+  })()
 
   const formatProcessingTime = (seconds?: number) => {
     if (!seconds) return "-"
@@ -41,6 +76,7 @@ export const QueueHealthWidget: React.FC<QueueHealthWidgetProps> = ({
           defaultValue: "Queue Health"
         })}
       </div>
+      <div className={hasIssues ? "text-danger" : "text-success"}>{summaryText}</div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-text-muted">
           {t("managePrompts.studio.queueHealth.queueDepth", {

@@ -45,10 +45,11 @@ def test_google_stream_emits_done_once(monkeypatch):
         lambda *a, **k: _Client(),
     )
 
-    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_google
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 
-    gen = chat_with_google(
-        input_data=[{"role": "user", "content": "hi"}],
+    gen = perform_chat_api_call(
+        api_provider="google",
+        messages=[{"role": "user", "content": "hi"}],
         api_key="test-key",
         model="gemini-1.5-flash-latest",
         streaming=True,
@@ -60,7 +61,7 @@ def test_google_stream_emits_done_once(monkeypatch):
 
 
 def test_huggingface_headers_are_masked(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_huggingface
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call as _perform_chat
 
     class _Client:
         def __enter__(self):
@@ -106,8 +107,9 @@ def test_huggingface_headers_are_masked(monkeypatch):
     )
 
     secret = "sk-ABCDEF1234567890"
-    chat_with_huggingface(
-        input_data=[{"role": "user", "content": "hi"}],
+    _perform_chat(
+        api_provider="huggingface",
+        messages=[{"role": "user", "content": "hi"}],
         api_key=secret,
         streaming=False,
         model="test/Model-Stub",

@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.testing import is_truthy
 
 _SETUP_ACCESS_GUARD_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -25,7 +26,7 @@ def _env_true(name: str) -> bool:
     raw = os.getenv(name)
     if not raw:
         return False
-    return raw.strip().lower() in {"1", "true", "yes", "on", "y"}
+    return is_truthy(raw)
 
 
 

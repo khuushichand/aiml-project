@@ -1,11 +1,45 @@
 export const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
-  "image/gif"
+  "image/gif",
+  "image/webp"
 ])
 
-const BASE64_IMAGE_PATTERN =
-  /^(?:[A-Za-z0-9+/_-]{4})*(?:[A-Za-z0-9+/_-]{2}==|[A-Za-z0-9+/_-]{3}=)?$/
+function isBase64ImageChar(code: number): boolean {
+  return (
+    (code >= 0x41 && code <= 0x5a) || // A-Z
+    (code >= 0x61 && code <= 0x7a) || // a-z
+    (code >= 0x30 && code <= 0x39) || // 0-9
+    code === 0x2b || // +
+    code === 0x2f || // /
+    code === 0x5f || // _
+    code === 0x2d // -
+  )
+}
+
+function isValidBase64ImagePayload(value: string): boolean {
+  const length = value.length
+  if (!length || length % 4 !== 0) return false
+
+  let paddingStart = length
+  for (let i = 0; i < length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code === 0x3d) {
+      paddingStart = i
+      break
+    }
+    if (!isBase64ImageChar(code)) return false
+  }
+
+  const paddingLength = length - paddingStart
+  if (paddingLength > 2) return false
+
+  for (let i = paddingStart; i < length; i += 1) {
+    if (value.charCodeAt(i) !== 0x3d) return false
+  }
+
+  return true
+}
 
 export function decodeBase64Header(
   value: string,
@@ -54,6 +88,18 @@ export function detectImageMime(bytes: Uint8Array): string | null {
     bytes[5] === 0x61
   if (isGif) return "image/gif"
 
+  const isWebp =
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  if (isWebp) return "image/webp"
+
   return null
 }
 
@@ -63,7 +109,7 @@ export function createImageDataUrl(base64: string): string | null {
   const trimmed = base64.trim()
   if (!trimmed) return null
   if (trimmed.toLowerCase().startsWith("data:image/")) return trimmed
-  if (!BASE64_IMAGE_PATTERN.test(trimmed)) return null
+  if (!isValidBase64ImagePayload(trimmed)) return null
 
   const headerBytes = decodeBase64Header(trimmed)
   if (!headerBytes) return null

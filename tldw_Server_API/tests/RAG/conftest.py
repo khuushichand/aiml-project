@@ -37,7 +37,7 @@ _POSTGRES_ENV_VARS = (
 _HAS_POSTGRES = (_PG_DRIVER is not None)
 
 def _postgres_required() -> bool:
-    return os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _skip_or_fail_postgres(reason: str) -> None:
@@ -194,7 +194,7 @@ def dual_backend_env(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator
             try:
                 _drop_postgres_database(config)  # type: ignore[name-defined]
             except Exception:
-                pass
+                _ = None
 
 
 @pytest.fixture

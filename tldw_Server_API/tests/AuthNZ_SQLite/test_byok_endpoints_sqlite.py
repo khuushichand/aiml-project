@@ -1,6 +1,10 @@
 import base64
+import json
+import sys
+import types
 import uuid
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -56,6 +60,26 @@ async def _setup_byok_sqlite(tmp_path, monkeypatch):
     monkeypatch.setenv("DEFAULT_MODEL_COHERE", "command-r")
     monkeypatch.setenv("DEFAULT_MODEL_GROQ", "llama-3.1-8b-instant")
     monkeypatch.setenv("DEFAULT_MODEL_OPENROUTER", "openrouter/test-model")
+
+    if "pyotp" not in sys.modules:
+        pyotp_stub = types.ModuleType("pyotp")
+
+        class _StubTOTP:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def now(self) -> str:
+                return "000000"
+
+            def verify(self, *_args, **_kwargs) -> bool:
+                return True
+
+            def provisioning_uri(self, *_args, **_kwargs) -> str:
+                return "otpauth://totp/test"
+
+        pyotp_stub.TOTP = _StubTOTP
+        pyotp_stub.random_base32 = lambda *_args, **_kwargs: "A" * 32
+        monkeypatch.setitem(sys.modules, "pyotp", pyotp_stub)
 
     from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
@@ -194,6 +218,7 @@ async def test_byok_endpoints_sqlite(tmp_path, monkeypatch):
         items = {item["provider"]: item for item in listing.json()["items"]}
         assert items["openai"]["source"] == "user"
         assert items["openai"]["has_key"] is True
+        assert items["openai"]["auth_source"] == "api_key"
         assert items["cohere"]["source"] == "user"
 
         r = client.delete("/api/v1/users/keys/cohere", headers=user_headers)
@@ -308,6 +333,249 @@ async def test_byok_endpoints_sqlite(tmp_path, monkeypatch):
         listing = client.get("/api/v1/users/keys", headers=user_headers)
         items = {item["provider"]: item for item in listing.json()["items"]}
         assert items["openai"]["source"] != "user"
+
+
+@pytest.mark.asyncio
+async def test_openai_oauth_endpoints_sqlite(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_OAUTH_ENABLED", "1")
+    monkeypatch.setenv("OPENAI_OAUTH_CLIENT_ID", "oauth-client-id")
+    monkeypatch.setenv("OPENAI_OAUTH_CLIENT_SECRET", "oauth-client-secret")
+    monkeypatch.setenv("OPENAI_OAUTH_AUTH_URL", "https://oauth.example.com/authorize")
+    monkeypatch.setenv("OPENAI_OAUTH_TOKEN_URL", "https://oauth.example.com/token")
+    monkeypatch.setenv("OPENAI_OAUTH_SCOPES", "openid profile api")
+    monkeypatch.setenv("OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES", "/settings,/profile")
+
+    state = await _setup_byok_sqlite(tmp_path, monkeypatch)
+    org_id = int(state["org"]["id"])
+    team_id = int(state["team"]["id"])
+
+    from tldw_Server_API.app.main import app
+    from tldw_Server_API.app.api.v1.endpoints import user_keys as user_keys_endpoints
+
+    user_token = await _issue_access_token(
+        state["user"],
+        active_org_id=org_id,
+        active_team_id=team_id,
+    )
+    user_headers = _auth_headers(user_token)
+
+    class _FakeOAuthTokenResponse:
+        def __init__(self, *, status_code: int, payload: dict):
+            self.status_code = status_code
+            self._payload = dict(payload)
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return dict(self._payload)
+
+        async def aclose(self):
+            return None
+
+    token_call_log: list[dict] = []
+    metric_counter_calls: list[dict] = []
+    metric_histogram_calls: list[dict] = []
+    audit_calls: list[dict] = []
+
+    class _FakeAuditService:
+        async def log_event(self, **kwargs):
+            audit_calls.append(dict(kwargs))
+            return "evt-test"
+
+    async def _fake_get_audit_service_for_user_id_optional(_user_id):
+        return _FakeAuditService()
+
+    def _fake_increment_counter(metric_name: str, value: float = 1, labels: dict | None = None):
+        metric_counter_calls.append(
+            {
+                "name": metric_name,
+                "value": value,
+                "labels": dict(labels or {}),
+            }
+        )
+
+    def _fake_observe_histogram(metric_name: str, value: float, labels: dict | None = None):
+        metric_histogram_calls.append(
+            {
+                "name": metric_name,
+                "value": value,
+                "labels": dict(labels or {}),
+            }
+        )
+
+    async def _fake_http_afetch(**kwargs):
+        token_call_log.append(dict(kwargs))
+        data = kwargs.get("data") or {}
+        grant_type = data.get("grant_type")
+        if grant_type == "authorization_code":
+            return _FakeOAuthTokenResponse(
+                status_code=200,
+                payload={
+                    "access_token": "oauth-access-token-111",
+                    "refresh_token": "oauth-refresh-token-111",
+                    "token_type": "Bearer",
+                    "scope": "api",
+                    "expires_in": 3600,
+                    "sub": "user-sub-123",
+                },
+            )
+        if grant_type == "refresh_token":
+            return _FakeOAuthTokenResponse(
+                status_code=200,
+                payload={
+                    "access_token": "oauth-access-token-222",
+                    "refresh_token": "oauth-refresh-token-222",
+                    "token_type": "Bearer",
+                    "scope": "api refreshed",
+                    "expires_in": 1800,
+                },
+            )
+        return _FakeOAuthTokenResponse(
+            status_code=400,
+            payload={"error": "unsupported_grant_type"},
+        )
+
+    monkeypatch.setattr(user_keys_endpoints, "_http_afetch", _fake_http_afetch)
+    monkeypatch.setattr(user_keys_endpoints, "increment_counter", _fake_increment_counter)
+    monkeypatch.setattr(user_keys_endpoints, "observe_histogram", _fake_observe_histogram)
+    monkeypatch.setattr(
+        user_keys_endpoints,
+        "get_or_create_audit_service_for_user_id_optional",
+        _fake_get_audit_service_for_user_id_optional,
+    )
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/v1/users/keys",
+            json={"provider": "openai", "api_key": "sk-user-openai-4321"},
+            headers=user_headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["key_hint"] == "4321"
+
+        listing = client.get("/api/v1/users/keys", headers=user_headers)
+        assert listing.status_code == 200
+        openai_item = {item["provider"]: item for item in listing.json()["items"]}["openai"]
+        assert openai_item["auth_source"] == "api_key"
+
+        r = client.post(
+            "/api/v1/users/keys/openai/oauth/authorize",
+            json={
+                "credential_fields": {"org_id": "org_abc"},
+                "return_path": "/settings/models",
+            },
+            headers=user_headers,
+        )
+        assert r.status_code == 200, r.text
+        auth_body = r.json()
+        assert auth_body["provider"] == "openai"
+        parsed = urlparse(auth_body["auth_url"])
+        parsed_qs = parse_qs(parsed.query)
+        assert parsed_qs.get("client_id") == ["oauth-client-id"]
+        state_value = parsed_qs["state"][0]
+
+        r = client.get(
+            "/api/v1/users/keys/openai/oauth/callback",
+            params={"code": "auth-code-123", "state": state_value},
+        )
+        assert r.status_code == 200, r.text
+        callback_body = r.json()
+        assert callback_body["auth_source"] == "oauth"
+        assert callback_body["key_hint"] == "oauth"
+        assert callback_body["expires_at"] is not None
+
+        r = client.get("/api/v1/users/keys/openai/oauth/status", headers=user_headers)
+        assert r.status_code == 200, r.text
+        status_body = r.json()
+        assert status_body["connected"] is True
+        assert status_body["auth_source"] == "oauth"
+        assert status_body["scope"] == "api"
+        assert status_body["expires_at"] is not None
+
+        listing = client.get("/api/v1/users/keys", headers=user_headers)
+        openai_item = {item["provider"]: item for item in listing.json()["items"]}["openai"]
+        assert openai_item["auth_source"] == "oauth"
+
+        r = client.post(
+            "/api/v1/users/keys/openai/source",
+            json={"auth_source": "api_key"},
+            headers=user_headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["auth_source"] == "api_key"
+
+        r = client.post(
+            "/api/v1/users/keys/openai/source",
+            json={"auth_source": "oauth"},
+            headers=user_headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["auth_source"] == "oauth"
+
+        r = client.post("/api/v1/users/keys/openai/oauth/refresh", headers=user_headers)
+        assert r.status_code == 200, r.text
+        refresh_body = r.json()
+        assert refresh_body["status"] == "refreshed"
+        assert refresh_body["expires_at"] is not None
+
+        r = client.get(
+            "/api/v1/users/keys/openai/oauth/callback",
+            params={"code": "bad-code", "state": "not-a-valid-state"},
+        )
+        assert r.status_code == 403
+
+        r = client.delete("/api/v1/users/keys/openai/oauth", headers=user_headers)
+        assert r.status_code == 204
+
+        r = client.post("/api/v1/users/keys/openai/oauth/refresh", headers=user_headers)
+        assert r.status_code == 404
+
+        r = client.get("/api/v1/users/keys/openai/oauth/status", headers=user_headers)
+        assert r.status_code == 200
+        status_after_disconnect = r.json()
+        assert status_after_disconnect["connected"] is False
+        assert status_after_disconnect["auth_source"] == "api_key"
+
+        listing = client.get("/api/v1/users/keys", headers=user_headers)
+        openai_item = {item["provider"]: item for item in listing.json()["items"]}["openai"]
+        assert openai_item["auth_source"] == "api_key"
+
+        r = client.post(
+            "/api/v1/users/keys/openai/source",
+            json={"auth_source": "oauth"},
+            headers=user_headers,
+        )
+        assert r.status_code == 409
+
+        r = client.post(
+            "/api/v1/users/keys/test",
+            json={"provider": "openai"},
+            headers=user_headers,
+        )
+        assert r.status_code == 200, r.text
+
+    assert len(token_call_log) == 2
+    assert token_call_log[0]["data"]["grant_type"] == "authorization_code"
+    assert token_call_log[1]["data"]["grant_type"] == "refresh_token"
+    metric_names = [entry["name"] for entry in metric_counter_calls]
+    assert "byok_oauth_authorize_started_total" in metric_names
+    assert "byok_oauth_callback_success_total" in metric_names
+    assert "byok_oauth_callback_failure_total" in metric_names
+    assert "byok_oauth_refresh_total" in metric_names
+    refresh_outcomes = {
+        entry["labels"].get("outcome")
+        for entry in metric_counter_calls
+        if entry["name"] == "byok_oauth_refresh_total"
+    }
+    assert "success" in refresh_outcomes
+    assert "failure" in refresh_outcomes
+    assert any(entry["name"] == "byok_oauth_refresh_latency_ms" for entry in metric_histogram_calls)
+
+    audit_actions = [entry.get("action") for entry in audit_calls]
+    assert "provider_oauth_authorize_started" in audit_actions
+    assert "provider_oauth_connected" in audit_actions
+    assert "provider_oauth_refreshed" in audit_actions
+    assert "provider_oauth_disconnected" in audit_actions
+    assert "provider_oauth_refresh_failed" in audit_actions
 
 
 @pytest.mark.asyncio

@@ -10,17 +10,30 @@ export interface Model {
 }
 
 const BASE_URL = 'https://api.elevenlabs.io/v1';
+const DEFAULT_ELEVENLABS_TIMEOUT_MS = 10_000;
 
-export const getVoices = async (apiKey: string): Promise<Voice[]> => {
+type ElevenLabsRequestOptions = {
+  timeoutMs?: number;
+};
+
+export const getVoices = async (
+  apiKey: string,
+  options?: ElevenLabsRequestOptions
+): Promise<Voice[]> => {
   const response = await axios.get(`${BASE_URL}/voices`, {
-    headers: { 'xi-api-key': apiKey }
+    headers: { 'xi-api-key': apiKey },
+    timeout: options?.timeoutMs ?? DEFAULT_ELEVENLABS_TIMEOUT_MS
   });
   return response.data.voices;
 };
 
-export const getModels = async (apiKey: string): Promise<Model[]> => {
+export const getModels = async (
+  apiKey: string,
+  options?: ElevenLabsRequestOptions
+): Promise<Model[]> => {
   const response = await axios.get(`${BASE_URL}/models`, {
-    headers: { 'xi-api-key': apiKey }
+    headers: { 'xi-api-key': apiKey },
+    timeout: options?.timeoutMs ?? DEFAULT_ELEVENLABS_TIMEOUT_MS
   });
   return response.data;
 };

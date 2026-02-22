@@ -1,15 +1,17 @@
 import { test, expect } from "@playwright/test"
-import { launchWithBuiltExtension } from "./utils/extension-build"
 import { forceErrorUnreachable, waitForConnectionStore } from "./utils/connection"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import {
+  requireRealServerConfig,
+  launchWithBuiltExtensionOrSkip
+} from "./utils/real-server"
 
 test.describe('i18n smoke test for Quick Ingest & Characters', () => {
   test('non-English locale resolves Quick Ingest hint and None character option', async () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
 
     const { context, page, extensionId, optionsUrl } =
-      await launchWithBuiltExtension({
+      await launchWithBuiltExtensionOrSkip(test, {
         seedConfig: {
           serverUrl,
           authMode: 'single-user',

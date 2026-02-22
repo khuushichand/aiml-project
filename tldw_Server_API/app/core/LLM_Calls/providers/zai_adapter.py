@@ -7,7 +7,7 @@ from typing import Any
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError, ChatProviderError
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
-from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import _safe_cast
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,

@@ -33,7 +33,7 @@ async def test_rss_conditional_304_updates_last_scraped_and_status(monkeypatch):
         if p.exists():
             p.unlink()
     except Exception:
-        pass
+        _ = None
     db = WatchlistsDatabase.for_user(user_id)
 
     src = db.create_source(
@@ -88,7 +88,7 @@ async def test_rss_retry_after_defers_and_skips(monkeypatch):
         if p.exists():
             p.unlink()
     except Exception:
-        pass
+        _ = None
     db = WatchlistsDatabase.for_user(user_id)
 
     src = db.create_source(
@@ -142,7 +142,7 @@ async def test_rss_200_sets_etag_last_modified_and_ingests(monkeypatch):
         if p.exists():
             p.unlink()
     except Exception:
-        pass
+        _ = None
     db = WatchlistsDatabase.for_user(user_id)
 
     src = db.create_source(

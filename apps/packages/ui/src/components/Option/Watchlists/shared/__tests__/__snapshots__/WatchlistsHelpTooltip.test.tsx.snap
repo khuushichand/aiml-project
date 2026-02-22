@@ -1,0 +1,423 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all configured topics 1`] = `
+<div>
+  <div>
+    <div>
+      <button
+        aria-label="Open help for OPML imports"
+        class="!h-6 !w-6 !p-0 text-text-muted "
+        data-testid="watchlists-help-opml"
+        type="text"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-circle-question-mark h-3.5 w-3.5"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle
+            cx="12"
+            cy="12"
+            r="10"
+          />
+          <path
+            d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"
+          />
+          <path
+            d="M12 17h.01"
+          />
+        </svg>
+      </button>
+      <div
+        data-testid="tooltip-content"
+      >
+        <div
+          class="max-w-[280px] space-y-2"
+        >
+          <div
+            class="text-sm font-medium"
+          >
+            What is OPML?
+          </div>
+          <div
+            class="text-xs text-text-muted"
+          >
+            OPML is a portable feed-list format. Import one file to add many RSS or site feeds at once.
+          </div>
+          <a
+            class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            href="https://en.wikipedia.org/wiki/OPML"
+            rel="noreferrer"
+            target="_blank"
+          >
+            Learn more
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-external-link h-3 w-3"
+              fill="none"
+              height="24"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M15 3h6v6"
+              />
+              <path
+                d="M10 14 21 3"
+              />
+              <path
+                d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"
+              />
+            </svg>
+          </a>
+        </div>
+      </div>
+    </div>
+    <div>
+      <button
+        aria-label="Open help for cron scheduling"
+        class="!h-6 !w-6 !p-0 text-text-muted "
+        data-testid="watchlists-help-cron"
+        type="text"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-circle-question-mark h-3.5 w-3.5"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle
+            cx="12"
+            cy="12"
+            r="10"
+          />
+          <path
+            d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"
+          />
+          <path
+            d="M12 17h.01"
+          />
+        </svg>
+      </button>
+      <div
+        data-testid="tooltip-content"
+      >
+        <div
+          class="max-w-[280px] space-y-2"
+        >
+          <div
+            class="text-sm font-medium"
+          >
+            How cron scheduling works
+          </div>
+          <div
+            class="text-xs text-text-muted"
+          >
+            Cron uses five fields: minute, hour, day-of-month, month, and day-of-week.
+          </div>
+          <a
+            class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            href="https://crontab.guru/"
+            rel="noreferrer"
+            target="_blank"
+          >
+            Learn more
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-external-link h-3 w-3"
+              fill="none"
+              height="24"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M15 3h6v6"
+              />
+              <path
+                d="M10 14 21 3"
+              />
+              <path
+                d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"
+              />
+            </svg>
+          </a>
+        </div>
+      </div>
+    </div>
+    <div>
+      <button
+        aria-label="Open help for retention TTL"
+        class="!h-6 !w-6 !p-0 text-text-muted "
+        data-testid="watchlists-help-ttl"
+        type="text"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-circle-question-mark h-3.5 w-3.5"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle
+            cx="12"
+            cy="12"
+            r="10"
+          />
+          <path
+            d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"
+          />
+          <path
+            d="M12 17h.01"
+          />
+        </svg>
+      </button>
+      <div
+        data-testid="tooltip-content"
+      >
+        <div
+          class="max-w-[280px] space-y-2"
+        >
+          <div
+            class="text-sm font-medium"
+          >
+            What retention TTL means
+          </div>
+          <div
+            class="text-xs text-text-muted"
+          >
+            TTL controls how long generated outputs are kept before they expire automatically.
+          </div>
+          <a
+            class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            href="https://en.wikipedia.org/wiki/Time_to_live"
+            rel="noreferrer"
+            target="_blank"
+          >
+            Learn more
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-external-link h-3 w-3"
+              fill="none"
+              height="24"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M15 3h6v6"
+              />
+              <path
+                d="M10 14 21 3"
+              />
+              <path
+                d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"
+              />
+            </svg>
+          </a>
+        </div>
+      </div>
+    </div>
+    <div>
+      <button
+        aria-label="Open help for Jinja2 templates"
+        class="!h-6 !w-6 !p-0 text-text-muted "
+        data-testid="watchlists-help-jinja2"
+        type="text"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-circle-question-mark h-3.5 w-3.5"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle
+            cx="12"
+            cy="12"
+            r="10"
+          />
+          <path
+            d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"
+          />
+          <path
+            d="M12 17h.01"
+          />
+        </svg>
+      </button>
+      <div
+        data-testid="tooltip-content"
+      >
+        <div
+          class="max-w-[280px] space-y-2"
+        >
+          <div
+            class="text-sm font-medium"
+          >
+            Using Jinja2 templates
+          </div>
+          <div
+            class="text-xs text-text-muted"
+          >
+            Jinja2 lets you loop, branch, and format monitor data into reusable report templates.
+          </div>
+          <a
+            class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            href="https://jinja.palletsprojects.com/en/stable/templates/"
+            rel="noreferrer"
+            target="_blank"
+          >
+            Learn more
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-external-link h-3 w-3"
+              fill="none"
+              height="24"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M15 3h6v6"
+              />
+              <path
+                d="M10 14 21 3"
+              />
+              <path
+                d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"
+              />
+            </svg>
+          </a>
+        </div>
+      </div>
+    </div>
+    <div>
+      <button
+        aria-label="Open help for claim clusters"
+        class="!h-6 !w-6 !p-0 text-text-muted "
+        data-testid="watchlists-help-claimClusters"
+        type="text"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-circle-question-mark h-3.5 w-3.5"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle
+            cx="12"
+            cy="12"
+            r="10"
+          />
+          <path
+            d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"
+          />
+          <path
+            d="M12 17h.01"
+          />
+        </svg>
+      </button>
+      <div
+        data-testid="tooltip-content"
+      >
+        <div
+          class="max-w-[280px] space-y-2"
+        >
+          <div
+            class="text-sm font-medium"
+          >
+            What claim clusters are
+          </div>
+          <div
+            class="text-xs text-text-muted"
+          >
+            Claim clusters group similar claims across feeds so monitors can subscribe to related topic updates.
+          </div>
+          <a
+            class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            href="https://github.com/rmusser01/tldw_server#documentation--resources"
+            rel="noreferrer"
+            target="_blank"
+          >
+            Learn more
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-external-link h-3 w-3"
+              fill="none"
+              height="24"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M15 3h6v6"
+              />
+              <path
+                d="M10 14 21 3"
+              />
+              <path
+                d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"
+              />
+            </svg>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;

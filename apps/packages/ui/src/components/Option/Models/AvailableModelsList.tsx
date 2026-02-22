@@ -48,7 +48,7 @@ export const AvailableModelsList: React.FC = () => {
       <Alert
         type="error"
         showIcon
-        message={t('settings:models.loadErrorTitle', 'Unable to load models from server')}
+        title={t('settings:models.loadErrorTitle', 'Unable to load models from server')}
         description={
           <div className="flex flex-col gap-1 text-xs">
             <span>

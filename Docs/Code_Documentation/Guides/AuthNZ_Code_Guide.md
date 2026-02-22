@@ -26,7 +26,7 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
 
 ## New endpoints checklist (AuthNZ + RG)
 
-- Always authenticate via `get_auth_principal` and enforce authorization with `require_permissions(...)` / `require_roles(...)` (and `require_service_principal()` for service-only routes). Avoid introducing new usages of `require_admin`, raw `request.state.user_id` checks, or ad-hoc `is_single_user_mode()` branches for access control.
+- Always authenticate via `get_auth_principal` and enforce authorization with `require_permissions(...)` / `require_roles(...)` (and `require_service_principal()` for service-only routes). `require_admin`/`require_role` API-dependency shims are removed; avoid raw `request.state.user_id` checks or ad-hoc `is_single_user_mode()` branches for access control.
 - For latency/cost-sensitive or user-facing endpoints (chat, audio, embeddings, evaluations, MCP, workflows, tools, media ingestion, etc.), verify whether they should be governed by Resource Governor:
   - If yes, ensure there is a policy entry (`resource_governor_policies.yaml` or DB-backed `rg_policies`) and a `route_map` entry mapping the endpoint’s path/tag to an appropriate policy id.
   - Confirm tests exercise the RG-enforced behavior where limits are important (429/Retry-After headers, tokens/streams limits, etc.).
@@ -44,7 +44,6 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
   - `PROFILE=multi-user-postgres`.
   - Optional `PROFILE=multi-user-sqlite` for small dev setups.
   - Auth-adjacent behaviour flags:
-    - `ORG_POLICY_SINGLE_USER_PRINCIPAL` – single-user org-policy fallback driven by `AuthPrincipal` + profile vs legacy mode heuristics.
     - `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` – embeddings tenant RPS quotas driven by profile and principals explicitly tagged as single-user (subject `"single_user"` via `is_single_user_principal`) vs legacy `AUTH_MODE`.
     - `MCP_SINGLE_USER_COMPAT_SHIM` – MCP single-user API-key compatibility shim vs always using the multi-user API key manager.
 - New code should treat mode/profile/flags as **coordination and guardrail-tuning inputs** (bootstrap, banners, WebUI hints, quotas), not as authorization shortcuts. Auth decisions must use `AuthPrincipal` claims via the dependencies below and MUST NOT branch on `is_single_user_mode()` / `is_multi_user_mode()` or `AUTH_MODE` to grant or bypass permissions.
@@ -113,7 +112,7 @@ from fastapi import APIRouter, Depends
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_user,           # Resolves single-user, API-key, or JWT
     get_current_active_user,    # Adds active status check
-    check_rate_limit,           # General rate limit helper
+    check_rate_limit,           # Diagnostics-only ingress compatibility helper
     require_permissions,        # Claim-first permission gate (preferred)
 )
 
@@ -157,16 +156,13 @@ async def run_workflow(user=Depends(get_current_user)):
 
 Notes:
 - `get_current_user` handles single-user mode first, then API key, then JWT.
-- `check_rate_limit` uses a token bucket; see Rate Limiting below.
+- `check_rate_limit` dependency is diagnostics-only (it does not enforce fallback 429s); see Rate Limiting below for enforcement paths.
 
 Legacy compatibility DI (existing endpoints only):
 - `get_optional_current_user` – legacy shim, kept for older optional-auth routes that
   need to behave differently when a user is present. New endpoints should prefer
   claim-first patterns (e.g., `AuthPrincipal` + explicit permissions/roles) rather
   than introducing fresh optional-auth behaviors.
-- `require_role("role")` – legacy shim around `get_current_active_user` user dicts.
-  New routes must use `require_roles(...)` / `require_permissions(...)` together with
-  `get_auth_principal` instead of adding new usages of `require_role`.
 
 Examples (modern, claim-first):
 ```python
@@ -198,7 +194,7 @@ async def media_read(principal: AuthPrincipal = Depends(require_permissions("med
 
 - `session_manager.py` encrypts token material at rest using Fernet.
 - Encryption key precedence: explicit `SESSION_ENCRYPTION_KEY` → persisted file (secure 0600) → derived keys from configured secrets (fallback) → generated in TEST_MODE.
-  - Persisted key preferred path: project root `Config_Files/session_encryption.key`; back-compat fallback: `tldw_Server_API/Config_Files/session_encryption.key`. Set `SESSION_KEY_STORAGE=api` to prefer the API component path. Symlinks are handled safely and file ownership/permissions are validated.
+  - Persisted key preferred path: `tldw_Server_API/Config_Files/session_encryption.key`; legacy fallback: project root `Config_Files/session_encryption.key`. Set `SESSION_KEY_STORAGE=project` to force legacy storage. In default API mode, valid legacy keys are migrated to the API path. Symlinks are handled safely and file ownership/permissions are validated.
 - Blacklist checks (by JTI) protect against replay after logout/rotation; see `token_blacklist.py`.
 - Redis (optional via `REDIS_URL`) accelerates lookups and counters.
 
@@ -239,8 +235,7 @@ Notes:
   - `get_org_policy_from_principal` → resolves an organization policy in a **principal-first** way for org-scoped features (for example, connectors/admin policy and sources):
     - Preference order:
       1. First `org_id` in `principal.org_ids` (claim-first).
-      2. First `org_id` from `current_user["org_memberships"]` (legacy user dict).
-      3. Synthetic `org_id=1` for single-user deployments, controlled by `ORG_POLICY_SINGLE_USER_PRINCIPAL` (see below).
+      2. Synthetic `org_id=1` only for principals explicitly tagged as `subject="single_user"`.
     - This helper is the preferred org-policy dependency for new org-scoped endpoints; avoid reimplementing org selection logic from `request.state` or mode flags.
 - **HTTP status semantics (AuthNZ dependencies)**:
   - `get_auth_principal`:
@@ -262,39 +257,24 @@ Notes:
 - **Removed legacy helpers (historical only)**:
   - Earlier versions exposed FastAPI dependencies `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, and `AllPermissionsChecker` from `permissions.py`. These have now been removed; endpoints must use `get_auth_principal` together with `require_permissions` / `require_roles` instead.
   - Existing admin and control surfaces that once used these helpers (media add, tools execute, workflows runs/events/artifacts/control/DLQ, sandbox admin) have been migrated to claim-first dependencies. Tests such as `test_media_add_permissions_claims.py`, `test_tools_permissions_claims.py`, `test_workflows_runs_permissions_claims.py`, `test_workflows_artifacts_permissions_claims.py`, `test_workflows_webhook_dlq_permissions_claims.py`, `test_workflows_control_permissions_claims.py`, and `test_sandbox_admin_permissions_claims.py` lock in the new behavior and ensure the claim-first dependencies are the true authorization gates.
-  - `require_admin` in `evaluations_auth.py` remains as an admin-only guard for heavy evaluations flows; new admin surfaces should prefer `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
+  - Heavy evaluations admin paths use claim-first checks via `enforce_heavy_evaluations_admin(AuthPrincipal)` together with `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
   - A repository layer exists for AuthNZ and MUST be used instead of ad-hoc SQL for core tables:
     - `AuthnzUsersRepo` (`app/core/AuthNZ/repos/users_repo.py`) wraps `UsersDB` for user lookups; exercised against both SQLite and Postgres in AuthNZ tests.
     - `AuthnzApiKeysRepo` (`app/core/AuthNZ/repos/api_keys_repo.py`) centralizes `api_keys` read/write paths and is used by `APIKeyManager` and single-user bootstrap.
     - `AuthnzRbacRepo` (`app/core/AuthNZ/repos/rbac_repo.py`) fronts `UserDatabase_v2` for RBAC permission checks; higher-level helpers in `app/core/AuthNZ/rbac.py` delegate to it.
     - `AuthnzOrgsTeamsRepo` (`app/core/AuthNZ/repos/orgs_teams_repo.py`) owns organizations, teams, and membership (including default-team creation/enrollment) so `orgs_teams.py` can remain orchestration-only.
 
-### Single-User Org Policy Flag (`ORG_POLICY_SINGLE_USER_PRINCIPAL`)
+### Single-User Org Policy Fallback (Principal-Only)
 
-Org-policy resolution for single-user deployments uses the same principal model as multi-user, with a small compatibility flag to control when (and how) the synthetic `org_id=1` fallback is allowed:
+Org-policy resolution now uses principal claims exclusively:
 
-- `ORG_POLICY_SINGLE_USER_PRINCIPAL` (env var):
-  - **Default (unset / truthy)**:
-    - `get_org_policy_from_principal` uses a **principal/profile-driven** fallback:
-      - It first checks that the active profile is single-user (`is_single_user_profile_mode()`).
-      - It then only uses synthetic `org_id=1` when `principal.kind == "single_user"`.
-      - If those conditions are not met (for example, a non-single-user principal without org memberships), the helper raises `HTTPException(400)` instead of silently assigning `org_id=1`.
-    - This is the recommended behaviour going forward and is the default when the env var is not set.
-  - **Explicit compatibility mode (`"0"`, `"false"`, `"off"`)**:
-    - The helper preserves the **legacy mode/profile-driven** fallback:
-      - When `principal.org_ids` and `current_user.org_memberships` are empty, it treats the environment as single-user if `is_single_user_mode()` or `is_single_user_profile_mode()` is true and uses a synthetic `org_id=1`, regardless of the principal’s kind/user id.
-      - Otherwise, it raises `HTTPException(400)` with `"User has no organization memberships"`.
-    - This compatibility path exists primarily for existing deployments that rely on the older behaviour and should be treated as deprecated for new code.
+- `principal.org_ids` is authoritative when present.
+- Synthetic `org_id=1` is allowed only for principals explicitly tagged with `subject="single_user"`.
+- Non-single-user principals without `org_ids` receive `HTTPException(400)` with `"User has no organization memberships"`.
 
 Tests:
-- Unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_org_policy_from_principal.py` cover:
-  - Claim-first preference for `principal.org_ids`.
-  - Fallback to `current_user["org_memberships"]`.
-  - Legacy single-user behaviour when the flag is unset.
-  - Principal-driven behaviour when `ORG_POLICY_SINGLE_USER_PRINCIPAL` is enabled (single-user principals vs non-single-user principals).
-- HTTP-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_connectors_admin_claims.py` exercise the org-policy helper indirectly via connectors admin endpoints:
-  - Single-user principals with the flag enabled and no org memberships successfully resolve `org_id=1`.
-  - Non-single-user principals without org memberships receive HTTP 400 under the same flag/profile conditions.
+- Unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_org_policy_from_principal.py` cover claim-first selection, single-user principal fallback, and legacy-flag-ignore behavior.
+- HTTP-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_connectors_admin_claims.py` exercise the same behavior through connectors routes.
     - `AuthnzUsageRepo` (`app/core/AuthNZ/repos/usage_repo.py`) provides aggregate and pruning helpers for `usage_log`, `usage_daily`, `llm_usage_log`, and `llm_usage_daily`, and is used by `virtual_keys` and the AuthNZ scheduler.
     - `AuthnzRateLimitsRepo` (`app/core/AuthNZ/repos/rate_limits_repo.py`) encapsulates all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`) and is used by `rate_limiter.RateLimiter` for counters, lockouts, and cleanup.
   - New AuthNZ code should **not** add fresh backend-specific SQL for these tables; prefer adding small, task-focused methods to the appropriate repo and calling them from business logic.
@@ -323,7 +303,7 @@ When adding a new FastAPI endpoint that needs AuthNZ and guardrails:
    - Gate the route with claim-first dependencies on the router or endpoint:
      - `dependencies=[Depends(require_permissions(MY_PERMISSION))]`
      - and/or `dependencies=[Depends(require_roles("admin"))]`.
-   - Do **not** introduce new `require_admin`-style helpers or mode-based gates; always build on `get_auth_principal` + `require_permissions` / `require_roles`.
+   - Do **not** introduce mode-based gates or legacy admin shims; always build on `get_auth_principal` + `require_permissions` / `require_roles`.
 
 3. **Wire ResourceGovernor / rate limits if needed**
    - For rate-limited endpoints, reuse shared helpers instead of new per-module limiters:
@@ -350,10 +330,11 @@ When adding a new FastAPI endpoint that needs AuthNZ and guardrails:
 - Governance facade: `AuthGovernor` (`auth_governor.py`) is the canonical entry point for AuthNZ guardrails. It wraps the shared `RateLimiter` and virtual-key budget helpers so core flows no longer talk to those primitives directly:
   - `check_llm_budget_for_api_key(principal, api_key_id)` decorates `is_key_over_budget(...)` with `AuthPrincipal` metadata and is used by `llm_budget_guard` and `llm_budget_middleware`.
   - `check_lockout(identifier, attempt_type="login", rate_limiter=...)` and `record_auth_failure(identifier, attempt_type, rate_limiter=...)` mediate login lockout and suspicious-activity tracking and are used by the `/auth/login` endpoint.
-  - `check_rate_limit(identifier, endpoint, limit=None, window_minutes=None, rate_limiter=...)` is the generic AuthNZ-level rate-limit helper used by `check_rate_limit` / `check_auth_rate_limit` to enforce 429 semantics.
+  - `check_rate_limit(identifier, endpoint, limit=None, window_minutes=None, rate_limiter=...)` remains available for compatibility/testing and direct limiter call sites where explicitly used.
 - Endpoint helpers:
-  - `check_rate_limit` extracts a stable client identity (IP or user) and calls `AuthGovernor.check_rate_limit` with defaults, raising HTTP 429 on failure.
-  - `check_auth_rate_limit` uses `AuthGovernor.check_rate_limit` with stricter defaults (`limit=5`, `window_minutes=1`) for authentication routes.
+  - `check_rate_limit` is diagnostics-only (no fallback 429 enforcement).
+  - `check_auth_rate_limit` is diagnostics-only (no fallback 429 enforcement).
+  - Route abuse protection should come from RG ingress policies and endpoint-local RG checks.
 - LLM budgets: `llm_budget_middleware.py` and `llm_budget_guard.py` enforce endpoint/provider/model quotas when configured, always via `AuthGovernor.check_llm_budget_for_api_key`. Settings are `LLM_BUDGET_ENFORCE` (on/off) and `LLM_BUDGET_ENDPOINTS` (paths). Virtual key features are gated by `VIRTUAL_KEYS_ENABLED` (defaults true).
 
 References:
@@ -365,7 +346,7 @@ References:
 - `tldw_Server_API/app/core/AuthNZ/auth_governor.py#AuthGovernor`
 
 RBAC-aware selector (logging-only for now):
-- `auth_deps.rbac_rate_limit(resource)` logs the strictest configured limit selected for a user/role-resource pair; it does not enforce yet (use `check_rate_limit` for enforcement).
+- `auth_deps.rbac_rate_limit(resource)` logs the strictest configured limit selected for a user/role-resource pair; it does not enforce yet (use `AuthGovernor`/`RateLimiter` call paths for enforcement).
 
 Example: RBAC resource-aware logging (no enforcement)
 ```python

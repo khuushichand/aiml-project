@@ -155,6 +155,68 @@ test.describe("KnowledgeQA Workflow", () => {
 
       await assertNoCriticalErrors(diagnostics)
     })
+
+    test("shows progressive loading stages for delayed long-running searches", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      qaPage = new KnowledgeQAPage(authedPage)
+
+      await authedPage.route("**/api/v1/rag/search/stream", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/plain",
+          body: "",
+        })
+      })
+
+      await authedPage.route("**/api/v1/rag/search", async (route) => {
+        await authedPage.waitForTimeout(6500)
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            results: [
+              {
+                id: "delayed-source-1",
+                content: "Delayed source excerpt",
+                metadata: {
+                  title: "Delayed Source",
+                  source_type: "media_db",
+                  url: "https://example.com/delayed-source",
+                },
+                score: 0.92,
+              },
+            ],
+            answer: "Delayed answer [1]",
+            expanded_queries: ["delayed response query"],
+          }),
+        })
+      })
+
+      await qaPage.goto()
+      await qaPage.waitForReady()
+
+      const input = await qaPage.getSearchInput()
+      await input.fill("delayed response query")
+      await input.press("Enter")
+
+      await expect(
+        authedPage.getByText(/Searching documents\.\.\./i)
+      ).toBeVisible({ timeout: 4_000 })
+      await expect(
+        authedPage.getByText(/Reranking results\.\.\./i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      await qaPage.waitForResults()
+      await expect(
+        authedPage.getByText(/Delayed answer \[1\]/i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
   })
 
   // ═════════════════════════════════════════════════════════════════════

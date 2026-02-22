@@ -145,7 +145,7 @@ class TestReDoSProtection:
                 except OSError:
                     continue
         except Exception:
-            pass
+            _ = None
         return False
 
     @pytest.mark.timeout(10)  # Pytest timeout as backup

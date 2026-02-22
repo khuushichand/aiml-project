@@ -3,10 +3,7 @@ import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import { shallow } from "zustand/shallow"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import {
-  type RagSettings,
-  buildRagSearchRequest
-} from "@/services/rag/unified-rag"
+import { type RagSettings } from "@/services/rag/unified-rag"
 import {
   formatRagResult,
   type RagCopyFormat,
@@ -73,6 +70,15 @@ const getMetadataPrimitive = (
   return undefined
 }
 
+const getFirstNonEmptyString = (...values: unknown[]): string => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value
+    }
+  }
+  return ""
+}
+
 // Helper functions for result extraction
 export const getResultText = (item: RagResult) =>
   item.content || item.text || item.chunk || ""
@@ -109,6 +115,88 @@ export const getResultScore = (item: RagResult) =>
     : typeof item.relevance === "number"
       ? item.relevance
       : undefined
+
+const toPositiveInt = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.trim())
+    if (Number.isInteger(parsed) && parsed > 0) return parsed
+  }
+  return null
+}
+
+export const extractMediaId = (item: RagResult): number | null => {
+  const fromMediaId = toPositiveInt(getMetadataValue(item.metadata, "media_id"))
+  if (fromMediaId !== null) return fromMediaId
+  return toPositiveInt(getMetadataValue(item.metadata, "id"))
+}
+
+const toOptionalNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  return undefined
+}
+
+const getFirstString = (
+  record: Record<string, unknown>,
+  keys: string[]
+): string => {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim()
+    }
+  }
+  return ""
+}
+
+export const normalizeMediaSearchResults = (payload: unknown): RagResult[] => {
+  const obj = isRecord(payload) ? payload : {}
+  const rawItems = Array.isArray(obj.items)
+    ? obj.items
+    : Array.isArray(obj.results)
+      ? obj.results
+      : Array.isArray(obj.media)
+        ? obj.media
+        : []
+
+  const normalized: RagResult[] = []
+  for (const rawItem of rawItems) {
+    if (!isRecord(rawItem)) continue
+    const mediaId = toPositiveInt(rawItem.media_id) ?? toPositiveInt(rawItem.id)
+    const title =
+      getFirstString(rawItem, ["title", "name", "filename"]) ||
+      (mediaId ? `Media ${mediaId}` : "Untitled media")
+    const type = getFirstString(rawItem, ["type", "media_type"]) || "media"
+    const itemUrl =
+      getFirstString(rawItem, ["url", "source"]) ||
+      (mediaId ? `/api/v1/media/${mediaId}` : "")
+    const snippet =
+      getFirstString(rawItem, ["snippet", "summary", "description", "content"]) ||
+      `Library item: ${title}`
+    const metadata: Record<string, unknown> = {
+      title,
+      type,
+      source: title,
+      url: itemUrl,
+      created_at: getFirstString(rawItem, ["created_at", "date", "added_at"]) || undefined
+    }
+    if (mediaId !== null) {
+      metadata.id = mediaId
+      metadata.media_id = mediaId
+    }
+
+    normalized.push({
+      content: snippet,
+      metadata,
+      score: toOptionalNumber(rawItem.score),
+      relevance: toOptionalNumber(rawItem.relevance)
+    })
+  }
+
+  return normalized
+}
 
 const getErrorMessage = (error: unknown) => {
   if (typeof error === "string") return error
@@ -171,32 +259,99 @@ export const toPinnedResult = (item: RagResult): RagPinnedResult => {
     source: getResultSource(item) || undefined,
     url: url || undefined,
     snippet,
-    type: getResultType(item) || undefined
+    type: getResultType(item) || undefined,
+    mediaId: extractMediaId(item) ?? undefined
   }
 }
 
-/**
- * Normalize batch results from various API response formats
- */
-const normalizeBatchResults = (payload: any): BatchResultGroup[] => {
-  if (!payload) return []
-  if (Array.isArray(payload)) {
-    return payload
-      .map((group: any) => ({
-        query: String(group.query || ""),
-        results: group.results || []
-      }))
-      .filter((group: BatchResultGroup) => group.results.length > 0)
+export const extractContentFromMediaDetail = (detail: unknown): string => {
+  if (typeof detail === "string") return detail
+  if (!isRecord(detail)) return ""
+
+  const contentValue = detail.content
+  if (isRecord(contentValue)) {
+    const nestedContent = getFirstNonEmptyString(
+      contentValue.text,
+      contentValue.content,
+      contentValue.raw_text,
+      contentValue.rawText,
+      contentValue.transcript,
+      contentValue.summary
+    )
+    if (nestedContent) return nestedContent
+  } else if (typeof contentValue === "string" && contentValue.trim().length > 0) {
+    return contentValue
   }
-  if (typeof payload === "object") {
-    return Object.entries(payload)
-      .map(([query, results]) => ({
-        query,
-        results: Array.isArray(results) ? results : []
-      }))
-      .filter((group) => group.results.length > 0)
+
+  const fromRoot = getFirstNonEmptyString(
+    detail.text,
+    detail.transcript,
+    detail.raw_text,
+    detail.rawText,
+    detail.raw_content,
+    detail.rawContent,
+    detail.summary
+  )
+  if (fromRoot) return fromRoot
+
+  const latestVersion = isRecord(detail.latest_version)
+    ? detail.latest_version
+    : isRecord(detail.latestVersion)
+      ? detail.latestVersion
+      : null
+  if (latestVersion) {
+    const fromLatest = getFirstNonEmptyString(
+      latestVersion.content,
+      latestVersion.text,
+      latestVersion.transcript,
+      latestVersion.raw_text,
+      latestVersion.rawText,
+      latestVersion.summary
+    )
+    if (fromLatest) return fromLatest
   }
-  return []
+
+  const data = isRecord(detail.data) ? detail.data : null
+  if (data) {
+    const fromData = getFirstNonEmptyString(
+      data.content,
+      data.text,
+      data.transcript,
+      data.raw_text,
+      data.rawText,
+      data.summary
+    )
+    if (fromData) return fromData
+  }
+
+  return ""
+}
+
+const fetchFullMediaTextById = async (mediaId: number): Promise<string | null> => {
+  try {
+    await tldwClient.initialize()
+    const detail = await tldwClient.getMediaDetails(mediaId, {
+      include_content: true,
+      include_versions: false,
+      include_version_content: false
+    })
+    const fullText = extractContentFromMediaDetail(detail)
+    return fullText || null
+  } catch {
+    return null
+  }
+}
+
+export const withFullMediaTextIfAvailable = async (
+  pinned: RagPinnedResult
+): Promise<RagPinnedResult> => {
+  if (!pinned.mediaId) return pinned
+  const fullText = await fetchFullMediaTextById(pinned.mediaId)
+  if (!fullText) return pinned
+  return {
+    ...pinned,
+    snippet: fullText
+  }
 }
 
 /**
@@ -270,15 +425,22 @@ export function useKnowledgeSearch({
   )
 
   // Pinned results from store
-  const { ragPinnedResults, setRagPinnedResults } = useStoreMessageOption(
+  const { ragPinnedResults, setRagPinnedResults, setRagMediaIds } = useStoreMessageOption(
     (state) => ({
       ragPinnedResults: state.ragPinnedResults,
-      setRagPinnedResults: state.setRagPinnedResults
+      setRagPinnedResults: state.setRagPinnedResults,
+      setRagMediaIds: state.setRagMediaIds
     }),
     shallow
   )
 
   const pinnedResults = ragPinnedResults || []
+  const collectPinnedMediaIds = React.useCallback((items: RagPinnedResult[]) => {
+    const ids = items
+      .map((item) => item.mediaId)
+      .filter((id): id is number => typeof id === "number" && Number.isInteger(id) && id > 0)
+    return Array.from(new Set(ids))
+  }, [])
 
   // Sort results by the selected mode
   const sortResults = React.useCallback(
@@ -312,20 +474,28 @@ export function useKnowledgeSearch({
         applySettings()
       }
 
-      const batchQueries = Array.isArray(draftSettings.batch_queries)
-        ? draftSettings.batch_queries
-        : []
-      const hasBatchQueries =
-        draftSettings.enable_batch && batchQueries.length > 0
-      const batchQuery = hasBatchQueries
-        ? batchQueries.find((value) => String(value).trim().length > 0) ?? ""
-        : ""
-      const query = (resolvedQuery || batchQuery).trim()
+      const query = (resolvedQuery || "").trim()
 
       if (!query) {
         setQueryError(
           t("sidepanel:rag.queryRequired", "Enter a query to search.") as string
         )
+        return
+      }
+      const selectedSources = Array.isArray(draftSettings.sources)
+        ? draftSettings.sources
+        : []
+      const canSearchMedia =
+        selectedSources.length === 0 || selectedSources.includes("media_db")
+      if (!canSearchMedia) {
+        setQueryError(
+          t(
+            "sidepanel:rag.mediaSourceRequired",
+            "Select Media source to search your library."
+          ) as string
+        )
+        setResults([])
+        setBatchResults([])
         return
       }
 
@@ -340,46 +510,24 @@ export function useKnowledgeSearch({
       setResults([])
       setBatchResults([])
 
-      let timeoutMs: number | undefined
-      let startedAt = 0
-
       try {
         await tldwClient.initialize()
-        const settings = {
-          ...draftSettings,
-          query
-        }
-        const request = buildRagSearchRequest(settings)
-        timeoutMs = request.timeoutMs
-        startedAt = Date.now()
-
-        const ragRes = await tldwClient.ragSearch(request.query, {
-          ...request.options,
-          timeoutMs: request.timeoutMs
-        })
-
-        // Handle batch results
-        const grouped = normalizeBatchResults(
-          ragRes?.batch_results || ragRes?.results_by_query
+        const mediaResponse = await tldwClient.searchMedia(
+          {
+            query,
+            fields: ["title", "content"],
+            sort_by: "relevance"
+          },
+          { page: 1, results_per_page: 50 }
         )
-        if (grouped.length > 0) {
-          setBatchResults(grouped)
-        } else {
-          const docs =
-            ragRes?.results || ragRes?.documents || ragRes?.docs || []
-          setResults(docs)
-        }
+        const mediaResults = normalizeMediaSearchResults(mediaResponse)
+        setBatchResults([])
+        setResults(mediaResults)
         setTimedOut(false)
       } catch (e) {
         setResults([])
         setBatchResults([])
-        const elapsedMs = startedAt ? Date.now() - startedAt : 0
-        const isTimeout =
-          (typeof timeoutMs === "number" &&
-            startedAt > 0 &&
-            elapsedMs >= timeoutMs) ||
-          isTimeoutError(e)
-        setTimedOut(isTimeout)
+        setTimedOut(isTimeoutError(e))
       } finally {
         setLoading(false)
       }
@@ -412,8 +560,11 @@ export function useKnowledgeSearch({
 
   const handleInsert = React.useCallback(
     (item: RagResult) => {
-      const pinned = toPinnedResult(item)
-      onInsert(formatRagResult(pinned, "markdown"))
+      void (async () => {
+        const pinned = toPinnedResult(item)
+        const resolvedPinned = await withFullMediaTextIfAvailable(pinned)
+        onInsert(formatRagResult(resolvedPinned, "markdown"))
+      })()
     },
     [onInsert]
   )
@@ -438,21 +589,28 @@ export function useKnowledgeSearch({
     (item: RagResult) => {
       const pinned = toPinnedResult(item)
       if (pinnedResults.some((result) => result.id === pinned.id)) return
-      setRagPinnedResults([...pinnedResults, pinned])
+      const nextPinned = [...pinnedResults, pinned]
+      setRagPinnedResults(nextPinned)
+      const mediaIds = collectPinnedMediaIds(nextPinned)
+      setRagMediaIds(mediaIds.length > 0 ? mediaIds : null)
     },
-    [pinnedResults, setRagPinnedResults]
+    [collectPinnedMediaIds, pinnedResults, setRagMediaIds, setRagPinnedResults]
   )
 
   const handleUnpin = React.useCallback(
     (id: string) => {
-      setRagPinnedResults(pinnedResults.filter((item) => item.id !== id))
+      const nextPinned = pinnedResults.filter((item) => item.id !== id)
+      setRagPinnedResults(nextPinned)
+      const mediaIds = collectPinnedMediaIds(nextPinned)
+      setRagMediaIds(mediaIds.length > 0 ? mediaIds : null)
     },
-    [pinnedResults, setRagPinnedResults]
+    [collectPinnedMediaIds, pinnedResults, setRagMediaIds, setRagPinnedResults]
   )
 
   const handleClearPins = React.useCallback(() => {
     setRagPinnedResults([])
-  }, [setRagPinnedResults])
+    setRagMediaIds(null)
+  }, [setRagMediaIds, setRagPinnedResults])
 
   return {
     // State

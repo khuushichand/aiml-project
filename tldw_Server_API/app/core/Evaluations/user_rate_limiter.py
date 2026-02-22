@@ -1,8 +1,15 @@
 """
 Per-user rate limiting for Evaluations module.
 
-Implements tiered rate limiting based on user subscription levels
-with support for burst traffic and cost-based limits.
+**Phase 2 Deprecation Notice**:
+- When ``RG_ENABLED=true``, evaluations/minute and evaluations/tokens daily
+  caps are enforced by the ResourceGovernor via ``_maybe_enforce_with_rg_evaluations``.
+- Cost caps (``max_cost_per_day``, ``max_cost_per_month``) remain **legacy-only**
+  and are enforced regardless of RG status.
+- When RG is disabled or unavailable, minute/daily eval/token checks are
+  skipped (fail-open with deprecation warning). Only cost caps are enforced.
+- CUSTOM tier bypasses RG; only cost caps are enforced with a deprecation warning.
+- This shim will be removed in a future release.
 """
 
 import asyncio
@@ -12,6 +19,7 @@ import os
 import sqlite3
 import threading
 import time
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -20,11 +28,10 @@ from typing import Any, Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-
-# Import configuration management
 from tldw_Server_API.app.core.Evaluations.config_manager import (
     get_rate_limit_config,
 )
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # Narrowed exception tuple for BLE001 fixes
 _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS = (
@@ -75,6 +82,22 @@ except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - safe fallb
 
 # Import connection pool
 # from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection  # unused
+
+_EVALS_DEPRECATION_WARNED = False
+
+
+def _emit_evals_legacy_deprecation(context: str) -> None:
+    global _EVALS_DEPRECATION_WARNED
+    if _EVALS_DEPRECATION_WARNED:
+        return
+    _EVALS_DEPRECATION_WARNED = True
+    msg = (
+        "Evaluations legacy rate limiter is deprecated (Phase 2). "
+        f"Context: {context}. Enable RG_ENABLED=true for enforcement. "
+        "This shim will be removed in a future release."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
 
 
 class UserTier(Enum):
@@ -316,17 +339,32 @@ class UserRateLimiter:
                 return True, metadata
 
             _log_rg_evals_fallback("rg_decision_unavailable")
+            _emit_evals_legacy_deprecation("rg_decision_unavailable")
+            # Fail-open for eval/token caps; still enforce cost.
+            cost_ok, cost_meta = await self._check_cost_limits(user_id, estimated_cost, config)
+            if not cost_ok:
+                return False, cost_meta
+            try:
+                await self._record_request(user_id, endpoint, tokens_requested, estimated_cost)
+            except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
+                pass
+            return True, {
+                "policy_id": policy_id,
+                "rate_limit_source": "resource_governor",
+            }
 
-        # RG disabled → use legacy per-user limits and headers.
-        minute_ok, minute_meta = await self._check_minute_limit(user_id, endpoint, is_batch, config)
-        if not minute_ok:
-            return False, minute_meta
-        daily_ok, daily_meta = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
-        if not daily_ok:
-            return False, daily_meta
+        # RG disabled or CUSTOM tier → skip minute/daily checks (Phase 2),
+        # enforce cost caps only.
+        _emit_evals_legacy_deprecation("rg_disabled_or_custom_tier")
+        cost_ok, cost_meta = await self._check_cost_limits(user_id, estimated_cost, config)
+        if not cost_ok:
+            return False, cost_meta
 
         await self._record_request(user_id, endpoint, tokens_requested, estimated_cost)
-        return True, self._generate_rate_limit_headers(user_id, config, minute_meta, daily_meta)
+        return True, {
+            "rate_limit_source": "legacy_cost_only",
+            "tier": config.tier.value,
+        }
 
     async def _get_user_config(self, user_id: str) -> RateLimitConfig:
         """Get user's rate limit configuration."""
@@ -498,166 +536,6 @@ class UserRateLimiter:
                 await ledger.add(entry)
         except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug(f"Evaluations: legacy daily_usage backfill skipped: {exc}")
-
-    async def _check_minute_limit(
-        self,
-        user_id: str,
-        endpoint: str,
-        is_batch: bool,
-        config: RateLimitConfig
-    ) -> tuple[bool, dict[str, Any]]:
-        """Check per-minute rate limits."""
-        now = datetime.now(timezone.utc)
-        minute_ago = now - timedelta(minutes=1)
-        # Compute seconds until the next minute boundary for consistent reset headers
-        try:
-            window_start = now.replace(second=0, microsecond=0)
-            seconds_into_window = max(0, int((now - window_start).total_seconds()))
-            reset_seconds = max(1, 60 - seconds_into_window)
-        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
-            reset_seconds = 60
-
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-
-            # Count requests in last minute
-            cursor.execute(
-                "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint = ?",
-                (user_id, minute_ago.isoformat(), endpoint)
-            )
-
-            request_count = cursor.fetchone()[0]
-
-            # Check against limit
-            limit = config.batch_evaluations_per_minute if is_batch else config.evaluations_per_minute
-
-            # Check burst allowance
-            if request_count >= limit:
-                # Check if within burst window
-                burst_window = now - timedelta(seconds=10)
-                cursor.execute(
-                    "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint = ?",
-                    (user_id, burst_window.isoformat(), endpoint)
-                )
-
-                burst_count = cursor.fetchone()[0]
-
-                if burst_count >= config.burst_size:
-                    # Retry after the remaining seconds in the current minute window
-                    retry_after = reset_seconds
-                    return False, {
-                        "error": "Rate limit exceeded",
-                        "retry_after": retry_after,
-                        "limit": limit,
-                        "window": "1 minute",
-                        "tier": config.tier.value,
-                        "reset_seconds": reset_seconds,
-                    }
-
-            return True, {
-                "requests_remaining": max(0, limit - request_count - 1),
-                "limit": limit,
-                "window": "1 minute",
-                "reset_seconds": reset_seconds,
-            }
-
-    async def _check_daily_limits(
-        self,
-        user_id: str,
-        tokens_requested: int,
-        estimated_cost: float,
-        config: RateLimitConfig
-    ) -> tuple[bool, dict[str, Any]]:
-        """Check daily usage limits."""
-        today = datetime.now(timezone.utc).date()
-        day_str = str(today)
-
-        total_evaluations = 0
-        total_tokens = 0
-        total_cost: float = 0.0
-
-        ledger: Optional[ResourceDailyLedger] = None
-        try:
-            ledger = await self._get_daily_ledger(user_id)
-        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
-            ledger = None
-
-        if ledger is not None:
-            try:
-                total_evaluations = await ledger.total_for_day(
-                    entity_scope="user",
-                    entity_value=str(user_id),
-                    category="evaluations",
-                    day_utc=day_str,
-                )
-                total_tokens = await ledger.total_for_day(
-                    entity_scope="user",
-                    entity_value=str(user_id),
-                    category="tokens",
-                    day_utc=day_str,
-                )
-            except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
-                logger.debug(f"Evaluations: ledger daily totals failed; falling back to legacy: {exc}")
-                ledger = None
-
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            if ledger is None:
-                # Legacy per-user DB totals
-                cursor.execute(
-                    """
-                    SELECT total_evaluations, total_tokens, total_cost
-                    FROM daily_usage
-                    WHERE user_id = ? AND date = ?
-                    """,
-                    (user_id, day_str),
-                )
-                row = cursor.fetchone()
-                if row:
-                    total_evaluations, total_tokens, total_cost = row
-                else:
-                    total_evaluations = total_tokens = total_cost = 0
-            else:
-                # Ledger owns evaluations/tokens caps; keep legacy for cost-only.
-                cursor.execute(
-                    "SELECT total_cost FROM daily_usage WHERE user_id = ? AND date = ?",
-                    (user_id, day_str),
-                )
-                row = cursor.fetchone()
-                total_cost = float(row[0] or 0.0) if row else 0.0
-
-            # Check limits
-            if total_evaluations >= config.evaluations_per_day:
-                return False, {
-                    "error": "Daily evaluation limit exceeded",
-                    "limit": config.evaluations_per_day,
-                    "used": total_evaluations,
-                    "resets_at": (datetime.combine(today + timedelta(days=1), datetime.min.time())).isoformat()
-                }
-
-            if total_tokens + tokens_requested > config.total_tokens_per_day:
-                return False, {
-                    "error": "Daily token limit exceeded",
-                    "limit": config.total_tokens_per_day,
-                    "used": total_tokens,
-                    "requested": tokens_requested,
-                    "resets_at": (datetime.combine(today + timedelta(days=1), datetime.min.time())).isoformat()
-                }
-
-            if total_cost + estimated_cost > config.max_cost_per_day:
-                return False, {
-                    "error": "Daily cost limit exceeded",
-                    "limit": config.max_cost_per_day,
-                    "used": total_cost,
-                    "requested": estimated_cost,
-                    "resets_at": (datetime.combine(today + timedelta(days=1), datetime.min.time())).isoformat()
-                }
-
-        return True, {
-            "evaluations_remaining": config.evaluations_per_day - total_evaluations - 1,
-            "tokens_remaining": config.total_tokens_per_day - total_tokens - tokens_requested,
-            "cost_remaining": config.max_cost_per_day - total_cost - estimated_cost
-        }
 
     async def _check_cost_limits(
         self,
@@ -970,7 +848,7 @@ def get_user_rate_limiter_for_user(user_id: int) -> UserRateLimiter:
     # In test environments, fall back to legacy global instance for compatibility with existing tests/mocks
     try:
         import os as _os
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes") or "PYTEST_CURRENT_TEST" in _os.environ:
+        if is_test_mode() or "PYTEST_CURRENT_TEST" in _os.environ:
             return user_rate_limiter
     except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
         pass
@@ -1037,7 +915,7 @@ def _log_rg_evals_init_failure(exc: Exception) -> None:
     _rg_evals_init_error_logged = True
     ctx = _rg_evals_context()
     logger.exception(
-        "Evaluations ResourceGovernor init failed; falling back to legacy limiter. "
+        "Evaluations ResourceGovernor init failed; using diagnostics-only compatibility shim (no enforcement). "
         "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
         "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
         "reload_interval={policy_reload_interval} cwd={cwd}",
@@ -1052,7 +930,7 @@ def _log_rg_evals_fallback(reason: str) -> None:
     _rg_evals_fallback_logged = True
     ctx = _rg_evals_context()
     logger.error(
-        "Evaluations ResourceGovernor unavailable; falling back to legacy limiter. "
+        "Evaluations ResourceGovernor unavailable; using diagnostics-only compatibility shim (no enforcement). "
         "reason={} init_error={} backend={backend} policy_path={policy_path} "
         "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
         "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
@@ -1060,6 +938,7 @@ def _log_rg_evals_fallback(reason: str) -> None:
         _rg_evals_init_error,
         **ctx,
     )
+
 
 # --- Generic daily ledger plumbing (optional) ------------------------------
 _evals_daily_ledger: Optional["ResourceDailyLedger"] = None  # type: ignore[name-defined]

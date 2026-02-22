@@ -7,6 +7,7 @@ Provides CRUD operations for chat sessions and character-specific completions.
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import json
 import os
 import random
@@ -15,7 +16,8 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from functools import lru_cache
+from typing import Any, Literal, Mapping, Optional
 
 from fastapi import (
     APIRouter,
@@ -61,6 +63,10 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     PresetTokenInfo,
     PresetUpdate,
 )
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
+    DEFAULT_LLM_PROVIDER,
+)
+from tldw_Server_API.app.api.v1.utils.deprecation import build_deprecation_headers
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
@@ -88,6 +94,7 @@ from tldw_Server_API.app.core.Character_Chat.constants import (
     THROTTLE_CACHE_MAX_KEYS,
     THROTTLE_STALE_SECONDS,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Character_Chat.modules.character_generation_presets import (
     resolve_character_generation_settings,
 )
@@ -100,10 +107,15 @@ from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets im
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     sanitize_sender_name,
 )
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 
 # Chat helpers and utilities
 # For chat completions
-from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+from tldw_Server_API.app.core.Chat.chat_service import (
+    is_model_known_for_provider,
+    perform_chat_api_call,
+    resolve_provider_and_model,
+)
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -116,8 +128,10 @@ from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_pr
 # Completion schemas centralized in schemas/chat_session_schemas.py
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.Utils.common import parse_boolean
+from tldw_Server_API.app.core.config import load_and_log_configs
 
 _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS = (
+    ChatAPIError,
     asyncio.CancelledError,
     asyncio.TimeoutError,
     AssertionError,
@@ -150,6 +164,62 @@ DEFAULT_AUTO_SUMMARY_WINDOW_MESSAGES = 12
 MAX_AUTO_SUMMARY_LINES = 24
 MAX_AUTO_SUMMARY_LINE_CHARS = 220
 MAX_AUTO_SUMMARY_CONTENT_CHARS = 8_000
+
+
+@lru_cache(maxsize=1)
+def _config_default_llm_provider() -> str | None:
+    """Read default provider from config sections used by chat endpoints."""
+    cfg = load_and_log_configs()
+    if not isinstance(cfg, dict):
+        return None
+
+    def _extract(section: str) -> str | None:
+        section_data = cfg.get(section)
+        if not isinstance(section_data, dict):
+            return None
+        default_api = section_data.get("default_api")
+        if not isinstance(default_api, str):
+            return None
+        value = default_api.strip()
+        return value or None
+
+    return _extract("llm_api_settings") or _extract("API")
+
+
+def _is_char_chat_test_mode() -> bool:
+    """Return True when running under test-mode semantics."""
+    for env_key in ("TEST_MODE", "TLDW_TEST_MODE", "PYTEST_CURRENT_TEST"):
+        raw = os.getenv(env_key)
+        if isinstance(raw, str) and raw.strip():
+            if env_key == "PYTEST_CURRENT_TEST":
+                return True
+            if is_truthy(raw):
+                return True
+    return False
+
+
+def _get_default_provider() -> str:
+    """Resolve default provider: config, then env, then test fallback, then schema default."""
+    cfg_default = _config_default_llm_provider()
+    if cfg_default:
+        return cfg_default
+
+    env_default = os.getenv("DEFAULT_LLM_PROVIDER")
+    if isinstance(env_default, str) and env_default.strip():
+        return env_default.strip()
+
+    if _is_char_chat_test_mode():
+        return "local-llm"
+
+    return DEFAULT_LLM_PROVIDER
+
+
+def _should_enforce_char_chat_strict_model_selection() -> bool:
+    """Return whether explicit model/provider requests should be strictly enforced."""
+    raw = os.getenv("CHAT_ENFORCE_STRICT_MODEL_SELECTION")
+    if raw is not None:
+        return is_truthy(raw)
+    return not _is_char_chat_test_mode()
 
 def _safe_replace_placeholders(value: Any, char_name: str, user_name: str) -> str:
     if value is None:
@@ -343,6 +413,9 @@ def _convert_db_conversation_to_response(
         last_modified=conv_data.get('last_modified', datetime.now(timezone.utc)),
         message_count=conv_data.get('message_count', 0),
         version=conv_data.get('version', 1),
+        parent_conversation_id=conv_data.get('parent_conversation_id'),
+        root_id=conv_data.get('root_id'),
+        forked_from_message_id=conv_data.get('forked_from_message_id'),
         settings=settings,
     )
 
@@ -839,6 +912,7 @@ def _resolve_effective_prompt_preset(
     character: dict[str, Any],
     *,
     request_preset: Any = None,
+    db: Optional[CharactersRAGDB] = None,
 ) -> str:
     """Resolve prompt formatting preset with scope-aware precedence.
 
@@ -869,7 +943,15 @@ def _resolve_effective_prompt_preset(
     )
 
     if scope == "chat":
-        return chat_override or DEFAULT_PROMPT_PRESET
+        if chat_override in {"default", "st_default"}:
+            return chat_override
+        if chat_override and db is not None:
+            try:
+                if isinstance(db.get_prompt_preset(chat_override), dict):
+                    return chat_override
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                pass
+        return DEFAULT_PROMPT_PRESET
 
     character_preset = _coerce_preset_id(resolve_character_prompt_preset(character))
     return character_preset or DEFAULT_PROMPT_PRESET
@@ -1082,18 +1164,36 @@ def _resolve_chat_turn_context(
 
 
 def _normalize_greeting_values(value: Any) -> list[str]:
-    if isinstance(value, str):
-        trimmed = value.strip()
-        return [trimmed] if trimmed else []
-    if isinstance(value, list):
+    def _normalize_string_entries(entries: list[Any]) -> list[str]:
         normalized: list[str] = []
-        for entry in value:
+        for entry in entries:
             if not isinstance(entry, str):
                 continue
-            trimmed = entry.strip()
-            if trimmed:
-                normalized.append(trimmed)
+            trimmed_entry = entry.strip()
+            if trimmed_entry:
+                normalized.append(trimmed_entry)
         return normalized
+
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return []
+        try:
+            parsed = json.loads(trimmed)
+        except json.JSONDecodeError:
+            return [trimmed]
+        if isinstance(parsed, list):
+            return _normalize_string_entries(parsed)
+        if isinstance(parsed, str):
+            try:
+                nested_parsed = json.loads(parsed)
+            except json.JSONDecodeError:
+                return [trimmed]
+            if isinstance(nested_parsed, list):
+                return _normalize_string_entries(nested_parsed)
+        return [trimmed]
+    if isinstance(value, list):
+        return _normalize_string_entries(value)
     return []
 
 
@@ -1488,7 +1588,7 @@ def _coerce_truthy_bool(value: Any, default: bool = False) -> bool:
         return bool(value)
     if isinstance(value, str):
         normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
+        if is_truthy(normalized):
             return True
         if normalized in {"0", "false", "no", "off"}:
             return False
@@ -1826,22 +1926,65 @@ def _resolve_message_steering_flags(
     return continue_flag, impersonate_flag, narrate_flag, had_conflict
 
 
+_DEFAULT_CONTINUE_AS_USER_PROMPT = (
+    "Continue the user's current thought in the same voice and perspective."
+)
+_DEFAULT_IMPERSONATE_USER_PROMPT = (
+    "Write this reply as if it is authored by the user, in first person, while preserving the user's intent."
+)
+_DEFAULT_FORCE_NARRATE_PROMPT = "Use narrative prose style for this reply."
+
+
+def _normalize_message_steering_prompt_overrides(
+    prompt_overrides: Any,
+) -> dict[str, str]:
+    raw_overrides: Mapping[str, Any] | dict[str, Any] = {}
+    if hasattr(prompt_overrides, "model_dump"):
+        try:
+            raw_overrides = prompt_overrides.model_dump(exclude_none=True)
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            raw_overrides = {}
+    elif isinstance(prompt_overrides, Mapping):
+        raw_overrides = dict(prompt_overrides)
+
+    def _resolve_prompt(raw_value: Any, fallback: str) -> str:
+        if not isinstance(raw_value, str):
+            return fallback
+        normalized = raw_value.strip()
+        return normalized or fallback
+
+    return {
+        "continue_as_user": _resolve_prompt(
+            raw_overrides.get("continue_as_user"),
+            _DEFAULT_CONTINUE_AS_USER_PROMPT,
+        ),
+        "impersonate_user": _resolve_prompt(
+            raw_overrides.get("impersonate_user"),
+            _DEFAULT_IMPERSONATE_USER_PROMPT,
+        ),
+        "force_narrate": _resolve_prompt(
+            raw_overrides.get("force_narrate"),
+            _DEFAULT_FORCE_NARRATE_PROMPT,
+        ),
+    }
+
+
 def _build_message_steering_instruction(
     continue_as_user: bool,
     impersonate_user: bool,
     force_narrate: bool,
+    prompt_overrides: Any = None,
 ) -> str:
+    prompt_templates = _normalize_message_steering_prompt_overrides(
+        prompt_overrides
+    )
     instructions: list[str] = []
     if impersonate_user:
-        instructions.append(
-            "Write this reply as if it is authored by the user, in first person, while preserving the user's intent."
-        )
+        instructions.append(prompt_templates["impersonate_user"])
     elif continue_as_user:
-        instructions.append(
-            "Continue the user's current thought in the same voice and perspective."
-        )
+        instructions.append(prompt_templates["continue_as_user"])
     if force_narrate:
-        instructions.append("Use narrative prose style for this reply.")
+        instructions.append(prompt_templates["force_narrate"])
     if not instructions:
         return ""
     return f"Steering instruction (single response): {' '.join(instructions)}"
@@ -1852,6 +1995,7 @@ def _inject_message_steering_instruction(
     continue_as_user: Any,
     impersonate_user: Any,
     force_narrate: Any,
+    prompt_overrides: Any = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     continue_flag, impersonate_flag, narrate_flag, had_conflict = (
         _resolve_message_steering_flags(
@@ -1864,6 +2008,7 @@ def _inject_message_steering_instruction(
         continue_as_user=continue_flag,
         impersonate_user=impersonate_flag,
         force_narrate=narrate_flag,
+        prompt_overrides=prompt_overrides,
     )
     if not instruction:
         return messages, had_conflict
@@ -1948,6 +2093,7 @@ async def create_chat_session(
         parent_conversation = None
         validated_parent_id: Optional[str] = None
         parent_root_id: Optional[str] = None
+        validated_forked_from_message_id: Optional[str] = None
         if session_data.parent_conversation_id:
             parent_conversation = db.get_conversation_by_id(session_data.parent_conversation_id)
             _verify_chat_ownership(parent_conversation, current_user.id, session_data.parent_conversation_id)
@@ -1955,6 +2101,22 @@ async def create_chat_session(
                 validated_parent_id = parent_conversation.get("id") or session_data.parent_conversation_id
                 parent_root_id = parent_conversation.get("root_id") or parent_conversation.get("id")
             # Cross-character forks are intentionally supported; do not enforce a character_id match.
+
+        if session_data.forked_from_message_id:
+            if not validated_parent_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="forked_from_message_id requires parent_conversation_id",
+                )
+            source_message = db.get_message_by_id(session_data.forked_from_message_id)
+            if not source_message or source_message.get("conversation_id") != validated_parent_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="forked_from_message_id must belong to parent_conversation_id",
+                )
+            validated_forked_from_message_id = (
+                source_message.get("id") or session_data.forked_from_message_id
+            )
 
         # Generate chat ID and title
         chat_id = str(uuid.uuid4())
@@ -1968,6 +2130,7 @@ async def create_chat_session(
             'title': title,
             'root_id': parent_root_id or chat_id,  # Inherit root for forks
             'parent_conversation_id': validated_parent_id,
+            'forked_from_message_id': validated_forked_from_message_id,
             'client_id': str(current_user.id),
             'version': 1,
             'state': session_data.state,
@@ -2032,10 +2195,15 @@ async def create_chat_session(
         # Persist a greetings checksum so staleness can be detected later.
         try:
             checksum = _compute_greetings_checksum(character)
-            db.upsert_conversation_settings(
+            updated_settings = db.upsert_conversation_settings(
                 created_id,
                 {"greetingsChecksum": checksum},
             )
+            # Keep optimistic-locking version in response in sync with DB.
+            if updated_settings:
+                latest_conv = db.get_conversation_by_id(created_id)
+                if isinstance(latest_conv, dict):
+                    created_conv = latest_conv
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             pass  # best-effort; staleness detection degrades gracefully
 
@@ -2226,7 +2394,7 @@ async def update_preset(
     if not updated_ok:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update preset '{preset_id}'",
+            detail=f"Failed to update preset '{preset_id}'",  # nosec B608
         )
     updated = db.get_prompt_preset(preset_id)
     if not updated:
@@ -2430,20 +2598,11 @@ async def complete_chat_legacy(
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_chat_completion_rate(current_user.id)
 
-        # Deprecation headers for clients; also used if we reject a non-empty body
-        # Sunset date is configurable via DEPRECATION_SUNSET_DAYS env var (default 90 days)
-        try:
-            from datetime import datetime, timedelta
-            from datetime import timezone as _tz
-            sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "90"))
-            sunset = (datetime.now(_tz.utc) + timedelta(days=sunset_days)).strftime("%a, %d %b %Y %H:%M:%S GMT")
-        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-            sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
-        dep_headers = {
-            "Deprecation": "true",
-            "Sunset": sunset,
-            "Link": f"</api/v1/chats/{chat_id}/complete-v2>; rel=successor-version",
-        }
+        # Deprecation headers for clients; also used if we reject a non-empty body.
+        dep_headers = build_deprecation_headers(
+            f"/api/v1/chats/{chat_id}/complete-v2",
+            default_sunset_days=90,
+        )
         try:
             if response is not None:
                 for k, v in dep_headers.items():
@@ -2561,6 +2720,7 @@ async def prepare_chat_completion(
             prep_settings,
             character,
             request_preset=body.prompt_preset,
+            db=db,
         )
 
         formatted: list[dict[str, Any]] = []
@@ -2611,6 +2771,7 @@ async def prepare_chat_completion(
             continue_as_user=body.continue_as_user,
             impersonate_user=body.impersonate_user,
             force_narrate=body.force_narrate,
+            prompt_overrides=body.message_steering_prompts,
         )
         if steering_conflict:
             logger.debug(
@@ -2791,6 +2952,7 @@ async def prompt_assembly_preview(
             settings,
             character,
             request_preset=body.prompt_preset,
+            db=db,
         )
 
         # Assemble prompt in the same order as completion-v2.
@@ -2865,12 +3027,14 @@ async def prompt_assembly_preview(
             continue_as_user=continue_flag,
             impersonate_user=impersonate_flag,
             force_narrate=narrate_flag,
+            prompt_overrides=body.message_steering_prompts,
         )
         formatted, _ = _inject_message_steering_instruction(
             formatted,
             continue_as_user=body.continue_as_user,
             impersonate_user=body.impersonate_user,
             force_narrate=body.force_narrate,
+            prompt_overrides=body.message_steering_prompts,
         )
 
         lorebook_text = ""
@@ -3118,6 +3282,7 @@ async def character_chat_completion(
             completion_settings,
             character,
             request_preset=body.prompt_preset,
+            db=db,
         )
 
         formatted: list[dict[str, Any]] = []
@@ -3170,6 +3335,7 @@ async def character_chat_completion(
             continue_as_user=body.continue_as_user,
             impersonate_user=body.impersonate_user,
             force_narrate=body.force_narrate,
+            prompt_overrides=body.message_steering_prompts,
         )
         if steering_conflict:
             logger.debug(
@@ -3213,9 +3379,60 @@ async def character_chat_completion(
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             pass  # world book injection is best-effort
 
-        # Determine provider/model with safe defaults for test/offline
-        provider = (body.provider or os.getenv("CHAR_CHAT_PROVIDER") or "local-llm").strip()
-        model = (body.model or os.getenv("CHAR_CHAT_MODEL") or "local-test").strip()
+        # Determine provider/model with shared normalization and safe defaults.
+        default_provider = _get_default_provider().strip()
+        explicit_model_requested = bool(str(body.model or "").strip())
+        strict_model_selection = _should_enforce_char_chat_strict_model_selection()
+        raw_provider = (
+            body.provider
+            or os.getenv("CHAR_CHAT_PROVIDER")
+            or None
+        )
+        if isinstance(raw_provider, str):
+            raw_provider = raw_provider.strip() or None
+        raw_model = (body.model or os.getenv("CHAR_CHAT_MODEL") or "local-test").strip()
+
+        class _ProviderModelResolutionRequest:
+            def __init__(self, provider_value: Optional[str], model_value: str):
+                self.api_provider = provider_value
+                self.model = model_value
+
+        provider = (raw_provider or default_provider).strip()
+        model = raw_model or "local-test"
+        try:
+            resolution_req = _ProviderModelResolutionRequest(raw_provider, raw_model)
+            (
+                _metrics_provider,
+                _metrics_model,
+                selected_provider,
+                selected_model,
+                provider_debug,
+            ) = resolve_provider_and_model(
+                request_data=resolution_req,
+                metrics_default_provider=default_provider,
+                normalize_default_provider=default_provider,
+            )
+            provider = (selected_provider or provider).strip()
+            model = (selected_model or model).strip()
+            logger.debug("Character provider/model resolution: {}", provider_debug)
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Character provider/model normalization fallback: {}", exc)
+
+        if strict_model_selection and explicit_model_requested:
+            availability = is_model_known_for_provider(provider, model)
+            if availability is False:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error_code": "model_not_available",
+                        "message": (
+                            f"Model '{model}' is not available for provider '{provider}'. "
+                            "Select one of the server-advertised models for this provider."
+                        ),
+                        "provider": provider,
+                        "model": model,
+                    },
+                )
 
         # If we will persist, ensure message cap won't be exceeded.
         # Otherwise enforce a soft cap for non-persisted completions.
@@ -3294,7 +3511,7 @@ async def character_chat_completion(
                 )
                 # Support async-returning provider hooks (test stubs or adapters)
                 try:
-                    if asyncio.iscoroutine(llm_resp):
+                    if inspect.isawaitable(llm_resp):
                         llm_resp = await llm_resp  # type: ignore
                 except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to await async LLM response: {e}")
@@ -3302,6 +3519,12 @@ async def character_chat_completion(
                         status_code=status.HTTP_502_BAD_GATEWAY,
                         detail="LLM provider error"
                     ) from e
+            except ChatAPIError as e:
+                logger.error("Chat provider call failed [{}]: {}", e.__class__.__name__, e)
+                raise HTTPException(
+                    status_code=int(getattr(e, "status_code", status.HTTP_502_BAD_GATEWAY)),
+                    detail=str(e),
+                ) from e
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Chat provider call failed: {e}")
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Chat provider error") from e
@@ -3505,8 +3728,13 @@ async def character_chat_completion(
                                         return
                             # Ensure DONE if provider didn't send one
                             await stream.done()
+                        except ChatAPIError as e:
+                            await stream.error("provider_error", str(e))
                         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                             await stream.error("internal_error", f"{e}")
+                        except Exception:
+                            logger.exception("Unhandled exception in character chat streaming producer")
+                            await stream.error("internal_error", "An internal error has occurred.")
 
                     async def _generator():
                         producer = asyncio.create_task(_produce_async())
@@ -3575,7 +3803,7 @@ async def character_chat_completion(
                                 yield ensure_sse_line(line)
                         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                             if isinstance(e, AttributeError) and "object has no attribute 'close'" in str(e):
-                                logger.debug("Ignoring streaming session close error: %s", e)
+                                logger.debug("Ignoring streaming session close error: {}", e)
                             else:
                                 logger.exception("Exception occurred in streaming SSE async generator.")
                                 yield f"data: {json.dumps({'error': 'An internal error has occurred.'})}\n\n"
@@ -3630,6 +3858,20 @@ async def character_chat_completion(
         if not assistant_text:
             assistant_text = ""
 
+        resolved_mood_label = (
+            body.mood_label.strip()
+            if isinstance(body.mood_label, str) and body.mood_label.strip()
+            else None
+        )
+        resolved_mood_confidence = (
+            float(body.mood_confidence) if body.mood_confidence is not None else None
+        )
+        resolved_mood_topic = (
+            body.mood_topic.strip()
+            if isinstance(body.mood_topic, str) and body.mood_topic.strip()
+            else None
+        )
+
         saved = False
         assistant_msg_id: Optional[str] = None
         if will_persist:
@@ -3669,6 +3911,12 @@ async def character_chat_completion(
                 "speaker_character_name": char_label,
                 "turn_taking_mode": turn_context.get("turn_taking_mode", "single"),
             }
+            if resolved_mood_label:
+                metadata_extra["mood_label"] = resolved_mood_label
+            if resolved_mood_confidence is not None:
+                metadata_extra["mood_confidence"] = resolved_mood_confidence
+            if resolved_mood_topic:
+                metadata_extra["mood_topic"] = resolved_mood_topic
             if turn_lorebook_diagnostics:
                 metadata_extra["lorebook_diagnostics"] = turn_lorebook_diagnostics
             validated_tool_calls = (
@@ -3697,6 +3945,9 @@ async def character_chat_completion(
             assistant_content=assistant_text,
             speaker_character_id=active_character_id,
             speaker_character_name=char_label,
+            mood_label=resolved_mood_label,
+            mood_confidence=resolved_mood_confidence,
+            mood_topic=resolved_mood_topic,
             lorebook_diagnostics=turn_lorebook_diagnostics,
         )
 
@@ -3726,6 +3977,8 @@ async def list_chat_sessions(
     character_id: Optional[int] = Query(None, description="Filter by character ID"),
     limit: int = Query(50, ge=1, le=200, description="Number of items to return"),
     offset: int = Query(0, ge=0, description="Number of items to skip"),
+    include_deleted: bool = Query(False, description="Include soft-deleted chats"),
+    deleted_only: bool = Query(False, description="Return only soft-deleted chats"),
     include_settings: bool = Query(
         False,
         description="Include per-chat settings payload for each returned chat.",
@@ -3748,19 +4001,42 @@ async def list_chat_sessions(
     """
     try:
         user_id_str = str(current_user.id)
+        include_deleted_effective = include_deleted or deleted_only
         if character_id:
             # Get conversations for specific character scoped to current user
-            conversations = db.get_conversations_for_user_and_character(user_id_str, character_id, limit=limit, offset=offset)
+            conversations = db.get_conversations_for_user_and_character(
+                user_id_str,
+                character_id,
+                limit=limit,
+                offset=offset,
+                include_deleted=include_deleted_effective,
+                deleted_only=deleted_only,
+            )
             try:
-                total_count = db.count_conversations_for_user_by_character(user_id_str, character_id)
+                total_count = db.count_conversations_for_user_by_character(
+                    user_id_str,
+                    character_id,
+                    include_deleted=include_deleted_effective,
+                    deleted_only=deleted_only,
+                )
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fallback: filter by client_id in-memory if efficient count isn't available
                 total_count = len([c for c in conversations if c.get('client_id') == user_id_str])
         else:
             # Efficient path: list conversations for this user directly
-            conversations = db.get_conversations_for_user(user_id_str, limit=limit, offset=offset)
+            conversations = db.get_conversations_for_user(
+                user_id_str,
+                limit=limit,
+                offset=offset,
+                include_deleted=include_deleted_effective,
+                deleted_only=deleted_only,
+            )
             try:
-                total_count = db.count_conversations_for_user(user_id_str)
+                total_count = db.count_conversations_for_user(
+                    user_id_str,
+                    include_deleted=include_deleted_effective,
+                    deleted_only=deleted_only,
+                )
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 total_count = len(conversations)
 
@@ -3775,7 +4051,11 @@ async def list_chat_sessions(
         # Add message counts using efficient counter
         for conv in user_conversations:
             try:
-                conv['message_count'] = db.count_messages_for_conversation(conv['id'])
+                # Deleted chats don't need message counts for listing performance.
+                if conv.get("deleted"):
+                    conv['message_count'] = 0
+                else:
+                    conv['message_count'] = db.count_messages_for_conversation(conv['id'])
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 messages = db.get_messages_for_conversation(conv['id'], limit=1000)
                 conv['message_count'] = len(messages) if messages else 0
@@ -3901,6 +4181,9 @@ async def get_chat_settings(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat settings not found")
 
         settings = settings_row.get("settings") or {}
+        # Internal bootstrap metadata alone should not count as user-visible settings.
+        if settings and set(settings.keys()) <= {"greetingsChecksum"}:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat settings not found")
 
         # Normalize stored enum values so the client always gets valid scopes.
         _SCOPE_DEFAULTS = {
@@ -3999,6 +4282,7 @@ async def update_chat_settings(
 async def delete_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
+    hard_delete: bool = Query(False, description="Permanently delete a chat already in trash"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ) -> Response:
@@ -4015,9 +4299,31 @@ async def delete_chat_session(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
-        # Get current conversation
-        conversation = db.get_conversation_by_id(chat_id)
+        # Get current conversation. Hard-delete may target already deleted rows.
+        conversation = db.get_conversation_by_id(chat_id, include_deleted=hard_delete)
         _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        if hard_delete:
+            if not conversation.get("deleted"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Chat must be in trash before permanent delete.",
+                )
+
+            if expected_version is not None and conversation.get('version', 1) != expected_version:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Version mismatch. Expected {expected_version}, found {conversation.get('version', 1)}"
+                )
+
+            deleted_ok = db.hard_delete_conversation(chat_id)
+            if not deleted_ok:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Chat session {chat_id} not found",
+                )
+            logger.info(f"Hard deleted chat session {chat_id} by user {current_user.id}")
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
 
         # Check version if provided
         if expected_version is not None and conversation.get('version', 1) != expected_version:
@@ -4098,6 +4404,57 @@ async def delete_chat_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting chat session"
+        ) from e
+
+
+@router.post(
+    "/{chat_id}/restore",
+    response_model=ChatSessionResponse,
+    summary="Restore chat session from trash",
+    tags=["Chat Sessions"],
+)
+async def restore_chat_session(
+    chat_id: str = Path(..., description="Chat session ID"),
+    expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = db.get_conversation_by_id(chat_id, include_deleted=True)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        # Already active: return current state as idempotent success.
+        if not conversation.get("deleted"):
+            try:
+                conversation['message_count'] = db.count_messages_for_conversation(chat_id)
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                conversation['message_count'] = 0
+            return _convert_db_conversation_to_response(conversation)
+
+        exp_ver = expected_version if expected_version is not None else conversation.get("version", 1)
+        db.restore_conversation(chat_id, exp_ver)
+
+        restored = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(restored, current_user.id, chat_id)
+        try:
+            restored['message_count'] = db.count_messages_for_conversation(chat_id)
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            restored['message_count'] = 0
+        return _convert_db_conversation_to_response(restored)
+
+    except ConflictError as e:
+        logger.warning(f"Conflict restoring chat session {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error restoring chat session {chat_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Error restoring chat session {chat_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while restoring chat session",
         ) from e
 
 
@@ -4487,6 +4844,16 @@ async def persist_streamed_assistant_message(
                 "speaker_character_name": resolved_speaker_name,
                 "turn_taking_mode": resolved_turn_mode,
             }
+            if isinstance(body.mood_label, str):
+                mood_label = body.mood_label.strip()
+                if mood_label:
+                    metadata_extra["mood_label"] = mood_label
+            if body.mood_confidence is not None:
+                metadata_extra["mood_confidence"] = float(body.mood_confidence)
+            if isinstance(body.mood_topic, str):
+                mood_topic = body.mood_topic.strip()
+                if mood_topic:
+                    metadata_extra["mood_topic"] = mood_topic
             if getattr(body, 'usage', None) is not None:
                 metadata_extra["usage"] = body.usage
             validated_tool_calls = _validate_and_truncate_tool_calls(getattr(body, 'tool_calls', None))

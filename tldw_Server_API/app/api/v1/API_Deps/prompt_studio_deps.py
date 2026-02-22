@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_content_backend_instance,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # Local imports
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
@@ -65,6 +66,8 @@ _PROMPT_STUDIO_RATE_LIMIT_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
 )
+
+_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED = False
 
 ########################################################################################################################
 # Helper Functions
@@ -164,8 +167,6 @@ async def get_prompt_studio_user(
     Returns:
         User context dictionary
     """
-    import os
-
     # Debug trace to aid tests
     with contextlib.suppress(_PROMPT_STUDIO_CONTEXT_EXCEPTIONS):
         logger.debug(
@@ -178,7 +179,7 @@ async def get_prompt_studio_user(
 
     # 1) Test mode: prefer patched hook if available; otherwise use deterministic test user id
     client_id_value = x_client_id if isinstance(x_client_id, str) else None
-    if os.getenv("TEST_MODE", "").lower() == "true":
+    if is_test_mode():
         try:
             maybe_user = get_current_active_user()  # may be sync or async, or None
             if asyncio.iscoroutine(maybe_user):
@@ -239,7 +240,7 @@ async def get_prompt_studio_user(
     path = (request.url.path or "")
     method = request.method.upper()
     if not authz and not api_key_hdr:
-        test_mode = os.getenv("TEST_MODE", "").lower() == "true"
+        test_mode = is_test_mode()
         # Explicitly require auth for project list endpoint (without trailing slash) to satisfy tests
         if path == "/api/v1/prompt-studio/projects" and method == "GET":
             raise HTTPException(
@@ -325,7 +326,16 @@ async def get_prompt_studio_user(
     roles_raw = getattr(current_user, "roles", []) or []
     normalized_roles = {r.lower() for r in roles_raw if isinstance(r, str)}
     perms = getattr(current_user, "permissions", []) or []
-    is_admin = bool(getattr(current_user, "is_admin", False) or ("admin" in normalized_roles))
+    normalized_permissions = {
+        p.lower()
+        for p in perms
+        if isinstance(p, str) and p.strip()
+    }
+    is_admin = bool(
+        ("admin" in normalized_roles)
+        or ("*" in normalized_permissions)
+        or ("system.configure" in normalized_permissions)
+    )
 
     user_context: dict[str, Any] = {
         "user_id": str(getattr(current_user, "id", "anonymous")),
@@ -368,11 +378,10 @@ async def get_prompt_studio_db(
     client_id = user_context["client_id"]
 
     # Allow anonymous only in explicit settings or during tests
-    import os
     if (
         user_id == "anonymous"
         and not settings.get("ALLOW_ANONYMOUS_PROMPT_STUDIO", False)
-        and not os.getenv("TEST_MODE", "").lower() == "true"
+        and not is_test_mode()
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -489,8 +498,7 @@ async def check_rate_limit(
         HTTPException: If rate limit exceeded
     """
     # Bypass in tests or when globally disabled
-    import os as _os
-    if _os.getenv("TEST_MODE", "").lower() == "true":
+    if is_test_mode():
         return True
     if not security_config.enable_rate_limiting:
         return True
@@ -516,7 +524,7 @@ async def check_rate_limit(
 
     limit = int(limits.get(operation, limits["default"]))
 
-    # Prefer shared limiter (Redis-backed when REDIS_URL configured)
+    # Prefer shared limiter; legacy local limiter fallback has been retired.
     if _authnz_check_rate_limit is not None:
         try:
             allowed, meta = await _authnz_check_rate_limit(
@@ -533,26 +541,30 @@ async def check_rate_limit(
         except HTTPException:
             raise
         except _PROMPT_STUDIO_RATE_LIMIT_EXCEPTIONS as e:
-            logger.warning(f"Shared rate limiter unavailable, falling back to local limiter: {e}")
-
-    # Fallback: simple in-memory limiter (process-local)
-    import time as _time
-    key = f"ps_local:{user_id}:{operation}"
-    now = _time.time()
-    window_seconds = 60
-    if not hasattr(check_rate_limit, "_local_requests"):
-        check_rate_limit._local_requests = {}
-    store = check_rate_limit._local_requests
-    bucket = store.get(key, [])
-    bucket = [t for t in bucket if now - t < window_seconds]
-    if len(bucket) >= limit:
+            if not bool(globals().get("_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED", False)):
+                globals()["_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED"] = True
+                logger.warning(
+                    "Prompt Studio shared rate limiter unavailable; local fallback limiter is retired. "
+                    "Denying request (fail-closed). operation={} error={}",
+                    operation,
+                    e,
+                )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Prompt Studio rate limiter is temporarily unavailable",
+            ) from e
+    else:
+        if not bool(globals().get("_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED", False)):
+            globals()["_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED"] = True
+            logger.warning(
+                "Prompt Studio shared rate limiter not available; local fallback limiter is retired. "
+                "Denying request (fail-closed). operation={}",
+                operation,
+            )
         raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded for operation: {operation}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Prompt Studio rate limiter is not configured",
         )
-    bucket.append(now)
-    store[key] = bucket
-    return True
 
 ########################################################################################################################
 # Cleanup

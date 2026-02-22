@@ -25,6 +25,13 @@ _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return int(default)
+
+
 def _get_app():
     """Return the current app instance, accommodating reloads in tests."""
     try:
@@ -414,6 +421,133 @@ async def rg_diag_query(
         return JSONResponse({"status": "ok", "entity": entity, "category": category, "data": data})
     except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("rg_diag_query failed")
+        return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
+
+
+@router.get(
+    "/resource-governor/diag/media-budget",
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def rg_diag_media_budget(
+    user_id: int = Query(..., ge=1, description="User id to inspect, e.g., 123"),
+    policy_id: str = Query("media.default", description="Media policy id"),
+):
+    """
+    Return per-user media ingestion budget limits and current usage.
+
+    This endpoint is intended for admin UI diagnostics and reads from the
+    existing Resource Governor + shared daily ledger path.
+    """
+    try:
+        gov = _get_or_init_governor()
+        if gov is None:
+            return JSONResponse(
+                {"status": "unavailable", "reason": "governor_not_initialized"},
+                status_code=503,
+            )
+
+        app = _get_app()
+        loader = getattr(app.state, "rg_policy_loader", None)
+        policy: dict[str, Any] = {}
+        if loader is not None:
+            try:
+                policy = dict(loader.get_policy(policy_id) or {})
+            except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                policy = {}
+
+        jobs_cfg = dict(policy.get("jobs") or {})
+        bytes_cfg = dict(policy.get("ingestion_bytes") or {})
+        jobs_limit = _safe_int(jobs_cfg.get("max_concurrent"), 0)
+        daily_cap = _safe_int(bytes_cfg.get("daily_cap"), 0)
+
+        categories: dict[str, dict[str, int]] = {}
+        if jobs_limit > 0:
+            categories["jobs"] = {"units": 1}
+        if daily_cap > 0:
+            # units=0 requests non-mutating headroom/usage details.
+            categories["ingestion_bytes"] = {"units": 0}
+
+        decision: Any | None = None
+        if categories:
+            try:
+                from tldw_Server_API.app.core.Resource_Governance import RGRequest
+            except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                RGRequest = None  # type: ignore
+            if RGRequest is not None:
+                decision = gov.check(
+                    RGRequest(
+                        entity=f"user:{int(user_id)}",
+                        categories=categories,
+                        tags={
+                            "policy_id": policy_id,
+                            "endpoint": "/api/v1/resource-governor/diag/media-budget",
+                        },
+                    )
+                )
+                if inspect.isawaitable(decision):
+                    decision = await decision
+
+        details = {}
+        if decision is not None:
+            details = dict(getattr(decision, "details", {}) or {})
+        category_details = dict(details.get("categories") or {})
+        jobs_details = dict(category_details.get("jobs") or {})
+        bytes_details = dict(category_details.get("ingestion_bytes") or {})
+
+        jobs_limit_eff = _safe_int(jobs_details.get("limit"), jobs_limit)
+        jobs_remaining = jobs_details.get("remaining")
+        jobs_remaining_int = (
+            max(0, _safe_int(jobs_remaining, 0))
+            if jobs_remaining is not None
+            else None
+        )
+        jobs_active = (
+            max(0, jobs_limit_eff - jobs_remaining_int)
+            if jobs_remaining_int is not None and jobs_limit_eff > 0
+            else None
+        )
+
+        daily_cap_eff = _safe_int(bytes_details.get("daily_cap"), daily_cap)
+        daily_used = bytes_details.get("daily_used")
+        daily_remaining = bytes_details.get("daily_remaining")
+
+        body = {
+            "status": "ok",
+            "entity": f"user:{int(user_id)}",
+            "policy_id": policy_id,
+            "limits": {
+                "jobs_max_concurrent": jobs_limit_eff if jobs_limit_eff > 0 else None,
+                "ingestion_bytes_daily_cap": daily_cap_eff if daily_cap_eff > 0 else None,
+            },
+            "usage": {
+                "jobs_active": jobs_active,
+                "jobs_remaining": jobs_remaining_int,
+                "ingestion_bytes_daily_used": (
+                    _safe_int(daily_used, 0) if daily_used is not None else None
+                ),
+                "ingestion_bytes_daily_remaining": (
+                    _safe_int(daily_remaining, 0)
+                    if daily_remaining is not None
+                    else (
+                        max(
+                            0,
+                            daily_cap_eff
+                            - _safe_int(daily_used, 0),
+                        )
+                        if daily_cap_eff > 0 and daily_used is not None
+                        else None
+                    )
+                ),
+            },
+            "retry_after": (
+                _safe_int(getattr(decision, "retry_after", 0), 0)
+                if decision is not None and getattr(decision, "retry_after", None) is not None
+                else None
+            ),
+        }
+        return JSONResponse(body)
+    except Exception:  # noqa: BLE001 - generic 500 handler
+        logger.exception("rg_diag_media_budget failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
 

@@ -19,6 +19,8 @@ def client_with_user(monkeypatch, tmp_path):
 
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.setenv("WATCHLIST_TEMPLATE_DIR", str(template_dir))
+    # Keep version-selection assertions independent from auto-seeding behavior.
+    monkeypatch.setenv("WATCHLISTS_SEED_OUTPUT_TEMPLATES", "false")
     monkeypatch.setenv("TEST_MODE", "1")
 
     from fastapi import FastAPI
@@ -111,4 +113,3 @@ def test_watchlists_template_versions_and_render_selection(client_with_user: Tes
     assert output["metadata"]["template_source"] == "watchlists_templates"
     assert output["metadata"]["template_version"] == 1
     assert output["content"].startswith("V1")
-

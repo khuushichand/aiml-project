@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
   buildMessageSteeringSnippet,
+  DEFAULT_MESSAGE_STEERING_PROMPTS,
   hasActiveMessageSteering,
+  normalizeMessageSteeringPrompts,
   resolveMessageSteering
 } from "../message-steering"
 
@@ -51,6 +53,33 @@ describe("message steering utilities", () => {
     expect(snippet).toContain("Steering instruction")
     expect(snippet).toContain("authored by the user")
     expect(snippet).toContain("narrative prose")
+  })
+
+  it("builds snippet text from custom prompt templates", () => {
+    const snippet = buildMessageSteeringSnippet(
+      {
+        continueAsUser: true,
+        impersonateUser: false,
+        forceNarrate: true
+      },
+      {
+        continueAsUser: "Custom continue prompt.",
+        forceNarrate: "Custom narrate prompt."
+      }
+    )
+
+    expect(snippet).toContain("Custom continue prompt.")
+    expect(snippet).toContain("Custom narrate prompt.")
+  })
+
+  it("normalizes blank prompt templates to defaults", () => {
+    const normalized = normalizeMessageSteeringPrompts({
+      continueAsUser: "  ",
+      impersonateUser: "\n",
+      forceNarrate: ""
+    })
+
+    expect(normalized).toEqual(DEFAULT_MESSAGE_STEERING_PROMPTS)
   })
 
   it("detects active steering when only force narrate is enabled", () => {

@@ -15,6 +15,7 @@ import {
   Dropdown,
   Segmented,
   Badge,
+  Drawer,
   message
 } from "antd"
 import {
@@ -34,10 +35,12 @@ import {
   MoreVertical,
   AlertCircle,
   Plus,
-  Trash2
+  Trash2,
+  PanelLeft
 } from "lucide-react"
 import type { SidebarPanel } from "@/types/workflow-editor"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
+import { useDesktop } from "@/hooks/useMediaQuery"
 import { WorkflowCanvas } from "./WorkflowCanvas"
 import { NodePalette } from "./NodePalette"
 import { NodeConfigPanel } from "./NodeConfigPanel"
@@ -48,9 +51,13 @@ interface WorkflowEditorProps {
 }
 
 export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
+  const isDesktop = useDesktop()
+
   // Store state
   const workflowName = useWorkflowEditorStore((s) => s.workflowName)
   const isDirty = useWorkflowEditorStore((s) => s.isDirty)
+  const nodes = useWorkflowEditorStore((s) => s.nodes)
+  const edges = useWorkflowEditorStore((s) => s.edges)
   const isMiniMapVisible = useWorkflowEditorStore((s) => s.isMiniMapVisible)
   const isGridVisible = useWorkflowEditorStore((s) => s.isGridVisible)
   const sidebarPanel = useWorkflowEditorStore((s) => s.sidebarPanel)
@@ -76,6 +83,13 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
 
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(workflowName)
+  const [isMobilePanelsOpen, setIsMobilePanelsOpen] = useState(false)
+
+  useEffect(() => {
+    if (isDesktop) {
+      setIsMobilePanelsOpen(false)
+    }
+  }, [isDesktop])
 
   // Initialize with a new workflow on mount
   useEffect(() => {
@@ -92,10 +106,13 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
     }
   }, [stepTypesStatus, loadStepTypes])
 
-  // Validate on changes
+  // Validate on graph/config changes with a short debounce for typing comfort
   useEffect(() => {
-    validate()
-  }, [validate])
+    const timeoutId = window.setTimeout(() => {
+      validate()
+    }, 120)
+    return () => window.clearTimeout(timeoutId)
+  }, [nodes, edges, validate])
 
   const handleSave = useCallback(() => {
     const workflow = saveWorkflow()
@@ -194,11 +211,48 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
 
   const errorCount = issues.filter((i) => i.severity === "error").length
   const warningCount = issues.filter((i) => i.severity === "warning").length
+  const validationIssuesAriaLabel =
+    errorCount > 0 && warningCount > 0
+      ? `Validation issues: ${errorCount} errors, ${warningCount} warnings`
+      : errorCount > 0
+        ? `Validation issues: ${errorCount} errors`
+        : `Validation issues: ${warningCount} warnings`
+
+  const sidebarContent = (
+    <>
+      <div className="flex items-center p-2 border-b border-border">
+        <Segmented
+          size="small"
+          value={sidebarPanel || "palette"}
+          onChange={(value) => setSidebarPanel(value as SidebarPanel)}
+          options={sidebarPanelOptions.map((opt) => ({
+            value: opt.value,
+            label: (
+              <Tooltip title={opt.label}>
+                <span className="inline-flex items-center justify-center">
+                  <span aria-hidden="true">{opt.icon}</span>
+                  <span className="sr-only">{opt.label}</span>
+                </span>
+              </Tooltip>
+            ),
+            title: opt.label
+          }))}
+          block
+        />
+      </div>
+
+      <div className="flex-1 overflow-hidden">
+        {sidebarPanel === "palette" && <NodePalette className="h-full" />}
+        {sidebarPanel === "config" && <NodeConfigPanel className="h-full" />}
+        {sidebarPanel === "execution" && <ExecutionPanel className="h-full" />}
+      </div>
+    </>
+  )
 
   return (
-    <div className={`flex flex-col h-full bg-gray-100 dark:bg-gray-900 ${className}`}>
+    <div className={`flex flex-col h-full bg-bg ${className}`}>
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex items-center gap-2 px-3 py-2 bg-surface border-b border-border">
         {/* Workflow name */}
         <div className="flex items-center gap-2 min-w-[200px]">
           {isEditing ? (
@@ -217,17 +271,17 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
                 setEditName(workflowName)
                 setIsEditing(true)
               }}
-              className="text-sm font-medium text-gray-800 dark:text-gray-200 hover:text-blue-500 truncate max-w-[180px]"
+              className="text-sm font-medium text-text hover:text-primary truncate max-w-[180px]"
             >
               {workflowName}
             </button>
           )}
           {isDirty && (
-            <span className="text-xs text-gray-400">*</span>
+            <span className="text-xs text-text-subtle">*</span>
           )}
         </div>
 
-        <div className="h-4 w-px bg-gray-200 dark:bg-gray-700" />
+        <div className="h-4 w-px bg-border" />
 
         {/* Undo/Redo */}
         <div className="flex items-center gap-1">
@@ -235,6 +289,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
             <Button
               type="text"
               size="small"
+              aria-label="Undo"
               icon={<Undo2 className="w-4 h-4" />}
               disabled={!canUndo()}
               onClick={undo}
@@ -244,6 +299,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
             <Button
               type="text"
               size="small"
+              aria-label="Redo"
               icon={<Redo2 className="w-4 h-4" />}
               disabled={!canRedo()}
               onClick={redo}
@@ -251,14 +307,26 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
           </Tooltip>
         </div>
 
-        <div className="h-4 w-px bg-gray-200 dark:bg-gray-700" />
+        <div className="h-4 w-px bg-border" />
 
         {/* View controls */}
         <div className="flex items-center gap-1">
+          {!isDesktop && (
+            <Tooltip title="Open workflow panels">
+              <Button
+                type="text"
+                size="small"
+                aria-label="Open workflow panels"
+                icon={<PanelLeft className="w-4 h-4" />}
+                onClick={() => setIsMobilePanelsOpen(true)}
+              />
+            </Tooltip>
+          )}
           <Tooltip title="Toggle Grid">
             <Button
               type={isGridVisible ? "primary" : "text"}
               size="small"
+              aria-label="Toggle Grid"
               icon={<Grid3X3 className="w-4 h-4" />}
               onClick={toggleGrid}
             />
@@ -267,6 +335,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
             <Button
               type={isMiniMapVisible ? "primary" : "text"}
               size="small"
+              aria-label="Toggle Minimap"
               icon={<Map className="w-4 h-4" />}
               onClick={toggleMiniMap}
             />
@@ -298,10 +367,11 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
               <Button
                 type="text"
                 size="small"
+                aria-label={validationIssuesAriaLabel}
                 icon={
                   <AlertCircle
                     className={`w-4 h-4 ${
-                      errorCount > 0 ? "text-red-500" : "text-orange-500"
+                      errorCount > 0 ? "text-danger" : "text-warn"
                     }`}
                   />
                 }
@@ -329,40 +399,25 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
           trigger={["click"]}
           placement="bottomRight"
         >
-          <Button
-            type="text"
-            size="small"
-            icon={<MoreVertical className="w-4 h-4" />}
-          />
+          <Tooltip title="More actions">
+            <Button
+              type="text"
+              size="small"
+              aria-label="More actions"
+              icon={<MoreVertical className="w-4 h-4" />}
+            />
+          </Tooltip>
         </Dropdown>
       </div>
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <div className="w-72 flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
-          {/* Panel tabs */}
-          <div className="flex items-center p-2 border-b border-gray-200 dark:border-gray-700">
-            <Segmented
-              size="small"
-              value={sidebarPanel || "palette"}
-              onChange={(value) => setSidebarPanel(value as SidebarPanel)}
-              options={sidebarPanelOptions.map((opt) => ({
-                value: opt.value,
-                icon: opt.icon,
-                title: opt.label
-              }))}
-              block
-            />
+        {/* Sidebar (desktop only) */}
+        {isDesktop && (
+          <div className="w-72 flex flex-col bg-surface border-r border-border">
+            {sidebarContent}
           </div>
-
-          {/* Panel content */}
-          <div className="flex-1 overflow-hidden">
-            {sidebarPanel === "palette" && <NodePalette className="h-full" />}
-            {sidebarPanel === "config" && <NodeConfigPanel className="h-full" />}
-            {sidebarPanel === "execution" && <ExecutionPanel className="h-full" />}
-          </div>
-        </div>
+        )}
 
         {/* Canvas */}
         <div className="flex-1 overflow-hidden">
@@ -370,8 +425,23 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
         </div>
       </div>
 
+      {!isDesktop && (
+        <Drawer
+          title="Workflow panels"
+          placement="left"
+          open={isMobilePanelsOpen}
+          onClose={() => setIsMobilePanelsOpen(false)}
+          styles={{
+            wrapper: { width: 320 },
+            body: { padding: 0, display: "flex", flexDirection: "column" }
+          }}
+        >
+          {sidebarContent}
+        </Drawer>
+      )}
+
       {/* Status bar */}
-      <div className="flex items-center justify-between px-3 py-1 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500">
+      <div className="flex items-center justify-between px-3 py-1 bg-surface border-t border-border text-xs text-text-subtle">
         <div className="flex items-center gap-3">
           <span>
             {useWorkflowEditorStore.getState().nodes.length} nodes
@@ -386,12 +456,12 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
               <span
                 className={`w-2 h-2 rounded-full ${
                   status === "running"
-                    ? "bg-blue-500 animate-pulse"
+                    ? "bg-primary animate-pulse"
                     : status === "completed"
-                    ? "bg-green-500"
+                    ? "bg-success"
                     : status === "failed"
-                    ? "bg-red-500"
-                    : "bg-yellow-500"
+                    ? "bg-danger"
+                    : "bg-warn"
                 }`}
               />
               {status}

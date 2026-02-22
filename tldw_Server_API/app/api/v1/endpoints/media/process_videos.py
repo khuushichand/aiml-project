@@ -43,9 +43,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.video_batch import (
-    run_video_batch,
-)
 
 router = APIRouter()
 
@@ -82,15 +79,20 @@ async def process_videos_endpoint(
     logger.info(
         "Request received for /process-videos. Form data validated via dependency."
     )
+
+    # Lazy import to avoid import-time hard failures from optional transcriber backends.
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.video_batch import (
+        run_video_batch,
+    )
     try:
         usage_log.log_event(
             "media.process.video",
             tags=["no_db"],
             metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
         )
-    except Exception:
+    except Exception as usage_log_error:
         # Usage logging is best-effort; do not fail the request.
-        pass
+        logger.debug("Video process endpoint usage logging failed", exc_info=usage_log_error)
 
     if form_data.urls and form_data.urls == [""]:
         logger.info(
@@ -344,8 +346,8 @@ async def process_videos_endpoint(
                     chunks = _improved_chunking_process(text, chunk_options_dict)
 
                 res["chunks"] = chunks
-    except Exception:
-        pass
+    except Exception as rechunk_error:
+        logger.debug("Video process endpoint rechunking failed; returning original result", exc_info=rechunk_error)
 
     return JSONResponse(status_code=final_status_code, content=batch_result)
 

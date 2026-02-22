@@ -10,6 +10,7 @@
  * Prerequisites: tldw_server at http://127.0.0.1:8000, extension built
  */
 import { test, expect, Page, BrowserContext } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -250,7 +251,7 @@ test.describe.serial('UX Walkthrough', () => {
     startFlow('01-Onboarding')
 
     // Launch fresh extension with no config
-    const { context, page } = await launchWithExtension('')
+    const { context, page } = await launchWithExtensionOrSkip(test, '')
     captureConsole(page)
 
     try {
@@ -369,7 +370,7 @@ test.describe.serial('UX Walkthrough', () => {
   test('Flow 2: Options Page Dashboard', async () => {
     startFlow('02-Dashboard')
 
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -507,7 +508,7 @@ test.describe.serial('UX Walkthrough', () => {
   test('Flow 3: Sidepanel Chat Interface', async () => {
     startFlow('03-Sidepanel')
 
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -645,7 +646,7 @@ test.describe.serial('UX Walkthrough', () => {
   test('Flow 4: Settings Pages', async () => {
     startFlow('04-Settings')
 
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -738,7 +739,7 @@ test.describe.serial('UX Walkthrough', () => {
   test('Flow 5: Media & Workspace Pages', async () => {
     startFlow('05-Workspace')
 
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -826,7 +827,7 @@ test.describe.serial('UX Walkthrough', () => {
   test('Flow 6: Dark Mode Consistency', async () => {
     startFlow('06-Dark-Mode')
 
-    const { context, page, optionsUrl, openSidepanel } = await launchWithExtension('', {
+    const { context, page, optionsUrl, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -931,7 +932,7 @@ test.describe.serial('UX Walkthrough', () => {
   test('Flow 7: Keyboard Navigation & Accessibility', async () => {
     startFlow('07-Accessibility')
 
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',

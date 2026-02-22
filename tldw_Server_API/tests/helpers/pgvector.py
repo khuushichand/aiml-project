@@ -49,7 +49,7 @@ def _ensure_extension(conn) -> None:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
     except Exception:
         # Best-effort
-        pass
+        _ = None
 
 
 @pytest.fixture(scope="session")
@@ -102,7 +102,7 @@ def pgvector_dsn() -> Optional[str]:
             else:
                 app_settings["RAG"] = prev_rag
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture(scope="function")
@@ -127,4 +127,4 @@ def pgvector_temp_table(pgvector_dsn):
             with conn, conn.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {name}")
     except Exception:
-        pass
+        _ = None

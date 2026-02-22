@@ -104,28 +104,26 @@ class MistralAdapter(ChatProvider):
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
             return override.strip()
-        try:
-            cfg = (request or {}).get("app_config") or {}
+        cfg = (request or {}).get("app_config") or {}
+        if isinstance(cfg, dict):
             mcfg = cfg.get("mistral_api") or {}
-            base = mcfg.get("api_base_url")
-            if isinstance(base, str) and base.strip():
-                return base.strip().rstrip("/")
-        except Exception:
-            pass
+            if isinstance(mcfg, dict):
+                base = mcfg.get("api_base_url")
+                if isinstance(base, str) and base.strip():
+                    return base.strip().rstrip("/")
         return self._base_url()
 
     def _resolve_timeout(self, request: dict[str, Any], fallback: float | None) -> float:
-        try:
-            cfg = (request or {}).get("app_config") or {}
+        cfg = (request or {}).get("app_config") or {}
+        if isinstance(cfg, dict):
             mcfg = cfg.get("mistral_api") or {}
-            t = mcfg.get("api_timeout")
-            if t is not None:
-                try:
-                    return float(t)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            if isinstance(mcfg, dict):
+                t = mcfg.get("api_timeout")
+                if t is not None:
+                    try:
+                        return float(t)
+                    except (TypeError, ValueError):
+                        t = None
         if fallback is not None:
             return float(fallback)
         return float(self.capabilities().get("default_timeout_seconds", 60))

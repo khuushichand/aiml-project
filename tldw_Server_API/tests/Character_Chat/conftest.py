@@ -23,7 +23,7 @@ def _override_character_chat_rate_limits_for_character_chat(monkeypatch):
 
         _crl._rate_limiter = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     yield
 
@@ -32,4 +32,4 @@ def _override_character_chat_rate_limits_for_character_chat(monkeypatch):
 
         _crl._rate_limiter = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None

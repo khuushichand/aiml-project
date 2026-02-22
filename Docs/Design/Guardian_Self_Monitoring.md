@@ -48,6 +48,15 @@ GuardianDB (storage)
             - Crisis resource integration (988 Lifeline, Crisis Text Line, SAMHSA, IASP)
 ```
 
+### Governance Policy Features
+
+Governance policies are named groups that bundle supervised policies and self-monitoring rules with schedule, scope, and transparency settings.
+
+- **Schedule Filtering** — Each governance policy may define `schedule_start` and `schedule_end` (HH:MM), `schedule_days` (comma-separated: `mon,tue,wed,thu,fri,sat,sun`), and `schedule_timezone` (IANA identifier, default UTC). Overnight ranges are supported (e.g., 22:00–06:00 spans midnight). On parse errors the schedule fails open (policy remains active).
+- **Chat-Type Scoping** — The `scope_chat_types` field accepts `"all"` (default) or a comma-separated list of chat types (e.g., `"regular,character,rag"`). Policies only evaluate when the current `chat_type` matches the scope.
+- **Transparent Mode** — The `transparent` flag controls whether block messages reveal the policy. When true, blocked responses include the governance policy name and category, e.g., `[School Policy] Category: entertainment — ...`.
+- **Implementation** — `governance_utils.py` provides two pure functions: `is_schedule_active()` and `chat_type_matches()`. These have no database dependencies and are used by both `SupervisedPolicyEngine` and `SelfMonitoringService` to filter policies at evaluation time.
+
 ### API Layer
 
 | Prefix | Module | Routes |
@@ -82,10 +91,15 @@ Each supervised policy specifies:
 - **category** — grouping label (e.g., `explicit_content`, `weapons`)
 - **severity** — `info` | `warning` | `critical`
 - **notify_context** — `topic_only` | `snippet` | `full_message` (privacy control)
+- **governance_policy_id** — optional link to a `GovernancePolicy` that controls schedule, chat-type scope, and transparent mode for this supervised policy
 
 ### Pipeline Integration
 
 `SupervisedPolicyEngine.build_moderation_policy_overlay()` merges supervised rules into a base `ModerationPolicy` object that is compatible with the existing moderation pipeline. Guardian and self-monitoring checks are wired into chat input moderation (`moderate_input_messages` and the chat endpoint integration); expanding this coverage to additional entry points is tracked as follow-up work.
+
+After the overlay is built in `moderate_input_messages()`, the engine performs a direct `check_text()` evaluation and calls `dispatch_guardian_notification()` (in `supervised_policy.py`) when `notify_guardian=True` on the matched policy. This routes alerts through `NotificationService.notify_or_batch()` using the same JSONL sink and optional webhook/email pipeline as topic monitoring alerts.
+
+The `chat_type` parameter (e.g., `"regular"`, `"character"`, `"rag"`) is now passed through the chat pipeline to both the supervised policy overlay and self-monitoring evaluation, enabling governance policy chat-type scoping at both layers.
 
 ---
 
@@ -100,7 +114,11 @@ Self-monitoring rules add awareness features beyond blocking:
 - **display_mode** — `inline_banner` | `sidebar_note` | `post_session_summary` | `silent_log`
 - **escalation** — session-level and rolling-window thresholds with action escalation
 - **cooldown_minutes** — prevents impulsive disabling (must wait N minutes before deactivation)
-- **bypass_protection** — partner-based override requiring a second user to confirm deactivation
+- **bypass_protection** — controls how a rule can be deactivated, with four modes:
+  - `none` — disable immediately with no restrictions
+  - `cooldown` — must wait `cooldown_minutes` after rule creation before deactivation is allowed
+  - `confirmation` — generates a one-time token; user must call `POST /rules/{id}/confirm-deactivation` with the token to complete deactivation
+  - `partner_approval` — generates a one-time token; the designated `bypass_partner_user_id` must call `POST /rules/{id}/approve-deactivation` with the token to authorize deactivation
 - **crisis_resources_enabled** — shows crisis helpline information when triggered
 
 ### Dedup Logic
@@ -167,6 +185,8 @@ Key models in `guardian_schemas.py`:
 - `SelfMonitoringRuleCreate/Update/Response/List`
 - `SelfMonitoringAlertResponse/List`
 - `MarkAlertsReadRequest`
+- `DeactivationConfirmRequest` — token-based confirmation for `confirmation` bypass mode
+- `DeactivationApproveRequest` — token-based partner approval for `partner_approval` bypass mode
 - `CrisisResource/CrisisResourceList`
 - `DetailResponse`
 
@@ -203,6 +223,7 @@ python3 -m pytest --collect-only -q \
 |------|------|
 | `tldw_Server_API/app/core/DB_Management/Guardian_DB.py` | Database layer |
 | `tldw_Server_API/app/core/Moderation/supervised_policy.py` | Supervised policy engine |
+| `tldw_Server_API/app/core/Moderation/governance_utils.py` | Schedule/chat-type utility functions |
 | `tldw_Server_API/app/core/Monitoring/self_monitoring_service.py` | Self-monitoring service |
 | `tldw_Server_API/app/api/v1/schemas/guardian_schemas.py` | Pydantic schemas |
 | `tldw_Server_API/app/api/v1/endpoints/guardian_controls.py` | Guardian REST API |
@@ -212,13 +233,13 @@ python3 -m pytest --collect-only -q \
 | `tldw_Server_API/tests/Guardian/test_supervised_policy.py` | Policy engine tests |
 | `tldw_Server_API/tests/Guardian/test_self_monitoring.py` | Service tests |
 | `tldw_Server_API/tests/Guardian/test_chat_integration.py` | Chat moderation integration tests |
+| `tldw_Server_API/tests/Guardian/test_governance_utils.py` | Governance utils tests |
 
 ---
 
 ## Future Work (P1/P2)
 
 - **P1**: Expand guardian/self-monitoring enforcement to additional non-chat entry points
-- **P1**: Notification delivery (webhook, email, trusted contact)
 - **P1**: In-app notification UI
 - **P2**: Age-based rule relaxation schedules
 - **P2**: External crisis API integration (988 API when available)

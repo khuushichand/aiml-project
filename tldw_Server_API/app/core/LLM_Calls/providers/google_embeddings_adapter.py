@@ -5,6 +5,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .base import EmbeddingsProvider
 
@@ -22,7 +23,7 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
     def _use_native_http(self) -> bool:
         import os
         v = os.getenv("LLM_EMBEDDINGS_NATIVE_HTTP_GOOGLE")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        return is_truthy(v)
 
     def _base_url(self) -> str:
         import os
@@ -43,8 +44,8 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
             items = raw.get("embeddings", [])
             for i, it in enumerate(items):
                 data.append({"index": i, "embedding": (it.get("values") or [])})
-        except Exception:
-            pass
+        except Exception as parse_error:
+            logger.debug("Google embeddings adapter failed to normalize response payload", exc_info=parse_error)
         return {"data": data, "object": "list", "model": None}
 
     def embed(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:

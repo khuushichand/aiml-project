@@ -22,25 +22,25 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
     get_db_transaction,
     require_permissions,
 )
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import ToolCatalogResponse
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.database import (
-    build_postgres_in_clause,
-    build_sqlite_in_clause,
-    is_postgres_backend,
-)
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
     resolve_client_ip,
 )
-from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_memberships_for_user
-from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
+    list_active_team_memberships_for_user,
+    list_org_memberships_for_user,
+)
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
+    is_single_user_mode as _authnz_is_single_user_mode,
     is_single_user_profile_mode,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
@@ -50,6 +50,8 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
+from tldw_Server_API.app.services import admin_tool_catalog_service
 
 _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -63,6 +65,9 @@ _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS = (
     ipaddress.AddressValueError,
     ipaddress.NetmaskValueError,
 )
+
+# Test compatibility alias: some MCP auth tests monkeypatch this symbol.
+is_single_user_mode = _authnz_is_single_user_mode
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -174,7 +179,9 @@ def _should_use_single_user_api_key_compat() -> bool:
     if flag in {"0", "false", "off"}:
         return False
     try:
-        return is_single_user_profile_mode()
+        single_mode_fn = globals().get("is_single_user_mode")
+        single_mode = bool(single_mode_fn()) if callable(single_mode_fn) else False
+        return bool(is_single_user_profile_mode() or single_mode)
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP unified: single-user profile detection failed; defaulting compat shim to False",
@@ -199,18 +206,39 @@ def _get_client_ip(request: Optional[Request]) -> Optional[str]:
 class McpAuthContext:
     """Resolved authentication context for MCP HTTP endpoints."""
     user: Optional[TokenData]
+    principal: Optional[AuthPrincipal]
     api_key_info: Optional[dict[str, Any]]
     raw_api_key: Optional[str]
 
 
+def _principal_to_token_data(principal: AuthPrincipal) -> Optional[TokenData]:
+    """Best-effort conversion from claim-first principal to MCP TokenData."""
+    sub: str = ""
+    if principal.user_id is not None:
+        sub = str(principal.user_id)
+    elif principal.subject:
+        sub = str(principal.subject)
+    elif principal.api_key_id is not None:
+        sub = f"api_key:{principal.api_key_id}"
+    if not sub:
+        return None
+    return TokenData(
+        sub=sub,
+        username=principal.username,
+        roles=list(principal.roles or []),
+        permissions=list(principal.permissions or []),
+        token_type=str(principal.token_type or "access"),
+    )
+
+
 # Dependency functions
 
-async def get_current_user(
+async def _resolve_token_data_compat(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Security(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
 ) -> Optional[TokenData]:
-    """Get current user (AuthNZ JWT, MCP JWT, or API key).
+    """Compatibility resolver for TokenData (AuthNZ JWT, MCP JWT, or API key).
 
     The resolution order deliberately mirrors the main AuthNZ stack:
     1) AuthNZ access JWT (multi-user).
@@ -306,12 +334,7 @@ async def get_current_user(
             try:
                 if _should_use_single_user_api_key_compat():
                     settings = get_settings()
-                    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {
-                        "1",
-                        "true",
-                        "yes",
-                        "on",
-                    }
+                    test_mode = is_test_mode()
                     if test_mode:
                         # Guard against accidental production use of TEST_MODE-based
                         # SINGLE_USER_TEST_API_KEY shortcuts. Only honor TEST_MODE
@@ -326,7 +349,7 @@ async def get_current_user(
                             or os.getenv("ENV")
                             or ""
                         ).lower()
-                        prod_flag = os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+                        prod_flag = env_flag_enabled("tldw_production")
                         is_dev_ctx = bool(cfg and getattr(cfg, "debug_mode", False))
                         if os.getenv("PYTEST_CURRENT_TEST") is not None:
                             is_dev_ctx = True
@@ -380,7 +403,7 @@ async def get_current_user(
             if info and info.get("user_id"):
                 # Attach API key metadata to the request state so downstream
                 # handlers can reuse it without re-validating (avoids double
-                # usage/audit updates when get_current_user is used as a
+                # usage/audit updates when the compatibility resolver is used as a
                 # dependency alongside per-endpoint validate_api_key calls).
                 try:
                     if request is not None:
@@ -400,7 +423,7 @@ async def get_current_user(
                 )
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
-            "API key check failed in MCP unified get_current_user",
+            "API key check failed in MCP unified compatibility token resolver",
             extra={"auth_method": "api_key"},
             exc_info=True,
         )
@@ -408,16 +431,60 @@ async def get_current_user(
     return None
 
 
+async def _get_optional_auth_principal(request: Request) -> Optional[AuthPrincipal]:
+    """Best-effort principal resolver for optional MCP auth context."""
+    try:
+        current = getattr(request.state, "auth", None)
+        if isinstance(current, AuthPrincipal):
+            return current
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        logger.debug(
+            "MCP unified: failed to read request.state.auth for optional principal",
+            exc_info=True,
+        )
+
+    try:
+        return await get_auth_principal(request)
+    except HTTPException:
+        return None
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        logger.debug(
+            "MCP unified: optional principal resolution failed",
+            exc_info=True,
+        )
+        return None
+
+
+async def _get_optional_token_data(
+    request: Request,
+    principal: Optional[AuthPrincipal] = Depends(_get_optional_auth_principal),
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+) -> Optional[TokenData]:
+    """Claim-first TokenData resolver with compatibility fallback."""
+    if principal is not None:
+        token_data = _principal_to_token_data(principal)
+        if token_data is not None:
+            return token_data
+    return await _resolve_token_data_compat(
+        request=request,
+        credentials=credentials,
+        x_api_key=x_api_key,
+    )
+
+
 async def get_mcp_auth_context(
     request: Request,
-    user: Optional[TokenData] = Depends(get_current_user),
+    user: Optional[TokenData] = Depends(_get_optional_token_data),
+    principal: Optional[AuthPrincipal] = Depends(_get_optional_auth_principal),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
 ) -> McpAuthContext:
     """Resolve MCP auth context (user + API key metadata) for HTTP endpoints.
 
-    Reuses :func:`get_current_user` for primary auth and surfaces any API key
-    metadata attached to ``request.state.mcp_api_key_info`` by the multi-user
-    API key path. HTTP handlers should rely on the resulting
+    Prefers the claim-first principal for user claims and falls back to
+    :func:`_resolve_token_data_compat` only when needed for compatibility. Surfaces any
+    API key metadata attached to ``request.state.mcp_api_key_info`` by the
+    multi-user API key path. HTTP handlers should rely on the resulting
     :class:`McpAuthContext` (and helper functions like ``_attach_api_key_metadata``)
     rather than re-validating API keys themselves.
     """
@@ -431,7 +498,12 @@ async def get_mcp_auth_context(
             exc_info=True,
         )
         api_key_info = None
-    return McpAuthContext(user=user, api_key_info=api_key_info, raw_api_key=x_api_key)
+    return McpAuthContext(
+        user=user,
+        principal=principal,
+        api_key_info=api_key_info,
+        raw_api_key=x_api_key,
+    )
 
 
 async def _attach_api_key_metadata(
@@ -513,23 +585,67 @@ def _attach_rg_ingress_metadata(metadata: dict[str, Any], http_request: Optional
         )
 
 
-async def require_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials = Security(security),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-) -> TokenData:
-    """Require authenticated user"""
-    if not credentials and not x_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
+def _resolve_auth_principal_from_request(request: Optional[Request]) -> Optional[AuthPrincipal]:
+    """Best-effort resolver for AuthPrincipal already attached to request state."""
+    if request is None:
+        return None
+    try:
+        principal = getattr(request.state, "auth", None)
+        if isinstance(principal, AuthPrincipal):
+            return principal
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        logger.debug(
+            "MCP unified: failed to resolve request.state.auth principal",
+            exc_info=True,
         )
-    # Reuse get_current_user to resolve any auth form, including client IP / API-key metadata
-    user = await get_current_user(request=request, credentials=credentials, x_api_key=x_api_key)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    return user
+    return None
+
+
+def _principal_has_admin_claims(principal: Optional[AuthPrincipal]) -> bool:
+    """Return True when principal carries admin-style claims."""
+    if principal is None:
+        return False
+    try:
+        roles = {
+            str(role).strip().lower()
+            for role in (getattr(principal, "roles", []) or [])
+            if str(role).strip()
+        }
+        permissions = {
+            str(perm).strip().lower()
+            for perm in (getattr(principal, "permissions", []) or [])
+            if str(perm).strip()
+        }
+        if "admin" in roles:
+            return True
+        if "*" in permissions:
+            return True
+        if SYSTEM_CONFIGURE in permissions:
+            return True
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        return False
+    return False
+
+
+def _is_catalog_admin_context(
+    request: Optional[Request],
+    user: Optional[TokenData],
+    principal: Optional[AuthPrincipal] = None,
+) -> bool:
+    """Claim-first admin check for MCP tool catalogs visibility."""
+    if principal is not None:
+        return _principal_has_admin_claims(principal)
+
+    principal = _resolve_auth_principal_from_request(request)
+    if principal is not None:
+        return _principal_has_admin_claims(principal)
+
+    # Compatibility fallback when no principal is attached to request.state.
+    try:
+        roles = list(getattr(user, "roles", []) or [])
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        return False
+    return any(str(role).lower() == "admin" for role in roles)
 
 
 # WebSocket endpoint
@@ -606,7 +722,8 @@ async def mcp_request(
 
     # Process request
     # Attach org/team metadata when auth via API key. Prefer any metadata attached
-    # by get_current_user to avoid re-validating the same key and double-counting
+    # by the compatibility resolver to avoid re-validating the same key and
+    # double-counting usage/audit; fall back to a direct lookup when needed.
     # usage/audit; fall back to a direct lookup when needed.
     metadata = await _attach_api_key_metadata(auth, http_request)
 
@@ -694,7 +811,8 @@ async def mcp_request_batch(
         await server.initialize()
 
     # Attach org/team metadata when auth via API key. Prefer any metadata attached
-    # by get_current_user to avoid re-validating the same key and double-counting
+    # by the compatibility resolver to avoid re-validating the same key and
+    # double-counting usage/audit; fall back to a direct lookup when needed.
     # usage/audit; fall back to a direct lookup when needed.
     metadata = await _attach_api_key_metadata(
         auth,
@@ -923,14 +1041,13 @@ async def list_tool_catalogs(
     db=Depends(get_db_transaction),
 ) -> list[ToolCatalogResponse]:
     user = auth.user
+    principal = auth.principal
     metadata = await _attach_api_key_metadata(auth, http_request)
 
-    if user is None and not metadata:
+    if user is None and principal is None and not metadata:
         raise HTTPException(status_code=403, detail="Authentication required")
 
-    admin_all = False
-    if user and user.roles:
-        admin_all = any(str(r).lower() == "admin" for r in user.roles)
+    admin_all = _is_catalog_admin_context(http_request, user, principal)
 
     org_ids: set[int] = set()
     team_ids: set[int] = set()
@@ -940,6 +1057,14 @@ async def list_tool_catalogs(
     if metadata.get("team_id") is not None:
         with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
             team_ids.add(int(metadata["team_id"]))
+
+    if principal is not None and not admin_all:
+        for principal_org_id in list(getattr(principal, "org_ids", []) or []):
+            with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
+                org_ids.add(int(principal_org_id))
+        for principal_team_id in list(getattr(principal, "team_ids", []) or []):
+            with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
+                team_ids.add(int(principal_team_id))
 
     if user and not admin_all:
         try:
@@ -959,29 +1084,18 @@ async def list_tool_catalogs(
                 logger.debug(f"MCP tool catalogs: org membership lookup failed: {exc}")
 
             try:
-                is_pg = await is_postgres_backend()
-                if is_pg:
-                    rows = await db.fetch(
-                        "SELECT team_id FROM team_members WHERE user_id = $1 AND status = 'active'",
-                        uid,
-                    )
-                    for row in rows or []:
-                        try:
-                            team_id_val = row["team_id"] if isinstance(row, dict) else row[0]
+                memberships = await list_active_team_memberships_for_user(uid)
+                for membership in memberships:
+                    try:
+                        team_id_val = (
+                            membership.get("team_id")
+                            if isinstance(membership, dict)
+                            else None
+                        )
+                        if team_id_val is not None:
                             team_ids.add(int(team_id_val))
-                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
-                            continue
-                else:
-                    cur = await db.execute(
-                        "SELECT team_id FROM team_members WHERE user_id = ? AND status = 'active'",
-                        (uid,),
-                    )
-                    rows = await cur.fetchall()
-                    for row in rows or []:
-                        try:
-                            team_ids.add(int(row[0]))
-                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
-                            continue
+                    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                        continue
             except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"MCP tool catalogs: team membership lookup failed: {exc}")
 
@@ -989,122 +1103,21 @@ async def list_tool_catalogs(
     if scope_norm not in {"all", "global", "org", "team"}:
         raise HTTPException(status_code=422, detail="Invalid scope value")
 
-    is_pg = await is_postgres_backend()
-    results: list[ToolCatalogResponse] = []
-
-    async def _add_rows(rows: list[Any]) -> None:
-        for r in rows or []:
-            try:
-                data = dict(r) if isinstance(r, dict) else {
-                    "id": r[0],
-                    "name": r[1],
-                    "description": r[2],
-                    "org_id": r[3],
-                    "team_id": r[4],
-                    "is_active": bool(r[5]),
-                    "created_at": r[6],
-                    "updated_at": r[7],
-                }
-                results.append(ToolCatalogResponse(**data))
-            except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
-                continue
-
-    if admin_all:
-        if scope_norm in {"all", "global"}:
-            if is_pg:
-                rows = await db.fetch(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
-                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
-                )
-            else:
-                cur = await db.execute(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
-                )
-                rows = await cur.fetchall()
-            await _add_rows(rows)
-
-        if scope_norm in {"all", "org"}:
-            if is_pg:
-                rows = await db.fetch(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
-                    "FROM tool_catalogs WHERE org_id IS NOT NULL AND team_id IS NULL ORDER BY created_at DESC"
-                )
-            else:
-                cur = await db.execute(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    "FROM tool_catalogs WHERE org_id IS NOT NULL AND team_id IS NULL ORDER BY created_at DESC"
-                )
-                rows = await cur.fetchall()
-            await _add_rows(rows)
-
-        if scope_norm in {"all", "team"}:
-            if is_pg:
-                rows = await db.fetch(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
-                    "FROM tool_catalogs WHERE team_id IS NOT NULL ORDER BY created_at DESC"
-                )
-            else:
-                cur = await db.execute(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    "FROM tool_catalogs WHERE team_id IS NOT NULL ORDER BY created_at DESC"
-                )
-                rows = await cur.fetchall()
-            await _add_rows(rows)
-    else:
-        if scope_norm in {"all", "global"}:
-            if is_pg:
-                rows = await db.fetch(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
-                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
-                )
-            else:
-                cur = await db.execute(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
-                )
-                rows = await cur.fetchall()
-            await _add_rows(rows)
-
-        if scope_norm in {"all", "org"} and org_ids:
-            if is_pg:
-                placeholders, params = build_postgres_in_clause(sorted(org_ids))
-                rows = await db.fetch(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
-                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
-                    *params,
-                )
-            else:
-                placeholders, params = build_sqlite_in_clause(sorted(org_ids))
-                cur = await db.execute(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
-                    params,
-                )
-                rows = await cur.fetchall()
-            await _add_rows(rows)
-
-        if scope_norm in {"all", "team"} and team_ids:
-            if is_pg:
-                placeholders, params = build_postgres_in_clause(sorted(team_ids))
-                rows = await db.fetch(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
-                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
-                    *params,
-                )
-            else:
-                placeholders, params = build_sqlite_in_clause(sorted(team_ids))
-                cur = await db.execute(
-                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
-                    params,
-                )
-                rows = await cur.fetchall()
-            await _add_rows(rows)
+    result_rows = await admin_tool_catalog_service.list_visible_tool_catalogs(
+        db,
+        scope_norm=scope_norm,
+        admin_all=admin_all,
+        org_ids=org_ids,
+        team_ids=team_ids,
+    )
 
     unique: dict[int, ToolCatalogResponse] = {}
-    for entry in results:
-        unique[entry.id] = entry
+    for row in result_rows:
+        try:
+            entry = ToolCatalogResponse(**row)
+            unique[entry.id] = entry
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+            continue
     return list(unique.values())
 
 
@@ -1395,14 +1408,14 @@ async def create_token(
     Use the primary AuthNZ login flow to obtain a JWT, or enable this endpoint
     explicitly via MCP_ENABLE_DEMO_AUTH=1 for development/testing only.
     """
-    if os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() not in {"1", "true", "yes"}:
+    if not env_flag_enabled("MCP_ENABLE_DEMO_AUTH"):
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Direct MCP auth is disabled. Use AuthNZ bearer tokens.",
         )
 
     cfg = get_config()
-    test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+    test_mode = is_test_mode()
     if not cfg.debug_mode and not test_mode:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

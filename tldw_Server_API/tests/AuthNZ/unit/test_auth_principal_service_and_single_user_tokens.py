@@ -282,3 +282,32 @@ async def test_get_request_user_bypass_blocked_in_environment_production(monkeyp
 
     assert exc.value.status_code == 401
     reset_settings()
+
+
+def test_user_db_is_test_context_accepts_single_letter_y(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "y")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    assert User_DB_Handling._is_test_context() is True
+
+
+def test_user_db_strict_test_bypass_context_accepts_single_letter_y(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "y")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    assert User_DB_Handling._is_strict_test_bypass_context() is True
+
+
+def test_auth_principal_resolver_is_test_context_accepts_single_letter_y(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.setenv("TESTING", "y")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    assert auth_principal_resolver._is_test_context() is True

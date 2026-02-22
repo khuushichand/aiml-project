@@ -441,6 +441,15 @@ const SidepanelAgent: FC = () => {
     })
   }, [])
 
+  const focusWorkspaceSelector = useCallback(() => {
+    const selector = document.querySelector<HTMLButtonElement>(
+      "[data-testid='agent-workspace-selector']"
+    )
+    if (!selector) return
+    selector.focus()
+    selector.click()
+  }, [])
+
   // Tab items
   const tabItems = useMemo(() => [
     {
@@ -453,6 +462,29 @@ const SidepanelAgent: FC = () => {
       ),
       children: (
         <div className="flex flex-col h-full">
+          {!workspace && (
+            <div
+              data-testid="agent-workspace-empty-state"
+              className="mx-4 mt-4 rounded-lg border border-border bg-surface px-4 py-3"
+            >
+              <h3 className="text-sm font-semibold text-text">
+                {t("agentWorkspaceRequiredTitle", "Select a workspace to use Agent")}
+              </h3>
+              <p className="mt-1 text-xs text-text-muted">
+                {t(
+                  "agentWorkspaceRequiredBody",
+                  "Agent actions run against files in a specific project folder. Choose a workspace above, then send a task."
+                )}
+              </p>
+              <button
+                type="button"
+                onClick={focusWorkspaceSelector}
+                className="mt-3 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text transition hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                {t("agentWorkspaceChoose", "Choose workspace")}
+              </button>
+            </div>
+          )}
           {/* Chat messages */}
           <div
             ref={chatContainerRef}
@@ -469,8 +501,8 @@ const SidepanelAgent: FC = () => {
                   aria-label={`${msg.role === "user" ? t("userMessage", "Your message") : t("assistantMessage", "Assistant message")}: ${msg.content.substring(0, 50)}${msg.content.length > 50 ? "..." : ""}`}
                   className={`max-w-[80%] rounded-lg px-4 py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 ${
                     msg.role === "user"
-                      ? "bg-blue-500 text-white"
-                      : "bg-gray-100 dark:bg-gray-800"
+                      ? "bg-primary text-white"
+                      : "bg-surface"
                   }`}
                 >
                   <pre className="whitespace-pre-wrap font-sans text-sm">
@@ -483,7 +515,7 @@ const SidepanelAgent: FC = () => {
             {/* Streaming content */}
             {streamingContent && (
               <div className="flex justify-start">
-                <div className="max-w-[80%] rounded-lg px-4 py-2 bg-gray-100 dark:bg-gray-800">
+                <div className="max-w-[80%] rounded-lg px-4 py-2 bg-surface">
                   <pre className="whitespace-pre-wrap font-sans text-sm">
                     {streamingContent}
                   </pre>
@@ -494,7 +526,7 @@ const SidepanelAgent: FC = () => {
             {/* Tool calls */}
             {toolCalls.length > 0 && (
               <div className="mt-4">
-                <h3 className="text-sm font-medium text-gray-500 mb-2">
+                <h3 className="text-sm font-medium text-text-muted mb-2">
                   {t("toolCalls", "Tool Calls")} ({toolCalls.length})
                 </h3>
                 <ToolCallLog
@@ -516,7 +548,7 @@ const SidepanelAgent: FC = () => {
           <FileCode className="size-4" />
           {t("diff", "Diff")}
           {diffs.length > 0 && (
-            <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+            <span className="px-1.5 py-0.5 text-xs rounded-full bg-primary/10 text-primary">
               {diffs.length}
             </span>
           )}
@@ -525,7 +557,7 @@ const SidepanelAgent: FC = () => {
       children: (
         <div className="p-4 overflow-y-auto h-full">
           {diffs.length > 0 && diffs.every(d => d.hunks.length === 0) && (
-            <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mb-3 text-xs text-text-muted">
               {t("diffMetadataOnly", "Diff content not stored; showing metadata only")}
             </p>
           )}
@@ -544,7 +576,7 @@ const SidepanelAgent: FC = () => {
           <TerminalIcon className="size-4" />
           {t("terminal", "Terminal")}
           {executions.length > 0 && (
-            <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+            <span className="px-1.5 py-0.5 text-xs rounded-full bg-primary/10 text-primary">
               {executions.length}
             </span>
           )}
@@ -556,7 +588,19 @@ const SidepanelAgent: FC = () => {
         </div>
       )
     }
-  ], [messages, streamingContent, toolCalls, expandedToolIds, toggleToolExpand, diffs, selectedHunks, executions, t])
+  ], [
+    messages,
+    streamingContent,
+    toolCalls,
+    expandedToolIds,
+    toggleToolExpand,
+    diffs,
+    selectedHunks,
+    executions,
+    focusWorkspaceSelector,
+    t,
+    workspace
+  ])
 
   return (
     <AgentErrorBoundary
@@ -572,9 +616,9 @@ const SidepanelAgent: FC = () => {
         agentRef.current = null
       }}
     >
-      <div className="relative flex flex-col h-dvh bg-white dark:bg-surface">
+      <div className="relative flex flex-col h-dvh bg-bg">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-border">
         <WorkspaceSelector
           onWorkspaceChange={setWorkspace}
           className="flex-1 max-w-[250px]"
@@ -582,38 +626,38 @@ const SidepanelAgent: FC = () => {
 
         <div className="flex items-center gap-2">
           {isRunning && (
-            <span className="flex items-center gap-1.5 text-sm text-blue-500">
+            <span className="flex items-center gap-1.5 text-sm text-primary">
               <Loader2 className="size-4 animate-spin" />
               {t("step", "Step")} {currentStep}
             </span>
           )}
           <button
-            className="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500"
+            className="p-2 rounded hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500"
             onClick={() => setShowHistory(!showHistory)}
             title={t("sessionHistory", "Session History")}
             aria-label={t("sessionHistory", "Session History")}
             aria-expanded={showHistory}
           >
-            <History className="size-4 text-gray-500" />
+            <History className="size-4 text-text-muted" />
           </button>
           <button
-            className="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500"
+            className="p-2 rounded hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500"
             title={t("settings", "Settings")}
             aria-label={t("settings", "Settings")}
           >
-            <Settings className="size-4 text-gray-500" />
+            <Settings className="size-4 text-text-muted" />
           </button>
         </div>
       </div>
 
       {/* Session History Panel (slide-out) */}
       {showHistory && (
-        <div className="absolute right-0 top-0 bottom-0 w-80 bg-white dark:bg-surface border-l border-gray-200 dark:border-gray-700 z-50 flex flex-col shadow-xl">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+        <div className="absolute right-0 top-0 bottom-0 w-80 bg-surface border-l border-border z-50 flex flex-col shadow-xl">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <h2 className="font-semibold">{t("sessionHistory", "Session History")}</h2>
             <button
               onClick={() => setShowHistory(false)}
-              className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500"
+              className="p-1 rounded hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500"
               aria-label={t("close", "Close")}
               title={t("close", "Close")}
             >
@@ -655,7 +699,7 @@ const SidepanelAgent: FC = () => {
       )}
 
       {/* Input area */}
-      <div className="border-t border-gray-200 dark:border-gray-700 p-4">
+      <div className="border-t border-border p-4">
         <div className="flex gap-2">
           <TextArea
             value={inputValue}
@@ -663,7 +707,10 @@ const SidepanelAgent: FC = () => {
             placeholder={
               workspace
                 ? t("askAgent", "Ask the agent to help with your code...")
-                : t("selectWorkspace", "Select a workspace to get started")
+                : t(
+                    "selectWorkspaceBeforePrompt",
+                    "Choose a workspace above, then describe what you want the agent to do"
+                  )
             }
             disabled={!workspace || isRunning}
             autoSize={{ minRows: 1, maxRows: 4 }}

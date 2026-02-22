@@ -61,7 +61,7 @@ export const ContextualSuggestionCard: React.FC<ContextualSuggestionCardProps> =
           <p className="text-sm font-medium text-text">
             {t(suggestion.titleToken, workflow.id)}
           </p>
-          <p className="text-xs text-textMuted mt-0.5 line-clamp-2">
+          <p className="text-xs text-text-muted mt-0.5 line-clamp-2">
             {t(suggestion.descriptionToken, "")}
           </p>
 
@@ -80,7 +80,7 @@ export const ContextualSuggestionCard: React.FC<ContextualSuggestionCardProps> =
               type="text"
               size="small"
               onClick={handleDismiss}
-              className="text-xs text-textMuted"
+              className="text-xs text-text-muted"
             >
               {t("workflows:suggestion.dismiss", "Dismiss")}
             </Button>

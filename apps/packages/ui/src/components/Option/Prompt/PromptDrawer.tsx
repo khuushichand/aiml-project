@@ -1,15 +1,178 @@
 import React from "react"
-import { Alert, Button, Drawer, Form, Input, Select, Collapse, Tooltip, Space, Tag } from "antd"
+import { Alert, Button, Drawer, Form, Input, Select, Collapse, Tooltip, Space, Tag, Modal, Grid } from "antd"
 import { useTranslation } from "react-i18next"
-import { ChevronDown, ChevronUp, Info, Cloud, HardDrive, Link2, Unlink } from "lucide-react"
-import type { PromptSyncStatus, PromptSourceSystem } from "@/db/dexie/types"
+import { ChevronDown, ChevronUp, Info, Cloud, Plus, Trash2 } from "lucide-react"
+import type {
+  FewShotExample,
+  PromptSyncStatus,
+  PromptSourceSystem
+} from "@/db/dexie/types"
 import { useFormDraft, formatDraftAge } from "@/hooks/useFormDraft"
+import {
+  estimatePromptTokens,
+  getPromptTokenBudgetState
+} from "./prompt-length-utils"
+import {
+  extractTemplateVariables,
+  tokenizeTemplateVariableHighlights,
+  validateTemplateVariableSyntax
+} from "./prompt-template-variable-utils"
+import { VersionHistoryDrawer } from "./Studio/Prompts/VersionHistoryDrawer"
+
+type DrawerFewShotExample = {
+  input: string
+  output: string
+  explanation?: string | null
+}
+
+const readExampleRecordValue = (
+  record: Record<string, unknown> | undefined,
+  preferredKey: string
+): string => {
+  if (!record) return ""
+  const preferredValue = record[preferredKey]
+  if (typeof preferredValue === "string") {
+    return preferredValue
+  }
+  for (const value of Object.values(record)) {
+    if (typeof value === "string") {
+      return value
+    }
+  }
+  return ""
+}
+
+const normalizeFewShotExamplesForForm = (
+  examples:
+    | Array<
+        | {
+            input?: string
+            output?: string
+            explanation?: string | null
+            inputs?: Record<string, unknown>
+            outputs?: Record<string, unknown>
+          }
+        | FewShotExample
+      >
+    | null
+    | undefined
+): DrawerFewShotExample[] => {
+  if (!Array.isArray(examples)) return []
+  return examples
+    .map((example) => {
+      const candidate = example as
+        | {
+            input?: string
+            output?: string
+            explanation?: string | null
+            inputs?: Record<string, unknown>
+            outputs?: Record<string, unknown>
+          }
+        | undefined
+      if (!candidate || typeof candidate !== "object") {
+        return null
+      }
+
+      const input =
+        typeof candidate.input === "string"
+          ? candidate.input
+          : readExampleRecordValue(candidate.inputs, "input")
+      const output =
+        typeof candidate.output === "string"
+          ? candidate.output
+          : readExampleRecordValue(candidate.outputs, "output")
+
+      return {
+        input,
+        output,
+        explanation:
+          typeof candidate.explanation === "string"
+            ? candidate.explanation
+            : null
+      }
+    })
+    .filter((example): example is DrawerFewShotExample => {
+      if (!example) return false
+      return (
+        example.input.trim().length > 0 ||
+        example.output.trim().length > 0 ||
+        !!example.explanation
+      )
+    })
+}
+
+const mapFewShotExamplesForSubmit = (
+  examples: DrawerFewShotExample[] | null | undefined
+): FewShotExample[] | null => {
+  if (!Array.isArray(examples)) return null
+
+  const normalized = examples
+    .map((example) => ({
+      input: (example.input || "").trim(),
+      output: (example.output || "").trim(),
+      explanation: (example.explanation || "").trim()
+    }))
+    .filter((example) => example.input.length > 0 || example.output.length > 0)
+    .map(
+      (example): FewShotExample => ({
+        inputs: { input: example.input },
+        outputs: { output: example.output },
+        ...(example.explanation ? { explanation: example.explanation } : {})
+      })
+    )
+
+  return normalized.length > 0 ? normalized : null
+}
+
+const normalizePromptDraftSnapshot = (values: {
+  name?: unknown
+  author?: unknown
+  details?: unknown
+  system_prompt?: unknown
+  user_prompt?: unknown
+  keywords?: unknown
+  fewShotExamples?: unknown
+}) => {
+  const normalizeString = (value: unknown) =>
+    typeof value === "string" ? value.trim() : ""
+  const keywords = Array.isArray(values?.keywords)
+    ? values.keywords
+        .map((keyword) => (typeof keyword === "string" ? keyword.trim() : ""))
+        .filter((keyword) => keyword.length > 0)
+        .sort()
+    : []
+  const fewShotExamples = normalizeFewShotExamplesForForm(
+    values?.fewShotExamples as any
+  )
+    .map((example) => ({
+      input: example.input.trim(),
+      output: example.output.trim(),
+      explanation: (example.explanation || "").trim()
+    }))
+    .filter(
+      (example) =>
+        example.input.length > 0 ||
+        example.output.length > 0 ||
+        example.explanation.length > 0
+    )
+
+  return {
+    name: normalizeString(values?.name),
+    author: normalizeString(values?.author),
+    details: normalizeString(values?.details),
+    system_prompt: normalizeString(values?.system_prompt),
+    user_prompt: normalizeString(values?.user_prompt),
+    keywords,
+    fewShotExamples
+  }
+}
 
 interface PromptDrawerProps {
   open: boolean
   onClose: () => void
   mode: "create" | "edit"
   initialValues?: {
+    id?: string
     name?: string
     author?: string
     details?: string
@@ -23,7 +186,18 @@ interface PromptDrawerProps {
     studioProjectId?: number | null
     lastSyncedAt?: number | null
     // Advanced fields
-    fewShotExamples?: Array<{ input: string; output: string }> | null
+    fewShotExamples?:
+      | Array<
+          | {
+              input?: string
+              output?: string
+              explanation?: string | null
+              inputs?: Record<string, unknown>
+              outputs?: Record<string, unknown>
+            }
+          | FewShotExample
+        >
+      | null
     modulesConfig?: Array<{ name: string; enabled: boolean }> | null
     changeDescription?: string | null
     versionNumber?: number | null
@@ -43,30 +217,72 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
   allTags
 }) => {
   const { t } = useTranslation(["settings", "common"])
+  const screens = Grid.useBreakpoint()
   const [form] = Form.useForm()
   const [showSystemHelp, setShowSystemHelp] = React.useState(false)
   const [showUserHelp, setShowUserHelp] = React.useState(false)
+  const [versionHistoryOpen, setVersionHistoryOpen] = React.useState(false)
+  const [closeConfirmOpen, setCloseConfirmOpen] = React.useState(false)
+  const systemPromptValue = Form.useWatch("system_prompt", form)
+  const userPromptValue = Form.useWatch("user_prompt", form)
+  const systemTemplateVariables = React.useMemo(
+    () => extractTemplateVariables(systemPromptValue),
+    [systemPromptValue]
+  )
+  const userTemplateVariables = React.useMemo(
+    () => extractTemplateVariables(userPromptValue),
+    [userPromptValue]
+  )
+  const draftEditId = React.useMemo(() => {
+    if (mode !== "edit") return undefined
+    if (initialValues?.id) return String(initialValues.id)
+    if (typeof initialValues?.serverId === "number") {
+      return `server-${initialValues.serverId}`
+    }
+    return undefined
+  }, [mode, initialValues?.id, initialValues?.serverId])
+  const draftStorageKey = React.useMemo(
+    () => `tldw-prompt-drawer-draft-${mode}-${draftEditId || "new"}`,
+    [mode, draftEditId]
+  )
+  const initialSnapshot = React.useMemo(
+    () => normalizePromptDraftSnapshot(initialValues || {}),
+    [initialValues]
+  )
 
   // Draft auto-save
   const { hasDraft, draftData, saveDraft, clearDraft, applyDraft, dismissDraft } = useFormDraft({
-    storageKey: "tldw-prompt-drawer-draft",
+    storageKey: draftStorageKey,
     formType: mode,
-    editId: initialValues?.name,
+    editId: draftEditId,
     autoSaveInterval: 30000
   })
 
   // Check if prompt is synced
   const isSynced = initialValues?.serverId != null
   const syncStatus = initialValues?.syncStatus || "local"
+  const versionHistoryPromptId =
+    typeof initialValues?.serverId === "number" ? initialValues.serverId : null
+  const canViewVersionHistory = mode === "edit" && versionHistoryPromptId !== null
 
   React.useEffect(() => {
     if (open && initialValues) {
-      form.setFieldsValue(initialValues)
+      form.setFieldsValue({
+        ...initialValues,
+        fewShotExamples: normalizeFewShotExamplesForForm(initialValues.fewShotExamples)
+      })
     }
     if (open && mode === "create") {
       form.resetFields()
     }
   }, [open, initialValues, mode, form])
+
+  React.useEffect(() => {
+    if (!open) {
+      setVersionHistoryOpen(false)
+      setCloseConfirmOpen(false)
+    }
+  }, [open])
 
   // Auto-save on form value changes
   React.useEffect(() => {
@@ -83,13 +299,168 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
 
   const handleFinish = (values: any) => {
     clearDraft()
-    onSubmit(values)
+    onSubmit({
+      ...values,
+      fewShotExamples: mapFewShotExamplesForSubmit(values?.fewShotExamples)
+    })
   }
+
+  const closeWithoutSaving = React.useCallback(() => {
+    clearDraft()
+    setCloseConfirmOpen(false)
+    onClose()
+  }, [clearDraft, onClose])
+
+  const handleRequestClose = React.useCallback(() => {
+    const currentSnapshot = normalizePromptDraftSnapshot(
+      form.getFieldsValue(true) || {}
+    )
+    const hasDirtyValues =
+      form.isFieldsTouched(true) ||
+      JSON.stringify(currentSnapshot) !== JSON.stringify(initialSnapshot)
+
+    if (hasDirtyValues) {
+      setCloseConfirmOpen(true)
+      return
+    }
+    closeWithoutSaving()
+  }, [closeWithoutSaving, form, initialSnapshot])
 
   const title =
     mode === "create"
       ? t("managePrompts.modal.addTitle")
       : t("managePrompts.modal.editTitle")
+
+  const renderPromptLengthCounter = React.useCallback(
+    (value: string | undefined, testId: string) => {
+      const text = value || ""
+      const charCount = text.length
+      const tokenEstimate = estimatePromptTokens(text)
+      const budgetState = getPromptTokenBudgetState(tokenEstimate)
+      const budgetClass =
+        budgetState === "danger"
+          ? "text-danger"
+          : budgetState === "warning"
+            ? "text-warn"
+            : "text-text-muted"
+
+      return (
+        <div className={`text-xs ${budgetClass}`} data-testid={testId}>
+          {t("managePrompts.form.lengthCounter", {
+            defaultValue: "{{chars}} chars / ~{{tokens}} tokens",
+            chars: charCount.toLocaleString(),
+            tokens: tokenEstimate.toLocaleString()
+          })}
+          {budgetState !== "normal" && (
+            <span className="ml-2">
+              {budgetState === "danger"
+                ? t("managePrompts.form.lengthCounterDanger", {
+                    defaultValue: "High token load"
+                  })
+                : t("managePrompts.form.lengthCounterWarning", {
+                    defaultValue: "Approaching high token load"
+                  })}
+            </span>
+          )}
+        </div>
+      )
+    },
+    [t]
+  )
+
+  const renderPromptFieldInsights = React.useCallback(
+    ({
+      value,
+      variables,
+      counterTestId,
+      variablesTestId,
+      previewTestId
+    }: {
+      value?: string
+      variables: string[]
+      counterTestId: string
+      variablesTestId: string
+      previewTestId: string
+    }) => {
+      const tokens = tokenizeTemplateVariableHighlights(value)
+      const hasHighlightedVariables = tokens.some((token) => token.isVariable)
+
+      return (
+        <div className="space-y-2">
+          {renderPromptLengthCounter(value, counterTestId)}
+          {variables.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1" data-testid={variablesTestId}>
+              <span className="text-xs text-text-muted">
+                {t("managePrompts.form.templateVariables.label", {
+                  defaultValue: "Variables:"
+                })}
+              </span>
+              {variables.map((variableName) => (
+                <Tag key={variableName} className="text-xs">
+                  {`{{${variableName}}}`}
+                </Tag>
+              ))}
+            </div>
+          )}
+          {hasHighlightedVariables && (
+            <div
+              className="rounded-md bg-surface2 p-2 text-xs font-mono whitespace-pre-wrap break-words"
+              data-testid={previewTestId}
+            >
+              {tokens.map((token, index) =>
+                token.isVariable ? (
+                  <mark
+                    key={`${token.variableName || "var"}-${index}`}
+                    className="rounded bg-primary/20 px-0.5 text-primary"
+                  >
+                    {token.text}
+                  </mark>
+                ) : (
+                  <span key={`text-${index}`}>{token.text}</span>
+                )
+              )}
+            </div>
+          )}
+        </div>
+      )
+    },
+    [renderPromptLengthCounter, t]
+  )
+
+  const templateFieldValidator = React.useCallback(
+    async (_: unknown, value?: string) => {
+      const validation = validateTemplateVariableSyntax(value)
+      if (validation.isValid) {
+        return Promise.resolve()
+      }
+
+      if (validation.code === "unmatched_braces") {
+        return Promise.reject(
+          new Error(
+            t("managePrompts.form.templateVariables.unmatched", {
+              defaultValue:
+                "Template variables must use balanced braces, like {{variable_name}}."
+            })
+          )
+        )
+      }
+
+      const invalidToken =
+        validation.invalidTokens && validation.invalidTokens.length > 0
+          ? validation.invalidTokens[0]
+          : "{{invalid}}"
+      return Promise.reject(
+        new Error(
+          t("managePrompts.form.templateVariables.invalid", {
+            defaultValue:
+              "Invalid template variable '{{token}}'. Use letters, numbers, and underscores only.",
+            token: invalidToken
+          })
+        )
+      )
+    },
+    [t]
+  )
 
   const formatLastSync = (timestamp: number | null | undefined) => {
     if (!timestamp) return null
@@ -110,7 +481,7 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
   const collapseItems = []
 
   // Advanced section (for synced prompts or if data exists)
-  if (mode === "edit" && (isSynced || initialValues?.fewShotExamples?.length)) {
+  if (mode === "create" || mode === "edit") {
     collapseItems.push({
       key: "advanced",
       label: (
@@ -137,35 +508,154 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
             />
           </Form.Item>
 
-          {initialValues?.fewShotExamples && initialValues.fewShotExamples.length > 0 && (
-            <div className="p-3 bg-surface2 rounded-md">
-              <div className="text-xs font-medium text-text-muted mb-2">
-                {t("managePrompts.drawer.fewShotExamples", {
-                  defaultValue: "Few-shot examples"
-                })}
+          <Form.List name="fewShotExamples">
+            {(fields, { add, remove, move }) => (
+              <div className="space-y-3" data-testid="prompt-drawer-few-shot-section">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-medium text-text-muted">
+                      {t("managePrompts.drawer.fewShotExamples", {
+                        defaultValue: "Few-shot examples"
+                      })}
+                    </div>
+                    <p className="text-xs text-text-muted mt-1">
+                      {t("managePrompts.drawer.fewShotExamplesHint", {
+                        defaultValue:
+                          "Add input/output examples to improve response consistency."
+                      })}
+                    </p>
+                  </div>
+                  <Button
+                    size="small"
+                    type="dashed"
+                    icon={<Plus className="size-3" />}
+                    onClick={() =>
+                      add({
+                        input: "",
+                        output: "",
+                        explanation: null
+                      })
+                    }
+                    data-testid="prompt-drawer-few-shot-add"
+                  >
+                    {t("common:add", { defaultValue: "Add" })}
+                  </Button>
+                </div>
+
+                {fields.length === 0 && (
+                  <p className="text-xs text-text-muted">
+                    {t("managePrompts.drawer.fewShotExamplesEmpty", {
+                      defaultValue: "No examples yet."
+                    })}
+                  </p>
+                )}
+
+                {fields.map((field, index) => (
+                  <div
+                    key={field.key}
+                    className="rounded-md border border-border p-3 space-y-2 bg-surface2/50"
+                    data-testid={`prompt-drawer-few-shot-item-${index}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-text-muted">
+                        {t("managePrompts.drawer.fewShotExampleLabel", {
+                          defaultValue: "Example {{count}}",
+                          count: index + 1
+                        })}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<ChevronUp className="size-3" />}
+                          disabled={index === 0}
+                          onClick={() => move(index, index - 1)}
+                          data-testid={`prompt-drawer-few-shot-move-up-${index}`}
+                          aria-label={t("managePrompts.drawer.fewShotMoveUp", {
+                            defaultValue: "Move example up"
+                          })}
+                        />
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<ChevronDown className="size-3" />}
+                          disabled={index === fields.length - 1}
+                          onClick={() => move(index, index + 1)}
+                          data-testid={`prompt-drawer-few-shot-move-down-${index}`}
+                          aria-label={t("managePrompts.drawer.fewShotMoveDown", {
+                            defaultValue: "Move example down"
+                          })}
+                        />
+                        <Button
+                          type="text"
+                          danger
+                          size="small"
+                          icon={<Trash2 className="size-3" />}
+                          onClick={() => remove(field.name)}
+                          data-testid={`prompt-drawer-few-shot-remove-${index}`}
+                          aria-label={t("common:delete", { defaultValue: "Delete" })}
+                        />
+                      </div>
+                    </div>
+
+                    <Form.Item
+                      name={[field.name, "input"]}
+                      label={t("managePrompts.drawer.fewShotInput", {
+                        defaultValue: "Input"
+                      })}
+                      className="mb-0"
+                    >
+                      <Input.TextArea
+                        autoSize={{ minRows: 2, maxRows: 6 }}
+                        placeholder={t("managePrompts.drawer.fewShotInputPlaceholder", {
+                          defaultValue: "Sample input"
+                        })}
+                        data-testid={`prompt-drawer-few-shot-input-${index}`}
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={[field.name, "output"]}
+                      label={t("managePrompts.drawer.fewShotOutput", {
+                        defaultValue: "Output"
+                      })}
+                      className="mb-0"
+                    >
+                      <Input.TextArea
+                        autoSize={{ minRows: 2, maxRows: 6 }}
+                        placeholder={t("managePrompts.drawer.fewShotOutputPlaceholder", {
+                          defaultValue: "Expected output"
+                        })}
+                        data-testid={`prompt-drawer-few-shot-output-${index}`}
+                      />
+                    </Form.Item>
+                  </div>
+                ))}
               </div>
-              <p className="text-xs text-text-muted">
-                {t("managePrompts.drawer.fewShotExamplesCount", {
-                  defaultValue: "{{count}} examples configured",
-                  count: initialValues.fewShotExamples.length
-                })}
-              </p>
-              <p className="text-xs text-text-muted mt-1">
-                {t("managePrompts.drawer.fewShotExamplesHint", {
-                  defaultValue: "Edit examples in Prompt Studio for advanced configuration."
-                })}
-              </p>
-            </div>
-          )}
+            )}
+          </Form.List>
 
           {initialValues?.versionNumber && (
-            <div className="flex items-center gap-2 text-xs text-text-muted">
+            <div className="flex items-center justify-between gap-2 text-xs text-text-muted">
               <span>
                 {t("managePrompts.drawer.versionNumber", {
                   defaultValue: "Version {{version}}",
                   version: initialValues.versionNumber
                 })}
               </span>
+              {canViewVersionHistory && (
+                <Button
+                  type="link"
+                  size="small"
+                  className="!px-0"
+                  onClick={() => setVersionHistoryOpen(true)}
+                  data-testid="prompt-drawer-view-history"
+                >
+                  {t("managePrompts.drawer.viewHistory", {
+                    defaultValue: "View history"
+                  })}
+                </Button>
+              )}
             </div>
           )}
         </div>
@@ -232,13 +722,13 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
   return (
     <Drawer
       placement="right"
-      width={480}
+      size={screens.sm ? 480 : "100%"}
       open={open}
-      onClose={onClose}
+      onClose={handleRequestClose}
       title={title}
       footer={
         <div className="flex justify-end gap-2">
-          <Button onClick={onClose}>
+          <Button onClick={handleRequestClose}>
             {t("common:cancel", { defaultValue: "Cancel" })}
           </Button>
           <Button
@@ -265,7 +755,7 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
             type="info"
             showIcon
             className="mb-4"
-            message={t("managePrompts.drawer.draftRecovered", {
+            title={t("managePrompts.drawer.draftRecovered", {
               defaultValue: "Unsaved draft found ({{age}})",
               age: formatDraftAge(draftData.savedAt)
             })}
@@ -340,6 +830,11 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
           <div className="space-y-4">
             <Form.Item
               name="system_prompt"
+              rules={[
+                {
+                  validator: templateFieldValidator
+                }
+              ]}
               label={
                 <span className="flex items-center gap-1">
                   {t("managePrompts.form.systemPrompt.labelImproved", {
@@ -368,6 +863,13 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
                   </button>
                 </span>
               }
+              extra={renderPromptFieldInsights({
+                value: systemPromptValue,
+                variables: systemTemplateVariables,
+                counterTestId: "prompt-drawer-system-counter",
+                variablesTestId: "prompt-drawer-system-vars",
+                previewTestId: "prompt-drawer-system-preview"
+              })}
             >
               <Input.TextArea
                 placeholder={t("managePrompts.form.systemPrompt.placeholder", {
@@ -404,6 +906,11 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
 
             <Form.Item
               name="user_prompt"
+              rules={[
+                {
+                  validator: templateFieldValidator
+                }
+              ]}
               label={
                 <span className="flex items-center gap-1">
                   {t("managePrompts.form.userPrompt.labelImproved", {
@@ -432,6 +939,13 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
                   </button>
                 </span>
               }
+              extra={renderPromptFieldInsights({
+                value: userPromptValue,
+                variables: userTemplateVariables,
+                counterTestId: "prompt-drawer-user-counter",
+                variablesTestId: "prompt-drawer-user-vars",
+                previewTestId: "prompt-drawer-user-preview"
+              })}
             >
               <Input.TextArea
                 placeholder={t("managePrompts.form.userPrompt.placeholder", {
@@ -512,10 +1026,53 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
             items={collapseItems}
             bordered={false}
             className="bg-transparent"
-            expandIconPosition="end"
+            expandIconPlacement="end"
           />
         )}
       </Form>
+      {canViewVersionHistory && (
+        <VersionHistoryDrawer
+          open={versionHistoryOpen}
+          promptId={versionHistoryPromptId}
+          onClose={() => setVersionHistoryOpen(false)}
+        />
+      )}
+      <Modal
+        open={closeConfirmOpen}
+        title={t("managePrompts.drawer.unsavedTitle", {
+          defaultValue: "Unsaved changes"
+        })}
+        onCancel={() => setCloseConfirmOpen(false)}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={() => setCloseConfirmOpen(false)}
+              data-testid="prompt-drawer-unsaved-cancel"
+            >
+              {t("common:cancel", { defaultValue: "Cancel" })}
+            </Button>
+            <Button danger onClick={closeWithoutSaving} data-testid="prompt-drawer-unsaved-discard">
+              {t("common:discard", { defaultValue: "Discard" })}
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => {
+                setCloseConfirmOpen(false)
+                form.submit()
+              }}
+              data-testid="prompt-drawer-unsaved-save"
+            >
+              {t("common:save", { defaultValue: "Save" })}
+            </Button>
+          </div>
+        }
+      >
+        <p>
+          {t("managePrompts.drawer.unsavedDescription", {
+            defaultValue: "You have unsaved changes. Close anyway?"
+          })}
+        </p>
+      </Modal>
     </Drawer>
   )
 }

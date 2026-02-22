@@ -66,7 +66,7 @@ def test_ttl_cancel_updates_counters(monkeypatch, tmp_path):
                     break
             assert saw, "Expected cancelled_total increment for TTL cancel"
         except Exception:
-            pass
+            _ = None
     # Counters reflect zeros
     conn = jm._connect()
     try:
@@ -117,7 +117,7 @@ def test_ttl_fail_updates_counters(monkeypatch, tmp_path):
                         saw_runtime = True
             assert saw_age and saw_runtime, "Expected failures_total increments for ttl_age and ttl_runtime"
         except Exception:
-            pass
+            _ = None
     conn = jm._connect()
     try:
         row = conn.execute("SELECT ready_count, scheduled_count, processing_count FROM job_counters WHERE domain=? AND queue=? AND job_type=?", (domain, queue, jt)).fetchone()

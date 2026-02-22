@@ -42,7 +42,7 @@ export const VoiceChatIndicator: React.FC<VoiceChatIndicatorProps> = ({
         aria-label={t("playground:voiceChat.stop", "Stop voice chat")}
         title={t("playground:voiceChat.stop", "Stop voice chat") as string}
       >
-        <StopCircle className="h-4 w-4 text-red-500" />
+        <StopCircle className="h-4 w-4 text-danger" />
       </button>
     </div>
   )

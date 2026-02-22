@@ -183,6 +183,25 @@ class TestFVAConfig:
         assert "statistic" in config.force_falsification_claim_types
 
 
+class TestFVAPipelineInit:
+    """Tests for FVAPipeline initialization wiring."""
+
+    @pytest.mark.unit
+    def test_prefers_verifier_nli_pipeline(self):
+        """Pipeline should wire adjudicator NLI from claims_engine.verifier._nli."""
+        nli_obj = object()
+        verifier = MockVerifier()
+        verifier._nli = nli_obj  # type: ignore[attr-defined]
+
+        class _ClaimsEngineNoLegacyNli:
+            def __init__(self):
+                self.verifier = verifier
+                self._analyze = AsyncMock(return_value='{"stance":"SUPPORTS","confidence":0.8}')
+
+        pipeline = FVAPipeline(_ClaimsEngineNoLegacyNli(), MockRetriever())
+        assert pipeline.adjudicator.nli_pipeline is nli_obj
+
+
 class TestFVAPipelineProcessClaim:
     """Tests for FVAPipeline.process_claim()."""
 

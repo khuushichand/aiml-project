@@ -24,6 +24,13 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
 
+try:  # pragma: no cover - optional dependency guard for static tooling
+    import asyncpg as _asyncpg
+except Exception:  # noqa: BLE001 - fallback when asyncpg is unavailable
+    _ASYNC_DB_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+else:
+    _ASYNC_DB_EXCEPTIONS = (_asyncpg.PostgresError,)
+
 # Default configuration
 DEFAULT_CLEANUP_INTERVAL_SEC = 3600  # 1 hour
 DEFAULT_TRASH_RETENTION_DAYS = 30
@@ -42,6 +49,8 @@ _STORAGE_CLEANUP_EXCEPTIONS = (
     TypeError,
     ValueError,
 )
+if _ASYNC_DB_EXCEPTIONS:
+    _STORAGE_CLEANUP_EXCEPTIONS = _STORAGE_CLEANUP_EXCEPTIONS + _ASYNC_DB_EXCEPTIONS
 
 
 def _safe_resolve_user_path(
@@ -265,6 +274,8 @@ async def run_storage_cleanup_cycle(
                 f"purged {stats['trash_purged']} from trash"
             )
 
+    except asyncio.CancelledError:
+        raise
     except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.error(f"Storage cleanup cycle failed: {exc}")
         stats["errors"] += 1
@@ -313,6 +324,8 @@ async def run_storage_cleanup_loop(
                 batch_size=batch_size,
                 temp_retention_hours=temp_retention_hours,
             )
+        except asyncio.CancelledError:
+            raise
         except _STORAGE_CLEANUP_EXCEPTIONS as exc:
             logger.warning(f"Storage cleanup loop error: {exc}")
 
@@ -371,15 +384,22 @@ class StorageCleanupService:
     async def stop(self):
         """Stop the cleanup background task."""
         self._running = False
-        if self._stop_event:
-            self._stop_event.set()
-        if self._task:
+        stop_event = self._stop_event
+        task = self._task
+        self._stop_event = None
+        self._task = None
+        if stop_event:
+            stop_event.set()
+        if task:
             try:
-                await asyncio.wait_for(self._task, timeout=5.0)
+                await asyncio.wait_for(task, timeout=5.0)
             except asyncio.TimeoutError:
-                self._task.cancel()
+                task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
-                    await self._task
+                    await task
+            except RuntimeError as exc:
+                # Happens when shutdown races event-loop teardown in tests.
+                logger.debug(f"StorageCleanupService stop skipped due to runtime teardown: {exc}")
         logger.info("StorageCleanupService stopped")
 
 
@@ -399,3 +419,14 @@ def get_cleanup_service(
             temp_retention_hours=temp_retention_hours,
         )
     return _cleanup_service
+
+
+async def reset_cleanup_service() -> None:
+    """Stop and clear the storage cleanup singleton (best-effort)."""
+    global _cleanup_service
+    service = _cleanup_service
+    _cleanup_service = None
+    if service is None:
+        return
+    with contextlib.suppress(asyncio.CancelledError, RuntimeError, TimeoutError):
+        await service.stop()

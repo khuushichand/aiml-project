@@ -97,7 +97,7 @@ def test_orchestrator_summary_endpoint_unauthorized(monkeypatch):
                 request_id=None,
             )
         except Exception:
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _non_admin_principal

@@ -26,9 +26,12 @@ export class TldwModelsService {
   private lastFetchTime: number = 0
   private readonly CACHE_DURATION = 15 * 60 * 1000 // 15 minutes
   private readonly CACHE_KEY = "tldwModelsCache"
+  private readonly CACHE_SCHEMA_VERSION = 2
   private storage = createSafeStorage({ area: "local" })
   private storageLoaded = false
   private storageInitPromise: Promise<void> | null = null
+  private inFlightFetch: Promise<ModelInfo[]> | null = null
+  private cacheScopeKey: string | null = null
 
   private async ensureStorageLoaded() {
     if (this.storageLoaded) return
@@ -36,9 +39,17 @@ export class TldwModelsService {
       this.storageInitPromise = (async () => {
         try {
           const cached = (await this.storage.get<any>(this.CACHE_KEY)) || null
-          if (cached?.models && Array.isArray(cached.models)) {
+          const cacheVersion =
+            typeof cached?.version === "number" ? cached.version : 0
+          if (
+            cacheVersion === this.CACHE_SCHEMA_VERSION &&
+            cached?.models &&
+            Array.isArray(cached.models)
+          ) {
             this.cachedModels = cached.models as ModelInfo[]
             this.lastFetchTime = Number(cached.timestamp || 0)
+            this.cacheScopeKey =
+              typeof cached.scope === "string" ? cached.scope : null
           }
         } catch {
           // ignore storage read failures
@@ -53,8 +64,10 @@ export class TldwModelsService {
   private async persistCache() {
     try {
       await this.storage.set(this.CACHE_KEY, {
+        version: this.CACHE_SCHEMA_VERSION,
         models: this.cachedModels,
-        timestamp: this.lastFetchTime
+        timestamp: this.lastFetchTime,
+        scope: this.cacheScopeKey
       })
     } catch {
       // Best-effort persistence; ignore errors
@@ -76,34 +89,64 @@ export class TldwModelsService {
     return true
   }
 
+  private buildCacheScope(config: TldwConfig | null): string {
+    if (!config) return "none"
+    const serverUrl = String(config.serverUrl || "").trim().toLowerCase()
+    const authMode = String(config.authMode || "single-user")
+    const hasAccessToken = Boolean(String(config.accessToken || "").trim())
+    const hasApiKey = Boolean(String(config.apiKey || "").trim())
+    const orgId = config.orgId != null ? String(config.orgId) : "none"
+    return `${serverUrl}|${authMode}|${hasAccessToken ? "token" : hasApiKey ? "key" : "none"}|${orgId}`
+  }
+
   /**
    * Get available models from tldw server
    * Uses cache to avoid frequent API calls
    */
-  async getModels(forceRefresh: boolean = false): Promise<ModelInfo[]> {
+  async getModels(
+    forceRefresh: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
     await this.ensureStorageLoaded()
+    const config = await tldwClient.getConfig().catch(() => null)
+    const scopeKey = this.buildCacheScope(config)
+    if (this.cacheScopeKey && this.cacheScopeKey !== scopeKey) {
+      this.cachedModels = null
+      this.lastFetchTime = 0
+    }
+    this.cacheScopeKey = scopeKey
+
     const now = Date.now()
     
     // Return cached models if available and not expired
     if (!forceRefresh && this.cachedModels && (now - this.lastFetchTime) < this.CACHE_DURATION) {
       return this.cachedModels
     }
+    if (this.inFlightFetch) {
+      return await this.inFlightFetch
+    }
 
-    try {
-      const config = await tldwClient.getConfig().catch(() => null)
-      if (!this.isConfiguredForModels(config)) {
-        return this.cachedModels || []
-      }
+    if (!this.isConfiguredForModels(config)) {
+      return this.cachedModels || []
+    }
 
+    const fetchPromise = (async () => {
       await tldwClient.initialize()
-      const models = await tldwClient.getModels()
+      const models = await tldwClient.getModels({
+        refreshOpenRouter: options?.refreshOpenRouter === true
+      })
       
       // Transform tldw models to our format
       this.cachedModels = models.map(model => this.transformModel(model))
-      this.lastFetchTime = now
+      this.lastFetchTime = Date.now()
       await this.persistCache()
       
       return this.cachedModels
+    })()
+
+    this.inFlightFetch = fetchPromise
+    try {
+      return await fetchPromise
     } catch (error) {
       if (!import.meta.env?.DEV) {
         console.error('Failed to fetch models from tldw:', error)
@@ -116,30 +159,43 @@ export class TldwModelsService {
       
       // Return empty array as fallback
       return []
+    } finally {
+      if (this.inFlightFetch === fetchPromise) {
+        this.inFlightFetch = null
+      }
     }
   }
 
   /**
    * Get chat models only
    */
-  async getChatModels(forceRefresh: boolean = false): Promise<ModelInfo[]> {
-    const models = await this.getModels(forceRefresh)
+  async getChatModels(
+    forceRefresh: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
+    const models = await this.getModels(forceRefresh, options)
     return models.filter(m => m.type === 'chat')
   }
 
   /**
    * Get embedding models only
    */
-  async getEmbeddingModels(forceRefresh: boolean = false): Promise<ModelInfo[]> {
-    const models = await this.getModels(forceRefresh)
+  async getEmbeddingModels(
+    forceRefresh: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
+    const models = await this.getModels(forceRefresh, options)
     return models.filter(m => m.type === 'embedding')
   }
 
   /**
    * Get image models only
    */
-  async getImageModels(forceRefresh: boolean = false): Promise<ModelInfo[]> {
-    const models = await this.getModels(forceRefresh)
+  async getImageModels(
+    forceRefresh: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
+    const models = await this.getModels(forceRefresh, options)
     return models.filter(m => m.type === 'image')
   }
 
@@ -251,6 +307,8 @@ export class TldwModelsService {
   async clearCache(): Promise<void> {
     this.cachedModels = null
     this.lastFetchTime = 0
+    this.inFlightFetch = null
+    this.cacheScopeKey = null
     await this.persistCache()
   }
 
@@ -264,8 +322,11 @@ export class TldwModelsService {
   /**
    * Warm the cache and return the latest models.
    */
-  async warmCache(force: boolean = false): Promise<ModelInfo[]> {
-    return await this.getModels(force)
+  async warmCache(
+    force: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
+    return await this.getModels(force, options)
   }
 }
 

@@ -126,6 +126,10 @@ def test_sqlite_migration_v9_to_v10_backfills_and_indexes(tmp_path):
         ).fetchone()[0]
         assert version == CharactersRAGDB._CURRENT_SCHEMA_VERSION
 
+        # Character card FTS dependencies should be present for legacy minimal schemas.
+        character_cols = [row[1] for row in conn.execute("PRAGMA table_info('character_cards')").fetchall()]
+        assert {"description", "personality", "scenario", "system_prompt"}.issubset(set(character_cols))
+
         # Conversations should have state backfilled and new columns/indexes
         conv_cols = [row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()]
         assert {

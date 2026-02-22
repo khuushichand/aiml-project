@@ -40,7 +40,7 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.commit()
     except Exception:
-        pass
+        _ = None
     try:
         # Add default character required by chat endpoint
         db.add_character_card(
@@ -137,12 +137,12 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         # Restore overrides
         try:
             getattr(app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -208,11 +208,11 @@ def test_chat_endpoint_rejects_oversized_image_by_default(monkeypatch):
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         try:
             getattr(app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -273,11 +273,11 @@ def test_chat_endpoint_request_size_returns_413(monkeypatch):
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         try:
             getattr(app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -297,7 +297,7 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.commit()
     except Exception:
-        pass
+        _ = None
     try:
         # Add default character required by chat endpoint
         db.add_character_card(
@@ -375,7 +375,7 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
                                 payload = json.loads(data_line[6:].strip())
                                 conv_id = payload.get("conversation_id")
                             except Exception:
-                                pass
+                                _ = None
                         break
                 assert conv_id, "Expected conversation_id in stream_start event"
 
@@ -417,8 +417,8 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         try:
             getattr(app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
         except Exception:
-            pass
+            _ = None

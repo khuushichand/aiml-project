@@ -67,10 +67,10 @@ Note: This README follows the project-wide template to help contributors quickly
 - Purpose: Encrypts session tokens at rest using Fernet.
 - Configure explicitly with `SESSION_ENCRYPTION_KEY` (urlsafe base64, 32-byte key when decoded). If not set, a key is persisted to disk.
 - Persistence locations (searched in order):
-  - Default: `PROJECT_ROOT/Config_Files/session_encryption.key` (tests set `core_settings["PROJECT_ROOT"]`).
-  - Fallback/alternate: `tldw_Server_API/Config_Files/session_encryption.key`.
-- Force API path storage: set `SESSION_KEY_STORAGE=api` to persist and prefer `tldw_Server_API/Config_Files/session_encryption.key`.
-  - On startup, if a valid key exists at project root and the API path is missing/invalid, the manager migrates the key to the API path (0600 perms) and logs a notice.
+  - Default: `tldw_Server_API/Config_Files/session_encryption.key`.
+  - Legacy fallback: `PROJECT_ROOT/Config_Files/session_encryption.key`.
+- Legacy storage opt-in: set `SESSION_KEY_STORAGE=project` to persist and prefer `PROJECT_ROOT/Config_Files/session_encryption.key`.
+  - In API mode (default), if a valid key exists at project root and the API path is missing/invalid, the manager migrates the key to the API path (0600 perms) and logs a notice.
 - Security: file must be a regular file, owned by the current user, and is written with `0600` permissions; symlinks and invalid contents are rejected.
 - Concurrency & Performance:
   - Async DB paths for asyncpg/aiosqlite; Redis-backed counters when available.
@@ -78,7 +78,7 @@ Note: This README follows the project-wide template to help contributors quickly
 - Error Handling & Security:
   - Custom exceptions in `exceptions.py`; consistent HTTP errors from endpoints.
   - Input validation in `input_validation.py`; CSRF middleware for WebUI flows.
-- Admin routes should be protected via claim-first dependencies (`get_auth_principal` + `require_roles("admin")` / `require_permissions(...)`); legacy `require_admin` shims remain for backwards compatibility only.
+- Admin routes should be protected via claim-first dependencies (`get_auth_principal` + `require_roles("admin")` / `require_permissions(...)`); legacy `require_admin`/`require_role` shims in API deps are retired.
 
 ## 3. Developer-Related/Relevant Information for Contributors
 
@@ -90,7 +90,7 @@ Note: This README follows the project-wide template to help contributors quickly
   - Keys/budgets: `api_key_manager.py`, `virtual_keys.py`, `quotas.py`.
   - Ops/monitoring: `monitoring.py`, `alerting.py`, `scheduler.py`.
 - Extension Points:
-  - Add endpoints under `app/api/v1/endpoints/` and use dependencies from `API_Deps/auth_deps.py` (`get_auth_principal`, `require_roles`, `require_permissions`, `check_rate_limit`); avoid introducing new `require_admin` call sites.
+  - Add endpoints under `app/api/v1/endpoints/` and use dependencies from `API_Deps/auth_deps.py` (`get_auth_principal`, `require_roles`, `require_permissions`, `check_rate_limit`).
   - Extend roles/permissions using RBAC tables; seed updates go into `migrations.py` seeding section.
   - Add budgets or allowlists by extending `virtual_keys.py`/`api_key_manager.py` and updating schema + tests.
   - Add periodic tasks in `scheduler.py` (e.g., cleanup of expired tokens/lockouts).

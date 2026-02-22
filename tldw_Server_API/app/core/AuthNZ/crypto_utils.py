@@ -15,6 +15,7 @@ import os
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 _HMAC_KDF_SALT_LEGACY = b"tldw_authnz_hmac_kdf_v1"
 _HMAC_KDF_SALT_PREFIX = b"tldw_authnz_hmac_kdf_v2:"
@@ -89,13 +90,8 @@ def derive_hmac_key_candidates(settings: Settings | None = None) -> list[bytes]:
     auth_mode = getattr(s, "AUTH_MODE", "single_user")
 
     # Detect pytest context and known deterministic JWT secret used only for testing
-    test_mode_env = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-    allow_test_fallback = test_mode_env or os.getenv("TLDW_ALLOW_TEST_FALLBACK_KEYS", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    test_mode_env = is_test_mode()
+    allow_test_fallback = test_mode_env or env_flag_enabled("TLDW_ALLOW_TEST_FALLBACK_KEYS")
     pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
     in_test_context = test_mode_env or pytest_active
     test_secret_env = os.getenv("JWT_SECRET_TEST_KEY", "test-secret-jwt-key-please-change-1234567890")
@@ -128,7 +124,8 @@ def derive_hmac_key_candidates(settings: Settings | None = None) -> list[bytes]:
         jwt_secret_candidate = getattr(s, "JWT_SECRET_KEY", None)
         only_public_key = bool(getattr(s, "JWT_PUBLIC_KEY", None)) and not getattr(s, "JWT_PRIVATE_KEY", None)
         auto_test_secret = in_test_context and jwt_secret_candidate == test_secret_env
-        if not (only_public_key and auto_test_secret):
+        placeholder_test_secret = jwt_secret_candidate == "CHANGE_ME_TO_SECURE_RANDOM_KEY_MIN_32_CHARS"
+        if not (only_public_key and (auto_test_secret or (in_test_context and placeholder_test_secret))):
             add_source(jwt_secret_candidate)
         add_source(getattr(s, "JWT_PRIVATE_KEY", None))
 
@@ -147,7 +144,7 @@ def derive_hmac_key_candidates(settings: Settings | None = None) -> list[bytes]:
             )
         # SECURITY: Additional production guard - never use fallback in production environment
         environment = os.getenv("ENVIRONMENT", "").strip().lower()
-        prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
+        prod_flag = env_flag_enabled("tldw_production")
         if environment in {"production", "prod"} or prod_flag:
             raise ValueError(
                 "CRITICAL: Test fallback secret cannot be used in production environment. "

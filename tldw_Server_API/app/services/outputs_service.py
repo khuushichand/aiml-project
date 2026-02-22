@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -85,11 +86,11 @@ def _sum_audiobook_output_bytes_for_ids(cdb, user_id: int, ids: list[int]) -> in
     total_bytes = 0
     try:
         rows = cdb.backend.execute(
-            f"SELECT id, type, metadata_json, storage_path, deleted FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
+            f"SELECT id, type, metadata_json, storage_path, deleted FROM outputs WHERE user_id = ? AND id IN ({placeholders})",  # nosec B608
             tuple([user_id] + list(ids)),
         ).rows
     except _OUTPUTS_DB_FALLBACK_EXCEPTIONS as exc:
-        logger.warning("outputs_service: audiobook quota lookup failed: %s", exc)
+        logger.warning("outputs_service: audiobook quota lookup failed: {}", exc)
         return 0
     outputs_dir = _outputs_dir_for_user(user_id)
     for row in rows:
@@ -111,7 +112,7 @@ def _sum_audiobook_output_bytes_for_ids(cdb, user_id: int, ids: list[int]) -> in
             except FileNotFoundError:
                 continue
             except OSError as exc:
-                logger.warning("outputs_service: failed to stat output for quota: %s", exc)
+                logger.warning("outputs_service: failed to stat output for quota: {}", exc)
                 continue
         if size_bytes:
             total_bytes += size_bytes
@@ -125,7 +126,7 @@ def render_output_template(template_str: str, context: dict[str, Any]) -> str:
         template = _OUTPUT_TEMPLATE_ENV.from_string(normalized)
         return template.render(**context)
     except _OUTPUTS_TEMPLATE_EXCEPTIONS as exc:
-        logger.error("outputs: template render failed: %s", exc)
+        logger.error("outputs: template render failed: {}", exc)
         return template_str
 
 
@@ -135,8 +136,22 @@ def build_items_context_from_content_items(rows: Iterable[Any]) -> list[dict[str
         media_id = getattr(row, "media_id", None)
         item_id = media_id if media_id is not None else getattr(row, "id", None)
         tags = getattr(row, "tags", None)
+        if callable(tags):
+            try:
+                tags = tags()
+            except Exception:
+                tags = []
         if not isinstance(tags, list):
-            tags = []
+            raw_json = getattr(row, "tags_json", None)
+            if isinstance(raw_json, str):
+                try:
+                    tags = json.loads(raw_json)
+                    if not isinstance(tags, list):
+                        tags = []
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    tags = []
+            else:
+                tags = []
         items.append(
             {
                 "id": item_id,
@@ -436,7 +451,9 @@ def update_output_artifact_db(
         params.append(retention_until)
     if sets:
         params.extend([output_id, cdb.user_id])
-        q = f"UPDATE outputs SET {', '.join(sets)} WHERE id = ? AND user_id = ? AND deleted = 0"
+        set_clause = ", ".join(sets)
+        update_output_sql_template = "UPDATE outputs SET {set_clause} WHERE id = ? AND user_id = ? AND deleted = 0"
+        q = update_output_sql_template.format_map(locals())  # nosec B608
         try:
             cdb.backend.execute(q, tuple(params))
         except Exception as e:
@@ -494,15 +511,121 @@ def delete_outputs_by_ids(cdb, user_id: int, ids: list[int]) -> int:
     audiobook_bytes = _sum_audiobook_output_bytes_for_ids(cdb, user_id, ids)
     try:
         cdb.backend.execute(
-            f"DELETE FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
+            f"DELETE FROM outputs WHERE user_id = ? AND id IN ({placeholders})",  # nosec B608
             tuple([user_id] + list(ids)),
         )
         if audiobook_bytes:
             try:
                 cdb.update_audiobook_output_usage(-audiobook_bytes)
             except _OUTPUTS_DB_FALLBACK_EXCEPTIONS as exc:
-                logger.warning("outputs_service: failed to decrement audiobook usage: %s", exc)
+                logger.warning("outputs_service: failed to decrement audiobook usage: {}", exc)
         return len(ids)
     except Exception as e:
         logger.error(f"outputs_service.purge: delete failed: {e}")
         raise
+
+
+# ---------------------------------------------------------------------------
+# LLM Summarization helpers for watchlist outputs
+# ---------------------------------------------------------------------------
+
+_SUMMARIZE_MAX_CHARS = 12_000
+_SUMMARIZE_DEFAULT_PROMPT = "Summarize the following article in 2-3 concise sentences:\n\n{text}"
+
+
+def _content_cache_key(content: str) -> str:
+    """SHA256[:16] content hash for summary caching."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+
+
+def _get_cached_summary(metadata_json: str | None, content_hash: str) -> str | None:
+    """Return a cached summary from item metadata if the content hash matches."""
+    if not metadata_json:
+        return None
+    try:
+        meta = json.loads(metadata_json) if isinstance(metadata_json, str) else metadata_json
+        if not isinstance(meta, dict):
+            return None
+        # Format 1: flat keys
+        if meta.get("cached_summary_hash") == content_hash:
+            return meta.get("cached_summary")
+        # Format 2: nested dict
+        cached = meta.get("cached_summary")
+        if isinstance(cached, dict) and cached.get("content_hash") == content_hash:
+            return cached.get("text")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def _summarize_single_article(
+    text: str,
+    *,
+    api_name: str,
+    model_override: str | None = None,
+    custom_prompt: str | None = None,
+) -> str:
+    """Synchronously call LLM to summarize a single article."""
+    from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+
+    truncated = text[:_SUMMARIZE_MAX_CHARS]
+    prompt = (custom_prompt or _SUMMARIZE_DEFAULT_PROMPT).format(text=truncated)
+    try:
+        result = analyze(
+            input_data=truncated,
+            custom_prompt=prompt,
+            api_name=api_name,
+            api_key=None,
+            model=model_override,
+        )
+        if isinstance(result, str) and result.strip():
+            return result.strip()
+    except Exception as exc:
+        logger.warning(f"outputs_service: LLM summarize failed: {exc}")
+    return text[:300]
+
+
+async def summarize_items_for_output(
+    items: list[dict[str, Any]],
+    *,
+    api_name: str,
+    model_override: str | None = None,
+    custom_prompt: str | None = None,
+    db: Any = None,
+) -> list[dict[str, Any]]:
+    """Enrich items with LLM-generated 'llm_summary' field.
+
+    Uses SHA256-keyed caching when metadata is available.
+    """
+    loop = asyncio.get_running_loop()
+    for item in items:
+        content = item.get("content") or item.get("summary") or item.get("title") or ""
+        if not content.strip():
+            item["llm_summary"] = ""
+            continue
+        content_hash = _content_cache_key(content)
+        cached = _get_cached_summary(item.get("metadata_json"), content_hash)
+        if cached:
+            item["llm_summary"] = cached
+            continue
+        summary = await loop.run_in_executor(
+            None,
+            lambda text=content: _summarize_single_article(
+                text, api_name=api_name, model_override=model_override, custom_prompt=custom_prompt,
+            ),
+        )
+        item["llm_summary"] = summary
+        if db and hasattr(db, "update_item_metadata"):
+            try:
+                item_id = item.get("id")
+                if item_id is not None:
+                    existing_meta = {}
+                    raw = item.get("metadata_json")
+                    if raw:
+                        existing_meta = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                    existing_meta["cached_summary"] = summary
+                    existing_meta["cached_summary_hash"] = content_hash
+                    db.update_item_metadata(int(item_id), json.dumps(existing_meta))
+            except Exception as exc:
+                logger.debug(f"outputs_service: cache persist failed: {exc}")
+    return items

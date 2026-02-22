@@ -18,6 +18,7 @@
 ####################
 
 import logging
+import importlib
 import os
 import sys
 import tempfile
@@ -25,7 +26,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import numpy as np
-import torch
 
 # Apply NumPy 2.0 compatibility patches before importing Nemo
 from .numpy_compat import ensure_numpy_compatibility
@@ -33,7 +33,7 @@ from .numpy_compat import ensure_numpy_compatibility
 ensure_numpy_compatibility()
 
 # Import local config helpers
-from tldw_Server_API.app.core.config import get_stt_config
+from tldw_Server_API.app.core.config import get_stt_config, loaded_config_data
 
 # Global model cache
 _model_cache: dict[str, Any] = {}
@@ -85,6 +85,42 @@ _NEMO_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     TypeError,
     ValueError,
 )
+
+torch: Any | None = None
+_TORCH_IMPORT_ERROR: Exception | None = None
+_TORCH_IMPORT_ATTEMPTED: bool = False
+
+
+def _get_torch(*, allow_import: bool) -> Any | None:
+    global torch, _TORCH_IMPORT_ERROR, _TORCH_IMPORT_ATTEMPTED
+
+    if torch is not None:
+        return torch
+    if _TORCH_IMPORT_ERROR is not None:
+        return None
+    if not allow_import:
+        return None
+    if _TORCH_IMPORT_ATTEMPTED:
+        return None
+
+    _TORCH_IMPORT_ATTEMPTED = True
+    try:
+        torch = importlib.import_module("torch")
+        _TORCH_IMPORT_ERROR = None
+    except Exception as exc:
+        _TORCH_IMPORT_ERROR = exc
+        torch = None
+    return torch
+
+
+def _torch_cuda_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import)
+    if torch_mod is None:
+        return False
+    try:
+        return bool(torch_mod.cuda.is_available())
+    except Exception:
+        return False
 
 
 def _temp_wav_from_numpy(audio_np: np.ndarray, sample_rate: int) -> str:
@@ -198,14 +234,14 @@ def load_canary_model():
         model = nemo_asr.models.EncDecMultiTaskModel.from_pretrained("nvidia/canary-1b-v2")
 
         # Configure device
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        device = 'cuda' if _torch_cuda_available(allow_import=True) else 'cpu'
         try:
             stt_cfg = get_stt_config()
         except _NEMO_NONCRITICAL_EXCEPTIONS:
             stt_cfg = {}
         device = stt_cfg.get('nemo_device', device)
 
-        model = model.cuda() if device == 'cuda' and torch.cuda.is_available() else model.cpu()
+        model = model.cuda() if device == 'cuda' and _torch_cuda_available(allow_import=False) else model.cpu()
 
         model.eval()
 
@@ -234,7 +270,7 @@ def load_parakeet_model(variant: str = 'standard'):
         logging.debug(f"Using cached Parakeet model (variant: {variant})")
         return _model_cache[cache_key]
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cuda' if _torch_cuda_available(allow_import=True) else 'cpu'
     try:
         stt_cfg = get_stt_config()
     except _NEMO_NONCRITICAL_EXCEPTIONS:
@@ -273,7 +309,7 @@ def _load_parakeet_standard(device: str):
     # Configure for efficient inference
     model.change_decoding_strategy(None)  # Use greedy decoding for speed
 
-    model = model.cuda() if device == 'cuda' and torch.cuda.is_available() else model.cpu()
+    model = model.cuda() if device == 'cuda' and _torch_cuda_available(allow_import=False) else model.cpu()
 
     model.eval()
 
@@ -660,8 +696,9 @@ def unload_nemo_models():
     gc.collect()
 
     # Clear GPU cache if available
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    torch_mod = _get_torch(allow_import=False)
+    if _torch_cuda_available(allow_import=False) and torch_mod is not None:
+        torch_mod.cuda.empty_cache()
 
     logging.info("Unloaded all Nemo models from memory")
 

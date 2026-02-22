@@ -41,7 +41,7 @@ export function useModelSelector({
 
   const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false)
   const [modelSearchQuery, setModelSearchQuery] = React.useState("")
-  const [favoriteModels, setFavoriteModels] = useStorage<string[]>(
+  const [favoriteModels, setFavoriteModels, favoriteModelsMeta] = useStorage<string[]>(
     "favoriteChatModels",
     []
   )
@@ -57,11 +57,24 @@ export function useModelSelector({
   }, [composerModels, selectedModel])
 
   const modelContextLength = React.useMemo(() => {
-    const value =
-      selectedModelMeta?.context_length ??
-      selectedModelMeta?.contextLength ??
-      selectedModelMeta?.details?.context_length
-    return typeof value === "number" && Number.isFinite(value) ? value : null
+    const candidates = [
+      selectedModelMeta?.context_length,
+      selectedModelMeta?.contextLength,
+      (selectedModelMeta as any)?.context_window,
+      selectedModelMeta?.details?.context_length,
+      (selectedModelMeta as any)?.details?.contextLength,
+      (selectedModelMeta as any)?.details?.context_window,
+      (selectedModelMeta as any)?.max_input_tokens,
+      (selectedModelMeta as any)?.details?.max_input_tokens,
+      (selectedModelMeta as any)?.max_context_tokens,
+      (selectedModelMeta as any)?.details?.max_context_tokens
+    ]
+    for (const candidate of candidates) {
+      if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+        return candidate
+      }
+    }
+    return null
   }, [selectedModelMeta])
 
   const modelCapabilities = React.useMemo(() => {
@@ -72,16 +85,25 @@ export function useModelSelector({
   }, [selectedModelMeta])
 
   const numCtx = useStoreChatModelSettings((state) => state.numCtx)
+  const requestedNumCtx = React.useMemo(() => {
+    if (typeof numCtx !== "number" || !Number.isFinite(numCtx) || numCtx <= 0) {
+      return null
+    }
+    return numCtx
+  }, [numCtx])
 
   const resolvedMaxContext = React.useMemo(() => {
-    if (typeof numCtx === "number" && Number.isFinite(numCtx) && numCtx > 0) {
-      return numCtx
+    if (typeof requestedNumCtx === "number") {
+      if (typeof modelContextLength === "number" && modelContextLength > 0) {
+        return Math.min(requestedNumCtx, modelContextLength)
+      }
+      return requestedNumCtx
     }
     if (typeof modelContextLength === "number" && modelContextLength > 0) {
       return modelContextLength
     }
     return null
-  }, [modelContextLength, numCtx])
+  }, [modelContextLength, requestedNumCtx])
 
   const resolvedProviderKey = React.useMemo(() => {
     const fromOverride = typeof apiProvider === "string" ? apiProvider.trim() : ""
@@ -295,7 +317,7 @@ export function useModelSelector({
               <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
               <span className="truncate flex-1">{modelLabel}</span>
               {isRecommended && (
-                <span className="rounded-full bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
+                <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
                   {t("playground:composer.recommended", "Recommended")}
                 </span>
               )}
@@ -419,6 +441,7 @@ export function useModelSelector({
     apiModelLabel,
     modelSelectorWarning,
     favoriteModels,
+    favoriteModelsIsLoading: favoriteModelsMeta.isLoading,
     favoriteModelSet,
     toggleFavoriteModel,
     filteredModels,

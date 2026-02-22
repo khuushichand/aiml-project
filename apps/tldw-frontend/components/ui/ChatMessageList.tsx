@@ -85,15 +85,15 @@ export const ChatMessageList = forwardRef<ChatMessageListHandle, ChatMessageList
                   className={cn(
                     'max-w-[80%] rounded-lg px-4 py-2 text-sm',
                     isSystem
-                      ? 'bg-amber-50 text-amber-900 border border-amber-200 text-xs'
+                      ? 'bg-warn/10 text-warn border border-warn/30 text-xs'
                       : isRight
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-900',
-                    isCenter && !isSystem && 'bg-gray-200 text-gray-600 text-xs'
+                        ? 'bg-primary text-white'
+                        : 'bg-surface text-text',
+                    isCenter && !isSystem && 'bg-surface2 text-text-muted text-xs'
                   )}
                 >
                   {msg.user?.name && !isRight && !isSystem && (
-                    <div className="mb-1 text-xs font-medium text-gray-500">
+                    <div className="mb-1 text-xs font-medium text-text-muted">
                       {msg.user.name}
                     </div>
                   )}

@@ -5,7 +5,7 @@ import json
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Path, Query
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
@@ -43,6 +43,28 @@ _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS = (
 )
 
 router = APIRouter(prefix="/collections/feeds", tags=["collections-feeds"])
+
+_RSS_EXTENSIONS = {".xml", ".rss", ".atom", ".feed"}
+_RSS_PATH_HINTS = {"/feed", "/rss", "/atom", "/feeds", "/index.xml"}
+
+
+def _detect_source_type(url: str) -> str:
+    """Detect source type from URL heuristics. Returns 'rss' or 'site'."""
+    try:
+        parsed = urlparse(str(url))
+        path = (parsed.path or "").lower().rstrip("/")
+        for ext in _RSS_EXTENSIONS:
+            if path.endswith(ext):
+                return "rss"
+        for hint in _RSS_PATH_HINTS:
+            if path.endswith(hint) or hint + "." in path:
+                return "rss"
+        query = (parsed.query or "").lower()
+        if "format=rss" in query or "format=atom" in query or "feed=" in query:
+            return "rss"
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
+        pass
+    return "rss"
 
 
 def _parse_settings(raw: str | None) -> dict[str, Any]:
@@ -190,6 +212,33 @@ def _register_schedule(db: WatchlistsDatabase, job_row, *, current_user: User) -
         logger.debug(f"Collections feeds schedule DB fallback failed: {exc}")
 
 
+def _derive_health_status(source_row) -> str:
+    """Derive health status from source row fields."""
+    consec_errors = int(getattr(source_row, "consec_errors", 0) or 0)
+    active = bool(getattr(source_row, "active", 1))
+    if not active:
+        return "disabled"
+    if consec_errors >= 5:
+        return "failing"
+    if consec_errors >= 1:
+        return "degraded"
+    return "healthy"
+
+
+def _extract_promoted_at(settings: dict[str, Any], job_row=None) -> str | None:
+    """Extract promoted_at from job output_prefs schedule config."""
+    if job_row is not None:
+        try:
+            import json as _json
+            prefs = _json.loads(getattr(job_row, "output_prefs_json", None) or "{}")
+            schedule_cfg = prefs.get("collections_schedule")
+            if isinstance(schedule_cfg, dict) and schedule_cfg.get("promoted"):
+                return schedule_cfg.get("promoted_at")
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return None
+
+
 def _to_feed_response(source_row, *, job_row=None, settings: dict[str, Any] | None = None) -> CollectionsFeed:
     settings = settings if settings is not None else _parse_settings(source_row.settings_json)
     job_id = _extract_job_id(settings)
@@ -208,6 +257,9 @@ def _to_feed_response(source_row, *, job_row=None, settings: dict[str, Any] | No
         defer_until=source_row.defer_until,
         status=source_row.status,
         consec_not_modified=source_row.consec_not_modified,
+        consec_errors=int(getattr(source_row, "consec_errors", 0) or 0),
+        health_status=_derive_health_status(source_row),
+        promoted_at=_extract_promoted_at(settings, job_row=job_row),
         created_at=source_row.created_at,
         updated_at=source_row.updated_at,
         job_id=job_row.id if job_row is not None else job_id,
@@ -297,6 +349,7 @@ def _sync_job_schedule(db: WatchlistsDatabase, job_row, *, current_user: User) -
 @router.post("", response_model=CollectionsFeed, summary="Create a Collections feed subscription")
 async def create_feed_subscription(
     payload: CollectionsFeedCreateRequest = Body(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(get_request_user),
     db: WatchlistsDatabase = Depends(get_watchlists_db_for_user),
 ) -> CollectionsFeed:
@@ -307,11 +360,12 @@ async def create_feed_subscription(
     tags = [t for t in (payload.tags or []) if t]
     schedule_expr = payload.schedule_expr or _DEFAULT_HOURLY_CRON
     schedule_timezone = payload.timezone
+    detected_type = _detect_source_type(str(payload.url))
     try:
         source = db.create_source(
             name=name,
             url=str(payload.url),
-            source_type="rss",
+            source_type=detected_type,
             active=payload.active,
             settings_json=json.dumps(settings),
             tags=tags,
@@ -361,6 +415,17 @@ async def create_feed_subscription(
         job = db.get_job(int(job.id))
     _register_schedule(db, job, current_user=current_user)
     job = db.get_job(int(job.id))
+
+    if payload.active:
+        async def _run_first_job(user_id: int, job_id: int) -> None:
+            try:
+                from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
+                await run_watchlist_job(user_id, job_id)
+            except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"collections_feeds: first run failed for job {job_id}: {exc}")
+
+        background_tasks.add_task(_run_first_job, int(current_user.id), int(job.id))
+
     return _to_feed_response(source, job_row=job, settings=settings)
 
 

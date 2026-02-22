@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 
 import { launchWithExtension } from "./utils/extension"
@@ -27,7 +28,7 @@ test.describe("Collections playground", () => {
     const extPath = path.resolve("build/chrome-mv3")
     log("launching extension", { extPath })
     const { context, page: basePage, optionsUrl } = await logStep("launchWithExtension", () =>
-      launchWithExtension(extPath, {
+      launchWithExtensionOrSkip(test, extPath, {
         seedConfig: {
           __tldw_first_run_complete: true,
           __tldw_allow_offline: true,

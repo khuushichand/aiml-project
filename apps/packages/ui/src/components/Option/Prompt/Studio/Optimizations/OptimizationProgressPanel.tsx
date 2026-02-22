@@ -134,6 +134,12 @@ export const OptimizationProgressPanel: React.FC<
     return new Date(dateStr).toLocaleString()
   }
 
+  const metricColor = (value: number): string => {
+    if (value >= 0.8) return "rgb(var(--color-success))"
+    if (value >= 0.5) return "rgb(var(--color-warn))"
+    return "rgb(var(--color-danger))"
+  }
+
   const progressPercent = optimization?.total_iterations
     ? Math.round(
         ((optimization.current_iteration ?? 0) /
@@ -161,7 +167,7 @@ export const OptimizationProgressPanel: React.FC<
           })}
         </span>
       }
-      width={650}
+      size={650}
       destroyOnHidden
     >
       {isLoadingOptimization && <Skeleton paragraph={{ rows: 10 }} />}
@@ -188,7 +194,7 @@ export const OptimizationProgressPanel: React.FC<
             <Alert
               type="error"
               showIcon
-              message={t("managePrompts.studio.optimizations.error", {
+              title={t("managePrompts.studio.optimizations.error", {
                 defaultValue: "Error"
               })}
               description={optimization.error_message}
@@ -200,7 +206,7 @@ export const OptimizationProgressPanel: React.FC<
             <Alert
               type="warning"
               showIcon
-              message={t("managePrompts.studio.optimizations.cancelled", {
+              title={t("managePrompts.studio.optimizations.cancelled", {
                 defaultValue: "Cancelled"
               })}
               description={optimization.cancel_reason}
@@ -249,12 +255,7 @@ export const OptimizationProgressPanel: React.FC<
                 precision={1}
                 suffix="%"
                 valueStyle={{
-                  color:
-                    (optimization.best_score ?? 0) >= 0.8
-                      ? "#52c41a"
-                      : (optimization.best_score ?? 0) >= 0.5
-                      ? "#faad14"
-                      : "#ff4d4f"
+                  color: metricColor(optimization.best_score ?? 0)
                 }}
               />
             </div>
@@ -305,7 +306,7 @@ export const OptimizationProgressPanel: React.FC<
               type="success"
               showIcon
               icon={<CheckCircle2 className="size-4" />}
-              message={t("managePrompts.studio.optimizations.bestPromptFound", {
+              title={t("managePrompts.studio.optimizations.bestPromptFound", {
                 defaultValue: "Best prompt found"
               })}
               description={t(

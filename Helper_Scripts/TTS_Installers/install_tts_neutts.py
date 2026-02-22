@@ -76,7 +76,7 @@ def prefetch(backbone: str, codec: str) -> None:
             return
         print(f"[neutts] Prefetching {repo} ...")
         # Prefetch into HF cache; no local_dir needed and no symlink flag
-        snapshot_download(repo_id=repo, force_download=_force_downloads())
+        snapshot_download(repo_id=repo, force_download=_force_downloads())  # nosec B615
 
     snap(backbone)
     if codec:

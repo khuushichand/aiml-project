@@ -28,6 +28,7 @@ def test_abtest_export_schema_contract(tmp_path, monkeypatch):
     app.dependency_overrides[get_auth_principal] = lambda: AuthPrincipal(
         kind="user",
         user_id=1,
+        roles=["admin"],
         is_admin=True,
     )
 

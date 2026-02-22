@@ -68,12 +68,20 @@ from tldw_Server_API.app.core.Chat.streaming_utils import (
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
 )
+from tldw_Server_API.app.core.Chat.tool_auto_exec import execute_assistant_tool_calls
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
-from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
+from tldw_Server_API.app.core.testing import (
+    is_test_mode as _shared_is_test_mode,
+    is_truthy as _shared_is_truthy,
+)
+from tldw_Server_API.app.core.Usage.pricing_catalog import (
+    get_pricing_catalog,
+    list_provider_models,
+)
 from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
 
@@ -114,7 +122,172 @@ def _coerce_int(value: str | None, default: int) -> int:
 def _coerce_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return _shared_is_truthy(value)
+
+
+def _coerce_int_bounded(
+    value: str | None,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    parsed = _coerce_int(value, default)
+    return max(minimum, min(maximum, parsed))
+
+
+_TOOL_ALLOW_CATALOG_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:-]+(?:\*)?$")
+_TOOL_ALLOW_CATALOG_DEFAULT = ""
+_CHAT_TOOL_CALLS_MIN = 1
+_CHAT_TOOL_CALLS_MAX = 20
+_CHAT_TOOL_TIMEOUT_MS_MIN = 1000
+_CHAT_TOOL_TIMEOUT_MS_MAX = 120_000
+
+_PROVIDER_MODEL_CONFIG_FIELDS: dict[str, tuple[str, str]] = {
+    "openai": ("API", "openai_model"),
+    "anthropic": ("API", "anthropic_model"),
+    "cohere": ("API", "cohere_model"),
+    "deepseek": ("API", "deepseek_model"),
+    "qwen": ("API", "qwen_model"),
+    "google": ("API", "google_model"),
+    "groq": ("API", "groq_model"),
+    "huggingface": ("API", "huggingface_model"),
+    "mistral": ("API", "mistral_model"),
+    "bedrock": ("API", "bedrock_model"),
+    "openrouter": ("API", "openrouter_model"),
+    "moonshot": ("API", "moonshot_model"),
+    "zai": ("API", "zai_model"),
+    "custom-openai-api": ("API", "custom_openai_api_model"),
+    "custom-openai-api-2": ("API", "custom_openai2_api_model"),
+    "llama.cpp": ("Local-API", "llama_model"),
+    "kobold": ("Local-API", "kobold_model"),
+    "ooba": ("Local-API", "ooba_model"),
+    "tabbyapi": ("Local-API", "tabby_model"),
+    "vllm": ("Local-API", "vllm_model"),
+    "ollama": ("Local-API", "ollama_model"),
+    "aphrodite": ("Local-API", "aphrodite_model"),
+}
+
+
+def _parse_tool_allow_catalog(value: str | None) -> list[str]:
+    """Parse chat tool allow-catalog from comma-separated names/prefixes.
+
+    - Empty string or blank means no tools allowed (empty list).
+    - `*` means allow all (returns ``["*"]``).
+    - Entries support exact names (``notes.search``) and suffix wildcard prefixes
+      (``notes.*``).
+    - Invalid entries are ignored.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return []
+
+    if raw == "*":
+        return ["*"]
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for token in raw.split(","):
+        entry = token.strip()
+        if not entry:
+            continue
+        if entry == "*":
+            return ["*"]
+        if "*" in entry[:-1]:
+            continue
+        if not _TOOL_ALLOW_CATALOG_TOKEN_RE.match(entry):
+            continue
+        if entry not in seen:
+            seen.add(entry)
+            items.append(entry)
+    return items
+
+
+def _split_model_list(raw_value: str | None) -> list[str]:
+    """Split a model list string into distinct model IDs."""
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item and item.strip()]
+
+
+@lru_cache(maxsize=64)
+def _configured_models_for_provider_cached(provider: str) -> tuple[str, ...]:
+    """Return models explicitly configured for a provider in config files."""
+    provider_key = (provider or "").strip().lower()
+    mapping = _PROVIDER_MODEL_CONFIG_FIELDS.get(provider_key)
+    if not mapping:
+        return tuple()
+
+    section, field = mapping
+    try:
+        if not _config or not _config.has_section(section):
+            return tuple()
+        raw_value = _config.get(section, field, fallback="")
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return tuple()
+
+    return tuple(_split_model_list(raw_value))
+
+
+@lru_cache(maxsize=64)
+def known_models_for_provider_cached(provider: str) -> tuple[str, ...]:
+    """Return known model IDs for a provider from catalog + configured values."""
+    provider_key = (provider or "").strip().lower()
+    if not provider_key:
+        return tuple()
+
+    known: set[str] = set()
+    try:
+        for model_name in list_provider_models(provider_key) or []:
+            normalized = str(model_name).strip()
+            if normalized:
+                known.add(normalized)
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    for model_name in _configured_models_for_provider_cached(provider_key):
+        normalized = str(model_name).strip()
+        if normalized:
+            known.add(normalized)
+
+    return tuple(sorted(known))
+
+
+def is_model_known_for_provider(provider: str, model: str) -> bool | None:
+    """Return whether model is known for provider; None means no inventory is available."""
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip().lower()
+    if not provider_key or not model_key:
+        return None
+
+    known_models = known_models_for_provider_cached(provider_key)
+    if not known_models:
+        return None
+
+    # Most providers use flat model IDs; keep strict exact matching there.
+    # Some providers commonly use namespaced IDs (vendor/model),
+    # so treat namespaced and non-namespaced forms as equivalent.
+    if provider_key not in {"openrouter", "huggingface", "novita", "poe", "together"}:
+        known_lower = {str(item).strip().lower() for item in known_models}
+        return model_key in known_lower
+
+    def _aliases(raw_model: str) -> set[str]:
+        normalized = (raw_model or "").strip().lower()
+        if not normalized:
+            return set()
+        candidates = {normalized}
+        if "/" in normalized:
+            _, suffix = normalized.split("/", 1)
+            if suffix:
+                candidates.add(suffix)
+        return candidates
+
+    known_aliases: set[str] = set()
+    for known in known_models:
+        known_aliases.update(_aliases(str(known)))
+
+    return bool(_aliases(model_key) & known_aliases)
 
 
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
@@ -153,6 +326,65 @@ if _env_force_normalize is not None:
     _force_normalize_strings = _coerce_bool(_env_force_normalize, _force_normalize_strings)
 FORCE_NORMALIZE_STRING_RESPONSES = _force_normalize_strings
 
+_chat_auto_execute_tools = _coerce_bool(_chat_config.get("chat_auto_execute_tools"), False)
+_env_chat_auto_execute_tools = os.getenv("CHAT_AUTO_EXECUTE_TOOLS")
+if _env_chat_auto_execute_tools is not None:
+    _chat_auto_execute_tools = _coerce_bool(_env_chat_auto_execute_tools, _chat_auto_execute_tools)
+CHAT_AUTO_EXECUTE_TOOLS = _chat_auto_execute_tools
+
+_chat_max_tool_calls = _coerce_int_bounded(
+    _chat_config.get("chat_max_tool_calls"),
+    3,
+    minimum=_CHAT_TOOL_CALLS_MIN,
+    maximum=_CHAT_TOOL_CALLS_MAX,
+)
+_env_chat_max_tool_calls = os.getenv("CHAT_MAX_TOOL_CALLS")
+if _env_chat_max_tool_calls is not None:
+    _chat_max_tool_calls = _coerce_int_bounded(
+        _env_chat_max_tool_calls,
+        _chat_max_tool_calls,
+        minimum=_CHAT_TOOL_CALLS_MIN,
+        maximum=_CHAT_TOOL_CALLS_MAX,
+    )
+CHAT_MAX_TOOL_CALLS = _chat_max_tool_calls
+
+_chat_tool_timeout_ms = _coerce_int_bounded(
+    _chat_config.get("chat_tool_timeout_ms"),
+    15_000,
+    minimum=_CHAT_TOOL_TIMEOUT_MS_MIN,
+    maximum=_CHAT_TOOL_TIMEOUT_MS_MAX,
+)
+_env_chat_tool_timeout_ms = os.getenv("CHAT_TOOL_TIMEOUT_MS")
+if _env_chat_tool_timeout_ms is not None:
+    _chat_tool_timeout_ms = _coerce_int_bounded(
+        _env_chat_tool_timeout_ms,
+        _chat_tool_timeout_ms,
+        minimum=_CHAT_TOOL_TIMEOUT_MS_MIN,
+        maximum=_CHAT_TOOL_TIMEOUT_MS_MAX,
+    )
+CHAT_TOOL_TIMEOUT_MS = _chat_tool_timeout_ms
+
+_chat_tool_allow_catalog_raw = _chat_config.get("chat_tool_allow_catalog", _TOOL_ALLOW_CATALOG_DEFAULT)
+_env_chat_tool_allow_catalog = os.getenv("CHAT_TOOL_ALLOW_CATALOG")
+if _env_chat_tool_allow_catalog is not None:
+    _chat_tool_allow_catalog_raw = _env_chat_tool_allow_catalog
+CHAT_TOOL_ALLOW_CATALOG = _parse_tool_allow_catalog(_chat_tool_allow_catalog_raw)
+
+_chat_tool_idempotency = _coerce_bool(_chat_config.get("chat_tool_idempotency"), True)
+_env_chat_tool_idempotency = os.getenv("CHAT_TOOL_IDEMPOTENCY")
+if _env_chat_tool_idempotency is not None:
+    _chat_tool_idempotency = _coerce_bool(_env_chat_tool_idempotency, _chat_tool_idempotency)
+CHAT_TOOL_IDEMPOTENCY = _chat_tool_idempotency
+
+_chat_tool_auto_continue_once = _coerce_bool(_chat_config.get("chat_tool_auto_continue_once"), False)
+_env_chat_tool_auto_continue_once = os.getenv("CHAT_TOOL_AUTO_CONTINUE_ONCE")
+if _env_chat_tool_auto_continue_once is not None:
+    _chat_tool_auto_continue_once = _coerce_bool(
+        _env_chat_tool_auto_continue_once,
+        _chat_tool_auto_continue_once,
+    )
+CHAT_TOOL_AUTO_CONTINUE_ONCE = _chat_tool_auto_continue_once
+
 
 def should_force_normalize_string_responses() -> bool:
     """Return True when raw-string LLM responses should be wrapped in OpenAI format."""
@@ -160,6 +392,64 @@ def should_force_normalize_string_responses() -> bool:
     if raw is not None:
         return _coerce_bool(raw, FORCE_NORMALIZE_STRING_RESPONSES)
     return FORCE_NORMALIZE_STRING_RESPONSES
+
+
+def should_auto_execute_tools() -> bool:
+    """Return whether chat should auto-execute assistant tool calls."""
+    raw = os.getenv("CHAT_AUTO_EXECUTE_TOOLS")
+    if raw is not None:
+        return _coerce_bool(raw, CHAT_AUTO_EXECUTE_TOOLS)
+    return CHAT_AUTO_EXECUTE_TOOLS
+
+
+def get_chat_max_tool_calls() -> int:
+    """Return configured per-response cap for auto-executed tool calls."""
+    raw = os.getenv("CHAT_MAX_TOOL_CALLS")
+    if raw is not None:
+        return _coerce_int_bounded(
+            raw,
+            CHAT_MAX_TOOL_CALLS,
+            minimum=_CHAT_TOOL_CALLS_MIN,
+            maximum=_CHAT_TOOL_CALLS_MAX,
+        )
+    return CHAT_MAX_TOOL_CALLS
+
+
+def get_chat_tool_timeout_ms() -> int:
+    """Return timeout budget in milliseconds for each auto-executed tool call."""
+    raw = os.getenv("CHAT_TOOL_TIMEOUT_MS")
+    if raw is not None:
+        return _coerce_int_bounded(
+            raw,
+            CHAT_TOOL_TIMEOUT_MS,
+            minimum=_CHAT_TOOL_TIMEOUT_MS_MIN,
+            maximum=_CHAT_TOOL_TIMEOUT_MS_MAX,
+        )
+    return CHAT_TOOL_TIMEOUT_MS
+
+
+def get_chat_tool_allow_catalog() -> list[str]:
+    """Return allow-catalog patterns (empty list means no tools allowed)."""
+    raw = os.getenv("CHAT_TOOL_ALLOW_CATALOG")
+    if raw is not None:
+        return _parse_tool_allow_catalog(raw)
+    return CHAT_TOOL_ALLOW_CATALOG
+
+
+def should_attach_tool_idempotency() -> bool:
+    """Return whether auto-execution should attach idempotency keys for tools."""
+    raw = os.getenv("CHAT_TOOL_IDEMPOTENCY")
+    if raw is not None:
+        return _coerce_bool(raw, CHAT_TOOL_IDEMPOTENCY)
+    return CHAT_TOOL_IDEMPOTENCY
+
+
+def should_auto_continue_tools_once() -> bool:
+    """Return whether chat should run one follow-up assistant turn after tool execution."""
+    raw = os.getenv("CHAT_TOOL_AUTO_CONTINUE_ONCE")
+    if raw is not None:
+        return _coerce_bool(raw, CHAT_TOOL_AUTO_CONTINUE_ONCE)
+    return CHAT_TOOL_AUTO_CONTINUE_ONCE
 
 
 # --- Cached helpers (module scope) -------------------------------------------
@@ -248,6 +538,114 @@ def _load_alias_overrides_cached() -> dict[str, dict[str, str]]:
     return {}
 
 
+@lru_cache(maxsize=2048)
+def _provider_has_model_cached(provider: str, model: str) -> bool:
+    """Return True when provider catalog contains the given model (exact, case-insensitive)."""
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip().lower()
+    if not provider_key or not model_key:
+        return False
+    try:
+        for candidate in _load_models_with_case_cached(provider_key):
+            if str(candidate).strip().lower() == model_key:
+                return True
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return False
+    return False
+
+
+@lru_cache(maxsize=4096)
+def _find_catalog_providers_for_model_cached(model: str) -> tuple[str, ...]:
+    """Return providers whose pricing catalog contains the model (exact, case-insensitive)."""
+    model_key = (model or "").strip().lower()
+    if not model_key:
+        return tuple()
+
+    matches: set[str] = set()
+    try:
+        catalog = getattr(get_pricing_catalog(), "_catalog", {})
+        if isinstance(catalog, dict):
+            for provider_name, provider_models in catalog.items():
+                if not isinstance(provider_models, dict):
+                    continue
+                for model_name, model_meta in provider_models.items():
+                    if str(model_name).strip().lower() != model_key:
+                        continue
+                    if isinstance(model_meta, dict) and model_meta.get("placeholder"):
+                        continue
+                    provider_key = str(provider_name).strip().lower()
+                    if provider_key:
+                        matches.add(provider_key)
+                    break
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return tuple()
+
+    return tuple(sorted(matches))
+
+
+def infer_provider_from_model_catalog(
+    *,
+    provider: str,
+    model: str,
+    provider_explicit: bool,
+) -> tuple[str, dict[str, Any]]:
+    """Infer provider from model catalog when the current provider likely mismatches.
+
+    Safety rules:
+    - Never override an explicit provider.
+    - Only switch when the model has a unique provider match in catalog.
+    - Keep current provider on ambiguous matches.
+    """
+    current_provider = (provider or "").strip().lower()
+    model_value = (model or "").strip()
+    debug: dict[str, Any] = {
+        "attempted": False,
+        "provider_explicit": provider_explicit,
+        "current_provider": current_provider,
+        "model": model_value,
+        "current_provider_has_model": None,
+        "candidates": [],
+        "selected_provider": current_provider,
+        "reason": "skipped",
+    }
+
+    if provider_explicit:
+        debug["reason"] = "explicit_provider"
+        return current_provider, debug
+    if not current_provider or not model_value:
+        debug["reason"] = "missing_provider_or_model"
+        return current_provider, debug
+    if "/" in model_value:
+        debug["reason"] = "inline_model_namespace"
+        return current_provider, debug
+
+    debug["attempted"] = True
+    has_current_match = _provider_has_model_cached(current_provider, model_value)
+    debug["current_provider_has_model"] = has_current_match
+    if has_current_match:
+        debug["reason"] = "current_provider_match"
+        return current_provider, debug
+
+    candidates = list(_find_catalog_providers_for_model_cached(model_value))
+    debug["candidates"] = candidates
+    if not candidates:
+        debug["reason"] = "no_catalog_match"
+        return current_provider, debug
+
+    if len(candidates) == 1:
+        selected = candidates[0]
+        debug["selected_provider"] = selected
+        debug["reason"] = "unique_catalog_match"
+        return selected, debug
+
+    if current_provider in candidates:
+        debug["reason"] = "ambiguous_kept_current"
+        return current_provider, debug
+
+    debug["reason"] = "ambiguous_no_change"
+    return current_provider, debug
+
+
 def invalidate_model_alias_caches() -> None:
     """Invalidate cached model list and alias overrides for hot-reload.
 
@@ -259,6 +657,14 @@ def invalidate_model_alias_caches() -> None:
         _load_models_with_case_cached.cache_clear()
     with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         _load_alias_overrides_cached.cache_clear()
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+        _provider_has_model_cached.cache_clear()
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+        _find_catalog_providers_for_model_cached.cache_clear()
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+        _configured_models_for_provider_cached.cache_clear()
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+        known_models_for_provider_cached.cache_clear()
 
 
 def queue_is_active(queue: Any) -> bool:
@@ -425,7 +831,7 @@ def normalize_request_provider_and_model(
             # Resolve against known models when no explicit override present
             resolved = _resolve_alias(provider_for_mapping, target_model_part)
         if resolved and resolved != model_str:
-            allow_cross = str(os.getenv("CHAT_ALLOW_CROSS_PROVIDER_ALIASING", "0")).lower() in {"1", "true", "yes", "on"}
+            allow_cross = _shared_is_truthy(os.getenv("CHAT_ALLOW_CROSS_PROVIDER_ALIASING", "0"))
             if inline_provider:
                 # Preserve inline provider prefix until final normalization below
                 combined = f"{inline_provider}/{resolved}"
@@ -464,11 +870,11 @@ def normalize_request_provider_and_model(
                 # In this case, strip the inline provider prefix from the model
                 request_data.model = actual_model
             else:
-                # api_provider is explicitly set on the request. For OpenRouter and
-                # Hugging Face, many valid model IDs include a namespace
+                # api_provider is explicitly set on the request. For some providers,
+                # many valid model IDs include a namespace
                 # (e.g., "openai/gpt-4o-mini", "z-ai/glm-4.6"). Preserve the full
                 # namespaced model id unless the inline namespace matches "openrouter".
-                if provider in {"openrouter", "huggingface"}:
+                if provider in {"openrouter", "huggingface", "novita", "poe", "together"}:
                     if provider == "openrouter" and inline_provider_lower == "openrouter":
                         request_data.model = actual_model
                     else:
@@ -500,6 +906,7 @@ def resolve_provider_and_model(
     """
     raw_model = getattr(request_data, "model", None)
     raw_api_provider = getattr(request_data, "api_provider", None)
+    provider_explicit = bool(str(raw_api_provider or "").strip())
 
     # Step 1: derive metrics-facing provider/model without mutating the request
     metrics_provider, metrics_model = parse_provider_model_for_metrics(
@@ -527,10 +934,24 @@ def resolve_provider_and_model(
             exc,
         )
 
+    catalog_inference_debug: dict[str, Any] | None = None
+    try:
+        selected_provider, catalog_inference_debug = infer_provider_from_model_catalog(
+            provider=selected_provider,
+            model=selected_model,
+            provider_explicit=provider_explicit,
+        )
+    except _CHAT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(
+            "resolve_provider_and_model: catalog inference failed; keeping selected provider. Error={}",
+            exc,
+        )
+
     debug_info: dict[str, Any] = {
         "raw": {
             "api_provider": raw_api_provider,
             "model": raw_model,
+            "provider_explicit": provider_explicit,
         },
         "metrics": {
             "default_provider": metrics_default_provider,
@@ -546,6 +967,7 @@ def resolve_provider_and_model(
             "provider_changed": metrics_provider != selected_provider,
             "model_changed": metrics_model != selected_model,
         },
+        "catalog_inference": catalog_inference_debug,
     }
 
     return metrics_provider, metrics_model, selected_provider, selected_model, debug_info
@@ -581,9 +1003,9 @@ def resolve_provider_api_key(
         is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
     except _CHAT_NONCRITICAL_EXCEPTIONS:
         is_pytest = False
-    is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-    use_module_overrides = prefer_module_keys_in_tests and (is_pytest or is_test_mode)
-    debug_info["test_flags"] = {"pytest": is_pytest, "test_mode": is_test_mode}
+    test_mode_enabled = _shared_is_test_mode()
+    use_module_overrides = prefer_module_keys_in_tests and (is_pytest or test_mode_enabled)
+    debug_info["test_flags"] = {"pytest": is_pytest, "test_mode": test_mode_enabled}
 
     try:
         from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as _schemas_mod  # type: ignore
@@ -802,6 +1224,19 @@ def _attach_internal_http_hooks(adapter: Any, request: dict[str, Any], internal:
         request.update(internal)
 
 
+def _is_client_like_error(exc: Exception) -> bool:
+    """Return True if *exc* looks like a client/config error (not an upstream failure).
+
+    Used to gate provider fallback: we only fall back on upstream/server errors,
+    not on client-side mistakes such as bad credentials or malformed requests.
+    """
+    name_lower = type(exc).__name__.lower()
+    return any(t in name_lower for t in (
+        "authentication", "ratelimit", "rate_limit",
+        "badrequest", "bad_request", "configuration",
+    ))
+
+
 def _get_llm_registry():
     """Resolve the adapter registry at call time to honor test monkeypatching."""
     return _adapter_registry.get_registry()
@@ -902,6 +1337,9 @@ def build_call_params_from_request(
             "history_message_limit",
             "history_message_order",
             "slash_command_injection_mode",
+            "persona_exemplar_budget_tokens",
+            "persona_exemplar_strategy",
+            "persona_debug",
         },
     )
 
@@ -1100,6 +1538,7 @@ async def moderate_input_messages(
     supervised_policy_engine: Any | None = None,
     self_monitoring_service: Any | None = None,
     dependent_user_id: str | None = None,
+    chat_type: str | None = None,
 ) -> None:
     """Apply input moderation and redaction to user message text parts in-place.
 
@@ -1120,13 +1559,39 @@ async def moderate_input_messages(
     eff_policy = moderation_service.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
 
     # Guardian policy overlay: merge supervised rules into eff_policy
+    _guardian_rule_name_visible = None
     if supervised_policy_engine and dependent_user_id:
         try:
             eff_policy = supervised_policy_engine.build_moderation_policy_overlay(
-                dependent_user_id, eff_policy
+                dependent_user_id, eff_policy, chat_type=chat_type,
             )
         except _CHAT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Guardian policy overlay skipped: {e}")
+        # Guardian notification dispatch: check supervised policies directly
+        # and send notification to guardian if a rule triggers.
+        # Also stores transparent rule_name for enriched block messages.
+        try:
+            from tldw_Server_API.app.core.Moderation.supervised_policy import (
+                dispatch_guardian_notification,
+            )
+            _first_text = None
+            if request_data and request_data.messages:
+                for _m in request_data.messages:
+                    if getattr(_m, "role", None) == "user":
+                        _mt = getattr(_m, "content", None)
+                        if isinstance(_mt, str) and _mt.strip():
+                            _first_text = _mt
+                            break
+            if _first_text:
+                _sup_result = supervised_policy_engine.check_text(
+                    _first_text, dependent_user_id, phase="input", chat_type=chat_type,
+                )
+                if _sup_result.rule_name_visible:
+                    _guardian_rule_name_visible = _sup_result.rule_name_visible
+                if _sup_result.notify_guardian and _sup_result.action != "pass":
+                    dispatch_guardian_notification(_sup_result, dependent_user_id)
+        except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"Guardian notification dispatch skipped: {e}")
     conv_id = None
     try:
         conv_id = getattr(request_data, "conversation_id", None)
@@ -1162,11 +1627,16 @@ async def moderate_input_messages(
         # Self-monitoring check (awareness/notifications)
         if self_monitoring_service and text:
             try:
-                sm_result = self_monitoring_service.check_text(
-                    text=text,
-                    user_id=str(req_user_id or client_id),
-                    phase="input",
-                    conversation_id=str(conv_id) if conv_id else None,
+                _sm_loop = asyncio.get_running_loop()
+                sm_result = await _sm_loop.run_in_executor(
+                    None,
+                    lambda: self_monitoring_service.check_text(
+                        text=text,
+                        user_id=str(req_user_id or client_id),
+                        phase="input",
+                        conversation_id=str(conv_id) if conv_id else None,
+                        chat_type=chat_type,
+                    ),
                 )
                 if sm_result.action == "block":
                     raise HTTPException(
@@ -1252,7 +1722,10 @@ async def moderate_input_messages(
             pass
 
         if resolved_action == "block":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input violates moderation policy")
+            block_detail = "Input violates moderation policy"
+            if _guardian_rule_name_visible:
+                block_detail = f"[{_guardian_rule_name_visible}] {block_detail}"
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=block_detail)
         if resolved_action == "redact":
             return redacted if isinstance(redacted, str) else moderation_service.redact_text(text, eff_policy)
         return text
@@ -1325,7 +1798,7 @@ async def build_context_and_messages(
     # Ensure a valid character ID is present before attempting persistence
     if should_persist and character_db_id is None:
         logger.warning(
-            "Persistence requested but no character ID is available; disabling persistence for conversation %s.",
+            'Persistence requested but no character ID is available; disabling persistence for conversation {}.',
             final_conversation_id or "<new>",
         )
         should_persist = False
@@ -1535,7 +2008,7 @@ async def build_context_and_messages(
                 overlap_cut = overlap_start + overlap_k
                 if overlap_cut > 0:
                     logger.debug(
-                        "Trimmed %d request messages overlapping history for conv_id %s.",
+                        'Trimmed {} request messages overlapping history for conv_id {}.',
                         overlap_cut,
                         conv_id,
                     )
@@ -1559,7 +2032,7 @@ async def build_context_and_messages(
                     if hist_sigs[-len(req_sigs):] == req_sigs:
                         overlap_cut = len(req_sigs)
                         logger.debug(
-                            "Trimmed %d user-only request messages overlapping history for conv_id %s.",
+                            'Trimmed {} user-only request messages overlapping history for conv_id {}.',
                             overlap_cut,
                             conv_id,
                         )
@@ -1784,6 +2257,8 @@ async def execute_streaming_call(
     rg_commit_cb: Callable[[int], Any] | None = None,
     rg_refund_cb: Callable[..., Any] | None = None,
     on_success: Callable[[str], Awaitable[None]] | None = None,
+    self_monitoring_service: Any | None = None,
+    on_stream_full_reply: Callable[[str], Awaitable[None] | None] | None = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -1859,16 +2334,7 @@ async def execute_streaming_call(
                     stream_failure_recorded = True
                     if provider_manager:
                         provider_manager.record_failure(selected_provider, proc_error)
-                        name_lower = type(proc_error).__name__.lower()
-                        client_like_error = (
-                            "authentication" in name_lower
-                            or "ratelimit" in name_lower
-                            or "rate_limit" in name_lower
-                            or "badrequest" in name_lower
-                            or "bad_request" in name_lower
-                            or "configuration" in name_lower
-                        )
-                        if enable_provider_fallback and isinstance(proc_error, (ChatProviderError, ChatAPIError)) and not client_like_error:
+                        if enable_provider_fallback and isinstance(proc_error, (ChatProviderError, ChatAPIError)) and not _is_client_like_error(proc_error):
                             fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
                             if fallback_provider:
                                 logger.warning(
@@ -2063,16 +2529,7 @@ async def execute_streaming_call(
         if provider_manager and not queue_enabled:
             provider_manager.record_failure(selected_provider, e)
             # Only fallback on upstream/server errors; skip fallback for client/config errors
-            name_lower_e = type(e).__name__.lower()
-            client_like_error = (
-                "authentication" in name_lower_e
-                or "ratelimit" in name_lower_e
-                or "rate_limit" in name_lower_e
-                or "badrequest" in name_lower_e
-                or "bad_request" in name_lower_e
-                or "configuration" in name_lower_e
-            )
-            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not client_like_error:
+            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not _is_client_like_error(e):
                 fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
@@ -2169,8 +2626,38 @@ async def execute_streaming_call(
     ):
         nonlocal stream_metrics_recorded
         saved_message_id: str | None = None
+        tool_execution_payload: list[dict[str, Any]] | None = None
         full_reply_to_save = full_reply
         post_stream_blocked = False
+
+        # Self-monitoring output check (streaming)
+        if self_monitoring_service and full_reply:
+            try:
+                _sm_uid_s = None
+                try:
+                    if request is not None and hasattr(request, "state"):
+                        _sm_uid_s = getattr(request.state, "user_id", None)
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
+                    _sm_uid_s = None
+                _sm_user_s = str(_sm_uid_s or client_id)
+                _sm_loop_s = asyncio.get_running_loop()
+                sm_result_s = await _sm_loop_s.run_in_executor(
+                    None,
+                    lambda: self_monitoring_service.check_text(
+                        text=full_reply,
+                        user_id=_sm_user_s,
+                        phase="output",
+                        conversation_id=str(final_conversation_id) if final_conversation_id else None,
+                    ),
+                )
+                if sm_result_s.action == "block":
+                    post_stream_blocked = True
+                    full_reply_to_save = None
+                elif sm_result_s.action == "redact" and sm_result_s.redacted_text is not None:
+                    full_reply_to_save = sm_result_s.redacted_text
+            except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+                logger.debug(f"Self-monitoring output check (streaming) skipped: {e}")
+
         try:
             _get_mod = moderation_getter or get_moderation_service
             moderation = _get_mod()
@@ -2282,6 +2769,14 @@ async def execute_streaming_call(
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
 
+        if callable(on_stream_full_reply):
+            try:
+                maybe_result = on_stream_full_reply(str(full_reply or ""))
+                if hasattr(maybe_result, "__await__"):
+                    await maybe_result  # type: ignore[misc]
+            except _CHAT_NONCRITICAL_EXCEPTIONS as stream_callback_err:
+                logger.debug("on_stream_full_reply callback skipped due to error: {}", stream_callback_err)
+
         if not stream_metrics_recorded:
             try:
                 latency = time.time() - llm_start_time
@@ -2314,6 +2809,43 @@ async def execute_streaming_call(
                 message_payload,
                 use_transaction=True,
             )
+
+        if (
+            not post_stream_blocked
+            and should_auto_execute_tools()
+            and isinstance(tool_calls, list)
+            and tool_calls
+        ):
+            try:
+                req_user_id = None
+                try:
+                    if request is not None and hasattr(request, "state"):
+                        req_user_id = getattr(request.state, "user_id", None)
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
+                    req_user_id = None
+
+                autoexec_result = await execute_assistant_tool_calls(
+                    tool_calls=tool_calls,
+                    user_id=str(req_user_id) if req_user_id is not None else None,
+                    client_id=client_id,
+                    max_tool_calls=get_chat_max_tool_calls(),
+                    timeout_ms=get_chat_tool_timeout_ms(),
+                    allow_catalog=get_chat_tool_allow_catalog(),
+                    attach_idempotency=should_attach_tool_idempotency(),
+                    idempotency_seed=str(final_conversation_id) if final_conversation_id else None,
+                )
+                tool_execution_payload = autoexec_result.event_payload().get("tool_results", [])
+
+                if should_persist and final_conversation_id:
+                    for tool_message in autoexec_result.tool_messages():
+                        await save_message_fn(
+                            chat_db,
+                            final_conversation_id,
+                            tool_message,
+                            use_transaction=True,
+                        )
+            except _CHAT_NONCRITICAL_EXCEPTIONS as autoexec_err:
+                logger.warning("Streaming chat tool auto-execution skipped due to error: {}", autoexec_err)
         # Usage logging (estimated) after stream completes
         total_est = 0
         try:
@@ -2382,6 +2914,16 @@ async def execute_streaming_call(
                 await on_success(selected_provider)
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
+        if tool_execution_payload is not None:
+            return {
+                "saved_message_id": saved_message_id,
+                "events": [
+                    {
+                        "event": "tool_results",
+                        "data": {"tool_results": tool_execution_payload},
+                    }
+                ],
+            }
         return saved_message_id
 
     async def tracked_streaming_generator():
@@ -2634,7 +3176,7 @@ async def execute_streaming_call(
 
     # Feature-flagged: route through unified SSE abstraction for pilot
     try:
-        use_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+        use_unified = _shared_is_truthy(os.getenv("STREAMS_UNIFIED", "0"))
     except _CHAT_NONCRITICAL_EXCEPTIONS:
         use_unified = False
 
@@ -2733,6 +3275,7 @@ async def execute_non_stream_call(
     refresh_provider_params: Callable[[str], Any],
     moderation_getter: Callable[[], Any] | None = None,
     on_success: Callable[[str], Awaitable[None]] | None = None,
+    self_monitoring_service: Any | None = None,
 ) -> dict[str, Any]:
     """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -2819,7 +3362,12 @@ async def execute_non_stream_call(
             # Execute provided LLM call function in a worker to avoid blocking the loop.
             # llm_call_func is a sync callable (partial of perform_chat_api_call or a mock).
             loop = asyncio.get_running_loop()
-            llm_response = await loop.run_in_executor(None, llm_call_func)
+            try:
+                llm_response = await loop.run_in_executor(None, llm_call_func)
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                raise
+            except Exception as exc:  # noqa: BLE001 - normalize unexpected provider exceptions
+                raise ChatAPIError(str(exc)) from exc
         llm_latency = time.time() - llm_start_time
         if not metrics_recorded:
             metrics.track_llm_call(selected_provider, model, llm_latency, success=True)
@@ -2851,16 +3399,7 @@ async def execute_non_stream_call(
                 provider_manager.record_failure(selected_provider, e)
 
         if provider_manager:
-            name_lower_e = type(e).__name__.lower()
-            client_like_error = (
-                "authentication" in name_lower_e
-                or "ratelimit" in name_lower_e
-                or "rate_limit" in name_lower_e
-                or "badrequest" in name_lower_e
-                or "bad_request" in name_lower_e
-                or "configuration" in name_lower_e
-            )
-            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not client_like_error:
+            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not _is_client_like_error(e):
                 fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
@@ -2997,6 +3536,49 @@ async def execute_non_stream_call(
     # Cache content text for moderation/usage when content is non-string
     content_text_for_usage = _extract_text_from_content(content_to_save)
 
+    # Self-monitoring output check (awareness/notifications)
+    if self_monitoring_service and content_text_for_usage:
+        try:
+            _sm_uid = None
+            try:
+                if request is not None and hasattr(request, "state"):
+                    _sm_uid = getattr(request.state, "user_id", None)
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                _sm_uid = None
+            _sm_user = str(_sm_uid or client_id)
+            _sm_loop = asyncio.get_running_loop()
+            sm_result = await _sm_loop.run_in_executor(
+                None,
+                lambda: self_monitoring_service.check_text(
+                    text=content_text_for_usage,
+                    user_id=_sm_user,
+                    phase="output",
+                    conversation_id=str(final_conversation_id) if final_conversation_id else None,
+                ),
+            )
+            if sm_result.action == "block":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=sm_result.block_message or "Output blocked by self-monitoring rule",
+                )
+            if sm_result.action == "redact" and sm_result.redacted_text is not None:
+                content_to_save = sm_result.redacted_text
+                content_text_for_usage = sm_result.redacted_text
+                # Update llm_response dict if applicable
+                try:
+                    if isinstance(llm_response, dict):
+                        choices = llm_response.get("choices")
+                        if choices and isinstance(choices, list) and choices:
+                            msg = choices[0].get("message") or {}
+                            if isinstance(msg, dict):
+                                msg["content"] = sm_result.redacted_text
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
+                    pass
+        except HTTPException:
+            raise
+        except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"Self-monitoring output check skipped: {e}")
+
     # Output moderation (non-streaming)
     try:
         if content_text_for_usage:
@@ -3128,6 +3710,8 @@ async def execute_non_stream_call(
         logger.warning(f"Moderation output processing error: {e}")
 
     assistant_message_id: str | None = None
+    tool_execution_payload: list[dict[str, Any]] | None = None
+    tool_auto_continue_meta: dict[str, bool] | None = None
     should_save_response = (
         should_persist
         and final_conversation_id
@@ -3150,6 +3734,121 @@ async def execute_non_stream_call(
             message_payload,
             use_transaction=True,
         )
+
+    if should_auto_execute_tools() and isinstance(tool_calls_to_save, list) and tool_calls_to_save:
+        try:
+            req_user_id = None
+            try:
+                if request is not None and hasattr(request, "state"):
+                    req_user_id = getattr(request.state, "user_id", None)
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                req_user_id = None
+
+            autoexec_result = await execute_assistant_tool_calls(
+                tool_calls=tool_calls_to_save,
+                user_id=str(req_user_id) if req_user_id is not None else None,
+                client_id=client_id,
+                max_tool_calls=get_chat_max_tool_calls(),
+                timeout_ms=get_chat_tool_timeout_ms(),
+                allow_catalog=get_chat_tool_allow_catalog(),
+                attach_idempotency=should_attach_tool_idempotency(),
+                idempotency_seed=str(final_conversation_id) if final_conversation_id else None,
+            )
+            tool_execution_payload = autoexec_result.event_payload().get("tool_results", [])
+            tool_messages = autoexec_result.tool_messages()
+
+            failed_results = len([r for r in autoexec_result.results if not r.ok])
+            timed_out_results = len([r for r in autoexec_result.results if r.timed_out])
+            logger.info(
+                "Chat tool auto-exec summary (conv={} requested={} attempts={} executed={} failed={} timed_out={} truncated={})",
+                final_conversation_id,
+                autoexec_result.requested_calls,
+                autoexec_result.execution_attempts,
+                autoexec_result.executed_calls,
+                failed_results,
+                timed_out_results,
+                autoexec_result.truncated,
+            )
+
+            if should_persist and final_conversation_id:
+                for tool_message in tool_messages:
+                    await save_message_fn(
+                        chat_db,
+                        final_conversation_id,
+                        tool_message,
+                        use_transaction=True,
+                    )
+
+            if should_auto_continue_tools_once() and tool_messages:
+                tool_auto_continue_meta = {"attempted": True, "succeeded": False}
+                try:
+                    continuation_messages: list[dict[str, Any]] = list(templated_llm_payload)
+                    assistant_context_message: dict[str, Any] = {"role": "assistant"}
+                    if content_to_save is not None:
+                        assistant_context_message["content"] = content_to_save
+                    if tool_calls_to_save is not None:
+                        assistant_context_message["tool_calls"] = tool_calls_to_save
+                    if function_call_to_save is not None:
+                        assistant_context_message["function_call"] = function_call_to_save
+                    if len(assistant_context_message) > 1:
+                        continuation_messages.append(assistant_context_message)
+                    continuation_messages.extend(tool_messages)
+
+                    continuation_args = dict(cleaned_args)
+                    continuation_args["messages_payload"] = continuation_messages
+                    continuation_args["streaming"] = False
+                    continuation_response = await perform_chat_api_call_async(**continuation_args)
+                    if isinstance(continuation_response, str) and should_force_normalize_string_responses():
+                        continuation_response = _wrap_raw_string_response(continuation_response, model)
+
+                    continuation_content: str | None = None
+                    continuation_tool_calls: Any | None = None
+                    continuation_function_call: Any | None = None
+                    if continuation_response and isinstance(continuation_response, dict):
+                        continuation_choices = continuation_response.get("choices")
+                        if continuation_choices and isinstance(continuation_choices, list):
+                            continuation_message = continuation_choices[0].get("message") or {}
+                            if isinstance(continuation_message, dict):
+                                continuation_content = continuation_message.get("content")
+                                continuation_tool_calls = continuation_message.get("tool_calls")
+                                continuation_function_call = continuation_message.get("function_call")
+                    elif isinstance(continuation_response, str):
+                        continuation_content = continuation_response
+
+                    if continuation_response is not None:
+                        llm_response = continuation_response
+                        content_to_save = continuation_content
+                        tool_calls_to_save = continuation_tool_calls
+                        function_call_to_save = continuation_function_call
+
+                        if (
+                            should_persist
+                            and final_conversation_id
+                            and (content_to_save or tool_calls_to_save or function_call_to_save)
+                        ):
+                            asst_name = sanitize_sender_name(
+                                character_card_for_context.get("name") if character_card_for_context else None
+                            )
+                            continuation_payload: dict[str, Any] = {"role": "assistant", "name": asst_name}
+                            if content_to_save is not None:
+                                continuation_payload["content"] = content_to_save
+                            if tool_calls_to_save is not None:
+                                continuation_payload["tool_calls"] = tool_calls_to_save
+                            if function_call_to_save is not None:
+                                continuation_payload["function_call"] = function_call_to_save
+                            continuation_message_id = await save_message_fn(
+                                chat_db,
+                                final_conversation_id,
+                                continuation_payload,
+                                use_transaction=True,
+                            )
+                            if continuation_message_id:
+                                assistant_message_id = continuation_message_id
+                        tool_auto_continue_meta["succeeded"] = True
+                except _CHAT_NONCRITICAL_EXCEPTIONS as continue_err:
+                    logger.warning("Chat tool auto-continue skipped due to error: {}", continue_err)
+        except _CHAT_NONCRITICAL_EXCEPTIONS as autoexec_err:
+            logger.warning("Chat tool auto-execution skipped due to error: {}", autoexec_err)
 
     if INJECT_ASSISTANT_NAME and isinstance(llm_response, dict):
         try:
@@ -3191,6 +3890,10 @@ async def execute_non_stream_call(
             encoded_payload["tldw_message_id"] = assistant_message_id
         if system_message_id:
             encoded_payload["tldw_system_message_id"] = system_message_id
+        if tool_execution_payload is not None:
+            encoded_payload["tldw_tool_results"] = tool_execution_payload
+        if tool_auto_continue_meta is not None:
+            encoded_payload["tldw_tool_auto_continue"] = tool_auto_continue_meta
 
     # Audit success
     if audit_service and audit_context:

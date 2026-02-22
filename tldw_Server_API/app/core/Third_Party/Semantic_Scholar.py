@@ -73,8 +73,8 @@ def search_papers_semantic_scholar(
                         params["year"] = yr
                 elif yr.isdigit() and len(yr) == 4:
                     params["year"] = yr
-            except Exception:
-                pass
+            except Exception as year_parse_error:
+                _ = year_parse_error  # keep request without year filter
 
         data = fetch_json(method="GET", url=url, params=params, timeout=15)
         # Optional pacing if needed; retries/backoff handled centrally

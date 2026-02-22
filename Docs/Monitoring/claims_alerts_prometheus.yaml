@@ -49,6 +49,46 @@ groups:
             Check provider availability or credentials.
           runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsprovidererrorsspike"
 
+      - alert: ClaimsOutputParseErrorsSpike
+        # Tuned for mixed tenant traffic: require both minimum event volume and ratio breach.
+        expr: >
+          (sum(increase(claims_output_parse_events_total{outcome="error"}[10m])) >= 20)
+          and
+          (
+            sum(increase(claims_output_parse_events_total{outcome="error"}[10m]))
+            /
+            clamp_min(sum(increase(claims_provider_requests_total{mode=~"extract|verify|ingestion"}[10m])), 1)
+          ) > 0.08
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Claims output parse errors elevated"
+          description: >
+            Claims parse errors exceeded 20 events in 10 minutes and crossed an 8% error ratio.
+            Verify response format support and recent prompt/schema changes.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsoutputparseerrorsspike"
+
+      - alert: ClaimsFallbackSpike
+        # Tuned for mixed tenant traffic: require both minimum event volume and ratio breach.
+        expr: >
+          (sum(increase(claims_fallback_total[10m])) >= 30)
+          and
+          (
+            sum(increase(claims_fallback_total[10m]))
+            /
+            clamp_min(sum(increase(claims_provider_requests_total{mode=~"extract|verify|ingestion"}[10m])), 1)
+          ) > 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Claims fallback volume elevated"
+          description: >
+            Claims fallback events exceeded 30 in 10 minutes and crossed a 15% fallback ratio.
+            Check throttle, budget, and parse failure reasons by provider/model.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsfallbackspike"
+
       - alert: ClaimsAlertWebhookFailures
         expr: increase(claims_alert_webhook_failed_total[10m]) > 0
         for: 5m

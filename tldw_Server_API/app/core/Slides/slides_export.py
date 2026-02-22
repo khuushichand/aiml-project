@@ -39,6 +39,7 @@ except Exception:  # pragma: no cover - playwright is an optional dependency
 
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Slides.slides_images import SlidesImageError, validate_images_payload
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 class SlidesExportError(Exception):
@@ -200,7 +201,7 @@ def _env_int(name: str, default: int) -> int:
     try:
         return int(raw)
     except (TypeError, ValueError):
-        logger.warning("slides export: invalid %s value %r", name, raw)
+        logger.warning("slides export: invalid {} value {}", name, raw)
         return default
 
 
@@ -209,11 +210,11 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     value = str(raw).strip().lower()
-    if value in {"1", "true", "yes", "on"}:
+    if is_truthy(value):
         return True
     if value in {"0", "false", "no", "off"}:
         return False
-    logger.warning("slides export: invalid %s value %r", name, raw)
+    logger.warning("slides export: invalid {} value {}", name, raw)
     return default
 
 
@@ -384,7 +385,7 @@ def _sanitize_custom_css(css_text: str | None) -> str | None:
             sanitizer = CSSSanitizer(allowed_css_properties=_ALLOWED_CSS_PROPERTIES)
             cleaned = sanitizer.sanitize_css(css_text)
         except Exception as exc:
-            logger.warning("slides export: css sanitizer failed: %s", exc)
+            logger.warning("slides export: css sanitizer failed: {}", exc)
             cleaned = ""
     cleaned = cleaned.replace("\x00", "").strip()
     return cleaned or None

@@ -118,8 +118,8 @@ def _load_flashrank_defaults_from_config() -> tuple[str, Optional[str]]:
                 model_name = cp.get("RAG", "flashrank_model_name", fallback=None)
             if not cache_dir:
                 cache_dir = cp.get("RAG", "flashrank_cache_dir", fallback=None)
-    except Exception:  # noqa: BLE001 - best effort lookup
-        pass
+    except Exception as config_lookup_error:  # noqa: BLE001 - best effort lookup
+        logger.debug("FlashRank config lookup failed; using defaults", exc_info=config_lookup_error)
 
     return (model_name or "ms-marco-TinyBERT-L-2-v2"), cache_dir
 
@@ -179,6 +179,7 @@ class RerankingConfig:
     transformers_device: Optional[str] = None  # 'auto' | 'cuda' | 'cpu'
     transformers_trust_remote_code: bool = False
     transformers_max_length: Optional[int] = None
+    hf_revision: Optional[str] = None
     # Two-tier gating overrides (optional per-request)
     min_relevance_prob: Optional[float] = None
     sentinel_margin: Optional[float] = None
@@ -614,6 +615,11 @@ class TransformersCrossEncoderReranker(BaseReranker):
         self._device = (config.transformers_device or "auto").lower()
         self._max_length = config.transformers_max_length or None
         self._trust_remote_code = bool(config.transformers_trust_remote_code)
+        self._hf_revision = (
+            config.hf_revision
+            or os.getenv("RAG_TRANSFORMERS_RERANKER_REVISION")
+            or None
+        )
 
         model_id = config.model_name or None
         if not model_id:
@@ -649,8 +655,16 @@ class TransformersCrossEncoderReranker(BaseReranker):
                     # Fallback: raw transformers pipeline if provided
                     import torch
                     from transformers import AutoModelForSequenceClassification, AutoTokenizer
-                    self._tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=self._trust_remote_code)
-                    self._model = AutoModelForSequenceClassification.from_pretrained(model_id, trust_remote_code=self._trust_remote_code)
+                    self._tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
+                        model_id,
+                        revision=self._hf_revision,
+                        trust_remote_code=self._trust_remote_code,
+                    )
+                    self._model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
+                        model_id,
+                        revision=self._hf_revision,
+                        trust_remote_code=self._trust_remote_code,
+                    )
                     self._model.eval()
                     self._torch = torch
                     if self._device != "auto":
@@ -763,18 +777,26 @@ class Qwen3CausalLMReranker(BaseReranker):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         model_id = config.model_name or "Qwen/Qwen3-Reranker-8B"
+        model_revision = config.hf_revision or os.getenv("RAG_QWEN3_RERANKER_REVISION") or None
 
         # Mirror official example behavior
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side='left')
-        self.model = AutoModelForCausalLM.from_pretrained(model_id).eval()
+        self.tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
+            model_id,
+            revision=model_revision,
+            padding_side='left',
+        )
+        self.model = AutoModelForCausalLM.from_pretrained(  # nosec B615
+            model_id,
+            revision=model_revision,
+        ).eval()
         self._torch = torch
         # Optional: honor configured device if provided
         self._device = (config.transformers_device or "auto").lower()
         if self._device != "auto":
             try:
                 self.model.to(self._device)
-            except Exception:  # noqa: BLE001 - device move best-effort
-                pass
+            except Exception as device_move_error:  # noqa: BLE001 - device move best-effort
+                logger.debug("LLM scoring reranker device move failed; keeping default device", exc_info=device_move_error)
 
         # Yes/No token ids
         self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
@@ -1298,8 +1320,8 @@ class LLMReranker(BaseReranker):
             try:
                 from .metrics_collector import get_metrics_collector  # lazy import to avoid heavy deps when unused
                 get_metrics_collector().increment(name, value)
-            except Exception:  # noqa: BLE001 - metrics best-effort
-                pass
+            except Exception as metrics_error:  # noqa: BLE001 - metrics best-effort
+                logger.debug("LLM reranker local metrics increment failed", exc_info=metrics_error)
             # Also export to central metrics registry (Prometheus/OTel) when available
             try:
                 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
@@ -1312,8 +1334,8 @@ class LLMReranker(BaseReranker):
                 metric_name = mapping.get(name)
                 if metric_name:
                     increment_counter(metric_name, value, labels={"strategy": "llm_scoring"})
-            except Exception:  # noqa: BLE001 - metrics best-effort
-                pass
+            except Exception as metrics_error:  # noqa: BLE001 - metrics best-effort
+                logger.debug("LLM reranker central metrics increment failed", exc_info=metrics_error)
         try:
             per_call_timeout = float(os.getenv("RAG_LLM_RERANK_TIMEOUT_SEC", "10"))
         except (TypeError, ValueError):
@@ -1382,8 +1404,8 @@ class LLMReranker(BaseReranker):
         # Number of documents scored (for visibility)
         try:
             _inc_counter("reranker.llm.docs_scored", len(scores))
-        except Exception:  # noqa: BLE001 - metrics best-effort
-            pass
+        except Exception as metrics_error:  # noqa: BLE001 - metrics best-effort
+            logger.debug("LLM reranker docs_scored metric failed", exc_info=metrics_error)
 
         # Normalize to [0,1]
         try:
@@ -1562,8 +1584,8 @@ class TwoTierReranker(BaseReranker):
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
             observe_histogram("rag_phase_duration_seconds", ce_dt, labels={"phase": "rerank_fast", "difficulty": "na"})
-        except Exception:  # noqa: BLE001 - metrics best-effort
-            pass
+        except Exception as metrics_error:  # noqa: BLE001 - metrics best-effort
+            logger.debug("Two-tier reranker cross-encoder duration metric failed", exc_info=metrics_error)
 
         # Track CE scores in a map, and record sentinel CE score
         ce_scores: dict[str, float] = {}
@@ -1591,8 +1613,8 @@ class TwoTierReranker(BaseReranker):
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
             observe_histogram("rag_phase_duration_seconds", llm_dt, labels={"phase": "rerank_llm", "difficulty": "na"})
-        except Exception:  # noqa: BLE001 - metrics best-effort
-            pass
+        except Exception as metrics_error:  # noqa: BLE001 - metrics best-effort
+            logger.debug("Two-tier reranker llm duration metric failed", exc_info=metrics_error)
 
         # Map LLM scores and capture sentinel
         llm_scores: dict[str, float] = {}

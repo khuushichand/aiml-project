@@ -247,7 +247,7 @@ async def test_non_json_body_skips_model_enforcement_postgres(test_db_pool, monk
             assert r.status_code not in (403, 402), r.text
         except Exception:
             # Non-JSON bodies may raise deeper in the stack; middleware under test should not be the blocker.
-            pass
+            _ = None
 
 
 @pytest.mark.integration
@@ -304,4 +304,4 @@ async def test_invalid_json_body_skips_model_enforcement_postgres(test_db_pool, 
             assert r.status_code not in (403, 402), r.text
         except Exception:
             # Invalid JSON can trip downstream parsing; we're only asserting middleware does not block.
-            pass
+            _ = None

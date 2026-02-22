@@ -21,7 +21,6 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS = (
-    asyncio.CancelledError,
     AssertionError,
     AttributeError,
     ConnectionError,
@@ -361,6 +360,9 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                             logger.debug(f"Core Jobs Worker: failed to remove import archive {file_ref}: {cleanup_err}")
             else:
                 jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
+        except asyncio.CancelledError:
+            logger.info("Core Jobs worker cancellation received; exiting worker loop")
+            raise
         except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
             logger.exception("Core Jobs worker loop error")
             try:

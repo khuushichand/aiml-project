@@ -24,7 +24,7 @@ def client(monkeypatch):
         mgr = get_tts_config_manager()
         mgr._config_cache = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     app = FastAPI()
     app.include_router(audio_router, prefix="/api/v1/audio")
     with TestClient(app) as c:
@@ -95,3 +95,11 @@ def test_neutts_endpoint_missing_reference_text(client: TestClient):
     # Expect 400 on validation error mapping
     assert r.status_code == 400, r.text
     assert "reference_text" in (r.text or "").lower()
+
+
+def test_audio_health_includes_capabilities_envelope(client: TestClient):
+    r = client.get("/api/v1/audio/health")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "capabilities_envelope" in data
+    assert isinstance(data["capabilities_envelope"], list)

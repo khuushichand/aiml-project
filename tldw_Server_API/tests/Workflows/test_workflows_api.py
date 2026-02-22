@@ -18,7 +18,14 @@ def client_with_workflows_db(tmp_path, auth_headers):
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
-        return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
+        return User(
+            id=1,
+            username="tester",
+            email="t@e.com",
+            is_active=True,
+            is_admin=True,
+            roles=["admin"],
+        )
 
     def override_db():
 
@@ -342,7 +349,7 @@ def test_artifact_download_per_run_non_block(monkeypatch, client_with_workflows_
             try:
                 setattr(run, 'validation_mode', 'non-block')
             except Exception:
-                pass
+                _ = None
         return run
     monkeypatch.setattr(db, 'get_run', _patched_get_run, raising=False)
 

@@ -43,10 +43,17 @@ Example payload:
 Connect to `/api/v1/prompt-studio/ws` and subscribe to optimization events.
 You will receive:
 - `optimization_started`
-- `optimization_iteration` (throttled): `{optimization_id, iteration, max_iterations, current_metric, best_metric, progress}`
+- `optimization_iteration` (throttled): `{optimization_id, iteration, max_iterations, current_metric, best_metric, progress, strategy, sim_index, depth, reward, best_reward, token_spend_so_far, trace_summary}`
 - `optimization_completed`
 
 Throttle interval defaults to roughly `n_sims/50` (configurable via `ws_throttle_every`).
+
+## Reference examples
+
+- `Docs/Examples/PromptStudio/mcts/create_optimization_mcts.json`
+- `Docs/Examples/PromptStudio/mcts/websocket_optimization_iteration_event.json`
+- `Docs/Examples/PromptStudio/mcts/optimization_history_response.json`
+- `Docs/Examples/PromptStudio/mcts/ROLL_OUT_NOTES.md`
 
 ## Cost control tips
 
@@ -59,3 +66,17 @@ Throttle interval defaults to roughly `n_sims/50` (configurable via `ws_throttle
 The optimization row includes `final_metrics` with:
 - `tree_nodes`, `avg_branching`, `tokens_spent`, `duration_ms`, `best_reward`, `errors`, and `applied_params`.
 - A compact `trace` with `best_path` and `top_candidates`. Set `PROMPT_STUDIO_MCTS_DEBUG_DECISIONS=true` to include `debug_top_scores_by_depth`.
+
+## Rollout notes (canary to global)
+
+1. Keep `PROMPT_STUDIO_ENABLE_MCTS=false` in production by default.
+2. Enable canary in dev/test (`APP_ENV=dev` with `PROMPT_STUDIO_ENABLE_MCTS_CANARY=true`) and validate:
+   - optimization creation succeeds;
+   - WS emits lifecycle + throttled iteration payloads;
+   - `final_metrics.trace` persists.
+3. Promote to controlled production rollout by enabling `PROMPT_STUDIO_ENABLE_MCTS=true` for selected environments.
+4. Monitor:
+   - `prompt_studio.mcts.*` summary metrics;
+   - `prompt_studio.mcts.errors_total{error=...}` labels;
+   - queue depth and job processing health from `/api/v1/prompt-studio/status`.
+5. Roll back by setting `PROMPT_STUDIO_ENABLE_MCTS=false`; existing optimization records remain queryable.

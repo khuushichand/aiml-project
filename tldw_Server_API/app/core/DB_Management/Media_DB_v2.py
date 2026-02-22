@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sqlite3
 import threading
 import time
@@ -41,9 +42,11 @@ from configparser import ConfigParser
 from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone  # Use timezone-aware UTC
+from email.utils import getaddresses, parsedate_to_datetime
 from math import ceil
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 
@@ -99,6 +102,7 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend, load_content_db_settings
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # Use application-wide logging configuration; avoid configuring here.
 
@@ -152,8 +156,87 @@ _MEDIA_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 
 
+def _coerce_email_metric_label(value: Any, *, default: str = "unknown") -> str:
+    raw = str(value or "").strip().lower()
+    return raw or default
+
+
+def _emit_email_metric_counter(
+    metric_name: str,
+    *,
+    labels: dict[str, Any] | None = None,
+) -> None:
+    with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+        safe_labels = (
+            {str(k): _coerce_email_metric_label(v, default="none") for k, v in labels.items()}
+            if labels
+            else None
+        )
+        log_counter(metric_name, labels=safe_labels)
+
+
+def _emit_email_metric_histogram(
+    metric_name: str,
+    value: float,
+    *,
+    labels: dict[str, Any] | None = None,
+) -> None:
+    with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+        safe_labels = (
+            {str(k): _coerce_email_metric_label(v, default="none") for k, v in labels.items()}
+            if labels
+            else None
+        )
+        safe_value = max(0.0, float(value))
+        log_histogram(metric_name, safe_value, labels=safe_labels)
+
+
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DATA_TABLES_UNSET = object()
+
+
+def normalize_media_dedupe_url(url: str | None) -> str | None:
+    """Normalize URL-like media identifiers for dedupe comparisons.
+
+    Rules:
+    - Preserve non-HTTP(S) identifiers as-is (e.g., ``local://...`` or filenames).
+    - For HTTP(S), apply crawl normalization (lowercase scheme/host, drop fragments,
+      strip tracking params, normalize path/query ordering).
+    """
+    if url is None:
+        return None
+    raw = str(url).strip()
+    if not raw:
+        return None
+
+    try:
+        scheme = (urlparse(raw).scheme or "").lower()
+    except _MEDIA_NONCRITICAL_EXCEPTIONS:
+        return raw
+
+    if scheme not in {"http", "https"}:
+        return raw
+
+    try:
+        from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
+
+        normalized = str(normalize_for_crawl(raw, raw) or "").strip()
+        return normalized or raw
+    except _MEDIA_NONCRITICAL_EXCEPTIONS:
+        return raw
+
+
+def media_dedupe_url_candidates(url: str | None) -> tuple[str, ...]:
+    """Return stable candidate URLs for dedupe lookups (normalized first)."""
+    normalized = normalize_media_dedupe_url(url)
+    raw = str(url).strip() if url is not None else ""
+
+    candidates: list[str] = []
+    if normalized:
+        candidates.append(normalized)
+    if raw and raw not in candidates:
+        candidates.append(raw)
+    return tuple(candidates)
 
 
 class _RowAdapter:
@@ -256,7 +339,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 20  # Latest sqlite migrations (tts_history)
+    _CURRENT_SCHEMA_VERSION = 22  # Email-native schema bootstrap + lookup indexes
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -560,6 +643,8 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_visualdocs_prev_version ON VisualDocuments(prev_version);
     CREATE INDEX IF NOT EXISTS idx_visualdocs_merge_parent_uuid ON VisualDocuments(merge_parent_uuid);
     CREATE INDEX IF NOT EXISTS idx_visualdocs_page_frame ON VisualDocuments(media_id, page_number, frame_index);
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_caption ON VisualDocuments(caption);
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_tags ON VisualDocuments(tags);
 
     CREATE INDEX IF NOT EXISTS idx_document_versions_media_id ON DocumentVersions(media_id);
     CREATE INDEX IF NOT EXISTS idx_document_versions_version_number ON DocumentVersions(version_number);
@@ -579,6 +664,7 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_dsi_media_kind ON DocumentStructureIndex(media_id, kind);
     CREATE INDEX IF NOT EXISTS idx_dsi_media_start ON DocumentStructureIndex(media_id, start_char);
     CREATE INDEX IF NOT EXISTS idx_dsi_media_parent ON DocumentStructureIndex(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_dsi_media_path ON DocumentStructureIndex(media_id, path);
 
     CREATE INDEX IF NOT EXISTS idx_sync_log_ts ON sync_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_sync_log_entity_uuid ON sync_log(entity_uuid);
@@ -1101,6 +1187,169 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_data_table_sources_table ON data_table_sources(table_id);
     """
 
+    _EMAIL_SCHEMA_SQL = """
+    -- Email Sources --
+    CREATE TABLE IF NOT EXISTS email_sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'upload',
+        source_key TEXT NOT NULL,
+        display_name TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, provider, source_key)
+    );
+
+    -- Email Messages (normalized message identity + denormalized search helper columns)
+    CREATE TABLE IF NOT EXISTS email_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id TEXT NOT NULL,
+        media_id INTEGER NOT NULL UNIQUE,
+        source_id INTEGER NOT NULL,
+        source_message_id TEXT,
+        message_id TEXT,
+        subject TEXT,
+        body_text TEXT,
+        internal_date DATETIME,
+        from_text TEXT,
+        to_text TEXT,
+        cc_text TEXT,
+        bcc_text TEXT,
+        label_text TEXT,
+        has_attachments BOOLEAN NOT NULL DEFAULT 0,
+        raw_metadata_json TEXT,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (media_id) REFERENCES Media(id) ON DELETE CASCADE,
+        FOREIGN KEY (source_id) REFERENCES email_sources(id) ON DELETE CASCADE
+    );
+
+    -- Email Participants --
+    CREATE TABLE IF NOT EXISTS email_participants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id TEXT NOT NULL,
+        email_normalized TEXT NOT NULL,
+        display_name TEXT,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, email_normalized)
+    );
+
+    -- Message <-> Participant role mapping
+    CREATE TABLE IF NOT EXISTS email_message_participants (
+        email_message_id INTEGER NOT NULL,
+        participant_id INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
+        PRIMARY KEY (email_message_id, participant_id, role),
+        FOREIGN KEY (email_message_id) REFERENCES email_messages(id) ON DELETE CASCADE,
+        FOREIGN KEY (participant_id) REFERENCES email_participants(id) ON DELETE CASCADE
+    );
+
+    -- Labels and message-label mappings
+    CREATE TABLE IF NOT EXISTS email_labels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id TEXT NOT NULL,
+        label_key TEXT NOT NULL,
+        label_name TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, label_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS email_message_labels (
+        email_message_id INTEGER NOT NULL,
+        label_id INTEGER NOT NULL,
+        PRIMARY KEY (email_message_id, label_id),
+        FOREIGN KEY (email_message_id) REFERENCES email_messages(id) ON DELETE CASCADE,
+        FOREIGN KEY (label_id) REFERENCES email_labels(id) ON DELETE CASCADE
+    );
+
+    -- Attachment metadata
+    CREATE TABLE IF NOT EXISTS email_attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email_message_id INTEGER NOT NULL,
+        filename TEXT,
+        content_type TEXT,
+        size_bytes INTEGER,
+        content_id TEXT,
+        disposition TEXT,
+        extracted_text_available BOOLEAN NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (email_message_id) REFERENCES email_messages(id) ON DELETE CASCADE
+    );
+
+    -- Sync cursor/checkpoint state
+    CREATE TABLE IF NOT EXISTS email_sync_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id TEXT NOT NULL,
+        source_id INTEGER NOT NULL,
+        cursor TEXT,
+        last_run_at DATETIME,
+        last_success_at DATETIME,
+        error_state TEXT,
+        retry_backoff_count INTEGER NOT NULL DEFAULT 0,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, source_id),
+        FOREIGN KEY (source_id) REFERENCES email_sources(id) ON DELETE CASCADE
+    );
+
+    -- Legacy media -> normalized email backfill checkpoint state
+    CREATE TABLE IF NOT EXISTS email_backfill_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id TEXT NOT NULL,
+        backfill_key TEXT NOT NULL,
+        last_media_id INTEGER NOT NULL DEFAULT 0,
+        processed_count INTEGER NOT NULL DEFAULT 0,
+        success_count INTEGER NOT NULL DEFAULT 0,
+        skipped_count INTEGER NOT NULL DEFAULT 0,
+        failed_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'idle',
+        last_error TEXT,
+        started_at DATETIME,
+        completed_at DATETIME,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, backfill_key)
+    );
+    """
+
+    _EMAIL_INDICES_SQL = """
+    CREATE INDEX IF NOT EXISTS idx_email_sources_tenant_provider ON email_sources(tenant_id, provider);
+    CREATE INDEX IF NOT EXISTS idx_email_messages_tenant_date ON email_messages(tenant_id, internal_date);
+    CREATE INDEX IF NOT EXISTS idx_email_messages_tenant_date_id ON email_messages(tenant_id, internal_date DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_email_messages_tenant_has_attachments_date
+        ON email_messages(tenant_id, has_attachments, internal_date DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_email_messages_source_id ON email_messages(source_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_tenant_source_message
+        ON email_messages(tenant_id, source_id, source_message_id)
+        WHERE source_message_id IS NOT NULL AND source_message_id <> '';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_tenant_message_id
+        ON email_messages(tenant_id, source_id, message_id)
+        WHERE message_id IS NOT NULL AND message_id <> '';
+    CREATE INDEX IF NOT EXISTS idx_email_participants_tenant_email ON email_participants(tenant_id, email_normalized);
+    CREATE INDEX IF NOT EXISTS idx_email_message_participants_role ON email_message_participants(role);
+    CREATE INDEX IF NOT EXISTS idx_email_message_participants_message_role
+        ON email_message_participants(email_message_id, role, participant_id);
+    CREATE INDEX IF NOT EXISTS idx_email_labels_tenant_name ON email_labels(tenant_id, label_name);
+    CREATE INDEX IF NOT EXISTS idx_email_message_labels_label ON email_message_labels(label_id);
+    CREATE INDEX IF NOT EXISTS idx_email_attachments_message_id ON email_attachments(email_message_id);
+    CREATE INDEX IF NOT EXISTS idx_email_sync_state_tenant_source ON email_sync_state(tenant_id, source_id);
+    CREATE INDEX IF NOT EXISTS idx_email_backfill_state_status ON email_backfill_state(status);
+    """
+
+    _EMAIL_SQLITE_FTS_SQL = """
+    CREATE VIRTUAL TABLE IF NOT EXISTS email_fts USING fts5(
+        subject,
+        body_text,
+        from_text,
+        to_text,
+        cc_text,
+        bcc_text,
+        label_text,
+        content='email_messages',
+        content_rowid='id'
+    );
+    """
+
     def __init__(
         self,
         db_path: str | Path,
@@ -1282,7 +1531,7 @@ class MediaDatabase:
         try:
             test_mode = (
                 os.getenv("PYTEST_CURRENT_TEST") is not None
-                or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+                or is_test_mode()
             )
         except _MEDIA_NONCRITICAL_EXCEPTIONS:
             test_mode = False
@@ -1804,7 +2053,7 @@ class MediaDatabase:
         }
         placeholders = ", ".join([f":{k}" for k in data])
         columns = ", ".join(data.keys())
-        sql = f"INSERT INTO VisualDocuments ({columns}) VALUES ({placeholders})"
+        sql = f"INSERT INTO VisualDocuments ({columns}) VALUES ({placeholders})"  # nosec B608
         try:
             self._execute_with_connection(conn, sql, data)
             with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
@@ -1842,7 +2091,7 @@ class MediaDatabase:
             clauses.append("deleted = 0")
         where_sql = " AND ".join(clauses)
         sql = (
-            "SELECT * FROM VisualDocuments "
+            "SELECT * FROM VisualDocuments "  # nosec B608
             f"WHERE {where_sql} "
             "ORDER BY "
             "COALESCE(page_number, 0), "
@@ -1962,7 +2211,7 @@ class MediaDatabase:
         }
         placeholders = ", ".join([f":{k}" for k in data])
         columns = ", ".join(data.keys())
-        sql = f"INSERT INTO MediaFiles ({columns}) VALUES ({placeholders})"
+        sql = f"INSERT INTO MediaFiles ({columns}) VALUES ({placeholders})"  # nosec B608
         try:
             self._execute_with_connection(conn, sql, data)
             with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
@@ -2008,7 +2257,7 @@ class MediaDatabase:
         if not include_deleted:
             clauses.append("deleted = 0")
         where_sql = " AND ".join(clauses)
-        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} LIMIT 1"
+        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} LIMIT 1"  # nosec B608
         try:
             rows = self._fetchall_with_connection(conn, sql, params)
             return rows[0] if rows else None
@@ -2037,7 +2286,7 @@ class MediaDatabase:
         if not include_deleted:
             clauses.append("deleted = 0")
         where_sql = " AND ".join(clauses)
-        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} ORDER BY file_type, id"
+        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} ORDER BY file_type, id"  # nosec B608
         try:
             return self._fetchall_with_connection(conn, sql, params)
         except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
@@ -2325,7 +2574,7 @@ class MediaDatabase:
     @property
     def _SCHEMA_UPDATE_VERSION_SQL_V1(self):
         return (
-            "DELETE FROM schema_version WHERE version <> 0;\n"
+            "DELETE FROM schema_version WHERE version <> 0;\n"  # nosec B608
             f"UPDATE schema_version SET version = {self._CURRENT_SCHEMA_VERSION} WHERE version = 0;"
         )
 
@@ -2435,6 +2684,8 @@ class MediaDatabase:
             logging.debug("[Schema V1] Applying full schema script...")
             conn.executescript(full_schema_script)
             logging.debug("[Schema V1] Full schema script executed.")
+            # Ensure stage-1 email-native schema is present on fresh SQLite DBs.
+            self._ensure_sqlite_email_schema(conn)
 
             # --- Validation step (optional but good) - Check Media table ---
             try:
@@ -2627,6 +2878,9 @@ class MediaDatabase:
             logger.debug(f"Applying Postgres index DDL: {stmt[:120]}...")
             self.backend.execute(stmt, connection=conn)
 
+        # Ensure stage-1 email-native schema is present on fresh PostgreSQL DBs.
+        self._ensure_postgres_email_schema(conn)
+
         # Ensure schema_version reflects the current code version (single row)
         self.backend.execute(
             "DELETE FROM schema_version WHERE version <> %s",
@@ -2769,6 +3023,7 @@ class MediaDatabase:
                     self._ensure_sqlite_visibility_columns(conn)
                     self._ensure_sqlite_source_hash_column(conn)
                     self._ensure_sqlite_claims_extensions(conn)
+                    self._ensure_sqlite_email_schema(conn)
                     logging.debug("Verified FTS tables and visibility columns exist.")
                 except (sqlite3.Error, DatabaseError) as fts_err:
                     logging.warning(f"Could not verify/create FTS tables on already correct schema version: {fts_err}")
@@ -2820,6 +3075,21 @@ class MediaDatabase:
                             if status == "success":
                                 logger.info(
                                     f"Database migrated from version {result['previous_version']} to {result['current_version']}"
+                                )
+                            elif status == "no_migrations":
+                                migrations_dir_used = (
+                                    (result or {}).get("migrations_dir")
+                                    or getattr(migrator, "migrations_dir", None)
+                                    or migrations_dir
+                                )
+                                available_versions = (result or {}).get("available_versions") or []
+                                missing_versions = (result or {}).get("missing_versions") or []
+                                raise SchemaError(  # noqa: TRY003
+                                    "No migration scripts available to upgrade database schema "
+                                    f"from version {current_db_version} to {target_version}. "
+                                    f"migrations_dir={migrations_dir_used}, "
+                                    f"discovered_versions={available_versions}, "
+                                    f"missing_versions={missing_versions}."
                                 )
                             else:
                                 logger.info(
@@ -2932,6 +3202,7 @@ class MediaDatabase:
                             self._ensure_sqlite_visibility_columns(conn)
                             self._ensure_sqlite_source_hash_column(conn)
                             self._ensure_sqlite_claims_extensions(conn)
+                            self._ensure_sqlite_email_schema(conn)
                         else:
                             raise SchemaError(f"Migration failed: {result}")  # noqa: TRY003
 
@@ -3044,6 +3315,7 @@ class MediaDatabase:
                 self._ensure_postgres_data_tables(conn)
                 self._ensure_postgres_source_hash_column(conn)
                 self._ensure_postgres_claims_extensions(conn)
+                self._ensure_postgres_email_schema(conn)
                 self._sync_postgres_sequences(conn)
                 self._ensure_postgres_rls(conn)
                 return
@@ -3157,6 +3429,7 @@ class MediaDatabase:
                 self._ensure_postgres_data_tables(conn)
                 self._ensure_postgres_source_hash_column(conn)
                 self._ensure_postgres_claims_extensions(conn)
+                self._ensure_postgres_email_schema(conn)
                 self._sync_postgres_sequences(conn)
                 self._ensure_postgres_rls(conn)
                 return
@@ -3251,6 +3524,7 @@ class MediaDatabase:
             self._ensure_postgres_data_tables(conn)
             self._ensure_postgres_source_hash_column(conn)
             self._ensure_postgres_claims_extensions(conn)
+            self._ensure_postgres_email_schema(conn)
             self._sync_postgres_sequences(conn)
             self._ensure_postgres_rls(conn)
 
@@ -3293,6 +3567,8 @@ class MediaDatabase:
             18: self._postgres_migrate_to_v18,
             19: self._postgres_migrate_to_v19,
             20: self._postgres_migrate_to_v20,
+            21: self._postgres_migrate_to_v21,
+            22: self._postgres_migrate_to_v22,
         }
 
     def _postgres_migrate_to_v5(self, conn) -> None:
@@ -3433,8 +3709,9 @@ class MediaDatabase:
 
         # Add check constraint for visibility values (idempotent)
         try:
-            backend.execute(
-                """
+            media_table_ident = ident("media")
+            visibility_col_ident = ident("visibility")
+            visibility_constraint_template = """
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
@@ -3447,10 +3724,13 @@ class MediaDatabase:
                         CHECK ({visibility_col} IN ('personal', 'team', 'org'));
                     END IF;
                 END $$;
-                """.format(
-                    media_table=ident("media"),
-                    visibility_col=ident("visibility"),
-                ),
+                """
+            visibility_constraint_sql = visibility_constraint_template.format(
+                media_table=media_table_ident,
+                visibility_col=visibility_col_ident,
+            )  # nosec B608
+            backend.execute(
+                visibility_constraint_sql,
                 connection=conn,
             )
         except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
@@ -3464,17 +3744,22 @@ class MediaDatabase:
 
         # Backfill owner_user_id from client_id where possible
         try:
-            backend.execute(
-                """
+            media_table_ident = ident("media")
+            owner_user_id_col_ident = ident("owner_user_id")
+            client_id_col_ident = ident("client_id")
+            owner_backfill_template = """
                 UPDATE {media_table}
                 SET {owner_user_id_col} = CAST({client_id_col} AS BIGINT)
                 WHERE {owner_user_id_col} IS NULL
                   AND {client_id_col} ~ '^[0-9]+$'
-                """.format(
-                    media_table=ident("media"),
-                    owner_user_id_col=ident("owner_user_id"),
-                    client_id_col=ident("client_id"),
-                ),
+                """
+            owner_backfill_sql = owner_backfill_template.format(
+                media_table=media_table_ident,
+                owner_user_id_col=owner_user_id_col_ident,
+                client_id_col=client_id_col_ident,
+            )  # nosec B608
+            backend.execute(
+                owner_backfill_sql,
                 connection=conn,
             )
         except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
@@ -3563,6 +3848,52 @@ class MediaDatabase:
 
         self._ensure_postgres_tts_history(conn)
 
+    def _postgres_migrate_to_v21(self, conn) -> None:
+        """Add structure/visual lookup indexes introduced in schema v21."""
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        structure_table: str | None = None
+        if backend.table_exists("documentstructureindex", connection=conn):
+            structure_table = "documentstructureindex"
+        elif backend.table_exists("DocumentStructureIndex", connection=conn):
+            structure_table = "DocumentStructureIndex"
+        if structure_table:
+            backend.execute(
+                (
+                    f"CREATE INDEX IF NOT EXISTS {ident('idx_dsi_media_path')} "
+                    f"ON {ident(structure_table)} ({ident('media_id')}, {ident('path')})"
+                ),
+                connection=conn,
+            )
+
+        visual_documents_table: str | None = None
+        if backend.table_exists("visualdocuments", connection=conn):
+            visual_documents_table = "visualdocuments"
+        elif backend.table_exists("VisualDocuments", connection=conn):
+            visual_documents_table = "VisualDocuments"
+        if visual_documents_table:
+            backend.execute(
+                (
+                    f"CREATE INDEX IF NOT EXISTS {ident('idx_visualdocs_caption')} "
+                    f"ON {ident(visual_documents_table)} ({ident('caption')})"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    f"CREATE INDEX IF NOT EXISTS {ident('idx_visualdocs_tags')} "
+                    f"ON {ident(visual_documents_table)} ({ident('tags')})"
+                ),
+                connection=conn,
+            )
+
+    def _postgres_migrate_to_v22(self, conn) -> None:
+        """Ensure email-native schema and lookup indexes exist (schema v22)."""
+
+        self._ensure_postgres_email_schema(conn)
+
     def _update_schema_version_postgres(self, conn, version: int) -> None:
         """Ensure schema_version table reflects the supplied version."""
 
@@ -3609,7 +3940,7 @@ class MediaDatabase:
 
             max_result = backend.execute(
                 (
-                    f"SELECT COALESCE(MAX({ident(column_name)}), 0) AS max_id "
+                    f"SELECT COALESCE(MAX({ident(column_name)}), 0) AS max_id "  # nosec B608
                     f"FROM {ident(table_name)}"
                 ),
                 connection=conn,
@@ -3661,6 +3992,44 @@ class MediaDatabase:
                 raise DatabaseError(f"Missing required FTS tables: {', '.join(sorted(missing))}")  # noqa: TRY003
         finally:
             conn.commit()
+
+    def _ensure_sqlite_email_schema(self, conn: sqlite3.Connection) -> None:
+        """Ensure email-native schema/index/FTS objects exist on SQLite."""
+
+        try:
+            fts_existed = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='email_fts' LIMIT 1"
+                ).fetchone()
+                is not None
+            )
+            conn.executescript(self._EMAIL_SCHEMA_SQL)
+            conn.executescript(self._EMAIL_INDICES_SQL)
+            conn.executescript(self._EMAIL_SQLITE_FTS_SQL)
+            if not fts_existed:
+                with suppress(sqlite3.Error):
+                    conn.execute("INSERT INTO email_fts(email_fts) VALUES ('rebuild')")
+        except sqlite3.Error as exc:
+            logger.warning(f"Could not ensure email-native schema on SQLite: {exc}")
+
+    def _ensure_postgres_email_schema(self, conn) -> None:
+        """Ensure email-native schema/index objects exist on PostgreSQL."""
+
+        schema_statements = self._convert_sqlite_sql_to_postgres_statements(
+            self._EMAIL_SCHEMA_SQL
+        )
+        index_statements = self._convert_sqlite_sql_to_postgres_statements(
+            self._EMAIL_INDICES_SQL
+        )
+        for stmt in schema_statements + index_statements:
+            try:
+                self.backend.execute(stmt, connection=conn)
+            except BackendDatabaseError as exc:
+                logger.warning(
+                    "Could not ensure email-native Postgres statement '{}': {}",
+                    stmt[:120],
+                    exc,
+                )
 
     def _ensure_sqlite_visibility_columns(self, conn: sqlite3.Connection) -> None:
         """
@@ -3986,14 +4355,14 @@ class MediaDatabase:
 
             if backend.table_exists("data_tables", connection=conn):
                 backend.execute(
-                    f"UPDATE {ident('data_tables')} "
+                    f"UPDATE {ident('data_tables')} "  # nosec B608
                     f"SET {ident('client_id')} = %s "
                     f"WHERE {ident('client_id')} IS NULL OR {ident('client_id')} = ''",
                     (str(self.client_id),),
                     connection=conn,
                 )
                 backend.execute(
-                    f"UPDATE {ident('data_tables')} "
+                    f"UPDATE {ident('data_tables')} "  # nosec B608
                     f"SET {ident('last_modified')} = CURRENT_TIMESTAMP "
                     f"WHERE {ident('last_modified')} IS NULL",
                     connection=conn,
@@ -4249,12 +4618,12 @@ class MediaDatabase:
                 connection=conn,
             )
             backend.execute(
-                f"UPDATE {ident('claims')} SET {ident('review_status')} = 'pending' "
+                f"UPDATE {ident('claims')} SET {ident('review_status')} = 'pending' "  # nosec B608
                 f"WHERE {ident('review_status')} IS NULL",
                 connection=conn,
             )
             backend.execute(
-                f"UPDATE {ident('claims')} SET {ident('review_version')} = 1 "
+                f"UPDATE {ident('claims')} SET {ident('review_version')} = 1 "  # nosec B608
                 f"WHERE {ident('review_version')} IS NULL",
                 connection=conn,
             )
@@ -4955,7 +5324,7 @@ class MediaDatabase:
                 conditions.append("(0 = 1)")
 
         sql = (
-            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "  # nosec B608
             "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
             "c.last_modified, c.version, c.client_id, "
             "c.review_status, c.reviewer_id, c.review_group, c.reviewed_at, "
@@ -5013,7 +5382,7 @@ class MediaDatabase:
                 conditions.append("(0 = 1)")
 
         sql = (
-            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "  # nosec B608
             "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
             "c.last_modified, c.version, c.client_id, c.deleted, "
             "c.review_status, c.reviewer_id, c.review_group, c.reviewed_at, "
@@ -5080,7 +5449,7 @@ class MediaDatabase:
 
         params.append(int(claim_id))
 
-        sql = "UPDATE Claims SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE Claims SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
 
         if self.backend_type == BackendType.POSTGRESQL and claim_text is not None:
@@ -5180,7 +5549,7 @@ class MediaDatabase:
                 where_clause += " AND review_version = ?"
                 params.append(int(expected_version))
 
-            sql = "UPDATE Claims SET " + ", ".join(update_parts) + " WHERE " + where_clause
+            sql = "UPDATE Claims SET " + ", ".join(update_parts) + " WHERE " + where_clause  # nosec B608
             cur = self._execute_with_connection(conn, sql, tuple(params))
             if cur.rowcount == 0:
                 return {"conflict": True, "current": dict(row)}
@@ -5395,7 +5764,7 @@ class MediaDatabase:
             params.append(str(extractor_version))
 
         sql = (
-            "SELECT id, user_id, report_date, extractor, extractor_version, total_reviewed, "
+            "SELECT id, user_id, report_date, extractor, extractor_version, total_reviewed, "  # nosec B608
             "approved_count, rejected_count, flagged_count, reassigned_count, edited_count, "
             "reason_code_counts_json, created_at, updated_at "
             "FROM claims_review_extractor_metrics_daily WHERE "
@@ -5485,7 +5854,7 @@ class MediaDatabase:
                 conditions.append("(0 = 1)")
 
         sql = (
-            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "  # nosec B608
             "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
             "c.last_modified, c.version, c.client_id, c.deleted, "
             "c.review_status, c.reviewer_id, c.review_group, c.reviewed_at, "
@@ -5609,7 +5978,7 @@ class MediaDatabase:
         params.append(now)
         params.append(int(rule_id))
 
-        sql = "UPDATE claims_review_rules SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE claims_review_rules SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_claim_review_rule(int(rule_id))
 
@@ -5700,7 +6069,7 @@ class MediaDatabase:
         update_parts.append("updated_at = ?")
         params.append(now)
         params.append(int(existing.get("id")))
-        sql = "UPDATE claims_monitoring_settings SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE claims_monitoring_settings SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_claims_monitoring_settings(str(user_id))
 
@@ -5859,7 +6228,7 @@ class MediaDatabase:
         update_parts.append("updated_at = ?")
         params.append(now)
         params.append(int(alert_id))
-        sql = "UPDATE claims_monitoring_alerts SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE claims_monitoring_alerts SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_claims_monitoring_alert(int(alert_id))
 
@@ -5982,7 +6351,7 @@ class MediaDatabase:
         update_parts.append("updated_at = ?")
         params.append(now)
         params.append(int(config_id))
-        sql = "UPDATE claims_monitoring_config SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE claims_monitoring_config SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_claims_monitoring_config(int(config_id))
 
@@ -6105,7 +6474,7 @@ class MediaDatabase:
             conditions.append("resource_id = ?")
             params.append(str(resource_id))
         sql = (
-            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "
+            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "  # nosec B608
             "resource_id, payload_json, created_at, delivered_at "
             "FROM claims_notifications "
             f"WHERE {' AND '.join(conditions)} "
@@ -6157,7 +6526,7 @@ class MediaDatabase:
             conditions.append("delivered_at IS NULL")
 
         sql = (
-            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "
+            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "  # nosec B608
             "resource_id, payload_json, created_at, delivered_at "
             "FROM claims_notifications "
             f"WHERE {' AND '.join(conditions)} "
@@ -6172,7 +6541,7 @@ class MediaDatabase:
             return []
         placeholders = ",".join("?" * len(ids))
         sql = (
-            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "
+            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "  # nosec B608
             "resource_id, payload_json, created_at, delivered_at "
             f"FROM claims_notifications WHERE id IN ({placeholders})"
         )
@@ -6184,7 +6553,7 @@ class MediaDatabase:
             return 0
         placeholders = ",".join("?" * len(ids))
         now = self._get_current_utc_timestamp_str()
-        sql = f"UPDATE claims_notifications SET delivered_at = ? WHERE id IN ({placeholders})"
+        sql = f"UPDATE claims_notifications SET delivered_at = ? WHERE id IN ({placeholders})"  # nosec B608
         params: list[Any] = [str(now)]
         params.extend([int(i) for i in ids])
         cursor = self.execute_query(sql, tuple(params), commit=True)
@@ -6198,7 +6567,7 @@ class MediaDatabase:
             return []
         placeholders = ",".join("?" * len(uuids))
         sql = (
-            "SELECT id, uuid, media_id, chunk_index, claim_text, reviewer_id, review_group "
+            "SELECT id, uuid, media_id, chunk_index, claim_text, reviewer_id, review_group "  # nosec B608
             f"FROM Claims WHERE uuid IN ({placeholders})"
         )
         rows = self.execute_query(sql, tuple(uuids)).fetchall()
@@ -6209,7 +6578,7 @@ class MediaDatabase:
             return []
         placeholders = ",".join("?" * len(cluster_ids))
         sql = (
-            "SELECT id, canonical_claim_text, updated_at "
+            "SELECT id, canonical_claim_text, updated_at "  # nosec B608
             f"FROM claim_clusters WHERE id IN ({placeholders})"
         )
         rows = self.execute_query(sql, tuple(int(cid) for cid in cluster_ids)).fetchall()
@@ -6220,7 +6589,7 @@ class MediaDatabase:
             return {}
         placeholders = ",".join("?" * len(cluster_ids))
         sql = (
-            "SELECT cluster_id, COUNT(*) AS member_count "
+            "SELECT cluster_id, COUNT(*) AS member_count "  # nosec B608
             f"FROM claim_cluster_membership WHERE cluster_id IN ({placeholders}) "
             "GROUP BY cluster_id"
         )
@@ -6295,7 +6664,7 @@ class MediaDatabase:
         where_clause = " AND ".join(conditions)
         rows = self.execute_query(
             (
-                "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "
+                "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "  # nosec B608
                 "FROM claims_monitoring_events WHERE "
                 + where_clause
                 + " ORDER BY created_at ASC"
@@ -6322,7 +6691,7 @@ class MediaDatabase:
             conditions.append("event_type = ?")
             params.append(str(event_type))
         sql = (
-            "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "
+            "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "  # nosec B608
             "FROM claims_monitoring_events WHERE "
             + " AND ".join(conditions)
             + " ORDER BY created_at ASC LIMIT ?"
@@ -6336,7 +6705,7 @@ class MediaDatabase:
             return 0
         placeholders = ",".join("?" * len(ids))
         now = self._get_current_utc_timestamp_str()
-        sql = f"UPDATE claims_monitoring_events SET delivered_at = ? WHERE id IN ({placeholders})"
+        sql = f"UPDATE claims_monitoring_events SET delivered_at = ? WHERE id IN ({placeholders})"  # nosec B608
         params: list[Any] = [str(now)]
         params.extend([int(i) for i in ids])
         cursor = self.execute_query(sql, tuple(params), commit=True)
@@ -6357,7 +6726,7 @@ class MediaDatabase:
             conditions.append("event_type = ?")
             params.append(str(event_type))
         sql = (
-            "SELECT MAX(delivered_at) AS delivered_at "
+            "SELECT MAX(delivered_at) AS delivered_at "  # nosec B608
             "FROM claims_monitoring_events WHERE "
             + " AND ".join(conditions)
         )
@@ -6714,7 +7083,7 @@ class MediaDatabase:
         )
 
         query = (
-            "SELECT id, user_id, created_at, text, provider, model, voice_id, voice_name, "
+            "SELECT id, user_id, created_at, text, provider, model, voice_id, voice_name, "  # nosec B608
             "voice_info, format, duration_ms, status, favorite, job_id, output_id, "
             "artifact_deleted_at "
             "FROM tts_history WHERE "
@@ -6752,7 +7121,7 @@ class MediaDatabase:
             created_to=created_to,
             include_deleted=False,
         )
-        query = "SELECT COUNT(*) AS count FROM tts_history WHERE " + " AND ".join(conditions)
+        query = "SELECT COUNT(*) AS count FROM tts_history WHERE " + " AND ".join(conditions)  # nosec B608
         row = self.execute_query(query, tuple(params)).fetchone()
         if not row:
             return 0
@@ -6773,7 +7142,7 @@ class MediaDatabase:
         if not include_deleted:
             conditions.append("deleted = 0")
         query = (
-            "SELECT id, user_id, created_at, text, text_hash, text_length, provider, model, "
+            "SELECT id, user_id, created_at, text, text_hash, text_length, provider, model, "  # nosec B608
             "voice_id, voice_name, voice_info, format, duration_ms, generation_time_ms, "
             "params_json, status, segments_json, favorite, job_id, output_id, artifact_ids, "
             "artifact_deleted_at, error_message, deleted, deleted_at "
@@ -6878,7 +7247,7 @@ class MediaDatabase:
         params: list[Any] = [ts, str(user_id)] + matched_ids
         cursor = self.execute_query(
             (
-                "UPDATE tts_history "
+                "UPDATE tts_history "  # nosec B608
                 "SET artifact_deleted_at = ?, output_id = NULL, artifact_ids = NULL "
                 f"WHERE user_id = ? AND id IN ({placeholders}) AND deleted = 0"
             ),
@@ -6967,7 +7336,7 @@ class MediaDatabase:
             params.append(str(user_id))
         row = self.execute_query(
             (
-                "SELECT export_id, user_id, format, status, payload_json, payload_csv, filters_json, "
+                "SELECT export_id, user_id, format, status, payload_json, payload_csv, filters_json, "  # nosec B608
                 "pagination_json, error_message, created_at, updated_at "
                 "FROM claims_analytics_exports WHERE "
                 + " AND ".join(conditions)
@@ -7002,7 +7371,7 @@ class MediaDatabase:
             conditions.append("format = ?")
             params.append(str(format))
         query = (
-            "SELECT export_id, user_id, format, status, filters_json, pagination_json, error_message, "
+            "SELECT export_id, user_id, format, status, filters_json, pagination_json, error_message, "  # nosec B608
             "created_at, updated_at "
             "FROM claims_analytics_exports WHERE "
             + " AND ".join(conditions)
@@ -7028,7 +7397,7 @@ class MediaDatabase:
             conditions.append("format = ?")
             params.append(str(format))
         row = self.execute_query(
-            "SELECT COUNT(*) AS count FROM claims_analytics_exports WHERE " + " AND ".join(conditions),
+            "SELECT COUNT(*) AS count FROM claims_analytics_exports WHERE " + " AND ".join(conditions),  # nosec B608
             tuple(params),
         ).fetchone()
         if not row:
@@ -7104,7 +7473,7 @@ class MediaDatabase:
             params.append(int(min_size))
 
         sql = (
-            "SELECT c.id, c.user_id, c.canonical_claim_text, c.representative_claim_id, c.summary, "
+            "SELECT c.id, c.user_id, c.canonical_claim_text, c.representative_claim_id, c.summary, "  # nosec B608
             "c.cluster_version, c.watchlist_count, c.created_at, c.updated_at, "
             "COALESCE(m.member_count, 0) AS member_count "
             "FROM claim_clusters c "
@@ -7162,7 +7531,7 @@ class MediaDatabase:
             params.extend([int(cluster_id), int(cluster_id)])
         rows = self.execute_query(
             (
-                "SELECT parent_cluster_id, child_cluster_id, relation_type, created_at "
+                "SELECT parent_cluster_id, child_cluster_id, relation_type, created_at "  # nosec B608
                 "FROM claim_cluster_links WHERE "
                 + " AND ".join(conditions)
                 + " ORDER BY created_at DESC"
@@ -7181,9 +7550,9 @@ class MediaDatabase:
         now = self._get_current_utc_timestamp_str()
         self.execute_query(
             (
-                "INSERT OR IGNORE INTO claim_cluster_links "
+                "INSERT INTO claim_cluster_links "
                 "(parent_cluster_id, child_cluster_id, relation_type, created_at) "
-                "VALUES (?, ?, ?, ?)"
+                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
             ),
             (
                 int(parent_cluster_id),
@@ -7268,7 +7637,7 @@ class MediaDatabase:
                 conditions.append("(0 = 1)")
 
         sql = (
-            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "  # nosec B608
             "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
             "c.last_modified, c.version, c.client_id, c.deleted, "
             "c.review_status, c.reviewer_id, c.review_group, c.reviewed_at, "
@@ -7338,9 +7707,9 @@ class MediaDatabase:
             self._execute_with_connection(
                 conn,
                 (
-                    "INSERT OR IGNORE INTO claim_cluster_membership "
+                    "INSERT INTO claim_cluster_membership "
                     "(cluster_id, claim_id, similarity_score, cluster_joined_at) "
-                    "VALUES (?, ?, ?, ?)"
+                    "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
                 ),
                 (int(cluster_id), int(claim_id), similarity_score, now),
             )
@@ -7383,17 +7752,17 @@ class MediaDatabase:
                 params = tuple(cluster_ids)
                 self._execute_with_connection(
                     conn,
-                    f"DELETE FROM claim_cluster_membership WHERE cluster_id IN ({placeholders})",
+                    f"DELETE FROM claim_cluster_membership WHERE cluster_id IN ({placeholders})",  # nosec B608
                     params,
                 )
                 self._execute_with_connection(
                     conn,
-                    f"UPDATE Claims SET claim_cluster_id = NULL WHERE claim_cluster_id IN ({placeholders})",
+                    f"UPDATE Claims SET claim_cluster_id = NULL WHERE claim_cluster_id IN ({placeholders})",  # nosec B608
                     params,
                 )
                 self._execute_with_connection(
                     conn,
-                    f"DELETE FROM claim_clusters WHERE id IN ({placeholders})",
+                    f"DELETE FROM claim_clusters WHERE id IN ({placeholders})",  # nosec B608
                     params,
                 )
 
@@ -7454,9 +7823,9 @@ class MediaDatabase:
                     self._execute_with_connection(
                         conn,
                         (
-                            "INSERT OR IGNORE INTO claim_cluster_membership "
+                            "INSERT INTO claim_cluster_membership "
                             "(cluster_id, claim_id, similarity_score, cluster_joined_at) "
-                            "VALUES (?, ?, ?, ?)"
+                            "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
                         ),
                         (int(cluster_id), int(item["id"]), 1.0, now),
                     )
@@ -7507,12 +7876,12 @@ class MediaDatabase:
                 params = tuple(cluster_ids)
                 self._execute_with_connection(
                     conn,
-                    f"DELETE FROM claim_cluster_membership WHERE cluster_id IN ({placeholders})",
+                    f"DELETE FROM claim_cluster_membership WHERE cluster_id IN ({placeholders})",  # nosec B608
                     params,
                 )
                 self._execute_with_connection(
                     conn,
-                    f"DELETE FROM claim_clusters WHERE id IN ({placeholders})",
+                    f"DELETE FROM claim_clusters WHERE id IN ({placeholders})",  # nosec B608
                     params,
                 )
 
@@ -7530,16 +7899,10 @@ class MediaDatabase:
             )
 
             membership_sql = (
-                "INSERT OR IGNORE INTO claim_cluster_membership "
+                "INSERT INTO claim_cluster_membership "
                 "(cluster_id, claim_id, similarity_score, cluster_joined_at) "
-                "VALUES (?, ?, ?, ?)"
+                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
             )
-            if self.backend_type == BackendType.POSTGRESQL:
-                membership_sql = (
-                    "INSERT INTO claim_cluster_membership "
-                    "(cluster_id, claim_id, similarity_score, cluster_joined_at) "
-                    "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
-                )
 
             for cluster in clusters:
                 canonical_text = str(cluster.get("canonical_claim_text") or "")
@@ -7724,6 +8087,2583 @@ class MediaDatabase:
             logging.error(f"Failed to rebuild claims_fts (backend): {exc}", exc_info=True)
             raise DatabaseError(f"Failed to rebuild claims_fts: {exc}") from exc  # noqa: TRY003
 
+    def _resolve_email_tenant_id(self, tenant_id: str | None = None) -> str:
+        """Resolve tenant scope for email-native tables."""
+
+        explicit = str(tenant_id or "").strip()
+        if explicit:
+            return explicit
+        scope = get_scope()
+        if scope is not None:
+            if scope.effective_org_id is not None:
+                return f"org:{int(scope.effective_org_id)}"
+            if scope.user_id is not None:
+                return f"user:{int(scope.user_id)}"
+        return str(self.client_id)
+
+    @staticmethod
+    def _normalize_email_address(value: Any) -> str | None:
+        addr = str(value or "").strip().lower()
+        return addr if addr and "@" in addr else None
+
+    @staticmethod
+    def _parse_email_internal_date(value: Any) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+            dt = parsedate_to_datetime(raw)
+            if dt is not None:
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc).isoformat()
+        return None
+
+    @staticmethod
+    def _collect_email_labels(
+        metadata: dict[str, Any] | None = None,
+        labels: list[str] | str | None = None,
+    ) -> list[str]:
+        raw_values: list[str] = []
+        if isinstance(labels, str):
+            raw_values.extend(v.strip() for v in labels.split(","))
+        elif isinstance(labels, list):
+            raw_values.extend(str(v).strip() for v in labels if v is not None)
+
+        email_meta = (metadata or {}).get("email")
+        if isinstance(email_meta, dict):
+            meta_labels = email_meta.get("labels")
+            if isinstance(meta_labels, str):
+                raw_values.extend(v.strip() for v in meta_labels.split(","))
+            elif isinstance(meta_labels, list):
+                raw_values.extend(str(v).strip() for v in meta_labels if v is not None)
+
+        top_labels = (metadata or {}).get("labels")
+        if isinstance(top_labels, str):
+            raw_values.extend(v.strip() for v in top_labels.split(","))
+        elif isinstance(top_labels, list):
+            raw_values.extend(str(v).strip() for v in top_labels if v is not None)
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in raw_values:
+            label = str(value or "").strip()
+            if not label:
+                continue
+            key = label.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(label)
+        return normalized
+
+    def upsert_email_message_graph(
+        self,
+        *,
+        media_id: int,
+        metadata: dict[str, Any] | None = None,
+        body_text: str | None = None,
+        tenant_id: str | None = None,
+        provider: str = "upload",
+        source_key: str | None = None,
+        source_message_id: str | None = None,
+        labels: list[str] | str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Upsert a normalized email message graph (message, participants, labels, attachments).
+
+        This is the Stage-1 persistence bridge used by archive/upload ingestion.
+        """
+
+        media_id_int = int(media_id)
+        if media_id_int <= 0:
+            raise InputError("media_id must be a positive integer")  # noqa: TRY003
+
+        metadata_map = metadata if isinstance(metadata, dict) else {}
+        email_meta = metadata_map.get("email") if isinstance(metadata_map.get("email"), dict) else {}
+
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_provider = str(provider or "upload").strip() or "upload"
+        resolved_source_key = str(
+            source_key
+            or metadata_map.get("source_key")
+            or metadata_map.get("source")
+            or metadata_map.get("filename")
+            or "upload"
+        ).strip() or "upload"
+        resolved_source_message_id = str(
+            source_message_id
+            or email_meta.get("source_message_id")
+            or email_meta.get("id")
+            or metadata_map.get("source_message_id")
+            or ""
+        ).strip() or None
+        resolved_message_id = str(
+            email_meta.get("message_id")
+            or metadata_map.get("message_id")
+            or ""
+        ).strip() or None
+        resolved_subject = str(
+            email_meta.get("subject")
+            or metadata_map.get("title")
+            or ""
+        ).strip() or None
+        resolved_from = str(email_meta.get("from") or "").strip() or None
+        resolved_to = str(email_meta.get("to") or "").strip() or None
+        resolved_cc = str(email_meta.get("cc") or "").strip() or None
+        resolved_bcc = str(email_meta.get("bcc") or "").strip() or None
+        resolved_internal_date = self._parse_email_internal_date(
+            email_meta.get("date") or metadata_map.get("date")
+        )
+
+        attachments_raw = email_meta.get("attachments")
+        attachments: list[dict[str, Any]] = (
+            [a for a in attachments_raw if isinstance(a, dict)]
+            if isinstance(attachments_raw, list)
+            else []
+        )
+        normalized_labels = self._collect_email_labels(metadata_map, labels)
+        label_text = ", ".join(normalized_labels) if normalized_labels else None
+        has_attachments = bool(attachments)
+        raw_metadata_json = json.dumps(metadata_map, ensure_ascii=False) if metadata_map else None
+
+        with self.transaction() as conn:
+            self._execute_with_connection(
+                conn,
+                (
+                    "INSERT INTO email_sources "
+                    "(tenant_id, provider, source_key, display_name, status) "
+                    "VALUES (?, ?, ?, ?, 'active') "
+                    "ON CONFLICT(tenant_id, provider, source_key) "
+                    "DO UPDATE SET "
+                    "display_name = COALESCE(EXCLUDED.display_name, email_sources.display_name), "
+                    "updated_at = CURRENT_TIMESTAMP"
+                ),
+                (
+                    resolved_tenant,
+                    resolved_provider,
+                    resolved_source_key,
+                    resolved_source_key,
+                ),
+            )
+            source_row = self._fetchone_with_connection(
+                conn,
+                (
+                    "SELECT id FROM email_sources "
+                    "WHERE tenant_id = ? AND provider = ? AND source_key = ? "
+                    "LIMIT 1"
+                ),
+                (resolved_tenant, resolved_provider, resolved_source_key),
+            )
+            if not source_row:
+                raise DatabaseError("Failed to resolve email source after upsert.")  # noqa: TRY003
+            source_id = int(source_row["id"])
+
+            existing_message: dict[str, Any] | None = None
+            match_strategy = "new"
+
+            if resolved_source_message_id:
+                existing_message = self._fetchone_with_connection(
+                    conn,
+                    (
+                        "SELECT id FROM email_messages "
+                        "WHERE tenant_id = ? AND source_id = ? AND source_message_id = ? "
+                        "LIMIT 1"
+                    ),
+                    (resolved_tenant, source_id, resolved_source_message_id),
+                )
+                if existing_message:
+                    match_strategy = "source_message_id"
+
+            if existing_message is None and resolved_message_id:
+                existing_message = self._fetchone_with_connection(
+                    conn,
+                    (
+                        "SELECT id FROM email_messages "
+                        "WHERE tenant_id = ? AND source_id = ? AND message_id = ? "
+                        "LIMIT 1"
+                    ),
+                    (resolved_tenant, source_id, resolved_message_id),
+                )
+                if existing_message:
+                    match_strategy = "message_id"
+
+            if existing_message is None:
+                existing_message = self._fetchone_with_connection(
+                    conn,
+                    "SELECT id FROM email_messages WHERE media_id = ? LIMIT 1",
+                    (media_id_int,),
+                )
+                if existing_message:
+                    match_strategy = "media_id"
+
+            if existing_message is not None:
+                email_message_id = int(existing_message["id"])
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "UPDATE email_messages SET "
+                        "media_id = ?, "
+                        "source_id = ?, "
+                        "source_message_id = ?, "
+                        "message_id = ?, "
+                        "subject = ?, "
+                        "body_text = ?, "
+                        "internal_date = ?, "
+                        "from_text = ?, "
+                        "to_text = ?, "
+                        "cc_text = ?, "
+                        "bcc_text = ?, "
+                        "label_text = ?, "
+                        "has_attachments = ?, "
+                        "raw_metadata_json = ?, "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ?"
+                    ),
+                    (
+                        media_id_int,
+                        source_id,
+                        resolved_source_message_id,
+                        resolved_message_id,
+                        resolved_subject,
+                        str(body_text or ""),
+                        resolved_internal_date,
+                        resolved_from,
+                        resolved_to,
+                        resolved_cc,
+                        resolved_bcc,
+                        label_text,
+                        bool(has_attachments),
+                        raw_metadata_json,
+                        email_message_id,
+                    ),
+                )
+            else:
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "INSERT INTO email_messages ("
+                        "tenant_id, media_id, source_id, source_message_id, message_id, "
+                        "subject, body_text, internal_date, from_text, to_text, cc_text, bcc_text, "
+                        "label_text, has_attachments, raw_metadata_json"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    ),
+                    (
+                        resolved_tenant,
+                        media_id_int,
+                        source_id,
+                        resolved_source_message_id,
+                        resolved_message_id,
+                        resolved_subject,
+                        str(body_text or ""),
+                        resolved_internal_date,
+                        resolved_from,
+                        resolved_to,
+                        resolved_cc,
+                        resolved_bcc,
+                        label_text,
+                        bool(has_attachments),
+                        raw_metadata_json,
+                    ),
+                )
+                inserted_message = self._fetchone_with_connection(
+                    conn,
+                    (
+                        "SELECT id FROM email_messages "
+                        "WHERE tenant_id = ? AND media_id = ? LIMIT 1"
+                    ),
+                    (resolved_tenant, media_id_int),
+                )
+                if not inserted_message and resolved_source_message_id:
+                    inserted_message = self._fetchone_with_connection(
+                        conn,
+                        (
+                            "SELECT id FROM email_messages "
+                            "WHERE tenant_id = ? AND source_id = ? AND source_message_id = ? LIMIT 1"
+                        ),
+                        (resolved_tenant, source_id, resolved_source_message_id),
+                    )
+                if not inserted_message and resolved_message_id:
+                    inserted_message = self._fetchone_with_connection(
+                        conn,
+                        (
+                            "SELECT id FROM email_messages "
+                            "WHERE tenant_id = ? AND source_id = ? AND message_id = ? LIMIT 1"
+                        ),
+                        (resolved_tenant, source_id, resolved_message_id),
+                    )
+                if not inserted_message:
+                    raise DatabaseError("Failed to resolve email message row after insert.")  # noqa: TRY003
+                email_message_id = int(inserted_message["id"])
+
+            self._execute_with_connection(
+                conn,
+                "DELETE FROM email_message_participants WHERE email_message_id = ?",
+                (email_message_id,),
+            )
+            self._execute_with_connection(
+                conn,
+                "DELETE FROM email_message_labels WHERE email_message_id = ?",
+                (email_message_id,),
+            )
+            self._execute_with_connection(
+                conn,
+                "DELETE FROM email_attachments WHERE email_message_id = ?",
+                (email_message_id,),
+            )
+
+            for role_name, value in (
+                ("from", resolved_from),
+                ("to", resolved_to),
+                ("cc", resolved_cc),
+                ("bcc", resolved_bcc),
+            ):
+                role_text = str(value or "").strip()
+                if not role_text:
+                    continue
+                for display_name, email_addr in getaddresses([role_text]):
+                    normalized_addr = self._normalize_email_address(email_addr)
+                    if not normalized_addr:
+                        continue
+                    display = str(display_name or "").strip() or None
+                    self._execute_with_connection(
+                        conn,
+                        (
+                            "INSERT INTO email_participants (tenant_id, email_normalized, display_name) "
+                            "VALUES (?, ?, ?) "
+                            "ON CONFLICT(tenant_id, email_normalized) "
+                            "DO UPDATE SET display_name = COALESCE(EXCLUDED.display_name, email_participants.display_name)"
+                        ),
+                        (resolved_tenant, normalized_addr, display),
+                    )
+                    participant_row = self._fetchone_with_connection(
+                        conn,
+                        (
+                            "SELECT id FROM email_participants "
+                            "WHERE tenant_id = ? AND email_normalized = ? LIMIT 1"
+                        ),
+                        (resolved_tenant, normalized_addr),
+                    )
+                    if participant_row:
+                        self._execute_with_connection(
+                            conn,
+                            (
+                                "INSERT INTO email_message_participants "
+                                "(email_message_id, participant_id, role) "
+                                "VALUES (?, ?, ?) ON CONFLICT DO NOTHING"
+                            ),
+                            (
+                                email_message_id,
+                                int(participant_row["id"]),
+                                role_name,
+                            ),
+                        )
+
+            for label_name in normalized_labels:
+                label_key = str(label_name).strip().lower()
+                if not label_key:
+                    continue
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "INSERT INTO email_labels (tenant_id, label_key, label_name) "
+                        "VALUES (?, ?, ?) "
+                        "ON CONFLICT(tenant_id, label_key) "
+                        "DO UPDATE SET label_name = EXCLUDED.label_name, updated_at = CURRENT_TIMESTAMP"
+                    ),
+                    (resolved_tenant, label_key, label_name),
+                )
+                label_row = self._fetchone_with_connection(
+                    conn,
+                    (
+                        "SELECT id FROM email_labels "
+                        "WHERE tenant_id = ? AND label_key = ? LIMIT 1"
+                    ),
+                    (resolved_tenant, label_key),
+                )
+                if label_row:
+                    self._execute_with_connection(
+                        conn,
+                        (
+                            "INSERT INTO email_message_labels (email_message_id, label_id) "
+                            "VALUES (?, ?) ON CONFLICT DO NOTHING"
+                        ),
+                        (email_message_id, int(label_row["id"])),
+                    )
+
+            for attachment in attachments:
+                filename = str(
+                    attachment.get("filename")
+                    or attachment.get("name")
+                    or ""
+                ).strip() or None
+                content_type = str(attachment.get("content_type") or "").strip() or None
+                size_bytes_raw = attachment.get("size_bytes")
+                if size_bytes_raw is None:
+                    size_bytes_raw = attachment.get("size")
+                with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+                    size_bytes_raw = int(size_bytes_raw) if size_bytes_raw is not None else None
+                if isinstance(size_bytes_raw, bool):
+                    size_bytes_raw = None
+                size_bytes = size_bytes_raw if isinstance(size_bytes_raw, int) else None
+                content_id = str(attachment.get("content_id") or "").strip() or None
+                disposition = str(attachment.get("disposition") or "").strip() or None
+                extracted_text_available = bool(
+                    attachment.get("extracted_text_available")
+                    or attachment.get("text_extracted")
+                )
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "INSERT INTO email_attachments ("
+                        "email_message_id, filename, content_type, size_bytes, "
+                        "content_id, disposition, extracted_text_available"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?)"
+                    ),
+                    (
+                        email_message_id,
+                        filename,
+                        content_type,
+                        size_bytes,
+                        content_id,
+                        disposition,
+                        bool(extracted_text_available),
+                    ),
+                )
+
+            if self.backend_type == BackendType.SQLITE:
+                with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+                    self._execute_with_connection(
+                        conn,
+                        (
+                            "INSERT OR REPLACE INTO email_fts "
+                            "(rowid, subject, body_text, from_text, to_text, cc_text, bcc_text, label_text) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                        ),
+                        (
+                            email_message_id,
+                            resolved_subject or "",
+                            str(body_text or ""),
+                            resolved_from or "",
+                            resolved_to or "",
+                            resolved_cc or "",
+                            resolved_bcc or "",
+                            label_text or "",
+                        ),
+                    )
+
+            return {
+                "email_message_id": email_message_id,
+                "source_id": source_id,
+                "tenant_id": resolved_tenant,
+                "match_strategy": match_strategy,
+            }
+
+    @staticmethod
+    def _normalize_email_sync_cursor(value: Any) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    def _resolve_email_sync_source_row_id(
+        self,
+        conn,
+        *,
+        tenant_id: str,
+        provider: str,
+        source_key: str,
+        create_if_missing: bool,
+    ) -> int | None:
+        if create_if_missing:
+            self._execute_with_connection(
+                conn,
+                (
+                    "INSERT INTO email_sources "
+                    "(tenant_id, provider, source_key, display_name, status) "
+                    "VALUES (?, ?, ?, ?, 'active') "
+                    "ON CONFLICT(tenant_id, provider, source_key) "
+                    "DO UPDATE SET updated_at = CURRENT_TIMESTAMP"
+                ),
+                (tenant_id, provider, source_key, source_key),
+            )
+
+        source_row = self._fetchone_with_connection(
+            conn,
+            (
+                "SELECT id FROM email_sources "
+                "WHERE tenant_id = ? AND provider = ? AND source_key = ? "
+                "LIMIT 1"
+            ),
+            (tenant_id, provider, source_key),
+        )
+        if not source_row:
+            return None
+        return int(source_row["id"])
+
+    def _fetch_email_sync_state_row(
+        self,
+        conn,
+        *,
+        tenant_id: str,
+        source_id: int,
+        provider: str,
+        source_key: str,
+    ) -> dict[str, Any] | None:
+        state_row = self._fetchone_with_connection(
+            conn,
+            (
+                "SELECT id, cursor, last_run_at, last_success_at, error_state, "
+                "retry_backoff_count, updated_at "
+                "FROM email_sync_state "
+                "WHERE tenant_id = ? AND source_id = ? "
+                "LIMIT 1"
+            ),
+            (tenant_id, int(source_id)),
+        )
+        if not state_row:
+            return None
+        return {
+            "id": int(state_row["id"]),
+            "tenant_id": tenant_id,
+            "source_id": int(source_id),
+            "provider": provider,
+            "source_key": source_key,
+            "cursor": state_row.get("cursor"),
+            "last_run_at": state_row.get("last_run_at"),
+            "last_success_at": state_row.get("last_success_at"),
+            "error_state": state_row.get("error_state"),
+            "retry_backoff_count": int(state_row.get("retry_backoff_count") or 0),
+            "updated_at": state_row.get("updated_at"),
+        }
+
+    def get_email_sync_state(
+        self,
+        *,
+        provider: str,
+        source_key: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_provider = str(provider or "").strip().lower() or "upload"
+        resolved_source_key = str(source_key or "").strip()
+        if not resolved_source_key:
+            raise InputError("source_key is required for email sync state.")  # noqa: TRY003
+
+        with self.transaction() as conn:
+            source_row_id = self._resolve_email_sync_source_row_id(
+                conn,
+                tenant_id=resolved_tenant,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+                create_if_missing=False,
+            )
+            if source_row_id is None:
+                return None
+            return self._fetch_email_sync_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                source_id=source_row_id,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+            )
+
+    def mark_email_sync_run_started(
+        self,
+        *,
+        provider: str,
+        source_key: str,
+        tenant_id: str | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_provider = str(provider or "").strip().lower() or "upload"
+        resolved_source_key = str(source_key or "").strip()
+        if not resolved_source_key:
+            raise InputError("source_key is required for email sync state.")  # noqa: TRY003
+
+        started_at = datetime.now(timezone.utc).isoformat()
+        normalized_cursor = self._normalize_email_sync_cursor(cursor)
+
+        with self.transaction() as conn:
+            source_row_id = self._resolve_email_sync_source_row_id(
+                conn,
+                tenant_id=resolved_tenant,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+                create_if_missing=True,
+            )
+            if source_row_id is None:
+                raise DatabaseError("Failed to resolve email source for sync state.")  # noqa: TRY003
+
+            existing_row = self._fetch_email_sync_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                source_id=source_row_id,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+            )
+            next_cursor = (
+                normalized_cursor
+                if normalized_cursor is not None
+                else (existing_row or {}).get("cursor")
+            )
+
+            if existing_row:
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "UPDATE email_sync_state SET "
+                        "cursor = ?, "
+                        "last_run_at = ?, "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ?"
+                    ),
+                    (next_cursor, started_at, int(existing_row["id"])),
+                )
+            else:
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "INSERT INTO email_sync_state "
+                        "(tenant_id, source_id, cursor, last_run_at, last_success_at, error_state, retry_backoff_count, updated_at) "
+                        "VALUES (?, ?, ?, ?, NULL, NULL, 0, CURRENT_TIMESTAMP)"
+                    ),
+                    (
+                        resolved_tenant,
+                        source_row_id,
+                        next_cursor,
+                        started_at,
+                    ),
+                )
+
+            state = self._fetch_email_sync_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                source_id=source_row_id,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+            )
+            if not state:
+                raise DatabaseError("Failed to persist email sync start state.")  # noqa: TRY003
+            return state
+
+    def mark_email_sync_run_succeeded(
+        self,
+        *,
+        provider: str,
+        source_key: str,
+        cursor: str | None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_provider = str(provider or "").strip().lower() or "upload"
+        resolved_source_key = str(source_key or "").strip()
+        if not resolved_source_key:
+            raise InputError("source_key is required for email sync state.")  # noqa: TRY003
+
+        succeeded_at = datetime.now(timezone.utc).isoformat()
+        normalized_cursor = self._normalize_email_sync_cursor(cursor)
+
+        with self.transaction() as conn:
+            source_row_id = self._resolve_email_sync_source_row_id(
+                conn,
+                tenant_id=resolved_tenant,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+                create_if_missing=True,
+            )
+            if source_row_id is None:
+                raise DatabaseError("Failed to resolve email source for sync state.")  # noqa: TRY003
+
+            existing_row = self._fetch_email_sync_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                source_id=source_row_id,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+            )
+            next_cursor = (
+                normalized_cursor
+                if normalized_cursor is not None
+                else (existing_row or {}).get("cursor")
+            )
+
+            if existing_row:
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "UPDATE email_sync_state SET "
+                        "cursor = ?, "
+                        "last_run_at = ?, "
+                        "last_success_at = ?, "
+                        "error_state = NULL, "
+                        "retry_backoff_count = 0, "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ?"
+                    ),
+                    (
+                        next_cursor,
+                        succeeded_at,
+                        succeeded_at,
+                        int(existing_row["id"]),
+                    ),
+                )
+            else:
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "INSERT INTO email_sync_state "
+                        "(tenant_id, source_id, cursor, last_run_at, last_success_at, error_state, retry_backoff_count, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP)"
+                    ),
+                    (
+                        resolved_tenant,
+                        source_row_id,
+                        next_cursor,
+                        succeeded_at,
+                        succeeded_at,
+                    ),
+                )
+
+            state = self._fetch_email_sync_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                source_id=source_row_id,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+            )
+            if not state:
+                raise DatabaseError("Failed to persist email sync success state.")  # noqa: TRY003
+            return state
+
+    def mark_email_sync_run_failed(
+        self,
+        *,
+        provider: str,
+        source_key: str,
+        error_state: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_provider = str(provider or "").strip().lower() or "upload"
+        resolved_source_key = str(source_key or "").strip()
+        if not resolved_source_key:
+            raise InputError("source_key is required for email sync state.")  # noqa: TRY003
+
+        failed_at = datetime.now(timezone.utc).isoformat()
+        normalized_error = str(error_state or "sync_failed").strip()[:1024] or "sync_failed"
+
+        with self.transaction() as conn:
+            source_row_id = self._resolve_email_sync_source_row_id(
+                conn,
+                tenant_id=resolved_tenant,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+                create_if_missing=True,
+            )
+            if source_row_id is None:
+                raise DatabaseError("Failed to resolve email source for sync state.")  # noqa: TRY003
+
+            existing_row = self._fetch_email_sync_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                source_id=source_row_id,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+            )
+            if existing_row:
+                retry_count = int(existing_row.get("retry_backoff_count") or 0) + 1
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "UPDATE email_sync_state SET "
+                        "last_run_at = ?, "
+                        "error_state = ?, "
+                        "retry_backoff_count = ?, "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ?"
+                    ),
+                    (
+                        failed_at,
+                        normalized_error,
+                        retry_count,
+                        int(existing_row["id"]),
+                    ),
+                )
+            else:
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "INSERT INTO email_sync_state "
+                        "(tenant_id, source_id, cursor, last_run_at, last_success_at, error_state, retry_backoff_count, updated_at) "
+                        "VALUES (?, ?, NULL, ?, NULL, ?, 1, CURRENT_TIMESTAMP)"
+                    ),
+                    (
+                        resolved_tenant,
+                        source_row_id,
+                        failed_at,
+                        normalized_error,
+                    ),
+                )
+
+            state = self._fetch_email_sync_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                source_id=source_row_id,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+            )
+            if not state:
+                raise DatabaseError("Failed to persist email sync failure state.")  # noqa: TRY003
+            return state
+
+    @staticmethod
+    def _normalize_email_backfill_key(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        return text[:128] if text else "legacy_media_email"
+
+    def _fetch_email_backfill_state_row(
+        self,
+        conn,
+        *,
+        tenant_id: str,
+        backfill_key: str,
+    ) -> dict[str, Any] | None:
+        row = self._fetchone_with_connection(
+            conn,
+            (
+                "SELECT id, last_media_id, processed_count, success_count, skipped_count, "
+                "failed_count, status, last_error, started_at, completed_at, updated_at "
+                "FROM email_backfill_state "
+                "WHERE tenant_id = ? AND backfill_key = ? "
+                "LIMIT 1"
+            ),
+            (tenant_id, backfill_key),
+        )
+        if not row:
+            return None
+        return {
+            "id": int(row["id"]),
+            "tenant_id": tenant_id,
+            "backfill_key": backfill_key,
+            "last_media_id": int(row.get("last_media_id") or 0),
+            "processed_count": int(row.get("processed_count") or 0),
+            "success_count": int(row.get("success_count") or 0),
+            "skipped_count": int(row.get("skipped_count") or 0),
+            "failed_count": int(row.get("failed_count") or 0),
+            "status": str(row.get("status") or "idle"),
+            "last_error": row.get("last_error"),
+            "started_at": row.get("started_at"),
+            "completed_at": row.get("completed_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _ensure_email_backfill_state_row(
+        self,
+        conn,
+        *,
+        tenant_id: str,
+        backfill_key: str,
+    ) -> None:
+        self._execute_with_connection(
+            conn,
+            (
+                "INSERT INTO email_backfill_state "
+                "(tenant_id, backfill_key, last_media_id, processed_count, success_count, "
+                "skipped_count, failed_count, status, updated_at) "
+                "VALUES (?, ?, 0, 0, 0, 0, 0, 'idle', CURRENT_TIMESTAMP) "
+                "ON CONFLICT(tenant_id, backfill_key) DO NOTHING"
+            ),
+            (tenant_id, backfill_key),
+        )
+
+    def get_email_legacy_backfill_state(
+        self,
+        *,
+        tenant_id: str | None = None,
+        backfill_key: str = "legacy_media_email",
+    ) -> dict[str, Any] | None:
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_key = self._normalize_email_backfill_key(backfill_key)
+        with self.transaction() as conn:
+            return self._fetch_email_backfill_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                backfill_key=resolved_key,
+            )
+
+    @staticmethod
+    def _parse_email_backfill_safe_metadata(raw_safe_metadata: Any) -> dict[str, Any]:
+        if isinstance(raw_safe_metadata, dict):
+            metadata_map = dict(raw_safe_metadata)
+        else:
+            raw_text = str(raw_safe_metadata or "").strip()
+            if not raw_text:
+                return {}
+            try:
+                parsed = json.loads(raw_text)
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
+                return {}
+            if not isinstance(parsed, dict):
+                return {}
+            metadata_map = dict(parsed)
+
+        nested_meta = metadata_map.get("metadata")
+        if (
+            not isinstance(metadata_map.get("email"), dict)
+            and isinstance(nested_meta, dict)
+            and isinstance(nested_meta.get("email"), dict)
+        ):
+            # Some older document versions wrap parser metadata under "metadata".
+            merged = dict(nested_meta)
+            for key, value in metadata_map.items():
+                if key not in merged:
+                    merged[key] = value
+            metadata_map = merged
+
+        return metadata_map
+
+    @staticmethod
+    def _derive_email_backfill_source_fields(
+        *,
+        metadata_map: dict[str, Any],
+        media_url: Any,
+        tenant_id: str,
+    ) -> tuple[str, str, str | None]:
+        url_text = str(media_url or "").strip()
+        provider_hint = str(metadata_map.get("provider") or "").strip().lower()
+        source_hint = str(metadata_map.get("source") or "").strip().lower()
+        email_meta = metadata_map.get("email")
+        email_map = email_meta if isinstance(email_meta, dict) else {}
+
+        provider = provider_hint
+        if not provider:
+            if source_hint in {"gmail", "gmail_connector"} or url_text.lower().startswith("gmail://"):
+                provider = "gmail"
+            else:
+                provider = "upload"
+
+        source_key = str(
+            metadata_map.get("source_key")
+            or email_map.get("source_key")
+            or ""
+        ).strip()
+        source_message_id = str(
+            email_map.get("source_message_id")
+            or metadata_map.get("source_message_id")
+            or ""
+        ).strip() or None
+
+        if url_text.lower().startswith("gmail://"):
+            path = url_text[len("gmail://") :]
+            source_part, sep, message_part = path.partition("/")
+            source_part = source_part.strip()
+            message_part = message_part.strip()
+            if provider == "gmail" and not source_key and source_part:
+                source_key = source_part
+            if source_message_id is None and sep and message_part:
+                source_message_id = message_part
+
+        if not source_key:
+            source_key = f"legacy-media:{tenant_id}"
+
+        return provider, source_key, source_message_id
+
+    def _update_email_backfill_progress(
+        self,
+        *,
+        tenant_id: str,
+        backfill_key: str,
+        last_media_id: int,
+        delta_processed: int,
+        delta_success: int,
+        delta_skipped: int,
+        delta_failed: int,
+        status: str,
+        last_error: str | None = None,
+    ) -> None:
+        error_text = str(last_error or "").strip()
+        normalized_error = error_text[:1024] if error_text else None
+        with self.transaction() as conn:
+            self._ensure_email_backfill_state_row(
+                conn,
+                tenant_id=tenant_id,
+                backfill_key=backfill_key,
+            )
+            self._execute_with_connection(
+                conn,
+                (
+                    "UPDATE email_backfill_state SET "
+                    "last_media_id = ?, "
+                    "processed_count = processed_count + ?, "
+                    "success_count = success_count + ?, "
+                    "skipped_count = skipped_count + ?, "
+                    "failed_count = failed_count + ?, "
+                    "status = ?, "
+                    "last_error = CASE WHEN ? = 1 THEN ? ELSE last_error END, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE tenant_id = ? AND backfill_key = ?"
+                ),
+                (
+                    int(last_media_id),
+                    int(delta_processed),
+                    int(delta_success),
+                    int(delta_skipped),
+                    int(delta_failed),
+                    str(status or "running"),
+                    1 if normalized_error else 0,
+                    normalized_error,
+                    tenant_id,
+                    backfill_key,
+                ),
+            )
+
+    def run_email_legacy_backfill_batch(
+        self,
+        *,
+        batch_size: int = 500,
+        tenant_id: str | None = None,
+        backfill_key: str = "legacy_media_email",
+    ) -> dict[str, Any]:
+        """
+        Backfill one batch of legacy email Media rows into normalized email tables.
+
+        Progress is checkpointed in `email_backfill_state` by `(tenant_id, backfill_key)`
+        so repeated calls resume from the prior `last_media_id`.
+        """
+
+        try:
+            batch_size_int = int(batch_size)
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+            raise InputError("batch_size must be an integer.") from exc  # noqa: TRY003
+        if batch_size_int <= 0:
+            raise InputError("batch_size must be greater than zero.")  # noqa: TRY003
+
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_key = self._normalize_email_backfill_key(backfill_key)
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        with self.transaction() as conn:
+            self._ensure_email_backfill_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                backfill_key=resolved_key,
+            )
+            self._execute_with_connection(
+                conn,
+                (
+                    "UPDATE email_backfill_state SET "
+                    "status = 'running', "
+                    "started_at = COALESCE(started_at, ?), "
+                    "completed_at = NULL, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE tenant_id = ? AND backfill_key = ?"
+                ),
+                (now_iso, resolved_tenant, resolved_key),
+            )
+            state_before = self._fetch_email_backfill_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                backfill_key=resolved_key,
+            )
+            if state_before is None:
+                raise DatabaseError("Failed to initialize email backfill state.")  # noqa: TRY003
+            cursor_start = int(state_before.get("last_media_id") or 0)
+            rows = self._fetchall_with_connection(
+                conn,
+                (
+                    "SELECT m.id, m.url, m.title, m.content, m.author, m.ingestion_date, "
+                    "(SELECT dv.safe_metadata "
+                    " FROM DocumentVersions dv "
+                    " WHERE dv.media_id = m.id AND dv.deleted = 0 "
+                    " ORDER BY dv.version_number DESC, dv.id DESC "
+                    " LIMIT 1) AS safe_metadata_json, "
+                    "EXISTS(SELECT 1 FROM email_messages em WHERE em.media_id = m.id) AS already_backfilled "
+                    "FROM Media m "
+                    "WHERE m.deleted = 0 "
+                    "AND lower(COALESCE(m.type, '')) = 'email' "
+                    "AND m.id > ? "
+                    "ORDER BY m.id ASC "
+                    "LIMIT ?"
+                ),
+                (cursor_start, batch_size_int),
+            )
+
+        if not rows:
+            with self.transaction() as conn:
+                state = self._fetch_email_backfill_state_row(
+                    conn,
+                    tenant_id=resolved_tenant,
+                    backfill_key=resolved_key,
+                )
+                if state is None:
+                    raise DatabaseError("Failed to load email backfill state.")  # noqa: TRY003
+                final_status = (
+                    "completed_with_errors"
+                    if int(state.get("failed_count") or 0) > 0
+                    else "completed"
+                )
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "UPDATE email_backfill_state SET "
+                        "status = ?, "
+                        "completed_at = COALESCE(completed_at, ?), "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE tenant_id = ? AND backfill_key = ?"
+                    ),
+                    (final_status, now_iso, resolved_tenant, resolved_key),
+                )
+                state_after = self._fetch_email_backfill_state_row(
+                    conn,
+                    tenant_id=resolved_tenant,
+                    backfill_key=resolved_key,
+                )
+            return {
+                "tenant_id": resolved_tenant,
+                "backfill_key": resolved_key,
+                "batch_size": batch_size_int,
+                "cursor_start": cursor_start,
+                "cursor_end": cursor_start,
+                "scanned": 0,
+                "ingested": 0,
+                "skipped": 0,
+                "failed": 0,
+                "completed": True,
+                "status": final_status,
+                "state": state_after,
+            }
+
+        scanned = 0
+        ingested = 0
+        skipped = 0
+        failed = 0
+        cursor_end = cursor_start
+
+        for row in rows:
+            media_id = int(row.get("id") or 0)
+            if media_id <= 0:
+                continue
+            cursor_end = media_id
+            scanned += 1
+
+            delta_success = 0
+            delta_skipped = 0
+            delta_failed = 0
+            row_error: str | None = None
+
+            already_backfilled = bool(row.get("already_backfilled"))
+            if already_backfilled:
+                skipped += 1
+                delta_skipped = 1
+            else:
+                try:
+                    metadata_map = self._parse_email_backfill_safe_metadata(
+                        row.get("safe_metadata_json")
+                    )
+                    email_meta = metadata_map.get("email")
+                    if not isinstance(email_meta, dict):
+                        email_meta = {}
+                        metadata_map["email"] = email_meta
+
+                    subject_fallback = str(row.get("title") or "").strip()
+                    from_fallback = str(row.get("author") or "").strip()
+                    date_fallback = str(row.get("ingestion_date") or "").strip()
+                    if subject_fallback and not str(email_meta.get("subject") or "").strip():
+                        email_meta["subject"] = subject_fallback
+                    if from_fallback and not str(email_meta.get("from") or "").strip():
+                        email_meta["from"] = from_fallback
+                    if date_fallback and not str(email_meta.get("date") or "").strip():
+                        email_meta["date"] = date_fallback
+
+                    provider, source_key, source_message_id = self._derive_email_backfill_source_fields(
+                        metadata_map=metadata_map,
+                        media_url=row.get("url"),
+                        tenant_id=resolved_tenant,
+                    )
+                    if source_message_id and not str(email_meta.get("source_message_id") or "").strip():
+                        email_meta["source_message_id"] = source_message_id
+
+                    body_text = str(row.get("content") or "")
+                    labels = self._collect_email_labels(metadata_map)
+
+                    self.upsert_email_message_graph(
+                        media_id=media_id,
+                        metadata=metadata_map,
+                        body_text=body_text,
+                        tenant_id=resolved_tenant,
+                        provider=provider,
+                        source_key=source_key,
+                        source_message_id=source_message_id,
+                        labels=labels,
+                    )
+                    ingested += 1
+                    delta_success = 1
+                except Exception as exc:  # noqa: BLE001
+                    failed += 1
+                    delta_failed = 1
+                    row_error = f"{type(exc).__name__}: {exc}"
+
+            self._update_email_backfill_progress(
+                tenant_id=resolved_tenant,
+                backfill_key=resolved_key,
+                last_media_id=media_id,
+                delta_processed=1,
+                delta_success=delta_success,
+                delta_skipped=delta_skipped,
+                delta_failed=delta_failed,
+                status="running",
+                last_error=row_error,
+            )
+
+        with self.transaction() as conn:
+            remaining = self._fetchone_with_connection(
+                conn,
+                (
+                    "SELECT id FROM Media "
+                    "WHERE deleted = 0 "
+                    "AND lower(COALESCE(type, '')) = 'email' "
+                    "AND id > ? "
+                    "LIMIT 1"
+                ),
+                (cursor_end,),
+            )
+            has_more = bool(remaining)
+            state_after = self._fetch_email_backfill_state_row(
+                conn,
+                tenant_id=resolved_tenant,
+                backfill_key=resolved_key,
+            )
+            if state_after is None:
+                raise DatabaseError("Failed to load email backfill state after batch.")  # noqa: TRY003
+            final_status = str(state_after.get("status") or "running")
+            if not has_more:
+                final_status = (
+                    "completed_with_errors"
+                    if int(state_after.get("failed_count") or 0) > 0
+                    else "completed"
+                )
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "UPDATE email_backfill_state SET "
+                        "status = ?, "
+                        "completed_at = COALESCE(completed_at, ?), "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE tenant_id = ? AND backfill_key = ?"
+                    ),
+                    (final_status, now_iso, resolved_tenant, resolved_key),
+                )
+                state_after = self._fetch_email_backfill_state_row(
+                    conn,
+                    tenant_id=resolved_tenant,
+                    backfill_key=resolved_key,
+                )
+                if state_after is None:
+                    raise DatabaseError("Failed to persist final email backfill state.")  # noqa: TRY003
+
+        return {
+            "tenant_id": resolved_tenant,
+            "backfill_key": resolved_key,
+            "batch_size": batch_size_int,
+            "cursor_start": cursor_start,
+            "cursor_end": cursor_end,
+            "scanned": scanned,
+            "ingested": ingested,
+            "skipped": skipped,
+            "failed": failed,
+            "completed": not has_more,
+            "status": final_status,
+            "state": state_after,
+        }
+
+    def run_email_legacy_backfill_worker(
+        self,
+        *,
+        batch_size: int = 500,
+        tenant_id: str | None = None,
+        backfill_key: str = "legacy_media_email",
+        max_batches: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Worker-style loop for the legacy email backfill.
+
+        Runs `run_email_legacy_backfill_batch` repeatedly until completion or
+        until `max_batches` is reached.
+        """
+
+        max_batches_int: int | None = None
+        if max_batches is not None:
+            try:
+                max_batches_int = int(max_batches)
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+                raise InputError("max_batches must be an integer or None.") from exc  # noqa: TRY003
+            if max_batches_int <= 0:
+                raise InputError("max_batches must be greater than zero when provided.")  # noqa: TRY003
+
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_key = self._normalize_email_backfill_key(backfill_key)
+
+        batches_run = 0
+        scanned_total = 0
+        ingested_total = 0
+        skipped_total = 0
+        failed_total = 0
+        completed = False
+        stop_reason = "max_batches"
+        last_batch: dict[str, Any] | None = None
+
+        while True:
+            if max_batches_int is not None and batches_run >= max_batches_int:
+                break
+
+            batch_result = self.run_email_legacy_backfill_batch(
+                batch_size=batch_size,
+                tenant_id=resolved_tenant,
+                backfill_key=resolved_key,
+            )
+            last_batch = batch_result
+            batches_run += 1
+            scanned_total += int(batch_result.get("scanned") or 0)
+            ingested_total += int(batch_result.get("ingested") or 0)
+            skipped_total += int(batch_result.get("skipped") or 0)
+            failed_total += int(batch_result.get("failed") or 0)
+
+            if bool(batch_result.get("completed")):
+                completed = True
+                stop_reason = "completed"
+                break
+
+            # Safety valve: avoid infinite loops if a batch made no forward progress.
+            if int(batch_result.get("scanned") or 0) <= 0:
+                completed = True
+                stop_reason = "no_progress"
+                break
+
+        final_state = self.get_email_legacy_backfill_state(
+            tenant_id=resolved_tenant,
+            backfill_key=resolved_key,
+        )
+        return {
+            "tenant_id": resolved_tenant,
+            "backfill_key": resolved_key,
+            "batch_size": int(batch_size),
+            "max_batches": max_batches_int,
+            "batches_run": batches_run,
+            "scanned": scanned_total,
+            "ingested": ingested_total,
+            "skipped": skipped_total,
+            "failed": failed_total,
+            "completed": completed,
+            "stop_reason": stop_reason,
+            "last_batch": last_batch,
+            "state": final_state,
+        }
+
+    @staticmethod
+    def _normalize_email_label_values(values: list[str] | str | None) -> dict[str, str]:
+        if values is None:
+            return {}
+        raw_values: list[str] = []
+        if isinstance(values, str):
+            raw_values.extend(part.strip() for part in values.split(","))
+        elif isinstance(values, list):
+            raw_values.extend(str(part or "").strip() for part in values)
+
+        out: dict[str, str] = {}
+        for value in raw_values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key not in out:
+                out[key] = text
+        return out
+
+    def _resolve_email_message_row_for_source_message(
+        self,
+        conn,
+        *,
+        tenant_id: str,
+        source_id: int,
+        source_message_id: str,
+    ) -> dict[str, Any] | None:
+        return self._fetchone_with_connection(
+            conn,
+            (
+                "SELECT id, media_id, label_text, raw_metadata_json "
+                "FROM email_messages "
+                "WHERE tenant_id = ? AND source_id = ? AND source_message_id = ? "
+                "LIMIT 1"
+            ),
+            (tenant_id, int(source_id), source_message_id),
+        )
+
+    def apply_email_label_delta(
+        self,
+        *,
+        provider: str,
+        source_key: str,
+        source_message_id: str,
+        labels_added: list[str] | str | None = None,
+        labels_removed: list[str] | str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_provider = str(provider or "").strip().lower() or "upload"
+        resolved_source_key = str(source_key or "").strip()
+        resolved_message_key = str(source_message_id or "").strip()
+        if not resolved_source_key:
+            raise InputError("source_key is required for email label delta.")  # noqa: TRY003
+        if not resolved_message_key:
+            raise InputError("source_message_id is required for email label delta.")  # noqa: TRY003
+
+        added_map = self._normalize_email_label_values(labels_added)
+        removed_map = self._normalize_email_label_values(labels_removed)
+        if not added_map and not removed_map:
+            return {
+                "applied": False,
+                "reason": "empty_delta",
+                "tenant_id": resolved_tenant,
+                "provider": resolved_provider,
+                "source_key": resolved_source_key,
+                "source_message_id": resolved_message_key,
+                "labels": [],
+            }
+
+        # Net out contradictory changes in a single delta window.
+        overlap_keys = set(added_map.keys()) & set(removed_map.keys())
+        for key in overlap_keys:
+            added_map.pop(key, None)
+            removed_map.pop(key, None)
+
+        with self.transaction() as conn:
+            source_row_id = self._resolve_email_sync_source_row_id(
+                conn,
+                tenant_id=resolved_tenant,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+                create_if_missing=False,
+            )
+            if source_row_id is None:
+                return {
+                    "applied": False,
+                    "reason": "source_not_found",
+                    "tenant_id": resolved_tenant,
+                    "provider": resolved_provider,
+                    "source_key": resolved_source_key,
+                    "source_message_id": resolved_message_key,
+                    "labels": [],
+                }
+
+            message_row = self._resolve_email_message_row_for_source_message(
+                conn,
+                tenant_id=resolved_tenant,
+                source_id=source_row_id,
+                source_message_id=resolved_message_key,
+            )
+            if message_row is None:
+                return {
+                    "applied": False,
+                    "reason": "message_not_found",
+                    "tenant_id": resolved_tenant,
+                    "provider": resolved_provider,
+                    "source_key": resolved_source_key,
+                    "source_message_id": resolved_message_key,
+                    "labels": [],
+                }
+
+            email_message_id = int(message_row["id"])
+            media_id = int(message_row["media_id"])
+
+            removed_count = 0
+            for label_key in removed_map.keys():
+                label_row = self._fetchone_with_connection(
+                    conn,
+                    (
+                        "SELECT id FROM email_labels "
+                        "WHERE tenant_id = ? AND label_key = ? "
+                        "LIMIT 1"
+                    ),
+                    (resolved_tenant, label_key),
+                )
+                if not label_row:
+                    continue
+                delete_cursor = self._execute_with_connection(
+                    conn,
+                    (
+                        "DELETE FROM email_message_labels "
+                        "WHERE email_message_id = ? AND label_id = ?"
+                    ),
+                    (email_message_id, int(label_row["id"])),
+                )
+                removed_count += int(getattr(delete_cursor, "rowcount", 0) or 0)
+
+            added_count = 0
+            for label_key, label_name in added_map.items():
+                self._execute_with_connection(
+                    conn,
+                    (
+                        "INSERT INTO email_labels (tenant_id, label_key, label_name) "
+                        "VALUES (?, ?, ?) "
+                        "ON CONFLICT(tenant_id, label_key) "
+                        "DO UPDATE SET label_name = EXCLUDED.label_name, updated_at = CURRENT_TIMESTAMP"
+                    ),
+                    (resolved_tenant, label_key, label_name),
+                )
+                label_row = self._fetchone_with_connection(
+                    conn,
+                    (
+                        "SELECT id FROM email_labels "
+                        "WHERE tenant_id = ? AND label_key = ? "
+                        "LIMIT 1"
+                    ),
+                    (resolved_tenant, label_key),
+                )
+                if not label_row:
+                    continue
+                insert_cursor = self._execute_with_connection(
+                    conn,
+                    (
+                        "INSERT INTO email_message_labels (email_message_id, label_id) "
+                        "VALUES (?, ?) ON CONFLICT DO NOTHING"
+                    ),
+                    (email_message_id, int(label_row["id"])),
+                )
+                added_count += int(getattr(insert_cursor, "rowcount", 0) or 0)
+
+            label_rows = self._fetchall_with_connection(
+                conn,
+                (
+                    "SELECT el.label_name AS label_name "
+                    "FROM email_message_labels eml "
+                    "JOIN email_labels el ON el.id = eml.label_id "
+                    "WHERE eml.email_message_id = ? AND el.tenant_id = ? "
+                    "ORDER BY el.label_name ASC"
+                ),
+                (email_message_id, resolved_tenant),
+            )
+            final_labels = [
+                str(row.get("label_name") or "").strip()
+                for row in label_rows
+                if str(row.get("label_name") or "").strip()
+            ]
+            label_text = ", ".join(final_labels) if final_labels else None
+
+            raw_metadata_json = message_row.get("raw_metadata_json")
+            metadata_json_out = raw_metadata_json
+            if isinstance(raw_metadata_json, str) and raw_metadata_json.strip():
+                with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+                    metadata_obj = json.loads(raw_metadata_json)
+                    if isinstance(metadata_obj, dict):
+                        metadata_obj["labels"] = final_labels
+                        email_obj = metadata_obj.get("email")
+                        if isinstance(email_obj, dict):
+                            email_obj["labels"] = final_labels
+                        metadata_json_out = json.dumps(metadata_obj, ensure_ascii=False)
+
+            self._execute_with_connection(
+                conn,
+                (
+                    "UPDATE email_messages "
+                    "SET label_text = ?, raw_metadata_json = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ?"
+                ),
+                (label_text, metadata_json_out, email_message_id),
+            )
+
+            if self.backend_type == BackendType.SQLITE:
+                with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+                    self._execute_with_connection(
+                        conn,
+                        (
+                            "INSERT OR REPLACE INTO email_fts "
+                            "(rowid, subject, body_text, from_text, to_text, cc_text, bcc_text, label_text) "
+                            "SELECT id, COALESCE(subject, ''), COALESCE(body_text, ''), "
+                            "COALESCE(from_text, ''), COALESCE(to_text, ''), "
+                            "COALESCE(cc_text, ''), COALESCE(bcc_text, ''), COALESCE(label_text, '') "
+                            "FROM email_messages WHERE id = ?"
+                        ),
+                        (email_message_id,),
+                    )
+
+            return {
+                "applied": bool(added_count or removed_count),
+                "reason": "ok",
+                "tenant_id": resolved_tenant,
+                "provider": resolved_provider,
+                "source_key": resolved_source_key,
+                "source_message_id": resolved_message_key,
+                "source_id": int(source_row_id),
+                "email_message_id": email_message_id,
+                "media_id": media_id,
+                "added_count": int(added_count),
+                "removed_count": int(removed_count),
+                "labels": final_labels,
+            }
+
+    def reconcile_email_message_state(
+        self,
+        *,
+        provider: str,
+        source_key: str,
+        source_message_id: str,
+        tenant_id: str | None = None,
+        deleted: bool | None = None,
+    ) -> dict[str, Any]:
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        resolved_provider = str(provider or "").strip().lower() or "upload"
+        resolved_source_key = str(source_key or "").strip()
+        resolved_message_key = str(source_message_id or "").strip()
+        if not resolved_source_key:
+            raise InputError("source_key is required for email state reconciliation.")  # noqa: TRY003
+        if not resolved_message_key:
+            raise InputError("source_message_id is required for email state reconciliation.")  # noqa: TRY003
+
+        if deleted is None:
+            return {
+                "applied": False,
+                "reason": "no_state_change",
+                "tenant_id": resolved_tenant,
+                "provider": resolved_provider,
+                "source_key": resolved_source_key,
+                "source_message_id": resolved_message_key,
+            }
+
+        with self.transaction() as conn:
+            source_row_id = self._resolve_email_sync_source_row_id(
+                conn,
+                tenant_id=resolved_tenant,
+                provider=resolved_provider,
+                source_key=resolved_source_key,
+                create_if_missing=False,
+            )
+            if source_row_id is None:
+                return {
+                    "applied": False,
+                    "reason": "source_not_found",
+                    "tenant_id": resolved_tenant,
+                    "provider": resolved_provider,
+                    "source_key": resolved_source_key,
+                    "source_message_id": resolved_message_key,
+                }
+
+            message_row = self._resolve_email_message_row_for_source_message(
+                conn,
+                tenant_id=resolved_tenant,
+                source_id=source_row_id,
+                source_message_id=resolved_message_key,
+            )
+            if message_row is None:
+                return {
+                    "applied": False,
+                    "reason": "message_not_found",
+                    "tenant_id": resolved_tenant,
+                    "provider": resolved_provider,
+                    "source_key": resolved_source_key,
+                    "source_message_id": resolved_message_key,
+                    "source_id": int(source_row_id),
+                }
+
+            media_id = int(message_row["media_id"])
+            media_row = self._fetchone_with_connection(
+                conn,
+                "SELECT deleted FROM Media WHERE id = ? LIMIT 1",
+                (media_id,),
+            )
+            media_deleted = bool((media_row or {}).get("deleted"))
+
+        if bool(deleted):
+            if media_deleted:
+                return {
+                    "applied": False,
+                    "reason": "already_deleted",
+                    "tenant_id": resolved_tenant,
+                    "provider": resolved_provider,
+                    "source_key": resolved_source_key,
+                    "source_message_id": resolved_message_key,
+                    "media_id": media_id,
+                }
+            removed = bool(self.soft_delete_media(media_id, cascade=True))
+            return {
+                "applied": removed,
+                "reason": "deleted" if removed else "delete_failed",
+                "tenant_id": resolved_tenant,
+                "provider": resolved_provider,
+                "source_key": resolved_source_key,
+                "source_message_id": resolved_message_key,
+                "media_id": media_id,
+            }
+
+        return {
+            "applied": False,
+            "reason": "unsupported_state",
+            "tenant_id": resolved_tenant,
+            "provider": resolved_provider,
+            "source_key": resolved_source_key,
+            "source_message_id": resolved_message_key,
+            "media_id": media_id,
+        }
+
+    @staticmethod
+    def _parse_email_retention_datetime(value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+            normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+            parsed = parsedate_to_datetime(text)
+            if parsed is not None:
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
+        return None
+
+    def _cleanup_email_orphans_for_tenant(
+        self,
+        conn,
+        *,
+        tenant_id: str,
+        delete_empty_sources: bool = False,
+    ) -> dict[str, int]:
+        labels_cursor = self._execute_with_connection(
+            conn,
+            (
+                "DELETE FROM email_labels "
+                "WHERE tenant_id = ? "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM email_message_labels eml "
+                "WHERE eml.label_id = email_labels.id"
+                ")"
+            ),
+            (tenant_id,),
+        )
+        participants_cursor = self._execute_with_connection(
+            conn,
+            (
+                "DELETE FROM email_participants "
+                "WHERE tenant_id = ? "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM email_message_participants emp "
+                "WHERE emp.participant_id = email_participants.id"
+                ")"
+            ),
+            (tenant_id,),
+        )
+
+        sources_deleted = 0
+        if delete_empty_sources:
+            sources_cursor = self._execute_with_connection(
+                conn,
+                (
+                    "DELETE FROM email_sources "
+                    "WHERE tenant_id = ? "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM email_messages em "
+                    "WHERE em.source_id = email_sources.id"
+                    ")"
+                ),
+                (tenant_id,),
+            )
+            sources_deleted = int(getattr(sources_cursor, "rowcount", 0) or 0)
+
+        return {
+            "labels_deleted": int(getattr(labels_cursor, "rowcount", 0) or 0),
+            "participants_deleted": int(getattr(participants_cursor, "rowcount", 0) or 0),
+            "sources_deleted": int(sources_deleted),
+        }
+
+    def enforce_email_retention_policy(
+        self,
+        *,
+        retention_days: int,
+        tenant_id: str | None = None,
+        hard_delete: bool = False,
+        include_missing_internal_date: bool = False,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Apply tenant-scoped retention policy to normalized email rows."""
+
+        try:
+            retention_days_int = int(retention_days)
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+            raise InputError("retention_days must be an integer.") from exc  # noqa: TRY003
+        if retention_days_int < 0:
+            raise InputError("retention_days must be greater than or equal to zero.")  # noqa: TRY003
+
+        limit_int = None
+        if limit is not None:
+            try:
+                limit_int = int(limit)
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+                raise InputError("limit must be an integer when provided.") from exc  # noqa: TRY003
+            if limit_int <= 0:
+                raise InputError("limit must be greater than zero when provided.")  # noqa: TRY003
+
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=retention_days_int)
+
+        with self.transaction() as conn:
+            candidate_rows = self._fetchall_with_connection(
+                conn,
+                (
+                    "SELECT "
+                    "em.id AS email_message_id, "
+                    "em.media_id AS media_id, "
+                    "em.internal_date AS internal_date, "
+                    "m.deleted AS media_deleted "
+                    "FROM email_messages em "
+                    "JOIN Media m ON m.id = em.media_id "
+                    "WHERE em.tenant_id = ? "
+                    "ORDER BY em.internal_date ASC, em.id ASC"
+                ),
+                (resolved_tenant,),
+            )
+
+        skipped_missing_date = 0
+        skipped_already_deleted = 0
+        eligible_message_ids: list[int] = []
+        candidate_media_ids: list[int] = []
+        seen_media_ids: set[int] = set()
+        for row in candidate_rows:
+            parsed_dt = self._parse_email_retention_datetime(row.get("internal_date"))
+            if parsed_dt is None and not include_missing_internal_date:
+                skipped_missing_date += 1
+                continue
+            if parsed_dt is not None and parsed_dt > cutoff_dt:
+                continue
+
+            media_id = int(row["media_id"])
+            media_deleted = bool(row.get("media_deleted"))
+            if not hard_delete and media_deleted:
+                skipped_already_deleted += 1
+                continue
+
+            eligible_message_ids.append(int(row["email_message_id"]))
+            if media_id in seen_media_ids:
+                continue
+            seen_media_ids.add(media_id)
+            candidate_media_ids.append(media_id)
+
+        total_candidate_media = len(candidate_media_ids)
+        if limit_int is not None:
+            candidate_media_ids = candidate_media_ids[:limit_int]
+
+        failed_media_ids: list[int] = []
+        applied_media_ids: list[int] = []
+        for media_id in candidate_media_ids:
+            try:
+                removed = (
+                    permanently_delete_item(self, media_id)
+                    if hard_delete
+                    else self.soft_delete_media(media_id, cascade=True)
+                )
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Email retention delete failed for tenant={} media_id={}: {}",
+                    resolved_tenant,
+                    media_id,
+                    exc,
+                )
+                failed_media_ids.append(int(media_id))
+                continue
+            if removed:
+                applied_media_ids.append(int(media_id))
+            else:
+                failed_media_ids.append(int(media_id))
+
+        with self.transaction() as conn:
+            cleanup_counts = self._cleanup_email_orphans_for_tenant(
+                conn,
+                tenant_id=resolved_tenant,
+                delete_empty_sources=False,
+            )
+
+        return {
+            "tenant_id": resolved_tenant,
+            "retention_days": int(retention_days_int),
+            "hard_delete": bool(hard_delete),
+            "cutoff_internal_date": cutoff_dt.isoformat(),
+            "eligible_message_count": int(len(eligible_message_ids)),
+            "candidate_media_count": int(total_candidate_media),
+            "candidate_media_count_after_limit": int(len(candidate_media_ids)),
+            "applied_count": int(len(applied_media_ids)),
+            "applied_media_ids": applied_media_ids,
+            "failed_media_ids": failed_media_ids,
+            "skipped_missing_internal_date_count": int(skipped_missing_date),
+            "skipped_already_deleted_count": int(skipped_already_deleted),
+            "orphan_labels_deleted": int(cleanup_counts["labels_deleted"]),
+            "orphan_participants_deleted": int(cleanup_counts["participants_deleted"]),
+            "orphan_sources_deleted": int(cleanup_counts["sources_deleted"]),
+        }
+
+    def hard_delete_email_tenant_data(
+        self,
+        *,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Hard-delete all normalized email data (and linked Media rows) for a tenant."""
+
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+
+        with self.transaction() as conn:
+            rows = self._fetchall_with_connection(
+                conn,
+                (
+                    "SELECT em.media_id AS media_id "
+                    "FROM email_messages em "
+                    "WHERE em.tenant_id = ? "
+                    "ORDER BY em.id ASC"
+                ),
+                (resolved_tenant,),
+            )
+        media_ids = [int(row["media_id"]) for row in rows]
+
+        deleted_media_ids: list[int] = []
+        failed_media_ids: list[int] = []
+        for media_id in media_ids:
+            try:
+                removed = permanently_delete_item(self, int(media_id))
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Tenant email hard delete failed for tenant={} media_id={}: {}",
+                    resolved_tenant,
+                    media_id,
+                    exc,
+                )
+                failed_media_ids.append(int(media_id))
+                continue
+            if removed:
+                deleted_media_ids.append(int(media_id))
+            else:
+                failed_media_ids.append(int(media_id))
+
+        sync_state_deleted = 0
+        sources_deleted = 0
+        backfill_deleted = 0
+        cleanup_counts: dict[str, int] = {
+            "labels_deleted": 0,
+            "participants_deleted": 0,
+            "sources_deleted": 0,
+        }
+
+        with self.transaction() as conn:
+            cleanup_counts = self._cleanup_email_orphans_for_tenant(
+                conn,
+                tenant_id=resolved_tenant,
+                delete_empty_sources=True,
+            )
+
+            if not failed_media_ids:
+                sync_cursor = self._execute_with_connection(
+                    conn,
+                    "DELETE FROM email_sync_state WHERE tenant_id = ?",
+                    (resolved_tenant,),
+                )
+                sync_state_deleted = int(getattr(sync_cursor, "rowcount", 0) or 0)
+
+                source_cursor = self._execute_with_connection(
+                    conn,
+                    "DELETE FROM email_sources WHERE tenant_id = ?",
+                    (resolved_tenant,),
+                )
+                sources_deleted = int(getattr(source_cursor, "rowcount", 0) or 0)
+
+                backfill_cursor = self._execute_with_connection(
+                    conn,
+                    "DELETE FROM email_backfill_state WHERE tenant_id = ?",
+                    (resolved_tenant,),
+                )
+                backfill_deleted = int(getattr(backfill_cursor, "rowcount", 0) or 0)
+            else:
+                sources_deleted = int(cleanup_counts.get("sources_deleted", 0))
+
+        return {
+            "tenant_id": resolved_tenant,
+            "candidate_media_count": int(len(media_ids)),
+            "deleted_media_count": int(len(deleted_media_ids)),
+            "deleted_media_ids": deleted_media_ids,
+            "failed_media_ids": failed_media_ids,
+            "sync_state_deleted": int(sync_state_deleted),
+            "sources_deleted": int(sources_deleted),
+            "backfill_state_deleted": int(backfill_deleted),
+            "orphan_labels_deleted": int(cleanup_counts.get("labels_deleted", 0)),
+            "orphan_participants_deleted": int(cleanup_counts.get("participants_deleted", 0)),
+            "orphan_sources_deleted": int(cleanup_counts.get("sources_deleted", 0)),
+        }
+
+    @staticmethod
+    def _parse_email_relative_window(value: str) -> timedelta | None:
+        text = str(value or "").strip().lower()
+        match = re.fullmatch(r"(\d+)([smhdwy])", text)
+        if not match:
+            return None
+        magnitude = int(match.group(1))
+        unit = match.group(2)
+        if magnitude <= 0:
+            return None
+        if unit == "s":
+            return timedelta(seconds=magnitude)
+        if unit == "m":
+            return timedelta(minutes=magnitude)
+        if unit == "h":
+            return timedelta(hours=magnitude)
+        if unit == "d":
+            return timedelta(days=magnitude)
+        if unit == "w":
+            return timedelta(days=magnitude * 7)
+        if unit == "y":
+            return timedelta(days=magnitude * 365)
+        return None
+
+    @staticmethod
+    def _sqlite_fts_literal_term(value: str) -> str | None:
+        """Return a safely quoted SQLite FTS5 literal term."""
+
+        text = str(value or "").strip()
+        if not text:
+            return None
+        escaped = text.replace('"', '""')
+        return f'"{escaped}"'
+
+    def _parse_email_operator_query(self, query: str | None) -> list[list[dict[str, Any]]]:
+        cleaned = str(query or "").strip()
+        if not cleaned:
+            return [[]]
+        if "(" in cleaned or ")" in cleaned:
+            raise InputError("Parentheses are not supported in email query v1.")  # noqa: TRY003
+        try:
+            tokens = shlex.split(cleaned)
+        except ValueError as exc:
+            raise InputError(f"Invalid email query syntax: {exc}") from exc  # noqa: TRY003
+        if not tokens:
+            return [[]]
+
+        groups: list[list[dict[str, Any]]] = [[]]
+        for token in tokens:
+            raw_token = str(token or "").strip()
+            if not raw_token:
+                continue
+            if raw_token.upper() == "OR":
+                if not groups[-1]:
+                    raise InputError("Invalid email query: OR requires terms on both sides.")  # noqa: TRY003
+                groups.append([])
+                continue
+
+            negated = raw_token.startswith("-")
+            core = raw_token[1:] if negated else raw_token
+            if not core:
+                raise InputError("Invalid email query: empty negated token.")  # noqa: TRY003
+
+            term: dict[str, Any] = {"kind": "text", "value": core, "negated": negated}
+            field_name = ""
+            field_value = ""
+            if ":" in core:
+                field_name, field_value = core.split(":", 1)
+                field_name = field_name.strip().lower()
+                field_value = field_value.strip()
+
+            if field_name in {"from", "to", "cc", "bcc"} and field_value:
+                term = {
+                    "kind": "participant",
+                    "role": field_name,
+                    "value": field_value,
+                    "negated": negated,
+                }
+            elif field_name == "subject" and field_value:
+                term = {"kind": "subject", "value": field_value, "negated": negated}
+            elif field_name == "label" and field_value:
+                term = {"kind": "label", "value": field_value, "negated": negated}
+            elif field_name == "has" and field_value.lower() == "attachment":
+                term = {"kind": "has_attachment", "value": True, "negated": negated}
+            elif field_name in {"before", "after"} and field_value:
+                try:
+                    parsed_date = datetime.strptime(field_value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                except ValueError as exc:
+                    raise InputError(
+                        f"Invalid {field_name}: expected YYYY-MM-DD."
+                    ) from exc  # noqa: TRY003
+                term = {
+                    "kind": field_name,
+                    "value": parsed_date.isoformat(),
+                    "negated": negated,
+                }
+            elif field_name in {"older_than", "newer_than"} and field_value:
+                delta = self._parse_email_relative_window(field_value)
+                if delta is None:
+                    raise InputError(
+                        f"Invalid {field_name}: expected patterns like 7d, 12h, 30m."
+                    )  # noqa: TRY003
+                threshold = (datetime.now(timezone.utc) - delta).isoformat()
+                term = {
+                    "kind": field_name,
+                    "value": threshold,
+                    "negated": negated,
+                }
+            elif field_name and not field_value:
+                raise InputError(f"Invalid email query token '{raw_token}'.")  # noqa: TRY003
+
+            groups[-1].append(term)
+
+        if not groups or not groups[-1]:
+            raise InputError("Invalid email query: dangling OR without trailing term.")  # noqa: TRY003
+        return groups
+
+    def _email_like_clause(self, column_sql: str) -> str:
+        return (
+            f"{column_sql} ILIKE ?"
+            if self.backend_type == BackendType.POSTGRESQL
+            else f"{column_sql} LIKE ? COLLATE NOCASE"
+        )
+
+    def search_email_messages(
+        self,
+        *,
+        query: str | None = None,
+        tenant_id: str | None = None,
+        include_deleted: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """
+        Search normalized email messages with Stage-1 operator support.
+
+        Sorting is deterministic: internal_date DESC, email_message_id DESC.
+        """
+
+        query_present = "true" if isinstance(query, str) and query.strip() else "false"
+        include_deleted_label = "true" if include_deleted else "false"
+        started_at = time.perf_counter()
+        _emit_email_metric_counter(
+            "email_native_search_requests_total",
+            labels={
+                "phase": "attempt",
+                "query_present": query_present,
+                "include_deleted": include_deleted_label,
+            },
+        )
+
+        try:
+            try:
+                limit_int = max(1, min(500, int(limit)))
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
+                limit_int = 50
+            try:
+                offset_int = max(0, int(offset))
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
+                offset_int = 0
+
+            resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+            parsed_groups = self._parse_email_operator_query(query)
+
+            where_clauses = ["em.tenant_id = ?"]
+            if not include_deleted:
+                if self.backend_type == BackendType.POSTGRESQL:
+                    where_clauses.extend(
+                        [
+                            "COALESCE(m.deleted, FALSE) = FALSE",
+                            "COALESCE(m.is_trash, FALSE) = FALSE",
+                        ]
+                    )
+                else:
+                    where_clauses.extend(
+                        [
+                            "COALESCE(m.deleted, 0) = 0",
+                            "COALESCE(m.is_trash, 0) = 0",
+                        ]
+                    )
+            where_params: list[Any] = [resolved_tenant]
+
+            group_sql_clauses: list[str] = []
+            for group in parsed_groups:
+                group_parts: list[str] = []
+                for term in group:
+                    kind = str(term.get("kind") or "").strip().lower()
+                    value = term.get("value")
+                    negated = bool(term.get("negated"))
+                    part_sql = ""
+                    part_params: list[Any] = []
+
+                    if kind == "participant":
+                        role = str(term.get("role") or "").strip().lower()
+                        like_value = f"%{str(value or '').strip()}%"
+                        participant_display_expr = "COALESCE(ep.display_name, '')"
+                        participant_text_clause = (
+                            f"{self._email_like_clause('ep.email_normalized')} "
+                            f"OR {self._email_like_clause(participant_display_expr)}"
+                        )
+                        part_sql = (
+                            "EXISTS ("  # nosec B608
+                            "SELECT 1 FROM email_message_participants emp "
+                            "JOIN email_participants ep ON ep.id = emp.participant_id "
+                            "WHERE emp.email_message_id = em.id "
+                            "AND emp.role = ? "
+                            "AND ep.tenant_id = em.tenant_id "
+                            f"AND ({participant_text_clause})"
+                            ")"
+                        )
+                        part_params.extend([role, like_value, like_value])
+                    elif kind == "subject":
+                        like_value = f"%{str(value or '').strip()}%"
+                        part_sql = self._email_like_clause("COALESCE(em.subject, '')")
+                        part_params.append(like_value)
+                    elif kind == "label":
+                        like_value = f"%{str(value or '').strip()}%"
+                        label_text_clause = (
+                            f"{self._email_like_clause('el.label_name')} "
+                            f"OR {self._email_like_clause('el.label_key')}"
+                        )
+                        part_sql = (
+                            "EXISTS ("  # nosec B608
+                            "SELECT 1 FROM email_message_labels eml "
+                            "JOIN email_labels el ON el.id = eml.label_id "
+                            "WHERE eml.email_message_id = em.id "
+                            "AND el.tenant_id = em.tenant_id "
+                            f"AND ({label_text_clause})"
+                            ")"
+                        )
+                        part_params.extend([like_value, like_value])
+                    elif kind == "has_attachment":
+                        bool_true = True if self.backend_type == BackendType.POSTGRESQL else 1
+                        part_sql = (
+                            "(em.has_attachments = ? OR EXISTS ("
+                            "SELECT 1 FROM email_attachments ea WHERE ea.email_message_id = em.id"
+                            "))"
+                        )
+                        part_params.append(bool_true)
+                    elif kind == "before":
+                        part_sql = "em.internal_date < ?"
+                        part_params.append(str(value))
+                    elif kind == "after":
+                        part_sql = "em.internal_date >= ?"
+                        part_params.append(str(value))
+                    elif kind == "older_than":
+                        part_sql = "em.internal_date < ?"
+                        part_params.append(str(value))
+                    elif kind == "newer_than":
+                        part_sql = "em.internal_date >= ?"
+                        part_params.append(str(value))
+                    else:
+                        text_value = str(value or "").strip()
+                        like_value = f"%{text_value}%"
+                        like_clauses = [
+                            self._email_like_clause("COALESCE(em.subject, '')"),
+                            self._email_like_clause("COALESCE(em.body_text, '')"),
+                            self._email_like_clause("COALESCE(em.from_text, '')"),
+                            self._email_like_clause("COALESCE(em.to_text, '')"),
+                            self._email_like_clause("COALESCE(em.cc_text, '')"),
+                            self._email_like_clause("COALESCE(em.bcc_text, '')"),
+                            self._email_like_clause("COALESCE(em.label_text, '')"),
+                        ]
+                        part_sql = "(" + " OR ".join(like_clauses) + ")"
+                        part_params.extend([like_value] * len(like_clauses))
+                        if self.backend_type == BackendType.SQLITE and text_value:
+                            fts_term = self._sqlite_fts_literal_term(text_value)
+                            if fts_term:
+                                part_sql = (
+                                    "("  # nosec B608
+                                    "em.id IN (SELECT rowid FROM email_fts WHERE email_fts MATCH ?) "
+                                    f"OR {part_sql}"
+                                    ")"
+                                )
+                                part_params = [fts_term, *part_params]
+
+                    if not part_sql:
+                        continue
+                    if negated:
+                        part_sql = f"NOT ({part_sql})"
+                    group_parts.append(part_sql)
+                    where_params.extend(part_params)
+
+                if group_parts:
+                    group_sql_clauses.append("(" + " AND ".join(group_parts) + ")")
+
+            if group_sql_clauses:
+                where_clauses.append("(" + " OR ".join(group_sql_clauses) + ")")
+
+            where_sql = " AND ".join(where_clauses)
+            base_from = (
+                " FROM email_messages em "
+                "JOIN Media m ON m.id = em.media_id "
+                "WHERE " + where_sql
+            )
+
+            with self.transaction() as conn:
+                count_row = self._fetchone_with_connection(
+                    conn,
+                    "SELECT COUNT(*) AS total" + base_from,
+                    tuple(where_params),
+                )
+                total = int((count_row or {}).get("total", 0) or 0)
+
+                rows = self._fetchall_with_connection(
+                    conn,
+                    (
+                        "SELECT "  # nosec B608
+                        "em.id AS email_message_id, "
+                        "em.media_id AS media_id, "
+                        "m.uuid AS media_uuid, "
+                        "m.url AS media_url, "
+                        "m.title AS media_title, "
+                        "em.source_id AS source_id, "
+                        "em.source_message_id AS source_message_id, "
+                        "em.message_id AS message_id, "
+                        "em.subject AS subject, "
+                        "em.internal_date AS internal_date, "
+                        "em.from_text AS from_text, "
+                        "em.to_text AS to_text, "
+                        "em.cc_text AS cc_text, "
+                        "em.bcc_text AS bcc_text, "
+                        "em.label_text AS label_text, "
+                        "em.has_attachments AS has_attachments, "
+                        "(SELECT COUNT(*) FROM email_attachments ea WHERE ea.email_message_id = em.id) "
+                        "AS attachment_count"
+                        + base_from +
+                        " ORDER BY em.internal_date DESC, em.id DESC "
+                        "LIMIT ? OFFSET ?"
+                    ),
+                    (*where_params, limit_int, offset_int),
+                )
+
+            _emit_email_metric_counter(
+                "email_native_search_requests_total",
+                labels={
+                    "phase": "success",
+                    "query_present": query_present,
+                    "include_deleted": include_deleted_label,
+                },
+            )
+            _emit_email_metric_histogram(
+                "email_native_search_results_total",
+                float(total),
+                labels={
+                    "query_present": query_present,
+                    "include_deleted": include_deleted_label,
+                },
+            )
+            return rows, total
+        except InputError:
+            _emit_email_metric_counter(
+                "email_native_search_requests_total",
+                labels={
+                    "phase": "parse_error",
+                    "query_present": query_present,
+                    "include_deleted": include_deleted_label,
+                },
+            )
+            _emit_email_metric_counter(
+                "email_native_search_parse_failures_total",
+                labels={
+                    "query_present": query_present,
+                    "include_deleted": include_deleted_label,
+                },
+            )
+            raise
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+            _emit_email_metric_counter(
+                "email_native_search_requests_total",
+                labels={
+                    "phase": "error",
+                    "query_present": query_present,
+                    "include_deleted": include_deleted_label,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
+        finally:
+            _emit_email_metric_histogram(
+                "email_native_search_duration_seconds",
+                time.perf_counter() - started_at,
+                labels={
+                    "query_present": query_present,
+                    "include_deleted": include_deleted_label,
+                },
+            )
+
+    def get_email_message_detail(
+        self,
+        *,
+        email_message_id: int,
+        tenant_id: str | None = None,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a normalized email message graph for detail API responses."""
+
+        try:
+            message_id_int = int(email_message_id)
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+            raise InputError("email_message_id must be an integer.") from exc  # noqa: TRY003
+
+        if message_id_int <= 0:
+            raise InputError("email_message_id must be greater than zero.")  # noqa: TRY003
+
+        resolved_tenant = self._resolve_email_tenant_id(tenant_id)
+
+        deleted_clause = "" if include_deleted else "AND m.deleted = 0 "
+        with self.transaction() as conn:
+            message_row = self._fetchone_with_connection(
+                conn,
+                (
+                    "SELECT "  # nosec B608
+                    "em.id AS email_message_id, "
+                    "em.media_id AS media_id, "
+                    "m.uuid AS media_uuid, "
+                    "m.url AS media_url, "
+                    "m.title AS media_title, "
+                    "em.source_id AS source_id, "
+                    "es.provider AS source_provider, "
+                    "es.source_key AS source_key, "
+                    "es.display_name AS source_display_name, "
+                    "em.source_message_id AS source_message_id, "
+                    "em.message_id AS message_id, "
+                    "em.subject AS subject, "
+                    "em.body_text AS body_text, "
+                    "em.internal_date AS internal_date, "
+                    "em.from_text AS from_text, "
+                    "em.to_text AS to_text, "
+                    "em.cc_text AS cc_text, "
+                    "em.bcc_text AS bcc_text, "
+                    "em.label_text AS label_text, "
+                    "em.has_attachments AS has_attachments, "
+                    "em.raw_metadata_json AS raw_metadata_json "
+                    "FROM email_messages em "
+                    "JOIN Media m ON m.id = em.media_id "
+                    "JOIN email_sources es ON es.id = em.source_id "
+                    "WHERE em.id = ? AND em.tenant_id = ? "
+                    + deleted_clause +
+                    "LIMIT 1"
+                ),
+                (message_id_int, resolved_tenant),
+            )
+            if message_row is None:
+                return None
+
+            participant_rows = self._fetchall_with_connection(
+                conn,
+                (
+                    "SELECT emp.role AS role, ep.email_normalized AS email, ep.display_name AS display_name "
+                    "FROM email_message_participants emp "
+                    "JOIN email_participants ep ON ep.id = emp.participant_id "
+                    "WHERE emp.email_message_id = ? AND ep.tenant_id = ? "
+                    "ORDER BY "
+                    "CASE emp.role "
+                    "WHEN 'from' THEN 0 "
+                    "WHEN 'to' THEN 1 "
+                    "WHEN 'cc' THEN 2 "
+                    "WHEN 'bcc' THEN 3 "
+                    "ELSE 9 END, "
+                    "ep.email_normalized ASC"
+                ),
+                (message_id_int, resolved_tenant),
+            )
+
+            label_rows = self._fetchall_with_connection(
+                conn,
+                (
+                    "SELECT el.label_key AS label_key, el.label_name AS label_name "
+                    "FROM email_message_labels eml "
+                    "JOIN email_labels el ON el.id = eml.label_id "
+                    "WHERE eml.email_message_id = ? AND el.tenant_id = ? "
+                    "ORDER BY el.label_name ASC"
+                ),
+                (message_id_int, resolved_tenant),
+            )
+
+            attachment_rows = self._fetchall_with_connection(
+                conn,
+                (
+                    "SELECT id, filename, content_type, size_bytes, content_id, disposition, "
+                    "extracted_text_available "
+                    "FROM email_attachments "
+                    "WHERE email_message_id = ? "
+                    "ORDER BY id ASC"
+                ),
+                (message_id_int,),
+            )
+
+        participants: dict[str, list[dict[str, str | None]]] = {
+            "from": [],
+            "to": [],
+            "cc": [],
+            "bcc": [],
+        }
+        for row in participant_rows:
+            role = str(row.get("role") or "").strip().lower()
+            if role not in participants:
+                continue
+            participants[role].append(
+                {
+                    "email": row.get("email"),
+                    "display_name": row.get("display_name"),
+                }
+            )
+
+        labels = [
+            {
+                "label_key": row.get("label_key"),
+                "label_name": row.get("label_name"),
+            }
+            for row in label_rows
+        ]
+
+        attachments = [
+            {
+                "id": row.get("id"),
+                "filename": row.get("filename"),
+                "content_type": row.get("content_type"),
+                "size_bytes": row.get("size_bytes"),
+                "content_id": row.get("content_id"),
+                "disposition": row.get("disposition"),
+                "extracted_text_available": bool(row.get("extracted_text_available")),
+            }
+            for row in attachment_rows
+        ]
+
+        raw_metadata = None
+        raw_metadata_json = message_row.get("raw_metadata_json")
+        if isinstance(raw_metadata_json, str) and raw_metadata_json.strip():
+            try:
+                raw_metadata = json.loads(raw_metadata_json)
+            except json.JSONDecodeError:
+                raw_metadata = None
+
+        return {
+            "email_message_id": message_row.get("email_message_id"),
+            "message_id": message_row.get("message_id"),
+            "source_message_id": message_row.get("source_message_id"),
+            "subject": message_row.get("subject"),
+            "internal_date": message_row.get("internal_date"),
+            "body_text": message_row.get("body_text"),
+            "has_attachments": bool(message_row.get("has_attachments")),
+            "search_text": {
+                "from": message_row.get("from_text"),
+                "to": message_row.get("to_text"),
+                "cc": message_row.get("cc_text"),
+                "bcc": message_row.get("bcc_text"),
+                "labels": message_row.get("label_text"),
+            },
+            "media": {
+                "id": message_row.get("media_id"),
+                "uuid": message_row.get("media_uuid"),
+                "url": message_row.get("media_url"),
+                "title": message_row.get("media_title"),
+            },
+            "source": {
+                "id": message_row.get("source_id"),
+                "provider": message_row.get("source_provider"),
+                "source_key": message_row.get("source_key"),
+                "display_name": message_row.get("source_display_name"),
+            },
+            "participants": participants,
+            "labels": labels,
+            "attachments": attachments,
+            "raw_metadata": raw_metadata,
+        }
+
     def search_claims(
         self,
         query: str,
@@ -7786,7 +10726,7 @@ class MediaDatabase:
                             conditions.append("(" + " OR ".join(visibility_parts) + ")")
                     where_clause = " AND ".join(conditions)
                     sql = (
-                        "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "
+                        "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "  # nosec B608
                         "       bm25(claims_fts) AS relevance_score "
                         "FROM claims_fts JOIN Claims c ON claims_fts.rowid = c.id "
                         "JOIN Media m ON c.media_id = m.id "
@@ -7829,7 +10769,7 @@ class MediaDatabase:
                                 conditions.append("(" + " OR ".join(visibility_parts) + ")")
                         where_clause = " AND ".join(conditions)
                         sql = (
-                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "  # nosec B608
                             "       ts_rank(c.claims_fts_tsv, to_tsquery('english', ?)) AS relevance_score "
                             "FROM claims c JOIN media m ON c.media_id = m.id "
                             "WHERE c.claims_fts_tsv @@ to_tsquery('english', ?) AND "
@@ -7876,7 +10816,7 @@ class MediaDatabase:
                     like_pattern = f"%{cleaned_query}%"
                     if self.backend_type == BackendType.POSTGRESQL:
                         like_sql = (
-                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "  # nosec B608
                             "FROM claims c JOIN media m ON c.media_id = m.id "
                             "WHERE c.deleted IS FALSE AND c.claim_text ILIKE ?"
                             + like_clause +
@@ -7884,7 +10824,7 @@ class MediaDatabase:
                         )
                     else:
                         like_sql = (
-                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "  # nosec B608
                             "FROM Claims c JOIN Media m ON c.media_id = m.id "
                             "WHERE c.deleted = 0 AND c.claim_text LIKE ?"
                             + like_clause +
@@ -8043,7 +10983,7 @@ class MediaDatabase:
         if owner_filter is not None:
             conditions.append("client_id = ?")
             params.append(owner_filter)
-        sql = "SELECT * FROM data_tables WHERE " + " AND ".join(conditions) + " LIMIT 1"
+        sql = "SELECT * FROM data_tables WHERE " + " AND ".join(conditions) + " LIMIT 1"  # nosec B608
         row = self.execute_query(sql, tuple(params)).fetchone()
         return dict(row) if row else None
 
@@ -8065,7 +11005,7 @@ class MediaDatabase:
         if owner_filter is not None:
             conditions.append("client_id = ?")
             params.append(owner_filter)
-        sql = "SELECT * FROM data_tables WHERE " + " AND ".join(conditions) + " LIMIT 1"
+        sql = "SELECT * FROM data_tables WHERE " + " AND ".join(conditions) + " LIMIT 1"  # nosec B608
         row = self.execute_query(sql, tuple(params)).fetchone()
         return dict(row) if row else None
 
@@ -8111,7 +11051,7 @@ class MediaDatabase:
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
         sql = (
-            "SELECT * FROM data_tables "
+            "SELECT * FROM data_tables "  # nosec B608
             f"{where_clause} "
             "ORDER BY updated_at DESC, id DESC "
             "LIMIT ? OFFSET ?"
@@ -8151,7 +11091,7 @@ class MediaDatabase:
             params.extend([pattern, pattern])
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-        sql = f"SELECT COUNT(*) as total FROM data_tables {where_clause}"
+        sql = f"SELECT COUNT(*) as total FROM data_tables {where_clause}"  # nosec B608
         row = self.execute_query(sql, tuple(params)).fetchone()
         if not row:
             return 0
@@ -8176,13 +11116,13 @@ class MediaDatabase:
             owner_clause = " AND dt.client_id = ?"
             params.append(owner_filter)
         columns_sql = (
-            "SELECT c.table_id, COUNT(*) as count FROM data_table_columns c "
+            "SELECT c.table_id, COUNT(*) as count FROM data_table_columns c "  # nosec B608
             "INNER JOIN data_tables dt ON dt.id = c.table_id "
             f"WHERE c.deleted = 0 AND dt.deleted = 0 AND c.table_id IN ({placeholders}){owner_clause} "
             "GROUP BY c.table_id"
         )
         sources_sql = (
-            "SELECT s.table_id, COUNT(*) as count FROM data_table_sources s "
+            "SELECT s.table_id, COUNT(*) as count FROM data_table_sources s "  # nosec B608
             "INNER JOIN data_tables dt ON dt.id = s.table_id "
             f"WHERE s.deleted = 0 AND dt.deleted = 0 AND s.table_id IN ({placeholders}){owner_clause} "
             "GROUP BY s.table_id"
@@ -8266,7 +11206,7 @@ class MediaDatabase:
         update_parts.append("version = version + 1")
 
         params.append(int(table_id))
-        sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         if owner_filter is not None:
             sql += " AND client_id = ?"
             params.append(owner_filter)
@@ -8285,14 +11225,14 @@ class MediaDatabase:
                 params.append(owner_filter)
             cur = self._execute_with_connection(
                 conn,
-                f"""
+                """
                 UPDATE data_tables
                 SET deleted = 1,
                     updated_at = ?,
                     last_modified = ?,
                     version = version + 1
                 {where_clause}
-                """,
+                """.format_map(locals()),  # nosec B608
                 tuple(params),
             )
             updated = int(getattr(cur, "rowcount", 0) or 0)
@@ -8323,13 +11263,13 @@ class MediaDatabase:
         for table in ("data_table_columns", "data_table_rows", "data_table_sources"):
             self._execute_with_connection(
                 conn,
-                f"""
+                """
                 UPDATE {table}
                 SET deleted = 1,
                     last_modified = ?,
                     version = version + 1
                 {where_clause}
-                """,
+                """.format_map(locals()),  # nosec B608
                 tuple(params),
             )
 
@@ -8413,7 +11353,7 @@ class MediaDatabase:
             conditions.append("client_id = ?")
             params.append(owner_filter)
         sql = (
-            "SELECT * FROM data_table_columns WHERE "
+            "SELECT * FROM data_table_columns WHERE "  # nosec B608
             + " AND ".join(conditions)
             + " ORDER BY position ASC, id ASC"
         )
@@ -8434,13 +11374,13 @@ class MediaDatabase:
             where_clause += " AND client_id = ?"
             params.append(owner_filter)
         cur = self.execute_query(
-            f"""
+            """
             UPDATE data_table_columns
             SET deleted = 1,
                 last_modified = ?,
                 version = version + 1
             {where_clause}
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(params),
             commit=True,
         )
@@ -8897,7 +11837,7 @@ class MediaDatabase:
                     commit=False,
                     connection=conn,
                 )
-            sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"
+            sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
             self._execute_with_connection(conn, sql, tuple(params))
 
         return self.get_data_table(int(table_id), include_deleted=True)
@@ -8928,7 +11868,7 @@ class MediaDatabase:
             conditions.append("client_id = ?")
             params.append(owner_filter)
         sql = (
-            "SELECT * FROM data_table_rows WHERE "
+            "SELECT * FROM data_table_rows WHERE "  # nosec B608
             + " AND ".join(conditions)
             + " ORDER BY row_index ASC, id ASC LIMIT ? OFFSET ?"
         )
@@ -8950,13 +11890,13 @@ class MediaDatabase:
             where_clause += " AND client_id = ?"
             params.append(owner_filter)
         cur = self.execute_query(
-            f"""
+            """
             UPDATE data_table_rows
             SET deleted = 1,
                 last_modified = ?,
                 version = version + 1
             {where_clause}
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(params),
             commit=True,
         )
@@ -9045,7 +11985,7 @@ class MediaDatabase:
             conditions.append("client_id = ?")
             params.append(owner_filter)
         sql = (
-            "SELECT * FROM data_table_sources WHERE "
+            "SELECT * FROM data_table_sources WHERE "  # nosec B608
             + " AND ".join(conditions)
             + " ORDER BY id ASC"
         )
@@ -9066,13 +12006,13 @@ class MediaDatabase:
             where_clause += " AND client_id = ?"
             params.append(owner_filter)
         cur = self.execute_query(
-            f"""
+            """
             UPDATE data_table_sources
             SET deleted = 1,
                 last_modified = ?,
                 version = version + 1
             {where_clause}
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(params),
             commit=True,
         )
@@ -9135,7 +12075,7 @@ class MediaDatabase:
                 raise DatabaseError(  # noqa: TRY003
                     f"Unsafe identifier in version lookup: table={table!r}, column={id_col!r}"
                 )
-            cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))
+            cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))  # nosec B608
             result = cursor.fetchone()
             if result:
                 current_version = result['version']
@@ -9283,7 +12223,9 @@ class MediaDatabase:
         if self.backend_type == BackendType.POSTGRESQL:
             # Use fielded weights: title=A (highest), content=C (lower)
             try:
-                enable_syn = str(os.getenv("PG_FTS_ENABLE_SYNONYMS", "false")).lower() in {"1","true","yes","on","y"}
+                from tldw_Server_API.app.core.testing import env_flag_enabled
+
+                enable_syn = env_flag_enabled("PG_FTS_ENABLE_SYNONYMS")
                 if enable_syn:
                     # Best-effort create synonyms support
                     try:
@@ -9685,13 +12627,13 @@ class MediaDatabase:
         if cleaned_must_have:
             kw_mh_placeholders = ','.join('?' * len(cleaned_must_have))
             # Subquery to ensure media_id is linked to ALL provided keywords
-            conditions.append(f"""
+            conditions.append("""
                 (SELECT COUNT(DISTINCT k_mh.id)
                  FROM MediaKeywords mk_mh
                  JOIN Keywords k_mh ON mk_mh.keyword_id = k_mh.id
                  WHERE mk_mh.media_id = m.id AND k_mh.deleted = 0 AND LOWER(k_mh.keyword) IN ({kw_mh_placeholders})
                 ) = ?
-            """)
+            """).format_map(locals())  # nosec B608
             params.extend(cleaned_must_have)
             params.append(len(cleaned_must_have))
 
@@ -9699,14 +12641,14 @@ class MediaDatabase:
         cleaned_must_not_have = [k.strip().lower() for k in must_not_have_keywords if k and k.strip()] if must_not_have_keywords else []
         if cleaned_must_not_have:
             kw_mnh_placeholders = ','.join('?' * len(cleaned_must_not_have))
-            conditions.append(f"""
+            conditions.append("""
                 NOT EXISTS (
                     SELECT 1
                     FROM MediaKeywords mk_mnh
                     JOIN Keywords k_mnh ON mk_mnh.keyword_id = k_mnh.id
                     WHERE mk_mnh.media_id = m.id AND k_mnh.deleted = 0 AND LOWER(k_mnh.keyword) IN ({kw_mnh_placeholders})
                 )
-            """)
+            """).format_map(locals())  # nosec B608
             params.extend(cleaned_must_not_have)
 
         # Text Search Logic (FTS or LIKE)
@@ -9989,8 +12931,7 @@ class MediaDatabase:
                 titles = [row.get('title', 'Untitled') for row in results_list]
                 logging.info(f"Search results for '{search_query}' (page {page}): {titles}")
 
-            else:
-                return results_list, total_matches
+            return results_list, total_matches
 
         except sqlite3.Error as e:
             if "no such table: media_fts" in str(e).lower():
@@ -10375,7 +13316,7 @@ class MediaDatabase:
                        "m.author AS media_author"
 
         order_expr = self._keyword_order_expression("k.keyword")
-        query = f"""
+        query = """
             SELECT
                 k.keyword AS keyword_text,
                 {media_fields}
@@ -10386,7 +13327,7 @@ class MediaDatabase:
               AND k.keyword IN ({placeholders})
               AND k.deleted = ?
             ORDER BY {order_expr}, m.last_modified DESC, m.id DESC
-        """
+        """.format_map(locals())  # nosec B608
 
         params = tuple(media_params + unique_clean_keywords + [False])
 
@@ -10518,7 +13459,7 @@ class MediaDatabase:
         if not all(isinstance(cid, int) for cid in change_ids):
             raise ValueError("change_ids must be a list of integers.")  # noqa: TRY003
         placeholders = ','.join('?' * len(change_ids))
-        query = f"DELETE FROM sync_log WHERE change_id IN ({placeholders})"
+        query = f"DELETE FROM sync_log WHERE change_id IN ({placeholders})"  # nosec B608
         try:
             with self.transaction() as conn:
                 cursor = self._execute_with_connection(
@@ -10647,7 +13588,7 @@ class MediaDatabase:
                         params = (media_id, *keyword_ids)
                         self._execute_with_connection(
                             conn,
-                            f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({placeholders})",
+                            f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({placeholders})",  # nosec B608
                             params,
                         )
                         unlink_version = 1
@@ -10662,13 +13603,13 @@ class MediaDatabase:
                     for table, fk_col, uuid_col in child_tables:
                         children = self._fetchall_with_connection(
                             conn,
-                            f"SELECT id, {uuid_col} AS uuid, version FROM {table} WHERE {fk_col} = ? AND deleted = 0",
+                            f"SELECT id, {uuid_col} AS uuid, version FROM {table} WHERE {fk_col} = ? AND deleted = 0",  # nosec B608
                             (media_id,),
                         )
                         if not children:
                             continue
                         # Pass current_time for last_modified in child update
-                        update_sql = f"UPDATE {table} SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ? AND deleted = 0"
+                        update_sql = f"UPDATE {table} SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ? AND deleted = 0"  # nosec B608
                         processed_children_count = 0
                         for child in children:
                             child_id, child_uuid, child_current_version = child['id'], child['uuid'], child['version']
@@ -10898,7 +13839,13 @@ class MediaDatabase:
         if source_hash is not None:
             source_hash_str = str(source_hash).strip()
             source_hash_norm = source_hash_str if source_hash_str else None
-        url = url or f"local://{media_type}/{content_hash}"
+        raw_url_input = str(url).strip() if url is not None else ""
+        if raw_url_input:
+            dedupe_url_candidates = media_dedupe_url_candidates(raw_url_input)
+            url = normalize_media_dedupe_url(raw_url_input) or raw_url_input
+        else:
+            url = f"local://{media_type}/{content_hash}"
+            dedupe_url_candidates = (url,)
 
         # Determine the final chunk status before any DB operation
         final_chunk_status = "completed" if chunks is not None else "pending"
@@ -11043,11 +13990,24 @@ class MediaDatabase:
                 def _fetchall(query: str, params: tuple | list | dict | None = None):
                     return self._fetchall_with_connection(conn, query, params)
 
+                def _fetch_existing_by_url(select_columns: str):
+                    if len(dedupe_url_candidates) == 1:
+                        return _fetchone(
+                            f"SELECT {select_columns} "  # nosec B608
+                            "FROM Media WHERE url = ? AND deleted = 0 LIMIT 1",
+                            (dedupe_url_candidates[0],),
+                        )
+                    placeholders = ", ".join(["?"] * len(dedupe_url_candidates))
+                    return _fetchone(
+                        f"SELECT {select_columns} "  # nosec B608
+                        f"FROM Media WHERE url IN ({placeholders}) AND deleted = 0 "
+                        "ORDER BY last_modified DESC, id DESC LIMIT 1",
+                        tuple(dedupe_url_candidates),
+                    )
+
                 # Find existing record by URL or content_hash
-                row = _fetchone(
-                    "SELECT id, uuid, version, url, content_hash, source_hash, visibility, owner_user_id, org_id, team_id "
-                    "FROM Media WHERE url = ? AND deleted = 0 LIMIT 1",
-                    (url,),
+                row = _fetch_existing_by_url(
+                    "id, uuid, version, url, content_hash, source_hash, visibility, owner_user_id, org_id, team_id"
                 )
 
                 if not row:
@@ -11106,7 +14066,7 @@ class MediaDatabase:
                                 update_fields.append("last_modified = ?")
                                 update_params.append(now)
                                 update_sql = (
-                                    f"UPDATE Media SET {', '.join(update_fields)} "
+                                    f"UPDATE Media SET {', '.join(update_fields)} "  # nosec B608
                                     "WHERE id = ? AND version = ?"
                                 )
                                 update_params.extend([media_id, current_ver])
@@ -11259,10 +14219,7 @@ class MediaDatabase:
                     # Use lock to prevent race conditions during concurrent inserts
                     with self._media_insert_lock:
                         # Double-check within lock that record still doesn't exist
-                        recheck_row = _fetchone(
-                            "SELECT id, uuid, version FROM Media WHERE url = ? AND deleted = 0",
-                            (url,),
-                        )
+                        recheck_row = _fetch_existing_by_url("id, uuid, version")
                         if recheck_row:
                             # Another thread inserted while we were waiting for lock
                             media_id, media_uuid, current_ver = recheck_row["id"], recheck_row["uuid"], recheck_row["version"]
@@ -11348,54 +14305,135 @@ class MediaDatabase:
                         enable_si = True
                     if enable_si and chunks:
                         try:
-                            # Derive section ranges using chunk metadata 'section_path' or 'ancestry_titles'
+                            # Derive section ranges using chunk metadata
+                            # (`section_path` / `ancestry_titles`) and persist explicit
+                            # section hierarchy parent links.
+                            def _normalize_path(path_value: Any) -> list[str]:
+                                if path_value is None:
+                                    return []
+                                if isinstance(path_value, str):
+                                    raw = path_value.strip()
+                                    if not raw:
+                                        return []
+                                    if " > " in raw:
+                                        parts = [p.strip() for p in raw.split(" > ")]
+                                    elif "/" in raw:
+                                        parts = [p.strip() for p in raw.split("/")]
+                                    else:
+                                        parts = [raw]
+                                elif isinstance(path_value, (list, tuple)):
+                                    parts = [str(p).strip() for p in path_value if str(p).strip()]
+                                else:
+                                    parts = [str(path_value).strip()]
+                                return [p for p in parts if p]
+
+                            def _path_key(parts: list[str]) -> str:
+                                return " / ".join(parts)
+
+                            def _row_get(row: Any, key: str, default: Any = None) -> Any:
+                                if isinstance(row, dict):
+                                    return row.get(key, default)
+                                try:
+                                    return row[key]
+                                except _MEDIA_NONCRITICAL_EXCEPTIONS:
+                                    return default
+
                             sections_agg: dict[str, dict[str, Any]] = {}
                             order = 0
                             for ch in chunks:
-                                md = ch.get('metadata') or {}
-                                start = ch.get('start_char')
-                                end = ch.get('end_char')
+                                md = ch.get("metadata") or {}
+                                start = ch.get("start_char")
+                                end = ch.get("end_char")
                                 if start is None or end is None:
                                     continue
-                                path = md.get('section_path') or md.get('ancestry_titles') or []
-                                if isinstance(path, str):
-                                    # Some callers may store as CSV
-                                    path = [p.strip() for p in path.split('/') if p.strip()]
-                                if not isinstance(path, list) or not path:
+                                path_parts = _normalize_path(
+                                    md.get("section_path") or md.get("ancestry_titles")
+                                )
+                                if not path_parts:
                                     continue
-                                title = str(path[-1])
-                                key = ' / '.join([str(x) for x in path])
-                                rec = sections_agg.get(key)
-                                if not rec:
-                                    sections_agg[key] = {
-                                        'kind': 'section',
-                                        'level': len(path),
-                                        'title': title,
-                                        'start_char': int(start),
-                                        'end_char': int(end),
-                                        'order_index': order,
-                                        'path': key,
-                                    }
-                                    order += 1
-                                else:
-                                    # Expand section bounds
-                                    rec['start_char'] = min(int(start), int(rec['start_char']))
-                                    rec['end_char'] = max(int(end), int(rec['end_char']))
+
+                                # Build records for every hierarchy level so parent links
+                                # can be represented in DocumentStructureIndex.
+                                for depth in range(1, len(path_parts) + 1):
+                                    current_parts = path_parts[:depth]
+                                    key = _path_key(current_parts)
+                                    rec = sections_agg.get(key)
+                                    if rec is None:
+                                        parent_parts = current_parts[:-1]
+                                        sections_agg[key] = {
+                                            "kind": "section",
+                                            "level": depth,
+                                            "title": str(current_parts[-1]),
+                                            "start_char": int(start),
+                                            "end_char": int(end),
+                                            "order_index": order,
+                                            "path": key,
+                                            "parent_path": _path_key(parent_parts) if parent_parts else None,
+                                        }
+                                        order += 1
+                                    else:
+                                        rec["start_char"] = min(int(start), int(rec["start_char"]))
+                                        rec["end_char"] = max(int(end), int(rec["end_char"]))
 
                             section_ids_by_range: list[dict[str, Any]] = []
                             if sections_agg:
-                                # Insert sections first
-                                self._write_structure_index_records(conn, media_id, list(sections_agg.values()))
-                                # Preload section rows to speed up parent_id lookup
+                                section_records = sorted(
+                                    sections_agg.values(),
+                                    key=lambda r: (int(r.get("level") or 0), int(r.get("order_index") or 0)),
+                                )
+                                self._write_structure_index_records(conn, media_id, section_records)
+
+                                # Preload rows for fast section lookup + parent relinking.
+                                bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
                                 try:
-                                    cur = conn.execute(
-                                        "SELECT id, start_char, end_char FROM DocumentStructureIndex "
-                                        "WHERE media_id=? AND deleted=0 AND kind IN ('section','header')",
-                                        (media_id,),
+                                    cur = self._execute_with_connection(
+                                        conn,
+                                        "SELECT id, start_char, end_char, path FROM DocumentStructureIndex "
+                                        "WHERE media_id = ? AND deleted = ? AND kind IN ('section','header') "
+                                        "ORDER BY COALESCE(level, 0) DESC, start_char DESC",
+                                        (media_id, bool_false),
                                     )
-                                    section_ids_by_range = [dict(row) for row in cur.fetchall()]
+                                    fetched = cur.fetchall() or []
+                                    section_ids_by_range = [
+                                        {
+                                            "id": int(_row_get(row, "id", 0) or 0),
+                                            "start_char": int(_row_get(row, "start_char", 0) or 0),
+                                            "end_char": int(_row_get(row, "end_char", 0) or 0),
+                                            "path": str(_row_get(row, "path", "") or ""),
+                                        }
+                                        for row in fetched
+                                        if _row_get(row, "id") is not None
+                                    ]
                                 except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                     section_ids_by_range = []
+
+                                # Backfill parent_id now that section row ids are known.
+                                try:
+                                    now_ts = self._get_current_utc_timestamp_str()
+                                    path_to_id = {
+                                        str(r.get("path") or ""): int(r.get("id"))
+                                        for r in section_ids_by_range
+                                        if r.get("path")
+                                    }
+                                    for rec in section_records:
+                                        parent_path = rec.get("parent_path")
+                                        if not parent_path:
+                                            continue
+                                        child_id = path_to_id.get(str(rec.get("path") or ""))
+                                        parent_id = path_to_id.get(str(parent_path))
+                                        if not child_id or not parent_id or child_id == parent_id:
+                                            continue
+                                        self._execute_with_connection(
+                                            conn,
+                                            "UPDATE DocumentStructureIndex "
+                                            "SET parent_id = ?, last_modified = ?, client_id = ? "
+                                            "WHERE id = ?",
+                                            (int(parent_id), now_ts, client_id, int(child_id)),
+                                        )
+                                except _MEDIA_NONCRITICAL_EXCEPTIONS as _parent_err:
+                                    logging.warning(
+                                        f"Structure index parent-link population failed (non-fatal): {_parent_err}"
+                                    )
 
                             # Insert paragraph entries linked to their containing section
                             try:
@@ -11405,41 +14443,51 @@ class MediaDatabase:
                                 for ch in chunks:
                                     if not isinstance(ch, dict):
                                         continue
-                                    ctype = (ch.get('chunk_type') or '').lower()
+                                    ctype = (ch.get("chunk_type") or "").lower()
                                     # Treat text/list/code as paragraph-like; skip heading/table for this index
-                                    if ctype not in ('text', 'list', 'code'):
+                                    if ctype not in ("text", "list", "code"):
                                         continue
-                                    s = ch.get('start_char')
-                                    e = ch.get('end_char')
+                                    s = ch.get("start_char")
+                                    e = ch.get("end_char")
                                     if s is None or e is None:
                                         continue
                                     parent_id = None
                                     # Fast path: find containing section from preloaded ranges
                                     try:
                                         for row in section_ids_by_range:
-                                            if int(row.get('start_char')) <= int(s) < int(row.get('end_char')):
-                                                parent_id = int(row.get('id'))
+                                            if int(row.get("start_char") or 0) <= int(s) < int(row.get("end_char") or 0):
+                                                parent_id = int(row.get("id"))
                                                 break
                                     except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                         parent_id = None
                                     # Fallback DB lookup
                                     if parent_id is None:
                                         try:
-                                            cur2 = conn.execute(
-                                                "SELECT id FROM DocumentStructureIndex WHERE media_id=? AND deleted=0 AND kind IN ('section','header') AND start_char <= ? AND end_char > ? ORDER BY COALESCE(level,0) DESC, start_char DESC LIMIT 1",
-                                                (media_id, int(s), int(s)),
+                                            cur2 = self._execute_with_connection(
+                                                conn,
+                                                "SELECT id FROM DocumentStructureIndex "
+                                                "WHERE media_id = ? AND deleted = ? "
+                                                "AND kind IN ('section','header') "
+                                                "AND start_char <= ? AND end_char > ? "
+                                                "ORDER BY COALESCE(level, 0) DESC, start_char DESC LIMIT 1",
+                                                (media_id, bool_false, int(s), int(s)),
                                             )
                                             row2 = cur2.fetchone()
-                                            parent_id = int(row2['id']) if row2 else None
+                                            parent_id = int(_row_get(row2, "id", 0) or 0) if row2 else None
                                         except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                             parent_id = None
-                                    path = None
-                                    md = ch.get('metadata') or {}
-                                    if md.get('section_path'):
-                                        path = md.get('section_path') if isinstance(md.get('section_path'), str) else '/'.join(map(str, md.get('section_path')))
-                                    elif md.get('ancestry_titles'):
-                                        path = md.get('ancestry_titles') if isinstance(md.get('ancestry_titles'), str) else '/'.join(map(str, md.get('ancestry_titles')))
-                                    conn.execute(
+
+                                    md = ch.get("metadata") or {}
+                                    paragraph_path_parts = _normalize_path(
+                                        md.get("section_path") or md.get("ancestry_titles")
+                                    )
+                                    paragraph_path = (
+                                        _path_key(paragraph_path_parts)
+                                        if paragraph_path_parts
+                                        else None
+                                    )
+                                    self._execute_with_connection(
+                                        conn,
                                         """
                                         INSERT INTO DocumentStructureIndex (
                                             media_id, parent_id, kind, level, title, start_char, end_char,
@@ -11452,7 +14500,7 @@ class MediaDatabase:
                                             int(s),
                                             int(e),
                                             order,
-                                            path,
+                                            paragraph_path,
                                             created,
                                             created,
                                             client_id,
@@ -11486,7 +14534,11 @@ class MediaDatabase:
         """
         try:
             # Remove previous index (derived data)
-            conn.execute("DELETE FROM DocumentStructureIndex WHERE media_id = ?", (media_id,))
+            self._execute_with_connection(
+                conn,
+                "DELETE FROM DocumentStructureIndex WHERE media_id = ?",
+                (media_id,),
+            )
         except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.warning(f"Failed to clear old structure index for media_id={media_id}: {e}")
         if not records:
@@ -11496,7 +14548,8 @@ class MediaDatabase:
         inserted = 0
         for rec in records:
             try:
-                conn.execute(
+                self._execute_with_connection(
+                    conn,
                     """
                     INSERT INTO DocumentStructureIndex (
                         media_id, parent_id, kind, level, title, start_char, end_char,
@@ -11540,8 +14593,12 @@ class MediaDatabase:
         if not media_id:
             return 0
         with self.transaction() as conn:
-            cur = conn.execute("DELETE FROM DocumentStructureIndex WHERE media_id = ?", (media_id,))
-            return int(cur.rowcount or 0)
+            cur = self._execute_with_connection(
+                conn,
+                "DELETE FROM DocumentStructureIndex WHERE media_id = ?",
+                (media_id,),
+            )
+            return int(getattr(cur, "rowcount", 0) or 0)
 
     # =========================================================================
     # Chunking Templates Methods (moved earlier to ensure availability)
@@ -11675,7 +14732,7 @@ class MediaDatabase:
             conditions.append("uuid = ?")
             params.append(uuid)
 
-        query = f"SELECT * FROM ChunkingTemplates WHERE ({' OR '.join(conditions)})"
+        query = f"SELECT * FROM ChunkingTemplates WHERE ({' OR '.join(conditions)})"  # nosec B608
         if not include_deleted:
             query += " AND deleted = ?"
             params.append(False)
@@ -11841,11 +14898,12 @@ class MediaDatabase:
         ])
         params.extend([current_time, current_time, self.client_id, template['id'], False])
 
-        update_sql = f"""
+        updates_sql = ', '.join(updates)
+        update_sql = """
             UPDATE ChunkingTemplates
-            SET {', '.join(updates)}
+            SET {updates_sql}
             WHERE id = ? AND deleted = ?
-        """
+        """.format_map(locals())  # nosec B608
 
         with self.transaction() as conn:
             cursor = self._execute_with_connection(conn, update_sql, tuple(params))
@@ -11988,14 +15046,19 @@ class MediaDatabase:
         """Return the most specific section covering char_offset for media_id."""
         if media_id is None or char_offset is None:
             return None
+        bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
         query = (
             "SELECT id, title, level, start_char, end_char FROM DocumentStructureIndex "
-            "WHERE media_id = ? AND deleted = 0 AND kind IN ('section','header') "
+            "WHERE media_id = ? AND deleted = ? AND kind IN ('section','header') "
             "AND start_char <= ? AND end_char > ? ORDER BY COALESCE(level, 0) DESC, start_char DESC LIMIT 1"
         )
         try:
             with self.transaction() as conn:
-                cur = conn.execute(query, (media_id, char_offset, char_offset))
+                cur = self._execute_with_connection(
+                    conn,
+                    query,
+                    (media_id, bool_false, char_offset, char_offset),
+                )
                 row = cur.fetchone()
         except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return None
@@ -12010,13 +15073,15 @@ class MediaDatabase:
         if not media_id or not heading:
             return None
         try:
+            bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
             pattern = f"%{heading.strip()}%"
             with self.transaction() as conn:
-                cur = conn.execute(
+                cur = self._execute_with_connection(
+                    conn,
                     "SELECT start_char, end_char, title FROM DocumentStructureIndex "
-                    "WHERE media_id = ? AND deleted = 0 AND kind IN ('section','header') AND LOWER(title) LIKE LOWER(?) "
+                    "WHERE media_id = ? AND deleted = ? AND kind IN ('section','header') AND LOWER(title) LIKE LOWER(?) "
                     "ORDER BY COALESCE(level,0) DESC, (end_char - start_char) DESC LIMIT 1",
-                    (media_id, pattern),
+                    (media_id, bool_false, pattern),
                 )
                 row = cur.fetchone()
                 if not row:
@@ -12279,7 +15344,7 @@ class MediaDatabase:
                 params = (media_id, *list(ids_to_remove))
                 self._execute_with_connection(
                     connection,
-                    f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({remove_placeholders})",
+                    f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({remove_placeholders})",  # nosec B608
                     params,
                 )
                 for removed_id in ids_to_remove:
@@ -12415,7 +15480,7 @@ class MediaDatabase:
                         placeholders = ",".join("?" for _ in media_ids)
                         delete_cursor = self._execute_with_connection(
                             conn,
-                            f"DELETE FROM MediaKeywords WHERE keyword_id = ? AND media_id IN ({placeholders})",
+                            f"DELETE FROM MediaKeywords WHERE keyword_id = ? AND media_id IN ({placeholders})",  # nosec B608
                             (keyword_id, *media_ids),
                         )
                         deleted_link_count = getattr(delete_cursor, "rowcount", 0) or 0
@@ -12873,14 +15938,14 @@ class MediaDatabase:
                     limit_offset_clause += " OFFSET ?"
                     params.append(offset)
 
-            final_query = f"""
+            final_query = """
                 SELECT {select_clause}
                 FROM DocumentVersions dv
                 JOIN Media m ON dv.media_id = m.id
                 WHERE {where_clause}
                 ORDER BY dv.version_number DESC
                 {limit_offset_clause}
-            """
+            """.format_map(locals())  # nosec B608
 
             # --- Execution ---
             logging.debug(f"Executing get_all_document_versions query | Params: {params}")
@@ -13119,7 +16184,7 @@ class MediaDatabase:
                     params.append(0)
                     payload["vector_processing"] = 0
 
-                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
+                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"  # nosec B608
                 update_params = (*params, media_id, current_version)
                 cursor = self._execute_with_connection(conn, update_sql, update_params)
                 if cursor.rowcount == 0:
@@ -13191,7 +16256,7 @@ class MediaDatabase:
                     "chunking_status": error_status,
                 }
 
-                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
+                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"  # nosec B608
                 update_params = (*params, media_id, current_version)
                 cursor = self._execute_with_connection(conn, update_sql, update_params)
                 if cursor.rowcount == 0:
@@ -13223,7 +16288,7 @@ class MediaDatabase:
         """
         try:
             order_expr = self._keyword_order_expression("keyword")
-            query = f"SELECT keyword FROM Keywords WHERE deleted = ? ORDER BY {order_expr}"
+            query = f"SELECT keyword FROM Keywords WHERE deleted = ? ORDER BY {order_expr}"  # nosec B608
             cursor = self.execute_query(query, (False,))
             return [row['keyword'] for row in cursor.fetchall()]
         except DatabaseError:
@@ -13414,6 +16479,35 @@ class MediaDatabase:
         except sqlite3.Error:
             logger.exception(f"Error checking unvectorized chunks for media {media_id}")
             return False
+
+    def get_unvectorized_chunk_count(self, media_id: int) -> int | None:
+        """Return active UnvectorizedMediaChunks count for a media item, or None on query failure."""
+        try:
+            media_id_int = int(media_id)
+        except (TypeError, ValueError):
+            logger.warning(f"Invalid media_id for chunk count lookup: {media_id}")
+            return None
+
+        try:
+            cur = self.execute_query(
+                "SELECT COUNT(*) AS chunk_count FROM UnvectorizedMediaChunks "
+                "WHERE media_id = ? AND deleted = 0",
+                (media_id_int,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return 0
+
+            if isinstance(row, dict):
+                return int(row.get("chunk_count", 0) or 0)
+            with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+                return int(row["chunk_count"] or 0)
+            with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+                return int(row[0] or 0)
+            return 0
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
+            logger.exception(f"Error fetching unvectorized chunk count for media {media_id_int}")
+            return None
 
     def get_unvectorized_anchor_index_for_offset(self, media_id: int, approx_offset: int) -> int | None:
         """
@@ -13748,8 +16842,17 @@ def get_media_by_url(self, url: str, include_deleted=False, include_trash=False)
     if not url:
         raise InputError("url cannot be empty or None.")  # noqa: TRY003
 
-    query = "SELECT * FROM Media WHERE url = ?"
-    params = [url]
+    url_candidates = media_dedupe_url_candidates(url)
+    if not url_candidates:
+        raise InputError("url cannot be empty or None.")  # noqa: TRY003
+
+    if len(url_candidates) == 1:
+        query = "SELECT * FROM Media WHERE url = ?"
+        params = [url_candidates[0]]
+    else:
+        placeholders = ", ".join(["?"] * len(url_candidates))
+        query = f"SELECT * FROM Media WHERE url IN ({placeholders})"  # nosec B608
+        params = list(url_candidates)
 
     if not include_deleted:
         query += " AND deleted = 0"
@@ -14044,7 +17147,7 @@ def get_distinct_media_types(self, include_deleted=False, include_trash=False) -
 
     where_clause = " AND ".join(conditions)
 
-    query = f"SELECT DISTINCT type FROM Media WHERE {where_clause} ORDER BY type ASC"
+    query = f"SELECT DISTINCT type FROM Media WHERE {where_clause} ORDER BY type ASC"  # nosec B608
     try:
         cursor = self.execute_query(query)
         results = [row['type'] for row in cursor.fetchall() if row['type']]
@@ -14819,14 +17922,20 @@ def check_media_exists(db_instance: MediaDatabase, media_id: int | None = None, 
         query_parts.append("id = ?")
         params.append(media_id)
     if url:
-        query_parts.append("url = ?")
-        params.append(url)
+        url_candidates = media_dedupe_url_candidates(url)
+        if len(url_candidates) == 1:
+            query_parts.append("url = ?")
+            params.append(url_candidates[0])
+        elif url_candidates:
+            placeholders = ", ".join(["?"] * len(url_candidates))
+            query_parts.append(f"url IN ({placeholders})")
+            params.extend(url_candidates)
     if content_hash:
         query_parts.append("content_hash = ?")
         params.append(content_hash)
     if not query_parts:
         raise ValueError("Must provide id, url, or content_hash to check.")  # noqa: TRY003
-    query = f"SELECT id FROM Media WHERE ({' OR '.join(query_parts)}) AND deleted = 0 LIMIT 1"
+    query = f"SELECT id FROM Media WHERE ({' OR '.join(query_parts)}) AND deleted = 0 LIMIT 1"  # nosec B608
     try:
         cursor = db_instance.execute_query(query, tuple(params))
         result = cursor.fetchone()
@@ -14883,7 +17992,7 @@ def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> tuple[int, i
             logger.info(f"Found {len(items_to_process)} items to process.")
             for item in items_to_process:
                 media_id, title = item['id'], item['title']
-                logger.debug(f"Processing item ID {media_id} ('{title}') for sync delete from trash.")
+                logger.debug(f"Processing item ID {media_id} ('{title}') for sync delete from trash.")  # nosec B608
                 try:
                     success = db_instance.soft_delete_media(media_id=media_id, cascade=True)  # Instance method handles logging/FTS
                     if success:
@@ -15670,7 +18779,7 @@ def get_chunk_text(db_instance: MediaDatabase, chunk_uuid: str) -> str | None:
         raise TypeError("db_instance required.")  # noqa: TRY003
     target_table = "UnvectorizedMediaChunks"  # Assuming this table for text
     try:
-        query = f"SELECT c.chunk_text FROM {target_table} c JOIN Media m ON c.media_id = m.id WHERE c.uuid = ? AND c.deleted = 0 AND m.deleted = 0"
+        query = f"SELECT c.chunk_text FROM {target_table} c JOIN Media m ON c.media_id = m.id WHERE c.uuid = ? AND c.deleted = 0 AND m.deleted = 0"  # nosec B608
         cursor = db_instance.execute_query(query, (chunk_uuid,))
         result = cursor.fetchone()
         return result['chunk_text'] if result else None
@@ -15803,7 +18912,7 @@ def fetch_keywords_for_media(media_id: int, db_instance: MediaDatabase) -> list[
     try:
         order_expr = db_instance._keyword_order_expression("k.keyword")  # type: ignore[attr-defined]
         query = (
-            f"SELECT k.keyword FROM Keywords k "
+            f"SELECT k.keyword FROM Keywords k "  # nosec B608
             "JOIN MediaKeywords mk ON k.id = mk.keyword_id "
             "JOIN Media m ON mk.media_id = m.id "
             "WHERE mk.media_id = ? AND k.deleted = ? AND m.deleted = ? "
@@ -15853,7 +18962,7 @@ def fetch_keywords_for_media_batch(media_ids: list[int], db_instance: MediaDatab
     placeholders = ','.join('?' * len(safe_media_ids))
     order_expr = db_instance._keyword_order_expression("k.keyword")  # type: ignore[attr-defined]
     query = (
-        f"SELECT mk.media_id, k.keyword FROM MediaKeywords mk "
+        f"SELECT mk.media_id, k.keyword FROM MediaKeywords mk "  # nosec B608
         "JOIN Keywords k ON mk.keyword_id = k.id "
         "JOIN Media m ON mk.media_id = m.id "
         f"WHERE mk.media_id IN ({placeholders}) AND k.deleted = ? AND m.deleted = ? "

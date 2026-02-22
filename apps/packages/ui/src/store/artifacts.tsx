@@ -21,28 +21,61 @@ type ArtifactState = {
   active: ArtifactItem | null
   isOpen: boolean
   isPinned: boolean
+  history: ArtifactItem[]
+  unreadCount: number
   openArtifact: (artifact: ArtifactItem, options?: { auto?: boolean }) => void
+  setOpen: (value: boolean) => void
   closeArtifact: () => void
   setPinned: (value: boolean) => void
+  markRead: () => void
 }
 
 export const useArtifactsStore = createWithEqualityFn<ArtifactState>((set, get) => ({
   active: null,
   isOpen: false,
   isPinned: false,
+  history: [],
+  unreadCount: 0,
   openArtifact: (artifact, options) =>
     set((state) => {
       if (options?.auto && state.isPinned) {
         return state
       }
+      const compactViewport =
+        options?.auto &&
+        typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(max-width: 1023px)").matches
+      const shouldOpenPanel = !options?.auto || !compactViewport
+      const history = [
+        artifact,
+        ...state.history.filter((item) => item.id !== artifact.id)
+      ].slice(0, 20)
       return {
         active: artifact,
-        isOpen: true
+        isOpen: shouldOpenPanel ? true : state.isOpen,
+        history,
+        unreadCount:
+          shouldOpenPanel || state.isOpen ? 0 : Math.min(state.unreadCount + 1, 99)
+      }
+    }),
+  setOpen: (value) =>
+    set((state) => {
+      if (value) {
+        if (!state.active) {
+          return { isOpen: false, unreadCount: 0 }
+        }
+        return {
+          isOpen: true,
+          unreadCount: 0
+        }
+      }
+      return {
+        isOpen: false
       }
     }),
   closeArtifact: () =>
     set(() => ({
-      active: null,
       isOpen: false,
       isPinned: false
     })),
@@ -50,6 +83,10 @@ export const useArtifactsStore = createWithEqualityFn<ArtifactState>((set, get) 
     set((state) => ({
       isPinned: value,
       isOpen: value ? state.isOpen || Boolean(state.active) : state.isOpen
+    })),
+  markRead: () =>
+    set(() => ({
+      unreadCount: 0
     }))
 }))
 

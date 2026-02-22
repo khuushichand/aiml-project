@@ -55,9 +55,14 @@ except _SETTINGS_IMPORT_EXCEPTIONS:
 
 try:
     from tldw_Server_API.app.core.testing import (
+        is_truthy as _is_truthy,
         is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
     )
 except _SETTINGS_IMPORT_EXCEPTIONS:
+    def _is_truthy(value: str | None) -> bool:
+        s = str(value or "").strip().lower()
+        return s == "1" or s == "true" or s == "yes" or s == "y" or s == "on"
+
     def _is_explicit_pytest_runtime() -> bool:
         return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
@@ -87,6 +92,13 @@ SINGLE_USER_KEY_PRODUCTION_WEAK = (
     "In production (tldw_production=true), SINGLE_USER_API_KEY must be set to a secure value (>=24 chars) "
     f"and must not use defaults.\n{SECURE_KEY_GUIDANCE}"
 )
+SINGLE_USER_API_KEY_PLACEHOLDERS = {
+    "CHANGE_ME_TO_SECURE_API_KEY",
+    "default-secret-key-for-single-user",
+    "change-me-in-production",
+    "CHANGE-ME-to-a-secure-key-at-least-16-chars",
+}
+AUTHNZ_DEFAULT_ENV_FILE = Path(__file__).resolve().parents[3] / "Config_Files" / ".env"
 
 #######################################################################################################################
 #
@@ -237,24 +249,6 @@ class Settings(BaseSettings):
         description="Account lockout duration in minutes"
     )
 
-    # ===== Rate Limiting =====
-    RATE_LIMIT_ENABLED: bool = Field(
-        default=True,
-        description="Enable rate limiting"
-    )
-
-    RATE_LIMIT_PER_MINUTE: int = Field(
-        default=60,
-        ge=10,
-        description="Requests allowed per minute"
-    )
-
-    RATE_LIMIT_BURST: int = Field(
-        default=10,
-        ge=5,
-        description="Burst requests allowed"
-    )
-
     # ===== Storage Settings =====
     DEFAULT_STORAGE_QUOTA_MB: int = Field(
         default=5120,  # 5GB
@@ -392,6 +386,50 @@ class Settings(BaseSettings):
     BYOK_SECONDARY_ENCRYPTION_KEY: Optional[str] = Field(
         default=None,
         description="Secondary BYOK encryption key for dual-read during rotations"
+    )
+    OPENAI_OAUTH_ENABLED: bool = Field(
+        default=False,
+        description="Enable OpenAI OAuth account-linking for BYOK users",
+    )
+    OPENAI_OAUTH_CLIENT_ID: Optional[str] = Field(
+        default=None,
+        description="OpenAI OAuth client ID",
+    )
+    OPENAI_OAUTH_CLIENT_SECRET: Optional[str] = Field(
+        default=None,
+        description="OpenAI OAuth client secret",
+    )
+    OPENAI_OAUTH_AUTH_URL: Optional[str] = Field(
+        default=None,
+        description="OpenAI OAuth authorize URL",
+    )
+    OPENAI_OAUTH_TOKEN_URL: Optional[str] = Field(
+        default=None,
+        description="OpenAI OAuth token URL",
+    )
+    OPENAI_OAUTH_SCOPES: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="OAuth scopes requested during OpenAI account linking",
+    )
+    OPENAI_OAUTH_STATE_TTL_MINUTES: int = Field(
+        default=10,
+        ge=1,
+        le=60,
+        description="OAuth state TTL in minutes for OpenAI account linking",
+    )
+    OPENAI_OAUTH_REFRESH_SKEW_SECONDS: int = Field(
+        default=120,
+        ge=0,
+        le=3600,
+        description="Proactive refresh lead time in seconds for OpenAI OAuth access tokens",
+    )
+    OPENAI_OAUTH_REDIRECT_URI: Optional[str] = Field(
+        default=None,
+        description="Optional fixed callback URI override for OpenAI OAuth flow",
+    )
+    OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["/"],
+        description="Allowed app-relative return path prefixes for OpenAI OAuth flow",
     )
 
     # ===== Token Rotation =====
@@ -712,7 +750,7 @@ class Settings(BaseSettings):
         if alg_upper.startswith(("RS", "ES")) and self.JWT_PRIVATE_KEY:
             # Asymmetric algorithms supply their own key material; a symmetric secret is unnecessary
             logger.debug(
-                "Asymmetric JWT algorithm %s detected with private key; skipping JWT secret requirement",
+                'Asymmetric JWT algorithm {} detected with private key; skipping JWT secret requirement',
                 self.JWT_ALGORITHM,
             )
             return
@@ -791,14 +829,12 @@ class Settings(BaseSettings):
                 else:
                     raise ValueError(SINGLE_USER_KEY_MISSING)
             # In test contexts, normalize known placeholder keys to a deterministic test key
-            elif in_test_context and (
-                self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}
-            ):
+            elif in_test_context and self.SINGLE_USER_API_KEY in SINGLE_USER_API_KEY_PLACEHOLDERS:
                 test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
                 if test_key:
                     self.SINGLE_USER_API_KEY = test_key
                     logger.debug("Normalized SINGLE_USER_API_KEY to SINGLE_USER_TEST_API_KEY for pytest context")
-            elif self.SINGLE_USER_API_KEY == "change-me-in-production":
+            elif self.SINGLE_USER_API_KEY in SINGLE_USER_API_KEY_PLACEHOLDERS:
                 raise ValueError(SINGLE_USER_KEY_DEFAULT)
             elif len(self.SINGLE_USER_API_KEY) < 16:
                 # Allow short keys in explicit test contexts to avoid brittle fixtures
@@ -828,7 +864,7 @@ class Settings(BaseSettings):
             if prod_flag:
                 weak = (
                     not self.SINGLE_USER_API_KEY
-                    or self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "test-api-key-12345", "change-me-in-production"}
+                    or self.SINGLE_USER_API_KEY in SINGLE_USER_API_KEY_PLACEHOLDERS.union({"test-api-key-12345"})
                     or len(self.SINGLE_USER_API_KEY) < 24
                 )
                 if weak:
@@ -849,38 +885,20 @@ class Settings(BaseSettings):
     @field_validator("SINGLE_USER_ALLOWED_IPS", mode="before")
     @classmethod
     def parse_single_user_allowed_ips(cls, v):
-        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
-        if not v:
-            return []
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(',') if s.strip()]
-        if isinstance(v, (list, tuple)):
-            return [str(x).strip() for x in v if str(x).strip()]
-        return []
+        """Allow CSV or JSON-list env forms for IP allowlists."""
+        return _split_csv(v)
 
     @field_validator("SERVICE_TOKEN_ALLOWED_IPS", mode="before")
     @classmethod
     def parse_service_token_allowed_ips(cls, v):
-        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
-        if not v:
-            return []
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(',') if s.strip()]
-        if isinstance(v, (list, tuple)):
-            return [str(x).strip() for x in v if str(x).strip()]
-        return []
+        """Allow CSV or JSON-list env forms for IP allowlists."""
+        return _split_csv(v)
 
     @field_validator("AUTH_TRUSTED_PROXY_IPS", mode="before")
     @classmethod
     def parse_auth_trusted_proxy_ips(cls, v):
-        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
-        if not v:
-            return []
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(',') if s.strip()]
-        if isinstance(v, (list, tuple)):
-            return [str(x).strip() for x in v if str(x).strip()]
-        return []
+        """Allow CSV or JSON-list env forms for IP allowlists."""
+        return _split_csv(v)
 
     @field_validator("ORG_RBAC_SCOPE_MODE", mode="before")
     @classmethod
@@ -945,6 +963,52 @@ class Settings(BaseSettings):
             return v or None
         return v
 
+    @field_validator("OPENAI_OAUTH_ENABLED", mode="before")
+    @classmethod
+    def parse_openai_oauth_enabled(cls, v):
+        if v is None:
+            env_val = os.getenv("OPENAI_OAUTH_ENABLED")
+            if env_val is not None:
+                return _bool_from_str(env_val)
+        return v
+
+    @field_validator("OPENAI_OAUTH_CLIENT_ID", "OPENAI_OAUTH_CLIENT_SECRET", mode="before")
+    @classmethod
+    def normalize_openai_oauth_secret_fields(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @field_validator("OPENAI_OAUTH_AUTH_URL", "OPENAI_OAUTH_TOKEN_URL", "OPENAI_OAUTH_REDIRECT_URI", mode="before")
+    @classmethod
+    def normalize_openai_oauth_urls(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @field_validator("OPENAI_OAUTH_SCOPES", mode="before")
+    @classmethod
+    def parse_openai_oauth_scopes(cls, v):
+        if v is None:
+            env_val = os.getenv("OPENAI_OAUTH_SCOPES")
+            if env_val is not None:
+                v = env_val
+        return _split_csv(v)
+
+    @field_validator("OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES", mode="before")
+    @classmethod
+    def parse_openai_oauth_allowed_return_path_prefixes(cls, v):
+        if v is None:
+            env_val = os.getenv("OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES")
+            if env_val is not None:
+                v = env_val
+        parsed = _split_csv(v)
+        if not parsed:
+            return ["/"]
+        return parsed
+
     @field_validator("DATABASE_URL")
     @classmethod
     def validate_database_url(cls, v, info):
@@ -980,7 +1044,7 @@ class Settings(BaseSettings):
         return v
 
     model_config = {
-        "env_file": ".env",
+        "env_file": str(AUTHNZ_DEFAULT_ENV_FILE),
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
         "extra": "allow"  # Allow extra fields for backward compatibility
@@ -992,7 +1056,7 @@ _settings: Optional[Settings] = None
 
 
 def _bool_from_str(val: str) -> bool:
-    return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _is_truthy(str(val).strip())
 
 
 def _split_csv(val) -> list[str]:
@@ -1045,6 +1109,24 @@ def _load_overrides_from_config() -> dict:
         maybe_set("BYOK_ALLOWED_BASE_URL_PROVIDERS", "byok_allowed_base_url_providers", _split_csv)
         maybe_set("BYOK_ENCRYPTION_KEY", "byok_encryption_key", lambda v: v.strip())
         maybe_set("BYOK_SECONDARY_ENCRYPTION_KEY", "byok_secondary_encryption_key", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_ENABLED", "openai_oauth_enabled", _bool_from_str)
+        maybe_set("OPENAI_OAUTH_CLIENT_ID", "openai_oauth_client_id", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_CLIENT_SECRET", "openai_oauth_client_secret", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_AUTH_URL", "openai_oauth_auth_url", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_TOKEN_URL", "openai_oauth_token_url", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_SCOPES", "openai_oauth_scopes", _split_csv)
+        maybe_set("OPENAI_OAUTH_STATE_TTL_MINUTES", "openai_oauth_state_ttl_minutes", lambda v: int(v))
+        maybe_set(
+            "OPENAI_OAUTH_REFRESH_SKEW_SECONDS",
+            "openai_oauth_refresh_skew_seconds",
+            lambda v: int(v),
+        )
+        maybe_set("OPENAI_OAUTH_REDIRECT_URI", "openai_oauth_redirect_uri", lambda v: v.strip())
+        maybe_set(
+            "OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES",
+            "openai_oauth_allowed_return_path_prefixes",
+            _split_csv,
+        )
         maybe_set("ENABLE_REGISTRATION", "enable_registration", _bool_from_str)
         # Legacy aliases in config.txt
         maybe_set("ENABLE_REGISTRATION", "registration_enabled", _bool_from_str)
@@ -1060,9 +1142,6 @@ def _load_overrides_from_config() -> dict:
             "org_invite_allow_missing_email",
             _bool_from_str,
         )
-        maybe_set("RATE_LIMIT_ENABLED", "rate_limit_enabled", _bool_from_str)
-        maybe_set("RATE_LIMIT_PER_MINUTE", "rate_limit_per_minute", lambda v: int(v))
-        maybe_set("RATE_LIMIT_BURST", "rate_limit_burst", lambda v: int(v))
         maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
         maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
         maybe_set("MAGIC_LINK_EXPIRE_MINUTES", "magic_link_expire_minutes", lambda v: int(v))
@@ -1143,7 +1222,7 @@ def get_settings() -> Settings:
         try:
             import os as _os
             def _alias_bool(env_name: str) -> bool:
-                return str(_os.getenv(env_name, "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+                return _is_truthy(str(_os.getenv(env_name, "")).strip())
             # REGISTRATION_ENABLED -> ENABLE_REGISTRATION
             if _os.getenv("REGISTRATION_ENABLED") is not None and "ENABLE_REGISTRATION" not in overrides:
                 overrides["ENABLE_REGISTRATION"] = _alias_bool("REGISTRATION_ENABLED")
@@ -1175,38 +1254,6 @@ def get_settings() -> Settings:
                 _settings.USER_DATA_BASE_PATH = str(Path(base_dir).resolve())
         except _SETTINGS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"AuthNZ settings: failed to align USER_DATA_BASE_PATH with core settings: {exc}")
-        # In explicit pytest/runtime test contexts, default-disable rate
-        # limiting to keep tests deterministic. Explicit falsey flags (e.g.,
-        # TEST_MODE=0) should take precedence so tests can exercise real rate
-        # limiting.
-        try:
-            import os as _os
-            truthy = {"1", "true", "yes", "on"}
-            falsy = {"0", "false", "no", "off"}
-
-            def _env_bool(name: str) -> Optional[bool]:
-                raw = _os.getenv(name)
-                if raw is None:
-                    return None
-                norm = str(raw).strip().lower()
-                if norm in truthy:
-                    return True
-                if norm in falsy:
-                    return False
-                return None
-
-            explicit_flags = [
-                _env_bool("TEST_MODE"),
-                _env_bool("TLDW_TEST_MODE"),
-                _env_bool("TESTING"),
-            ]
-            explicit_false = any(flag is False for flag in explicit_flags)
-            explicit_true = any(flag is True for flag in explicit_flags)
-
-            if not explicit_false and (explicit_true or _os.getenv("PYTEST_CURRENT_TEST")):
-                _settings.RATE_LIMIT_ENABLED = False
-        except _SETTINGS_NONCRITICAL_EXCEPTIONS:
-            pass
         # Log a lightweight profile hint for coordination/UX and optional
         # hardening. AUTH_MODE remains the canonical behavioral switch; PROFILE
         # (explicit or inferred) must not be used to bypass or relax auth
@@ -1219,14 +1266,14 @@ def get_settings() -> Settings:
                 profile_hint = _infer_profile_from_settings(_settings)
             if isinstance(profile_hint, str) and profile_hint.strip():
                 logger.info(
-                    "Settings initialized - Auth mode: %s, profile=%s",
+                    'Settings initialized - Auth mode: {}, profile={}',
                     _settings.AUTH_MODE,
                     profile_hint.strip(),
                 )
             else:
-                logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
+                logger.info("Settings initialized - Auth mode: {}", _settings.AUTH_MODE)
         except _SETTINGS_NONCRITICAL_EXCEPTIONS:
-            logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
+            logger.info("Settings initialized - Auth mode: {}", _settings.AUTH_MODE)
     return _settings
 
 

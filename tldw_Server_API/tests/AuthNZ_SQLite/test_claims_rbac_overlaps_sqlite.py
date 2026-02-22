@@ -16,7 +16,6 @@ def _base_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-rbac-claims-1234567890")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'users.db'}")
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     monkeypatch.setenv("VIRTUAL_KEYS_ENABLED", "false")
     monkeypatch.setenv("LLM_BUDGET_ENFORCE", "false")
 

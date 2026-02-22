@@ -19,6 +19,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from tldw_Server_API.app.core.config_paths import resolve_config_file, resolve_config_root
+from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
 SETUP_SECTION = "Setup"
@@ -413,7 +414,7 @@ def get_status_snapshot() -> dict[str, Any]:
     flags = get_setup_flags(parser)
 
     remote_flag = parser.getboolean(SETUP_SECTION, REMOTE_ACCESS_FIELD, fallback=False)
-    env_override = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
+    env_override = env_flag_enabled("TLDW_SETUP_ALLOW_REMOTE")
     remote_active = remote_flag or env_override
 
     placeholder_fields: list[dict[str, str]] = []
@@ -607,7 +608,7 @@ def _write_config_preserving_comments(config_path: Path, updates: dict[str, dict
     # Sanity: Ensure all keys were applied; if not, fall back to parser write for missed keys
     leftovers = sum(len(items) for items in pending.values())
     if leftovers:
-        logger.warning("Some config updates were not applied via comment-preserving writer; falling back for %d keys.", leftovers)
+        logger.warning("Some config updates were not applied via comment-preserving writer; falling back for {} keys.", leftovers)
         # As a conservative fallback: append missing keys at end of their section
         text = "".join(out_lines)
         for section, items in pending.items():

@@ -1,6 +1,8 @@
 import os
 import json
+import time
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -16,8 +18,8 @@ pytestmark = pytest.mark.unit
 def _test_mode_env(monkeypatch, tmp_path):
      # Force offline behavior
     monkeypatch.setenv("TEST_MODE", "1")
-    # Route per-user DBs into a temp directory under project
-    base_dir = Path.cwd() / "Databases" / "test_user_dbs_pipeline"
+    # Route per-user DBs into an isolated temp directory per test.
+    base_dir = tmp_path / "test_user_dbs_pipeline"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     yield
@@ -438,3 +440,58 @@ async def test_site_scrape_rules_integration(monkeypatch):
     second = await run_watchlist_job(user_id, job.id)
     assert second.get("items_found") == 2
     assert second.get("items_ingested") == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_persists_post_run_audio_and_output_stats():
+    user_id = 882
+    db = WatchlistsDatabase.for_user(user_id)
+    unique_suffix = time.time_ns()
+
+    source = db.create_source(
+        name="Audio Feed",
+        url=f"https://example.com/audio-feed-{unique_suffix}.xml",
+        source_type="rss",
+        active=True,
+        settings_json=json.dumps({"limit": 1}),
+        tags=["audio"],
+        group_ids=[],
+    )
+
+    job = db.create_job(
+        name="AudioOutputJob",
+        description=None,
+        scope_json=json.dumps({"sources": [source.id]}),
+        schedule_expr=None,
+        schedule_timezone="UTC",
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=json.dumps(
+            {
+                "auto_output": {"enabled": True, "type": "briefing_markdown"},
+                "generate_audio": True,
+            }
+        ),
+    )
+
+    with (
+        patch(
+            "tldw_Server_API.app.core.Watchlists.pipeline._maybe_auto_generate_output",
+            new=AsyncMock(return_value=9876),
+        ),
+        patch(
+            "tldw_Server_API.app.core.Watchlists.audio_briefing_workflow.trigger_audio_briefing",
+            new=AsyncMock(return_value="task_stage2"),
+        ),
+    ):
+        result = await run_watchlist_job(user_id, job.id)
+
+    assert result.get("auto_output_id") == 9876
+    assert result.get("audio_briefing_task_id") == "task_stage2"
+
+    persisted_run = db.get_run(int(result["run_id"]))
+    persisted_stats = json.loads(persisted_run.stats_json or "{}")
+    assert persisted_stats.get("auto_output_id") == 9876
+    assert persisted_stats.get("audio_briefing_task_id") == "task_stage2"

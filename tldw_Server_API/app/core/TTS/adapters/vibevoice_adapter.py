@@ -4,9 +4,11 @@
 # Imports
 import asyncio
 import gc
+import importlib
 import importlib.util
 import os
 import re
+import sys
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any, Optional
@@ -15,7 +17,6 @@ import numpy as np
 
 #
 # Third-party Imports
-import torch
 from loguru import logger
 
 from ..tts_exceptions import (
@@ -58,6 +59,67 @@ _VIBEVOICE_NONCRITICAL_EXCEPTIONS = (
 #######################################################################################################################
 #
 # VibeVoice TTS Adapter Implementation
+
+torch: Any | None = None
+_TORCH_IMPORT_ERROR: Exception | None = None
+_TORCH_IMPORT_ATTEMPTED: bool = False
+
+
+def _is_test_runtime() -> bool:
+    test_flags = {"1", "true", "yes", "y", "on"}
+    if str(os.getenv("PYTEST_CURRENT_TEST", "")).strip():
+        return True
+    if str(os.getenv("MINIMAL_TEST_APP", "")).strip().lower() in test_flags:
+        return True
+    if str(os.getenv("TLDW_TEST_MODE", "")).strip().lower() in test_flags:
+        return True
+    return any("pytest" in str(arg or "") for arg in sys.argv)
+
+
+def _get_torch(*, allow_import: bool) -> Any | None:
+    global torch, _TORCH_IMPORT_ERROR, _TORCH_IMPORT_ATTEMPTED
+
+    if torch is not None:
+        return torch
+    if _TORCH_IMPORT_ERROR is not None:
+        return None
+    if not allow_import:
+        return None
+    if _TORCH_IMPORT_ATTEMPTED:
+        return None
+
+    _TORCH_IMPORT_ATTEMPTED = True
+    try:
+        torch = importlib.import_module("torch")
+        _TORCH_IMPORT_ERROR = None
+    except Exception as exc:
+        _TORCH_IMPORT_ERROR = exc
+        torch = None
+    return torch
+
+
+def _torch_cuda_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import and not _is_test_runtime())
+    if torch_mod is None:
+        return False
+    try:
+        return bool(torch_mod.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _torch_mps_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import and not _is_test_runtime())
+    if torch_mod is None:
+        return False
+    try:
+        return bool(
+            hasattr(torch_mod.backends, "mps")
+            and torch_mod.backends.mps.is_available()
+            and torch_mod.backends.mps.is_built()
+        )
+    except Exception:
+        return False
 
 class VibeVoiceAdapter(TTSAdapter):
     """
@@ -102,15 +164,16 @@ class VibeVoiceAdapter(TTSAdapter):
         # Model configuration
         variant_config = self.MODEL_VARIANTS[self.variant]
         self.model_path = self.config.get("vibevoice_model_path", variant_config["path"])
+        self.model_revision = self.config.get("vibevoice_model_revision") or os.getenv("VIBEVOICE_MODEL_REVISION")
         self.context_length = variant_config["context"]
         self.frame_rate = variant_config["frame_rate"]
 
         # Device configuration with MPS support
         if self.config.get("vibevoice_device"):
             self.device = self.config.get("vibevoice_device")
-        elif torch.cuda.is_available():
+        elif _torch_cuda_available(allow_import=True):
             self.device = "cuda"
-        elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        elif _torch_mps_available(allow_import=True):
             self.device = "mps"
             logger.info("Using MPS (Apple Silicon) for VibeVoice")
         else:
@@ -298,6 +361,12 @@ class VibeVoiceAdapter(TTSAdapter):
 
     async def initialize(self, user_id: Optional[int] = None) -> bool:
         """Initialize the VibeVoice TTS model"""
+        if _get_torch(allow_import=True) is None:
+            logger.warning(
+                f"{self.provider_name}: torch unavailable; disabling provider. error={_TORCH_IMPORT_ERROR}"
+            )
+            self._status = ProviderStatus.NOT_CONFIGURED
+            return False
         try:
             logger.info(f"{self.provider_name}: Initializing VibeVoice TTS (variant: {self.variant}, model: {self.model_path})...")
 
@@ -344,14 +413,20 @@ class VibeVoiceAdapter(TTSAdapter):
                 # Load processor
                 logger.info(f"Loading VibeVoice processor from {self.model_path}")
                 self.processor = VibeVoiceProcessor.from_pretrained(self.model_path)
+                torch_mod = _get_torch(allow_import=True)
+                if torch_mod is None:
+                    raise TTSProviderNotConfiguredError(
+                        "VibeVoice requires torch, which is unavailable",
+                        provider=self.provider_name,
+                    )
 
                 # Determine dtype and attention implementation
                 if self.device == "cuda":
-                    load_dtype = torch.bfloat16 if self.use_fp16 else torch.float32
+                    load_dtype = torch_mod.bfloat16 if self.use_fp16 else torch_mod.float32
                 elif self.device == "mps":
-                    load_dtype = torch.float16 if self.use_fp16 else torch.float32
+                    load_dtype = torch_mod.float16 if self.use_fp16 else torch_mod.float32
                 else:
-                    load_dtype = torch.float32
+                    load_dtype = torch_mod.float32
 
                 # Determine attention implementation with fallback chain
                 attn_impl = self._get_best_attention_implementation()
@@ -533,11 +608,12 @@ class VibeVoiceAdapter(TTSAdapter):
 
             local_dir = snapshot_download(
                 repo_id=self.model_path,
+                revision=self.model_revision,
                 local_dir=str(self.model_dir),
                 cache_dir=str(self.cache_dir),
                 resume_download=True,
                 # No symlinks parameter needed in recent huggingface_hub
-            )
+            )  # nosec B615
             if progress.pbar:
                 progress.pbar.close()
             logger.info(f"{self.provider_name}: Model download complete at {local_dir}")
@@ -565,10 +641,14 @@ class VibeVoiceAdapter(TTSAdapter):
                     return_tensors="pt",
                     return_attention_mask=True,
                 )
+                torch_mod = _get_torch(allow_import=True)
+                if torch_mod is None:
+                    logger.debug(f"{self.provider_name}: skipping warmup forward because torch is unavailable")
+                    return
                 for k, v in tiny_inputs.items():
-                    if torch.is_tensor(v):
+                    if torch_mod.is_tensor(v):
                         tiny_inputs[k] = v.to(self.device)
-                with torch.no_grad():
+                with torch_mod.no_grad():
                     _ = self.model.generate(
                         **tiny_inputs,
                         max_new_tokens=32,
@@ -913,10 +993,16 @@ class VibeVoiceAdapter(TTSAdapter):
                 return_tensors="pt",
                 return_attention_mask=True
             )
+            torch_mod = _get_torch(allow_import=True)
+            if torch_mod is None:
+                raise TTSProviderNotConfiguredError(
+                    "VibeVoice generation requires torch, which is unavailable",
+                    provider=self.provider_name,
+                )
 
             # Move tensors to device
             for k, v in inputs.items():
-                if torch.is_tensor(v):
+                if torch_mod.is_tensor(v):
                     inputs[k] = v.to(self.device)
 
             # Prepare generation config from gen_config parameter
@@ -928,9 +1014,9 @@ class VibeVoiceAdapter(TTSAdapter):
 
             # Set seed for reproducibility
             if seed is not None:
-                torch.manual_seed(seed)
-                if self.device == "cuda":
-                    torch.cuda.manual_seed(seed)
+                torch_mod.manual_seed(seed)
+                if self.device == "cuda" and _torch_cuda_available(allow_import=False):
+                    torch_mod.cuda.manual_seed(seed)
 
             # Create generation config
             generation_config = {
@@ -944,7 +1030,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 generation_config['top_k'] = top_k
 
             # Generate with VibeVoice model
-            with torch.no_grad():
+            with torch_mod.no_grad():
                 # Check for cancellation before generation
                 self._check_cancellation()
 
@@ -1268,7 +1354,10 @@ class VibeVoiceAdapter(TTSAdapter):
                 logger.debug("SageAttention not available")
         elif attn_type == "sdpa":
             # SDPA is generally available in newer PyTorch
-            return hasattr(torch.nn.functional, "scaled_dot_product_attention")
+            torch_mod = _get_torch(allow_import=False)
+            if torch_mod is None:
+                return False
+            return hasattr(torch_mod.nn.functional, "scaled_dot_product_attention")
         elif attn_type == "eager":
             # Always available
             return True
@@ -1295,10 +1384,11 @@ class VibeVoiceAdapter(TTSAdapter):
     def _update_memory_stats(self):
         """Update memory usage statistics."""
         try:
-            if self.device == "cuda" and torch.cuda.is_available():
+            torch_mod = _get_torch(allow_import=False)
+            if self.device == "cuda" and _torch_cuda_available(allow_import=False) and torch_mod is not None:
                 # Get CUDA memory stats
-                allocated_gb = torch.cuda.memory_allocated() / 1024**3
-                reserved_gb = torch.cuda.memory_reserved() / 1024**3
+                allocated_gb = torch_mod.cuda.memory_allocated() / 1024**3
+                reserved_gb = torch_mod.cuda.memory_reserved() / 1024**3
 
                 self._memory_stats["current_vram_gb"] = allocated_gb
                 self._memory_stats["reserved_vram_gb"] = reserved_gb
@@ -1308,10 +1398,10 @@ class VibeVoiceAdapter(TTSAdapter):
                     self._memory_stats["peak_vram_gb"] = allocated_gb
 
                 logger.debug(f"VRAM usage: {allocated_gb:.2f}GB allocated, {reserved_gb:.2f}GB reserved")
-            elif self.device == "mps" and torch.backends.mps.is_available():
+            elif self.device == "mps" and _torch_mps_available(allow_import=False) and torch_mod is not None:
                 # MPS memory tracking is limited
                 try:
-                    allocated_gb = torch.mps.current_allocated_memory() / 1024**3
+                    allocated_gb = torch_mod.mps.current_allocated_memory() / 1024**3
                     self._memory_stats["current_vram_gb"] = allocated_gb
 
                     if allocated_gb > self._memory_stats["peak_vram_gb"]:
@@ -1348,13 +1438,14 @@ class VibeVoiceAdapter(TTSAdapter):
             gc.collect()
 
             # Clear GPU cache if using CUDA
-            if self.device == "cuda" and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-            elif self.device == "mps" and torch.backends.mps.is_available():
+            torch_mod = _get_torch(allow_import=False)
+            if self.device == "cuda" and _torch_cuda_available(allow_import=False) and torch_mod is not None:
+                torch_mod.cuda.empty_cache()
+                torch_mod.cuda.synchronize()
+            elif self.device == "mps" and _torch_mps_available(allow_import=False) and torch_mod is not None:
                 # Clear MPS cache for Apple Silicon
-                torch.mps.empty_cache()
-                torch.mps.synchronize()
+                torch_mod.mps.empty_cache()
+                torch_mod.mps.synchronize()
 
             # Update memory stats after cleanup
             self._update_memory_stats()
@@ -1371,10 +1462,11 @@ class VibeVoiceAdapter(TTSAdapter):
 
             # Clear device cache without unloading model if auto_cleanup is enabled
             if self.auto_cleanup:
-                if self.device == "cuda" and torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                elif self.device == "mps" and torch.backends.mps.is_available():
-                    torch.mps.empty_cache()
+                torch_mod = _get_torch(allow_import=False)
+                if self.device == "cuda" and _torch_cuda_available(allow_import=False) and torch_mod is not None:
+                    torch_mod.cuda.empty_cache()
+                elif self.device == "mps" and _torch_mps_available(allow_import=False) and torch_mod is not None:
+                    torch_mod.mps.empty_cache()
 
                 # Update memory stats
                 self._update_memory_stats()

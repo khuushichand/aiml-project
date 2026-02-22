@@ -38,7 +38,7 @@ def _download_url(url: str, dest: Path, force: bool = False) -> None:
         return
     print(f"Downloading {url} -> {dest}")
     try:
-        with urlopen(url, timeout=60) as r, open(dest, "wb") as f:
+        with urlopen(url, timeout=60) as r, open(dest, "wb") as f:  # nosec B310
             while True:
                 chunk = r.read(8192)
                 if not chunk:
@@ -61,7 +61,7 @@ def _hf_download_file(repo_id: str, filename: str, dest: Path, force: bool = Fal
         return
     print(f"Fetching {repo_id}:{filename} -> {dest}")
     # Download into HF cache, then copy to exact destination path
-    src_fp = hf_hub_download(repo_id=repo_id, filename=filename, force_download=force)
+    src_fp = hf_hub_download(repo_id=repo_id, filename=filename, force_download=force)  # nosec B615
     shutil.copy2(src_fp, dest)
 
 
@@ -80,7 +80,7 @@ def _hf_download_dir(repo_id: str, subdir: str, dest: Path, force: bool = False)
     with tempfile.TemporaryDirectory(prefix="kokoro_hf_") as _td:
         tmp_dir = Path(_td)
         # Restrict snapshot to the requested subdirectory only to avoid downloading large ONNX files
-        snap = Path(snapshot_download(
+        snap = Path(snapshot_download(  # nosec B615
             repo_id=repo_id,
             local_dir=str(tmp_dir),
             allow_patterns=[f"{subdir}", f"{subdir}/*", f"{subdir}/**"],

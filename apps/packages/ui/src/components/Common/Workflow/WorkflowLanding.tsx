@@ -142,7 +142,7 @@ export const WorkflowLanding: React.FC<WorkflowLandingProps> = ({
             <Sparkles className="h-6 w-6 text-primary" />
             {t("workflows:landing.title", "Welcome to tldw Assistant")}
           </h1>
-          <p className="text-base text-textMuted mt-2">
+          <p className="text-base text-text-muted mt-2">
             {t("workflows:landing.subtitle", "What would you like to do?")}
           </p>
           <Button
@@ -205,7 +205,7 @@ export const WorkflowLanding: React.FC<WorkflowLandingProps> = ({
         <div className="mt-8 pt-4 border-t border-border">
           <div className="flex items-center justify-center">
             <Checkbox onChange={(e) => handleDontShowAgain(e.target.checked)}>
-              <span className="text-sm text-textMuted">
+              <span className="text-sm text-text-muted">
                 {t(
                   "common:landingHub.skipCheckbox",
                   "Don't show this again - go straight to chat"
@@ -229,7 +229,7 @@ export const WorkflowLanding: React.FC<WorkflowLandingProps> = ({
           <Sparkles className="h-6 w-6 text-primary" />
           {t("workflows:landing.title", "Welcome to tldw Assistant")}
         </h1>
-        <p className="text-base text-textMuted mt-2">
+        <p className="text-base text-text-muted mt-2">
           {t("workflows:landing.subtitle", "What would you like to do?")}
         </p>
         <Button
@@ -250,7 +250,7 @@ export const WorkflowLanding: React.FC<WorkflowLandingProps> = ({
 
           return (
             <div key={category} className="space-y-4">
-              <h2 className="text-sm font-medium text-textMuted">
+              <h2 className="text-sm font-medium text-text-muted">
                 {t(CATEGORY_LABELS[category], category)}
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
@@ -272,7 +272,7 @@ export const WorkflowLanding: React.FC<WorkflowLandingProps> = ({
       <div className="mt-8 pt-4 border-t border-border">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <Checkbox onChange={(e) => handleDontShowAgain(e.target.checked)}>
-            <span className="text-sm text-textMuted">
+            <span className="text-sm text-text-muted">
               {t("workflows:landing.dontShowAgain", "Don't show this again")}
             </span>
           </Checkbox>
@@ -316,7 +316,7 @@ const HubCard: React.FC<{
           {icon}
         </div>
         <h3 className="text-lg font-semibold text-text">{title}</h3>
-        <p className="text-sm text-textMuted">{description}</p>
+        <p className="text-sm text-text-muted">{description}</p>
       </div>
     </div>
   )

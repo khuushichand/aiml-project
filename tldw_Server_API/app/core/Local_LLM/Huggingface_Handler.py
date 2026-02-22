@@ -18,14 +18,17 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import (
     ModelNotFoundError,
 )
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import HuggingFaceConfig
+from tldw_Server_API.app.core.Utils.torch_import_guard import (
+    can_import_torch_safely,
+    safe_import_torch,
+)
 
-try:
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline
-except ImportError:
-    logger.error("transformers or torch not installed. Please install them: pip install transformers torch torchvision torchaudio accelerate bitsandbytes")
-    # Raise or handle appropriately
-    raise ImportError("HuggingFace handler requires 'transformers', 'torch', 'accelerate', 'bitsandbytes'.") from None
+torch = None
+AutoModelForCausalLM = None
+AutoTokenizer = None
+BitsAndBytesConfig = None
+pipeline = None
+_TRANSFORMERS_IMPORT_ERROR: Exception | None = None
 #
 ########################################################################################################################
 #
@@ -40,6 +43,52 @@ class HuggingFaceHandler(BaseLLMHandler):
         if not self.models_dir.exists():
             self.models_dir.mkdir(parents=True, exist_ok=True)
         self.loaded_models: dict[tuple, Any] = {} # Cache for loaded models and tokenizers
+
+    @staticmethod
+    def _ensure_hf_dependencies() -> tuple[Any, Any, Any, Any, Any]:
+        """Load optional Hugging Face deps lazily so app startup doesn't hard-fail."""
+        global torch, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline, _TRANSFORMERS_IMPORT_ERROR
+
+        torch_ok, torch_reason = can_import_torch_safely()
+        if not torch_ok:
+            raise InferenceError(
+                "HuggingFace backend unavailable: torch import preflight failed. "
+                "Install/repair torch for this runtime."
+            ) from ImportError(torch_reason)
+
+        if any(dep is None for dep in (AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline)):
+            if _TRANSFORMERS_IMPORT_ERROR is not None:
+                raise InferenceError(
+                    "HuggingFace backend unavailable: failed to import transformers dependencies. "
+                    "Install/repair: transformers accelerate bitsandbytes."
+                ) from _TRANSFORMERS_IMPORT_ERROR
+            try:
+                from transformers import AutoModelForCausalLM as _AutoModelForCausalLM
+                from transformers import AutoTokenizer as _AutoTokenizer
+                from transformers import BitsAndBytesConfig as _BitsAndBytesConfig
+                from transformers import pipeline as _pipeline
+            except Exception as exc:  # pragma: no cover - optional dependency failure path
+                raise InferenceError(
+                    "HuggingFace backend unavailable: failed to import transformers dependencies. "
+                    "Install/repair: transformers accelerate bitsandbytes."
+                ) from exc
+            AutoModelForCausalLM = _AutoModelForCausalLM
+            AutoTokenizer = _AutoTokenizer
+            BitsAndBytesConfig = _BitsAndBytesConfig
+            pipeline = _pipeline
+            _TRANSFORMERS_IMPORT_ERROR = None
+
+        if torch is None:
+            try:
+                _torch = safe_import_torch()
+            except Exception as exc:  # pragma: no cover - optional dependency failure path
+                raise InferenceError(
+                    "HuggingFace backend unavailable: failed to import torch. "
+                    "Install/repair: torch torchvision torchaudio."
+                ) from exc
+            torch = _torch
+
+        return torch, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline
 
     def _is_path_allowed(self, p: Path) -> bool:
         base_dirs = handler_utils.build_allowed_paths(
@@ -99,12 +148,13 @@ class HuggingFaceHandler(BaseLLMHandler):
         model_save_path.parent.mkdir(parents=True, exist_ok=True)
         model_save_path.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"Downloading model '{model_identifier}' to {model_save_path}...")
+        _, auto_model_cls, auto_tokenizer_cls, _, _ = self._ensure_hf_dependencies()
 
         try:
             # Running in a separate thread to avoid blocking asyncio event loop
             def _download():
-                tokenizer = AutoTokenizer.from_pretrained(model_identifier)
-                model = AutoModelForCausalLM.from_pretrained(model_identifier) # Add quantization here if desired globally
+                tokenizer = auto_tokenizer_cls.from_pretrained(model_identifier)
+                model = auto_model_cls.from_pretrained(model_identifier) # Add quantization here if desired globally
                 tokenizer.save_pretrained(model_save_path)
                 model.save_pretrained(model_save_path)
 
@@ -121,15 +171,17 @@ class HuggingFaceHandler(BaseLLMHandler):
                     self.logger.exception(f"Failed to cleanup partial download at {model_save_path}: {e_clean}")
             raise ModelDownloadError(f"Failed to download model '{model_identifier}': {e}") from e
 
-    def _get_torch_dtype(self, dtype_str: Optional[str]):
+    def _get_torch_dtype(self, dtype_str: Optional[str], torch_module: Any = None):
+        if torch_module is None:
+            torch_module, _, _, _, _ = self._ensure_hf_dependencies()
         if not dtype_str:
             return None
         if dtype_str == "torch.bfloat16":
-            return torch.bfloat16
+            return torch_module.bfloat16
         elif dtype_str == "torch.float16":
-            return torch.float16
+            return torch_module.float16
         elif dtype_str == "torch.float32":
-            return torch.float32
+            return torch_module.float32
         # Add more dtypes if needed
         self.logger.warning(f"Unsupported torch_dtype string: {dtype_str}. Returning None.")
         return None
@@ -137,6 +189,7 @@ class HuggingFaceHandler(BaseLLMHandler):
 
     async def _load_model_and_tokenizer(self, model_name_or_path: str, quantization_config: Optional[dict] = None):
         """Loads model and tokenizer, applying quantization if specified."""
+        torch_module, auto_model_cls, auto_tokenizer_cls, bits_and_bytes_config_cls, _ = self._ensure_hf_dependencies()
         cache_key = self._cache_key(model_name_or_path, quantization_config)
         if cache_key in self.loaded_models:
             return self.loaded_models[cache_key]
@@ -154,24 +207,30 @@ class HuggingFaceHandler(BaseLLMHandler):
             load_in_4bit = quantization_config.get("load_in_4bit", False)
             load_in_8bit = quantization_config.get("load_in_8bit", False)
             if load_in_4bit:
-                bnb_config = BitsAndBytesConfig(
+                bnb_config = bits_and_bytes_config_cls(
                     load_in_4bit=True,
                     bnb_4bit_use_double_quant=quantization_config.get("bnb_4bit_use_double_quant", True),
                     bnb_4bit_quant_type=quantization_config.get("bnb_4bit_quant_type", "nf4"),
-                    bnb_4bit_compute_dtype=self._get_torch_dtype(quantization_config.get("bnb_4bit_compute_dtype", "torch.bfloat16")) or torch.bfloat16
+                    bnb_4bit_compute_dtype=self._get_torch_dtype(
+                        quantization_config.get("bnb_4bit_compute_dtype", "torch.bfloat16"),
+                        torch_module=torch_module,
+                    ) or torch_module.bfloat16
                 )
                 self.logger.info("Applying 4-bit quantization.")
             elif load_in_8bit:
-                bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+                bnb_config = bits_and_bytes_config_cls(load_in_8bit=True)
                 self.logger.info("Applying 8-bit quantization.")
 
 
         def _load():
-            tokenizer = AutoTokenizer.from_pretrained(actual_path)
-            model = AutoModelForCausalLM.from_pretrained(
+            tokenizer = auto_tokenizer_cls.from_pretrained(actual_path)
+            model = auto_model_cls.from_pretrained(
                 actual_path,
                 device_map=self.config.default_device_map,
-                torch_dtype=self._get_torch_dtype(self.config.default_torch_dtype),
+                torch_dtype=self._get_torch_dtype(
+                    self.config.default_torch_dtype,
+                    torch_module=torch_module,
+                ),
                 quantization_config=bnb_config,
                 # low_cpu_mem_usage=True # Can be useful for large models
             )
@@ -194,8 +253,12 @@ class HuggingFaceHandler(BaseLLMHandler):
                 del self.loaded_models[key]
             # Python's garbage collector should handle freeing GPU memory if model/tokenizer are no longer referenced.
             # For more explicit control, especially with CUDA:
-            if torch.cuda.is_available():
-                await asyncio.to_thread(torch.cuda.empty_cache)
+            try:
+                torch_module, _, _, _, _ = self._ensure_hf_dependencies()
+            except InferenceError:
+                torch_module = None
+            if torch_module is not None and torch_module.cuda.is_available():
+                await asyncio.to_thread(torch_module.cuda.empty_cache)
             self.logger.info(f"Model '{model_name_or_path}' unloaded from cache.")
         else:
             self.logger.info(f"Model '{model_name_or_path}' not found in loaded cache, no action taken.")
@@ -277,13 +340,14 @@ class HuggingFaceHandler(BaseLLMHandler):
 
         # For pipeline, we usually pass the model and tokenizer names/paths directly.
         # But to use our cached/quantized versions if loaded:
+        _, _, _, _, pipeline_fn = self._ensure_hf_dependencies()
         model, tokenizer = await self._load_model_and_tokenizer(model_name_or_path, quantization_config)
 
         def _generate_with_pipeline():
             # Determine device for pipeline
             device = model.device # Get device from the loaded model
 
-            text_gen_pipeline = pipeline(
+            text_gen_pipeline = pipeline_fn(
                 "text-generation",
                 model=model, # Use pre-loaded model
                 tokenizer=tokenizer, # Use pre-loaded tokenizer

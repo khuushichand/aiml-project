@@ -13,6 +13,7 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import get_database_dir
 
 _DEFAULT_BUFFER_SIZE = 2000
@@ -63,7 +64,7 @@ def _coerce_optional_int(value: Any) -> int | None:
 def _coerce_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return is_truthy(value)
 
 
 def _extract_extra(extra: dict[str, Any]) -> dict[str, Any]:

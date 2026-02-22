@@ -9,6 +9,7 @@ from unittest.mock import Mock, MagicMock, patch
 import json
 
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import ConflictError
 
 # ========================================================================
 # World Book Management Tests
@@ -84,6 +85,45 @@ class TestWorldBookManagement:
         assert updated['description'] == "Updated description"
 
     @pytest.mark.unit
+    def test_update_world_book_with_expected_version(self, world_book_service):
+        """Test optimistic-lock update with expected version."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Versioned", description="v1")
+        created = service.get_world_book(wb_id)
+        expected_version = created["version"]
+
+        service.update_world_book(
+            world_book_id=wb_id,
+            description="v2",
+            expected_version=expected_version,
+        )
+
+        updated = service.get_world_book(wb_id)
+        assert updated["description"] == "v2"
+        assert updated["version"] == expected_version + 1
+
+    @pytest.mark.unit
+    def test_update_world_book_rejects_stale_expected_version(self, world_book_service):
+        """Test stale expected-version update is rejected with conflict."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Version conflict", description="v1")
+        created = service.get_world_book(wb_id)
+        expected_version = created["version"]
+
+        service.update_world_book(
+            world_book_id=wb_id,
+            description="v2",
+            expected_version=expected_version,
+        )
+
+        with pytest.raises(ConflictError, match="Version mismatch"):
+            service.update_world_book(
+                world_book_id=wb_id,
+                description="v3",
+                expected_version=expected_version,
+            )
+
+    @pytest.mark.unit
     def test_delete_world_book(self, world_book_service):
         """Test deleting a world book."""
         service = world_book_service
@@ -139,6 +179,36 @@ class TestEntryManagement:
         entries = service.get_entries(wb_id)
         assert len(entries) == 1
         assert 'dragon' in entries[0]['keywords']
+
+    @pytest.mark.unit
+    def test_entry_group_roundtrip_and_backfill_behavior(self, world_book_service):
+        """Entries expose nullable group while preserving metadata group values."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Entry Group Test")
+
+        grouped_entry_id = service.add_entry(
+            world_book_id=wb_id,
+            keywords=["city"],
+            content="City lore",
+            metadata={"group": "Locations"}
+        )
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=["general"],
+            content="Ungrouped lore"
+        )
+
+        entries_by_id = {int(entry["id"]): entry for entry in service.get_entries(wb_id)}
+
+        grouped_entry = entries_by_id[grouped_entry_id]
+        assert grouped_entry["group"] == "Locations"
+        assert grouped_entry["metadata"]["group"] == "Locations"
+
+        ungrouped_entries = [
+            entry for entry_id, entry in entries_by_id.items() if entry_id != grouped_entry_id
+        ]
+        assert len(ungrouped_entries) == 1
+        assert ungrouped_entries[0]["group"] is None
 
     @pytest.mark.unit
     def test_add_recursive_entry(self, world_book_service):

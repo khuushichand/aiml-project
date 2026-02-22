@@ -231,19 +231,19 @@ async def _ensure_default_character(
             }
             if not payload["client_id"]:
                 logger.warning(
-                    "Cannot create default character '%s' because client_id is missing on DB instance.",
+                    "Cannot create default character '{}' because client_id is missing on DB instance.",
                     DEFAULT_CHARACTER_NAME,
                 )
                 return None, None
 
             new_id = db.add_character_card(payload)
             if not new_id:
-                logger.error("add_character_card returned None while creating default character '%s'.", DEFAULT_CHARACTER_NAME)
+                logger.error("add_character_card returned None while creating default character '{}'.", DEFAULT_CHARACTER_NAME)
                 return None, None
 
             created = db.get_character_card_by_id(new_id)
             if created:
-                logger.info("Created default character '%s' with ID %s.", DEFAULT_CHARACTER_NAME, new_id)
+                logger.info("Created default character '{}' with ID {}.", DEFAULT_CHARACTER_NAME, new_id)
                 return created, created.get("id")
 
             # Fallback lookup by name if direct fetch failed
@@ -252,10 +252,10 @@ async def _ensure_default_character(
                 return fetched, fetched.get("id")
             return None, None
         except (CharactersRAGDBError, InputError, ConflictError) as db_error:
-            logger.error("Failed to ensure default character '%s': %s", DEFAULT_CHARACTER_NAME, db_error)
+            logger.error("Failed to ensure default character '{}': {}", DEFAULT_CHARACTER_NAME, db_error)
             return None, None
         except Exception as exc:  # pragma: no cover - defensive guard
-            logger.error("Unexpected error ensuring default character '%s': %s", DEFAULT_CHARACTER_NAME, exc)
+            logger.error("Unexpected error ensuring default character '{}': {}", DEFAULT_CHARACTER_NAME, exc)
             return None, None
 
     return await loop.run_in_executor(None, _create_default)

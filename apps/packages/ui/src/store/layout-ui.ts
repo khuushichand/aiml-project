@@ -6,7 +6,7 @@ type LayoutUiState = {
 }
 
 export const useLayoutUiStore = createWithEqualityFn<LayoutUiState>((set) => ({
-  chatSidebarCollapsed: false,
+  chatSidebarCollapsed: true,
   setChatSidebarCollapsed: (next) =>
     set((state) => ({
       chatSidebarCollapsed:

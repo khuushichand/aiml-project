@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from loguru import logger
@@ -28,15 +29,26 @@ from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
 from tldw_Server_API.app.core.AuthNZ.repos.user_provider_secrets_repo import (
     AuthnzUserProviderSecretsRepo,
 )
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     decrypt_byok_payload,
+    dumps_envelope,
+    encrypt_byok_payload,
+    key_hint_for_api_key,
     loads_envelope,
     normalize_provider_name,
 )
 from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.http_client import RetryPolicy as _RetryPolicy
+from tldw_Server_API.app.core.http_client import afetch as _http_afetch
 from tldw_Server_API.app.core.Metrics import increment_counter
 
 DEFAULT_LAST_USED_THROTTLE_SECONDS = 300
+DEFAULT_OPENAI_OAUTH_REFRESH_SKEW_SECONDS = 120
+_OPENAI_PROVIDER = "openai"
+_OPENAI_SOURCE_API_KEY = "api_key"
+_OPENAI_SOURCE_OAUTH = "oauth"
+_OPENAI_CREDENTIAL_VERSION = 2
 
 _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -139,6 +151,7 @@ class ResolvedByokCredentials:
     credential_fields: dict[str, Any]
     source: str
     allowlisted: bool
+    auth_source: str | None = None
     _touch_cb: Callable[[], Awaitable[None]] | None = None
 
     @property
@@ -152,6 +165,14 @@ class ResolvedByokCredentials:
             await self._touch_cb()
         except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"BYOK last_used_at update failed for {self.provider}: {exc}")
+
+
+@dataclass
+class _OpenAIUserResolution:
+    payload: dict[str, Any]
+    api_key: str | None
+    auth_source: str | None
+    fail_closed: bool
 
 
 def _record_byok_resolution(resolved: ResolvedByokCredentials, *, byok_enabled: bool) -> None:
@@ -237,6 +258,7 @@ def _fallback_result(
         credential_fields={},
         source=source,
         allowlisted=allowlisted,
+        auth_source=None,
         _touch_cb=None,
     )
 
@@ -249,6 +271,7 @@ def _invalid_byok_result(provider: str, *, source: str) -> ResolvedByokCredentia
         credential_fields={},
         source=source,
         allowlisted=True,
+        auth_source=None,
         _touch_cb=None,
     )
 
@@ -292,6 +315,544 @@ def _extract_payload(row: dict[str, Any], provider: str) -> dict[str, Any] | Non
         return None
 
 
+def _coerce_nonempty_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    return trimmed if trimmed else None
+
+
+def _extract_positive_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _parse_metadata_value(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return dict(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return dict(parsed) if isinstance(parsed, dict) else None
+
+
+async def _close_http_response(response: Any) -> None:
+    close_async = getattr(response, "aclose", None)
+    if callable(close_async):
+        await close_async()
+        return
+    close_sync = getattr(response, "close", None)
+    if callable(close_sync):
+        close_sync()
+
+
+def _is_openai_v2_payload(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("credential_version") != _OPENAI_CREDENTIAL_VERSION:
+        return False
+    credentials = payload.get("credentials")
+    return isinstance(credentials, dict)
+
+
+def _openai_credentials_map(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not _is_openai_v2_payload(payload):
+        return {}
+    credentials = payload.get("credentials")
+    return dict(credentials) if isinstance(credentials, dict) else {}
+
+
+def _openai_source_payload(payload: dict[str, Any] | None, source: str) -> dict[str, Any]:
+    credentials = _openai_credentials_map(payload)
+    blob = credentials.get(source)
+    return dict(blob) if isinstance(blob, dict) else {}
+
+
+def _legacy_payload_api_key(payload: dict[str, Any] | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    return _coerce_nonempty_string(payload.get("api_key"))
+
+
+def _v2_payload_api_key(payload: dict[str, Any] | None) -> str | None:
+    source_blob = _openai_source_payload(payload, _OPENAI_SOURCE_API_KEY)
+    return _coerce_nonempty_string(source_blob.get("api_key"))
+
+
+def _v2_payload_oauth_access_token(payload: dict[str, Any] | None) -> str | None:
+    source_blob = _openai_source_payload(payload, _OPENAI_SOURCE_OAUTH)
+    return _coerce_nonempty_string(source_blob.get("access_token"))
+
+
+def _v2_payload_oauth_refresh_token(payload: dict[str, Any] | None) -> str | None:
+    source_blob = _openai_source_payload(payload, _OPENAI_SOURCE_OAUTH)
+    return _coerce_nonempty_string(source_blob.get("refresh_token"))
+
+
+def _extract_api_key_from_v2_source(credentials: dict[str, Any], source: str) -> str | None:
+    source_blob = credentials.get(source)
+    if not isinstance(source_blob, dict):
+        return None
+    if source == _OPENAI_SOURCE_OAUTH:
+        return _coerce_nonempty_string(source_blob.get("access_token"))
+    if source == _OPENAI_SOURCE_API_KEY:
+        return _coerce_nonempty_string(source_blob.get("api_key"))
+    return None
+
+
+def _v2_source_available(
+    payload: dict[str, Any] | None,
+    source: str,
+    *,
+    require_access_for_oauth: bool = False,
+) -> bool:
+    if source == _OPENAI_SOURCE_API_KEY:
+        return bool(_v2_payload_api_key(payload))
+    if source == _OPENAI_SOURCE_OAUTH:
+        access_token = _v2_payload_oauth_access_token(payload)
+        refresh_token = _v2_payload_oauth_refresh_token(payload)
+        if require_access_for_oauth:
+            return bool(access_token)
+        return bool(access_token or refresh_token)
+    return False
+
+
+def _extract_runtime_auth_source(
+    payload: dict[str, Any] | None,
+    *,
+    require_access_for_oauth: bool = True,
+) -> str | None:
+    legacy = _legacy_payload_api_key(payload)
+    if legacy:
+        return _OPENAI_SOURCE_API_KEY
+
+    if not _is_openai_v2_payload(payload):
+        return None
+
+    active_source_raw = payload.get("active_auth_source")
+    active_source = (
+        active_source_raw.strip().lower() if isinstance(active_source_raw, str) else ""
+    )
+    if active_source in {_OPENAI_SOURCE_API_KEY, _OPENAI_SOURCE_OAUTH} and _v2_source_available(
+        payload,
+        active_source,
+        require_access_for_oauth=require_access_for_oauth,
+    ):
+        return active_source
+
+    if _v2_source_available(
+        payload,
+        _OPENAI_SOURCE_API_KEY,
+        require_access_for_oauth=require_access_for_oauth,
+    ):
+        return _OPENAI_SOURCE_API_KEY
+    if _v2_source_available(
+        payload,
+        _OPENAI_SOURCE_OAUTH,
+        require_access_for_oauth=require_access_for_oauth,
+    ):
+        return _OPENAI_SOURCE_OAUTH
+    return None
+
+
+def _extract_runtime_api_key(payload: dict[str, Any]) -> str | None:
+    runtime_source = _extract_runtime_auth_source(payload, require_access_for_oauth=True)
+    if runtime_source == _OPENAI_SOURCE_API_KEY:
+        return _legacy_payload_api_key(payload) or _v2_payload_api_key(payload)
+    if runtime_source == _OPENAI_SOURCE_OAUTH:
+        return _v2_payload_oauth_access_token(payload)
+    return None
+
+
+def _openai_has_any_credentials(payload: dict[str, Any] | None) -> bool:
+    if not _is_openai_v2_payload(payload):
+        return False
+    return _v2_source_available(payload, _OPENAI_SOURCE_API_KEY) or _v2_source_available(
+        payload,
+        _OPENAI_SOURCE_OAUTH,
+        require_access_for_oauth=False,
+    )
+
+
+def _payload_key_hint(payload: dict[str, Any]) -> str:
+    auth_source = _extract_runtime_auth_source(payload, require_access_for_oauth=False)
+    if auth_source == _OPENAI_SOURCE_OAUTH:
+        return _OPENAI_SOURCE_OAUTH
+    key = _legacy_payload_api_key(payload) or _v2_payload_api_key(payload)
+    return key_hint_for_api_key(key) if key else ""
+
+
+def _openai_oauth_refresh_skew_seconds() -> int:
+    raw = os.getenv("OPENAI_OAUTH_REFRESH_SKEW_SECONDS")
+    if raw is not None:
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            pass
+    try:
+        settings = get_settings()
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
+        return DEFAULT_OPENAI_OAUTH_REFRESH_SKEW_SECONDS
+    raw_setting = getattr(
+        settings,
+        "OPENAI_OAUTH_REFRESH_SKEW_SECONDS",
+        DEFAULT_OPENAI_OAUTH_REFRESH_SKEW_SECONDS,
+    )
+    try:
+        parsed = int(raw_setting)
+    except (TypeError, ValueError):
+        return DEFAULT_OPENAI_OAUTH_REFRESH_SKEW_SECONDS
+    return max(0, parsed)
+
+
+def _openai_payload_needs_refresh(
+    payload: dict[str, Any],
+    *,
+    force_oauth_refresh: bool,
+    now: datetime,
+    skew_seconds: int,
+) -> bool:
+    active_source = _extract_runtime_auth_source(payload, require_access_for_oauth=False)
+    if active_source != _OPENAI_SOURCE_OAUTH:
+        return False
+    if force_oauth_refresh:
+        return True
+
+    access_token = _v2_payload_oauth_access_token(payload)
+    if not access_token:
+        return True
+
+    expires_at = _parse_iso_datetime(_openai_source_payload(payload, _OPENAI_SOURCE_OAUTH).get("expires_at"))
+    if expires_at is None:
+        return False
+    return expires_at <= (now + timedelta(seconds=max(0, skew_seconds)))
+
+
+def _coerce_openai_payload_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "credential_version": _OPENAI_CREDENTIAL_VERSION,
+        "credentials": {},
+    }
+    credentials: dict[str, Any] = {}
+
+    existing_credentials = _openai_credentials_map(payload)
+    api_blob = existing_credentials.get(_OPENAI_SOURCE_API_KEY)
+    if isinstance(api_blob, dict):
+        api_key = _coerce_nonempty_string(api_blob.get("api_key"))
+        if api_key:
+            copied_api_blob = dict(api_blob)
+            copied_api_blob["api_key"] = api_key
+            credentials[_OPENAI_SOURCE_API_KEY] = copied_api_blob
+
+    oauth_blob = existing_credentials.get(_OPENAI_SOURCE_OAUTH)
+    if isinstance(oauth_blob, dict):
+        copied_oauth_blob: dict[str, Any] = {}
+        for key in (
+            "access_token",
+            "refresh_token",
+            "token_type",
+            "scope",
+            "subject",
+            "issued_at",
+            "expires_at",
+        ):
+            value = oauth_blob.get(key)
+            if isinstance(value, datetime):
+                copied_oauth_blob[key] = value.astimezone(timezone.utc).isoformat()
+                continue
+            text = _coerce_nonempty_string(value)
+            if text:
+                copied_oauth_blob[key] = text
+        if copied_oauth_blob:
+            credentials[_OPENAI_SOURCE_OAUTH] = copied_oauth_blob
+
+    legacy_api_key = _legacy_payload_api_key(payload)
+    if legacy_api_key and _OPENAI_SOURCE_API_KEY not in credentials:
+        credentials[_OPENAI_SOURCE_API_KEY] = {"api_key": legacy_api_key}
+
+    result["credentials"] = credentials
+
+    credential_fields = payload.get("credential_fields")
+    if isinstance(credential_fields, dict) and credential_fields:
+        result["credential_fields"] = dict(credential_fields)
+
+    active_source = _extract_runtime_auth_source(payload, require_access_for_oauth=False)
+    if active_source in {_OPENAI_SOURCE_API_KEY, _OPENAI_SOURCE_OAUTH} and _v2_source_available(
+        result,
+        active_source,
+        require_access_for_oauth=False,
+    ):
+        result["active_auth_source"] = active_source
+    elif _v2_source_available(result, _OPENAI_SOURCE_API_KEY):
+        result["active_auth_source"] = _OPENAI_SOURCE_API_KEY
+    elif _v2_source_available(result, _OPENAI_SOURCE_OAUTH, require_access_for_oauth=False):
+        result["active_auth_source"] = _OPENAI_SOURCE_OAUTH
+
+    return result
+
+
+async def _openai_oauth_token_refresh(
+    *,
+    token_url: str,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+) -> dict[str, Any] | None:
+    try:
+        response = await _http_afetch(
+            method="POST",
+            url=token_url,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=30,
+            retry=_RetryPolicy(attempts=1),
+        )
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"OpenAI OAuth refresh request failed: {exc}")
+        return None
+
+    try:
+        status_code = int(getattr(response, "status_code", 0))
+        payload: dict[str, Any] | None = None
+        try:
+            maybe_payload = response.json()
+            if isinstance(maybe_payload, dict):
+                payload = dict(maybe_payload)
+        except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
+            payload = None
+
+        if status_code < 200 or status_code >= 300:
+            if payload:
+                provider_error = _coerce_nonempty_string(
+                    payload.get("error_description") or payload.get("error")
+                )
+                if provider_error:
+                    logger.debug(f"OpenAI OAuth refresh rejected: {provider_error}")
+            return None
+        return payload if payload is not None else None
+    finally:
+        await _close_http_response(response)
+
+
+async def _persist_user_payload_update(
+    *,
+    repo: AuthnzUserProviderSecretsRepo,
+    provider: str,
+    user_id: int,
+    row: dict[str, Any],
+    payload: dict[str, Any],
+    updated_at: datetime,
+) -> None:
+    key_hint = _payload_key_hint(payload)
+    if not key_hint:
+        key_hint = row.get("key_hint") or ""
+    try:
+        envelope = encrypt_byok_payload(payload)
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"BYOK encrypt failed while persisting provider={provider}: {exc}")
+        return
+
+    metadata_to_store = _parse_metadata_value(row.get("metadata"))
+    try:
+        await repo.upsert_secret(
+            user_id=user_id,
+            provider=provider,
+            encrypted_blob=dumps_envelope(envelope),
+            key_hint=key_hint or None,
+            metadata=metadata_to_store,
+            updated_at=updated_at,
+            created_by=user_id,
+            updated_by=user_id,
+        )
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"BYOK payload persist failed for user_id={user_id} provider={provider}: {exc}")
+
+
+async def _resolve_openai_user_payload(
+    *,
+    user_repo: AuthnzUserProviderSecretsRepo,
+    user_id: int,
+    row: dict[str, Any],
+    payload: dict[str, Any],
+    force_oauth_refresh: bool,
+) -> _OpenAIUserResolution:
+    merged_payload = _coerce_openai_payload_v2(payload)
+    now = datetime.now(timezone.utc)
+    runtime_api_key = _extract_runtime_api_key(merged_payload)
+    runtime_auth_source = _extract_runtime_auth_source(
+        merged_payload,
+        require_access_for_oauth=True,
+    )
+    needs_refresh = _openai_payload_needs_refresh(
+        merged_payload,
+        force_oauth_refresh=force_oauth_refresh,
+        now=now,
+        skew_seconds=_openai_oauth_refresh_skew_seconds(),
+    )
+
+    if needs_refresh:
+        settings = get_settings()
+        token_url = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_TOKEN_URL", None))
+        client_id = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_CLIENT_ID", None))
+        client_secret = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_CLIENT_SECRET", None))
+        oauth_enabled = bool(getattr(settings, "OPENAI_OAUTH_ENABLED", False))
+        refresh_token = _v2_payload_oauth_refresh_token(merged_payload)
+        token_payload: dict[str, Any] | None = None
+        refresh_succeeded = False
+        if oauth_enabled and token_url and client_id and client_secret and refresh_token:
+            token_payload = await _openai_oauth_token_refresh(
+                token_url=token_url,
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_token=refresh_token,
+            )
+
+        if token_payload:
+            access_token = _coerce_nonempty_string(token_payload.get("access_token"))
+            if access_token:
+                oauth_payload = _openai_source_payload(merged_payload, _OPENAI_SOURCE_OAUTH)
+                next_refresh_token = _coerce_nonempty_string(token_payload.get("refresh_token")) or refresh_token
+                token_type = (
+                    _coerce_nonempty_string(token_payload.get("token_type"))
+                    or _coerce_nonempty_string(oauth_payload.get("token_type"))
+                    or "Bearer"
+                )
+                scope = _coerce_nonempty_string(token_payload.get("scope")) or _coerce_nonempty_string(
+                    oauth_payload.get("scope")
+                )
+                expires_in = _extract_positive_int(token_payload.get("expires_in"))
+                refreshed_at = datetime.now(timezone.utc)
+                refreshed_oauth_payload = dict(oauth_payload)
+                refreshed_oauth_payload["access_token"] = access_token
+                if next_refresh_token:
+                    refreshed_oauth_payload["refresh_token"] = next_refresh_token
+                refreshed_oauth_payload["token_type"] = token_type
+                refreshed_oauth_payload["issued_at"] = refreshed_at.isoformat()
+                if scope:
+                    refreshed_oauth_payload["scope"] = scope
+                if expires_in:
+                    refreshed_oauth_payload["expires_at"] = (
+                        refreshed_at + timedelta(seconds=expires_in)
+                    ).isoformat()
+                else:
+                    refreshed_oauth_payload.pop("expires_at", None)
+
+                credentials = _openai_credentials_map(merged_payload)
+                credentials[_OPENAI_SOURCE_OAUTH] = refreshed_oauth_payload
+                merged_payload["credentials"] = credentials
+                merged_payload["active_auth_source"] = _OPENAI_SOURCE_OAUTH
+                runtime_auth_source = _OPENAI_SOURCE_OAUTH
+                runtime_api_key = access_token
+                refresh_succeeded = True
+                await _persist_user_payload_update(
+                    repo=user_repo,
+                    provider=_OPENAI_PROVIDER,
+                    user_id=user_id,
+                    row=row,
+                    payload=merged_payload,
+                    updated_at=refreshed_at,
+                )
+            else:
+                logger.debug("OpenAI OAuth refresh response missing access_token")
+
+        if not refresh_succeeded:
+            runtime_api_key = None
+            runtime_auth_source = None
+
+        if not runtime_api_key:
+            fallback_api_key = _v2_payload_api_key(merged_payload)
+            if fallback_api_key:
+                runtime_api_key = fallback_api_key
+                runtime_auth_source = _OPENAI_SOURCE_API_KEY
+                merged_payload["active_auth_source"] = _OPENAI_SOURCE_API_KEY
+                await _persist_user_payload_update(
+                    repo=user_repo,
+                    provider=_OPENAI_PROVIDER,
+                    user_id=user_id,
+                    row=row,
+                    payload=merged_payload,
+                    updated_at=datetime.now(timezone.utc),
+                )
+                return _OpenAIUserResolution(
+                    payload=merged_payload,
+                    api_key=runtime_api_key,
+                    auth_source=runtime_auth_source,
+                    fail_closed=False,
+                )
+
+            return _OpenAIUserResolution(
+                payload=merged_payload,
+                api_key=None,
+                auth_source=None,
+                fail_closed=True,
+            )
+
+    if runtime_api_key:
+        return _OpenAIUserResolution(
+            payload=merged_payload,
+            api_key=runtime_api_key,
+            auth_source=runtime_auth_source,
+            fail_closed=False,
+        )
+
+    if _openai_has_any_credentials(merged_payload):
+        return _OpenAIUserResolution(
+            payload=merged_payload,
+            api_key=None,
+            auth_source=None,
+            fail_closed=True,
+        )
+
+    return _OpenAIUserResolution(
+        payload=merged_payload,
+        api_key=None,
+        auth_source=None,
+        fail_closed=False,
+    )
+
+
 def _build_touch_cb(
     *,
     provider: str,
@@ -325,6 +886,7 @@ async def resolve_byok_credentials(
     team_ids: list[int] | None = None,
     org_ids: list[int] | None = None,
     fallback_resolver: Callable[[str], str | None] | None = None,
+    force_oauth_refresh: bool = False,
 ) -> ResolvedByokCredentials:
     provider_norm = normalize_provider_name(provider)
     byok_enabled = is_byok_enabled()
@@ -352,9 +914,30 @@ async def resolve_byok_credentials(
     if user_row:
         payload = _extract_payload(user_row, provider_norm)
         if payload:
-            api_key = payload.get("api_key")
+            runtime_payload = payload
+            runtime_auth_source = _extract_runtime_auth_source(
+                runtime_payload,
+                require_access_for_oauth=True,
+            )
+            if provider_norm == _OPENAI_PROVIDER and _is_openai_v2_payload(payload):
+                openai_resolution = await _resolve_openai_user_payload(
+                    user_repo=user_repo,
+                    user_id=int(user_id),
+                    row=user_row,
+                    payload=payload,
+                    force_oauth_refresh=force_oauth_refresh,
+                )
+                runtime_payload = openai_resolution.payload
+                runtime_auth_source = openai_resolution.auth_source
+                if openai_resolution.fail_closed:
+                    return _finalize_resolution(
+                        _invalid_byok_result(provider_norm, source="user"),
+                        byok_enabled=byok_enabled,
+                    )
+
+            api_key = _extract_runtime_api_key(runtime_payload)
             if api_key:
-                credential_fields_raw = payload.get("credential_fields") or {}
+                credential_fields_raw = runtime_payload.get("credential_fields") or {}
                 try:
                     credential_fields = _sanitize_credential_fields(
                         provider_norm,
@@ -363,7 +946,7 @@ async def resolve_byok_credentials(
                     )
                 except ValueError as exc:
                     logger.warning(
-                        "BYOK credential_fields invalid for user_id=%s provider=%s: %s",
+                        'BYOK credential_fields invalid for user_id={} provider={}: {}',
                         user_id,
                         provider_norm,
                         exc,
@@ -381,6 +964,7 @@ async def resolve_byok_credentials(
                         credential_fields=credential_fields,
                         source="user",
                         allowlisted=True,
+                        auth_source=runtime_auth_source,
                         _touch_cb=_build_touch_cb(
                             provider=provider_norm,
                             last_used_at=last_used_at,
@@ -455,7 +1039,7 @@ async def resolve_byok_credentials(
             payload = _extract_payload(row, provider_norm)
             if not payload:
                 continue
-            api_key = payload.get("api_key")
+            api_key = _extract_runtime_api_key(payload)
             if not api_key:
                 continue
             credential_fields_raw = payload.get("credential_fields") or {}
@@ -467,7 +1051,7 @@ async def resolve_byok_credentials(
                 )
             except ValueError as exc:
                 logger.warning(
-                    "BYOK credential_fields invalid for team_id=%s provider=%s: %s",
+                    'BYOK credential_fields invalid for team_id={} provider={}: {}',
                     team_id,
                     provider_norm,
                     exc,
@@ -481,14 +1065,15 @@ async def resolve_byok_credentials(
                 ResolvedByokCredentials(
                     provider=provider_norm,
                     api_key=api_key,
-                        app_config=_build_app_config(provider_norm, credential_fields),
-                        credential_fields=credential_fields,
-                        source="team",
-                        allowlisted=True,
-                        _touch_cb=_build_touch_cb(
-                            provider=provider_norm,
-                            last_used_at=last_used_at,
-                            repo=shared_repo,
+                    app_config=_build_app_config(provider_norm, credential_fields),
+                    credential_fields=credential_fields,
+                    source="team",
+                    allowlisted=True,
+                    auth_source=_extract_runtime_auth_source(payload, require_access_for_oauth=True),
+                    _touch_cb=_build_touch_cb(
+                        provider=provider_norm,
+                        last_used_at=last_used_at,
+                        repo=shared_repo,
                         scope_type="team",
                         scope_id=int(team_id),
                     ),
@@ -507,7 +1092,7 @@ async def resolve_byok_credentials(
             payload = _extract_payload(row, provider_norm)
             if not payload:
                 continue
-            api_key = payload.get("api_key")
+            api_key = _extract_runtime_api_key(payload)
             if not api_key:
                 continue
             credential_fields_raw = payload.get("credential_fields") or {}
@@ -519,7 +1104,7 @@ async def resolve_byok_credentials(
                 )
             except ValueError as exc:
                 logger.warning(
-                    "BYOK credential_fields invalid for org_id=%s provider=%s: %s",
+                    'BYOK credential_fields invalid for org_id={} provider={}: {}',
                     org_id,
                     provider_norm,
                     exc,
@@ -537,6 +1122,7 @@ async def resolve_byok_credentials(
                     credential_fields=credential_fields,
                     source="org",
                     allowlisted=True,
+                    auth_source=_extract_runtime_auth_source(payload, require_access_for_oauth=True),
                     _touch_cb=_build_touch_cb(
                         provider=provider_norm,
                         last_used_at=last_used_at,

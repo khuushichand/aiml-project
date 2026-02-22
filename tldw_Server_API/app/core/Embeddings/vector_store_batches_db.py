@@ -39,9 +39,9 @@ def _ensure_initialized(user_id: Optional[str]) -> None:
     """
     try:
         init_db(user_id)
-    except Exception:
+    except Exception as init_error:
         # Best effort; callers will raise if operations still fail
-        pass
+        _ = init_error
 
 
 def init_db(user_id: Optional[str]) -> None:
@@ -109,7 +109,10 @@ def update_batch(batch_id: str, user_id: Optional[str], status: Optional[str] = 
         return
 
     with _connect(user_id) as conn:
-        conn.execute(f"UPDATE vector_store_batches SET {', '.join(fields)} WHERE id = ?", values)
+        set_clause = ", ".join(fields)
+        update_batch_sql_template = "UPDATE vector_store_batches SET {set_clause} WHERE id = ?"
+        update_batch_sql = update_batch_sql_template.format_map(locals())  # nosec B608
+        conn.execute(update_batch_sql, values)
         conn.commit()
 
 

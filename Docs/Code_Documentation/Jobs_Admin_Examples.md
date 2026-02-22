@@ -67,6 +67,8 @@ curl -X POST "$BASE/api/v1/jobs/ttl/sweep" \
 
 ## Requeue Quarantined
 
+Canonical endpoint is `POST /api/v1/jobs/batch/requeue_quarantined`; compatibility alias `POST /api/v1/jobs/batch/requeue-quarantined` is also accepted.
+
 Dry run (count only) for a scoped set:
 
 ```bash

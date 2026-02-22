@@ -38,7 +38,10 @@ export type ClientPath =
   | "/api/v1/rag/feedback/implicit"
   | "/api/v1/media"
   | "/api/v1/media/search"
+  | "/api/v1/media/metadata-search"
   | "/api/v1/media/add"
+  | "/api/v1/media/ingest/jobs"
+  | "/api/v1/media/ingest/jobs/{job_id}"
   | "/api/v1/media/{media_id}/keywords"
   | "/api/v1/media/process-audios"
   | "/api/v1/media/process-documents"
@@ -71,6 +74,10 @@ export type ClientPath =
   | "/api/v1/notes/conversations/keyword-links"
   | "/api/v1/prompts"
   | "/api/v1/prompts/search"
+  | "/api/v1/prompts/export"
+  | "/api/v1/prompts/collections"
+  | "/api/v1/prompts/collections/create"
+  | "/api/v1/prompts/collections/{collection_id}"
   | "/api/v1/chat/dictionaries"
   | "/api/v1/chat/dictionaries/import/json"
   | "/api/v1/chat/dictionaries/validate"
@@ -125,6 +132,9 @@ export type ClientPath =
   | "/api/v1/mcp/status"
   | "/api/v1/mcp/tools/execute"
   | "/api/v1/workflows/step-types"
+  | "/api/v1/items"
+  | "/api/v1/items/{item_id}"
+  | "/api/v1/items/bulk"
   | "/api/v1/reading/items"
   | "/api/v1/reading/items/{item_id}"
   | "/api/v1/reading/save"
@@ -134,7 +144,11 @@ export type ClientPath =
   | "/api/v1/reading/items/{item_id}/highlights"
   | "/api/v1/reading/highlights/{highlight_id}"
   | "/api/v1/reading/import"
+  | "/api/v1/reading/import/jobs"
+  | "/api/v1/reading/import/jobs/{job_id}"
   | "/api/v1/reading/export"
+  | "/api/v1/reading/digests/schedules"
+  | "/api/v1/reading/digests/schedules/{schedule_id}"
   | "/api/v1/writing/version"
   | "/api/v1/writing/capabilities"
   | "/api/v1/writing/sessions"
@@ -151,10 +165,14 @@ export type ClientPath =
   | "/api/v1/outputs/templates/{template_id}/preview"
   | "/api/v1/outputs"
   | "/api/v1/outputs/{output_id}/download"
+  | "/api/v1/quizzes/import/json"
   | "/api/v1/flashcards"
   | "/api/v1/flashcards/decks"
+  | "/api/v1/flashcards/generate"
   | "/api/v1/flashcards/review"
   | "/api/v1/flashcards/import"
+  | "/api/v1/flashcards/import/json"
+  | "/api/v1/flashcards/import/apkg"
   | "/api/v1/flashcards/export"
   | "/api/v1/chatbooks/export"
   | "/api/v1/chatbooks/preview"
@@ -213,7 +231,8 @@ export type ClientPathRuntimeWithQuery = ClientPathRuntime | `${ClientPathRuntim
 // checked against ClientPath so that any drift from the OpenAPI spec is
 // caught at compile time.
 export const API_PATHS = {
-  MEDIA_ADD: "/api/v1/media/add" as const
+  MEDIA_ADD: "/api/v1/media/add" as const,
+  MEDIA_INGEST_JOBS: "/api/v1/media/ingest/jobs" as const
 } as const satisfies Record<string, ClientPath>
 
 // Allowed relative API path: anything beginning with a slash. We keep

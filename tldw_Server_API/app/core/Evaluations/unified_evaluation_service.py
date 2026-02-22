@@ -67,12 +67,20 @@ from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
 
 # Import support services
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
+from tldw_Server_API.app.core.Evaluations.persona_telemetry_metrics import (
+    get_persona_telemetry_metrics_summary,
+)
 
 # Import evaluation engines
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
 from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_value
 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
+from tldw_Server_API.app.core.testing import is_test_mode
+
+
+def _await_webhook_inline_in_test_mode() -> bool:
+    return is_test_mode()
 
 
 class EvaluationType(str, Enum):
@@ -693,7 +701,6 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import asyncio as _asyncio
-                    import os as _os
                     effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
                     if effective_user_id == "single_user":
                         try:
@@ -701,7 +708,7 @@ class UnifiedEvaluationService:
                             effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
                         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                             effective_user_id = "user_1"
-                    if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                    if self.webhook_manager and _await_webhook_inline_in_test_mode():
                         await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
@@ -800,7 +807,6 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import asyncio as _asyncio
-                    import os as _os
                     effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
                     if effective_user_id == "single_user":
                         try:
@@ -808,7 +814,7 @@ class UnifiedEvaluationService:
                             effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
                         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                             effective_user_id = "user_1"
-                    if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                    if self.webhook_manager and _await_webhook_inline_in_test_mode():
                         await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
@@ -903,7 +909,6 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import asyncio as _asyncio
-                    import os as _os
                     effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
                     if effective_user_id == "single_user":
                         try:
@@ -911,7 +916,7 @@ class UnifiedEvaluationService:
                             effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
                         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                             effective_user_id = "user_1"
-                    if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                    if self.webhook_manager and _await_webhook_inline_in_test_mode():
                         await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
@@ -1451,9 +1456,16 @@ class UnifiedEvaluationService:
     async def get_metrics_summary(self) -> dict[str, Any]:
         """Get evaluation metrics summary"""
         try:
-            if advanced_metrics.enabled:
-                return advanced_metrics.get_summary()
-            return {"metrics_enabled": False}
+            summary: dict[str, Any]
+            if advanced_metrics.enabled and hasattr(advanced_metrics, "get_summary"):
+                advanced_summary = advanced_metrics.get_summary()
+                summary = dict(advanced_summary) if isinstance(advanced_summary, dict) else {}
+                summary.setdefault("metrics_enabled", True)
+            else:
+                summary = {"metrics_enabled": False}
+
+            summary["persona_telemetry"] = get_persona_telemetry_metrics_summary()
+            return summary
         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get metrics summary: {e}")
             # Do not expose internal error details to external clients

@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 
 test.describe('Sidepanel header actions', () => {
   test('incognito toggle and kebab ingest actions', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, openSidepanel } = await launchWithExtension(extPath)
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, extPath)
 
     // Open sidepanel page
     const sp = await openSidepanel()

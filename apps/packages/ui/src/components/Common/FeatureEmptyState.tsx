@@ -33,6 +33,8 @@ const FeatureEmptyState: React.FC<FeatureEmptyStateProps> = ({
   icon: Icon,
   iconClassName
 }) => {
+  const actionFocusClassName =
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
   return (
     <div
       className={
@@ -79,7 +81,7 @@ const FeatureEmptyState: React.FC<FeatureEmptyStateProps> = ({
                     ? primaryActionLabel
                     : undefined
                 }
-                className="mr-1 rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.08em]"
+                className={`mr-1 rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.08em] ${actionFocusClassName}`}
                 disabled={primaryDisabled}>
                 {primaryActionLabel}
               </Button>
@@ -93,7 +95,7 @@ const FeatureEmptyState: React.FC<FeatureEmptyStateProps> = ({
                     ? secondaryActionLabel
                     : undefined
                 }
-                className="rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.08em]"
+                className={`rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.08em] ${actionFocusClassName}`}
                 disabled={secondaryDisabled}>
                 {secondaryActionLabel}
               </Button>

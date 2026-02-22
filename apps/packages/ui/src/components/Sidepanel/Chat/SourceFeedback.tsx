@@ -9,11 +9,16 @@ type Props = {
   source: any
   sourceKey: string
   sourceIndex?: number
+  pinnedState?: "active" | "inactive" | null
   selected?: FeedbackThumb
   disabled?: boolean
   onRate?: (sourceKey: string, source: any, thumb: FeedbackThumb) => void
   onSourceClick?: (source: any) => void
   onTrackClick?: (source: any, index?: number) => void
+  onTrackCitation?: (source: any, index?: number) => void
+  onTrackDwell?: (source: any, dwellMs: number, index?: number) => void
+  onAskWithSource?: (source: any) => void
+  onOpenKnowledgePanel?: () => void
 }
 
 const buttonBase =
@@ -23,11 +28,16 @@ export const SourceFeedback = ({
   source,
   sourceKey,
   sourceIndex,
+  pinnedState = null,
   selected = null,
   disabled = false,
   onRate,
   onSourceClick,
-  onTrackClick
+  onTrackClick,
+  onTrackCitation,
+  onTrackDwell,
+  onAskWithSource,
+  onOpenKnowledgePanel
 }: Props) => {
   const { t } = useTranslation("playground")
 
@@ -42,8 +52,16 @@ export const SourceFeedback = ({
   const handleSourceNavigate = React.useCallback(
     (payload: any) => {
       onTrackClick?.(payload, sourceIndex)
+      onTrackCitation?.(payload, sourceIndex)
     },
-    [onTrackClick, sourceIndex]
+    [onTrackCitation, onTrackClick, sourceIndex]
+  )
+
+  const handleSourceDwell = React.useCallback(
+    (payload: any, dwellMs: number) => {
+      onTrackDwell?.(payload, dwellMs, sourceIndex)
+    },
+    [onTrackDwell, sourceIndex]
   )
 
   const isDisabled = disabled
@@ -54,7 +72,36 @@ export const SourceFeedback = ({
         source={source}
         onSourceClick={handleSourceClick}
         onSourceNavigate={handleSourceNavigate}
+        onSourceDwell={handleSourceDwell}
+        onOpenKnowledgePanel={onOpenKnowledgePanel}
       />
+      {pinnedState && (
+        <span
+          className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+            pinnedState === "active"
+              ? "border-success/40 bg-success/10 text-success"
+              : "border-border bg-surface2 text-text-muted"
+          }`}
+          title={
+            pinnedState === "active"
+              ? t("sources.pinnedUsed", "Pinned and used in this answer")
+              : t("sources.pinnedNotUsed", "Pinned but not used in this answer")
+          }
+        >
+          {pinnedState === "active"
+            ? t("sources.pinnedUsedBadge", "Pinned: used")
+            : t("sources.pinnedIdleBadge", "Pinned: not used")}
+        </span>
+      )}
+      {onAskWithSource && (
+        <button
+          type="button"
+          onClick={() => onAskWithSource(source)}
+          className="rounded-md border border-border bg-surface2 px-2 py-0.5 text-[10px] font-medium text-text-subtle transition hover:bg-surface hover:text-text"
+        >
+          {t("sources.askWithSource", "Ask with this source")}
+        </button>
+      )}
       <div className="flex items-center gap-1">
         <Tooltip title={t("feedback.sourceHelpful", "Helpful source")}>
           <button
@@ -66,7 +113,7 @@ export const SourceFeedback = ({
             title={t("feedback.sourceHelpful", "Helpful source")}
             className={`${buttonBase} ${
               selected === "up"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                ? "border-success/30 bg-success/10 text-success"
                 : "border-border text-text-subtle hover:bg-surface2"
             } ${isDisabled ? "cursor-not-allowed opacity-50" : ""}`}>
             <ThumbsUp className="h-3 w-3" />
@@ -82,7 +129,7 @@ export const SourceFeedback = ({
             title={t("feedback.sourceUnhelpful", "Unhelpful source")}
             className={`${buttonBase} ${
               selected === "down"
-                ? "border-rose-200 bg-rose-50 text-rose-600 dark:border-rose-700 dark:bg-rose-900/30 dark:text-rose-300"
+                ? "border-danger/30 bg-danger/10 text-danger"
                 : "border-border text-text-subtle hover:bg-surface2"
             } ${isDisabled ? "cursor-not-allowed opacity-50" : ""}`}>
             <ThumbsDown className="h-3 w-3" />

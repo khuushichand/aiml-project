@@ -8,12 +8,13 @@ These schemas define the request and response models for the chat dictionary
 API endpoints, ensuring proper validation and serialization.
 """
 
+import json
 import re
 from datetime import datetime
 from typing import Any, Optional, Union
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from tldw_Server_API.app.core.Character_Chat.constants import MAX_CHAT_DICTIONARY_TEXT_LENGTH
 
@@ -32,6 +33,107 @@ DANGEROUS_REGEX_PATTERNS = [
     r'(.?)*',      # Many optional matches
     r'([a-zA-Z]+)*',  # Character class with nested quantifier
 ]
+
+MAX_DICTIONARY_TAGS = 20
+MAX_DICTIONARY_TAG_LENGTH = 40
+MAX_INCLUDED_DICTIONARIES = 50
+
+
+def _normalize_dictionary_category(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _normalize_dictionary_tags(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    raw_values: list[Any]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            parsed = [part.strip() for part in stripped.split(",")]
+        if isinstance(parsed, (list, tuple, set)):
+            raw_values = list(parsed)
+        else:
+            raw_values = [parsed]
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
+    else:
+        raise ValueError("tags must be a list of strings")
+
+    normalized_tags: list[str] = []
+    seen: set[str] = set()
+    for item in raw_values:
+        if item is None:
+            continue
+        tag = str(item).strip()
+        if not tag:
+            continue
+        if len(tag) > MAX_DICTIONARY_TAG_LENGTH:
+            raise ValueError(
+                f"Tag '{tag[:20]}...' exceeds max length of {MAX_DICTIONARY_TAG_LENGTH} characters"
+            )
+        dedupe_key = tag.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized_tags.append(tag)
+
+    if len(normalized_tags) > MAX_DICTIONARY_TAGS:
+        raise ValueError(f"At most {MAX_DICTIONARY_TAGS} tags are allowed")
+
+    return normalized_tags
+
+
+def _normalize_included_dictionary_ids(value: Any) -> list[int]:
+    if value is None:
+        return []
+
+    raw_values: list[Any]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            parsed = [part.strip() for part in stripped.split(",")]
+        if isinstance(parsed, (list, tuple, set)):
+            raw_values = list(parsed)
+        else:
+            raw_values = [parsed]
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
+    else:
+        raise ValueError("included_dictionary_ids must be a list of integers")
+
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for item in raw_values:
+        if item is None or isinstance(item, bool):
+            continue
+        try:
+            dictionary_id = int(item)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid dictionary ID '{item}' in included_dictionary_ids") from None
+        if dictionary_id <= 0:
+            raise ValueError("included_dictionary_ids must contain positive integers")
+        if dictionary_id in seen:
+            continue
+        seen.add(dictionary_id)
+        normalized.append(dictionary_id)
+
+    if len(normalized) > MAX_INCLUDED_DICTIONARIES:
+        raise ValueError(f"At most {MAX_INCLUDED_DICTIONARIES} included dictionaries are allowed")
+
+    return normalized
 
 
 def _has_nested_quantifiers(pattern: str) -> bool:
@@ -191,6 +293,9 @@ class DictionaryEntryResponse(DictionaryEntryBase):
     type: str = Field(..., description="Entry type")
     enabled: bool = Field(..., description="Whether the entry is enabled")
     case_sensitive: bool = Field(..., description="Case-sensitive matching for literal patterns")
+    priority: Optional[int] = Field(None, ge=1, description="Execution priority (1 = first)")
+    usage_count: int = Field(0, ge=0, description="Total number of times this entry has fired")
+    last_used_at: Optional[datetime] = Field(None, description="Timestamp when this entry last fired")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
@@ -201,20 +306,130 @@ class ChatDictionaryBase(BaseModel):
     """Base schema for chat dictionaries."""
     name: str = Field(..., min_length=1, max_length=100, description="Unique dictionary name")
     description: Optional[str] = Field(None, max_length=500, description="Dictionary description")
+    category: Optional[str] = Field(
+        None,
+        max_length=100,
+        description="Optional category for organizing dictionaries",
+    )
+    tags: list[str] = Field(default_factory=list, description="Optional tags for dictionary filtering")
+    included_dictionary_ids: list[int] = Field(
+        default_factory=list,
+        description="Optional list of included dictionary IDs processed before this dictionary.",
+    )
     is_active: bool = Field(True, description="Whether the dictionary is active")
+    default_token_budget: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Optional default token budget applied when processing requests omit token_budget.",
+    )
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, value: Any) -> Optional[str]:
+        return _normalize_dictionary_category(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[str]:
+        return _normalize_dictionary_tags(value)
+
+    @field_validator("included_dictionary_ids", mode="before")
+    @classmethod
+    def normalize_included_dictionary_ids(cls, value: Any) -> list[int]:
+        return _normalize_included_dictionary_ids(value)
 
 
 class ChatDictionaryCreate(BaseModel):
     """Schema for creating a chat dictionary."""
     name: str = Field(..., min_length=1, max_length=100, description="Unique dictionary name")
     description: Optional[str] = Field(None, max_length=500, description="Dictionary description")
+    category: Optional[str] = Field(
+        None,
+        max_length=100,
+        description="Optional category for organizing dictionaries",
+    )
+    tags: list[str] = Field(default_factory=list, description="Optional tags for dictionary filtering")
+    included_dictionary_ids: list[int] = Field(
+        default_factory=list,
+        description="Optional included dictionary IDs for composition.",
+    )
+    default_token_budget: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Optional default token budget.",
+    )
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, value: Any) -> Optional[str]:
+        return _normalize_dictionary_category(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[str]:
+        return _normalize_dictionary_tags(value)
+
+    @field_validator("included_dictionary_ids", mode="before")
+    @classmethod
+    def normalize_included_dictionary_ids(cls, value: Any) -> list[int]:
+        return _normalize_included_dictionary_ids(value)
 
 
 class ChatDictionaryUpdate(BaseModel):
     """Schema for updating a chat dictionary."""
     name: Optional[str] = Field(None, min_length=1, max_length=100, description="New dictionary name")
     description: Optional[str] = Field(None, max_length=500, description="New description")
+    category: Optional[str] = Field(
+        None,
+        max_length=100,
+        description="New category value (null clears category)",
+    )
+    tags: Optional[list[str]] = Field(
+        None,
+        description="New tags list (empty list clears tags)",
+    )
+    included_dictionary_ids: Optional[list[int]] = Field(
+        None,
+        description="New included dictionary IDs (empty list clears includes).",
+    )
     is_active: Optional[bool] = Field(None, description="New active status")
+    default_token_budget: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Optional default token budget override.",
+    )
+    version: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Expected dictionary version for optimistic locking",
+    )
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, value: Any) -> Optional[str]:
+        return _normalize_dictionary_category(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> Optional[list[str]]:
+        if value is None:
+            return None
+        return _normalize_dictionary_tags(value)
+
+    @field_validator("included_dictionary_ids", mode="before")
+    @classmethod
+    def normalize_included_dictionary_ids(cls, value: Any) -> Optional[list[int]]:
+        if value is None:
+            return None
+        return _normalize_included_dictionary_ids(value)
+
+
+class DictionaryUsageChatRef(BaseModel):
+    """Lightweight chat reference used by dictionary usage summaries."""
+    chat_id: str = Field(..., description="Chat session ID")
+    title: Optional[str] = Field(None, description="Chat title")
+    state: str = Field("in-progress", description="Conversation state")
+    last_modified: Optional[datetime] = Field(None, description="Chat last-modified timestamp")
 
 
 class ChatDictionaryResponse(ChatDictionaryBase):
@@ -224,6 +439,17 @@ class ChatDictionaryResponse(ChatDictionaryBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
     version: int = Field(..., description="Version number for optimistic locking")
     entry_count: Optional[int] = Field(None, description="Number of entries in the dictionary")
+    processing_priority: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Execution priority among active dictionaries (1 = first).",
+    )
+    used_by_chat_count: int = Field(0, description="Number of chat sessions linked to this dictionary")
+    used_by_active_chat_count: int = Field(0, description="Number of active chat sessions linked to this dictionary")
+    used_by_chat_refs: list[DictionaryUsageChatRef] = Field(
+        default_factory=list,
+        description="Small preview of linked chat sessions",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -240,6 +466,10 @@ class ProcessTextRequest(BaseModel):
     group: Optional[str] = Field(None, description="Specific group to filter entries")
     max_iterations: int = Field(5, ge=1, le=20, description="Maximum processing iterations")
     token_budget: Optional[int] = Field(None, ge=1, description="Optional token limit")
+    chat_id: Optional[str] = Field(
+        None,
+        description="Optional chat session ID for activity/audit attribution.",
+    )
 
 
 class ProcessTextResponse(BaseModel):
@@ -250,7 +480,86 @@ class ProcessTextResponse(BaseModel):
     iterations: int = Field(..., description="Number of iterations performed")
     entries_used: list[int] = Field(..., description="IDs of entries that made replacements")
     token_budget_exceeded: bool = Field(False, description="Whether token budget was exceeded")
+    token_budget_used: Optional[int] = Field(
+        None,
+        description="Effective token budget used during processing (request override or dictionary default).",
+    )
     processing_time_ms: Optional[float] = Field(None, description="Processing time in milliseconds")
+
+
+class DictionaryActivityEvent(BaseModel):
+    """Single dictionary transformation activity event."""
+    id: int = Field(..., description="Activity event ID")
+    dictionary_id: int = Field(..., description="Dictionary ID")
+    chat_id: Optional[str] = Field(None, description="Associated chat session ID, if provided")
+    entries_used: list[int] = Field(default_factory=list, description="Entry IDs that fired for this event")
+    replacements: int = Field(..., ge=0, description="Number of replacements made")
+    iterations: int = Field(..., ge=0, description="Iterations performed")
+    token_budget_used: Optional[int] = Field(None, ge=1, description="Effective token budget used")
+    original_text_preview: str = Field(..., description="Original text preview snippet")
+    processed_text_preview: str = Field(..., description="Processed text preview snippet")
+    processing_time_ms: Optional[float] = Field(None, ge=0, description="Processing time in milliseconds")
+    created_at: datetime = Field(..., description="Event timestamp")
+
+
+class DictionaryActivityListResponse(BaseModel):
+    """Paginated activity events for a dictionary."""
+    dictionary_id: int = Field(..., description="Dictionary ID")
+    events: list[DictionaryActivityEvent] = Field(default_factory=list, description="Activity events")
+    total: int = Field(..., ge=0, description="Total number of matching events")
+    limit: int = Field(..., ge=1, description="Applied page size")
+    offset: int = Field(..., ge=0, description="Applied offset")
+
+
+class DictionaryVersionSummary(BaseModel):
+    """Single version-history row for a dictionary snapshot."""
+    revision: int = Field(..., ge=1, description="Monotonic revision number for this dictionary")
+    source_dictionary_version: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Dictionary optimistic-lock version captured in this snapshot.",
+    )
+    change_type: str = Field(..., description="High-level change category (create/update/entry/revert/etc.)")
+    summary: Optional[str] = Field(None, description="Human-readable change summary")
+    entry_count: int = Field(0, ge=0, description="Number of entries captured in this snapshot")
+    created_at: datetime = Field(..., description="Snapshot timestamp")
+
+
+class DictionaryVersionDetailResponse(BaseModel):
+    """Detailed dictionary snapshot payload for a specific revision."""
+    dictionary_id: int = Field(..., description="Dictionary ID")
+    revision: int = Field(..., ge=1, description="Requested revision number")
+    source_dictionary_version: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Dictionary optimistic-lock version captured in this snapshot.",
+    )
+    change_type: str = Field(..., description="High-level change category")
+    summary: Optional[str] = Field(None, description="Human-readable change summary")
+    created_at: datetime = Field(..., description="Snapshot timestamp")
+    dictionary: ChatDictionaryResponse = Field(..., description="Dictionary metadata captured in this revision")
+    entries: list[DictionaryEntryResponse] = Field(
+        default_factory=list,
+        description="Dictionary entries captured in this revision",
+    )
+
+
+class DictionaryVersionListResponse(BaseModel):
+    """Paginated dictionary version-history list response."""
+    dictionary_id: int = Field(..., description="Dictionary ID")
+    versions: list[DictionaryVersionSummary] = Field(default_factory=list, description="Version-history rows")
+    total: int = Field(..., ge=0, description="Total number of snapshots for this dictionary")
+    limit: int = Field(..., ge=1, description="Applied page size")
+    offset: int = Field(..., ge=0, description="Applied offset")
+
+
+class DictionaryVersionRevertResponse(BaseModel):
+    """Response payload for dictionary revision revert operations."""
+    dictionary_id: int = Field(..., description="Dictionary ID")
+    reverted_to_revision: int = Field(..., ge=1, description="Revision number that was restored")
+    current_dictionary_version: int = Field(..., ge=1, description="Dictionary optimistic-lock version after revert")
+    current_revision: int = Field(..., ge=1, description="Latest revision number after revert snapshot is recorded")
+    message: str = Field(..., description="Result summary")
 
 
 class ImportDictionaryRequest(BaseModel):
@@ -284,6 +593,17 @@ class ExportDictionaryJSONResponse(BaseModel):
     """Response schema for JSON export of a dictionary."""
     name: str = Field(..., description="Dictionary name")
     description: Optional[str] = Field(None, description="Dictionary description")
+    category: Optional[str] = Field(None, description="Dictionary category")
+    tags: list[str] = Field(default_factory=list, description="Dictionary tags")
+    included_dictionary_ids: list[int] = Field(
+        default_factory=list,
+        description="Included dictionary IDs for composition.",
+    )
+    default_token_budget: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Optional default token budget for processing requests without token_budget.",
+    )
     entries: list[dict[str, Any]] = Field(..., description="Entries with pattern, replacement, type, probability, etc.")
 
 
@@ -292,6 +612,16 @@ class BulkEntryOperation(BaseModel):
     entry_ids: list[int] = Field(..., min_length=1, description="List of entry IDs to operate on")
     operation: str = Field(..., pattern="^(delete|activate|deactivate|group)$", description="Operation to perform")
     group_name: Optional[str] = Field(None, description="Group name (for group operation)")
+
+    @model_validator(mode="after")
+    def validate_group_operation(self) -> "BulkEntryOperation":
+        """Require a non-empty group_name when operation is group."""
+        if self.operation == "group":
+            group_name = (self.group_name or "").strip()
+            if not group_name:
+                raise ValueError("group_name is required when operation is 'group'")
+            self.group_name = group_name
+        return self
 
 
 class BulkOperationResponse(BaseModel):
@@ -302,6 +632,51 @@ class BulkOperationResponse(BaseModel):
     message: str = Field(..., description="Operation result message")
 
 
+class DictionaryEntryReorderRequest(BaseModel):
+    """Schema for reordering all entries in a dictionary."""
+    entry_ids: list[int] = Field(
+        ...,
+        min_length=1,
+        description="Full ordered list of dictionary entry IDs",
+    )
+
+    @model_validator(mode="after")
+    def validate_unique_entry_ids(self) -> "DictionaryEntryReorderRequest":
+        if len(set(self.entry_ids)) != len(self.entry_ids):
+            raise ValueError("entry_ids must not contain duplicates")
+        return self
+
+
+class DictionaryEntryReorderResponse(BaseModel):
+    """Response schema for dictionary entry reordering."""
+    success: bool = Field(..., description="Whether reorder completed successfully")
+    dictionary_id: int = Field(..., description="Dictionary ID")
+    affected_count: int = Field(..., description="Number of entries reordered")
+    entry_ids: list[int] = Field(..., description="Persisted ordered list of entry IDs")
+    message: str = Field(..., description="Operation result message")
+
+
+class DictionaryEntryUsageStatistic(BaseModel):
+    """Per-entry usage statistic row."""
+    entry_id: int = Field(..., description="Entry ID")
+    pattern: str = Field(..., description="Entry pattern")
+    usage_count: int = Field(0, ge=0, description="Times this entry fired")
+    last_used_at: Optional[datetime] = Field(None, description="Entry last-used timestamp")
+
+
+class DictionaryPatternConflict(BaseModel):
+    """Potentially overlapping/shadowing pair of dictionary patterns."""
+    entry_id_a: int = Field(..., description="First entry ID")
+    entry_id_b: int = Field(..., description="Second entry ID")
+    pattern_a: str = Field(..., description="First entry pattern")
+    pattern_b: str = Field(..., description="Second entry pattern")
+    type_a: str = Field(..., description="First entry type")
+    type_b: str = Field(..., description="Second entry type")
+    conflict_type: str = Field(..., description="Conflict heuristic category")
+    severity: str = Field(..., pattern="^(low|medium|high)$", description="Relative conflict severity")
+    reason: str = Field(..., description="Human-readable explanation")
+
+
 class DictionaryStatistics(BaseModel):
     """Statistics for a dictionary."""
     dictionary_id: int = Field(..., description="Dictionary ID")
@@ -309,8 +684,24 @@ class DictionaryStatistics(BaseModel):
     total_entries: int = Field(..., description="Total number of entries")
     regex_entries: int = Field(..., description="Number of regex entries")
     literal_entries: int = Field(..., description="Number of literal entries")
+    enabled_entries: int = Field(0, description="Number of enabled entries")
+    disabled_entries: int = Field(0, description="Number of disabled entries")
+    probabilistic_entries: int = Field(0, description="Entries with probability below 1.0")
+    timed_effect_entries: int = Field(0, description="Entries with any timed effect configured")
     groups: list[str] = Field(..., description="List of unique groups")
     average_probability: float = Field(..., description="Average replacement probability")
+    created_at: datetime = Field(..., description="Dictionary creation timestamp")
+    updated_at: datetime = Field(..., description="Dictionary last-update timestamp")
+    zero_usage_entries: int = Field(0, description="Entries that have never fired")
+    entry_usage: list[DictionaryEntryUsageStatistic] = Field(
+        default_factory=list,
+        description="Per-entry usage snapshot for maintenance workflows",
+    )
+    pattern_conflict_count: int = Field(0, description="Number of potential pattern conflicts")
+    pattern_conflicts: list[DictionaryPatternConflict] = Field(
+        default_factory=list,
+        description="Potential overlapping/shadowing pattern pairs",
+    )
     total_usage_count: Optional[int] = Field(None, description="Total times used (if tracked)")
     last_used: Optional[datetime] = Field(None, description="Last usage timestamp (if tracked)")
 
@@ -379,3 +770,8 @@ class ValidateDictionaryResponse(BaseModel):
     warnings: list[ValidationIssue] = Field(default_factory=list, description="List of validation warnings")
     entry_stats: dict[str, int] = Field(default_factory=dict, description="Basic statistics about entries")
     suggested_fixes: list[str] = Field(default_factory=list, description="Optional suggestions to fix issues")
+    partial: bool = Field(False, description="True when validation short-circuited and report is best-effort")
+    partial_reason: Optional[str] = Field(
+        None,
+        description="Reason for partial validation, e.g. 'max_entries' or 'timeout'",
+    )

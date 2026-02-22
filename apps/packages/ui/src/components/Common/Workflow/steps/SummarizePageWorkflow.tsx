@@ -166,7 +166,7 @@ const CaptureStep: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <Spin size="large" />
-        <p className="mt-4 text-textMuted">
+        <p className="mt-4 text-text-muted">
           {t("workflows:summarizePage.capturing", "Capturing page content...")}
         </p>
       </div>
@@ -180,18 +180,18 @@ const CaptureStep: React.FC = () => {
           type="success"
           showIcon
           icon={<CheckCircle className="h-4 w-4" />}
-          message={t("workflows:summarizePage.captured", "Page captured")}
+          title={t("workflows:summarizePage.captured", "Page captured")}
           description={
             <div className="mt-2">
               <p className="font-medium">{pageInfo.title}</p>
-              <p className="text-xs text-textMuted flex items-center gap-1 mt-1">
+              <p className="text-xs text-text-muted flex items-center gap-1 mt-1">
                 <Globe className="h-3 w-3" />
                 {pageInfo.url}
               </p>
             </div>
           }
         />
-        <p className="text-sm text-textMuted">
+        <p className="text-sm text-text-muted">
           {t(
             "workflows:summarizePage.contentPreview",
             "Content length: {{length}} characters",
@@ -258,7 +258,7 @@ const OptionsStep: React.FC = () => {
           onChange={(e) => handleStyleChange(e.target.value)}
           className="w-full"
         >
-          <Space direction="vertical" className="w-full">
+          <Space orientation="vertical" className="w-full">
             {styleOptions.map((option) => (
               <Radio
                 key={option.value}
@@ -267,7 +267,7 @@ const OptionsStep: React.FC = () => {
               >
                 <div>
                   <span className="font-medium">{option.label}</span>
-                  <p className="text-xs text-textMuted mt-0.5">
+                  <p className="text-xs text-text-muted mt-0.5">
                     {option.description}
                   </p>
                 </div>
@@ -426,7 +426,7 @@ const ResultStep: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <Spin size="large" />
-        <p className="mt-4 text-textMuted">
+        <p className="mt-4 text-text-muted">
           {t("workflows:summarizePage.generating", "Generating summary...")}
         </p>
       </div>

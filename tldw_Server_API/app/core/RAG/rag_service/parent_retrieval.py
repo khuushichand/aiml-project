@@ -162,7 +162,7 @@ class ParentDocumentIndex:
 
     def _generate_parent_id(self, key: str) -> str:
         """Generate a unique parent document ID."""
-        return hashlib.md5(key.encode()).hexdigest()[:12]
+        return hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 class ParentDocumentRetriever:
@@ -490,7 +490,7 @@ class SmartParentRetriever(ParentDocumentRetriever):
 
         try:
             import hashlib as _hl
-            _qh = _hl.md5((query or '').encode('utf-8')).hexdigest()[:8]
+            _qh = _hl.md5((query or '').encode('utf-8'), usedforsecurity=False).hexdigest()[:8]
             logger.info(f"Selected strategy: {strategy.value} for query_hash={_qh}")
         except Exception:
             logger.info(f"Selected strategy: {strategy.value}")

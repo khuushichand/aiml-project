@@ -1,6 +1,7 @@
 import type {
   MessageSteeringFlags,
   MessageSteeringMode,
+  MessageSteeringPromptTemplates,
   MessageSteeringState,
   ResolvedMessageSteering
 } from "@/types/message-steering"
@@ -15,6 +16,54 @@ type ResolveMessageSteeringInput = {
 export const EMPTY_MESSAGE_STEERING_STATE: MessageSteeringState = {
   mode: "none",
   forceNarrate: false
+}
+
+export const MESSAGE_STEERING_PROMPTS_STORAGE_KEY = "messageSteeringPrompts"
+
+export const DEFAULT_MESSAGE_STEERING_PROMPTS: MessageSteeringPromptTemplates = {
+  continueAsUser:
+    "Continue the user's current thought in the same voice and perspective.",
+  impersonateUser:
+    "Write this reply as if it is authored by the user, in first person, while preserving the user's intent.",
+  forceNarrate: "Use narrative prose style for this reply."
+}
+
+const normalizePromptText = (value: unknown, fallback: string): string => {
+  if (typeof value !== "string") return fallback
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : fallback
+}
+
+export const normalizeMessageSteeringPrompts = (
+  input?: Partial<MessageSteeringPromptTemplates> | null
+): MessageSteeringPromptTemplates => ({
+  continueAsUser: normalizePromptText(
+    input?.continueAsUser,
+    DEFAULT_MESSAGE_STEERING_PROMPTS.continueAsUser
+  ),
+  impersonateUser: normalizePromptText(
+    input?.impersonateUser,
+    DEFAULT_MESSAGE_STEERING_PROMPTS.impersonateUser
+  ),
+  forceNarrate: normalizePromptText(
+    input?.forceNarrate,
+    DEFAULT_MESSAGE_STEERING_PROMPTS.forceNarrate
+  )
+})
+
+export const toMessageSteeringPromptPayload = (
+  input?: Partial<MessageSteeringPromptTemplates> | null
+): {
+  continue_as_user: string
+  impersonate_user: string
+  force_narrate: string
+} => {
+  const prompts = normalizeMessageSteeringPrompts(input)
+  return {
+    continue_as_user: prompts.continueAsUser,
+    impersonate_user: prompts.impersonateUser,
+    force_narrate: prompts.forceNarrate
+  }
 }
 
 export const resolveMessageSteering = (
@@ -68,24 +117,20 @@ export const resolveMessageSteering = (
 }
 
 export const buildMessageSteeringSnippet = (
-  steering: MessageSteeringFlags
+  steering: MessageSteeringFlags,
+  promptTemplates?: Partial<MessageSteeringPromptTemplates> | null
 ): string | null => {
+  const prompts = normalizeMessageSteeringPrompts(promptTemplates)
   const instructions: string[] = []
 
   if (steering.impersonateUser) {
-    instructions.push(
-      "Write this reply as if it is authored by the user, in first person, while preserving the user's intent."
-    )
+    instructions.push(prompts.impersonateUser)
   } else if (steering.continueAsUser) {
-    instructions.push(
-      "Continue the user's current thought in the same voice and perspective."
-    )
+    instructions.push(prompts.continueAsUser)
   }
 
   if (steering.forceNarrate) {
-    instructions.push(
-      "Use narrative prose style for this reply."
-    )
+    instructions.push(prompts.forceNarrate)
   }
 
   if (instructions.length === 0) {
@@ -103,4 +148,3 @@ export const hasActiveMessageSteering = (
       steering.impersonateUser ||
       steering.forceNarrate
   )
-

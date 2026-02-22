@@ -1,5 +1,11 @@
 import { App, notification as staticNotification } from "antd"
 import type { NotificationInstance } from "antd/es/notification/interface"
+import {
+  patchNotificationApi,
+  patchStaticAntdNotificationCompat
+} from "@/utils/antd-notification-compat"
+
+patchStaticAntdNotificationCompat()
 
 export const useAntdNotification = (): NotificationInstance => {
   const { notification } = App.useApp()
@@ -17,5 +23,6 @@ export const useAntdNotification = (): NotificationInstance => {
   ensureMethod("info")
   ensureMethod("warning")
   ensureMethod("error")
+  patchNotificationApi(api)
   return api as NotificationInstance
 }

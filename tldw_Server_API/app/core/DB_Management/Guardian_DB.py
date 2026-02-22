@@ -22,7 +22,7 @@ import os
 import sqlite3
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -64,6 +64,14 @@ def _new_id() -> str:
     return uuid4().hex[:16]
 
 
+def _safe_get(row: Any, key: str, default: Any = None) -> Any:
+    """Safely read a column from a sqlite3.Row, returning default if missing."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
 # ── Data classes ─────────────────────────────────────────────
 
 @dataclass
@@ -87,6 +95,7 @@ class GuardianRelationship:
 class SupervisedPolicy:
     id: str
     relationship_id: str
+    governance_policy_id: str | None = None  # optional parent governance policy group
     policy_type: str = "block"  # block | notify
     category: str = ""  # e.g. "explicit_content", "self_harm", "bullying"
     pattern: str = ""  # regex or literal pattern
@@ -171,6 +180,8 @@ class SelfMonitoringRule:
     min_context_length: int = 0  # minimum chars for a match to fire
     enabled: bool = True
     pending_deactivation_at: str | None = None  # cooldown deactivation timestamp
+    deactivation_confirmation_token: str | None = None  # token for confirmation/partner bypass
+    deactivation_requested_at: str | None = None  # ISO timestamp of deactivation request
     created_at: str = ""
     updated_at: str = ""
 
@@ -224,6 +235,7 @@ class GuardianDB:
         self._lock = threading.RLock()
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._ensure_schema()
+        self._migrate_schema()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10, isolation_level=None)
@@ -268,6 +280,7 @@ class GuardianDB:
                     CREATE TABLE IF NOT EXISTS supervised_policies (
                         id TEXT PRIMARY KEY,
                         relationship_id TEXT NOT NULL,
+                        governance_policy_id TEXT,
                         policy_type TEXT NOT NULL DEFAULT 'block',
                         category TEXT NOT NULL DEFAULT '',
                         pattern TEXT NOT NULL DEFAULT '',
@@ -282,7 +295,8 @@ class GuardianDB:
                         metadata TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
-                        FOREIGN KEY (relationship_id) REFERENCES guardian_relationships(id)
+                        FOREIGN KEY (relationship_id) REFERENCES guardian_relationships(id),
+                        FOREIGN KEY (governance_policy_id) REFERENCES governance_policies(id)
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_sp_relationship
@@ -365,6 +379,8 @@ class GuardianDB:
                         min_context_length INTEGER NOT NULL DEFAULT 0,
                         enabled INTEGER NOT NULL DEFAULT 1,
                         pending_deactivation_at TEXT,
+                        deactivation_confirmation_token TEXT,
+                        deactivation_requested_at TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
                         FOREIGN KEY (governance_policy_id) REFERENCES governance_policies(id)
@@ -372,8 +388,6 @@ class GuardianDB:
 
                     CREATE INDEX IF NOT EXISTS idx_smr_user
                         ON self_monitoring_rules(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_smr_policy
-                        ON self_monitoring_rules(governance_policy_id);
                     CREATE INDEX IF NOT EXISTS idx_smr_enabled
                         ON self_monitoring_rules(enabled);
 
@@ -426,6 +440,50 @@ class GuardianDB:
                 """)
             finally:
                 conn.close()
+
+    def _migrate_schema(self) -> None:
+        """Add columns introduced after the initial schema, if missing."""
+        migrations = [
+            ("supervised_policies", "governance_policy_id", "TEXT"),
+            ("self_monitoring_rules", "governance_policy_id", "TEXT"),
+            ("self_monitoring_rules", "deactivation_confirmation_token", "TEXT"),
+            ("self_monitoring_rules", "deactivation_requested_at", "TEXT"),
+        ]
+        with self._lock:
+            conn = self._connect()
+            try:
+                for table, column, col_type in migrations:
+                    try:
+                        existing = {
+                            row["name"]
+                            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                        }
+                        if column not in existing:
+                            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                            logger.debug(f"Migrated: added {table}.{column} ({col_type})")
+                    except _GUARDIAN_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(
+                            f"Guardian DB migration error for {table}.{column} (non-critical): {e}"
+                        )
+                self._ensure_optional_indexes(conn)
+            finally:
+                conn.close()
+
+    @staticmethod
+    def _table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(_safe_get(row, "name") == column for row in rows)
+
+    def _ensure_optional_indexes(self, conn: sqlite3.Connection) -> None:
+        optional_indexes = [
+            ("idx_sp_governance", "supervised_policies", "governance_policy_id"),
+            ("idx_smr_policy", "self_monitoring_rules", "governance_policy_id"),
+        ]
+        for idx_name, table, column in optional_indexes:
+            if self._table_has_column(conn, table, column):
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({column})"
+                )
 
     # ── Guardian Relationships ─────────────────────────────────
 
@@ -663,6 +721,7 @@ class GuardianDB:
         message_to_dependent: str | None = None,
         enabled: bool = True,
         metadata: dict[str, Any] | None = None,
+        governance_policy_id: str | None = None,
     ) -> SupervisedPolicy:
         if action not in ("block", "redact", "warn", "notify"):
             raise ValueError(f"Invalid action: {action}")
@@ -678,6 +737,7 @@ class GuardianDB:
         pol = SupervisedPolicy(
             id=_new_id(),
             relationship_id=relationship_id,
+            governance_policy_id=governance_policy_id,
             policy_type=policy_type,
             category=category,
             pattern=pattern,
@@ -698,15 +758,15 @@ class GuardianDB:
             try:
                 conn.execute(
                     """INSERT INTO supervised_policies
-                    (id, relationship_id, policy_type, category, pattern,
-                     pattern_type, action, phase, severity, notify_guardian,
-                     notify_context, message_to_dependent, enabled,
-                     metadata, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (id, relationship_id, governance_policy_id, policy_type,
+                     category, pattern, pattern_type, action, phase, severity,
+                     notify_guardian, notify_context, message_to_dependent,
+                     enabled, metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        pol.id, pol.relationship_id, pol.policy_type,
-                        pol.category, pol.pattern, pol.pattern_type,
-                        pol.action, pol.phase, pol.severity,
+                        pol.id, pol.relationship_id, pol.governance_policy_id,
+                        pol.policy_type, pol.category, pol.pattern,
+                        pol.pattern_type, pol.action, pol.phase, pol.severity,
                         int(pol.notify_guardian), pol.notify_context,
                         pol.message_to_dependent, int(pol.enabled),
                         json.dumps(pol.metadata) if pol.metadata else None,
@@ -787,6 +847,7 @@ class GuardianDB:
             "policy_type", "category", "pattern", "pattern_type",
             "action", "phase", "severity", "notify_guardian",
             "notify_context", "message_to_dependent", "enabled", "metadata",
+            "governance_policy_id",
         }
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
         if not updates:
@@ -814,11 +875,12 @@ class GuardianDB:
         set_clauses.append("updated_at = ?")
         params.append(now)
         params.append(policy_id)
+        set_clause_sql = ", ".join(set_clauses)
         with self._lock:
             conn = self._connect()
             try:
                 result = conn.execute(
-                    f"UPDATE supervised_policies SET {', '.join(set_clauses)} WHERE id = ?",
+                    f"UPDATE supervised_policies SET {set_clause_sql} WHERE id = ?",  # nosec B608
                     params,
                 )
                 return (result.rowcount or 0) > 0
@@ -846,9 +908,14 @@ class GuardianDB:
                 meta = json.loads(raw_meta)
             except _GUARDIAN_NONCRITICAL_EXCEPTIONS:
                 meta = None
+        try:
+            governance_policy_id = row["governance_policy_id"]
+        except (IndexError, KeyError):
+            governance_policy_id = None
         return SupervisedPolicy(
             id=row["id"],
             relationship_id=row["relationship_id"],
+            governance_policy_id=governance_policy_id,
             policy_type=row["policy_type"],
             category=row["category"],
             pattern=row["pattern"],
@@ -1267,7 +1334,8 @@ class GuardianDB:
             "escalation_session_action", "escalation_window_days",
             "escalation_window_threshold", "escalation_window_action",
             "min_context_length", "enabled", "pending_deactivation_at",
-            "governance_policy_id",
+            "governance_policy_id", "deactivation_confirmation_token",
+            "deactivation_requested_at",
         }
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
         if not updates:
@@ -1294,11 +1362,12 @@ class GuardianDB:
         set_clauses.append("updated_at = ?")
         params.append(now)
         params.append(rule_id)
+        set_clause_sql = ", ".join(set_clauses)
         with self._lock:
             conn = self._connect()
             try:
                 result = conn.execute(
-                    f"UPDATE self_monitoring_rules SET {', '.join(set_clauses)} WHERE id = ?",
+                    f"UPDATE self_monitoring_rules SET {set_clause_sql} WHERE id = ?",  # nosec B608
                     params,
                 )
                 return (result.rowcount or 0) > 0
@@ -1363,6 +1432,8 @@ class GuardianDB:
             min_context_length=row["min_context_length"],
             enabled=bool(row["enabled"]),
             pending_deactivation_at=row["pending_deactivation_at"],
+            deactivation_confirmation_token=_safe_get(row, "deactivation_confirmation_token"),
+            deactivation_requested_at=_safe_get(row, "deactivation_requested_at"),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -1480,8 +1551,9 @@ class GuardianDB:
             conn = self._connect()
             try:
                 placeholders = ",".join("?" * len(alert_ids))
+                alert_ids_clause = f"({placeholders})"
                 result = conn.execute(
-                    f"UPDATE self_monitoring_alerts SET is_read = 1 WHERE user_id = ? AND id IN ({placeholders})",
+                    f"UPDATE self_monitoring_alerts SET is_read = 1 WHERE user_id = ? AND id IN {alert_ids_clause}",  # nosec B608
                     [str(user_id), *alert_ids],
                 )
                 return result.rowcount or 0
@@ -1643,6 +1715,134 @@ class GuardianDB:
             finally:
                 conn.close()
 
+    def count_alerts_in_window(
+        self,
+        user_id: str,
+        rule_id: str,
+        window_days: int,
+    ) -> int:
+        """Count alerts for a rule within the last *window_days* days.
+
+        Used by escalation logic to compute a rolling-window trigger count
+        instead of a monotonically increasing counter.
+        """
+        if window_days <= 0:
+            return 0
+        since = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM self_monitoring_alerts "
+                    "WHERE user_id = ? AND rule_id = ? AND created_at >= ?",
+                    (str(user_id), rule_id, since),
+                ).fetchone()
+                return row["cnt"] if row else 0
+            finally:
+                conn.close()
+
+    # ── Analytics / Aggregation ────────────────────────────────
+
+    def aggregate_alerts_by_category(
+        self, user_id: str, since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Group alerts by category, return [{category, count}]."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                query = (
+                    "SELECT category, COUNT(*) AS cnt "
+                    "FROM self_monitoring_alerts WHERE user_id = ?"
+                )
+                params: list[Any] = [str(user_id)]
+                if since_iso:
+                    query += " AND created_at >= ?"
+                    params.append(since_iso)
+                query += " GROUP BY category ORDER BY cnt DESC"
+                rows = conn.execute(query, params).fetchall()
+                return [{"category": r["category"], "count": r["cnt"]} for r in rows]
+            finally:
+                conn.close()
+
+    def aggregate_alerts_by_severity(
+        self, user_id: str, since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Group alerts by severity, return [{severity, count}]."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                query = (
+                    "SELECT severity, COUNT(*) AS cnt "
+                    "FROM self_monitoring_alerts WHERE user_id = ?"
+                )
+                params: list[Any] = [str(user_id)]
+                if since_iso:
+                    query += " AND created_at >= ?"
+                    params.append(since_iso)
+                query += " GROUP BY severity ORDER BY cnt DESC"
+                rows = conn.execute(query, params).fetchall()
+                return [{"severity": r["severity"], "count": r["cnt"]} for r in rows]
+            finally:
+                conn.close()
+
+    def aggregate_alerts_by_time(
+        self, user_id: str, bucket: str = "day", since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Group alerts by time bucket (day|week|month), return [{bucket, count}]."""
+        fmt_map = {"day": "%Y-%m-%d", "week": "%Y-W%W", "month": "%Y-%m"}
+        fmt = fmt_map.get(bucket, "%Y-%m-%d")
+        with self._lock:
+            conn = self._connect()
+            try:
+                query = (
+                    f"SELECT strftime('{fmt}', created_at) AS bucket, COUNT(*) AS cnt "  # nosec B608
+                    f"FROM self_monitoring_alerts WHERE user_id = ?"
+                )
+                params: list[Any] = [str(user_id)]
+                if since_iso:
+                    query += " AND created_at >= ?"
+                    params.append(since_iso)
+                query += " GROUP BY bucket ORDER BY bucket"
+                rows = conn.execute(query, params).fetchall()
+                return [{"bucket": r["bucket"], "count": r["cnt"]} for r in rows]
+            finally:
+                conn.close()
+
+    def get_top_matched_patterns(
+        self, user_id: str, limit: int = 10, since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return most-frequent matched_pattern values, [{pattern, count}]."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                query = (
+                    "SELECT matched_pattern, COUNT(*) AS cnt "
+                    "FROM self_monitoring_alerts WHERE user_id = ?"
+                )
+                params: list[Any] = [str(user_id)]
+                if since_iso:
+                    query += " AND created_at >= ?"
+                    params.append(since_iso)
+                query += " GROUP BY matched_pattern ORDER BY cnt DESC LIMIT ?"
+                params.append(limit)
+                rows = conn.execute(query, params).fetchall()
+                return [{"pattern": r["matched_pattern"], "count": r["cnt"]} for r in rows]
+            finally:
+                conn.close()
+
+    def get_escalation_summary(self, user_id: str) -> list[dict[str, Any]]:
+        """Return current escalation states for a user."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM escalation_state WHERE user_id = ?",
+                    (str(user_id),),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+
     # ── Cleanup ────────────────────────────────────────────────
 
     def delete_all_for_user(self, user_id: str) -> dict[str, int]:
@@ -1666,18 +1866,19 @@ class GuardianDB:
                 rel_ids = [r["id"] for r in rows]
                 if rel_ids:
                     placeholders = ",".join("?" * len(rel_ids))
+                    rel_ids_clause = f"({placeholders})"
                     result = conn.execute(
-                        f"DELETE FROM supervision_audit_log WHERE relationship_id IN ({placeholders})",
+                        f"DELETE FROM supervision_audit_log WHERE relationship_id IN {rel_ids_clause}",  # nosec B608
                         rel_ids,
                     )
                     counts["audit_entries"] = result.rowcount or 0
                     result = conn.execute(
-                        f"DELETE FROM supervised_policies WHERE relationship_id IN ({placeholders})",
+                        f"DELETE FROM supervised_policies WHERE relationship_id IN {rel_ids_clause}",  # nosec B608
                         rel_ids,
                     )
                     counts["policies"] = result.rowcount or 0
                     result = conn.execute(
-                        f"DELETE FROM guardian_relationships WHERE id IN ({placeholders})",
+                        f"DELETE FROM guardian_relationships WHERE id IN {rel_ids_clause}",  # nosec B608
                         rel_ids,
                     )
                     counts["relationships"] = result.rowcount or 0

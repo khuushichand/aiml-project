@@ -187,12 +187,14 @@ Earlier versions exposed decorator-style FastAPI helpers (`PermissionChecker`, `
 
 ### Using in Non-FastAPI Code
 
+Note: `app.core.AuthNZ.permissions` decorators are plain Python helpers for business/service code. They are distinct from the retired FastAPI API-dependency shims in `app/api/v1/API_Deps/auth_deps.py`.
+
 ```python
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     check_permission,
     check_role,
     require_permission,
-    require_role
+    require_any_permission
 )
 
 # Check permission manually
@@ -209,10 +211,10 @@ def update_system_config(user: User, config: dict):
     # Only users with system.configure permission can call this
     print(f"Updating system configuration")
 
-@require_role("admin")
-def admin_only_function(user: User):
-    # Only admins can call this
-    print(f"Admin function executed by {user.username}")
+@require_any_permission(["system.configure", "system.maintenance"])
+def admin_like_function(user: User):
+    # Only users with elevated system permissions can call this
+    print(f"Elevated function executed by {user.username}")
 ```
 
 ## Registration Codes

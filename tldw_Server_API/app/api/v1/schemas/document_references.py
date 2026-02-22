@@ -35,6 +35,55 @@ class DocumentReferencesResponse(BaseModel):
         None,
         description="External API used for enrichment (semantic_scholar, crossref, arxiv)",
     )
+    enriched_count: int = Field(
+        0,
+        ge=0,
+        description="Number of references modified by external enrichment during this request",
+    )
+    enrichment_limited: bool = Field(
+        False,
+        description=(
+            "True when enrichment was intentionally capped (for example, first N references only)"
+        ),
+    )
+    total_detected: int = Field(
+        0,
+        ge=0,
+        description="Total references detected before response limits are applied",
+    )
+    truncated: bool = Field(
+        False,
+        description="True when detected references exceeded the response cap",
+    )
+    offset: int = Field(
+        0,
+        ge=0,
+        description="Start offset of the current page in the post-cap reference list",
+    )
+    limit: int = Field(
+        0,
+        ge=0,
+        description="Requested page size for this response",
+    )
+    returned_count: int = Field(
+        0,
+        ge=0,
+        description="Number of references returned in this page",
+    )
+    total_available: int = Field(
+        0,
+        ge=0,
+        description="Total references available after applying parse cap (if any)",
+    )
+    has_more: bool = Field(
+        False,
+        description="Whether more references are available beyond this page",
+    )
+    next_offset: int | None = Field(
+        None,
+        ge=0,
+        description="Offset to request for the next page when has_more=true",
+    )
 
 
 __all__ = ["ReferenceEntry", "DocumentReferencesResponse"]

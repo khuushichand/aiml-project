@@ -89,17 +89,17 @@ def migrate_sqlite_to_postgres(
     if not sqlite_path.exists():
         raise FileNotFoundError(f'SQLite database not found: {sqlite_path}')
 
-    logger.info('Starting migration of %s database from %s', label, sqlite_path)
+    logger.info('Starting migration of %s database from file %s', label, sqlite_path.name)
     sqlite_conn = sqlite3.connect(str(sqlite_path))
     sqlite_conn.row_factory = sqlite3.Row
     try:
         tables = _introspect_sqlite_schema(sqlite_conn, skip_tables)
         if not tables:
-            logger.warning('No tables discovered in %s; skipping migration', sqlite_path)
+            logger.warning('No tables discovered in {}; skipping migration', sqlite_path)
             return
 
         insertion_order = _topological_sort(tables)
-        logger.debug('Insertion order for %s: %s', label, insertion_order)
+        logger.debug('Insertion order for {}: {}', label, insertion_order)
 
         backend = DatabaseBackendFactory.create_backend(postgres_config)
         try:
@@ -116,7 +116,7 @@ def migrate_sqlite_to_postgres(
                 pass
     finally:
         sqlite_conn.close()
-    logger.info('Completed migration of %s database from %s', label, sqlite_path)
+    logger.info('Completed migration of %s database from file %s', label, sqlite_path.name)
 
 
 def migrate_workflows_sqlite_to_postgres(
@@ -131,7 +131,7 @@ def migrate_workflows_sqlite_to_postgres(
     if not sqlite_path.exists():
         raise FileNotFoundError(f'Workflows SQLite database not found: {sqlite_path}')
 
-    logger.info('Starting migration of workflows database from %s', sqlite_path)
+    logger.info('Starting migration of workflows database')
     sqlite_conn = sqlite3.connect(str(sqlite_path))
     sqlite_conn.row_factory = sqlite3.Row
 
@@ -143,7 +143,7 @@ def migrate_workflows_sqlite_to_postgres(
 
         with backend.transaction() as pg_conn:
             for table in ('workflow_artifacts', 'workflow_events', 'workflow_step_runs', 'workflow_runs', 'workflows'):
-                backend.execute(f'DELETE FROM {table}', connection=pg_conn)
+                backend.execute(f'DELETE FROM {table}', connection=pg_conn)  # nosec B608
 
         cursor = sqlite_conn.execute("SELECT * FROM workflows")
         with backend.transaction() as pg_conn:
@@ -181,7 +181,7 @@ def migrate_workflows_sqlite_to_postgres(
         ):
             name, pk = table
             columns = [col['name'] for col in sqlite_conn.execute(f'PRAGMA table_info("{name}")')]
-            select_sql = f'SELECT {", ".join(columns)} FROM "{name}"'
+            select_sql = f'SELECT {", ".join(columns)} FROM "{name}"'  # nosec B608
             cursor = sqlite_conn.execute(select_sql)
             with backend.transaction() as pg_conn:
                 # Discover boolean columns for coercion
@@ -215,7 +215,7 @@ def migrate_workflows_sqlite_to_postgres(
                     placeholders = ', '.join(['%s'] * len(columns))
                     backend.execute_many(
                         (
-                            f'INSERT INTO {name} ({", ".join(columns)}) '
+                            f'INSERT INTO {name} ({", ".join(columns)}) '  # nosec B608
                             f'VALUES ({placeholders}) ON CONFLICT ({pk}) DO NOTHING'
                         ),
                         params,
@@ -234,7 +234,7 @@ def migrate_workflows_sqlite_to_postgres(
         run_count = int(result_runs.scalar or 0)
         def_count = int(result_defs.scalar or 0)
         logger.info(
-            'Completed migration of workflows database (%s definitions, %s runs)',
+            'Completed migration of workflows database ({} definitions, {} runs)',
             def_count,
             run_count,
         )
@@ -336,21 +336,21 @@ def _truncate_tables(
         user_col_ident = _escape_backend_identifier(backend, "user_id")
         has_user_id = bool(meta and any(col.lower() == "user_id" for col in meta.columns))
         if user_id and has_user_id:
-            sql = f'DELETE FROM {table_ident} WHERE {user_col_ident} = %s'
+            sql = f'DELETE FROM {table_ident} WHERE {user_col_ident} = %s'  # nosec B608
             params = (user_id,)
         elif user_id and not has_user_id:
             logger.info(
-                'Skipping truncate for %s (no user_id column) in per-user mode',
+                'Skipping truncate for {} (no user_id column) in per-user mode',
                 table_name,
             )
             continue
         else:
-            sql = f'DELETE FROM {table_ident}'
+            sql = f'DELETE FROM {table_ident}'  # nosec B608
             params = None
         try:
             backend.execute(sql, params, connection=pg_conn)
         except _MIGRATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
-            logger.warning('Unable to clear table %s: %s', table_name, exc)
+            logger.warning('Unable to clear table {}: {}', table_name, exc)
 
 
 def _copy_table(
@@ -363,7 +363,7 @@ def _copy_table(
 ) -> None:
     sqlite_column_list = ', '.join(_sqlite_quote_identifier(col) for col in meta.columns)
     sqlite_table_name = _sqlite_quote_identifier(meta.source_name)
-    select_sql = f'SELECT {sqlite_column_list} FROM {sqlite_table_name}'
+    select_sql = f'SELECT {sqlite_column_list} FROM {sqlite_table_name}'  # nosec B608
     select_params: tuple[Any, ...] = ()
     has_user_id = any(col.lower() == "user_id" for col in meta.columns)
     if user_id and has_user_id:
@@ -373,7 +373,7 @@ def _copy_table(
     insert_columns = ', '.join(_escape_backend_identifier(backend, col) for col in meta.pg_columns)
     placeholders = ', '.join(['%s'] * len(meta.pg_columns))
     insert_sql = (
-        f'INSERT INTO {insert_table} ({insert_columns}) '
+        f'INSERT INTO {insert_table} ({insert_columns}) '  # nosec B608
         f'VALUES ({placeholders}) ON CONFLICT DO NOTHING'
     )
 
@@ -419,7 +419,7 @@ def _copy_table(
         params = converted_params
         backend.execute_many(insert_sql, params, connection=pg_conn)
         total += len(params)
-    logger.info('Copied %s rows into %s', total, meta.name)
+    logger.info('Copied {} rows into {}', total, meta.name)
 
 
 def _sync_sequences(
@@ -434,14 +434,14 @@ def _sync_sequences(
             serial_table_name = meta.name.replace("'", "''")
             serial_column_name = column.replace("'", "''")
             sql = (
-                f"SELECT setval("
+                f"SELECT setval("  # nosec B608
                 f"pg_get_serial_sequence('{serial_table_name}', '{serial_column_name}'), "
                 f"COALESCE((SELECT MAX({column_ident}) FROM {table_ident}), 0) + 1, false)"
             )
             try:
                 backend.execute(sql, connection=pg_conn)
             except _MIGRATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
-                logger.warning('Sequence sync failed for %s.%s: %s', meta.name, column, exc)
+                logger.warning('Sequence sync failed for {}.{}: {}', meta.name, column, exc)
 
 
 def _build_postgres_config_from_args(args: argparse.Namespace) -> DatabaseConfig:
@@ -518,7 +518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             with contextlib.suppress(_MIGRATION_NONCRITICAL_EXCEPTIONS):
                 _backend.get_pool().close_all()
     except _MIGRATION_NONCRITICAL_EXCEPTIONS as _init_exc:  # pragma: no cover - defensive
-        logger.warning('Could not pre-initialize PostgreSQL schema: %s', _init_exc)
+        logger.warning('Could not pre-initialize PostgreSQL schema: {}', _init_exc)
     for label, path in targets:
         migrate_sqlite_to_postgres(
             path,

@@ -5,6 +5,7 @@ Provides PostgreSQL test database isolation with transaction rollback.
 
 import os
 import json
+import contextlib
 import shutil
 import subprocess
 import pytest
@@ -26,7 +27,8 @@ from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.settings import Settings
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, reset_rate_limiter
+from tldw_Server_API.app.core.AuthNZ.lockout_tracker import reset_lockout_tracker
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
@@ -142,7 +144,7 @@ async def _ensure_postgres_available(host: str, port: int, user: str, password: 
     try:
         await asyncio.to_thread(subprocess.run, [docker_bin, "rm", "-f", container], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
-        pass
+        _ = None
 
     envs = [
         "-e", f"POSTGRES_USER={user}",
@@ -172,6 +174,284 @@ async def _ensure_postgres_available(host: str, port: int, user: str, password: 
 
     logger.warning("Postgres did not become reachable after docker start attempts")
     return False
+
+
+async def _ensure_postgres_schema_extensions(conn: asyncpg.Connection) -> None:
+    """Ensure additional AuthNZ Postgres tables needed by integration tests."""
+    statements = [
+        # Core org/team hierarchy and memberships
+        """
+        CREATE TABLE IF NOT EXISTS organizations (
+            id SERIAL PRIMARY KEY,
+            uuid UUID UNIQUE DEFAULT gen_random_uuid(),
+            name VARCHAR(255) UNIQUE NOT NULL,
+            slug VARCHAR(255) UNIQUE,
+            owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_orgs_owner ON organizations(owner_user_id)",
+        """
+        CREATE TABLE IF NOT EXISTS org_members (
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role VARCHAR(32) DEFAULT 'member',
+            status VARCHAR(32) DEFAULT 'active',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (org_id, user_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)",
+        """
+        CREATE TABLE IF NOT EXISTS teams (
+            id SERIAL PRIMARY KEY,
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            slug VARCHAR(255),
+            description TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (org_id, name)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id)",
+        """
+        CREATE TABLE IF NOT EXISTS team_members (
+            team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role VARCHAR(32) DEFAULT 'member',
+            status VARCHAR(32) DEFAULT 'active',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (team_id, user_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)",
+        # RBAC and scoped permissions
+        """
+        CREATE TABLE IF NOT EXISTS permissions (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) UNIQUE NOT NULL,
+            description TEXT,
+            category VARCHAR(100)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+            UNIQUE(role_id, permission_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            UNIQUE(user_id, role_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+            granted BOOLEAN NOT NULL DEFAULT TRUE,
+            expires_at TIMESTAMP,
+            PRIMARY KEY (user_id, permission_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_user_permissions_user ON user_permissions(user_id)",
+        # API key audit log used by API key repository tests
+        """
+        CREATE TABLE IF NOT EXISTS api_key_audit_log (
+            id SERIAL PRIMARY KEY,
+            api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+            action VARCHAR(50) NOT NULL,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            ip_address VARCHAR(45),
+            user_agent TEXT,
+            details JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_api_key_audit_log_api_key_id ON api_key_audit_log(api_key_id)",
+        "CREATE INDEX IF NOT EXISTS idx_api_key_audit_log_created_at ON api_key_audit_log(created_at)",
+        # Usage tables
+        """
+        CREATE TABLE IF NOT EXISTS usage_log (
+            id SERIAL PRIMARY KEY,
+            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+            endpoint TEXT,
+            status INTEGER,
+            latency_ms INTEGER,
+            bytes BIGINT,
+            bytes_in BIGINT,
+            meta JSONB,
+            request_id TEXT
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)",
+        "CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_usage_log_status ON usage_log(status)",
+        "CREATE INDEX IF NOT EXISTS idx_usage_log_endpoint ON usage_log(endpoint)",
+        "CREATE INDEX IF NOT EXISTS idx_usage_log_request_id ON usage_log(request_id)",
+        """
+        CREATE TABLE IF NOT EXISTS usage_daily (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            day DATE NOT NULL,
+            requests INTEGER DEFAULT 0,
+            errors INTEGER DEFAULT 0,
+            bytes_total BIGINT DEFAULT 0,
+            bytes_in_total BIGINT DEFAULT 0,
+            latency_avg_ms DOUBLE PRECISION,
+            PRIMARY KEY (user_id, day)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_usage_daily_day_user ON usage_daily(day, user_id)",
+        """
+        CREATE TABLE IF NOT EXISTS llm_usage_log (
+            id SERIAL PRIMARY KEY,
+            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+            endpoint TEXT,
+            operation TEXT,
+            provider TEXT,
+            model TEXT,
+            status INTEGER,
+            latency_ms INTEGER,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            total_tokens INTEGER,
+            prompt_cost_usd DOUBLE PRECISION,
+            completion_cost_usd DOUBLE PRECISION,
+            total_cost_usd DOUBLE PRECISION,
+            currency TEXT DEFAULT 'USD',
+            estimated BOOLEAN DEFAULT FALSE,
+            request_id TEXT
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_log_ts ON llm_usage_log(ts)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_log_key_ts ON llm_usage_log(key_id, ts)",
+        """
+        CREATE TABLE IF NOT EXISTS llm_usage_daily (
+            day DATE NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            operation TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            requests INTEGER DEFAULT 0,
+            errors INTEGER DEFAULT 0,
+            input_tokens BIGINT DEFAULT 0,
+            output_tokens BIGINT DEFAULT 0,
+            total_tokens BIGINT DEFAULT 0,
+            total_cost_usd DOUBLE PRECISION DEFAULT 0.0,
+            latency_avg_ms DOUBLE PRECISION,
+            PRIMARY KEY (day, user_id, operation, provider, model)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_daily_day_user_op_prov_model ON llm_usage_daily(day, user_id, operation, provider, model)",
+        # Generated files table used by storage quota and cleanup paths
+        """
+        CREATE TABLE IF NOT EXISTS generated_files (
+            id SERIAL PRIMARY KEY,
+            uuid TEXT UNIQUE NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
+            team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+            filename TEXT NOT NULL,
+            original_filename TEXT,
+            storage_path TEXT NOT NULL,
+            mime_type TEXT,
+            file_size_bytes BIGINT NOT NULL DEFAULT 0,
+            checksum TEXT,
+            file_category TEXT NOT NULL,
+            source_feature TEXT NOT NULL,
+            source_ref TEXT,
+            folder_tag TEXT,
+            tags JSONB,
+            is_transient BOOLEAN DEFAULT FALSE,
+            expires_at TIMESTAMP,
+            retention_policy TEXT DEFAULT 'user_default',
+            is_deleted BOOLEAN DEFAULT FALSE,
+            deleted_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            accessed_at TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_user_id ON generated_files(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_org_id ON generated_files(org_id)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_team_id ON generated_files(team_id)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_uuid ON generated_files(uuid)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_category ON generated_files(file_category)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_source_feature ON generated_files(source_feature)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_folder_tag ON generated_files(folder_tag)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_is_deleted ON generated_files(is_deleted)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_expires_at ON generated_files(expires_at)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_created_at ON generated_files(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_user_category ON generated_files(user_id, file_category, is_deleted)",
+    ]
+
+    for sql in statements:
+        await conn.execute(sql)
+
+    await conn.execute(
+        """
+        INSERT INTO roles (name, description, is_system) VALUES
+        ('admin','Administrator', TRUE),
+        ('user','Standard user', TRUE)
+        ON CONFLICT (name) DO NOTHING
+        """
+    )
+    for name, desc, cat in (
+        ("media.read", "Read media", "media"),
+        ("media.create", "Create media", "media"),
+    ):
+        await conn.execute(
+            """
+            INSERT INTO permissions (name, description, category)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (name) DO NOTHING
+            """,
+            name,
+            desc,
+            cat,
+        )
+
+    role_rows = await conn.fetch("SELECT id, name FROM roles WHERE name IN ('admin','user')")
+    perm_rows = await conn.fetch("SELECT id, name FROM permissions WHERE name IN ('media.read','media.create')")
+    role_id = {r["name"]: r["id"] for r in role_rows or []}
+    perm_id = {p["name"]: p["id"] for p in perm_rows or []}
+    for pname in ("media.read", "media.create"):
+        if "user" in role_id and pname in perm_id:
+            await conn.execute(
+                """
+                INSERT INTO role_permissions (role_id, permission_id)
+                VALUES ($1, $2)
+                ON CONFLICT (role_id, permission_id) DO NOTHING
+                """,
+                role_id["user"],
+                perm_id[pname],
+            )
+        if "admin" in role_id and pname in perm_id:
+            await conn.execute(
+                """
+                INSERT INTO role_permissions (role_id, permission_id)
+                VALUES ($1, $2)
+                ON CONFLICT (role_id, permission_id) DO NOTHING
+                """,
+                role_id["admin"],
+                perm_id[pname],
+            )
 
 
 @pytest.fixture(scope="session")
@@ -211,12 +491,26 @@ async def reset_singletons(request):
     await reset_token_blacklist()
     await reset_security_alert_dispatcher()
     await reset_authnz_scheduler()
+    await reset_rate_limiter()
+    await reset_lockout_tracker()
     reset_settings()
     reset_jwt_service()
     await reset_registration_service()
     await reset_invite_service()
     await reset_subscription_service()
     reset_billing_enforcer()
+    try:
+        from tldw_Server_API.app.services.storage_cleanup_service import (
+            reset_cleanup_service as _reset_cleanup_service,
+        )
+        from tldw_Server_API.app.services.storage_quota_service import (
+            reset_storage_service as _reset_storage_service,
+        )
+
+        await _reset_cleanup_service()
+        await _reset_storage_service()
+    except Exception:
+        _ = None
     await shutdown_audit_service()
     await reset_api_key_manager()
     await reset_users_db()
@@ -252,7 +546,7 @@ async def reset_singletons(request):
                 _app.dependency_overrides[get_usage_event_logger] = _override_usage_logger
         except Exception:
             # If import fails here, tests that don't hit audit won't care
-            pass
+            _ = None
 
         # Also, in TEST_MODE, strip non-essential middlewares that may perform
         # background DB work after response (to avoid TaskGroup noise in full runs)
@@ -270,9 +564,9 @@ async def reset_singletons(request):
                 # Rebuild the Starlette middleware stack
                 _app.middleware_stack = _app.build_middleware_stack()
         except Exception:
-            pass
+            _ = None
     except Exception:
-        pass
+        _ = None
 
     yield
 
@@ -282,6 +576,8 @@ async def reset_singletons(request):
     await reset_token_blacklist()
     await reset_security_alert_dispatcher()
     await reset_authnz_scheduler()
+    await reset_rate_limiter()
+    await reset_lockout_tracker()
     reset_settings()
     reset_jwt_service()
     await reset_registration_service()
@@ -294,12 +590,12 @@ async def reset_singletons(request):
     try:
         close_all_chacha_db_instances()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.main import app as _app
         _app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 
     # Restore original CSRF setting
     if original_csrf_setting is not None:
@@ -328,7 +624,7 @@ async def real_audit_service(tmp_path):
         try:
             await _shutdown_all()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest_asyncio.fixture
@@ -1036,6 +1332,7 @@ async def isolated_test_environment(monkeypatch):
             "CREATE INDEX IF NOT EXISTS idx_invite_redemptions_user ON org_invite_redemptions(user_id)"
         )
 
+        await _ensure_postgres_schema_extensions(test_conn)
         logger.info(f"Created schema in test database: {db_name}")
     finally:
         await test_conn.close()
@@ -1049,7 +1346,6 @@ async def isolated_test_environment(monkeypatch):
     monkeypatch.setenv("ENABLE_REGISTRATION", "true")
     monkeypatch.setenv("REQUIRE_REGISTRATION_CODE", "false")
     monkeypatch.setenv("EMAIL_VERIFICATION_REQUIRED", "false")
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     # Defer heavy startup (embeddings, TTS, request queue, etc.) to prevent local hangs
     monkeypatch.setenv("DEFER_HEAVY_STARTUP", "true")
     monkeypatch.setenv("TEST_MODE", "true")
@@ -1060,14 +1356,20 @@ async def isolated_test_environment(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager
+    from tldw_Server_API.app.core.AuthNZ.rate_limiter import reset_rate_limiter
+    from tldw_Server_API.app.core.AuthNZ.lockout_tracker import reset_lockout_tracker
     from tldw_Server_API.app.services.registration_service import reset_registration_service
     from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
     from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
+    from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
 
     await reset_db_pool()
     await reset_session_manager()
     await reset_api_key_manager()
+    await reset_rate_limiter()
+    await reset_lockout_tracker()
     reset_settings()
+    reset_jwt_service()
     await reset_registration_service()
     await shutdown_audit_service()
     await reset_users_db()
@@ -1095,7 +1397,21 @@ async def isolated_test_environment(monkeypatch):
     await reset_session_manager()
     await reset_token_blacklist()
     await reset_authnz_scheduler()
+    await reset_rate_limiter()
+    await reset_lockout_tracker()
     reset_settings()
+    try:
+        from tldw_Server_API.app.services.storage_cleanup_service import (
+            reset_cleanup_service as _reset_cleanup_service,
+        )
+        from tldw_Server_API.app.services.storage_quota_service import (
+            reset_storage_service as _reset_storage_service,
+        )
+
+        await _reset_cleanup_service()
+        await _reset_storage_service()
+    except Exception:
+        _ = None
     await reset_registration_service()
     await shutdown_audit_service()
     await reset_users_db()
@@ -1130,16 +1446,21 @@ async def setup_test_database(monkeypatch):
     # Ensure FastAPI + core settings pick Postgres for this test DB
     require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes")
     test_dsn = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("DATABASE_URL", test_dsn)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
         from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
+        from tldw_Server_API.app.core.AuthNZ.rate_limiter import reset_rate_limiter as _reset_rate_limiter
+        from tldw_Server_API.app.core.AuthNZ.lockout_tracker import reset_lockout_tracker as _reset_lockout_tracker
         _reset_settings()
         # Reset any pre-existing pool so app endpoints use Postgres on first access
         # (some tests hit endpoints that call get_db_pool inside request handlers)
         await _reset_db_pool()
+        await _reset_rate_limiter()
+        await _reset_lockout_tracker()
     except Exception:
-        pass
+        _ = None
     # Ensure Postgres reachable before creating the session DB
     ok = await _ensure_postgres_available(TEST_DB_HOST, TEST_DB_PORT, TEST_DB_USER, TEST_DB_PASSWORD, require_pg=require_pg, default_db="postgres")
     if not ok:
@@ -1369,6 +1690,7 @@ async def setup_test_database(monkeypatch):
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id)")
 
+        await _ensure_postgres_schema_extensions(test_conn)
         logger.info("Created test database schema")
 
     finally:
@@ -1379,7 +1701,6 @@ async def setup_test_database(monkeypatch):
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("DATABASE_URL", f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}")
     monkeypatch.setenv("JWT_SECRET_KEY", os.environ.get("JWT_SECRET_KEY", "test-secret-key-for-testing-only"))
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     monkeypatch.setenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "1")
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import setup_database as _authnz_setup_db
@@ -1387,6 +1708,7 @@ async def setup_test_database(monkeypatch):
         logger.info("AuthNZ Postgres schema bootstrap completed for session test DB")
     except Exception as exc:
         logger.exception(f"AuthNZ schema bootstrap failed in setup_test_database: {exc}")
+        raise RuntimeError("AuthNZ Postgres schema bootstrap failed in setup_test_database") from exc
 
     yield
 
@@ -1414,6 +1736,46 @@ async def setup_test_database(monkeypatch):
 @pytest_asyncio.fixture(scope="function")
 async def clean_database(setup_test_database):
     """Ensure database is clean before each test."""
+    tables = [
+        "generated_files",
+        "llm_usage_daily",
+        "llm_usage_log",
+        "usage_daily",
+        "usage_log",
+        "org_invite_redemptions",
+        "org_invites",
+        "team_members",
+        "teams",
+        "org_members",
+        "organizations",
+        "billing_audit_log",
+        "payment_history",
+        "stripe_webhook_events",
+        "org_subscriptions",
+        "subscription_plans",
+        "api_key_audit_log",
+        "api_keys",
+        "token_blacklist",
+        "user_permissions",
+        "user_roles",
+        "role_permissions",
+        "permissions",
+        "audit_logs",
+        "audit_log",
+        "registration_codes",
+        "password_history",
+        "sessions",
+        "account_lockouts",
+        "failed_attempts",
+        "rate_limits",
+        "users",
+    ]
+
+    async def _truncate_all(connection: asyncpg.Connection) -> None:
+        for table in tables:
+            with contextlib.suppress(Exception):
+                await connection.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE")
+
     conn = await asyncpg.connect(
         host=TEST_DB_HOST,
         port=TEST_DB_PORT,
@@ -1423,12 +1785,7 @@ async def clean_database(setup_test_database):
     )
 
     try:
-        # Clean all tables in correct order (respecting foreign keys)
-        await conn.execute("TRUNCATE TABLE audit_log CASCADE")
-        await conn.execute("TRUNCATE TABLE registration_codes CASCADE")
-        await conn.execute("TRUNCATE TABLE password_history CASCADE")
-        await conn.execute("TRUNCATE TABLE sessions CASCADE")
-        await conn.execute("TRUNCATE TABLE users CASCADE")
+        await _truncate_all(conn)
 
         logger.debug("Cleaned test database tables")
     finally:
@@ -1446,11 +1803,7 @@ async def clean_database(setup_test_database):
     )
 
     try:
-        await cleanup_conn.execute("TRUNCATE TABLE audit_log CASCADE")
-        await cleanup_conn.execute("TRUNCATE TABLE registration_codes CASCADE")
-        await cleanup_conn.execute("TRUNCATE TABLE password_history CASCADE")
-        await cleanup_conn.execute("TRUNCATE TABLE sessions CASCADE")
-        await cleanup_conn.execute("TRUNCATE TABLE users CASCADE")
+        await _truncate_all(cleanup_conn)
     finally:
         await cleanup_conn.close()
 
@@ -1466,7 +1819,6 @@ async def test_db_pool(setup_test_database, clean_database):
         JWT_SECRET_KEY="test-secret-key-for-testing-only",
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False
     )
 
     pool = DatabasePool(test_settings)
@@ -1519,7 +1871,6 @@ def jwt_settings():
         REFRESH_TOKEN_EXPIRE_DAYS=7,
         SESSION_CLEANUP_INTERVAL_HOURS=24,
         SESSION_MAX_AGE_DAYS=30,
-        RATE_LIMIT_ENABLED=True,
         RATE_LIMIT_MAX_REQUESTS=100,
         RATE_LIMIT_WINDOW_SECONDS=60,
         PASSWORD_MIN_LENGTH=8,

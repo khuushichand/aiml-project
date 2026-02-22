@@ -9,7 +9,413 @@ import { useConnectionActions } from "@/hooks/useConnectionState"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectionProblemBanner from "@/components/Common/ConnectionProblemBanner"
 import { StatusBadge } from "@/components/Common/StatusBadge"
+import {
+  getDemoQuizzes,
+  type DemoQuiz,
+  type DemoQuizQuestion
+} from "@/utils/demo-content"
 import { QuizPlayground } from "./QuizPlayground"
+
+type DemoAnswerMap = Record<string, string>
+type DemoPreviewMode = "catalog" | "taking" | "results"
+
+const QUIZ_BETA_TOOLTIP_ID = "quiz-beta-tooltip"
+
+const normalizeDemoAnswer = (value: string | undefined): string => value?.trim().toLowerCase() ?? ""
+
+const isDemoQuestionCorrect = (question: DemoQuizQuestion, answer: string | undefined): boolean => {
+  if (!answer) return false
+
+  if (question.type === "fill_blank") {
+    const normalized = normalizeDemoAnswer(answer)
+    return question.acceptedAnswers.some(
+      (candidate) => normalizeDemoAnswer(candidate) === normalized
+    )
+  }
+
+  return normalizeDemoAnswer(answer) === normalizeDemoAnswer(question.correctAnswer)
+}
+
+const QuizBetaBadge: React.FC<{ label: string; description: string }> = ({
+  label,
+  description
+}) => {
+  const [isOpen, setIsOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!isOpen) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [isOpen])
+
+  return (
+    <div className="relative inline-flex items-center">
+      <button
+        type="button"
+        data-testid="quiz-beta-badge"
+        className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        aria-label={description}
+        aria-expanded={isOpen}
+        aria-describedby={isOpen ? QUIZ_BETA_TOOLTIP_ID : undefined}
+        onMouseEnter={() => setIsOpen(true)}
+        onMouseLeave={() => setIsOpen(false)}
+        onFocus={() => setIsOpen(true)}
+        onBlur={() => setIsOpen(false)}
+        onClick={() => setIsOpen((previous) => !previous)}
+      >
+        <StatusBadge variant="warning">{label}</StatusBadge>
+      </button>
+      {isOpen ? (
+        <div
+          id={QUIZ_BETA_TOOLTIP_ID}
+          role="tooltip"
+          data-testid="quiz-beta-tooltip"
+          className="absolute right-0 top-[calc(100%+8px)] z-10 w-72 rounded-lg border border-border bg-surface p-2 text-left text-xs text-text shadow-card"
+        >
+          {description}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+const DemoQuizPreview: React.FC<{ quizzes: DemoQuiz[] }> = ({ quizzes }) => {
+  const [selectedQuizId, setSelectedQuizId] = React.useState<string | null>(
+    quizzes[0]?.id ?? null
+  )
+  const [mode, setMode] = React.useState<DemoPreviewMode>("catalog")
+  const [questionIndex, setQuestionIndex] = React.useState(0)
+  const [answers, setAnswers] = React.useState<DemoAnswerMap>({})
+  const [scoreSummary, setScoreSummary] = React.useState<{
+    correctCount: number
+    total: number
+    percent: number
+    passed: boolean
+  } | null>(null)
+
+  const selectedQuiz = React.useMemo(
+    () => quizzes.find((quiz) => quiz.id === selectedQuizId) ?? quizzes[0] ?? null,
+    [quizzes, selectedQuizId]
+  )
+
+  React.useEffect(() => {
+    if (!selectedQuiz && quizzes.length > 0) {
+      setSelectedQuizId(quizzes[0].id)
+    }
+  }, [selectedQuiz, quizzes])
+
+  const activeQuestion =
+    mode === "taking" && selectedQuiz
+      ? selectedQuiz.questions[questionIndex]
+      : null
+
+  const handleStart = React.useCallback(() => {
+    setMode("taking")
+    setQuestionIndex(0)
+    setAnswers({})
+    setScoreSummary(null)
+  }, [])
+
+  const handleSubmit = React.useCallback(() => {
+    if (!selectedQuiz) return
+
+    const total = selectedQuiz.questions.length
+    const correctCount = selectedQuiz.questions.reduce((count, question) => {
+      return count + (isDemoQuestionCorrect(question, answers[question.id]) ? 1 : 0)
+    }, 0)
+    const percent = total > 0 ? Math.round((correctCount / total) * 100) : 0
+    const passed = percent >= selectedQuiz.passingScore
+
+    setScoreSummary({
+      correctCount,
+      total,
+      percent,
+      passed
+    })
+    setMode("results")
+  }, [answers, selectedQuiz])
+
+  if (!selectedQuiz) return null
+
+  if (mode === "catalog") {
+    return (
+      <section
+        data-testid="quiz-demo-preview"
+        className="rounded-2xl border border-dashed border-border bg-surface p-4"
+      >
+        <h3 className="text-sm font-semibold text-text">
+          Demo quiz preview (local only)
+        </h3>
+        <p className="mt-1 text-xs text-text-muted">
+          Pick a sample quiz and run through the full take-submit-review flow with local data.
+        </p>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {quizzes.map((quiz) => {
+            const isSelected = quiz.id === selectedQuiz.id
+            return (
+              <button
+                key={quiz.id}
+                type="button"
+                data-testid={`quiz-demo-card-${quiz.id}`}
+                className={`rounded-lg border px-3 py-2 text-left transition ${
+                  isSelected
+                    ? "border-primary bg-primary/5"
+                    : "border-border bg-bg hover:border-primary/50"
+                }`}
+                onClick={() => setSelectedQuizId(quiz.id)}
+              >
+                <div className="text-sm font-medium text-text">{quiz.title}</div>
+                <div className="mt-1 text-xs text-text-muted">{quiz.description}</div>
+                <div className="mt-2 text-[11px] text-text-muted">
+                  {quiz.questions.length} questions · {quiz.timeLimitMinutes} min · pass at{" "}
+                  {quiz.passingScore}%
+                </div>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="mt-3 rounded-lg border border-border/70 bg-bg p-3">
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-text-muted">
+            Selected sample
+          </div>
+          <div className="mt-1 text-sm font-medium text-text">{selectedQuiz.title}</div>
+          <div className="mt-1 text-xs text-text-muted">{selectedQuiz.sourceLabel}</div>
+          <div className="mt-2 text-xs text-text-muted">
+            Difficulty: {selectedQuiz.difficulty} · Timer: {selectedQuiz.timeLimitMinutes} minutes
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            data-testid="quiz-demo-start"
+            className="rounded-full bg-primary px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-bg transition hover:bg-primary/90"
+            onClick={handleStart}
+          >
+            Start demo quiz
+          </button>
+          <span className="inline-flex items-center rounded-full border border-border px-3 py-1 text-[11px] text-text-muted">
+            Answers stay in this tab only
+          </span>
+        </div>
+      </section>
+    )
+  }
+
+  if (mode === "taking" && activeQuestion) {
+    const isLastQuestion = questionIndex >= selectedQuiz.questions.length - 1
+    const currentAnswer = answers[activeQuestion.id] ?? ""
+
+    return (
+      <section
+        data-testid="quiz-demo-taking"
+        className="rounded-2xl border border-border bg-surface p-4"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-text">
+            {selectedQuiz.title}
+          </h3>
+          <span className="text-xs text-text-muted">
+            Question {questionIndex + 1} / {selectedQuiz.questions.length}
+          </span>
+        </div>
+
+        <div className="mt-3 rounded-lg border border-border/70 bg-bg p-3">
+          <p className="text-sm text-text">{activeQuestion.prompt}</p>
+
+          {activeQuestion.type === "multiple_choice" ? (
+            <div className="mt-3 space-y-2">
+              {activeQuestion.options.map((option) => (
+                <label key={option} className="flex items-start gap-2 text-sm text-text">
+                  <input
+                    type="radio"
+                    name={activeQuestion.id}
+                    checked={currentAnswer === option}
+                    onChange={() =>
+                      setAnswers((previous) => ({
+                        ...previous,
+                        [activeQuestion.id]: option
+                      }))
+                    }
+                  />
+                  <span>{option}</span>
+                </label>
+              ))}
+            </div>
+          ) : null}
+
+          {activeQuestion.type === "true_false" ? (
+            <div className="mt-3 space-y-2">
+              {["true", "false"].map((option) => (
+                <label key={option} className="flex items-start gap-2 text-sm text-text">
+                  <input
+                    type="radio"
+                    name={activeQuestion.id}
+                    checked={currentAnswer === option}
+                    onChange={() =>
+                      setAnswers((previous) => ({
+                        ...previous,
+                        [activeQuestion.id]: option
+                      }))
+                    }
+                  />
+                  <span>{option === "true" ? "True" : "False"}</span>
+                </label>
+              ))}
+            </div>
+          ) : null}
+
+          {activeQuestion.type === "fill_blank" ? (
+            <div className="mt-3">
+              <label className="sr-only" htmlFor={`demo-${activeQuestion.id}`}>
+                Demo answer
+              </label>
+              <input
+                id={`demo-${activeQuestion.id}`}
+                className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                type="text"
+                value={currentAnswer}
+                placeholder={activeQuestion.placeholder}
+                onChange={(event) =>
+                  setAnswers((previous) => ({
+                    ...previous,
+                    [activeQuestion.id]: event.target.value
+                  }))
+                }
+              />
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          {selectedQuiz.questions.map((question, index) => {
+            const answered = Boolean(answers[question.id]?.trim())
+            return (
+              <button
+                key={question.id}
+                type="button"
+                className={`h-8 w-8 rounded-full border text-xs ${
+                  index === questionIndex
+                    ? "border-primary bg-primary/10 text-primary"
+                    : answered
+                      ? "border-success bg-success/10 text-success"
+                      : "border-border text-text-muted"
+                }`}
+                onClick={() => setQuestionIndex(index)}
+                aria-label={`Go to question ${index + 1}`}
+              >
+                {index + 1}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="rounded-full border border-border px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-text-muted disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => setQuestionIndex((value) => Math.max(0, value - 1))}
+            disabled={questionIndex === 0}
+          >
+            Previous
+          </button>
+          {!isLastQuestion ? (
+            <button
+              type="button"
+              className="rounded-full border border-border px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-text"
+              onClick={() =>
+                setQuestionIndex((value) =>
+                  Math.min(selectedQuiz.questions.length - 1, value + 1)
+                )
+              }
+            >
+              Next
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid="quiz-demo-submit"
+              className="rounded-full bg-primary px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-bg transition hover:bg-primary/90"
+              onClick={handleSubmit}
+            >
+              Submit demo quiz
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded-full border border-border px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-text-muted"
+            onClick={() => setMode("catalog")}
+          >
+            Back to samples
+          </button>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section
+      data-testid="quiz-demo-results"
+      className="rounded-2xl border border-border bg-surface p-4"
+    >
+      <h3 className="text-sm font-semibold text-text">Demo results</h3>
+      <p className="mt-1 text-sm text-text" data-testid="quiz-demo-score">
+        Score: {scoreSummary?.correctCount ?? 0} / {scoreSummary?.total ?? 0} (
+        {scoreSummary?.percent ?? 0}%)
+      </p>
+      <p className="mt-1 text-xs text-text-muted">
+        {scoreSummary?.passed
+          ? `Pass (threshold ${selectedQuiz.passingScore}%)`
+          : `Needs review (threshold ${selectedQuiz.passingScore}%)`}
+      </p>
+
+      <div className="mt-3 space-y-2">
+        {selectedQuiz.questions.map((question, index) => {
+          const correct = isDemoQuestionCorrect(question, answers[question.id])
+          return (
+            <div
+              key={question.id}
+              className="rounded-md border border-border/70 bg-bg px-3 py-2 text-xs text-text"
+            >
+              <div className="font-semibold">
+                Q{index + 1}: {correct ? "Correct" : "Needs review"}
+              </div>
+              <div className="mt-1 text-text-muted">{question.explanation}</div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="rounded-full bg-primary px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-bg transition hover:bg-primary/90"
+          onClick={handleStart}
+        >
+          Retake demo quiz
+        </button>
+        <button
+          type="button"
+          className="rounded-full border border-border px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-text-muted"
+          onClick={() => setMode("catalog")}
+        >
+          Choose another sample
+        </button>
+      </div>
+    </section>
+  )
+}
 
 /**
  * QuizWorkspace handles connection state, demo mode, and feature availability.
@@ -26,6 +432,11 @@ export const QuizWorkspace: React.FC = () => {
   const [checkingConnection, setCheckingConnection] = React.useState(false)
 
   const quizzesUnsupported = !capsLoading && !!capabilities && !capabilities.hasQuizzes
+  const demoQuizzes = React.useMemo(() => getDemoQuizzes(t), [t])
+  const betaDescription = t("option:quiz.betaDescription", {
+    defaultValue:
+      "Quiz Playground is in beta. Features and score semantics may change, and demo responses are not saved after you leave this page."
+  })
 
   const handleRetryConnection = React.useCallback(() => {
     if (checkingConnection) return
@@ -43,6 +454,12 @@ export const QuizWorkspace: React.FC = () => {
   if (!isOnline) {
     return demoEnabled ? (
       <div className="space-y-4">
+        <div className="flex justify-end">
+          <QuizBetaBadge
+            label={t("common:beta", { defaultValue: "Beta" })}
+            description={betaDescription}
+          />
+        </div>
         <FeatureEmptyState
           title={
             <span className="inline-flex items-center gap-2">
@@ -77,72 +494,110 @@ export const QuizWorkspace: React.FC = () => {
           })}
           onPrimaryAction={scrollToServerCard}
         />
+        <DemoQuizPreview quizzes={demoQuizzes} />
       </div>
     ) : (
-      <ConnectionProblemBanner
-        badgeLabel="Not connected"
-        title={t("option:quiz.emptyConnectTitle", {
-          defaultValue: "Connect to use Quiz Playground"
-        })}
-        description={t("option:quiz.emptyConnectDescription", {
-          defaultValue:
-            "This view needs a connected server. Use the server connection card above to fix your connection, then return here to create and take quizzes."
-        })}
-        examples={[
-          t("option:quiz.emptyConnectExample1", {
+      <div className="space-y-4">
+        <div className="flex justify-end">
+          <QuizBetaBadge
+            label={t("common:beta", { defaultValue: "Beta" })}
+            description={betaDescription}
+          />
+        </div>
+        <ConnectionProblemBanner
+          badgeLabel="Not connected"
+          title={t("option:quiz.emptyConnectTitle", {
+            defaultValue: "Connect to use Quiz Playground"
+          })}
+          description={t("option:quiz.emptyConnectDescription", {
             defaultValue:
-              "Use the connection card at the top of this page to add your server URL and API key."
-          })
-        ]}
-        primaryActionLabel={t("option:connectionCard.buttonGoToServerCard", {
-          defaultValue: "Go to server card"
-        })}
-        onPrimaryAction={scrollToServerCard}
-        retryActionLabel={t("option:buttonRetry", "Retry connection")}
-        onRetry={handleRetryConnection}
-        retryDisabled={checkingConnection}
-      />
+              "This view needs a connected server. Use the server connection card above to fix your connection, then return here to create and take quizzes."
+          })}
+          examples={[
+            t("option:quiz.emptyConnectExample1", {
+              defaultValue:
+                "Use the connection card at the top of this page to add your server URL and API key."
+            })
+          ]}
+          primaryActionLabel={t("option:connectionCard.buttonGoToServerCard", {
+            defaultValue: "Go to server card"
+          })}
+          onPrimaryAction={scrollToServerCard}
+          retryActionLabel={t("option:buttonRetry", "Retry connection")}
+          onRetry={handleRetryConnection}
+          retryDisabled={checkingConnection}
+        />
+      </div>
     )
   }
 
   // Feature not supported on this server
   if (quizzesUnsupported) {
+    const specVersion = capabilities?.specVersion ?? "unknown"
+
     return (
-      <FeatureEmptyState
-        title={
-          <span className="inline-flex items-center gap-2">
-            <StatusBadge variant="error">Feature unavailable</StatusBadge>
-            <span>
-              {t("option:quiz.offlineTitle", {
-                defaultValue: "Quiz API not available on this server"
-              })}
+      <div className="space-y-4">
+        <div className="flex justify-end">
+          <QuizBetaBadge
+            label={t("common:beta", { defaultValue: "Beta" })}
+            description={betaDescription}
+          />
+        </div>
+        <FeatureEmptyState
+          title={
+            <span className="inline-flex items-center gap-2">
+              <StatusBadge variant="error">Feature unavailable</StatusBadge>
+              <span>
+                {t("option:quiz.offlineTitle", {
+                  defaultValue: "Quiz API not available on this server"
+                })}
+              </span>
             </span>
-          </span>
-        }
-        description={t("option:quiz.offlineDescription", {
-          defaultValue:
-            "This tldw server does not advertise the Quiz endpoints. Upgrade your server to a version that includes /api/v1/quizzes to use this workspace."
-        })}
-        examples={[
-          t("option:quiz.offlineExample1", {
+          }
+          description={t("option:quiz.offlineDescription", {
             defaultValue:
-              "Check Health & diagnostics to confirm your server version and available APIs."
-          }),
-          t("option:quiz.offlineExample2", {
-            defaultValue:
-              "After upgrading, reload the extension and return to Quiz Playground."
-          })
-        ]}
-        primaryActionLabel={t("settings:healthSummary.diagnostics", {
-          defaultValue: "Health & diagnostics"
-        })}
-        onPrimaryAction={() => navigate("/settings/health")}
-      />
+              "This server does not advertise Quiz endpoints in its capability spec (reported: {{specVersion}}). Quizzes require tldw_server v0.1.0+ with /api/v1/quizzes enabled.",
+            specVersion
+          })}
+          examples={[
+            t("option:quiz.offlineExample1", {
+              defaultValue:
+                "Open Health & diagnostics to verify server version and advertised API routes."
+            }),
+            t("option:quiz.offlineExample2", {
+              defaultValue:
+                "Update the server, then refresh this page so capabilities are re-detected."
+            }),
+            t("option:quiz.offlineExample3", {
+              defaultValue:
+                "If you self-host, confirm /api/v1/quizzes appears in /openapi.json."
+            })
+          ]}
+          primaryActionLabel={t("settings:healthSummary.diagnostics", {
+            defaultValue: "Health & diagnostics"
+          })}
+          onPrimaryAction={() => navigate("/settings/health")}
+          secondaryActionLabel={t("option:quiz.offlineSecondaryAction", {
+            defaultValue: "Open setup guide"
+          })}
+          onSecondaryAction={() => navigate("/documentation")}
+        />
+      </div>
     )
   }
 
   // Online and feature supported - render main playground
-  return <QuizPlayground />
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <QuizBetaBadge
+          label={t("common:beta", { defaultValue: "Beta" })}
+          description={betaDescription}
+        />
+      </div>
+      <QuizPlayground />
+    </div>
+  )
 }
 
 export default QuizWorkspace

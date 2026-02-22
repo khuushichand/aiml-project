@@ -86,7 +86,7 @@ export const RateLimitsWidget: React.FC<RateLimitsWidgetProps> = ({
       <Alert
         type="warning"
         showIcon
-        message={t("evaluations:rateLimitsErrorTitle", {
+        title={t("evaluations:rateLimitsErrorTitle", {
           defaultValue: "Unable to fetch rate limits"
         })}
         className={className}
@@ -100,7 +100,7 @@ export const RateLimitsWidget: React.FC<RateLimitsWidgetProps> = ({
       <Alert
         type="info"
         showIcon
-        message={t("evaluations:rateLimitsTitle", {
+        title={t("evaluations:rateLimitsTitle", {
           defaultValue: "Evaluation limits"
         })}
         description={quotaText}

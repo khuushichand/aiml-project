@@ -12,9 +12,6 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ChunkMethod,
     PdfEngine,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
-    resolve_default_transcription_model,
-)
 
 try:
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -126,6 +123,38 @@ async def get_add_media_form(
         "pymupdf4llm",
         description="PDF parsing engine",
     ),
+    enable_ocr: bool = Form(
+        False,
+        description="Enable OCR for scanned/low-text PDFs",
+    ),
+    ocr_backend: str | None = Form(
+        None,
+        description="OCR backend name (e.g., tesseract, auto)",
+    ),
+    ocr_lang: str | None = Form(
+        "eng",
+        description="OCR language (Tesseract ISO 639-2 code)",
+    ),
+    ocr_dpi: int = Form(
+        300,
+        description="DPI for OCR page rendering",
+    ),
+    ocr_mode: str | None = Form(
+        "fallback",
+        description="OCR mode: always or fallback",
+    ),
+    ocr_min_page_text_chars: int = Form(
+        40,
+        description="Minimum extracted chars before OCR fallback is skipped",
+    ),
+    ocr_output_format: str | None = Form(
+        None,
+        description="OCR output format: text|markdown|json",
+    ),
+    ocr_prompt_preset: str | None = Form(
+        None,
+        description="OCR prompt preset (general|doc|table|spotting|json)",
+    ),
     perform_chunking: bool = Form(True, description="Enable chunking"),
     chunk_method: ChunkMethod | None = Form(
         None,
@@ -225,6 +254,11 @@ async def get_add_media_form(
     Dependency function to parse form data for the /media/add endpoint and
     validate it against the AddMediaForm model.
     """
+    # Lazy import to avoid pulling optional STT backends during module import.
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+        resolve_default_transcription_model,
+    )
+
     transcription_model_value = (transcription_model or "").strip()
     if not transcription_model_value:
         transcription_model_value = resolve_default_transcription_model("whisper-large-v3")
@@ -256,8 +290,8 @@ async def get_add_media_form(
                 try:
                     parsed = json.loads(first)
                     urls = parsed if isinstance(parsed, list) else [parsed]
-                except Exception:
-                    pass
+                except Exception as url_parse_error:
+                    logger.debug("Failed to parse JSON list for 'urls' form field; using raw fallback", exc_info=url_parse_error)
 
         # Normalize common boolean/integer coercions for robust form handling
         if isinstance(enable_contextual_chunking, str):
@@ -282,8 +316,8 @@ async def get_add_media_form(
         try:
             if isinstance(context_window_size, str):
                 context_window_size = int(context_window_size)
-        except Exception:
-            pass
+        except Exception as context_window_error:
+            logger.debug("Failed to coerce context_window_size from form data", exc_info=context_window_error)
         if isinstance(context_strategy, str):
             context_strategy = context_strategy.strip().lower() or None
         try:
@@ -320,6 +354,14 @@ async def get_add_media_form(
                 perform_confabulation_check_of_analysis
             ),
             pdf_parsing_engine=pdf_parsing_engine,
+            enable_ocr=enable_ocr,
+            ocr_backend=ocr_backend,
+            ocr_lang=ocr_lang,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
             perform_chunking=perform_chunking,
             chunk_method=chunk_method,
             use_adaptive_chunking=use_adaptive_chunking,

@@ -9,6 +9,8 @@ export type {
   SortMode
 } from "./useKnowledgeSearch"
 export {
+  extractContentFromMediaDetail,
+  extractMediaId,
   getResultChunkIndex,
   getResultId,
   getResultSource,
@@ -18,5 +20,20 @@ export {
   getResultType,
   getResultDate,
   getResultScore,
-  toPinnedResult
+  normalizeMediaSearchResults,
+  toPinnedResult,
+  withFullMediaTextIfAvailable
 } from "./useKnowledgeSearch"
+
+export { useFileSearch } from "./useFileSearch"
+export type { UseFileSearchReturn, FileSearchMediaType } from "./useFileSearch"
+export { FILE_SEARCH_MEDIA_TYPES } from "./useFileSearch"
+
+export { useQASearch } from "./useQASearch"
+export type {
+  UseQASearchReturn,
+  QASearchResponse,
+  QADocument,
+  QACitation
+} from "./useQASearch"
+export { qaDocumentToRagResult } from "./useQASearch"

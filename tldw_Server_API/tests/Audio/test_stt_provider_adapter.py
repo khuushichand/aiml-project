@@ -1,15 +1,71 @@
 import types
+import importlib
+import sys
 
 import pytest
 
 
+_EXCEPTIONS_MODULE = "tldw_Server_API.app.core.exceptions"
+_AUDIO_LIB_MODULE = "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib"
+
+
+def _install_py39_compat_stubs() -> None:
+    exceptions_stub = types.ModuleType(_EXCEPTIONS_MODULE)
+    exceptions_stub.BadRequestError = type("BadRequestError", (Exception,), {})
+    exceptions_stub.CancelCheckError = type("CancelCheckError", (Exception,), {})
+    exceptions_stub.TranscriptionCancelled = type("TranscriptionCancelled", (Exception,), {})
+    exceptions_stub.InvalidStoragePathError = type("InvalidStoragePathError", (Exception,), {})
+    exceptions_stub.StorageUnavailableError = type("StorageUnavailableError", (Exception,), {})
+    exceptions_stub.NetworkError = type("NetworkError", (Exception,), {})
+    exceptions_stub.RetryExhaustedError = type("RetryExhaustedError", (Exception,), {})
+    exceptions_stub.__file__ = __file__
+
+    def _exception_getattr(name: str):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return type(str(name), (Exception,), {})
+
+    exceptions_stub.__getattr__ = _exception_getattr  # type: ignore[assignment]
+    sys.modules[_EXCEPTIONS_MODULE] = exceptions_stub
+
+    audio_lib_stub = types.ModuleType(_AUDIO_LIB_MODULE)
+    audio_lib_stub.__file__ = __file__
+
+    def _parse_transcription_model(model_name: str):
+        normalized = (model_name or "").strip()
+        lowered = normalized.lower()
+        if lowered.startswith("parakeet"):
+            return "parakeet", normalized, None
+        if lowered.startswith("qwen2audio"):
+            return "qwen2audio", normalized, None
+        if lowered.startswith("vibevoice"):
+            return "vibevoice", normalized, None
+        if lowered.startswith("external:"):
+            return "external", normalized, None
+        return "whisper", normalized, None
+
+    def _speech_to_text(*args, **kwargs):
+        return [], kwargs.get("selected_source_lang")
+
+    audio_lib_stub.parse_transcription_model = _parse_transcription_model
+    audio_lib_stub.speech_to_text = _speech_to_text
+    audio_lib_stub.strip_whisper_metadata_header = lambda segments: segments
+    sys.modules[_AUDIO_LIB_MODULE] = audio_lib_stub
+
+
 def _import_module():
-
-
-    # Local import so tests don't break when heavy STT deps are absent.
-    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter as spa
-
-    return spa
+    module_name = "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter"
+    try:
+        # Local import so tests don't break when heavy STT deps are absent.
+        return importlib.import_module(module_name)
+    except TypeError as exc:
+        # Python 3.9 cannot import some project modules that use PEP-604
+        # runtime unions. Inject a minimal exceptions stub for STT tests.
+        if "unsupported operand type(s) for |" not in str(exc):
+            raise
+        _install_py39_compat_stubs()
+        sys.modules.pop(module_name, None)
+        return importlib.import_module(module_name)
 
 
 @pytest.mark.unit
@@ -244,12 +300,36 @@ def test_resolve_provider_for_model_qwen3_asr_aliases(monkeypatch):
 @pytest.mark.unit
 def test_normalize_provider_name_qwen3_asr():
     spa = _import_module()
+    registry = spa.SttProviderRegistry()
 
     # Test various aliases
-    assert spa._normalize_provider_name("qwen3-asr") == "qwen3-asr"
-    assert spa._normalize_provider_name("qwen3_asr") == "qwen3-asr"
-    assert spa._normalize_provider_name("qwen3asr") == "qwen3-asr"
-    assert spa._normalize_provider_name("Qwen3-ASR") == "qwen3-asr"
+    assert registry.normalize_provider_name("qwen3-asr") == "qwen3-asr"
+    assert registry.normalize_provider_name("qwen3_asr") == "qwen3-asr"
+    assert registry.normalize_provider_name("qwen3asr") == "qwen3-asr"
+    assert registry.normalize_provider_name("Qwen3-ASR") == "qwen3-asr"
+
+
+@pytest.mark.unit
+def test_normalize_provider_name_additional_aliases():
+    spa = _import_module()
+    registry = spa.SttProviderRegistry()
+
+    assert registry.normalize_provider_name("whisper") == "faster-whisper"
+    assert registry.normalize_provider_name("vibevoice_asr") == "vibevoice"
+    assert registry.normalize_provider_name("nemo-parakeet") == "parakeet"
+
+
+@pytest.mark.unit
+def test_default_provider_name_whisper_alias_maps_to_faster_whisper(monkeypatch):
+    spa = _import_module()
+
+    def fake_get_stt_config():
+        return {"default_transcriber": "whisper"}
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+    registry = spa.SttProviderRegistry()
+
+    assert registry.get_default_provider_name() == "faster-whisper"
 
 
 @pytest.mark.unit

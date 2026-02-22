@@ -105,7 +105,7 @@ export const TestCaseRunModal: React.FC<TestCaseRunModalProps> = ({
             <Alert
               type="info"
               showIcon
-              message={t("managePrompts.studio.testCases.runInfo", {
+              title={t("managePrompts.studio.testCases.runInfo", {
                 defaultValue:
                   "Run {{count}} test cases against a prompt to see the outputs.",
                 count: testCaseIds.length

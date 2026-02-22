@@ -69,6 +69,7 @@ async def ensure_baseline_rbac_seed(
     conn: Any,
     *,
     include_mcp_permissions: bool = False,
+    is_postgres: bool | None = None,
 ) -> None:
     """
     Ensure baseline RBAC roles, permissions, and role-permission mappings exist.
@@ -80,7 +81,8 @@ async def ensure_baseline_rbac_seed(
     It is intentionally idempotent (INSERT ... ON CONFLICT / OR IGNORE) and
     should be safe to call repeatedly.
     """
-    is_postgres = _is_postgres_connection(conn)
+    if is_postgres is None:
+        is_postgres = _is_postgres_connection(conn)
 
     permissions: list[PermissionDef] = list(_BASELINE_PERMISSIONS)
     if include_mcp_permissions:
@@ -148,8 +150,11 @@ async def ensure_baseline_rbac_seed(
     try:
         role_names = [r[0] for r in _BASELINE_ROLES]
         placeholders = ",".join("?" for _ in role_names)
+        role_names_clause = f"({placeholders})"
+        role_lookup_sql_template = "SELECT id, name FROM roles WHERE name IN {role_names_clause}"
+        role_lookup_sql = role_lookup_sql_template.format_map(locals())  # nosec B608
         cur = await conn.execute(
-            f"SELECT id, name FROM roles WHERE name IN ({placeholders})",
+            role_lookup_sql,
             tuple(role_names),
         )
         role_rows = await cur.fetchall()
@@ -161,8 +166,11 @@ async def ensure_baseline_rbac_seed(
     try:
         perm_names = [p[0] for p in permissions]
         placeholders = ",".join("?" for _ in perm_names)
+        perm_names_clause = f"({placeholders})"
+        perm_lookup_sql_template = "SELECT id, name FROM permissions WHERE name IN {perm_names_clause}"
+        perm_lookup_sql = perm_lookup_sql_template.format_map(locals())  # nosec B608
         cur = await conn.execute(
-            f"SELECT id, name FROM permissions WHERE name IN ({placeholders})",
+            perm_lookup_sql,
             tuple(perm_names),
         )
         perm_rows = await cur.fetchall()
@@ -183,3 +191,47 @@ async def ensure_baseline_rbac_seed(
                 "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
                 (rid, pid),
             )
+
+
+async def ensure_sqlite_rbac_tables(conn: Any) -> None:
+    """Ensure minimal RBAC tables exist for SQLite bootstrap paths."""
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            is_system INTEGER DEFAULT 0
+        )
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            category TEXT
+        )
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role_id INTEGER NOT NULL,
+            permission_id INTEGER NOT NULL,
+            PRIMARY KEY (role_id, permission_id)
+        )
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id INTEGER NOT NULL,
+            role_id INTEGER NOT NULL,
+            granted_by INTEGER,
+            expires_at TIMESTAMP,
+            PRIMARY KEY (user_id, role_id)
+        )
+        """
+    )

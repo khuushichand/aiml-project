@@ -10,8 +10,10 @@ Routes:
 - GET    /rules/{id}             Get rule details
 - PATCH  /rules/{id}             Update rule
 - DELETE /rules/{id}             Delete rule
-- POST   /rules/{id}/deactivate  Request deactivation (with cooldown)
-- GET    /alerts                 List alerts
+- POST   /rules/{id}/deactivate              Request deactivation (with cooldown)
+- POST   /rules/{id}/confirm-deactivation    Confirm deactivation (token)
+- POST   /rules/{id}/approve-deactivation    Approve deactivation (partner)
+- GET    /alerts                              List alerts
 - POST   /alerts/mark-read       Mark alerts as read
 - GET    /alerts/unread-count     Count unread alerts
 - POST   /governance-policies     Create governance policy
@@ -21,15 +23,14 @@ Routes:
 """
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.guardian_deps import get_guardian_db_for_user
 from tldw_Server_API.app.api.v1.schemas.guardian_schemas import (
     CrisisResource,
     CrisisResourceList,
+    DeactivationApproveRequest,
+    DeactivationConfirmRequest,
     DetailResponse,
     GovernancePolicyCreate,
     GovernancePolicyList,
@@ -202,9 +203,39 @@ def request_deactivation(
     user: User = Depends(get_request_user),
     db: GuardianDB = Depends(get_guardian_db_for_user),
 ):
-    """Request deactivation of a rule (respects cooldown protection)."""
+    """Request deactivation of a rule (respects bypass protection)."""
     svc = _get_service(db)
     result = svc.request_deactivation(rule_id, _user_id(user))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed"))
+    return result
+
+
+@router.post("/rules/{rule_id}/confirm-deactivation")
+def confirm_deactivation(
+    rule_id: str,
+    body: DeactivationConfirmRequest,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Confirm deactivation of a rule (confirmation bypass mode)."""
+    svc = _get_service(db)
+    result = svc.confirm_deactivation(rule_id, _user_id(user), body.token)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed"))
+    return result
+
+
+@router.post("/rules/{rule_id}/approve-deactivation")
+def approve_deactivation(
+    rule_id: str,
+    body: DeactivationApproveRequest,
+    user: User = Depends(get_request_user),
+    db: GuardianDB = Depends(get_guardian_db_for_user),
+):
+    """Approve deactivation of a rule (partner_approval bypass mode)."""
+    svc = _get_service(db)
+    result = svc.approve_deactivation(rule_id, _user_id(user), body.token)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Failed"))
     return result

@@ -1,0 +1,1469 @@
+{
+  "formError_noModel": {
+    "message": "Vennligst velg en modell"
+  },
+  "formError_noEmbeddingModel": {
+    "message": "Vennligst velg en embedding-modell under innstillinger > RAG-siden"
+  },
+  "form_textarea_placeholder": {
+    "message": "Skriv en melding..."
+  },
+  "form_webSearch_on": {
+    "message": "På"
+  },
+  "form_webSearch_off": {
+    "message": "Av"
+  },
+  "tooltip_searchInternet": {
+    "message": "Søk på Internett"
+  },
+  "tooltip_speechToText": {
+    "message": "Tale til Tekst"
+  },
+  "tooltip_uploadImage": {
+    "message": "Last opp Bilde"
+  },
+  "tooltip_stopStreaming": {
+    "message": "Stopp Streaming"
+  },
+  "tooltip_knowledge": {
+    "message": "Kunnskap"
+  },
+  "tooltip_clearContext": {
+    "message": "Tøm Kontekst"
+  },
+  "tooltip_speechToTextServer": {
+    "message": "Diktering via tldw-serveren din"
+  },
+  "tooltip_speechToTextBrowser": {
+    "message": "Diktering via nettleserens talegjenkjenning"
+  },
+  "tooltip_speechToTextDetails": {
+    "message": "Bruker {{model}} · {{task}} · {{format}}. Konfigurer i Innstillinger → Generelt → Tale-til-tekst."
+  },
+  "tooltip_vision": {
+    "message": "[Eksperimentell] Visjonschat"
+  },
+  "tooltip_uploadDocuments": {
+    "message": "Last opp dokumenter (beta)"
+  },
+  "sendWhenEnter": {
+    "message": "Søk når Enter trykkes"
+  },
+  "welcome": {
+    "message": "Hei! Hvordan kan jeg hjelpe deg i dag?"
+  },
+  "useOCR": {
+    "message": "Trekk ut tekst fra bilde (OCR)"
+  },
+  "tips_title": {
+    "message": "Råd"
+  },
+  "tips_quickIngest": {
+    "message": "Bruk Hurtiginnhenting for å legge til dokumenter og nettsider."
+  },
+  "tips_pickModelPrompt": {
+    "message": "Velg en modell og en prompt fra toppmenyen."
+  },
+  "tips_startChatFocus": {
+    "message": "Når tilkoblet, fokuserer «Start chat» på komposisjonsfeltet."
+  },
+  "tldwState_searching": {
+    "message": "Søker etter din tldw server"
+  },
+  "tldwState_running": {
+    "message": "tldw kjører"
+  },
+  "tldwState_notRunning": {
+    "message": "Kan ikke koble til tldw server"
+  },
+  "tldwState_connectionError": {
+    "message": "Det ser ut til at du har en tilkoblingsfeil. Vennligst se denne <anchor>dokumentasjonen</anchor> for feilsøking."
+  },
+  "tldwState_openTldwSettings": {
+    "message": "Åpne tldw-innstillinger"
+  },
+  "tldwState_cancelSearch": {
+    "message": "Avbryt søk"
+  },
+  "tldwState_connectionFailedWithCode": {
+    "message": "Tilkobling mislyktes (HTTP {{code}})"
+  },
+  "tldwState_connectionFailed": {
+    "message": "Tilkobling mislyktes"
+  },
+  "tldwState_errorDetailsLabel": {
+    "message": "Detaljer:"
+  },
+  "tldwState_title": {
+    "message": "Venter på tldw-serveren din"
+  },
+  "tldwState_subtitle": {
+    "message": "Vi pinger {{host}} for å bekrefte tilkoblingen."
+  },
+  "tldwState_missing": {
+    "message": "Server-URL er ikke konfigurert"
+  },
+  "tldwState_noServer": {
+    "message": "Legg til tldw-serveren din for å starte chatten."
+  },
+  "tldwState_connectedSubtitle": {
+    "message": "Koblet til {{host}}. Start chatten når du er klar."
+  },
+  "tldwState_errorSubtitle": {
+    "message": "Vi fikk ikke kontakt med {{host}} ennå. Prøv igjen eller oppdater serverinnstillingene."
+  },
+  "tldwState_openSettings": {
+    "message": "Åpne innstillinger"
+  },
+  "tldwState_changeServer": {
+    "message": "Bytt server"
+  },
+  "tldwState_elapsed": {
+    "message": "Sjekker… {{seconds}} s"
+  },
+  "tldwState_connectedHint": {
+    "message": "Koblet til {{host}}."
+  },
+  "tldwState_lastChecked": {
+    "message": "Sjekket for {{seconds}} s siden"
+  },
+  "tldwState_recheck": {
+    "message": "Sjekk igjen"
+  },
+  "tldwState_errorToast": {
+    "message": "Vi fikk ikke kontakt med {{host}}"
+  },
+  "tldwState_missingHelp": {
+    "message": "Åpne Innstillinger → tldw Server for å legge til URL-en din eller koble til Alternativer-siden."
+  },
+  "tldwState_troubleshoot": {
+    "message": "Bekreft at serveren kjører og at nettleseren har tilgang, og prøv igjen fra Alternativer-siden."
+  },
+  "errors_privateModeDescription": {
+    "message": "Firefox privatmodus støtter ikke lagring av chat. Midlertidig chat er aktivert som standard. Flere forbedringer kommer."
+  },
+  "tts_playErrorTitle": {
+    "message": "Feil"
+  },
+  "tts_playErrorDescription": {
+    "message": "Det oppsto en feil under avspilling av lyd"
+  },
+  "tts_browserInfoTitle": {
+    "message": "Nettleser-TTS bruker systemlyd"
+  },
+  "tts_browserInfoDescription": {
+    "message": "Nettleser-TTS spiller av med systemsyntesen og tilbyr ikke en nedlastbar lydfil. Bruk segmentkontrollene nedenfor, eller bytt leverandør for å få sporlisten og en avspiller."
+  },
+  "tts_unsupportedProviderTitle": {
+    "message": "TTS-leverandør støttes ikke"
+  },
+  "tts_unsupportedProviderDescription": {
+    "message": "Leverandøren \"{{provider}}\" støttes ikke ennå i playground-spilleren."
+  },
+  "tts_unsupportedFormatTitle": {
+    "message": "Ikke støttet lydformat"
+  },
+  "tts_unsupportedFormatDescription": {
+    "message": "Svarformatet \"{{format}}\" støttes ikke. Faller tilbake til MP3."
+  },
+  "tts_elevenLabsMissingTitle": {
+    "message": "ElevenLabs trenger en API-nøkkel"
+  },
+  "tts_elevenLabsMissingBody": {
+    "message": "Legg til ElevenLabs API-nøkkel i innstillingene for å laste inn stemmer og modeller."
+  },
+  "tts_elevenLabsUnavailableTitle": {
+    "message": "ElevenLabs-stemmer utilgjengelige"
+  },
+  "tts_elevenLabsUnavailableBody": {
+    "message": "Vi kunne ikke laste inn stemmer eller modeller. Sjekk API-nøkkelen og prøv igjen."
+  },
+  "tts_elevenLabsMissingCta": {
+    "message": "Angi API-nøkkel i innstillingene"
+  },
+  "tts_generateErrorTitle": {
+    "message": "Feil ved generering av lyd"
+  },
+  "tts_generateErrorDescription": {
+    "message": "Noe gikk galt under generering av TTS-lyd."
+  },
+  "tts_sampleText": {
+    "message": "Sett inn eksempeltekst"
+  },
+  "tts_playHelper": {
+    "message": "Spill av bruker valgt leverandør, stemme og hastighet."
+  },
+  "tts_playDisabledNoText": {
+    "message": "Skriv inn tekst for å aktivere Spill av."
+  },
+  "tts_playDisabledTtsOff": {
+    "message": "Aktiver tekst-til-tale ovenfor for å spille av lyd."
+  },
+  "tts_playDisabledElevenLabs": {
+    "message": "Legg til en ElevenLabs API-nøkkel, stemme og modell for å aktivere Spill."
+  },
+  "tts_stopDisabled": {
+    "message": "Stopp blir aktivt etter at lyden starter."
+  },
+  "tts_providerChangeHelper": {
+    "message": "Åpne leverandørvelgeren nedenfor for å bytte mellom Nettleser, tldw, OpenAI eller Supersonic."
+  },
+  "tts_changeProvider": {
+    "message": "Bytt leverandør"
+  },
+  "tts_title": {
+    "message": "TTS-lekeplass"
+  },
+  "tts_subtitle": {
+    "message": "Prøv tekst-til-tale og juster leverandører, modeller og stemmer."
+  },
+  "tts_currentProvider": {
+    "message": "Gjeldende leverandør"
+  },
+  "tts_settingsIntro": {
+    "message": "Juster TTS-leverandør, modell og stemme. Disse innstillingene gjenbrukes når du spiller av lyd fra chat eller media."
+  },
+  "tts_providerCapabilities": {
+    "message": "Leverandørfunksjoner"
+  },
+  "tts_voicesPreview": {
+    "message": "Serverstemmer"
+  },
+  "tts_providerDetails": {
+    "message": "Vis rå leverandørkonfig"
+  },
+  "tts_providerDetailsTitle": {
+    "message": "Leverandørdetaljer"
+  },
+  "tts_inputLabel": {
+    "message": "Skriv inn tekst for å høre den lest opp."
+  },
+  "tts_inputPlaceholder": {
+    "message": "Skriv inn eller lim inn tekst her, og bruk Spill av for å lytte."
+  },
+  "tts_play": {
+    "message": "Spill av"
+  },
+  "tts_playing": {
+    "message": "Spiller av…"
+  },
+  "tts_stop": {
+    "message": "Stopp"
+  },
+  "tts_browserSegmentsTitle": {
+    "message": "Nettleser-TTS-segmenter"
+  },
+  "tts_browserSegmentsHelp": {
+    "message": "Kølegg segmenter eller spill av et enkelt segment med systemlyd."
+  },
+  "tts_browserQueueAll": {
+    "message": "Kølegg alle"
+  },
+  "tts_browserQueueFromHere": {
+    "message": "Kølegg herfra"
+  },
+  "tts_browserSegmentPlay": {
+    "message": "Spill av segment"
+  },
+  "tts_browserStatusSpeaking": {
+    "message": "Spiller av segment {{current}}/{{total}}"
+  },
+  "tts_browserStatusPaused": {
+    "message": "Pauset"
+  },
+  "tts_browserPause": {
+    "message": "Pausér"
+  },
+  "tts_browserResume": {
+    "message": "Gjenoppta"
+  },
+  "tts_tldwStatusOnline": {
+    "message": "tldw-serverens lyd-API funnet (audio/speech)"
+  },
+  "tts_tldwStatusOffline": {
+    "message": "Lyd-API ble ikke funnet; sjekk tldw-serverversjonen din."
+  },
+  "tts_tldwWarningTitle": {
+    "message": "tldw audio/speech API ikke funnet"
+  },
+  "tts_tldwWarningBody": {
+    "message": "Sørg for at tldw_server-versjonen inneholder /api/v1/audio/speech og at utvidelsen er koblet til med en gyldig API-nøkkel."
+  },
+  "tts_speechErrorTitle": {
+    "message": "Diktering mislyktes"
+  },
+  "tts_speechErrorBody": {
+    "message": "Transkripsjonsforespørselen mislyktes. Sjekk tldw-serverens status."
+  },
+  "tts_speechNoText": {
+    "message": "Transkripsjonen returnerte ingen tekst."
+  },
+  "tts_speechMicError": {
+    "message": "Kunne ikke få tilgang til mikrofonen. Sjekk nettlesertillatelser og prøv igjen."
+  },
+  "tts_savedToNotes": {
+    "message": "Transkripsjonen ble lagret som notat."
+  },
+  "empty_title": {
+    "message": "Start en ny chat"
+  },
+  "empty_description": {
+    "message": "Eksperimenter med ulike modeller, prompter og kunnskapskilder her."
+  },
+  "empty_demoDescription": {
+    "message": "Du er i demomodus — prøv å stille et spørsmål for å se hvordan assistenten svarer. Du kan koble til din egen tldw-server senere."
+  },
+  "empty_example1": {
+    "message": "Still et spørsmål, og dra deretter inn dokumenter eller nettsider du vil diskutere."
+  },
+  "empty_example2": {
+    "message": "Bruk Hurtiginnhenting for å legge til transkripsjoner eller notater, og referer til dem i chatten."
+  },
+  "empty_example3": {
+    "message": "Try different prompts or models, or open Model Playground to compare answers."
+  },
+  "empty_primaryCta": {
+    "message": "Start chat"
+  },
+  "empty_secondaryCta": {
+    "message": "Åpne serverinnstillinger"
+  },
+  "drop_hint": {
+    "message": "Dra filer hit for å legge dem ved i meldingen"
+  },
+  "drop_readySingle": {
+    "message": "{{name}} klar til sending"
+  },
+  "drop_readyMultiple": {
+    "message": "{{count}} filer klare til sending"
+  },
+  "drop_unsupported": {
+    "message": "Denne filtypen støttes ikke. Prøv bilder eller tekstbaserte filer."
+  },
+  "drop_defaultFileName": {
+    "message": "Fil"
+  },
+  "drop_imageOnly": {
+    "message": "Kun bilder kan slippes her akkurat nå."
+  },
+  "drop_imageHint": {
+    "message": "Dra inn et bilde for å inkludere det i meldingen"
+  },
+  "drop_overlayInstruction": {
+    "message": "Slipp bildet for å legge det ved i neste svar"
+  },
+  "aria_chatTranscript": {
+    "message": "Chatmeldinger"
+  },
+  "more_history": {
+    "message": "Chatlagring"
+  },
+  "more_searchKnowledge": {
+    "message": "Søk & Kunnskap"
+  },
+  "more_voice": {
+    "message": "Flere talevalg"
+  },
+  "more_uploads": {
+    "message": "Opplastinger og ingest"
+  },
+  "fileRetrievalEnabled": {
+    "message": "Aktiver RAG for dokumenter"
+  },
+  "stt_title": {
+    "message": "STT-lekeplass"
+  },
+  "stt_subtitle": {
+    "message": "Prøv transkripsjonsmodeller, kjør lengre dikteringsøkter og lagre transkripsjoner i Notater."
+  },
+  "stt_currentModelLabel": {
+    "message": "Nåværende transkripsjonsmodell"
+  },
+  "stt_defaultModel": {
+    "message": "Standard fra innstillinger"
+  },
+  "stt_settingsNotice": {
+    "message": "Språk, oppgave, svarformat, segmentering og prompt gjenbruker dine tale-til-tekst-standarder fra innstillinger."
+  },
+  "stt_sessionMode": {
+    "message": "Øktmodus"
+  },
+  "stt_modeLong": {
+    "message": "Langvarig (opptak i segmenter)"
+  },
+  "stt_modeShort": {
+    "message": "Kort diktering (enkeltklipp)"
+  },
+  "stt_languageTag": {
+    "message": "Språk"
+  },
+  "stt_taskTag": {
+    "message": "Oppgave"
+  },
+  "stt_formatTag": {
+    "message": "Svarformat"
+  },
+  "stt_segmentationEnabled": {
+    "message": "Segmentering aktivert"
+  },
+  "stt_recordButton": {
+    "message": "Ta opp"
+  },
+  "stt_stopButton": {
+    "message": "Stopp"
+  },
+  "stt_startTooltip": {
+    "message": "Start opptak av lyd for transkripsjon"
+  },
+  "stt_stopTooltip": {
+    "message": "Stopp og send til server"
+  },
+  "stt_transcribingButton": {
+    "message": "Transkriberer..."
+  },
+  "stt_transcribingTooltip": {
+    "message": "Transkriberer lyd..."
+  },
+  "stt_transcribingPlaceholder": {
+    "message": "Transkriberer lyd..."
+  },
+  "stt_historyTitle": {
+    "message": "Transkripsjonshistorikk"
+  },
+  "stt_clearAll": {
+    "message": "Tøm alle"
+  },
+  "stt_emptyHistory": {
+    "message": "Start et opptak for å se transkripsjoner her. Du kan lagre ethvert element i Notater."
+  },
+  "stt_saveToNotes": {
+    "message": "Lagre i Notater"
+  },
+  "stt_delete": {
+    "message": "Slett"
+  },
+  "stt_durationTag": {
+    "message": "Varighet"
+  },
+  "stt_modelTag": {
+    "message": "Modell"
+  },
+  "stt_currentTranscriptTitle": {
+    "message": "Nåværende økttranskripsjon"
+  },
+  "stt_currentTranscriptPlaceholder": {
+    "message": "Live transkripsjon vises her under opptak."
+  },
+  "actions_temporaryOn": {
+    "message": "Midlertidig chat (lagres ikke)"
+  },
+  "actions_temporaryOff": {
+    "message": "Lagre chat i historikk"
+  },
+  "actions_webSearchOn": {
+    "message": "Nettsøk på"
+  },
+  "actions_webSearchOff": {
+    "message": "Nettsøk av"
+  },
+  "actions_speechStart": {
+    "message": "Start diktering"
+  },
+  "actions_speechStop": {
+    "message": "Stopp diktering"
+  },
+  "actions_streamStart": {
+    "message": "Direkte teksting"
+  },
+  "actions_streamStop": {
+    "message": "Stopp teksting"
+  },
+  "actions_visionOn": {
+    "message": "Visjon på"
+  },
+  "actions_visionOff": {
+    "message": "Visjon av"
+  },
+  "actions_upload": {
+    "message": "Legg ved bilde"
+  },
+  "actions_ingest": {
+    "message": "Hurtiginnhenting"
+  },
+  "actions_ingestDisabled": {
+    "message": "Koble til tldw-serveren din for å kjøre ingest."
+  },
+  "actions_ingestHint": {
+    "message": "Last opp URL-er eller filer med avanserte valg."
+  },
+  "actions_ingestSub": {
+    "message": "Bruk URL-er/filer; last ned eller lagre."
+  },
+  "actions_streamErrorTitle": {
+    "message": "Direkte teksting utilgjengelig"
+  },
+  "composer_toolsButton": {
+    "message": "+Verktøy"
+  },
+  "composer_queuedBanner_title": {
+    "message": "I kø mens du er frakoblet"
+  },
+  "composer_queuedBanner_body": {
+    "message": "Vi holder disse meldingene og sender dem når tldw-serveren din er tilkoblet."
+  },
+  "composer_queuedBanner_sendNow": {
+    "message": "Send meldinger i kø"
+  },
+  "composer_queuedBanner_clear": {
+    "message": "Tøm køen"
+  },
+  "composer_coreTools": {
+    "message": "Samtalevalg"
+  },
+  "composer_captureTools": {
+    "message": "Verktøy for opptak og assistanse"
+  },
+  "composer_actions": {
+    "message": "Sendingsvalg"
+  },
+  "composer_moreTools": {
+    "message": "Flere verktøy"
+  },
+  "composer_scrollToLatest": {
+    "message": "Rull til siste meldinger"
+  },
+  "composer_submitAria": {
+    "message": "Send melding"
+  },
+  "composer_openModelSettings": {
+    "message": "Åpne nåværende chatinnstillinger"
+  },
+  "composer_stopStreaming": {
+    "message": "Stopp strømming av svar"
+  },
+  "composer_connectionPlaceholder": {
+    "message": "Koble til tldw-serveren din i Innstillinger for å sende meldinger og se media."
+  },
+  "composer_connectNotice": {
+    "message": "Koble til tldw-serveren din i Innstillinger for å sende meldinger og se media."
+  },
+  "composer_connectionChipDisconnected": {
+    "message": "Server: Ikke tilkoblet"
+  },
+  "composer_contextLabel": {
+    "message": "Kontekst:"
+  },
+  "composer_contextKnowledgeEmpty": {
+    "message": "Ingen kunnskap valgt"
+  },
+  "composer_contextTabs": {
+    "message": "{{count}} faner"
+  },
+  "composer_contextFiles": {
+    "message": "{{count}} filer"
+  },
+  "composer_contextMedia": {
+    "message": "Media og notater"
+  },
+  "composer_contextMediaHint": {
+    "message": "Legg ved media og notater som skal styre svaret."
+  },
+  "composer_contextMediaSelected": {
+    "message": "Media eller notat"
+  },
+  "composer_contextMediaEmpty": {
+    "message": "Ingen media eller notater valgt ennå."
+  },
+  "composer_addKnowledge": {
+    "message": "Legg til media og notater"
+  },
+  "composer_contextTabsTitle": {
+    "message": "Faner i konteksten"
+  },
+  "composer_contextTabsHint": {
+    "message": "Gå gjennom eller fjern refererte faner, eller legg til flere fra åpne faner."
+  },
+  "composer_contextManager": {
+    "message": "Konteksthåndtering"
+  },
+  "composer_contextManagerTitle": {
+    "message": "Konteksthåndtering"
+  },
+  "composer_contextKnowledge": {
+    "message": "Kontekst og kunnskap"
+  },
+  "composer_contextKnowledgeClose": {
+    "message": "Lukk kontekst og kunnskap"
+  },
+  "composer_knowledgeSearch": {
+    "message": "Kunnskapssøk"
+  },
+  "composer_knowledgeSearchClose": {
+    "message": "Lukk kunnskapssøk"
+  },
+  "composer_persistence_ephemeral": {
+    "message": "Ikke lagret i historikk; tømmes når du lukker denne fanen."
+  },
+  "composer_persistence_local": {
+    "message": "Lagrer kun i denne nettleseren."
+  },
+  "composer_persistence_server": {
+    "message": "Lagret lokalt + server"
+  },
+  "composer_persistence_ephemeralPill": {
+    "message": "Midlertidig"
+  },
+  "composer_persistence_localPill": {
+    "message": "Kun lokalt"
+  },
+  "composer_persistence_serverPill": {
+    "message": "Lokalt + server"
+  },
+  "composer_ephemeralLabel": {
+    "message": "Midlertidig"
+  },
+  "composer_savedLabel": {
+    "message": "Lagret"
+  },
+  "composer_persistence_saveToServer": {
+    "message": "Lagre også denne chatten på serveren"
+  },
+  "composer_persistence_connectToSave": {
+    "message": "Koble til serveren din for å lagre chatter der."
+  },
+  "composer_persistence_serverDefaultTitle": {
+    "message": "Utvidelseschat"
+  },
+  "composer_persistence_serverSavedTitle": {
+    "message": "Chat lagret på server"
+  },
+  "composer_persistence_serverSaved": {
+    "message": "Fremtidige meldinger i denne chatten synkroniseres til tldw-serveren din."
+  },
+  "composer_persistence_serverCharacterRequired": {
+    "message": "Fant ikke eller kunne ikke opprette en standard assistentkarakter på serveren. Prøv igjen fra Karakterer-siden."
+  },
+  "composer_connectToSend": {
+    "message": "Koble til din tldw-server i Innstillinger for å sende meldinger og se media."
+  },
+  "composer_compareTag": {
+    "message": "Sammenlign"
+  },
+  "composer_compareLabel": {
+    "message": "Sammenligningsmodus"
+  },
+  "composer_compareButton": {
+    "message": "Sammenlign modeller"
+  },
+  "composer_compareButtonActive": {
+    "message": "Sammenlign: {{count}} modeller"
+  },
+  "composer_compareButtonOn": {
+    "message": "Sammenligning aktivert"
+  },
+  "composer_compareSettingsTitle": {
+    "message": "Sammenligningsinnstillinger"
+  },
+  "composer_compareSettingsToggle": {
+    "message": "Aktiver sammenligningsmodus"
+  },
+  "composer_compareSettingsToggleHint": {
+    "message": "Send neste melding til flere modeller."
+  },
+  "composer_compareNoneSelected": {
+    "message": "Ingen modeller valgt for sammenligning"
+  },
+  "composer_compareSingle": {
+    "message": "Sammenligner 1 modell"
+  },
+  "composer_compareMany": {
+    "message": "Sammenligner {{count}} modeller"
+  },
+  "composer_compareActiveSummary": {
+    "message": "Aktive modeller neste tur: {{label}}"
+  },
+  "composer_compareModelPickerLabel": {
+    "message": "Velg modeller"
+  },
+  "composer_compareModelPickerPlaceholder": {
+    "message": "Velg modeller å sammenligne"
+  },
+  "composer_compareActiveModelsLabel": {
+    "message": "Aktive modeller"
+  },
+  "composer_compareActiveModelsHint": {
+    "message": "Din neste melding sendes til hver aktive modell."
+  },
+  "composer_compareSendToModels": {
+    "message": "Send til {{count}} modeller"
+  },
+  "composer_compareMaxModelsTitle": {
+    "message": "Sammenligningsgrense nådd"
+  },
+  "composer_compareMaxModels": {
+    "message": "Du kan sammenligne opptil {{limit}} modeller per tur."
+  },
+  "composer_compareMaxModelsTrimmed": {
+    "message": "Sammenligning er begrenset til {{limit}} modeller per tur. Bruker de første {{limit}} valgte modellene."
+  },
+  "composer_compareMaxLabel": {
+    "message": "Maks modeller per tur"
+  },
+  "composer_compareMaxHelper": {
+    "message": "Valgt {{current}} / {{limit}}"
+  },
+  "composer_compareSelectedLabel": {
+    "message": "Valgt som svar:"
+  },
+  "composer_compareContinueHint": {
+    "message": "Fortsett denne chatten med den valgte modellen."
+  },
+  "composer_compareContinue": {
+    "message": "Fortsett med denne modellen"
+  },
+  "composer_compareThreadShared": {
+    "message": "Du (delt)"
+  },
+  "composer_compareBulkSplitSuccess": {
+    "message": "Opprettet {{count}} chatter"
+  },
+  "composer_compareBulkSplitPartialFail": {
+    "message": "Kunne ikke opprette {{count}} chatter"
+  },
+  "composer_validationCompareSelectModelsInline": {
+    "message": "Velg minst én modell for sammenligningsmodus."
+  },
+  "speech_title": {
+    "message": "Tale-lekeplass"
+  },
+  "speech_subtitle": {
+    "message": "Spill inn tale, rediger transkripsjoner og syntetiser lyd på ett sted."
+  },
+  "speech_modeLabel": {
+    "message": "Modus"
+  },
+  "speech_modeRoundTrip": {
+    "message": "Tur-retur"
+  },
+  "speech_modeSpeak": {
+    "message": "Snakk"
+  },
+  "speech_modeListen": {
+    "message": "Lytt"
+  },
+  "speech_modeHint": {
+    "message": "Siste modus huskes på denne enheten."
+  },
+  "speech_recordingWaveform": {
+    "message": "Bølgeform for liveopptak"
+  },
+  "speech_playbackWaveform": {
+    "message": "Bølgeform for avspilling"
+  },
+  "speech_sendToTts": {
+    "message": "Send til TTS"
+  },
+  "speech_sendHint": {
+    "message": "Bruk siste transkripsjon som TTS-utkast."
+  },
+  "speech_download": {
+    "message": "Last ned"
+  },
+  "speech_downloadCurrent": {
+    "message": "Last ned gjeldende segment"
+  },
+  "speech_downloadAll": {
+    "message": "Last ned alle segmenter"
+  },
+  "speech_segmentFormat": {
+    "message": "Segmentformat"
+  },
+  "speech_historyTitle": {
+    "message": "Talehistorikk"
+  },
+  "speech_historyAll": {
+    "message": "Alle"
+  },
+  "speech_historyStt": {
+    "message": "Tale-til-tekst"
+  },
+  "speech_historyTts": {
+    "message": "Tekst-til-tale"
+  },
+  "speech_historySearch": {
+    "message": "Søk i transkripsjoner"
+  },
+  "speech_historyRetentionHint": {
+    "message": "Beholder de siste {{count}} elementene. Bruk \"Tøm alle\" for å fjerne alt."
+  },
+  "speech_useInTts": {
+    "message": "Bruk i TTS"
+  },
+  "speech_copy": {
+    "message": "Kopier"
+  },
+  "speech_copySuccess": {
+    "message": "Kopiert til utklippstavlen"
+  },
+  "speech_copyError": {
+    "message": "Klarte ikke å kopiere transkripsjonen."
+  },
+  "speech_providerTag": {
+    "message": "Leverandør"
+  },
+  "speech_voiceTag": {
+    "message": "Stemme"
+  },
+  "speech_emptyHistory": {
+    "message": "Start et opptak eller generer lyd for å se historikk her."
+  },
+  "speech_downloadDisabledBrowser": {
+    "message": "Nettleser-TTS lager ikke nedlastbar lyd."
+  },
+  "speech_downloadDisabledEmpty": {
+    "message": "Generer lyd for å aktivere nedlasting."
+  },
+  "speech_transcriptLock": {
+    "message": "Lås"
+  },
+  "speech_transcriptUnlock": {
+    "message": "Lås opp"
+  },
+  "speech_transcriptEditHint": {
+    "message": "Redigering aktivert for denne transkripsjonen."
+  },
+  "speech_transcriptLockedHint": {
+    "message": "Låst til live transkripsjonsoppdateringer."
+  },
+  "speech_transcriptRecordingHint": {
+    "message": "Opptak pågår; transkripsjonen er låst."
+  },
+  "actor_title": {
+    "message": "Sceneregissør (Actor)"
+  },
+  "actor_help": {
+    "message": "Konfigurer scenekontekst per chat: roller, stemning, verden, mål og notater."
+  },
+  "actor_addLabel": {
+    "message": "Legg til eller fjern aspekter for å fokusere scenen."
+  },
+  "actor_user": {
+    "message": "Bruker"
+  },
+  "actor_char": {
+    "message": "Karakter"
+  },
+  "actor_world": {
+    "message": "Verden"
+  },
+  "actor_newAspectPlaceholder": {
+    "message": "Aspektnavn (f.eks. Stemning, Rolle, Sted)"
+  },
+  "actor_addButton": {
+    "message": "Legg til aspekt"
+  },
+  "actor_aspectPlaceholder": {
+    "message": "Beskriv kort (valgfritt)"
+  },
+  "actor_notes": {
+    "message": "Scenenotater"
+  },
+  "actor_notesHelp": {
+    "message": "Valgfrie notater som sendes til modellen. Støtter Markdown og LaTeX."
+  },
+  "actor_position": {
+    "message": "Plassering av Actor-prompt"
+  },
+  "actor_before": {
+    "message": "Før hovedprompten/historien"
+  },
+  "actor_after": {
+    "message": "Etter hovedprompten/historien"
+  },
+  "actor_depth": {
+    "message": "I chatten på dybde"
+  },
+  "actor_depthLabel": {
+    "message": "Dybde (ikke-systemmeldinger)"
+  },
+  "actor_depthPlaceholder": {
+    "message": "0 = toppen av chatten"
+  },
+  "actor_depthHelp": {
+    "message": "Brukes bare når plasseringen er \"I chatten på dybde\". Teller ikke-systemmeldinger fra toppen av chatten."
+  },
+  "actor_roleLabel": {
+    "message": "Rolle for Actor-melding"
+  },
+  "actor_roleSystem": {
+    "message": "Systemrolle"
+  },
+  "actor_roleUser": {
+    "message": "Bruker"
+  },
+  "actor_roleAssistant": {
+    "message": "Assistent"
+  },
+  "actor_positionHelp": {
+    "message": "Dybde brukes bare når plasseringen er \"I chatten på dybde\". Rollen styrer om Actor vises som system, bruker eller assistent."
+  },
+  "actor_preview": {
+    "message": "Forhåndsvisning av Actor-prompt"
+  },
+  "actor_tokens": {
+    "message": "Antall tokens: {{count}}"
+  },
+  "actor_previewEmpty": {
+    "message": "Ingenting å sende ennå."
+  },
+  "actor_offlineHintTitle": {
+    "message": "World Books ikke tilgjengelig for Actor"
+  },
+  "actor_offlineHintBody": {
+    "message": "Koble til tldw-serveren i Innstillinger for å bruke World Books for Actor-aspekter, eller fortsett å bruke fritekstverdier."
+  },
+  "actor_loreWorldBookMissing": {
+    "message": "Tidligere World Book-binding ble ikke funnet; bruker fritekst i stedet."
+  },
+  "actor_loreEntryMissing": {
+    "message": "Tidligere World Book-oppføring ble ikke funnet; bruker fritekst i stedet."
+  },
+  "actor_sourceFree": {
+    "message": "Fritekst"
+  },
+  "actor_sourceLore": {
+    "message": "World Book"
+  },
+  "actor_worldBookPlaceholder": {
+    "message": "World Book"
+  },
+  "actor_entryPlaceholder": {
+    "message": "Oppføring"
+  },
+  "actor_loreValuePlaceholder": {
+    "message": "Velg et alternativ (valgfritt)"
+  },
+  "actor_tokenLabel": {
+    "message": "Tokennøkkel"
+  },
+  "actor_tokensTitle": {
+    "message": "Actor-ordbokstokens"
+  },
+  "actor_tokensHelp": {
+    "message": "Bruk disse tokens i prompt og systemmeldinger."
+  },
+  "actor_keyChangeTitle": {
+    "message": "Endre Actor-token-nøkkel?"
+  },
+  "actor_keyChangeBody": {
+    "message": "Dette endrer tokenet fra {{old}} til {{next}}. Prompter som bruker den gamle tokenet oppdateres ikke automatisk."
+  },
+  "actor_keyCollisionTitle": {
+    "message": "Actor-nøkkel allerede i bruk"
+  },
+  "actor_keyCollisionBody": {
+    "message": "En annen aspekt bruker allerede denne nøkkelen. Nøkler må være unike per chat."
+  },
+  "actor_copy": {
+    "message": "Kopier"
+  },
+  "actor_copied": {
+    "message": "Kopiert"
+  },
+  "actor_copySuccess": {
+    "message": "Token kopiert til utklippstavlen"
+  },
+  "actor_copyError": {
+    "message": "Kunne ikke kopiere token"
+  },
+  "actor_notesPreviewTitle": {
+    "message": "Forhåndsvisning av scenenotater"
+  },
+  "actor_notesPreviewToggle": {
+    "message": "Vis Markdown + LaTeX-forhåndsvisning"
+  },
+  "actor_aspectLimitWarningTitle": {
+    "message": "Mange aspekter konfigurert for denne chatten"
+  },
+  "actor_aspectLimitWarningBody": {
+    "message": "Du har {{count}} aspekter (myk grense {{limit}}). Vurder å trimme for å fokusere scenen og spare tokens."
+  },
+  "actor_tokenWarning": {
+    "message": "Actor-prompten er lang ({{count}} tokens; myk grense {{limit}}). Vurder å trimme aspekter eller notater for å spare kontekst."
+  },
+  "actor_depthRangeHelp": {
+    "message": "Dybden må være mellom 0 og 999; verdier utover historikklengden avgrenses."
+  },
+  "actor_presetLabel": {
+    "message": "Forhåndsinnstillinger"
+  },
+  "actor_presetPlaceholder": {
+    "message": "Velg en forhåndsinnstilling"
+  },
+  "actor_preset.sliceOfLife": {
+    "message": "Hverdagsliv"
+  },
+  "actor_preset.dungeonCrawl": {
+    "message": "Fangehullskryp"
+  },
+  "actor_preset.romance": {
+    "message": "Romantikk"
+  },
+  "actor_preset.workSession": {
+    "message": "Arbeidsøkt"
+  },
+  "actor_applyPreset": {
+    "message": "Bruk"
+  },
+  "actor_resetChat": {
+    "message": "Tilbakestill for denne chatten"
+  },
+  "actor_saveAsCharacterDefault": {
+    "message": "Lagre som standard for {{name}}"
+  },
+  "actor_applyCharacterDefault": {
+    "message": "Bruk standard for {{name}}"
+  },
+  "actor_notesGmOnly": {
+    "message": "Kun GM: ikke send notater til modellen"
+  },
+  "actor_templateModeLabel": {
+    "message": "Interaksjon med scenemaler"
+  },
+  "actor_templateModeHelp": {
+    "message": "Styrer hvordan Actor samhandler med aktive scenemaler. Slå sammen beholder begge; Overstyr lar Actor erstatte overlappende felt; Ignorer hopper over Actor når maler er aktive."
+  },
+  "actor_templateMode.merge": {
+    "message": "Slå sammen med maler"
+  },
+  "actor_templateMode.override": {
+    "message": "Overstyr maler"
+  },
+  "actor_templateMode.ignore": {
+    "message": "Ignorer når maler er aktive"
+  },
+  "actor_bladeAspectsTitle": {
+    "message": "Aspekter"
+  },
+  "actor_bladeNotesTitle": {
+    "message": "Scenenotater"
+  },
+  "actor_bladePlacementTitle": {
+    "message": "Plassering og maler"
+  },
+  "actor_bladeTokensTitle": {
+    "message": "Tokens og forhåndsvisning"
+  },
+  "actor_summaryAspectsEmpty": {
+    "message": "Ingen aspekter konfigurert ennå."
+  },
+  "actor_summaryAspectsCount": {
+    "message": "{{count}} aspekter konfigurert."
+  },
+  "actor_summaryNotesEmpty": {
+    "message": "Ingen scenenotater ennå."
+  },
+  "actor_summaryNotes": {
+    "message": "{{chars}} tegn{{gmSuffix}}."
+  },
+  "actor_summaryNotesGmOnly": {
+    "message": " · Kun GM"
+  },
+  "actor_summaryPlacementBefore": {
+    "message": "Før hovedprompten/historien."
+  },
+  "actor_summaryPlacementAfter": {
+    "message": "Etter hovedprompten/historien."
+  },
+  "actor_summaryPlacementDepth": {
+    "message": "Dybde {{depth}} · Rolle: {{role}}."
+  },
+  "actor_summaryTokensEmpty": {
+    "message": "Ingen tokens definert ennå; sett aspektverdier."
+  },
+  "actor_summaryTokensCount": {
+    "message": "{{tokens}} tokens · ~{{estimate}} tokens i prompten."
+  },
+  "actor_sceneTemplateActive": {
+    "message": "Scenemal aktiv: Actor respekterer innstillingene for malinteraksjon."
+  },
+  "composer_compareFeatureToggle": {
+    "message": "Aktiver sammenligningsmodus"
+  },
+  "composer_compareFeatureToggleHint": {
+    "message": "Lås opp eksperimentelle sammenligningsfunksjoner for flere modeller."
+  },
+  "composer_compareDisabled": {
+    "message": "Sammenligningsmodus er deaktivert i innstillingene."
+  },
+  "composer_compareChosenHint": {
+    "message": "Fortsett med det valgte svaret eller sammenlign igjen."
+  },
+  "composer_compareChosenLabel": {
+    "message": "Valgt"
+  },
+  "composer_compareLatency": {
+    "message": "Latens"
+  },
+  "composer_compareHistoryPrefix": {
+    "message": "Sammenlign: {{title}}"
+  },
+  "composer_compareHistorySuffix": {
+    "message": "(fra sammenligning)"
+  },
+  "composer_compareClusterLabel": {
+    "message": "Svar fra flere modeller"
+  },
+  "composer_compareClusterCount": {
+    "message": "{{count}} modeller"
+  },
+  "composer_compareBulkSplitHint": {
+    "message": "Valgte modeller: {{count}}"
+  },
+  "composer_compareBulkSplit": {
+    "message": "Åpne hvert valgt svar som egen chat"
+  },
+  "composer_compareThreadLabel": {
+    "message": "Tråd per modell"
+  },
+  "composer_compareThreadYou": {
+    "message": "Du"
+  },
+  "composer_compareOpenFullChat": {
+    "message": "Åpne som full chat"
+  },
+  "composer_compareSpawnedChat": {
+    "message": "Åpne delt chat"
+  },
+  "composer_compareCanonicalOn": {
+    "message": "Kanonisk"
+  },
+  "composer_compareCanonicalOff": {
+    "message": "Fest som kanonisk"
+  },
+  "composer_compareCanonicalLabel": {
+    "message": "Kanonisk svar"
+  },
+  "composer_compareFilterLabel": {
+    "message": "Filtrer modeller"
+  },
+  "composer_compareFilterClear": {
+    "message": "Vis alle"
+  },
+  "composer_compareFilterCount": {
+    "message": "Viser {{visible}} / {{total}}"
+  },
+  "composer_compareTokens": {
+    "message": "Antall tokens: {{count}}"
+  },
+  "feedback_prompt": {
+    "message": "Var dette nyttig?"
+  },
+  "feedback_thumbsUp": {
+    "message": "Nyttig"
+  },
+  "feedback_thumbsDown": {
+    "message": "Ikke nyttig"
+  },
+  "feedback_more": {
+    "message": "Mer tilbakemelding"
+  },
+  "feedback_thanks": {
+    "message": "Takk for tilbakemeldingen"
+  },
+  "feedback_disabled": {
+    "message": "Tilbakemelding er tilgjengelig etter at svaret er ferdig."
+  },
+  "feedback_unavailable": {
+    "message": "Tilbakemelding er ikke tilgjengelig for denne meldingen."
+  },
+  "feedback_modalTitle": {
+    "message": "Tilbakemelding"
+  },
+  "feedback_modalRatingLabel": {
+    "message": "Hvordan vil du vurdere dette svaret?"
+  },
+  "feedback_modalIssuesLabel": {
+    "message": "Hva var problemet? (velg alle som gjelder)"
+  },
+  "feedback_modalNotesLabel": {
+    "message": "Ytterligere kommentarer (valgfritt)"
+  },
+  "feedback_modalSubmit": {
+    "message": "Send tilbakemelding"
+  },
+  "feedback_errorTitle": {
+    "message": "Tilbakemelding mislyktes"
+  },
+  "feedback_errorBody": {
+    "message": "Kunne ikke sende tilbakemelding."
+  },
+  "feedback_errorSource": {
+    "message": "Kunne ikke sende kildetilbakemelding."
+  },
+  "feedback_issues_incorrect": {
+    "message": "Feil informasjon"
+  },
+  "feedback_issues_notRelevant": {
+    "message": "Ikke relevant for spørsmålet mitt"
+  },
+  "feedback_issues_missingDetails": {
+    "message": "Mangler viktige detaljer"
+  },
+  "feedback_issues_badSources": {
+    "message": "Kildene var lite hjelpsomme"
+  },
+  "feedback_issues_tooVerbose": {
+    "message": "For detaljert"
+  },
+  "feedback_issues_tooBrief": {
+    "message": "For kort"
+  },
+  "feedback_issues_other": {
+    "message": "Annet"
+  },
+  "feedback_sourceHelpful": {
+    "message": "Hjelpsom kilde"
+  },
+  "feedback_sourceUnhelpful": {
+    "message": "Ikke hjelpsom kilde"
+  },
+  "actor_uploadedFiles": {
+    "message": "Opplastede filer ({{count}})"
+  },
+  "actor_fileRetrieval": {
+    "message": "Filhenting"
+  },
+  "actor_fileStatusProcessed": {
+    "message": "Behandlet"
+  },
+  "actor_fileStatusProcessing": {
+    "message": "Behandler..."
+  },
+  "documentGenerator_title": {
+    "message": "Dokumentgenerator"
+  },
+  "documentGenerator_unavailable": {
+    "message": "Dokumentgenerering er ikke tilgjengelig på denne serveren."
+  },
+  "documentGenerator_noConversation": {
+    "message": "Start en servertilkoblet chat for å generere dokumenter."
+  },
+  "documentGenerator_source": {
+    "message": "Kilde"
+  },
+  "documentGenerator_sourceId": {
+    "message": "Samtale {{id}}"
+  },
+  "documentGenerator_sourceMissing": {
+    "message": "Ingen aktiv samtale ennå."
+  },
+  "documentGenerator_sourceMessageId": {
+    "message": "Melding {{id}}"
+  },
+  "documentGenerator_documentType": {
+    "message": "Dokumenttype"
+  },
+  "documentGenerator_model": {
+    "message": "Modell"
+  },
+  "documentGenerator_modelPlaceholder": {
+    "message": "Modell-ID"
+  },
+  "documentGenerator_providerPlaceholder": {
+    "message": "Leverandørnavn"
+  },
+  "documentGenerator_providerLabel": {
+    "message": "Leverandør: {{provider}}"
+  },
+  "documentGenerator_specificMessage": {
+    "message": "Fokuser på en bestemt melding"
+  },
+  "documentGenerator_specificMessagePlaceholder": {
+    "message": "Valgfritt: lim inn et meldingsutdrag for å fokusere."
+  },
+  "documentGenerator_customPrompt": {
+    "message": "Tilpasset prompt"
+  },
+  "documentGenerator_customPromptPlaceholder": {
+    "message": "Valgfrie instruksjoner for det genererte dokumentet."
+  },
+  "documentGenerator_asyncGeneration": {
+    "message": "Generer asynkront"
+  },
+  "documentGenerator_promptPresetTitle": {
+    "message": "Promptforhåndsinnstilling"
+  },
+  "documentGenerator_promptPresetHint": {
+    "message": "Tilpass system-/brukerpromptene som brukes for denne dokumenttypen."
+  },
+  "documentGenerator_promptReload": {
+    "message": "Last inn på nytt fra server"
+  },
+  "documentGenerator_systemPrompt": {
+    "message": "Systemprompt"
+  },
+  "documentGenerator_userPrompt": {
+    "message": "Brukerprompt"
+  },
+  "documentGenerator_temperature": {
+    "message": "Temperatur"
+  },
+  "documentGenerator_maxTokens": {
+    "message": "Maks tokens"
+  },
+  "documentGenerator_jobQueued": {
+    "message": "Dokumentgenerering satt i kø."
+  },
+  "documentGenerator_generated": {
+    "message": "Dokument generert."
+  },
+  "documentGenerator_deleteTitle": {
+    "message": "Slett dokument?"
+  },
+  "documentGenerator_deleteBody": {
+    "message": "Dette vil permanent fjerne det genererte dokumentet."
+  },
+  "documentGenerator_jobCancelled": {
+    "message": "Jobb avbrutt."
+  },
+  "documentGenerator_promptSaved": {
+    "message": "Promptforhåndsinnstilling lagret."
+  },
+  "documentGenerator_documentsTitle": {
+    "message": "Genererte dokumenter"
+  },
+  "documentGenerator_loading": {
+    "message": "Laster…"
+  },
+  "documentGenerator_noDocuments": {
+    "message": "Ingen dokumenter ennå."
+  },
+  "documentGenerator_jobsTitle": {
+    "message": "Genereringsjobber"
+  },
+  "documentGenerator_progress": {
+    "message": "{{percent}}% fullført"
+  },
+  "documentGenerator_noContent": {
+    "message": "Ingen innhold tilgjengelig."
+  },
+  "documentGenerator_errors_missingModel": {
+    "message": "Velg en modell og leverandør først."
+  },
+  "documentGenerator_types_summary": {
+    "message": "Sammendrag"
+  },
+  "documentGenerator_types_timeline": {
+    "message": "Tidslinje"
+  },
+  "documentGenerator_types_briefing": {
+    "message": "Orientering"
+  },
+  "documentGenerator_types_study_guide": {
+    "message": "Studieguide"
+  },
+  "documentGenerator_types_q_and_a": {
+    "message": "Spørsmål og svar"
+  },
+  "documentGenerator_types_meeting_notes": {
+    "message": "Møtenotater"
+  },
+  "composer_contextTabsEmpty": {
+    "message": "Ingen faner valgt."
+  },
+  "composer_contextFilesTitle": {
+    "message": "Filer i konteksten"
+  },
+  "composer_contextFilesEmpty": {
+    "message": "Ingen filer lagt ved."
+  },
+  "composer_addFile": {
+    "message": "Legg til fil"
+  },
+  "composer_contextTabsAvailable": {
+    "message": "Åpne faner"
+  },
+  "composer_noTabsFound": {
+    "message": "Fant ingen egnede åpne faner."
+  },
+  "errors_loadLocalHistoryPrefix": {
+    "message": "Kunne ikke laste lokal chathistorikk"
+  },
+  "errors_loadLocalHistoryDefault": {
+    "message": "Noe gikk galt under lasting av lokal chathistorikk."
+  },
+  "ttsClips_title": {
+    "message": "TTS clips"
+  },
+  "ttsClips_empty": {
+    "message": "Generate chat audio to save it here."
+  },
+  "ttsClips_clearAll": {
+    "message": "Clear all"
+  },
+  "ttsClips_clearConfirm": {
+    "message": "Clear all saved TTS clips?"
+  },
+  "ttsClips_deleteConfirm": {
+    "message": "Delete this clip?"
+  },
+  "ttsClips_download": {
+    "message": "Download"
+  },
+  "ttsClips_downloadAll": {
+    "message": "Download all segments"
+  },
+  "ttsClips_segmentsLabel": {
+    "message": "{{count}} segments"
+  },
+  "composer_modelSearchPlaceholder": {
+    "message": "Search models"
+  },
+  "composer_noModelsMatch": {
+    "message": "No models match your search."
+  },
+  "composer_favorites": {
+    "message": "Favorites"
+  },
+  "composer_favoriteAdd": {
+    "message": "Add to favorites"
+  },
+  "composer_favoriteRemove": {
+    "message": "Remove from favorites"
+  },
+  "composer_sort_favorites": {
+    "message": "Favorites"
+  },
+  "composer_sort_az": {
+    "message": "A-Z"
+  },
+  "composer_sort_provider": {
+    "message": "Provider"
+  },
+  "composer_sort_localFirst": {
+    "message": "Local-first"
+  },
+  "composer_mcpAriaUnavailable": {
+    "message": "MCP tools unavailable"
+  },
+  "composer_mcpAriaLabel": {
+    "message": "MCP-verktøy: {{choice}}, {{summary}}"
+  },
+  "composer_mcpConfigure": {
+    "message": "Konfigurer verktøy"
+  },
+  "composer_mcpSettingsTitle": {
+    "message": "Innstillinger for MCP-verktøy"
+  },
+  "acp_workspace_selectSession": {
+    "message": "Velg en økt for å åpne terminalen for arbeidsområdet."
+  },
+  "acp_workspace_unavailable": {
+    "message": "Terminalen for arbeidsområdet er ikke tilgjengelig for denne økten."
+  },
+  "acp_workspace_title": {
+    "message": "Terminal for arbeidsområdet"
+  }
+}

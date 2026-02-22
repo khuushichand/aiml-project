@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 import {
@@ -61,7 +62,7 @@ test.describe('Onboarding wizard', () => {
 
   test('guides first-run config and tests connection', async () => {
     const extPath = TEST_EXT_PATH
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
     try {
       await page.goto(`${optionsUrl}#/onboarding-test`)
       console.log('T1: navigated to /onboarding-test')
@@ -118,7 +119,7 @@ test.describe('Onboarding wizard', () => {
 
   test('does not auto-advance when URL becomes reachable', async () => {
     const extPath = TEST_EXT_PATH
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
     try {
       await page.goto(`${optionsUrl}#/onboarding-test`)
       await prepareFirstRun(page, { enableBypass: true })
@@ -150,7 +151,7 @@ test.describe('Onboarding wizard', () => {
 
   test('explains knowledge search health in plain language', async () => {
     const extPath = TEST_EXT_PATH
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
     try {
       await page.goto(`${optionsUrl}#/onboarding-test`)
       console.log('T3: navigated to /onboarding-test')
@@ -233,7 +234,7 @@ test.describe('Onboarding wizard', () => {
 
   test('can enter demo mode via onboarding path', async () => {
     const extPath = TEST_EXT_PATH
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
     try {
       await page.goto(`${optionsUrl}#/onboarding-test`)
       await prepareFirstRun(page, { enableBypass: false })

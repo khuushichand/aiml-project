@@ -2,13 +2,14 @@ import logoImage from "@/assets/icon.png"
 import { useMessage } from "@/hooks/useMessage"
 import { Link } from "react-router-dom"
 import { Tooltip } from "antd"
-import { CogIcon, ExternalLink, Menu, Pencil, Volume2 } from "lucide-react"
+import { Bot, CogIcon, ExternalLink, Menu, Pencil, Volume2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import React from "react"
 import { StatusDot } from "./StatusDot"
 import { browser } from "wxt/browser"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { TtsClipsDrawer } from "./TtsClipsDrawer"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 
 type SidepanelHeaderSimpleProps = {
   sidebarOpen?: boolean
@@ -35,6 +36,7 @@ export const SidepanelHeaderSimple = ({
   const { temporaryChat } = useMessage()
   const { t } = useTranslation(["sidepanel", "common", "option"])
   const notification = useAntdNotification()
+  const { capabilities } = useServerCapabilities()
   const [localSidebarOpen, setLocalSidebarOpen] = React.useState(false)
   const [ttsClipsOpen, setTtsClipsOpen] = React.useState(false)
   const [isEditingTitle, setIsEditingTitle] = React.useState(false)
@@ -228,6 +230,19 @@ export const SidepanelHeaderSimple = ({
             <Volume2 className="size-4" aria-hidden="true" />
           </button>
         </Tooltip>
+        {capabilities?.hasPersona ? (
+          <Tooltip title={t("sidepanel:persona.openPersona", "Open Persona")}>
+            <Link
+              to="/persona"
+              aria-label={t("sidepanel:persona.openPersona", "Open Persona") as string}
+              className="rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text"
+              title={t("sidepanel:persona.openPersona", "Open Persona")}
+              data-testid="chat-open-persona"
+            >
+              <Bot className="size-4" aria-hidden="true" />
+            </Link>
+          </Tooltip>
+        ) : null}
         <Tooltip title={t("sidepanel:header.openFullScreen", "Open Full-Screen")}>
           <button
             type="button"

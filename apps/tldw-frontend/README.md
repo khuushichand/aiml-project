@@ -2,7 +2,36 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-1) Configure environment variables (copy `.env.local.example` to `.env.local` and edit as needed):
+### Prerequisites
+
+Recommended package manager: Bun.
+
+Install Bun (if needed):
+
+```bash
+# macOS/Linux
+curl -fsSL https://bun.sh/install | bash
+
+# Windows (PowerShell)
+powershell -c "irm bun.sh/install.ps1 | iex"
+
+# Verify
+bun --version
+```
+
+You can also use npm/yarn/pnpm if you prefer Node package managers.
+
+1) Install dependencies:
+
+```bash
+cd apps/tldw-frontend
+bun install
+
+# npm fallback:
+# npm install
+```
+
+2) Configure environment variables (copy `.env.local.example` to `.env.local` and edit as needed):
 
 ```
 cp .env.local.example .env.local
@@ -17,12 +46,13 @@ Key variables:
 - `NEXT_PUBLIC_API_BEARER`: Optional. Bearer token for chat module when server sets `API_BEARER`.
 - `NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD`: Optional. Runs row-count threshold for preferring server-side CSV export (default: `2000`).
 
-2) Run the development server (use port 8080 to match server CORS defaults):
+3) Run the development server (use port 8080 to match server CORS defaults):
 
 ```bash
-npm run dev -- -p 8080
-# or
-yarn dev -p 8080
+bun run dev -- -p 8080
+
+# npm fallback:
+# npm run dev -- -p 8080
 ```
 
 Open [http://localhost:8080](http://localhost:8080) with your browser.
@@ -49,7 +79,10 @@ cd apps/tldw-frontend
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8000 \
 NEXT_PUBLIC_API_VERSION=v1 \
 NEXT_PUBLIC_X_API_KEY=your_api_key \
-npm run smoke
+bun run smoke
+
+# npm fallback:
+# npm run smoke
 ```
 
 The script exercises providers, chat, RAG, audio voices, and connectors (optional). A 404 on connectors is expected if that module isn’t enabled on your server.
@@ -67,26 +100,29 @@ You can inspect the current user and roles via the `/profile` page:
 
 ## Linting, Tests & Build
 
-From `apps/tldw-frontend/` (npm scripts live in `apps/tldw-frontend/package.json`):
+From `apps/tldw-frontend/` (scripts live in `apps/tldw-frontend/package.json`; use `bun run <script>` or `npm run <script>`):
 
-- `npm run lint` – run ESLint against the codebase.
-- `npm run test` – run Vitest unit tests (for example, auth error mapping).
-- `npm run test:integration` – start the backend (optional) and run frontend tests + smoke checks (runs `Helper_Scripts/run-frontend-integration.sh` for flags and env).
-- `npm run build` – Next.js production build.
+- `lint` – run ESLint against the codebase.
+- `test` – run Vitest unit tests (for example, auth error mapping).
+- `test:integration` – start the backend (optional) and run frontend tests + smoke checks (runs `Helper_Scripts/run-frontend-integration.sh` for flags and env).
+- `build` – Next.js production build.
 
 ## Integration Test Harness
 
 Run the full frontend + backend integration flow (from `apps/tldw-frontend/`):
 
 ```bash
-npm run test:integration
+bun run test:integration
+
+# npm fallback:
+# npm run test:integration
 ```
 
 Common options:
 
-- `npm run test:integration -- --backend-docker` (start backend via Docker Compose)
-- `npm run test:integration -- --skip-backend` (assume backend already running)
-- `npm run test:integration -- --no-backend-tests` (skip `pytest -m integration`)
+- `bun run test:integration -- --backend-docker` (start backend via Docker Compose)
+- `bun run test:integration -- --skip-backend` (assume backend already running)
+- `bun run test:integration -- --no-backend-tests` (skip `pytest -m integration`)
 
 Useful env overrides:
 
@@ -95,6 +131,33 @@ Useful env overrides:
 - `TLDW_DOCKER_COMPOSE=...` (custom compose file)
 
 These commands should succeed before shipping changes to the frontend.
+
+## UX Release Gates
+
+Frontend PRs should pass these Playwright smoke gates:
+
+- `npm run e2e:smoke:stage5`
+- `npm run e2e:smoke:interaction`
+- `npm run e2e:smoke:audio`
+- `npx playwright test e2e/smoke/all-pages.spec.ts --reporter=line`
+
+Interaction gate coverage (`e2e:smoke:interaction`) includes:
+
+- Stage 1 defect closures (`INT-1`, `INT-5`): chat template leak guard and home theme-toggle discoverability.
+- Stage 2 positive regressions (`INT-2`, `INT-3`, `INT-4`, `INT-6`): deterministic search typing/no-results behavior, keyboard-only command palette execution, and settings navigation active-state checks.
+
+Audio gate coverage (`e2e:smoke:audio`) includes:
+
+- Route identity + runtime budget checks for `/tts`, `/stt`, `/speech`, and `/audio` aliasing.
+- Template leak guardrails for audio surfaces (`{{...}}` never user-visible).
+- Timeout-to-retry recovery checks for ElevenLabs metadata (`/tts`, `/speech`) and transcription-model loading (`/stt`).
+
+Baseline pass criteria for UX gate acceptance:
+
+- Zero uncaught page errors on gated routes.
+- Zero unresolved `{{...}}` template placeholders on audited interaction surfaces.
+- No unexpected console/request failures beyond the scoped allowlist.
+- Stage 5 + Stage 6 + Stage 7 smoke suites pass with route/action-level assertion diagnostics.
 
 ## Learn More
 

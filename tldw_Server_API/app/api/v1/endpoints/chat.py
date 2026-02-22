@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import math
 import os
@@ -70,6 +73,7 @@ from starlette.responses import JSONResponse
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
+    get_chacha_db_for_user_id,
 )
 from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
     ChatAnalyticsBucket,
@@ -96,6 +100,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
     ChatCompletionSystemMessageParam,
     RagContext,
+    get_api_keys,  # noqa: F401 - legacy tests patch this endpoint symbol
 )
 from tldw_Server_API.app.api.v1.schemas.chat_validators import (
     validate_character_id,
@@ -112,6 +117,17 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     map_sender_to_role,
 )
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_embeddings import (
+    score_exemplars_with_embeddings,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector import (
+    PersonaExemplarSelectorConfig,
+    select_character_exemplars,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_telemetry import (
+    compute_persona_exemplar_telemetry,
+)
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.Chat.chat_exceptions import (
     ChatDatabaseError,
     ChatErrorCode,
@@ -136,6 +152,13 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     queue_is_active,
     resolve_provider_and_model,
     resolve_provider_api_key,
+    is_model_known_for_provider,
+)
+
+# Backward-compatible re-exports for legacy tests patching these symbols on the endpoint module.
+from tldw_Server_API.app.core.Chat.prompt_template_manager import (  # noqa: F401
+    apply_template_to_string,
+    load_template,
 )
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
@@ -182,15 +205,26 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
 from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled as _shared_env_flag_enabled,
+)
+from tldw_Server_API.app.core.testing import (
+    is_test_mode as _shared_is_test_mode,
+)
+from tldw_Server_API.app.core.testing import (
+    is_truthy as _shared_is_truthy,
+)
 from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
 
 from . import chat_dictionaries, chat_documents
@@ -213,6 +247,7 @@ _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     UnicodeDecodeError,
     json.JSONDecodeError,
+    ChatAPIError,
     HTTPException,
     ChatModuleException,
     ChatDatabaseError,
@@ -237,14 +272,33 @@ conversations_alias_router = APIRouter()
 router.include_router(chat_dictionaries.router)
 router.include_router(chat_documents.router)
 
+# Backward-compatible endpoint re-exports for unit tests and legacy imports
+# that still reference dictionary handlers from this module.
+create_chat_dictionary = chat_dictionaries.create_chat_dictionary
+list_chat_dictionaries = chat_dictionaries.list_chat_dictionaries
+get_chat_dictionary = chat_dictionaries.get_chat_dictionary
+update_chat_dictionary = chat_dictionaries.update_chat_dictionary
+delete_chat_dictionary = chat_dictionaries.delete_chat_dictionary
+add_dictionary_entry = chat_dictionaries.add_dictionary_entry
+list_dictionary_entries = chat_dictionaries.list_dictionary_entries
+update_dictionary_entry = chat_dictionaries.update_dictionary_entry
+delete_dictionary_entry = chat_dictionaries.delete_dictionary_entry
+bulk_dictionary_entry_operations = chat_dictionaries.bulk_dictionary_entry_operations
+reorder_dictionary_entries = chat_dictionaries.reorder_dictionary_entries
+process_text_with_dictionaries = chat_dictionaries.process_text_with_dictionaries
+import_dictionary = chat_dictionaries.import_dictionary
+export_dictionary = chat_dictionaries.export_dictionary
+export_dictionary_json = chat_dictionaries.export_dictionary_json
+import_dictionary_json = chat_dictionaries.import_dictionary_json
+list_dictionary_activity = chat_dictionaries.list_dictionary_activity
+list_dictionary_versions = chat_dictionaries.list_dictionary_versions
+get_dictionary_version = chat_dictionaries.get_dictionary_version
+revert_dictionary_version = chat_dictionaries.revert_dictionary_version
+get_dictionary_statistics = chat_dictionaries.get_dictionary_statistics
+
 def _chat_connectors_enabled() -> bool:
     """Feature flag for chat connectors v2 (email/issue/wiki exports)."""
-    return str(os.getenv("CHAT_CONNECTORS_V2_ENABLED", "false")).strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    return _shared_env_flag_enabled("CHAT_CONNECTORS_V2_ENABLED")
 
 # Load configuration values from config
 import contextlib
@@ -278,6 +332,75 @@ def _cfg_float(key: str, fallback: float) -> float:
     except (TypeError, ValueError):
         return fallback
 
+
+def _resolve_persona_default_budget_tokens(chat_config: dict[str, Any]) -> int:
+    """Resolve default persona exemplar budget from env/config with safe bounds."""
+    fallback = 600
+    max_budget = 20_000
+
+    env_raw = os.getenv("PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS")
+    raw_value: Any = env_raw if isinstance(env_raw, str) and env_raw.strip() else chat_config.get(
+        "persona_exemplar_default_budget_tokens"
+    )
+
+    if raw_value is None:
+        return fallback
+    try:
+        parsed = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+    if parsed < 1:
+        return 1
+    if parsed > max_budget:
+        return max_budget
+    return parsed
+
+
+def _resolve_persona_ioo_budget_auto_adjust_enabled(chat_config: dict[str, Any]) -> bool:
+    """Resolve whether sustained IOO alerts should auto-adjust persona budget."""
+    env_raw = os.getenv("PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED")
+    if isinstance(env_raw, str) and env_raw.strip():
+        return _shared_is_truthy(env_raw)
+
+    cfg_raw = chat_config.get("persona_ioo_budget_auto_adjust_enabled")
+    if cfg_raw is None:
+        return True
+    return _shared_is_truthy(cfg_raw)
+
+
+def _resolve_persona_ioo_budget_auto_reduction_factor(chat_config: dict[str, Any]) -> float:
+    """Resolve multiplier used when sustained IOO alerts trigger budget adjustment."""
+    fallback = 0.75
+    env_raw = os.getenv("PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR")
+    raw_value: Any = env_raw if isinstance(env_raw, str) and env_raw.strip() else chat_config.get(
+        "persona_ioo_budget_auto_reduction_factor"
+    )
+    if raw_value is None:
+        return fallback
+    try:
+        parsed = float(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return fallback
+    return max(0.10, min(0.95, parsed))
+
+
+def _resolve_persona_ioo_budget_auto_min_tokens(chat_config: dict[str, Any]) -> int:
+    """Resolve lower bound for persona budget after auto-adjustment."""
+    fallback = 240
+    env_raw = os.getenv("PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS")
+    raw_value: Any = env_raw if isinstance(env_raw, str) and env_raw.strip() else chat_config.get(
+        "persona_ioo_budget_auto_min_tokens"
+    )
+    if raw_value is None:
+        return fallback
+    try:
+        parsed = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return fallback
+    return max(1, min(20_000, parsed))
+
+
 RECENCY_HALF_LIFE_DAYS: float = _cfg_float("half_life_days", 14.0)
 CHAT_BM25_WEIGHT: float = _cfg_float("w_bm25", 0.65)
 CHAT_RECENCY_WEIGHT: float = _cfg_float("w_recency", 0.35)
@@ -289,10 +412,10 @@ TREE_MESSAGE_CAP_MAX: int = int(_chat_config.get("tree_message_cap_max", 500))
 def _cfg_bool_cmds(env_name: str, cfg_key: str, fallback: bool) -> bool:
     v = os.getenv(env_name)
     if isinstance(v, str) and v.strip():
-        return v.strip().lower() in {"1", "true", "yes", "on"}
+        return _shared_is_truthy(v)
     try:
         raw = _chat_commands_config.get(cfg_key) if _chat_commands_config else None
-        return str(raw).strip().lower() in {"1", "true", "yes", "on"} if raw is not None else fallback
+        return _shared_is_truthy(raw) if raw is not None else fallback
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         return fallback
 
@@ -300,14 +423,14 @@ def _cfg_bool_cmds(env_name: str, cfg_key: str, fallback: bool) -> bool:
 _env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
 try:
     QUEUED_EXECUTION: bool = (
-        (_env_queued.strip().lower() in {"1", "true", "yes", "on"}) if _env_queued is not None
-        else _chat_config.get('queued_execution', 'False').lower() == 'true'
+        (_shared_is_truthy(_env_queued)) if _env_queued is not None
+        else _shared_is_truthy(_chat_config.get("queued_execution", "False"))
     )
 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
     QUEUED_EXECUTION = False
 
 def _to_bool(val: str) -> bool:
-    return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _shared_is_truthy(val)
 
 
 def _resolve_base64_image_limit_enforcement() -> bool:
@@ -361,6 +484,24 @@ _recent_calls_by_user: dict[str, deque] = defaultdict(lambda: deque(maxlen=16))
 _active_request_counts: dict[str, int] = defaultdict(int)
 _active_request_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakKeyDictionary()
 _active_request_guard = threading.Lock()
+
+_PERSONA_EXEMPLAR_DEFAULT_BUDGET = _resolve_persona_default_budget_tokens(_chat_config)
+_PERSONA_EXEMPLAR_MAX_CHARS_PER_EXEMPLAR = 280
+_PERSONA_IOO_ALERT_THRESHOLD = 0.30
+_PERSONA_IOR_LOW_ALERT_THRESHOLD = 0.10
+_PERSONA_IOR_HIGH_ALERT_THRESHOLD = 0.60
+_PERSONA_IOO_SUSTAIN_WINDOW = 8
+_PERSONA_IOO_SUSTAIN_MIN_HITS = 3
+_PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED = _resolve_persona_ioo_budget_auto_adjust_enabled(_chat_config)
+_PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR = _resolve_persona_ioo_budget_auto_reduction_factor(_chat_config)
+_PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS = _resolve_persona_ioo_budget_auto_min_tokens(_chat_config)
+_PERSONA_ID_ALIAS_DEPRECATION_START_DATE = date(2026, 2, 9)
+_PERSONA_ID_ALIAS_SUNSET_DATE = date(2026, 6, 30)
+_PERSONA_ID_ALIAS_REMOVAL_DATE = date(2026, 7, 1)
+_persona_ioo_windows: dict[str, deque[int]] = defaultdict(
+    lambda: deque(maxlen=_PERSONA_IOO_SUSTAIN_WINDOW)
+)
+_persona_alert_guard = threading.Lock()
 
 
 @dataclass
@@ -452,6 +593,275 @@ def _schedule_audit_background_task(awaitable: Any, *, task_name: str) -> asynci
     return task
 
 
+def _extract_text_from_message_content(content: Any) -> str:
+    """Extract text content from OpenAI-style message payload content."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    text_val = part.get("text")
+                    if isinstance(text_val, str) and text_val.strip():
+                        text_parts.append(text_val.strip())
+                continue
+            part_type = getattr(part, "type", None)
+            if part_type == "text":
+                text_val = getattr(part, "text", None)
+                if isinstance(text_val, str) and text_val.strip():
+                    text_parts.append(text_val.strip())
+        return "\n".join(text_parts).strip()
+    return ""
+
+
+def _extract_latest_user_turn_text(messages: list[Any]) -> str:
+    """Return the most recent user text message from request payload."""
+    for msg in reversed(messages or []):
+        role = getattr(msg, "role", None)
+        if role is None and isinstance(msg, dict):
+            role = msg.get("role")
+        if role != "user":
+            continue
+        content = getattr(msg, "content", None) if not isinstance(msg, dict) else msg.get("content")
+        text = _extract_text_from_message_content(content)
+        if text:
+            return text
+    return ""
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    """Normalize mixed payload list/string values into list[str]."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    normalized = str(value).strip()
+    return [normalized] if normalized else []
+
+
+def _format_persona_exemplar_guidance(
+    selected_exemplars: list[dict[str, Any]],
+    *,
+    max_chars_per_exemplar: int = _PERSONA_EXEMPLAR_MAX_CHARS_PER_EXEMPLAR,
+) -> str:
+    """Build persona exemplar instructions to append to the system layer."""
+    if not selected_exemplars:
+        return ""
+
+    lines = [
+        "[Persona Exemplars]",
+        "Use the following exemplars as style anchors for tone and cadence.",
+        "Do not copy verbatim. Synthesize the style while following policy and system constraints.",
+    ]
+
+    for idx, exemplar in enumerate(selected_exemplars, start=1):
+        raw_text = re.sub(r"\s+", " ", str(exemplar.get("text") or "")).strip()
+        if not raw_text:
+            continue
+        if len(raw_text) > max_chars_per_exemplar:
+            raw_text = f"{raw_text[:max_chars_per_exemplar].rstrip()}..."
+
+        emotion = str(exemplar.get("emotion") or "other").strip() or "other"
+        scenario = str(exemplar.get("scenario") or "other").strip() or "other"
+        rhetorical = ", ".join(_normalize_string_list(exemplar.get("rhetorical"))) or "unspecified"
+        lines.append(
+            f"{idx}. [{scenario} | {emotion} | {rhetorical}] {raw_text}"
+        )
+
+    return "\n".join(lines).strip()
+
+
+def _resolve_persona_strategy(raw_strategy: str | None) -> str:
+    """Normalize persona exemplar strategy from request."""
+    normalized = (raw_strategy or "default").strip().lower()
+    allowed = {"off", "default", "hybrid", "embeddings"}
+    if normalized not in allowed:
+        return "default"
+    return normalized
+
+
+def _persona_alias_today() -> date:
+    """Return current UTC date for persona alias policy checks."""
+    return datetime.now(timezone.utc).date()
+
+
+def _build_persona_alias_deprecation_headers(alias_used: bool) -> dict[str, str]:
+    """Build response headers for deprecated `persona_id` alias usage."""
+    if not alias_used:
+        return {}
+    return {
+        "X-TLDW-Persona-ID-Alias-Deprecated": "true",
+        "X-TLDW-Persona-ID-Alias-Sunset-Date": _PERSONA_ID_ALIAS_REMOVAL_DATE.isoformat(),
+        "X-TLDW-Persona-ID-Alias-Replacement": "character_id",
+    }
+
+
+def _resolve_character_id_from_persona_alias(request_data: ChatCompletionRequest) -> bool:
+    """Best-effort compatibility resolver from legacy persona_id to character_id."""
+    character_id = str(getattr(request_data, "character_id", "") or "").strip()
+    if character_id:
+        return False
+
+    raw_persona_id = getattr(request_data, "persona_id", None)
+    if raw_persona_id is None:
+        return False
+
+    persona_id = str(raw_persona_id).strip()
+    if not persona_id:
+        return False
+
+    if _persona_alias_today() >= _PERSONA_ID_ALIAS_REMOVAL_DATE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"persona_id alias was removed on {_PERSONA_ID_ALIAS_REMOVAL_DATE.isoformat()}. "
+                "Use character_id explicitly."
+            ),
+        )
+
+    if not persona_id.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="persona_id alias could not be resolved to character_id. Provide character_id explicitly.",
+        )
+
+    request_data.character_id = persona_id
+    return True
+
+
+def _has_sustained_persona_ioo_alerts(user_id: str | None, character_id: int | None) -> bool:
+    """Return True when the per-user/character IOO window indicates sustained over-copying risk."""
+    if not user_id or character_id is None:
+        return False
+    window_key = f"{str(user_id)}:{character_id}"
+    with _persona_alert_guard:
+        window = _persona_ioo_windows.get(window_key)
+        if not window:
+            return False
+        if len(window) < _PERSONA_IOO_SUSTAIN_WINDOW:
+            return False
+        return sum(window) >= _PERSONA_IOO_SUSTAIN_MIN_HITS
+
+
+def _resolve_effective_persona_budget_tokens(
+    *,
+    budget_override: Any,
+    user_id: str | None,
+    character_id: int | None,
+) -> tuple[int, bool, str | None]:
+    """
+    Resolve effective persona exemplar budget with optional sustained-IOO auto-adjust.
+
+    Returns:
+        (effective_budget_tokens, adjusted, adjustment_reason)
+    """
+    if budget_override is not None:
+        parsed = int(budget_override)
+        return max(1, parsed), False, "request_override"
+
+    base_budget = int(_PERSONA_EXEMPLAR_DEFAULT_BUDGET)
+    if (
+        not _PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED
+        or not _has_sustained_persona_ioo_alerts(user_id, character_id)
+    ):
+        return max(1, base_budget), False, None
+
+    adjusted_budget = max(
+        _PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS,
+        int(math.floor(base_budget * _PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR)),
+    )
+    adjusted_budget = max(1, min(base_budget, adjusted_budget))
+    if adjusted_budget < base_budget:
+        return adjusted_budget, True, "ioo_sustained_alert_window"
+    return max(1, base_budget), False, None
+
+
+def _extract_assistant_text_from_completion_payload(payload: dict[str, Any]) -> str:
+    """Extract first assistant message text from a non-stream completion payload."""
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return ""
+    message_block = first_choice.get("message")
+    if not isinstance(message_block, dict):
+        return ""
+    return _extract_text_from_message_content(message_block.get("content"))
+
+
+def _record_persona_telemetry_hooks(
+    *,
+    telemetry: dict[str, Any],
+    provider: str,
+    model: str,
+    user_id: str | None,
+    character_id: int | None,
+    debug_id: str | None,
+) -> None:
+    """Emit metric/log hooks for persona telemetry diagnostics."""
+    labels = {
+        "provider": str(provider or "unknown"),
+        "model": str(model or "unknown"),
+        "user_id": str(user_id or "unknown"),
+        "character_id": str(character_id or "none"),
+    }
+
+    try:
+        ioo = float(telemetry.get("ioo", 0.0))
+    except (TypeError, ValueError):
+        ioo = 0.0
+    try:
+        ior = float(telemetry.get("ior", 0.0))
+    except (TypeError, ValueError):
+        ior = 0.0
+    try:
+        lcs = float(telemetry.get("lcs", 0.0))
+    except (TypeError, ValueError):
+        lcs = 0.0
+
+    log_histogram("chat_persona_ioo_ratio", max(0.0, min(1.0, ioo)), labels=labels)
+    log_histogram("chat_persona_ior_ratio", max(0.0, min(1.0, ior)), labels=labels)
+    log_histogram("chat_persona_lcs_ratio", max(0.0, min(1.0, lcs)), labels=labels)
+
+    safety_flags = telemetry.get("safety_flags")
+    if isinstance(safety_flags, list):
+        for flag in safety_flags:
+            log_counter(
+                "chat_persona_safety_flag_total",
+                labels={**labels, "flag": str(flag)},
+            )
+
+    if ioo >= _PERSONA_IOO_ALERT_THRESHOLD:
+        log_counter("chat_persona_ioo_threshold_exceeded_total", labels=labels)
+        logger.warning(
+            "Persona telemetry IOO threshold exceeded debug_id={} ioo={} user_id={} character_id={}",
+            debug_id or "n/a",
+            ioo,
+            labels["user_id"],
+            labels["character_id"],
+        )
+
+    if ior < _PERSONA_IOR_LOW_ALERT_THRESHOLD:
+        log_counter("chat_persona_ior_out_of_band_total", labels={**labels, "band": "low"})
+    elif ior > _PERSONA_IOR_HIGH_ALERT_THRESHOLD:
+        log_counter("chat_persona_ior_out_of_band_total", labels={**labels, "band": "high"})
+
+    window_key = f"{labels['user_id']}:{labels['character_id']}"
+    with _persona_alert_guard:
+        window = _persona_ioo_windows[window_key]
+        window.append(1 if ioo >= _PERSONA_IOO_ALERT_THRESHOLD else 0)
+        if (
+            len(window) == window.maxlen
+            and sum(window) >= _PERSONA_IOO_SUSTAIN_MIN_HITS
+        ):
+            log_counter("chat_persona_ioo_sustained_alert_total", labels=labels)
+
+
 async def _increment_active_request(user_id: str) -> int:
     """Increment the active request counter for a user and return the new count.
 
@@ -507,7 +917,7 @@ async def _maybe_rg_shadow_chat_decision(
         return
 
     try:
-        if str(os.getenv("RG_SHADOW_CHAT", "") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        if not _shared_is_truthy(os.getenv("RG_SHADOW_CHAT", "") or ""):
             return
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive: RG shadow must not affect control flow
         logger.debug("RG shadow: env flag check failed, skipping shadow comparison: {}", exc)
@@ -624,6 +1034,39 @@ async def _maybe_rg_shadow_chat_decision(
 async def list_chat_commands(
     current_user: User = Depends(get_request_user),
 ):
+    def _as_chat_command_from_spec(name: str, spec: Any) -> ChatCommandInfo:
+        return ChatCommandInfo(
+            name=name,
+            description=getattr(spec, "description", name),
+            required_permission=getattr(spec, "required_permission", None),
+            usage=getattr(spec, "usage", None),
+            args=list(getattr(spec, "args", []) or []),
+            requires_api_key=bool(getattr(spec, "requires_api_key", True)),
+            rate_limit=(
+                getattr(spec, "rate_limit", None)
+                or command_router.default_rate_limit_display()
+            ),
+            rbac_required=bool(
+                getattr(
+                    spec,
+                    "rbac_required",
+                    bool(getattr(spec, "required_permission", None)),
+                )
+            ),
+        )
+
+    def _as_chat_command_from_dict(entry: dict[str, Any]) -> ChatCommandInfo:
+        return ChatCommandInfo(
+            name=str(entry.get("name", "")),
+            description=str(entry.get("description", "")),
+            required_permission=entry.get("required_permission"),
+            usage=entry.get("usage"),
+            args=list(entry.get("args", []) or []),
+            requires_api_key=entry.get("requires_api_key"),
+            rate_limit=entry.get("rate_limit"),
+            rbac_required=entry.get("rbac_required"),
+        )
+
     # If commands are globally disabled, return empty list for discoverability
     if not command_router.commands_enabled():
         return ChatCommandsListResponse(commands=[])
@@ -632,27 +1075,15 @@ async def list_chat_commands(
     require_perms = _cfg_bool_cmds("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "require_permissions", False)
 
     if not require_perms:
-        # Include required_permission metadata from the registry even if not filtering
+        # Include metadata from registry even if not filtering.
         reg = getattr(command_router, "_registry", {})
         items = []
         if isinstance(reg, dict) and reg:
             for name, spec in reg.items():  # type: ignore
-                items.append(
-                    ChatCommandInfo(
-                        name=name,
-                        description=getattr(spec, "description", name),
-                        required_permission=getattr(spec, "required_permission", None),
-                    )
-                )
+                items.append(_as_chat_command_from_spec(name, spec))
         else:
             for c in command_router.list_commands():
-                items.append(
-                    ChatCommandInfo(
-                        name=c.get("name", ""),
-                        description=c.get("description", ""),
-                        required_permission=None,
-                    )
-                )
+                items.append(_as_chat_command_from_dict(c))
         return ChatCommandsListResponse(commands=items)
 
     # Permission-filtered list using registry metadata
@@ -665,13 +1096,7 @@ async def list_chat_commands(
         for name, spec in reg.items():  # type: ignore
             perm = getattr(spec, "required_permission", None)
             if not perm:
-                items.append(
-                    ChatCommandInfo(
-                        name=name,
-                        description=getattr(spec, "description", name),
-                        required_permission=perm,
-                    )
-                )
+                items.append(_as_chat_command_from_spec(name, spec))
                 continue
 
             has_perm_claim = perm in perms_claim
@@ -683,23 +1108,11 @@ async def list_chat_commands(
                     has_perm_db = False
 
             if has_perm_claim or has_perm_db:
-                items.append(
-                    ChatCommandInfo(
-                        name=name,
-                        description=getattr(spec, "description", name),
-                        required_permission=perm,
-                    )
-                )
+                items.append(_as_chat_command_from_spec(name, spec))
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         # Fallback: unfiltered list if registry not accessible
         for c in command_router.list_commands():
-            items.append(
-                ChatCommandInfo(
-                    name=c.get("name", ""),
-                    description=c.get("description", ""),
-                    required_permission=None,
-                )
-            )
+            items.append(_as_chat_command_from_dict(c))
 
     return ChatCommandsListResponse(commands=items)
 
@@ -735,6 +1148,8 @@ async def validate_chat_dictionary(
         warnings=[ValidationIssue(**w) for w in result.warnings],
         entry_stats=result.entry_stats,
         suggested_fixes=result.suggested_fixes,
+        partial=result.partial,
+        partial_reason=result.partial_reason,
     )
 
 # --- Helper Functions ---
@@ -768,9 +1183,39 @@ def _get_default_provider() -> str:
     env_val = os.getenv("DEFAULT_LLM_PROVIDER")
     if env_val:
         return env_val
-    if os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes"}:
+    if _shared_is_test_mode():
         return "local-llm"
     return DEFAULT_LLM_PROVIDER
+
+
+def _should_enforce_strict_model_selection() -> bool:
+    """Return whether explicit model/provider requests should be strictly enforced."""
+    raw = os.getenv("CHAT_ENFORCE_STRICT_MODEL_SELECTION")
+    if raw is not None:
+        return _shared_is_truthy(raw)
+    return not _shared_is_test_mode()
+
+
+def _validate_explicit_model_availability(provider: str, model: str) -> dict[str, Any] | None:
+    """Validate explicit model selection against known provider inventory when available."""
+    provider_name = (provider or "").strip()
+    model_name = (model or "").strip()
+    if not provider_name or not model_name:
+        return None
+
+    availability = is_model_known_for_provider(provider_name, model_name)
+    if availability is None or availability:
+        return None
+
+    return {
+        "error_code": "model_not_available",
+        "message": (
+            f"Model '{model_name}' is not available for provider '{provider_name}'. "
+            "Select one of the server-advertised models for this provider."
+        ),
+        "provider": provider_name,
+        "model": model_name,
+    }
 
 async def _process_content_for_db_sync(
     content_iterable: Any, # Can be list of dicts or string
@@ -792,7 +1237,7 @@ async def _process_content_for_db_sync(
         processed_content_iterable = content_iterable
     else:
         logger.warning(
-            "[DB SYNC] Unsupported content type=%s for conv=%s, treating as unsupported text.",
+            '[DB SYNC] Unsupported content type={} for conv={}, treating as unsupported text.',
             type(content_iterable),
             conversation_id
         )
@@ -808,7 +1253,7 @@ async def _process_content_for_db_sync(
                     part = part.model_dump(exclude_none=True)
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(
-                        "model_dump failed for part type=%s, falling back to string: %s",
+                        'model_dump failed for part type={}, falling back to string: {}',
                         type(part).__name__,
                         e,
                     )
@@ -824,7 +1269,7 @@ async def _process_content_for_db_sync(
                         try:
                             image_url_obj = image_url_obj.model_dump(exclude_none=True)
                         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
-                            logger.debug("model_dump failed for image_url_obj, setting to None: %s", e)
+                            logger.debug("model_dump failed for image_url_obj, setting to None: {}", e)
                             image_url_obj = None
                     if not isinstance(image_url_obj, dict):
                         image_url_obj = {"url": getattr(image_url_obj, "url", "") if image_url_obj is not None else ""}
@@ -837,7 +1282,7 @@ async def _process_content_for_db_sync(
             snippet = str(part.get("text", ""))[:MAX_TEXT_LENGTH + 1] # Ensure text is string
             if len(snippet) > MAX_TEXT_LENGTH:
                 logger.info(
-                    "[DB SYNC] Trimmed over-long text part (>%d chars) for conv=%s",
+                    '[DB SYNC] Trimmed over-long text part (>{} chars) for conv={}',
                     MAX_TEXT_LENGTH,
                     conversation_id
                 )
@@ -864,10 +1309,10 @@ async def _process_content_for_db_sync(
                     )
                     if is_valid and decoded_bytes:
                         images_sync.append((decoded_bytes, mime_type))
-                        logger.debug("[DB SYNC] Successfully processed large image for conv=%s", conversation_id)
+                        logger.debug("[DB SYNC] Successfully processed large image for conv={}", conversation_id)
                     else:
                         logger.warning(
-                            "[DB SYNC] Large image processing failed for conv=%s: %s",
+                            '[DB SYNC] Large image processing failed for conv={}: {}',
                             conversation_id, error_msg
                         )
                         text_parts_sync.append(f"<Image failed: {error_msg}>")
@@ -876,17 +1321,17 @@ async def _process_content_for_db_sync(
                     is_valid, mime_type, decoded_bytes = validate_image_url(url_str)
                     if is_valid and decoded_bytes:
                         images_sync.append((decoded_bytes, mime_type))
-                        logger.debug("[DB SYNC] Successfully validated and decoded image for conv=%s", conversation_id)
+                        logger.debug("[DB SYNC] Successfully validated and decoded image for conv={}", conversation_id)
                     else:
                         logger.warning(
-                            "[DB SYNC] Image validation failed for conv=%s, storing as text placeholder",
+                            '[DB SYNC] Image validation failed for conv={}, storing as text placeholder',
                             conversation_id
                         )
                         # Provide more context about the failed image
                         text_parts_sync.append(f"<Image failed validation: {mime_type if mime_type else 'unknown type'}>")
             else:
                 logger.warning(
-                    "[DB SYNC] image_url part was not a valid data URI or did not pass checks, storing as text placeholder. conv=%s, url_start='%.50s...'",
+                    "[DB SYNC] image_url part was not a valid data URI or did not pass checks, storing as text placeholder. conv={}, url_start='{}...'",
                     conversation_id, url_str
                 )
                 text_parts_sync.append(f"<Image URL (not processed): {url_str[:200]}>")
@@ -904,7 +1349,7 @@ def _jsonify_metadata_payload(value: Any) -> Any:
         return json.loads(json.dumps(encoded, default=str))
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
-            "Failed to normalize metadata payload of type %s: %s",
+            'Failed to normalize metadata payload of type {}: {}',
             type(value).__name__,
             exc,
         )
@@ -1001,7 +1446,7 @@ async def _save_message_turn_to_db(
     current_loop = asyncio.get_running_loop()
     role = message_obj.get("role")
     if role not in ("user", "assistant", "tool", "system"):
-        logger.warning("Skip DB save: invalid role='%s' for conv=%s", role, conversation_id)
+        logger.warning("Skip DB save: invalid role='{}' for conv={}", role, conversation_id)
         return None
 
     content = message_obj.get("content")
@@ -1075,7 +1520,7 @@ async def _save_message_turn_to_db(
             text_parts = [display]
         else:
             logger.warning(
-                "Message with no valid content after processing for conv=%s, saving placeholder",
+                'Message with no valid content after processing for conv={}, saving placeholder',
                 conversation_id,
             )
             text_parts = ["<Message processing failed - no valid content>"]
@@ -1221,7 +1666,7 @@ async def _persist_system_message_if_needed(
                 )
             except (CharactersRAGDBError, RuntimeError) as exc:
                 logger.debug(
-                    "System message presence check failed for conv=%s: %s",
+                    'System message presence check failed for conv={}: {}',
                     conversation_id,
                     exc,
                 )
@@ -1247,7 +1692,7 @@ async def _persist_system_message_if_needed(
                 )
             except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
                 logger.warning(
-                    "Failed to persist system message for conv=%s: %s",
+                    'Failed to persist system message for conv={}: {}',
                     conversation_id,
                     exc,
                 )
@@ -1328,6 +1773,12 @@ async def create_chat_completion(
 
     # Capture raw model input before any normalization for later decisions
     raw_model_input = request_data.model
+    explicit_model_requested = bool(str(raw_model_input or "").strip())
+    strict_model_selection = _should_enforce_strict_model_selection()
+    allow_provider_fallback_for_request = (
+        ENABLE_PROVIDER_FALLBACK
+        and not (strict_model_selection and explicit_model_requested)
+    )
 
     # Resolve provider/model for both metrics and execution, and record decision path
     (
@@ -1520,7 +1971,7 @@ async def create_chat_completion(
                             'conversation_id': request_data.conversation_id,
                         }
                         # Prepare content for injection and run input moderation on it
-                        content_text = f"[/{cmd_name}] {result.content}"
+                        content_text = command_router.build_injection_text(cmd_name, result.content)
                         moderated_content_text = content_text
                         inj_mod = {
                             'action': 'pass',
@@ -1690,7 +2141,7 @@ async def create_chat_completion(
         # limits to validate 429 behavior. So we only bypass the limiter for mocks
         # when not running in TEST_MODE.
         try:
-            _is_test_mode = _to_bool(os.getenv("TEST_MODE", ""))
+            _is_test_mode = _shared_is_test_mode()
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             _is_test_mode = False
 
@@ -1978,7 +2429,15 @@ async def create_chat_completion(
                     _uid_int = int(current_user.id)
                 except Exception:
                     import hashlib as _hashlib
-                    _digest = _hashlib.sha1(str(current_user.id).encode("utf-8")).digest()
+                    # Deterministic non-crypto ID derivation for non-integer test/single-user IDs.
+                    # `usedforsecurity=False` keeps behavior while making intent explicit.
+                    try:
+                        _digest = _hashlib.sha1(
+                            str(current_user.id).encode("utf-8"),
+                            usedforsecurity=False,
+                        ).digest()
+                    except TypeError:  # pragma: no cover - compatibility fallback
+                        _digest = _hashlib.sha1(str(current_user.id).encode("utf-8")).digest()  # nosec B324
                     _uid_int = int.from_bytes(_digest[:4], byteorder="big", signed=False)
                 _guardian_db_path = DatabasePaths.get_guardian_db_path(_uid_int)
 
@@ -2032,6 +2491,16 @@ async def create_chat_completion(
         if override_error:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
+        if strict_model_selection and explicit_model_requested:
+            availability_error = _validate_explicit_model_availability(provider, model)
+            if availability_error:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=availability_error,
+                )
+
+        persona_alias_used = _resolve_character_id_from_persona_alias(request_data)
+
         user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
         logger.info(
             f"Chat completion request. Provider={provider}, Model={request_data.model}, User={user_identifier_for_log}, "
@@ -2040,13 +2509,19 @@ async def create_chat_completion(
 
         character_card_for_context: dict[str, Any] | None = None
         final_conversation_id: str | None = request_data.conversation_id
+        persona_debug_requested = bool(getattr(request_data, "persona_debug", False))
+        persona_debug_meta: dict[str, Any] | None = None
+        persona_selected_exemplars: list[dict[str, Any]] = []
+        persona_budget_tokens_used = int(_PERSONA_EXEMPLAR_DEFAULT_BUDGET)
+        persona_budget_auto_adjusted = False
+        persona_budget_adjustment_reason: str | None = None
 
         try:
             # In TEST_MODE or when explicitly enabled via config/env, allow
             # auto-switching from 'local-llm' to 'openai' if an OpenAI key
             # is present. This is primarily to satisfy integration tests that
             # expect config-driven defaults.
-            _test_mode_flag = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+            _test_mode_flag = _shared_is_test_mode()
             _autoswitch_enabled = ALLOW_AUTOSWITCH_TO_OPENAI or _test_mode_flag
             if (
                 _autoswitch_enabled
@@ -2070,10 +2545,14 @@ async def create_chat_completion(
                 )
                 return key_val
 
-            async def _resolve_byok(name: str) -> ResolvedByokCredentials:
+            async def _resolve_byok(
+                name: str,
+                *,
+                force_oauth_refresh: bool = False,
+            ) -> ResolvedByokCredentials:
                 provider_key = (name or "").strip().lower()
                 cached = byok_cache.get(provider_key)
-                if cached:
+                if cached and not force_oauth_refresh:
                     return cached
                 user_id_int = getattr(current_user, "id_int", None)
                 if user_id_int is None:
@@ -2086,6 +2565,7 @@ async def create_chat_completion(
                     user_id=user_id_int,
                     request=request,
                     fallback_resolver=_fallback_resolver,
+                    force_oauth_refresh=force_oauth_refresh,
                 )
                 byok_cache[provider_key] = resolved
                 return resolved
@@ -2115,7 +2595,7 @@ async def create_chat_completion(
                 def provider_requires_api_key(_provider: str) -> bool:  # type: ignore[misc]
                     return True
             # Allow explicit mock forcing in tests even if provider key is absent
-            _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
+            _force_mock = _shared_is_truthy(os.getenv("CHAT_FORCE_MOCK", ""))
             _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
             if provider_requires_api_key(target_api_provider) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
@@ -2136,7 +2616,14 @@ async def create_chat_completion(
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
             # --- Character/Conversation Context, History, and Current Turn ---
-            character_card_for_context, _, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
+            (
+                character_card_for_context,
+                character_db_id_for_context,
+                final_conversation_id,
+                conversation_created_this_turn,
+                llm_payload_messages,
+                should_persist,
+            ) = await build_context_and_messages(
                 chat_db=chat_db,
                 request_data=request_data,
                 loop=current_loop,
@@ -2152,6 +2639,114 @@ async def create_chat_completion(
                 character_card=character_card_for_context or {},
                 llm_payload_messages=llm_payload_messages,
             )
+
+            # Persona exemplar augmentation (character chat path)
+            persona_strategy = _resolve_persona_strategy(
+                getattr(request_data, "persona_exemplar_strategy", None)
+            )
+            if persona_debug_requested:
+                persona_debug_meta = {
+                    "debug_id": uuid.uuid4().hex,
+                    "enabled": True,
+                    "strategy": persona_strategy,
+                    "selection": {
+                        "selected_count": 0,
+                        "selected_exemplar_ids": [],
+                        "budget_tokens_used": 0,
+                        "coverage": {
+                            "openers": 0,
+                            "emphasis": 0,
+                            "enders": 0,
+                            "catchphrases_used": 0,
+                        },
+                    },
+                    "applied": False,
+                    "reason": "not_run",
+                }
+
+            if persona_strategy != "off" and character_db_id_for_context is not None:
+                user_turn_text = _extract_latest_user_turn_text(getattr(request_data, "messages", []))
+                if user_turn_text:
+                    budget_override = getattr(request_data, "persona_exemplar_budget_tokens", None)
+                    budget_tokens, persona_budget_auto_adjusted, persona_budget_adjustment_reason = (
+                        _resolve_effective_persona_budget_tokens(
+                            budget_override=budget_override,
+                            user_id=user_id,
+                            character_id=character_db_id_for_context,
+                        )
+                    )
+                    persona_budget_tokens_used = int(budget_tokens)
+                    if persona_budget_auto_adjusted:
+                        logger.info(
+                            "Persona budget auto-adjust applied user_id={} character_id={} base={} adjusted={} reason={}",
+                            str(user_id or "unknown"),
+                            character_db_id_for_context,
+                            int(_PERSONA_EXEMPLAR_DEFAULT_BUDGET),
+                            int(budget_tokens),
+                            persona_budget_adjustment_reason or "unspecified",
+                        )
+                    selector_config = PersonaExemplarSelectorConfig(
+                        budget_tokens=max(1, budget_tokens),
+                        max_exemplar_tokens=120,
+                        mmr_lambda=0.7,
+                    )
+                    embedding_callback = None
+                    if persona_strategy in {"hybrid", "embeddings"}:
+
+                        def _embedding_callback(turn_text: str, candidates: list[dict[str, Any]]) -> dict[str, float]:
+                            return score_exemplars_with_embeddings(
+                                turn_text,
+                                candidates,
+                                user_id=user_id,
+                                character_id=character_db_id_for_context,
+                            )
+
+                        embedding_callback = _embedding_callback
+
+                    selected_result = select_character_exemplars(
+                        db=chat_db,
+                        character_id=character_db_id_for_context,
+                        user_turn=user_turn_text,
+                        config=selector_config,
+                        embedding_score_fn=embedding_callback,
+                    )
+                    persona_selected_exemplars = list(selected_result.selected)
+                    persona_guidance_block = _format_persona_exemplar_guidance(selected_result.selected)
+                    if persona_guidance_block:
+                        if final_system_message and final_system_message.strip():
+                            final_system_message = f"{final_system_message.rstrip()}\n\n{persona_guidance_block}"
+                        else:
+                            final_system_message = persona_guidance_block
+
+                    if persona_debug_meta is not None:
+                        persona_debug_meta["applied"] = bool(persona_guidance_block)
+                        persona_debug_meta["reason"] = "selected" if persona_guidance_block else "no_exemplars_selected"
+                        persona_debug_meta["selection"] = {
+                            "selected_count": len(selected_result.selected),
+                            "selected_exemplar_ids": [
+                                str(item.get("id")) for item in selected_result.selected if item.get("id")
+                            ],
+                            "budget_tokens_used": selected_result.budget_tokens_used,
+                            "coverage": selected_result.coverage,
+                        }
+                        persona_debug_meta["budget_tokens"] = selector_config.budget_tokens
+                        persona_debug_meta["budget_auto_adjusted"] = bool(persona_budget_auto_adjusted)
+                        if persona_budget_adjustment_reason:
+                            persona_debug_meta["budget_adjustment_reason"] = persona_budget_adjustment_reason
+                elif persona_debug_meta is not None:
+                    persona_debug_meta["reason"] = "no_user_turn_text"
+            elif persona_debug_meta is not None:
+                if persona_strategy == "off":
+                    persona_debug_meta["reason"] = "disabled_by_strategy"
+                elif character_db_id_for_context is None:
+                    persona_debug_meta["reason"] = "character_context_unavailable"
+
+            if persona_debug_meta is not None and "budget_tokens" not in persona_debug_meta:
+                persona_debug_meta["budget_tokens"] = int(persona_budget_tokens_used)
+                persona_debug_meta["budget_auto_adjusted"] = bool(persona_budget_auto_adjusted)
+                if persona_budget_adjustment_reason:
+                    persona_debug_meta["budget_adjustment_reason"] = persona_budget_adjustment_reason
+
             if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
                 final_system_message = build_system_message_with_skills(
                     final_system_message,
@@ -2223,8 +2818,15 @@ async def create_chat_completion(
             if override_error:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
-            async def rebuild_call_params_for_provider(target_provider: str) -> tuple[dict[str, Any], str | None]:
-                refreshed_resolution = await _resolve_byok(target_provider)
+            async def rebuild_call_params_for_provider(
+                target_provider: str,
+                *,
+                force_oauth_refresh: bool = False,
+            ) -> tuple[dict[str, Any], str | None]:
+                refreshed_resolution = await _resolve_byok(
+                    target_provider,
+                    force_oauth_refresh=force_oauth_refresh,
+                )
                 provider_api_key_new = refreshed_resolution.api_key
                 if provider_requires_api_key(target_provider) and not provider_api_key_new:
                     logger.error(
@@ -2285,7 +2887,7 @@ async def create_chat_completion(
                    provider_manager.circuit_breakers[provider].can_attempt_call():
                     selected_provider = provider
                     logger.info(f"Using requested provider {selected_provider} (health check passed)")
-                elif ENABLE_PROVIDER_FALLBACK:
+                elif allow_provider_fallback_for_request:
                     # Only try alternative providers if fallback is enabled
                     healthy_provider = provider_manager.get_available_provider(
                         exclude=[provider, *sorted(disabled_overrides)]
@@ -2307,7 +2909,7 @@ async def create_chat_completion(
             cleaned_args['api_endpoint'] = selected_provider
             if selected_provider != provider:
                 try:
-                    refreshed_args, refreshed_model = rebuild_call_params_for_provider(selected_provider)
+                    refreshed_args, refreshed_model = await rebuild_call_params_for_provider(selected_provider)
                     override_error = validate_provider_override(selected_provider, refreshed_model or model)
                     if override_error:
                         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
@@ -2317,7 +2919,7 @@ async def create_chat_completion(
                     raise
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as refresh_exc:
                     logger.error(
-                        "Failed to rebuild call params for fallback provider '%s': %s",
+                        "Failed to rebuild call params for fallback provider '{}': {}",
                         selected_provider,
                         refresh_exc,
                     )
@@ -2328,7 +2930,7 @@ async def create_chat_completion(
 
             # Request Queue Integration (Admission control / backpressure)
             # ------------------------------------------------------------------------
-            is_test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            is_test_mode_flag = _shared_is_test_mode()
             try:
                 queue_candidate = get_request_queue()
             except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
@@ -2336,8 +2938,8 @@ async def create_chat_completion(
 
             queue = None
             if queue_candidate is not None:
-                if is_test_mode:
-                    allow_queue_env = os.getenv("FORCE_CHAT_QUEUE_IN_TESTS", "").lower() in {"1", "true", "yes", "on"}
+                if is_test_mode_flag:
+                    allow_queue_env = _shared_is_truthy(os.getenv("FORCE_CHAT_QUEUE_IN_TESTS", ""))
                     queue_module = getattr(queue_candidate.__class__, "__module__", "")
                     allow_queue_override = getattr(queue_candidate, "allow_in_test_mode", False)
                     allow_queue_stub = (
@@ -2370,7 +2972,7 @@ async def create_chat_completion(
                     priority = RequestPriority.HIGH if bool(request_data.stream) else RequestPriority.NORMAL
                     # Use request_id generated for this call
                     logger.debug(
-                        "Queue admission: enqueue request_id=%s client_id=%s priority=%s est_tokens=%s",
+                        'Queue admission: enqueue request_id={} client_id={} priority={} est_tokens={}',
                         request_id,
                         str(user_id),
                         getattr(priority, "name", str(priority)),
@@ -2386,12 +2988,12 @@ async def create_chat_completion(
                     # Await admission; if queue times out internally, it will raise
                     await q_future
                     logger.debug(
-                        "Queue admission: admitted request_id=%s", request_id
+                        'Queue admission: admitted request_id={}', request_id
                     )
                 except ValueError as e:
                     # Queue full or rate limit in queue -> 429
                     logger.warning(
-                        "Queue admission rejected for request_id=%s: %s", request_id, e
+                        'Queue admission rejected for request_id={}: {}', request_id, e
                     )
                     raise HTTPException(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -2400,7 +3002,7 @@ async def create_chat_completion(
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                     # Treat unexpected queue errors as service unavailable
                     logger.error(
-                        "Queue admission error for request_id=%s: %s", request_id, e
+                        'Queue admission error for request_id={}: {}', request_id, e
                     )
                     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.") from e
             # The request queue system has been initialized in main.py but is not yet
@@ -2432,7 +3034,7 @@ async def create_chat_completion(
             # ------------------------------------------------------------------------
 
             mock_friendly_keys = {"sk-mock-key-12345", "test-openai-key", "mock-openai-key"}
-            _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
+            _force_mock = _shared_is_truthy(os.getenv("CHAT_FORCE_MOCK", ""))
             use_mock_provider = (
                 (
                     _test_mode_flag and (
@@ -2507,6 +3109,82 @@ async def create_chat_completion(
             else:
                 llm_call_func = partial(perform_chat_api_call, **cleaned_args)
 
+            def _is_auth_401_error(exc: BaseException) -> bool:
+                try:
+                    status_code = int(getattr(exc, "status_code", 0) or 0)
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                    status_code = 0
+                return status_code == status.HTTP_401_UNAUTHORIZED
+
+            def _is_missing_credentials_error(exc: BaseException) -> bool:
+                if not isinstance(exc, HTTPException):
+                    return False
+                if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
+                    return False
+                detail = getattr(exc, "detail", None)
+                return isinstance(detail, dict) and detail.get("error_code") == "missing_provider_credentials"
+
+            def _oauth_reconnect_required_exception() -> HTTPException:
+                return HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={
+                        "error_code": "oauth_reconnect_required",
+                        "provider": "openai",
+                        "reconnect_required": True,
+                        "message": "OpenAI OAuth access is no longer valid. Reconnect OpenAI and retry.",
+                    },
+                )
+
+            if (
+                target_api_provider == "openai"
+                and getattr(byok_resolution, "auth_source", None) == "oauth"
+            ):
+                oauth_retry_state = {"attempted": False}
+                base_llm_call_func = llm_call_func
+
+                def _run_refresh_on_endpoint_loop() -> tuple[dict[str, Any], str | None]:
+                    future = asyncio.run_coroutine_threadsafe(
+                        rebuild_call_params_for_provider(
+                            target_api_provider,
+                            force_oauth_refresh=True,
+                        ),
+                        current_loop,
+                    )
+                    return future.result(timeout=20.0)
+
+                def _llm_call_with_openai_oauth_retry():
+                    try:
+                        return base_llm_call_func()
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as initial_exc:
+                        if oauth_retry_state["attempted"] or not _is_auth_401_error(initial_exc):
+                            raise
+                        oauth_retry_state["attempted"] = True
+                        logger.info(
+                            "OpenAI OAuth auth failure detected; forcing refresh and retrying once."
+                        )
+                        try:
+                            refreshed_args, _ = _run_refresh_on_endpoint_loop()
+                        except HTTPException as refresh_exc:
+                            if _is_auth_401_error(refresh_exc) or _is_missing_credentials_error(refresh_exc):
+                                raise _oauth_reconnect_required_exception() from initial_exc
+                            raise
+                        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as refresh_exc:
+                            logger.warning("OpenAI OAuth forced refresh failed: {}", refresh_exc)
+                            raise _oauth_reconnect_required_exception() from initial_exc
+
+                        refreshed_key = refreshed_args.get("api_key")
+                        if not isinstance(refreshed_key, str) or not refreshed_key.strip():
+                            raise _oauth_reconnect_required_exception() from initial_exc
+
+                        try:
+                            return perform_chat_api_call(**refreshed_args)
+                        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as retry_exc:
+                            if _is_auth_401_error(retry_exc):
+                                raise _oauth_reconnect_required_exception() from retry_exc
+                            raise
+
+                llm_call_func = _llm_call_with_openai_oauth_retry
+
             # Build moderation getter that overlays guardian policies on output
             def _get_moderation_with_guardian():
                 base = get_moderation_service()
@@ -2518,8 +3196,36 @@ async def create_chat_completion(
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     return base
 
+            async def _on_stream_full_reply_for_persona_telemetry(full_reply: str) -> None:
+                if character_db_id_for_context is None:
+                    return
+                persona_telemetry = compute_persona_exemplar_telemetry(
+                    output_text=str(full_reply or ""),
+                    selected_exemplars=persona_selected_exemplars,
+                )
+                debug_id_for_logs = (
+                    str(persona_debug_meta.get("debug_id"))
+                    if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
+                    else None
+                )
+                logger.debug(
+                    "Persona streaming telemetry debug_id={} ioo={} ior={} lcs={}",
+                    debug_id_for_logs or "n/a",
+                    persona_telemetry.get("ioo"),
+                    persona_telemetry.get("ior"),
+                    persona_telemetry.get("lcs"),
+                )
+                _record_persona_telemetry_hooks(
+                    telemetry=persona_telemetry,
+                    provider=provider,
+                    model=model,
+                    user_id=user_id,
+                    character_id=character_db_id_for_context,
+                    debug_id=debug_id_for_logs,
+                )
+
             if request_data.stream:
-                return await execute_streaming_call(
+                stream_response = await execute_streaming_call(
                     current_loop=current_loop,
                     cleaned_args=cleaned_args,
                     selected_provider=selected_provider,
@@ -2540,11 +3246,12 @@ async def create_chat_completion(
                     audit_context=context,
                     client_id=user_id,
                     queue_execution_enabled=QUEUED_EXECUTION,
-                    enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
+                    enable_provider_fallback=allow_provider_fallback_for_request,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
+                    on_stream_full_reply=_on_stream_full_reply_for_persona_telemetry,
                     rg_commit_cb=(
                         (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
                         if _rg_handle_id else None
@@ -2553,7 +3260,17 @@ async def create_chat_completion(
                         (lambda **_kwargs: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": 0}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
                         if _rg_handle_id else None
                     ),
+                    self_monitoring_service=_self_mon_service,
                 )
+                if persona_debug_requested and persona_debug_meta and persona_debug_meta.get("debug_id"):
+                    try:
+                        stream_response.headers["X-TLDW-Persona-Debug-ID"] = str(persona_debug_meta["debug_id"])
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                        pass
+                alias_headers = _build_persona_alias_deprecation_headers(persona_alias_used)
+                for header_key, header_value in alias_headers.items():
+                    stream_response.headers[header_key] = header_value
+                return stream_response
 
             else: # Non-streaming
                 encoded_payload = await execute_non_stream_call(
@@ -2577,12 +3294,60 @@ async def create_chat_completion(
                     audit_context=context,
                     client_id=user_id,
                     queue_execution_enabled=QUEUED_EXECUTION,
-                    enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
+                    enable_provider_fallback=allow_provider_fallback_for_request,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
+                    self_monitoring_service=_self_mon_service,
                 )
+                persona_telemetry: dict[str, Any] | None = None
+                if isinstance(encoded_payload, dict) and character_db_id_for_context is not None:
+                    assistant_text = _extract_assistant_text_from_completion_payload(encoded_payload)
+                    persona_telemetry = compute_persona_exemplar_telemetry(
+                        output_text=assistant_text,
+                        selected_exemplars=persona_selected_exemplars,
+                    )
+                    debug_id_for_logs = (
+                        str(persona_debug_meta.get("debug_id"))
+                        if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
+                        else None
+                    )
+                    try:
+                        logger.debug(
+                            "Persona telemetry debug_id={} ioo={} ior={} lcs={}",
+                            debug_id_for_logs or "n/a",
+                            persona_telemetry.get("ioo"),
+                            persona_telemetry.get("ior"),
+                            persona_telemetry.get("lcs"),
+                        )
+                        _record_persona_telemetry_hooks(
+                            telemetry=persona_telemetry,
+                            provider=provider,
+                            model=model,
+                            user_id=user_id,
+                            character_id=character_db_id_for_context,
+                            debug_id=debug_id_for_logs,
+                        )
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                        pass
+
+                if (
+                    persona_debug_requested
+                    and persona_debug_meta is not None
+                    and isinstance(encoded_payload, dict)
+                ):
+                    if persona_telemetry is None:
+                        persona_telemetry = compute_persona_exemplar_telemetry(
+                            output_text="",
+                            selected_exemplars=persona_selected_exemplars,
+                        )
+                    persona_debug_meta["telemetry"] = persona_telemetry
+                    meta_payload = encoded_payload.get("meta")
+                    if not isinstance(meta_payload, dict):
+                        meta_payload = {}
+                        encoded_payload["meta"] = meta_payload
+                    meta_payload["persona"] = persona_debug_meta
                 # Track response size and return
                 if isinstance(encoded_payload, dict):
                     response_size = len(json.dumps(encoded_payload))
@@ -2610,7 +3375,8 @@ async def create_chat_completion(
                         rg_finalized = True
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _rg_commit_err:
                     logger.debug(f"RG tokens commit skipped/failed: {_rg_commit_err}")
-                return JSONResponse(content=encoded_payload)
+                alias_headers = _build_persona_alias_deprecation_headers(persona_alias_used)
+                return JSONResponse(content=encoded_payload, headers=alias_headers or None)
 
         # --- Exception Handling --- Improved with structured error handling
 
@@ -3034,7 +3800,7 @@ def _replace_conversation_keywords(
             try:
                 db.unlink_conversation_from_keyword(conversation_id, kw_id)
             except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-                logger.warning("Failed to unlink keyword %s from %s: %s", kw_id, conversation_id, exc)
+                logger.warning("Failed to unlink keyword {} from {}: {}", kw_id, conversation_id, exc)
 
     for key, original in target_map.items():
         if key in existing_map:
@@ -3047,7 +3813,205 @@ def _replace_conversation_keywords(
             if kw and kw.get("id") is not None:
                 db.link_conversation_to_keyword(conversation_id, int(kw["id"]))
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-            logger.warning("Failed to link keyword %s to %s: %s", original, conversation_id, exc)
+            logger.warning("Failed to link keyword {} to {}: {}", original, conversation_id, exc)
+
+
+_KNOWLEDGE_QA_SHARE_LINKS_SETTINGS_KEY = "knowledge_qa_share_links"
+_KNOWLEDGE_QA_SHARE_TOKEN_VERSION = 1
+_KNOWLEDGE_QA_SHARE_DEFAULT_TTL_SECONDS = max(
+    300, int(os.getenv("KNOWLEDGE_QA_SHARE_LINK_DEFAULT_TTL_SECONDS", "604800"))
+)
+_KNOWLEDGE_QA_SHARE_MAX_TTL_SECONDS = max(
+    _KNOWLEDGE_QA_SHARE_DEFAULT_TTL_SECONDS,
+    int(os.getenv("KNOWLEDGE_QA_SHARE_LINK_MAX_TTL_SECONDS", "2592000")),
+)
+
+
+@lru_cache(maxsize=1)
+def _get_knowledge_qa_share_signing_key() -> bytes:
+    explicit = (os.getenv("KNOWLEDGE_QA_SHARE_LINK_SECRET") or "").strip()
+    if explicit:
+        return explicit.encode("utf-8")
+    try:
+        return derive_hmac_key()
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        fallback = (os.getenv("JWT_SECRET_KEY") or "knowledge_qa_share_link_default")
+        return fallback.encode("utf-8")
+
+
+def _urlsafe_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("utf-8").rstrip("=")
+
+
+def _urlsafe_b64decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(f"{value}{padding}")
+
+
+def _build_knowledge_qa_share_token(payload: dict[str, Any]) -> str:
+    encoded_payload = _urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    signature = hmac.new(
+        _get_knowledge_qa_share_signing_key(),
+        encoded_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    encoded_signature = _urlsafe_b64encode(signature)
+    return f"{encoded_payload}.{encoded_signature}"
+
+
+def _decode_knowledge_qa_share_token(token: str) -> dict[str, Any]:
+    token_parts = token.split(".")
+    if len(token_parts) != 2:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed share token")
+
+    encoded_payload, encoded_signature = token_parts
+    expected_signature = hmac.new(
+        _get_knowledge_qa_share_signing_key(),
+        encoded_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    provided_signature = _urlsafe_b64decode(encoded_signature)
+    if not hmac.compare_digest(expected_signature, provided_signature):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid share token")
+
+    try:
+        payload = json.loads(_urlsafe_b64decode(encoded_payload).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed share token payload") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid share token payload")
+    return payload
+
+
+def _normalize_knowledge_qa_share_links(raw_links: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_links, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for raw in raw_links:
+        if not isinstance(raw, dict):
+            continue
+        share_id = str(raw.get("id") or "").strip()
+        if not share_id:
+            continue
+        permission = str(raw.get("permission") or "view").strip().lower()
+        if permission != "view":
+            permission = "view"
+        created_at = str(raw.get("created_at") or "").strip() or datetime.now(
+            timezone.utc
+        ).isoformat()
+        expires_at = str(raw.get("expires_at") or "").strip()
+        if not expires_at:
+            continue
+        normalized.append(
+            {
+                "id": share_id,
+                "permission": permission,
+                "created_at": created_at,
+                "expires_at": expires_at,
+                "revoked_at": raw.get("revoked_at"),
+                "created_by_user_id": str(raw.get("created_by_user_id") or "").strip(),
+                "label": str(raw.get("label") or "").strip() or None,
+            }
+        )
+    return normalized
+
+
+def _load_knowledge_qa_share_links(
+    db: CharactersRAGDB, conversation_id: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    settings_row = db.get_conversation_settings(conversation_id) or {}
+    settings = settings_row.get("settings") if isinstance(settings_row, dict) else {}
+    settings_payload: dict[str, Any] = settings if isinstance(settings, dict) else {}
+    links = _normalize_knowledge_qa_share_links(
+        settings_payload.get(_KNOWLEDGE_QA_SHARE_LINKS_SETTINGS_KEY)
+    )
+    return settings_payload, links
+
+
+def _persist_knowledge_qa_share_links(
+    db: CharactersRAGDB,
+    conversation_id: str,
+    settings_payload: dict[str, Any],
+    links: list[dict[str, Any]],
+) -> None:
+    settings_payload[_KNOWLEDGE_QA_SHARE_LINKS_SETTINGS_KEY] = links
+    if not db.upsert_conversation_settings(conversation_id, settings_payload):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist share link settings",
+        )
+
+
+def _prune_knowledge_qa_share_links(links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    pruned: list[dict[str, Any]] = []
+    for link in links:
+        expires_at = _coerce_datetime(link.get("expires_at"))
+        revoked_at = _coerce_datetime(link.get("revoked_at"))
+        if revoked_at and (now - revoked_at) > timedelta(days=30):
+            continue
+        if expires_at and (now - expires_at) > timedelta(days=30):
+            continue
+        pruned.append(link)
+    return pruned
+
+
+class ConversationShareLinkCreateRequest(BaseModel):
+    permission: Literal["view"] = Field("view", description="Share permission")
+    ttl_seconds: int | None = Field(
+        None,
+        ge=300,
+        le=_KNOWLEDGE_QA_SHARE_MAX_TTL_SECONDS,
+        description="Token lifetime in seconds",
+    )
+    label: str | None = Field(
+        None,
+        max_length=80,
+        description="Optional human-readable label",
+    )
+
+
+class ConversationShareLinkResponse(BaseModel):
+    share_id: str
+    permission: Literal["view"]
+    created_at: datetime
+    expires_at: datetime
+    token: str
+    share_path: str
+
+
+class ConversationShareLinkListItem(BaseModel):
+    id: str
+    permission: Literal["view"]
+    created_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    label: str | None = None
+    share_path: str | None = None
+    token: str | None = None
+
+
+class ConversationShareLinksResponse(BaseModel):
+    conversation_id: str
+    links: list[ConversationShareLinkListItem]
+
+
+class ConversationShareLinkRevokeResponse(BaseModel):
+    success: bool
+    share_id: str
+
+
+class SharedConversationResolveResponse(BaseModel):
+    conversation_id: str
+    title: str | None = None
+    source: str | None = None
+    permission: Literal["view"]
+    shared_by_user_id: str
+    expires_at: datetime
+    messages: list[dict[str, Any]]
 
 
 @router.post(
@@ -3397,7 +4361,7 @@ async def update_chat_conversation(
 
                 schedule_conversation_clustering(db)
             except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Conversation clustering skipped after manual topic update: %s", exc)
+                logger.debug("Conversation clustering skipped after manual topic update: {}", exc)
 
         updated = db.get_conversation_by_id(conversation_id) or conversation
         keyword_rows = db.get_keywords_for_conversation(conversation_id)
@@ -3619,6 +4583,271 @@ async def get_conversation_tree(
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Conversation tree failed: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load conversation tree") from exc
+
+
+@router.post(
+    "/conversations/{conversation_id}/share-links",
+    response_model=ConversationShareLinkResponse,
+    summary="Create a tokenized share link for a conversation",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+)
+@conversations_alias_router.post(
+    "/conversations/{conversation_id}/share-links",
+    response_model=ConversationShareLinkResponse,
+    summary="Create a tokenized share link for a conversation [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+    include_in_schema=False,
+)
+async def create_conversation_share_link(
+    request_body: ConversationShareLinkCreateRequest,
+    conversation_id: str = Path(..., description="Conversation ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+    now = datetime.now(timezone.utc)
+    ttl_seconds = request_body.ttl_seconds or _KNOWLEDGE_QA_SHARE_DEFAULT_TTL_SECONDS
+    ttl_seconds = max(300, min(ttl_seconds, _KNOWLEDGE_QA_SHARE_MAX_TTL_SECONDS))
+    expires_at = now + timedelta(seconds=ttl_seconds)
+
+    settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
+    links = _prune_knowledge_qa_share_links(existing_links)
+
+    share_id = str(uuid.uuid4())
+    link_entry = {
+        "id": share_id,
+        "permission": "view",
+        "created_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "revoked_at": None,
+        "created_by_user_id": str(current_user.id),
+        "label": request_body.label.strip() if isinstance(request_body.label, str) and request_body.label.strip() else None,
+    }
+    links.append(link_entry)
+    _persist_knowledge_qa_share_links(db, conversation_id, settings_payload, links)
+
+    token_payload = {
+        "v": _KNOWLEDGE_QA_SHARE_TOKEN_VERSION,
+        "conversation_id": conversation.get("id") or conversation_id,
+        "share_id": share_id,
+        "shared_by_user_id": str(current_user.id),
+        "permission": "view",
+        "exp": int(expires_at.timestamp()),
+    }
+    token = _build_knowledge_qa_share_token(token_payload)
+    share_path = f"/knowledge/shared/{token}"
+
+    return ConversationShareLinkResponse(
+        share_id=share_id,
+        permission="view",
+        created_at=now,
+        expires_at=expires_at,
+        token=token,
+        share_path=share_path,
+    )
+
+
+@router.get(
+    "/conversations/{conversation_id}/share-links",
+    response_model=ConversationShareLinksResponse,
+    summary="List tokenized share links for a conversation",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+)
+@conversations_alias_router.get(
+    "/conversations/{conversation_id}/share-links",
+    response_model=ConversationShareLinksResponse,
+    summary="List tokenized share links for a conversation [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+    include_in_schema=False,
+)
+async def list_conversation_share_links(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+    settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
+    links = _prune_knowledge_qa_share_links(existing_links)
+    if links != existing_links:
+        _persist_knowledge_qa_share_links(db, conversation_id, settings_payload, links)
+
+    now = datetime.now(timezone.utc)
+    response_links: list[ConversationShareLinkListItem] = []
+    for link in links:
+        expires_at_dt = _coerce_datetime(link.get("expires_at"))
+        if not expires_at_dt:
+            continue
+        revoked_at_dt = _coerce_datetime(link.get("revoked_at"))
+        token: str | None = None
+        share_path: str | None = None
+        if revoked_at_dt is None and expires_at_dt > now:
+            token_payload = {
+                "v": _KNOWLEDGE_QA_SHARE_TOKEN_VERSION,
+                "conversation_id": conversation.get("id") or conversation_id,
+                "share_id": link.get("id"),
+                "shared_by_user_id": str(link.get("created_by_user_id") or current_user.id),
+                "permission": "view",
+                "exp": int(expires_at_dt.timestamp()),
+            }
+            token = _build_knowledge_qa_share_token(token_payload)
+            share_path = f"/knowledge/shared/{token}"
+        created_at_dt = _coerce_datetime(link.get("created_at")) or now
+        response_links.append(
+            ConversationShareLinkListItem(
+                id=str(link.get("id") or ""),
+                permission="view",
+                created_at=created_at_dt,
+                expires_at=expires_at_dt,
+                revoked_at=revoked_at_dt,
+                label=link.get("label"),
+                share_path=share_path,
+                token=token,
+            )
+        )
+
+    return ConversationShareLinksResponse(
+        conversation_id=conversation.get("id") or conversation_id,
+        links=response_links,
+    )
+
+
+@router.delete(
+    "/conversations/{conversation_id}/share-links/{share_id}",
+    response_model=ConversationShareLinkRevokeResponse,
+    summary="Revoke a tokenized share link",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+)
+@conversations_alias_router.delete(
+    "/conversations/{conversation_id}/share-links/{share_id}",
+    response_model=ConversationShareLinkRevokeResponse,
+    summary="Revoke a tokenized share link [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+    include_in_schema=False,
+)
+async def revoke_conversation_share_link(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    share_id: str = Path(..., description="Share link ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    _verify_conversation_ownership(db, conversation_id, current_user)
+    settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
+    links = _prune_knowledge_qa_share_links(existing_links)
+
+    share_found = False
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for link in links:
+        if str(link.get("id")) != share_id:
+            continue
+        share_found = True
+        if not link.get("revoked_at"):
+            link["revoked_at"] = now_iso
+        break
+
+    if not share_found:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share link not found")
+
+    _persist_knowledge_qa_share_links(db, conversation_id, settings_payload, links)
+    return ConversationShareLinkRevokeResponse(success=True, share_id=share_id)
+
+
+@router.get(
+    "/shared/conversations/{share_token}",
+    response_model=SharedConversationResolveResponse,
+    summary="Resolve a public share token to conversation content",
+    tags=["chat"],
+)
+@conversations_alias_router.get(
+    "/shared/conversations/{share_token}",
+    response_model=SharedConversationResolveResponse,
+    summary="Resolve a public share token to conversation content [alias]",
+    tags=["chat"],
+    include_in_schema=False,
+)
+async def resolve_conversation_share_token(
+    share_token: str = Path(..., description="Share token"),
+    limit: int = Query(200, ge=1, le=500, description="Maximum messages to return"),
+):
+    payload = _decode_knowledge_qa_share_token(share_token)
+    if int(payload.get("v") or 0) != _KNOWLEDGE_QA_SHARE_TOKEN_VERSION:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported share token version")
+
+    conversation_id = str(payload.get("conversation_id") or "").strip()
+    share_id = str(payload.get("share_id") or "").strip()
+    shared_by_user_id = str(payload.get("shared_by_user_id") or "").strip()
+    permission = str(payload.get("permission") or "").strip().lower()
+    exp_raw = payload.get("exp")
+    if not conversation_id or not share_id or not shared_by_user_id or permission != "view":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed share token payload")
+    if not isinstance(exp_raw, (int, float)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed share token expiry")
+
+    expires_at = datetime.fromtimestamp(int(exp_raw), tz=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Share link expired")
+
+    try:
+        owner_user_id = int(shared_by_user_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid share link owner") from exc
+
+    db = await get_chacha_db_for_user_id(owner_user_id, str(owner_user_id))
+    conversation = db.get_conversation_by_id(conversation_id)
+    if not conversation or conversation.get("deleted"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    _, links = _load_knowledge_qa_share_links(db, conversation_id)
+    share_link = next((entry for entry in links if str(entry.get("id")) == share_id), None)
+    if not share_link:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share link not found")
+    if share_link.get("revoked_at"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Share link revoked")
+
+    link_expires_at = _coerce_datetime(share_link.get("expires_at"))
+    if link_expires_at is None or datetime.now(timezone.utc) > link_expires_at:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Share link expired")
+
+    messages = db.get_messages_with_rag_context(
+        conversation_id,
+        limit=limit,
+        offset=0,
+        include_rag_context=True,
+    )
+    safe_messages = messages if isinstance(messages, list) else []
+
+    return SharedConversationResolveResponse(
+        conversation_id=conversation_id,
+        title=conversation.get("title"),
+        source=conversation.get("source"),
+        permission="view",
+        shared_by_user_id=shared_by_user_id,
+        expires_at=link_expires_at,
+        messages=safe_messages,
+    )
 
 
 @router.get(

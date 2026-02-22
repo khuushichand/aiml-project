@@ -25,7 +25,7 @@ def test_pg_forward_migration_adds_missing_columns_and_partial_indexes(jobs_pg_d
             try:
                 cur.execute("ALTER TABLE jobs DROP COLUMN IF EXISTS progress_message")
             except Exception:
-                pass
+                _ = None
 
     # Run ensure to forward-migrate
     ensure_jobs_tables_pg(jobs_pg_dsn)

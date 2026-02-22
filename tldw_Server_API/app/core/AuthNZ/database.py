@@ -37,6 +37,7 @@ from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.testing import is_test_mode
 
 _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -166,7 +167,7 @@ def _apply_single_user_fallback(url: str, auth_mode: Optional[str] = None) -> st
     if mode == "single_user" and scheme and not scheme.startswith("sqlite") and not scheme.startswith("file"):
         with suppress(_AUTHNZ_DB_NONCRITICAL_EXCEPTIONS):
             logger.warning(
-                "Single-user mode: ignoring non-sqlite DATABASE_URL '%s'; using sqlite:///./Databases/users.db",
+                "Single-user mode: ignoring non-sqlite DATABASE_URL '{}'; using sqlite:///./Databases/users.db",
                 url,
             )
         return "sqlite:///./Databases/users.db"
@@ -280,7 +281,7 @@ class DatabasePool:
         # Allow Postgres in single-user mode only in explicit test contexts,
         # so production single-user profiles continue to fall back to SQLite.
         try:
-            test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
+            test_mode = is_test_mode()
         except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS:
             test_mode = False
         # Also allow Postgres when running under pytest even if TEST_MODE is not set,
@@ -349,7 +350,7 @@ class DatabasePool:
         if not schema_file.exists():
             # This path is expected in current builds: schema is provisioned by initialize.py/migrations.
             logger.warning(
-                "PostgreSQL schema file not found at %s. Run 'python -m tldw_Server_API.app.core.AuthNZ.initialize' or apply DB migrations to create schema.",
+                "PostgreSQL schema file not found at {}. Run 'python -m tldw_Server_API.app.core.AuthNZ.initialize' or apply DB migrations to create schema.",
                 schema_file,
             )
             return

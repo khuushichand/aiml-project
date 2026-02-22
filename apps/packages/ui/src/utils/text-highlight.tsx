@@ -23,7 +23,7 @@ export function highlightText(
 
   const {
     caseSensitive = false,
-    highlightClassName = "bg-yellow-200 dark:bg-yellow-700 rounded px-0.5"
+    highlightClassName = "bg-warn/20 rounded px-0.5"
   } = options
 
   // Escape special regex characters in the query for use in the split regex,

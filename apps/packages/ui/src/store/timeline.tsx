@@ -103,6 +103,12 @@ export interface TimelineState {
 // Default Settings
 // ============================================================================
 
+const resolveThemeColor = (tokenName: string, fallbackRgb: string): string => {
+  if (typeof window === 'undefined') return fallbackRgb
+  const tokenValue = getComputedStyle(document.documentElement).getPropertyValue(tokenName).trim()
+  return tokenValue ? `rgb(${tokenValue})` : fallbackRgb
+}
+
 const defaultSettings: TimelineSettings = {
   // Layout
   layoutDirection: 'TB',
@@ -114,10 +120,10 @@ const defaultSettings: TimelineSettings = {
   // Appearance
   nodeShape: 'roundrectangle',
   curveStyle: 'bezier',
-  userNodeColor: '#3b82f6',      // Blue
-  assistantNodeColor: '#ffffff', // White
-  systemNodeColor: '#6b7280',    // Gray
-  edgeColor: '#9ca3af',          // Light gray
+  userNodeColor: resolveThemeColor('--color-primary', 'rgb(59 130 246)'),
+  assistantNodeColor: resolveThemeColor('--color-surface', 'rgb(255 255 255)'),
+  systemNodeColor: resolveThemeColor('--color-text-muted', 'rgb(107 114 128)'),
+  edgeColor: resolveThemeColor('--color-border-strong', 'rgb(156 163 175)'),
 
   // Behavior
   autoExpandSwipes: false,

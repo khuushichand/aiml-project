@@ -177,21 +177,33 @@ class EvaluationConfigValidator:
 
     def _validate_rate_limiting(self):
         """Validate rate limiting configuration."""
-        rate_limit = os.getenv("RATE_LIMIT_PER_MINUTE")
+        def _is_truthy(raw: str | None) -> bool:
+            if raw is None:
+                return False
+            return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
-        if not rate_limit:
+        if not _is_truthy(os.getenv("RG_ENABLED")):
             self.issues.append(ConfigurationIssue(
                 severity="warning",
                 category="performance",
-                message="No rate limiting configured",
-                recommendation="Set RATE_LIMIT_PER_MINUTE to prevent abuse"
+                message="Resource Governor rate limiting is disabled",
+                recommendation=(
+                    "Set RG_ENABLED=true and tune evals.default requests.rpm/"
+                    "requests.burst in Config_Files/resource_governor_policies.yaml"
+                )
             ))
-        elif rate_limit and int(rate_limit) > 100:
+            return
+
+        policy_path = os.getenv("RG_POLICY_PATH")
+        if policy_path and not os.path.exists(policy_path):
             self.issues.append(ConfigurationIssue(
                 severity="warning",
                 category="performance",
-                message=f"High rate limit ({rate_limit}/min) may lead to resource exhaustion",
-                recommendation="Consider lowering RATE_LIMIT_PER_MINUTE for evaluations"
+                message=f"Resource Governor policy file not found ({policy_path})",
+                recommendation=(
+                    "Set RG_POLICY_PATH to a readable policy file and tune "
+                    "evals.default requests.rpm/requests.burst"
+                )
             ))
 
     def _validate_monitoring(self):

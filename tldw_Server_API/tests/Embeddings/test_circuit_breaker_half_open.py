@@ -2,10 +2,10 @@ import time
 
 import pytest
 
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import (
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
     CircuitBreaker,
     CircuitState,
-    CircuitBreakerError,
+    CircuitBreakerOpenError as CircuitBreakerError,
 )
 
 

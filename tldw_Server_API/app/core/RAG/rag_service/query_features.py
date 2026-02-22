@@ -7,7 +7,6 @@ and other advanced query processing capabilities.
 """
 
 import contextlib
-import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -18,6 +17,12 @@ import nltk
 from loguru import logger
 from nltk.corpus import stopwords, wordnet
 from nltk.tokenize import word_tokenize
+
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled,
+    is_explicit_pytest_runtime,
+    is_test_mode,
+)
 
 
 # --- NLTK downloads guarded by timeout ---
@@ -55,10 +60,10 @@ def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
 
 # Ensure NLTK resources are present, but avoid hangs by enforcing timeouts.
 # In tests or when explicitly disabled, skip downloads and degrade gracefully.
-_TEST_MODE = os.getenv("TEST_MODE") == "true"
-_DISABLE_NLTK_DOWNLOADS = os.getenv("DISABLE_NLTK_DOWNLOADS", "").lower() in {"1", "true", "yes"}
-_RUNNING_PYTEST = "PYTEST_CURRENT_TEST" in os.environ
-_FORCE_ALLOW_NLTK = os.getenv("ALLOW_NLTK_DOWNLOADS", "").lower() in {"1", "true", "yes"}
+_TEST_MODE = is_test_mode()
+_DISABLE_NLTK_DOWNLOADS = env_flag_enabled("DISABLE_NLTK_DOWNLOADS")
+_RUNNING_PYTEST = is_explicit_pytest_runtime()
+_FORCE_ALLOW_NLTK = env_flag_enabled("ALLOW_NLTK_DOWNLOADS")
 _ALLOW_NLTK_DOWNLOADS = _FORCE_ALLOW_NLTK or not (_TEST_MODE or _DISABLE_NLTK_DOWNLOADS or _RUNNING_PYTEST)
 
 def _ensure_resource(path: str, resource_key: str) -> bool:
@@ -794,19 +799,21 @@ class QueryRewriter:
         if analysis.question_type or query.strip().endswith('?'):
             return None
 
-        # Map intents to question forms
+        # Map intent values to question forms (keyed by value string to
+        # remain robust if the module is reloaded and enum identity changes).
         intent_to_question = {
-            QueryIntent.FACTUAL: f"What are the key facts about {query}?",
-            QueryIntent.DEFINITIONAL: f"What is the definition and meaning of {query}?",
-            QueryIntent.CAUSAL: f"What causes {query} and why does it happen?",
-            QueryIntent.PROCEDURAL: f"What are the steps to {query}?",
-            QueryIntent.ANALYTICAL: f"What is the analysis and evaluation of {query}?",
-            QueryIntent.COMPARATIVE: f"How does {query} compare to alternatives?",
-            QueryIntent.TEMPORAL: f"What is the timeline and history of {query}?",
-            QueryIntent.EXPLORATORY: f"What are the main aspects of {query}?",
+            "factual": f"What are the key facts about {query}?",
+            "definitional": f"What is the definition and meaning of {query}?",
+            "causal": f"What causes {query} and why does it happen?",
+            "procedural": f"What are the steps to {query}?",
+            "analytical": f"What is the analysis and evaluation of {query}?",
+            "comparative": f"How does {query} compare to alternatives?",
+            "temporal": f"What is the timeline and history of {query}?",
+            "exploratory": f"What are the main aspects of {query}?",
         }
 
-        return intent_to_question.get(analysis.intent)
+        intent_val = analysis.intent.value if isinstance(analysis.intent, Enum) else analysis.intent
+        return intent_to_question.get(intent_val)
 
     def _expand_with_related_concepts(
         self,

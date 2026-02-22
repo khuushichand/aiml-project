@@ -23,6 +23,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Embeddings import redis_pipeline
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # Try to import ChromaDB components - graceful fallback if unavailable
 _CHROMADB_AVAILABLE = False
@@ -271,7 +272,7 @@ class KanbanVectorSearch:
                 logger.warning(f"KanbanVectorSearch.index_card: missing or invalid card id for user {self.user_id}")
                 return False
 
-            if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes"}:
+            if is_test_mode():
                 return True
 
             doc_id = f"card_{card_id}"

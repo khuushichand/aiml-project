@@ -53,4 +53,4 @@ async def test_system_message_insert_is_serialized():
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None

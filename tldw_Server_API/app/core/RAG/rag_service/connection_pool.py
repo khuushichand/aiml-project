@@ -41,6 +41,31 @@ class ConnectionExhaustedError(ConnectionPoolError):
         super().__init__(f"Connection pool exhausted (max={max_connections})")
 
 
+def _is_sqlite_memory_path(db_path: str) -> bool:
+    raw = str(db_path or "").strip()
+    lowered = raw.lower()
+    if raw == ":memory:":
+        return True
+    if lowered.startswith("file:") and (":memory:" in lowered or "mode=memory" in lowered):
+        return True
+    return False
+
+
+def _normalize_pool_db_path(db_path: str) -> str:
+    """Normalize pool key/path while preserving SQLite memory and URI specs."""
+    raw = str(db_path or "").strip()
+    if not raw:
+        return raw
+    if _is_sqlite_memory_path(raw):
+        return raw
+    if raw.lower().startswith("file:"):
+        return raw
+    try:
+        return str(Path(raw).resolve())
+    except (OSError, RuntimeError, ValueError):
+        return raw
+
+
 class ConnectionPool:
     """
     Thread-safe connection pool for SQLite databases.
@@ -368,7 +393,7 @@ class MultiDatabasePool:
         Returns:
             ConnectionPool for the database
         """
-        db_path = str(Path(db_path).resolve())
+        db_path = _normalize_pool_db_path(db_path)
 
         with self._lock:
             if db_path not in self._pools:

@@ -262,7 +262,7 @@ export const CompareStrategiesModal: React.FC<CompareStrategiesModalProps> = ({
         <Alert
           type="info"
           showIcon
-          message={t("managePrompts.studio.optimizations.compare.info", {
+          title={t("managePrompts.studio.optimizations.compare.info", {
             defaultValue:
               "Compare different optimization strategies to find the best fit for your use case. Each strategy has different strengths depending on your prompt complexity and test case availability."
           })}

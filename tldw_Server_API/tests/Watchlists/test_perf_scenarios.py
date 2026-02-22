@@ -59,7 +59,7 @@ def test_watchlists_db_large_sources_and_jobs_listing_within_budget(monkeypatch)
         if user_db_path.exists():
             user_db_path.unlink()
     except Exception:
-        pass
+        _ = None
 
     db = WatchlistsDatabase.for_user(user_id)
     db.ensure_schema()

@@ -114,7 +114,7 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
       placement="right"
       onClose={onClose}
       open={open}
-      width={700}
+      styles={{ wrapper: { width: 700 } }}
       extra={
         <div className="flex items-center gap-2">
           {output?.format === "html" && (
@@ -142,13 +142,13 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
           <Spin size="large" />
         </div>
       ) : error ? (
-        <div className="text-center py-12 text-red-500">{error}</div>
+        <div className="text-center py-12 text-danger">{error}</div>
       ) : content ? (
         <div className="space-y-4">
           {(templateName || templateVersion || deliveryStatuses.length > 0 || output?.chatbook_path) && (
-            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 space-y-2 bg-zinc-50 dark:bg-zinc-900">
+            <div className="rounded-lg border border-border p-3 space-y-2 bg-surface">
               {(templateName || templateVersion) && (
-                <div className="text-sm text-zinc-700 dark:text-zinc-200">
+                <div className="text-sm text-text">
                   <span className="font-medium">
                     {t("watchlists:outputs.templateLabel", "Template")}:
                   </span>{" "}
@@ -158,7 +158,7 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
               )}
               {deliveryStatuses.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+                  <div className="text-sm font-medium text-text">
                     {t("watchlists:outputs.deliveryStatusLabel", "Delivery status")}
                   </div>
                   <div className="flex flex-wrap gap-1">
@@ -176,7 +176,7 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
                 </div>
               )}
               {output?.chatbook_path && (
-                <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                <div className="text-xs text-text-muted">
                   Chatbook: {output.chatbook_path}
                 </div>
               )}
@@ -201,16 +201,16 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
           {/* Content display */}
           {output?.format === "html" && viewMode === "rendered" ? (
             <div
-              className="prose dark:prose-invert max-w-none p-4 bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-auto max-h-[calc(100vh-200px)]"
+              className="prose dark:prose-invert max-w-none p-4 bg-surface rounded-lg border border-border overflow-auto max-h-[calc(100vh-200px)]"
               dangerouslySetInnerHTML={{ __html: sanitizedHtml || "" }}
             />
           ) : output?.format === "html" && viewMode === "source" ? (
-            <pre className="p-4 bg-zinc-900 text-zinc-100 rounded-lg font-mono text-xs overflow-auto max-h-[calc(100vh-200px)] whitespace-pre-wrap">
+            <pre className="p-4 bg-bg text-text rounded-lg font-mono text-xs overflow-auto max-h-[calc(100vh-200px)] whitespace-pre-wrap border border-border">
               {content}
             </pre>
           ) : (
             // Markdown or other formats
-            <pre className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg font-mono text-sm overflow-auto max-h-[calc(100vh-200px)] whitespace-pre-wrap border border-zinc-200 dark:border-zinc-700">
+            <pre className="p-4 bg-surface rounded-lg font-mono text-sm overflow-auto max-h-[calc(100vh-200px)] whitespace-pre-wrap border border-border">
               {content}
             </pre>
           )}

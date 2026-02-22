@@ -54,6 +54,8 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database, ingest_article_to_db
 from tldw_Server_API.app.core.http_client import afetch
 from tldw_Server_API.app.core.http_client import fetch as http_fetch
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+from tldw_Server_API.app.core.testing import is_truthy as _is_truthy
 
 #
 # Import Local
@@ -528,13 +530,19 @@ def clear_extraction_caches() -> None:
 
 
 def _schema_cache_key(html_text: str, url: str, schema_rules: dict[str, Any]) -> str:
-    html_hash = hashlib.sha1(html_text.encode("utf-8", errors="ignore")).hexdigest()
+    html_hash = hashlib.sha1(
+        html_text.encode("utf-8", errors="ignore"),
+        usedforsecurity=False
+    ).hexdigest()
     try:
         rules_repr = json.dumps(schema_rules, sort_keys=True, ensure_ascii=True)
     except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         rules_repr = str(schema_rules)
     raw = f"{url}|{rules_repr}|{html_hash}"
-    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+    return hashlib.sha1(
+        raw.encode("utf-8", errors="ignore"),
+        usedforsecurity=False
+    ).hexdigest()
 
 
 def _schema_cache_get(key: str) -> Optional[dict[str, Any]]:
@@ -706,7 +714,7 @@ def _extract_with_trafilatura(html: str, url: str) -> dict[str, Any]:
 
 def _regex_pii_mask_enabled() -> bool:
     flag = os.getenv("REGEX_PII_MASK", "")
-    return str(flag).strip().lower() in {"1", "true", "yes", "on"}
+    return _is_truthy(str(flag).strip())
 
 
 def _env_int(name: str) -> Optional[int]:
@@ -750,7 +758,7 @@ def _should_clear_caches(stage: str) -> bool:
     if not raw:
         return False
     value = raw.strip().lower()
-    if value in {"1", "true", "yes", "on"}:
+    if _is_truthy(value):
         return stage == "end"
     if value in {"both", "all"}:
         return True
@@ -1240,14 +1248,20 @@ def _hash_embedding(text: str, dims: int) -> list[float]:
         return [0.0] * dims
     vec = [0.0] * dims
     for token in tokens:
-        token_hash = hashlib.md5(token.encode("utf-8", errors="ignore")).hexdigest()
+        token_hash = hashlib.md5(
+            token.encode("utf-8", errors="ignore"),
+            usedforsecurity=False
+        ).hexdigest()
         idx = int(token_hash, 16) % dims
         vec[idx] += 1.0
     return _normalize_vector(vec)
 
 
 def _cluster_embedding(text: str, dims: int) -> list[float]:
-    key = hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
+    key = hashlib.sha1(
+        text.encode("utf-8", errors="ignore"),
+        usedforsecurity=False
+    ).hexdigest()
     cached = _cluster_cache_get(key)
     if cached is not None:
         return cached
@@ -2682,6 +2696,8 @@ def convert_html_to_markdown(html: str) -> str:
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
+    from tldw_Server_API.app.core.testing import is_truthy
+
     if isinstance(value, bool):
         return value
     if value is None:
@@ -2689,7 +2705,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+        return is_truthy(value)
     return default
 
 
@@ -2731,7 +2747,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
         ua_mode = str(ws_cfg.get('web_scraper_ua_mode', 'fixed') or 'fixed')
         respect_robots_default = ws_cfg.get('web_scraper_respect_robots', True)
         if isinstance(respect_robots_default, str):
-            respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on"}
+            respect_robots_default = _is_truthy(respect_robots_default.strip())
         router = ScraperRouter(rules, ua_mode=ua_mode, default_respect_robots=bool(respect_robots_default))
         plan = router.resolve(url)
     except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
@@ -2966,7 +2982,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
         # Whether stealth mode is enabled
         stealth_raw = loaded_config['web_scraper'].get('web_scraper_stealth_playwright', False)
         if isinstance(stealth_raw, str):
-            stealth_enabled = stealth_raw.strip().lower() in {"1", "true", "yes", "on"}
+            stealth_enabled = _is_truthy(stealth_raw.strip())
         else:
             stealth_enabled = bool(stealth_raw)
 
@@ -3426,7 +3442,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
         _allow_in_tests = (
             bool(os.getenv("PYTEST_CURRENT_TEST"))
             or "pytest" in sys.modules
-            or str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+            or _is_test_mode()
         )
         try:
             from tldw_Server_API.app.core.Security.egress import evaluate_url_policy

@@ -20,7 +20,7 @@ def test_get_corpus_synonyms_logs_selection_and_does_not_create(tmp_path, monkey
         try:
             messages.append(str(msg))
         except Exception:
-            pass
+            _ = None
 
     sink_id = logger.add(_sink, level="DEBUG", format="{message}")
     try:
@@ -50,4 +50,4 @@ def test_get_corpus_synonyms_logs_selection_and_does_not_create(tmp_path, monkey
         try:
             logger.remove(sink_id)
         except Exception:
-            pass
+            _ = None

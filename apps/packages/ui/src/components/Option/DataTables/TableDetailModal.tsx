@@ -216,11 +216,16 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
     <Drawer
       title={currentTable?.name || t("dataTables:tableDetails", "Table Details")}
       placement="right"
-      width={900}
+      size={900}
       open={open}
       onClose={handleClose}
       extra={
-        <Button type="text" icon={<X className="h-4 w-4" />} onClick={handleClose} />
+        <Button
+          type="text"
+          icon={<X className="h-4 w-4" />}
+          onClick={handleClose}
+          aria-label={t("common:close", "Close")}
+        />
       }
     >
       {/* Loading */}
@@ -234,7 +239,7 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
       {error && (
         <Alert
           type="error"
-          message={t("common:error", "Error")}
+          title={t("common:error", "Error")}
           description={error}
           showIcon
         />
@@ -273,7 +278,7 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
             </div>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                <span className="text-sm text-text-muted">
                   {t("dataTables:editMode", "Edit Mode")}
                 </span>
                 <Switch
@@ -320,10 +325,10 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
           {/* Description */}
           {currentTable.description && (
             <div>
-              <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+              <h4 className="text-sm font-medium text-text mb-1">
                 {t("dataTables:descriptionLabel", "Description")}
               </h4>
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              <p className="text-sm text-text-muted">
                 {currentTable.description}
               </p>
             </div>
@@ -332,10 +337,10 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
           {/* Prompt */}
           {currentTable.prompt && (
             <div>
-              <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+              <h4 className="text-sm font-medium text-text mb-1">
                 {t("dataTables:prompt", "Generation Prompt")}
               </h4>
-              <p className="text-sm text-zinc-600 dark:text-zinc-400 italic bg-zinc-50 dark:bg-zinc-800 p-2 rounded">
+              <p className="text-sm text-text-muted italic bg-surface p-2 rounded">
                 "{currentTable.prompt}"
               </p>
             </div>
@@ -344,7 +349,7 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
           {/* Sources */}
           {currentTable.sources && currentTable.sources.length > 0 && (
             <div>
-              <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+              <h4 className="text-sm font-medium text-text mb-2">
                 {t("dataTables:sources", "Sources")} ({currentTable.sources.length})
               </h4>
               <div className="flex flex-wrap gap-2">
@@ -359,10 +364,10 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
 
           {/* Data table */}
           <div>
-            <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+            <h4 className="text-sm font-medium text-text mb-2">
               {t("dataTables:data", "Data")}
               {editMode && (
-                <span className="ml-2 text-xs font-normal text-blue-600 dark:text-blue-400">
+                <span className="ml-2 text-xs font-normal text-primary">
                   ({t("dataTables:editModeActive", "Click cells to edit")})
                 </span>
               )}

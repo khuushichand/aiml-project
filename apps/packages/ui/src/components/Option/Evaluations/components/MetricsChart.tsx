@@ -23,10 +23,10 @@ interface MetricsChartProps {
 
 // Color scale based on value (0-1)
 const getBarColor = (value: number): string => {
-  if (value >= 0.8) return "bg-green-500"
-  if (value >= 0.6) return "bg-blue-500"
-  if (value >= 0.4) return "bg-yellow-500"
-  return "bg-red-500"
+  if (value >= 0.8) return "bg-success"
+  if (value >= 0.6) return "bg-primary"
+  if (value >= 0.4) return "bg-warn"
+  return "bg-danger"
 }
 
 export const MetricsChart: React.FC<MetricsChartProps> = ({

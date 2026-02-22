@@ -21,7 +21,6 @@ async def test_mfa_end_to_end_flow(tmp_path: Path):
         JWT_SECRET_KEY="test-secret-key-32-characters-minimum!",
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False,
     )
 
     pool = DatabasePool(settings)
@@ -112,7 +111,6 @@ async def test_backup_code_consumption_is_atomic_under_concurrency(tmp_path: Pat
         JWT_SECRET_KEY="test-secret-key-32-characters-minimum!",
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False,
     )
 
     pool = DatabasePool(settings)
@@ -174,7 +172,6 @@ async def test_mfa_secret_and_backup_codes_survive_key_rotation(tmp_path: Path):
         JWT_SECRET_KEY=primary_secret,
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False,
     )
 
     pool = DatabasePool(primary_settings)
@@ -220,7 +217,6 @@ async def test_mfa_secret_and_backup_codes_survive_key_rotation(tmp_path: Path):
             JWT_SECONDARY_SECRET=primary_secret,
             ENABLE_REGISTRATION=True,
             REQUIRE_REGISTRATION_CODE=False,
-            RATE_LIMIT_ENABLED=False,
         )
         rotated_service = MFAService(db_pool=pool, settings=rotated_settings)
 

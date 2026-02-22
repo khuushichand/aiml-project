@@ -8,7 +8,7 @@ groups:
       # HTTP 5xx ratio > 5% for 5 minutes
       - uid: tldw_app_http_5xx_ratio
         title: HTTP 5xx ratio high
-        condition: D
+        condition: C
         for: 5m
         annotations:
           summary: 'HTTP 5xx ratio > 5%'
@@ -32,7 +32,7 @@ groups:
             datasourceUid: prometheus
             model:
               editorMode: code
-              expr: clamp_min(sum(rate(http_requests_total[5m])), 1e-9)
+              expr: sum(rate(http_requests_total[5m]))
               instant: false
               interval: ""
               legendFormat: "all"

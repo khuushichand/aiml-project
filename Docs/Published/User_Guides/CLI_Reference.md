@@ -166,7 +166,7 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 ### Common Issues
 
 | Issue | Solution |
-|-------|----------|
+| ----- | -------- |
 | Port already in use | Change port: `--port 8001` |
 | Database locked | Ensure single connection or use proper context managers |
 | Missing API key | Check `.env` file or `Config_Files/config.txt` |
@@ -176,5 +176,5 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 
 - [Installation & Setup Guide](Installation-Setup-Guide.md)
 - [Authentication Setup](Authentication_Setup.md)
-- [API Documentation](../API-related/index.md)
+- [API Documentation](../API-related/API_README.md)
 - [TTS Getting Started](TTS_Getting_Started.md)

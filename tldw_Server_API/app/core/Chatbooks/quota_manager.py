@@ -21,6 +21,7 @@ UNLIMITED_QUOTA = -1
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.testing import is_truthy
 
 _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -39,7 +40,7 @@ _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS = (
 
 
 def _env_flag(name: str) -> bool:
-    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(os.getenv(name))
 
 
 class UserTier(str, Enum):

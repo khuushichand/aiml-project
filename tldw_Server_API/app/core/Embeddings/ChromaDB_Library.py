@@ -64,6 +64,7 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     log_security_violation,
 )
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze  # Assuming this is correct
+from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Utils.Utils import logger  # Assuming this is 'logging' aliased or a custom logger
 
@@ -283,7 +284,7 @@ class ChromaDBManager:
         else:
             backend = str(chroma_client_settings_config.get("backend", "persistent")).lower()
             # Honor explicit config, and also support CHROMADB_FORCE_STUB for tests/CI
-            _env_force_stub = str(os.getenv("CHROMADB_FORCE_STUB", "")).strip().lower() in {"1", "true", "yes", "on"}
+            _env_force_stub = env_flag_enabled("CHROMADB_FORCE_STUB")
             use_stub = bool(
                 chroma_client_settings_config.get("use_in_memory_stub", False)
                 or backend == "stub"
@@ -778,8 +779,9 @@ class ChromaDBManager:
                             if bool(_settings.get("CLAIMS_EMBED", False)) and claims:
                                 claim_texts = [c.get("claim_text", "") for c in claims if c.get("claim_text")]
                                 if claim_texts:
-                                    # Embed with same model unless overridden
-                                    claim_model_id = embedding_model_id_override or self.default_embedding_model_id
+                                    # Prefer claims-specific model, then request override, then default.
+                                    configured_claim_model = str(_settings.get("CLAIMS_EMBED_MODEL_ID", "") or "").strip()
+                                    claim_model_id = configured_claim_model or embedding_model_id_override or self.default_embedding_model_id
                                     emb_vectors = create_embeddings_batch(
                                         texts=claim_texts,
                                         user_app_config=self.user_embedding_config,
@@ -794,7 +796,7 @@ class ChromaDBManager:
                                         claims_coll = self.get_or_create_collection(coll_name)
                                     import hashlib as _hashlib
                                     ids = [
-                                        f"claim_{media_id}_{(c.get('chunk_index') or 0)}_{_hashlib.sha1(str(c.get('claim_text','')).encode()).hexdigest()[:12]}"
+                                        f"claim_{media_id}_{(c.get('chunk_index') or 0)}_{_hashlib.sha1(str(c.get('claim_text','')).encode(), usedforsecurity=False).hexdigest()[:12]}"
                                         for c in claims
                                     ]
                                     metas = []
@@ -1507,7 +1509,7 @@ class ChromaDBManager:
                     for w in words:
                         feats = grams(w)
                         for f in feats:
-                            h = int(_hash.sha1(f.encode("utf-8")).hexdigest()[:16], 16)
+                            h = int(_hash.sha1(f.encode("utf-8"), usedforsecurity=False).hexdigest()[:16], 16)
                             for b in range(64):
                                 if (h >> b) & 1:
                                     bits[b] += 1
@@ -1651,6 +1653,34 @@ class ChromaDBManager:
                     exc_info=True)
                 # Depending on severity, either return 0 or raise
                 raise RuntimeError(f"Failed to count items in collection: {e}") from e
+
+    def get_collection(self, collection_name: str) -> Collection:
+        """
+        Gets an existing ChromaDB collection without creating one.
+
+        Args:
+            collection_name: Name of the collection to retrieve.
+
+        Returns:
+            Collection: The ChromaDB collection object.
+
+        Raises:
+            KeyError: If the collection does not exist.
+            RuntimeError: If the lookup fails for other reasons.
+        """
+        if not collection_name:
+            raise ValueError("collection_name must be provided.")
+        with self._lock:
+            try:
+                return self.client.get_collection(name=collection_name)
+            except (KeyError, ValueError) as e:
+                raise KeyError(f"Collection '{collection_name}' does not exist") from e
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
+                logger.error(
+                    f"User '{self.user_id}': Failed to get collection '{collection_name}': {e}",
+                    exc_info=True,
+                )
+                raise RuntimeError(f"Failed to get collection '{collection_name}': {e}") from e
 
     def list_collections(self) -> Sequence[Collection]:
         """Lists all collections for the current user's client."""

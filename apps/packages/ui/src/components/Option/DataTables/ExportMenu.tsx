@@ -69,6 +69,8 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({ tableId, tableName }) =>
         <Button
           type="text"
           size="small"
+          aria-label={t("dataTables:export", "Export")}
+          className="min-h-[44px] min-w-[44px] md:min-h-[32px] md:min-w-[32px]"
           icon={<Download className="h-4 w-4" />}
           loading={isExporting}
         />

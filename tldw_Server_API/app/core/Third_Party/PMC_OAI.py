@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import contextlib
 from typing import Any
+from defusedxml import ElementTree as DET
+from defusedxml.common import DefusedXmlException
 from xml.etree import ElementTree as ET
 
 from tldw_Server_API.app.core.http_client import fetch
@@ -26,6 +28,7 @@ _PMC_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
     ET.ParseError,
+    DefusedXmlException,
 )
 
 
@@ -36,7 +39,7 @@ def _get_xml(params: dict[str, Any]) -> ET.Element:
         # Let caller handle via generic error path
         raise RuntimeError(f"HTTP {r.status_code}")
     try:
-        return ET.fromstring(r.text)
+        return DET.fromstring(r.text)
     finally:
         with contextlib.suppress(AttributeError, OSError):
             r.close()

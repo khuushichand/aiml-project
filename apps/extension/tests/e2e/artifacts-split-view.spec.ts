@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 
@@ -18,7 +19,7 @@ const enableProMode = async (page: any) => {
 
 test.describe("Artifacts split view", () => {
   test("shows inline table + mermaid with artifacts panel in Pro mode", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true,

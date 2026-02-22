@@ -12,7 +12,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { AlertTriangle, CheckCircle, Clock, Eye, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Clock, Eye, Plus, Trash2 } from 'lucide-react';
 import type { Watchlist, WatchlistDraft } from '../types';
 
 type WatchlistsPanelProps = {
@@ -207,12 +207,10 @@ export default function WatchlistsPanel({
                     title={isDeleting ? 'Deleting watchlist' : 'Delete watchlist'}
                     aria-label={isDeleting ? 'Deleting watchlist' : 'Delete watchlist'}
                     disabled={isDeleting}
+                    loading={isDeleting}
+                    className="text-red-500 hover:text-red-500"
                   >
-                    {isDeleting ? (
-                      <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-4 w-4 text-red-500" />
-                    )}
+                    <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
               );

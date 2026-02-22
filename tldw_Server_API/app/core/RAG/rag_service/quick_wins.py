@@ -728,25 +728,55 @@ def get_webhook_notifier() -> WebhookNotifier:
 # Pipeline integration functions
 
 async def spell_check_query(context: Any, **kwargs) -> Any:
-    """Spell check and correct query in pipeline."""
-    if not context.config.get("spell_check", {}).get("enabled", True):
+    """
+    Spell-check a query.
+
+    Backward compatibility:
+    - If ``context`` is a raw string query, return a corrected string.
+    - If ``context`` is a pipeline context object, mutate and return it.
+    """
+    checker = get_spell_checker()
+
+    # Unified pipeline currently calls this helper with a raw query string.
+    if isinstance(context, str):
+        result = checker.check_query(context)
+        corrected = result.get("corrected")
+        if result.get("has_errors") and isinstance(corrected, str):
+            return corrected
         return context
 
-    checker = get_spell_checker()
-    debug = get_debug_mode()
+    config_obj = getattr(context, "config", None)
+    spell_cfg = config_obj.get("spell_check", {}) if isinstance(config_obj, dict) else {}
+    if not spell_cfg.get("enabled", True):
+        return context
 
-    result = checker.check_query(context.query)
+    query_text = getattr(context, "query", None)
+    if not isinstance(query_text, str):
+        return context
+
+    debug = get_debug_mode()
+    result = checker.check_query(query_text)
 
     if result["has_errors"]:
         debug.log("spell_check", "Found spelling errors", result["corrections"])
 
-        if context.config.get("spell_check", {}).get("auto_correct", True):
-            context.metadata["original_query_before_correction"] = context.query
+        if spell_cfg.get("auto_correct", True):
+            metadata = getattr(context, "metadata", None)
+            if not isinstance(metadata, dict):
+                metadata = {}
+                try:
+                    setattr(context, "metadata", metadata)
+                except Exception as metadata_attach_error:
+                    logger.debug("Quick wins failed to attach metadata mapping to context", exc_info=metadata_attach_error)
+            metadata["original_query_before_correction"] = query_text
             context.query = result["corrected"]
-            context.metadata["spell_corrections"] = result["corrections"]
+            metadata["spell_corrections"] = result["corrections"]
             try:
                 import hashlib as _hl
-                _qh = _hl.md5((getattr(context, 'query', '') or '').encode('utf-8')).hexdigest()[:8]
+                _qh = _hl.md5(
+                    (getattr(context, 'query', '') or '').encode('utf-8'),
+                    usedforsecurity=False,
+                ).hexdigest()[:8]
                 logger.info(f"Auto-corrected query hash={_qh}")
             except Exception:
                 logger.info("Auto-corrected query")

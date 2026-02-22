@@ -5,19 +5,23 @@ Tests the full request/response cycle with real components,
 no mocking except for external API calls.
 """
 
+import contextlib
 import json
 import base64
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import status
 from unittest.mock import patch, AsyncMock, MagicMock
 
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
+from tldw_Server_API.app.api.v1.endpoints.audio import audio_jobs
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.TTS.tts_jobs_worker import _handle_tts_job
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -197,6 +201,36 @@ class TestTTSGenerateEndpoint:
             assert decoded == alignment_payload
             assert response.headers.get("X-TTS-Alignment-Format") == "json+base64"
 
+    async def test_generate_pcm_sets_sample_rate_header(self, test_client, auth_headers):
+        """PCM responses should expose the resolved sample rate header and content-type rate."""
+        seen: dict[str, Any] = {}
+
+        async def mock_stream(request_obj, *args, **kwargs):  # noqa: ARG001
+            seen["target_sample_rate"] = request_obj.target_sample_rate
+            request_obj._tts_metadata = {"sample_rate": 22050}
+            yield b"pcm_audio_data"
+
+        with patch("tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech") as mock_generate_speech:
+            mock_generate_speech.side_effect = mock_stream
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "Hello PCM",
+                    "voice": "af_heart",
+                    "model": "kokoro",
+                    "response_format": "pcm",
+                    "stream": False,
+                    "target_sample_rate": 22050,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            assert seen.get("target_sample_rate") == 22050
+            assert response.headers.get("X-Audio-Sample-Rate") == "22050"
+            assert "audio/L16; rate=22050; channels=1" in response.headers.get("content-type", "")
+
     async def test_generate_alignment_metadata_endpoint(self, test_client, auth_headers):
         """Test /api/v1/audio/speech/metadata returns alignment JSON."""
         alignment_payload = {
@@ -292,6 +326,35 @@ class TestTTSStreamingEndpoint:
             assert len(chunks) > 0
 
     @pytest.mark.streaming
+    async def test_streaming_pcm_sets_sample_rate_header(self, test_client, auth_headers):
+        """Streaming PCM responses should expose sample-rate headers."""
+
+        async def mock_stream(request_obj, *args, **kwargs):  # noqa: ARG001
+            request_obj._tts_metadata = {"sample_rate": 16000}
+            yield b"chunk1"
+            yield b"chunk2"
+
+        with patch("tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech") as mock_stream_gen:
+            mock_stream_gen.side_effect = mock_stream
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "Stream PCM",
+                    "voice": "echo",
+                    "response_format": "pcm",
+                    "stream": True,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            assert response.headers.get("X-Audio-Sample-Rate") == "16000"
+            assert "audio/L16; rate=16000; channels=1" in response.headers.get("content-type", "")
+            chunks = list(response.iter_bytes())
+            assert len(chunks) > 0
+
+    @pytest.mark.streaming
     async def test_streaming_with_error(self, test_client, auth_headers):
         """Test streaming handles errors gracefully."""
 
@@ -358,9 +421,9 @@ class TestTTSStreamingEndpoint:
                 try:
                     list(response.iter_bytes())
                 except Exception:
-                    pass
+                    _ = None
             except Exception:
-                pass
+                _ = None
 
         db_path = DatabasePaths.get_media_db_path(1)
         db = MediaDatabase(db_path=str(db_path), client_id="history_test")
@@ -374,6 +437,58 @@ class TestTTSStreamingEndpoint:
         assert row["status"] == "failed"
         assert row["error_message"]
         assert row["text"] == "Error test history"
+
+    async def test_history_write_failure_logs_request_id(self, test_client, auth_headers, monkeypatch, tmp_path):
+        """History write failures should include request_id in debug logs and not fail response."""
+        user_db_base = tmp_path / "user_dbs"
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(user_db_base))
+        monkeypatch.setenv("TTS_HISTORY_ENABLED", "true")
+        monkeypatch.setenv("TTS_HISTORY_STORE_TEXT", "true")
+        monkeypatch.setenv("TTS_HISTORY_HASH_KEY", "test-history-key")
+        monkeypatch.setattr(settings, "TTS_HISTORY_ENABLED", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_STORE_TEXT", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_HASH_KEY", "test-history-key", raising=False)
+
+        debug_lines: list[str] = []
+
+        def _capture_debug(message, *args, **kwargs):
+            try:
+                rendered = str(message).format(*args)
+            except Exception:
+                rendered = f"{message} {args}"
+            debug_lines.append(rendered)
+
+        monkeypatch.setattr(audio_endpoints.audio_tts.logger, "debug", _capture_debug)
+
+        async def mock_stream(*args, **kwargs):
+            yield b"history-write-failure-audio"
+
+        req_id = "req-stage2-history-write-fail"
+        headers = {**auth_headers, "X-Request-ID": req_id}
+
+        with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech, \
+                patch(
+                    'tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase.create_tts_history_entry',
+                    side_effect=RuntimeError("history insert failure"),
+                ):
+            mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "request id correlation test",
+                    "voice": "alloy",
+                    "response_format": "mp3",
+                    "stream": False,
+                },
+                headers=headers,
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert any(
+            "failed to write record" in line and f"request_id={req_id}" in line
+            for line in debug_lines
+        )
 
     @pytest.mark.streaming
     async def test_streaming_quota_exceeded_maps_to_402(self, test_client, auth_headers):
@@ -397,6 +512,112 @@ class TestTTSStreamingEndpoint:
             # Depending on streaming mechanics, frameworks may return 402 or 500
             # when the generator raises immediately. Accept both, preferring 402.
             assert response.status_code in [status.HTTP_402_PAYMENT_REQUIRED, status.HTTP_500_INTERNAL_SERVER_ERROR]
+
+
+class TestTTSJobsHistoryIntegration:
+    """Integration tests for long-form TTS jobs with history linkage."""
+
+    async def test_speech_jobs_flow_links_artifact_and_history(self, test_client, auth_headers, monkeypatch, tmp_path):
+        user_db_base = tmp_path / "user_dbs"
+        jobs_db_path = tmp_path / "jobs.db"
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(user_db_base))
+        monkeypatch.setenv("JOBS_DB_PATH", str(jobs_db_path))
+        monkeypatch.setenv("TTS_HISTORY_ENABLED", "true")
+        monkeypatch.setenv("TTS_HISTORY_STORE_TEXT", "true")
+        monkeypatch.setenv("TTS_HISTORY_STORE_FAILED", "true")
+        monkeypatch.setenv("TTS_HISTORY_HASH_KEY", "stage4-history-key")
+
+        monkeypatch.setattr(settings, "USER_DB_BASE_DIR", str(user_db_base), raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_ENABLED", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_STORE_TEXT", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_STORE_FAILED", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_HASH_KEY", "stage4-history-key", raising=False)
+
+        with contextlib.suppress(Exception):
+            audio_jobs._job_manager_cache.clear()
+
+        class DummyService:
+            def generate_speech(self, request_obj, *args, **kwargs):
+                request_obj._tts_metadata = {
+                    "provider": "openai",
+                    "model": "tts-1",
+                    "voice": "alloy",
+                    "voice_id": "alloy",
+                    "format": "mp3",
+                }
+
+                async def _gen():
+                    yield b"job-audio-bytes"
+
+                return _gen()
+
+        async def _get_service():
+            return DummyService()
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.TTS.tts_jobs_worker.get_tts_service_v2",
+            _get_service,
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.TTS.tts_jobs_worker.emit_job_event",
+            lambda *args, **kwargs: None,
+        )
+
+        try:
+            submit_resp = test_client.post(
+                "/api/v1/audio/speech/jobs",
+                json={
+                    "input": "Stage 4 jobs flow test",
+                    "voice": "alloy",
+                    "model": "tts-1",
+                    "response_format": "mp3",
+                    "stream": False,
+                },
+                headers=auth_headers,
+            )
+            assert submit_resp.status_code == status.HTTP_200_OK
+            submit_data = submit_resp.json()
+            job_id = int(submit_data["job_id"])
+
+            jm = audio_jobs.get_job_manager()
+            job = jm.get_job(job_id)
+            assert job is not None
+
+            result = await _handle_tts_job(job)
+            output_id = int(result["output_id"])
+            assert output_id > 0
+            jm.complete_job(job_id, result=result)
+
+            artifacts_resp = test_client.get(
+                f"/api/v1/audio/speech/jobs/{job_id}/artifacts",
+                headers=auth_headers,
+            )
+            assert artifacts_resp.status_code == status.HTTP_200_OK
+            artifacts_payload = artifacts_resp.json()
+            artifact_ids = {int(item["output_id"]) for item in artifacts_payload.get("artifacts", [])}
+            assert output_id in artifact_ids
+
+            media_db = MediaDatabase(
+                db_path=str(DatabasePaths.get_media_db_path(1)),
+                client_id="stage4_jobs_history_assert",
+            )
+            try:
+                row = media_db.execute_query(
+                    "SELECT job_id, output_id, artifact_ids, status FROM tts_history "
+                    "WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                    ("1",),
+                ).fetchone()
+            finally:
+                media_db.close_connection()
+
+            assert row is not None
+            assert int(row["job_id"]) == job_id
+            assert int(row["output_id"]) == output_id
+            assert row["status"] == "success"
+            assert json.loads(row["artifact_ids"]) == [f"output:{output_id}"]
+        finally:
+            with contextlib.suppress(Exception):
+                audio_jobs._job_manager_cache.clear()
 
 # ========================================================================
 # Provider Management Endpoint Tests

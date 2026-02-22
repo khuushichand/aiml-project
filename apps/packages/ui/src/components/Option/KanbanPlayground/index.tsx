@@ -111,6 +111,10 @@ export const KanbanPlayground = () => {
   }, [queryClient])
 
   const boards = boardsData?.boards ?? []
+  const emptyDescription =
+    boards.length > 0
+      ? "Select an existing board to get started"
+      : "No boards yet. Create your first board"
 
   const boardSelectorOptions = boards.map((b) => ({
     value: b.id,
@@ -124,13 +128,13 @@ export const KanbanPlayground = () => {
         <h1 className="text-xl font-semibold">Kanban Playground</h1>
       </div>
       <div className="flex items-center gap-2">
-        <div className="flex items-center gap-2 text-sm text-gray-500">
+        <div className="flex items-center gap-2 text-sm text-text-muted">
           <span>Boards</span>
           <Badge
             count={boards.length}
             showZero
             styles={{
-              indicator: { backgroundColor: "#60a5fa", color: "#0b1f4b" }
+              indicator: { backgroundColor: "rgb(var(--color-primary))", color: "rgb(var(--color-text))" }
             }}
           />
         </div>
@@ -178,7 +182,7 @@ export const KanbanPlayground = () => {
             </div>
           ) : !selectedBoardId ? (
             <Empty
-              description="Select a board or create a new one"
+              description={emptyDescription}
               className="mt-20"
             >
               <Button

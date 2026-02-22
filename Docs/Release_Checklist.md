@@ -10,6 +10,8 @@ Ensure version numbers and release metadata are consistent and discoverable.
 
 - [ ] Bump the version in `pyproject.toml` and verify it matches all visible references (for example `README.md`, `Docs/`, Docker tags).
 - [ ] Update release notes (for example `CHANGELOG.md` or a dedicated release notes file) with all user-visible changes, including any notable performance or behavior changes.
+- [ ] For WebUI route-boundary/recovery changes, use and adapt `Docs/Product/Completed/WebUI-related/M2_Release_Note_Template_Route_Recoverability_2026_02.md` so recoverability claims and troubleshooting links stay consistent.
+- [ ] For WebUI releases, include UX regression status using `Docs/Product/Completed/WebUI-related/M5_3_Release_Note_UX_Regression_Reporting_Template_2026_02.md` (gate outcomes, highest severity, and any conditional-ship exceptions).
 - [ ] Verify API docs that mention a version or base URL are current.
 - [ ] Document any new or changed environment variables in `README.md` and the relevant docs under `Docs/`.
 - [ ] Verify that the chosen version bump (patch, minor, major) matches the project’s versioning guidelines (for example `Versioning_Scheme.jpg`).

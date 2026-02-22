@@ -64,7 +64,7 @@ def get_compute_capability() -> str:
             if torch.backends.mps.is_available():
                 return "mps"
         except:
-            pass
+            _ = None
         return "cpu"
     elif platform.system() == "Linux":
         # Check for CUDA
@@ -72,7 +72,7 @@ def get_compute_capability() -> str:
             if torch.cuda.is_available():
                 return "cuda"
         except:
-            pass
+            _ = None
         # Check if nvidia-smi exists
         if shutil.which("nvidia-smi"):
             return "cuda"
@@ -82,7 +82,7 @@ def get_compute_capability() -> str:
             if torch.cuda.is_available():
                 return "cuda"
         except:
-            pass
+            _ = None
 
     return "cpu"
 
@@ -231,7 +231,7 @@ class TestAPITTSIntegration:
             assert False, "Primary should have failed"
         except Exception:
             # Expected to fail
-            pass
+            _ = None
 
         # Try fallback (should succeed)
         response = await fallback.generate(request)

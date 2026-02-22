@@ -90,7 +90,7 @@ def test_media_ingest_jobs_local_file_workflow(page, server_url):
 
 @pytest.mark.e2e
 def test_media_ingest_jobs_external_url_workflow(page, server_url):
-    if os.getenv("TLDW_E2E_EXTERNAL_MEDIA_INGEST", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("TLDW_E2E_EXTERNAL_MEDIA_INGEST", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("External media ingest disabled; set TLDW_E2E_EXTERNAL_MEDIA_INGEST=1 to enable.")
 
     headers = _auth_headers()

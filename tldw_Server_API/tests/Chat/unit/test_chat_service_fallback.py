@@ -311,7 +311,7 @@ async def test_execute_streaming_call_preserves_http_exception(monkeypatch):
         try:
             await agen.aclose()
         except Exception:
-            pass
+            _ = None
 
     # Normalize to str for assertions
     chunks = [c.decode() if isinstance(c, (bytes, bytearray)) else str(c) for c in chunks]
@@ -440,7 +440,7 @@ async def test_execute_streaming_call_queue_fallback(monkeypatch):
         try:
             await agen.aclose()
         except Exception:
-            pass
+            _ = None
 
     chunks = [c.decode() if isinstance(c, (bytes, bytearray)) else str(c) for c in chunks]
     joined = "".join(chunks)
@@ -526,7 +526,7 @@ async def test_execute_streaming_call_finalize_runs_without_refund_cb(monkeypatc
     try:
         await agen.__anext__()
     except StopAsyncIteration:
-        pass
+        _ = None
     finally:
         with contextlib.suppress(Exception):
             # Best effort close. Some test wrappers may already exhaust/close the iterator.
@@ -610,7 +610,7 @@ async def test_execute_streaming_call_refund_cb_still_conditional(monkeypatch):
     try:
         await agen.__anext__()
     except StopAsyncIteration:
-        pass
+        _ = None
     finally:
         with contextlib.suppress(Exception):
             await agen.aclose()

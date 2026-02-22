@@ -118,7 +118,7 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
           })}
         </span>
       }
-      width={480}
+      styles={{ wrapper: { width: 480 } }}
       destroyOnHidden
     >
       {historyStatus === "pending" && <Skeleton paragraph={{ rows: 6 }} />}

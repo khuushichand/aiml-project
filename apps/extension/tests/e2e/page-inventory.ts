@@ -76,6 +76,7 @@ export const EXTENSION_ROUTES: ExtensionRouteEntry[] = [
   // Sidepanel routes
   { kind: "sidepanel", path: "/", name: "Sidepanel Chat" },
   { kind: "sidepanel", path: "/agent", name: "Sidepanel Agent" },
+  { kind: "sidepanel", path: "/persona", name: "Sidepanel Persona" },
   { kind: "sidepanel", path: "/settings", name: "Sidepanel Settings" },
   { kind: "sidepanel", path: "/error-boundary-test", name: "Sidepanel Error Boundary Test" }
 ]

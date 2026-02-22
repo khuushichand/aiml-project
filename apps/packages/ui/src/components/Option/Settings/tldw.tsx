@@ -25,8 +25,15 @@ import type { PathOrUrl } from "@/services/tldw/openapi-guard"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useConnectionStore } from "@/store/connection"
 import { mapMultiUserLoginErrorMessage } from "@/services/auth-errors"
+import { emitSplashAfterSingleUserAuthSuccess } from "@/services/splash-auth"
 import { ServerOverviewHint } from "@/components/Common/ServerOverviewHint"
 import { requestOptionalHostPermission } from "@/utils/extension-permissions"
+import {
+  getCoreStatusLabel,
+  getRagStatusLabel,
+  type CoreStatus,
+  type RagStatus
+} from "./tldw-connection-status"
 
 type TimeoutPresetKey = 'balanced' | 'extended'
 type LoginMethod = 'magic-link' | 'password'
@@ -119,9 +126,6 @@ const BILLING_SUCCESS_URL = `${BILLING_BASE_URL}/billing/success`
 const BILLING_CANCEL_URL = `${BILLING_BASE_URL}/billing/cancel`
 const BILLING_RETURN_URL = `${BILLING_BASE_URL}/billing`
 
-type CoreStatus = 'unknown' | 'checking' | 'connected' | 'failed'
-type RagStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking'
-
 export const TldwSettings = () => {
   const { t } = useTranslation(["settings", "common"])
   const message = useAntdMessage()
@@ -213,19 +217,6 @@ export const TldwSettings = () => {
     }
   }
 
-  const coreStatusLabel = (status: CoreStatus) => {
-    switch (status) {
-      case "checking":
-        return t("settings:tldw.connection.coreChecking", "Core: checking…")
-      case "connected":
-        return t("settings:tldw.connection.coreOk", "Core: reachable")
-      case "failed":
-        return t("settings:tldw.connection.coreFailed", "Core: unreachable")
-      default:
-        return t("settings:tldw.connection.coreUnknown", "Core: waiting")
-    }
-  }
-
   const ragStatusColor = (status: RagStatus) => {
     switch (status) {
       case "healthy":
@@ -234,19 +225,6 @@ export const TldwSettings = () => {
         return "red"
       default:
         return "default"
-    }
-  }
-
-  const ragStatusLabel = (status: RagStatus) => {
-    switch (status) {
-      case "checking":
-        return t("settings:tldw.connection.ragChecking", "RAG: checking…")
-      case "healthy":
-        return t("settings:tldw.connection.ragHealthy", "RAG: healthy")
-      case "unhealthy":
-        return t("settings:tldw.connection.ragUnhealthy", "RAG: needs attention")
-      default:
-        return t("settings:tldw.connection.ragUnknown", "RAG: waiting")
     }
   }
 
@@ -479,7 +457,9 @@ export const TldwSettings = () => {
       message.success(t("settings:savedSuccessfully"))
       
       // Test connection after saving
-      await testConnection()
+      await testConnection({
+        triggerSplashOnSuccess: values.authMode === "single-user"
+      })
     } catch (error) {
       message.error(t("settings:saveFailed"))
       console.error('Failed to save config:', error)
@@ -604,7 +584,7 @@ export const TldwSettings = () => {
     }
   }, [authMode, isLoggedIn])
 
-  const testConnection = async () => {
+  const testConnection = async (options?: { triggerSplashOnSuccess?: boolean }) => {
     setTestingConnection(true)
     setConnectionStatus(null)
     setConnectionDetail("")
@@ -704,6 +684,9 @@ export const TldwSettings = () => {
       
       if (success) {
         message.success(t('settings:tldw.connection.success', 'Connection successful!'))
+        if (options?.triggerSplashOnSuccess) {
+          emitSplashAfterSingleUserAuthSuccess(values.authMode, true)
+        }
         if (
           values.authMode === 'single-user' &&
           typeof values.apiKey === 'string' &&
@@ -1074,7 +1057,7 @@ export const TldwSettings = () => {
             showIcon
             closable
             className="mb-4"
-            message={t('settings:tldw.loadError', 'Unable to load tldw settings')}
+            title={t('settings:tldw.loadError', 'Unable to load tldw settings')}
             description={initializingError}
             onClose={() => setInitializingError(null)}
           />
@@ -1085,7 +1068,7 @@ export const TldwSettings = () => {
             showIcon
             closable
             className="mb-4"
-            message={t(
+            title={t(
               'settings:tldw.defaultKeyWarning.title',
               'Default demo API key in use'
             )}
@@ -1120,7 +1103,7 @@ export const TldwSettings = () => {
             <Link to="/settings/health">
               <Button>{t('settings:tldw.buttons.health', 'Health')}</Button>
             </Link>
-            <Button type="primary" onClick={testConnection} loading={testingConnection}>{t('settings:tldw.buttons.recheck', 'Recheck')}</Button>
+            <Button type="primary" onClick={() => { void testConnection() }} loading={testingConnection}>{t('settings:tldw.buttons.recheck', 'Recheck')}</Button>
           </Space>
         </div>
         <h2 className="text-base font-semibold mb-4 text-text">{t('settings:tldw.serverConfigTitle', 'tldw Server Configuration')}</h2>
@@ -1206,7 +1189,7 @@ export const TldwSettings = () => {
           {authMode === 'multi-user' && !isLoggedIn && (
             <>
               <Alert
-                message={t('settings:tldw.loginRequired.title', 'Login Required')}
+                title={t('settings:tldw.loginRequired.title', 'Login Required')}
                 description={t('settings:tldw.loginRequired.description', 'Please login with your tldw_server credentials')}
                 type="info"
                 showIcon
@@ -1298,7 +1281,7 @@ export const TldwSettings = () => {
 
           {authMode === 'multi-user' && isLoggedIn && (
             <Alert
-              message={t('settings:tldw.loggedIn.title', 'Logged In')}
+              title={t('settings:tldw.loggedIn.title', 'Logged In')}
               description={t('settings:tldw.loggedIn.description', 'You are currently logged in to tldw_server')}
               type="success"
               showIcon
@@ -1318,13 +1301,15 @@ export const TldwSettings = () => {
               </Button>
 
               <Button
-                onClick={testConnection}
+                onClick={() => {
+                  void testConnection()
+                }}
                 loading={testingConnection}
                 icon={
                   connectionStatus === 'success' ? (
-                    <CheckIcon className="w-4 h-4 text-green-500" />
+                    <CheckIcon className="w-4 h-4 text-success" />
                   ) : connectionStatus === 'error' ? (
-                    <XMarkIcon className="w-4 h-4 text-red-500" />
+                    <XMarkIcon className="w-4 h-4 text-danger" />
                   ) : null
                 }
               >
@@ -1351,8 +1336,8 @@ export const TldwSettings = () => {
                 <span
                   className={`text-sm ${
                     connectionStatus === "success"
-                      ? "text-green-500"
-                      : "text-red-500"
+                      ? "font-medium text-text"
+                      : "text-danger"
                   }`}>
                   {connectionStatus === "success"
                     ? t(
@@ -1385,11 +1370,11 @@ export const TldwSettings = () => {
                 </span>
                 <Tag
                   color={coreStatusColor(coreStatus)}>
-                  {coreStatusLabel(coreStatus)}
+                  {getCoreStatusLabel(t, coreStatus)}
                 </Tag>
                 <Tag
                   color={ragStatusColor(ragStatus)}>
-                  {ragStatusLabel(ragStatus)}
+                  {getRagStatusLabel(t, ragStatus)}
                 </Tag>
               </div>
             </div>
@@ -1706,7 +1691,7 @@ export const TldwSettings = () => {
                 type="error"
                 showIcon
                 className="mt-4"
-                message={t('settings:tldw.billing.errorTitle', 'Billing unavailable')}
+                title={t('settings:tldw.billing.errorTitle', 'Billing unavailable')}
                 description={billingError}
               />
             )}
@@ -1716,7 +1701,7 @@ export const TldwSettings = () => {
                 <Alert
                   type="error"
                   showIcon
-                  message={t('settings:tldw.billing.subscriptionError', 'Unable to load subscription')}
+                  title={t('settings:tldw.billing.subscriptionError', 'Unable to load subscription')}
                   description={billingStatusError}
                 />
               ) : billingStatus ? (
@@ -1756,7 +1741,7 @@ export const TldwSettings = () => {
                       type="warning"
                       showIcon
                       className="mt-3"
-                      message={t(
+                      title={t(
                         'settings:tldw.billing.cancelAtPeriodEnd',
                         'Subscription will cancel at period end.'
                       )}
@@ -1808,7 +1793,7 @@ export const TldwSettings = () => {
                 <Alert
                   type="error"
                   showIcon
-                  message={t(
+                  title={t(
                     'settings:tldw.billing.limitExceeded',
                     'Usage has exceeded one or more plan limits.'
                   )}
@@ -1818,7 +1803,7 @@ export const TldwSettings = () => {
                 <Alert
                   type="warning"
                   showIcon
-                  message={t(
+                  title={t(
                     'settings:tldw.billing.limitWarning',
                     'Approaching plan limits for some resources.'
                   )}
@@ -1834,7 +1819,7 @@ export const TldwSettings = () => {
                     <Alert
                       type="error"
                       showIcon
-                      message={t('settings:tldw.billing.plansError', 'Unable to load plans')}
+                      title={t('settings:tldw.billing.plansError', 'Unable to load plans')}
                       description={billingPlansError}
                     />
                   )}
@@ -1910,7 +1895,7 @@ export const TldwSettings = () => {
                     <Alert
                       type="error"
                       showIcon
-                      message={t('settings:tldw.billing.usageError', 'Unable to load usage data')}
+                      title={t('settings:tldw.billing.usageError', 'Unable to load usage data')}
                       description={billingUsageError}
                     />
                   )}
@@ -1977,7 +1962,7 @@ export const TldwSettings = () => {
                     type="error"
                     showIcon
                     className="mt-3"
-                    message={t('settings:tldw.billing.invoices.error', 'Unable to load invoices')}
+                    title={t('settings:tldw.billing.invoices.error', 'Unable to load invoices')}
                     description={billingInvoicesError}
                   />
                 )}

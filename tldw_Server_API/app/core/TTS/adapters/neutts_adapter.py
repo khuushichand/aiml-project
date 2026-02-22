@@ -95,8 +95,8 @@ class NeuTTSAdapter(TTSAdapter):
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
-            except Exception:
-                pass
+            except Exception as registration_error:
+                logger.debug("NeuTTS provider registration failed; continuing", exc_info=registration_error)
 
             # Detect capabilities from engine flags
             self._is_quantized_model = getattr(self._engine, "_is_quantized_model", False)

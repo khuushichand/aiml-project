@@ -4,6 +4,26 @@
 
 import type { RagSettings, RagPresetName } from "@/services/rag/unified-rag"
 
+export type QueryStage =
+  | "idle"
+  | "searching"
+  | "ranking"
+  | "generating"
+  | "verifying"
+  | "complete"
+  | "error"
+
+export type ScopeSnapshot = {
+  preset: RagPresetName
+  sources: string[]
+  webFallback: boolean
+}
+
+export type PinnedSourceFilters = {
+  mediaIds: number[]
+  noteIds: string[]
+}
+
 // Retrieved document with citation info
 export type RagResult = {
   id?: string
@@ -66,6 +86,46 @@ export type RagContextData = {
   feedback_id?: string
 }
 
+export type SearchRuntimeDetails = {
+  expandedQueries: string[]
+  rerankingEnabled: boolean
+  rerankingStrategy: string
+  averageRelevance: number | null
+  webFallbackEnabled: boolean
+  webFallbackTriggered: boolean
+  webFallbackEngine: string | null
+  tokensUsed: number | null
+  estimatedCostUsd: number | null
+  feedbackId: string | null
+  whyTheseSources: {
+    topicality: number | null
+    diversity: number | null
+    freshness: number | null
+  } | null
+  faithfulnessScore: number | null
+  faithfulnessTotalClaims: number | null
+  faithfulnessSupportedClaims: number | null
+  faithfulnessUnsupportedClaims: number | null
+  verificationRate: number | null
+  verificationCoverage: number | null
+  verificationTotalClaims: number | null
+  verificationVerifiedClaims: number | null
+  verificationReportAvailable: boolean
+  retrievalLatencyMs: number | null
+  documentsConsidered: number | null
+  chunksConsidered: number | null
+  documentsReturned: number
+  candidatesConsidered: number | null
+  candidatesReturned: number
+  candidatesRejected: number | null
+  alsoConsidered: Array<{
+    id: string
+    title: string
+    score: number | null
+    reason: string | null
+  }>
+}
+
 // Search history item
 export type SearchHistoryItem = {
   id: string
@@ -75,6 +135,8 @@ export type SearchHistoryItem = {
   messageId?: string
   sourcesCount: number
   hasAnswer: boolean
+  answerPreview?: string
+  pinned?: boolean
   preset?: RagPresetName
   keywords?: string[]
 }
@@ -106,13 +168,17 @@ export type KnowledgeQAState = {
   // Search state
   query: string
   isSearching: boolean
+  hasSearched: boolean
   results: RagResult[]
   answer: string | null
   citations: CitationRef[]
+  searchDetails: SearchRuntimeDetails | null
   error: string | null
+  queryWarning: string | null
 
   // Thread state
   currentThreadId: string | null
+  isLocalOnlyThread: boolean
   messages: KnowledgeQAMessage[]
   threads: KnowledgeQAThread[]
 
@@ -128,6 +194,11 @@ export type KnowledgeQAState = {
   // UI state
   settingsPanelOpen: boolean
   focusedSourceIndex: number | null
+  evidenceRailOpen: boolean
+  evidenceRailTab: "sources" | "details"
+  queryStage: QueryStage
+  lastSearchScope: ScopeSnapshot | null
+  pinnedSourceFilters: PinnedSourceFilters
 }
 
 // Actions for KnowledgeQA
@@ -135,12 +206,16 @@ export type KnowledgeQAActions = {
   // Search actions
   setQuery: (query: string) => void
   search: () => Promise<void>
+  cancelSearch: () => void
   clearResults: () => void
+  rerunWithTokenLimit: (tokenLimit: number) => Promise<void>
 
   // Thread actions
   createNewThread: (title?: string) => Promise<string>
   selectThread: (threadId: string) => Promise<void>
+  selectSharedThread: (shareToken: string) => Promise<void>
   askFollowUp: (question: string) => Promise<void>
+  branchFromTurn: (messageId: string) => Promise<void>
 
   // Settings actions
   setPreset: (preset: RagPresetName) => void
@@ -152,15 +227,21 @@ export type KnowledgeQAActions = {
   loadSearchHistory: () => Promise<void>
   restoreFromHistory: (item: SearchHistoryItem) => Promise<void>
   deleteHistoryItem: (id: string) => Promise<void>
+  toggleHistoryPin: (id: string) => void
 
   // UI actions
   setSettingsPanelOpen: (open: boolean) => void
   setHistorySidebarOpen: (open: boolean) => void
   focusSource: (index: number | null) => void
+  setEvidenceRailOpen: (open: boolean) => void
+  setEvidenceRailTab: (tab: "sources" | "details") => void
+  setQueryStage: (stage: QueryStage) => void
+  setPinnedSourceFilters: (filters: PinnedSourceFilters) => void
 
   // Citation actions
   persistRagContext: (messageId: string, context: RagContextData) => Promise<boolean>
   scrollToSource: (index: number) => void
+  scrollToCitation: (citationIndex: number, occurrence?: number) => void
 }
 
 // Context value combining state and actions

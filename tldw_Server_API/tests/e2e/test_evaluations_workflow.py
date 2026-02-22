@@ -589,7 +589,7 @@ class TestEvaluationWorkflow:
                         if response.status_code in [204, 200]:
                             cleaned += 1
                     except:
-                        pass
+                        _ = None
 
             print(f"✓ Cleaned up {cleaned} evaluations")
 

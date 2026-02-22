@@ -35,21 +35,20 @@ def _isolate_app_state_per_test(monkeypatch, request):
     # Ensure test-mode environment prior to app import/reload
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("TESTING", "true")
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
 
     # Disable CSRF through global settings before app import
     try:
         from tldw_Server_API.app.core.config import settings as _global_settings
         _global_settings["CSRF_ENABLED"] = False
     except Exception:
-        pass
+        _ = None
 
     # Reset JWT singleton so a fresh key/config is used each test
     try:
         from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service as _reset_jwt
         _reset_jwt()
     except Exception:
-        pass
+        _ = None
 
     global app  # type: ignore
 
@@ -59,7 +58,7 @@ def _isolate_app_state_per_test(monkeypatch, request):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 
     if _should_reload:
         # Reload app.main under the new environment and rebind global `app`
@@ -87,14 +86,14 @@ def _isolate_app_state_per_test(monkeypatch, request):
                     app.user_middleware = kept
                     app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
             setattr(request.node, "_tldw_app_reloaded", True)
         except Exception:
             # If reload fails for any reason, at least clear overrides on existing app
             try:
                 app.dependency_overrides.clear()
             except Exception:
-                pass
+                _ = None
 
     yield
 
@@ -102,7 +101,7 @@ def _isolate_app_state_per_test(monkeypatch, request):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     InvalidCredentialsError,
     UserNotFoundError,
@@ -391,16 +390,23 @@ class TestAuthEndpointsIntegration:
     async def test_logout_success(self, mock_db_pool, jwt_service, session_manager, test_user, valid_access_token):
         """Test successful logout."""
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-            get_current_user,
+            get_auth_principal,
             get_session_manager_dep,
-            get_jwt_service_dep
+            get_jwt_service_dep,
         )
+        from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
-        # Mock current user
-        async def mock_get_current_user():
-            return test_user
+        async def mock_get_auth_principal():
+            return AuthPrincipal(
+                kind="user",
+                user_id=int(test_user["id"]),
+                username=test_user.get("username"),
+                email=test_user.get("email"),
+                roles=[str(test_user.get("role") or "user")],
+                is_admin=bool(test_user.get("is_admin", False)),
+            )
 
-        app.dependency_overrides[get_current_user] = mock_get_current_user
+        app.dependency_overrides[get_auth_principal] = mock_get_auth_principal
         app.dependency_overrides[get_session_manager_dep] = lambda: session_manager
         app.dependency_overrides[get_jwt_service_dep] = lambda: jwt_service
 

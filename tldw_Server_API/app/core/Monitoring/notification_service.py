@@ -32,6 +32,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert
+from tldw_Server_API.app.core.testing import is_truthy
 
 _SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
 
@@ -55,7 +56,7 @@ class NotificationService:
     def __init__(self) -> None:
         cfg = load_and_log_configs() or {}
         ncfg = (cfg.get("monitoring") or {}).get("notifications") if isinstance(cfg, dict) else None
-        self.enabled = os.getenv("MONITORING_NOTIFY_ENABLED", str((ncfg or {}).get("enabled", False))).strip().lower() in {"1","true","yes","on","y"}
+        self.enabled = is_truthy(os.getenv("MONITORING_NOTIFY_ENABLED", str((ncfg or {}).get("enabled", False))))
         self.min_severity = str(os.getenv("MONITORING_NOTIFY_MIN_SEVERITY", (ncfg or {}).get("min_severity", "critical"))).strip().lower()
         raw_file = os.getenv("MONITORING_NOTIFY_FILE", (ncfg or {}).get("file", "Databases/monitoring_notifications.log"))
         self.file_path = self._resolve_file_path(raw_file)
@@ -65,11 +66,16 @@ class NotificationService:
         self.smtp_host = os.getenv("MONITORING_NOTIFY_SMTP_HOST", (ncfg or {}).get("smtp_host", ""))
         raw_smtp_port = os.getenv("MONITORING_NOTIFY_SMTP_PORT", (ncfg or {}).get("smtp_port", "587"))
         self.smtp_port = self._coerce_int(raw_smtp_port, 587)
-        self.smtp_starttls = str(os.getenv("MONITORING_NOTIFY_SMTP_STARTTLS", (ncfg or {}).get("smtp_starttls", "true"))).lower() in {"1","true","yes","on","y"}
+        self.smtp_starttls = is_truthy(os.getenv("MONITORING_NOTIFY_SMTP_STARTTLS", (ncfg or {}).get("smtp_starttls", "true")))
         self.smtp_user = os.getenv("MONITORING_NOTIFY_SMTP_USER", (ncfg or {}).get("smtp_user", ""))
         self.smtp_password = os.getenv("MONITORING_NOTIFY_SMTP_PASSWORD", (ncfg or {}).get("smtp_password", ""))
         self.email_from = os.getenv("MONITORING_NOTIFY_EMAIL_FROM", (ncfg or {}).get("email_from", self.smtp_user or ""))
+        self.digest_mode = os.getenv(
+            "MONITORING_NOTIFY_DIGEST_MODE",
+            (ncfg or {}).get("digest_mode", "immediate"),
+        ).strip().lower()
         self._lock = threading.RLock()
+        self._pending_digests: dict[str, list[dict[str, Any]]] = {}
         with contextlib.suppress(OSError):
             Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -277,6 +283,61 @@ class NotificationService:
             if self.smtp_user:
                 server.login(self.smtp_user, self.smtp_password or "")
             server.sendmail(self.email_from, recipients, msg.as_string())
+
+    def notify_generic(self, payload: dict[str, Any]) -> str:
+        """Record a generic notification payload (not tied to TopicAlert).
+
+        Applies severity threshold filtering and writes to JSONL sink.
+        Adds ``ts`` field if not present.
+        """
+        severity = payload.get("severity")
+        if not self._meets_threshold(severity):
+            return "skipped"
+        if "ts" not in payload:
+            payload["ts"] = datetime.now(timezone.utc).isoformat()
+        file_written = True
+        try:
+            with self._lock, open(self.file_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
+            file_written = False
+            logger.warning(f"Notification file sink failed: {e}")
+        try:
+            if self.webhook_url:
+                threading.Thread(target=self._send_webhook_safe, args=(payload,), daemon=True).start()
+        except (OSError, RuntimeError) as e:
+            logger.debug(f"Webhook thread start failed: {e}")
+        return "logged" if file_written else "failed"
+
+    def notify_or_batch(self, payload: dict[str, Any]) -> str:
+        """Route to immediate send or batching depending on digest_mode."""
+        severity = payload.get("severity")
+        if not self._meets_threshold(severity):
+            return "skipped"
+        if self.digest_mode in ("hourly", "daily"):
+            recipient = payload.get("user_id", "_default")
+            with self._lock:
+                self._pending_digests.setdefault(recipient, []).append(payload)
+            return "batched"
+        return self.notify_generic(payload)
+
+    def flush_digest(self, recipient: str | None = None) -> int:
+        """Flush pending digest alerts. Returns count of flushed items."""
+        with self._lock:
+            if recipient is not None:
+                items = self._pending_digests.pop(recipient, [])
+                count = len(items)
+            else:
+                count = sum(len(v) for v in self._pending_digests.values())
+                self._pending_digests.clear()
+        return count
+
+    def get_pending_digest_count(self, recipient: str | None = None) -> int:
+        """Return count of pending digest items, optionally for a specific recipient."""
+        with self._lock:
+            if recipient is not None:
+                return len(self._pending_digests.get(recipient, []))
+            return sum(len(v) for v in self._pending_digests.values())
 
     def _send_email_safe(self, alert: TopicAlert) -> None:
         try:

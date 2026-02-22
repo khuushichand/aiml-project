@@ -5,13 +5,13 @@ These adapters handle content moderation and policy checking.
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
@@ -58,15 +58,15 @@ async def run_moderation_adapter(config: dict[str, Any], context: dict[str, Any]
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 text = str(last.get("text") or last.get("content") or "")
-        except Exception:
-            pass
+        except Exception as context_error:
+            logger.debug("Moderation adapter failed to read fallback text from context", exc_info=context_error)
     text = text or ""
 
     if not text.strip():
         return {"error": "missing_text"}
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         if action == "check":
             # Simulate: flag if "blocked" appears in text
             is_blocked = "blocked" in text.lower() or "unsafe" in text.lower()
@@ -230,8 +230,8 @@ async def run_policy_check_adapter(config: dict[str, Any], context: dict[str, An
             if block_on_pii:
                 blocked = True
                 reasons.append("pii_detected")
-    except Exception:
-        pass
+    except Exception as pii_error:
+        logger.debug("Moderation PII checks failed; continuing", exc_info=pii_error)
 
     # Block words
     if isinstance(block_words, list) and block_words:
@@ -254,8 +254,8 @@ async def run_policy_check_adapter(config: dict[str, Any], context: dict[str, An
             flags["too_long"] = True
             blocked = True
             reasons.append("too_long")
-    except Exception:
-        pass
+    except Exception as length_error:
+        logger.debug("Moderation length checks failed; continuing", exc_info=length_error)
 
     out: dict[str, Any] = {"flags": flags, "blocked": blocked, "reasons": reasons}
     if redact_preview and text:

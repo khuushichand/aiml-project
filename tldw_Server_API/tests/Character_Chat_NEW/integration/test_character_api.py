@@ -821,7 +821,7 @@ class TestRateLimiting:
     @pytest.mark.rate_limit
     def test_rate_limit_per_character(self, test_client, auth_headers):
         """Test rate limiting per character."""
-        if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+        if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "y", "on"}:
             pytest.skip("Character chat rate limits are enforced by Resource Governor when enabled.")
         # Create character
         char_response = test_client.post(

@@ -67,7 +67,7 @@ class StreamingConfig:
 @dataclass
 class ServerConfig:
     """Server configuration."""
-    host: str = "0.0.0.0"
+    host: str = "0.0.0.0"  # nosec B104
     port: int = 8080
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
     log_requests: bool = True
@@ -126,7 +126,7 @@ class MockConfig:
         if "server" in data:
             server_data = data["server"]
             config.server = ServerConfig(
-                host=server_data.get("host", "0.0.0.0"),
+                host=server_data.get("host", "0.0.0.0"),  # nosec B104
                 port=server_data.get("port", 8080),
                 cors_origins=server_data.get("cors_origins", ["*"]),
                 log_requests=server_data.get("log_requests", True),

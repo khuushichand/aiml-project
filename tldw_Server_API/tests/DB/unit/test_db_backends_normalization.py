@@ -33,3 +33,17 @@ def test_sqlite_file_memory_uri_uses_memory(monkeypatch, tmp_path):
     conn.execute("INSERT INTO items(name) VALUES ('alpha')")
     conn.close()
     assert not list(tmp_path.iterdir())
+
+
+def test_from_env_accepts_y_for_sqlite_flags(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("TLDW_DB_BACKEND", "sqlite")
+    monkeypatch.setenv("TLDW_DB_ECHO", "y")
+    monkeypatch.setenv("TLDW_SQLITE_WAL_MODE", "y")
+    monkeypatch.setenv("TLDW_SQLITE_FOREIGN_KEYS", "y")
+
+    cfg = DatabaseConfig.from_env()
+    assert cfg.backend_type == BackendType.SQLITE
+    assert cfg.echo is True
+    assert cfg.sqlite_wal_mode is True
+    assert cfg.sqlite_foreign_keys is True

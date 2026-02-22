@@ -2,15 +2,19 @@
 # Description: Unit tests for the ClientSyncEngine class, focusing on state management, push/pull operations, and conflict resolution.
 #
 # Imports
-from datetime import datetime, timedelta
-import pytest
 import json
 import os
-from unittest.mock import patch, MagicMock, call
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from tldw_Server_API.app.core.Sync.Sync_Client import ClientSyncEngine
+
 #
 # Local Imports
 from tldw_Server_API.tests.MediaDB2.test_sqlite_db import get_entity_version
-from tldw_Server_API.app.core.Sync.Sync_Client import ClientSyncEngine
+
 #
 #######################################################################################################################
 #
@@ -71,7 +75,7 @@ class TestClientSyncEngineState:
         assert engine.last_server_log_id_processed == 0
         # Check if file was created with defaults
         assert os.path.exists(temp_state_file)
-        with open(temp_state_file, 'r') as f:
+        with open(temp_state_file) as f:
             state = json.load(f)
             assert state == {'last_local_log_id_sent': 0, 'last_server_log_id_processed': 0}
 
@@ -95,7 +99,7 @@ class TestClientSyncEngineState:
         sync_engine.last_server_log_id_processed = 30
         sync_engine._save_sync_state()
 
-        with open(sync_engine.state_file, 'r') as f:
+        with open(sync_engine.state_file) as f:
             state = json.load(f)
             assert state == {'last_local_log_id_sent': 15, 'last_server_log_id_processed': 30}
 
@@ -109,7 +113,7 @@ class TestClientSyncEngineState:
         assert engine.last_local_log_id_sent == 0
         assert engine.last_server_log_id_processed == 0
         # Check if file was overwritten with defaults
-        with open(temp_state_file, 'r') as f:
+        with open(temp_state_file) as f:
             state = json.load(f)
             assert state == {'last_local_log_id_sent': 0, 'last_server_log_id_processed': 0}
 
@@ -141,6 +145,8 @@ class TestClientSyncEnginePush:
         # 4. Assertions
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
+        assert kwargs["url"].endswith("/api/v1/sync/send")
+        assert kwargs["headers"]["Content-Type"] == "application/json"
         sent_payload = kwargs['json']
         assert sent_payload['client_id'] == sync_engine.client_id
         assert len(sent_payload['changes']) == 1
@@ -150,6 +156,35 @@ class TestClientSyncEnginePush:
 
         # State should be updated
         assert sync_engine.last_local_log_id_sent == 1
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_push_includes_configured_auth_headers(
+        self,
+        mock_post,
+        client_db,
+        client_state_file,
+    ):
+        """Configured bearer/API-key auth should be applied to sync push calls."""
+        client_db.add_keyword("push_auth_kw")
+        engine = ClientSyncEngine(
+            db_instance=client_db,
+            server_api_url="http://mock-server.test",
+            client_id=client_db.client_id,
+            state_file=client_state_file,
+            auth_token="sync-token-123",
+            api_key="sync-api-key-456",
+        )
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        engine._push_local_changes()
+
+        headers = mock_post.call_args.kwargs["headers"]
+        assert headers["Content-Type"] == "application/json"
+        assert headers["Authorization"] == "Bearer sync-token-123"
+        assert headers["X-API-KEY"] == "sync-api-key-456"
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_push_http_error(self, mock_post, sync_engine, client_db):
@@ -174,6 +209,110 @@ class TestClientSyncEnginePush:
         # State should NOT be updated on error
         assert sync_engine.last_local_log_id_sent == 0
 
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_push_http_4xx_error(self, mock_post, sync_engine, client_db):
+        """Test push phase when server returns an HTTP 4xx error."""
+        client_db.add_keyword("push_fail_kw_4xx")  # Log entry 1
+
+        mock_http_response = MagicMock()
+        mock_http_response.status_code = 409
+        mock_http_response.text = "Conflict"
+        mock_http_error = DummyHTTPStatusError(mock_http_response)
+
+        mock_post_response = MagicMock()
+        mock_post_response.raise_for_status.side_effect = mock_http_error
+        mock_post.return_value = mock_post_response
+
+        # Should not raise; HTTP status errors are handled internally.
+        sync_engine._push_local_changes()
+
+        mock_post.assert_called_once()
+        assert sync_engine.last_local_log_id_sent == 0
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_push_skips_unsupported_send_entities_and_advances_checkpoint(
+        self,
+        mock_post,
+        sync_engine,
+        client_db,
+    ):
+        """Unsupported outbound entities should be skipped so valid changes can still sync."""
+        _, first_kw_uuid = client_db.add_keyword("push_allowed_kw_1")
+        client_db.execute_query(
+            (
+                "INSERT INTO sync_log (entity, entity_uuid, operation, timestamp, client_id, version, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                "Transcripts",
+                "transcript-uuid-1",
+                "create",
+                "2023-10-27T11:01:00Z",
+                sync_engine.client_id,
+                1,
+                '{"uuid":"transcript-uuid-1","transcription":"blocked outbound entity"}',
+            ),
+            commit=True,
+        )
+        _, second_kw_uuid = client_db.add_keyword("push_allowed_kw_2")
+        all_changes = client_db.get_sync_log_entries(since_change_id=0)
+        unsupported_change_id = next(
+            change["change_id"] for change in all_changes if change["entity"] == "Transcripts"
+        )
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        sync_engine._push_local_changes()
+
+        mock_post.assert_called_once()
+        sent_payload = mock_post.call_args.kwargs["json"]
+        sent_changes = sent_payload["changes"]
+        sent_ids = [change["change_id"] for change in sent_changes]
+
+        assert sent_payload["client_id"] == sync_engine.client_id
+        assert all(change["entity"] in {"Media", "Keywords", "MediaKeywords"} for change in sent_changes)
+        assert unsupported_change_id not in sent_ids
+        assert sent_changes[0]["entity_uuid"] == first_kw_uuid
+        assert sent_changes[1]["entity_uuid"] == second_kw_uuid
+        assert sync_engine.last_local_log_id_sent == max(change["change_id"] for change in all_changes)
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_push_unsupported_only_batch_advances_without_network_call(
+        self,
+        mock_post,
+        sync_engine,
+        client_db,
+    ):
+        """Unsupported-only outbound batches should not deadlock the sync cursor."""
+        client_db.execute_query(
+            (
+                "INSERT INTO sync_log (entity, entity_uuid, operation, timestamp, client_id, version, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                "Transcripts",
+                "transcript-uuid-only",
+                "create",
+                "2023-10-27T11:00:00Z",
+                sync_engine.client_id,
+                1,
+                '{"uuid":"transcript-uuid-only","transcription":"unsupported outbound entity"}',
+            ),
+            commit=True,
+        )
+        only_change_id = client_db.get_sync_log_entries(since_change_id=0)[0]["change_id"]
+
+        sync_engine._push_local_changes()
+
+        mock_post.assert_not_called()
+        assert sync_engine.last_local_log_id_sent == only_change_id
+
+        sync_engine._push_local_changes()
+        mock_post.assert_not_called()
+        assert sync_engine.last_local_log_id_sent == only_change_id
+
 
 class TestClientSyncEnginePullApply:
 
@@ -191,9 +330,96 @@ class TestClientSyncEnginePullApply:
 
         mock_get.assert_called_once()
         args, kwargs = mock_get.call_args
+        assert kwargs["url"].endswith("/api/v1/sync/get")
+        assert kwargs["headers"]["Accept"] == "application/json"
         assert kwargs['params']['since_change_id'] == 0 # Initial state
         # State should fast-forward to server's latest known ID
         assert sync_engine.last_server_log_id_processed == 50
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_pull_includes_configured_auth_headers(
+        self,
+        mock_get,
+        client_db,
+        client_state_file,
+    ):
+        """Configured bearer/API-key auth should be applied to sync pull calls."""
+        engine = ClientSyncEngine(
+            db_instance=client_db,
+            server_api_url="http://mock-server.test",
+            client_id=client_db.client_id,
+            state_file=client_state_file,
+            auth_token="Bearer preformatted-token",
+            api_key="pull-api-key",
+        )
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"changes": [], "latest_change_id": 0}
+        mock_get.return_value = mock_response
+
+        engine._pull_and_apply_remote_changes()
+
+        headers = mock_get.call_args.kwargs["headers"]
+        assert headers["Accept"] == "application/json"
+        assert headers["Authorization"] == "Bearer preformatted-token"
+        assert headers["X-API-KEY"] == "pull-api-key"
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_pull_http_4xx_error(self, mock_get, sync_engine):
+        """Test pull phase when server returns an HTTP 4xx error."""
+        mock_http_response = MagicMock()
+        mock_http_response.status_code = 404
+        mock_http_response.text = "Not Found"
+        mock_http_error = DummyHTTPStatusError(mock_http_response)
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = mock_http_error
+        mock_get.return_value = mock_response
+
+        sync_engine._pull_and_apply_remote_changes()
+
+        mock_get.assert_called_once()
+        assert sync_engine.last_server_log_id_processed == 0
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_pull_http_5xx_error(self, mock_get, sync_engine):
+        """Test pull phase when server returns an HTTP 5xx error."""
+        mock_http_response = MagicMock()
+        mock_http_response.status_code = 503
+        mock_http_response.text = "Service Unavailable"
+        mock_http_error = DummyHTTPStatusError(mock_http_response)
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = mock_http_error
+        mock_get.return_value = mock_response
+
+        sync_engine._pull_and_apply_remote_changes()
+
+        mock_get.assert_called_once()
+        assert sync_engine.last_server_log_id_processed == 0
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_pull_rejects_invalid_entity_operation(self, mock_get, sync_engine):
+        """Invalid entity/operation combinations should fail batch apply and not advance state."""
+        invalid_change = create_mock_log_entry(
+            change_id=100,
+            entity="Keywords",
+            uuid="invalid-client-op-uuid",
+            op="link",
+            client="other_client",
+            version=1,
+            payload_dict={"keyword": "invalid"},
+            ts="2023-10-28T09:00:00Z",
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"changes": [invalid_change], "latest_change_id": 100}
+        mock_get.return_value = mock_response
+
+        sync_engine._pull_and_apply_remote_changes()
+
+        assert sync_engine.last_server_log_id_processed == 0
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_and_apply_create_success(self, mock_get, sync_engine, client_db):
@@ -298,6 +524,100 @@ class TestClientSyncEnginePullApply:
         assert row['version'] == 2
         assert row['last_modified'] == "2023-10-28T12:00:00Z"
         assert sync_engine.last_server_log_id_processed == 103
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_pull_and_apply_mediakeywords_link_success(self, mock_get, sync_engine, client_db):
+        """Test pulling and applying a MediaKeywords 'link' change successfully."""
+        media_id, media_uuid, _ = client_db.add_media_with_keywords(
+            title="sync link media",
+            media_type="article",
+            content="media content",
+            keywords=[],
+        )
+        keyword_id, keyword_uuid = client_db.add_keyword("sync-link-keyword")
+        assert media_id is not None
+        assert keyword_id is not None
+
+        server_change = create_mock_log_entry(
+            change_id=120,
+            entity="MediaKeywords",
+            uuid=f"{media_uuid}_{keyword_uuid}",
+            op="link",
+            client="other_client",
+            version=1,
+            payload_dict={"media_uuid": media_uuid, "keyword_uuid": keyword_uuid},
+            ts="2023-10-28T12:30:00Z",
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"changes": [server_change], "latest_change_id": 120}
+        mock_get.return_value = mock_response
+
+        sync_engine.last_server_log_id_processed = 119
+        sync_engine._pull_and_apply_remote_changes()
+
+        row = client_db.execute_query(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM MediaKeywords mk
+            JOIN Media m ON m.id = mk.media_id
+            JOIN Keywords k ON k.id = mk.keyword_id
+            WHERE m.uuid = ? AND k.uuid = ?
+            """,
+            (media_uuid, keyword_uuid),
+        ).fetchone()
+        assert row["cnt"] == 1
+        assert sync_engine.last_server_log_id_processed == 120
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_pull_and_apply_mediakeywords_unlink_success(self, mock_get, sync_engine, client_db):
+        """Test pulling and applying a MediaKeywords 'unlink' change successfully."""
+        media_id, media_uuid, _ = client_db.add_media_with_keywords(
+            title="sync unlink media",
+            media_type="article",
+            content="media content",
+            keywords=[],
+        )
+        keyword_id, keyword_uuid = client_db.add_keyword("sync-unlink-keyword")
+        assert media_id is not None
+        assert keyword_id is not None
+
+        client_db.execute_query(
+            "INSERT INTO MediaKeywords (media_id, keyword_id) VALUES (?, ?)",
+            (media_id, keyword_id),
+            commit=True,
+        )
+
+        server_change = create_mock_log_entry(
+            change_id=121,
+            entity="MediaKeywords",
+            uuid=f"{media_uuid}_{keyword_uuid}",
+            op="unlink",
+            client="other_client",
+            version=2,
+            payload_dict={"media_uuid": media_uuid, "keyword_uuid": keyword_uuid},
+            ts="2023-10-28T12:31:00Z",
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"changes": [server_change], "latest_change_id": 121}
+        mock_get.return_value = mock_response
+
+        sync_engine.last_server_log_id_processed = 120
+        sync_engine._pull_and_apply_remote_changes()
+
+        row = client_db.execute_query(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM MediaKeywords mk
+            JOIN Media m ON m.id = mk.media_id
+            JOIN Keywords k ON k.id = mk.keyword_id
+            WHERE m.uuid = ? AND k.uuid = ?
+            """,
+            (media_uuid, keyword_uuid),
+        ).fetchone()
+        assert row["cnt"] == 0
+        assert sync_engine.last_server_log_id_processed == 121
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_apply_idempotency(self, mock_get, sync_engine, client_db):
@@ -451,6 +771,51 @@ class TestClientSyncEngineConflict:
         assert row['version'] == 2
         assert row['last_modified'] == ts_local_v2 # Local timestamp retained
         assert sync_engine.last_server_log_id_processed == 102 # State still advances
+
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_conflict_resolution_parses_offset_timestamps(self, mock_get, sync_engine, client_db):
+        """Remote should win when offset-aware datetime is newer in UTC."""
+        client_db.add_keyword("offset_ts_keyword")
+        kw_uuid = client_db.execute_query(
+            "SELECT uuid FROM Keywords WHERE keyword = ?",
+            ("offset_ts_keyword",),
+        ).fetchone()['uuid']
+
+        # Local timestamp string looks later lexicographically than the remote value,
+        # but it is earlier in UTC (13:00+02:00 == 11:00Z).
+        local_offset_ts = "2023-11-01T13:00:00+02:00"
+        client_db.execute_query(
+            "UPDATE Keywords SET keyword='local_offset', version=2, last_modified=?, client_id=? WHERE uuid=?",
+            (local_offset_ts, sync_engine.client_id, kw_uuid),
+            commit=True,
+        )
+
+        server_change = create_mock_log_entry(
+            change_id=130,
+            entity="Keywords",
+            uuid=kw_uuid,
+            op="update",
+            client="other_client",
+            version=2,
+            payload_dict={"keyword": "remote_should_win_offset_case"},
+            ts="2023-11-01T11:30:00Z",
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"changes": [server_change], "latest_change_id": 130}
+        mock_get.return_value = mock_response
+        sync_engine.last_server_log_id_processed = 129
+
+        sync_engine._pull_and_apply_remote_changes()
+
+        row = client_db.execute_query(
+            "SELECT keyword, version, last_modified FROM Keywords WHERE uuid = ?",
+            (kw_uuid,),
+        ).fetchone()
+        assert row['keyword'] == "remote_should_win_offset_case"
+        assert row['version'] == 3
+        assert row['last_modified'] == "2023-11-01T11:30:00Z"
+        assert sync_engine.last_server_log_id_processed == 130
 
 #
 # End of test_sync_client.py

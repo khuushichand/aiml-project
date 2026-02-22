@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 import time
 import warnings
 from typing import Any
@@ -10,13 +11,21 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
+    BulkEntryOperation,
+    BulkOperationResponse,
     ChatDictionaryCreate,
     ChatDictionaryResponse,
     ChatDictionaryUpdate,
     ChatDictionaryWithEntries,
     DictionaryEntryCreate,
+    DictionaryEntryReorderRequest,
+    DictionaryEntryReorderResponse,
     DictionaryEntryResponse,
     DictionaryEntryUpdate,
+    DictionaryActivityListResponse,
+    DictionaryVersionDetailResponse,
+    DictionaryVersionListResponse,
+    DictionaryVersionRevertResponse,
     DictionaryListResponse,
     DictionaryStatistics,
     EntryListResponse,
@@ -87,9 +96,292 @@ def _entry_dict_to_response(
         type=entry_type,
         enabled=enabled,
         case_sensitive=case_sensitive,
+        priority=(
+            int(entry_data.get("sort_order"))
+            if entry_data.get("sort_order") is not None
+            else None
+        ),
+        usage_count=int(entry_data.get("usage_count", 0) or 0),
+        last_used_at=_coerce_optional_datetime(entry_data.get("last_used_at")),
         created_at=coerce_datetime(entry_data.get("created_at")),
         updated_at=coerce_datetime(entry_data.get("updated_at")),
     )
+
+
+def _coerce_optional_datetime(value: Any) -> datetime.datetime | None:
+    """Best-effort conversion for optional datetime fields."""
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, str):
+        normalized = value.replace("Z", "+00:00").replace(" ", "T")
+        try:
+            return datetime.datetime.fromisoformat(normalized)
+        except ValueError:
+            for fmt in (
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S.%f",
+            ):
+                try:
+                    return datetime.datetime.strptime(normalized, fmt)
+                except ValueError:
+                    continue
+            return None
+    return None
+
+
+def _entry_has_timed_effects(entry_data: dict[str, Any]) -> bool:
+    timed_effects = parse_timed_effects(entry_data.get("timed_effects"))
+    if not timed_effects:
+        return False
+    return any(
+        int(getattr(timed_effects, key, 0) or 0) > 0
+        for key in ("sticky", "cooldown", "delay")
+    )
+
+
+def _entry_pattern(entry_data: dict[str, Any]) -> str:
+    return str(entry_data.get("pattern") or entry_data.get("key") or "")
+
+
+def _entry_type(entry_data: dict[str, Any]) -> str:
+    entry_type = str(entry_data.get("type") or "").strip().lower()
+    if entry_type in {"literal", "regex"}:
+        return entry_type
+    pattern = _entry_pattern(entry_data)
+    if pattern.startswith("/") and pattern.rfind("/") > 0:
+        return "regex"
+    return "literal"
+
+
+def _parse_regex_pattern(raw_pattern: str) -> tuple[str, int]:
+    """Parse /pattern/flags syntax into pattern body + Python flags."""
+    if not raw_pattern:
+        return "", 0
+    pattern_body = raw_pattern
+    flag_string = ""
+
+    if raw_pattern.startswith("/") and raw_pattern.rfind("/") > 0:
+        last_slash = raw_pattern.rfind("/")
+        pattern_body = raw_pattern[1:last_slash]
+        flag_string = raw_pattern[last_slash + 1 :]
+
+    flags = 0
+    if "i" in flag_string:
+        flags |= re.IGNORECASE
+    if "m" in flag_string:
+        flags |= re.MULTILINE
+    if "s" in flag_string:
+        flags |= re.DOTALL
+    if "x" in flag_string:
+        flags |= re.VERBOSE
+
+    return pattern_body, flags
+
+
+def _compile_entry_regex(entry_data: dict[str, Any]) -> re.Pattern[str] | None:
+    pattern_body, flags = _parse_regex_pattern(_entry_pattern(entry_data))
+    if not pattern_body:
+        return None
+    try:
+        return re.compile(pattern_body, flags)
+    except re.error:
+        return None
+
+
+def _regex_literal_prefix(raw_pattern: str) -> str:
+    """Extract a simple literal prefix from a regex body when possible."""
+    pattern_body, _ = _parse_regex_pattern(raw_pattern)
+    if not pattern_body:
+        return ""
+
+    prefix_chars: list[str] = []
+    escaped = False
+    for char in pattern_body:
+        if escaped:
+            prefix_chars.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char.isalnum() or char in {" ", "-", "_"}:
+            prefix_chars.append(char)
+            continue
+        break
+    return "".join(prefix_chars).strip()
+
+
+def _regex_seed_samples(raw_pattern: str) -> list[str]:
+    """Generate lightweight sample strings for overlap heuristics."""
+    pattern_body, _ = _parse_regex_pattern(raw_pattern)
+    tokens = re.findall(r"[A-Za-z0-9]{2,}", pattern_body)
+    seeds: list[str] = ["sample", "test", "kcl", "kc123", "doctor"]
+    for token in tokens[:4]:
+        seeds.extend([token, token.lower(), token.upper(), f"x{token}y"])
+    # Preserve insertion order while deduplicating
+    return list(dict.fromkeys(seeds))
+
+
+def _build_conflict(
+    entry_a: dict[str, Any],
+    entry_b: dict[str, Any],
+    *,
+    conflict_type: str,
+    severity: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "entry_id_a": int(entry_a.get("id")),
+        "entry_id_b": int(entry_b.get("id")),
+        "pattern_a": _entry_pattern(entry_a),
+        "pattern_b": _entry_pattern(entry_b),
+        "type_a": _entry_type(entry_a),
+        "type_b": _entry_type(entry_b),
+        "conflict_type": conflict_type,
+        "severity": severity,
+        "reason": reason,
+    }
+
+
+def _detect_pair_conflict(entry_a: dict[str, Any], entry_b: dict[str, Any]) -> dict[str, Any] | None:
+    type_a = _entry_type(entry_a)
+    type_b = _entry_type(entry_b)
+    pattern_a = _entry_pattern(entry_a)
+    pattern_b = _entry_pattern(entry_b)
+
+    if not pattern_a or not pattern_b:
+        return None
+
+    # literal-literal overlap
+    if type_a == "literal" and type_b == "literal":
+        normalized_a = pattern_a.casefold()
+        normalized_b = pattern_b.casefold()
+        if normalized_a == normalized_b:
+            return _build_conflict(
+                entry_a,
+                entry_b,
+                conflict_type="literal-literal",
+                severity="high",
+                reason="Both literal entries match the same text and may shadow one another.",
+            )
+        if normalized_a in normalized_b or normalized_b in normalized_a:
+            return _build_conflict(
+                entry_a,
+                entry_b,
+                conflict_type="literal-literal",
+                severity="medium",
+                reason="One literal is contained in the other, so processing order can change output.",
+            )
+        return None
+
+    # literal-regex overlap
+    if {type_a, type_b} == {"literal", "regex"}:
+        literal_entry = entry_a if type_a == "literal" else entry_b
+        regex_entry = entry_a if type_a == "regex" else entry_b
+        literal_pattern = _entry_pattern(literal_entry)
+        compiled_regex = _compile_entry_regex(regex_entry)
+        if not compiled_regex:
+            return None
+        try:
+            if compiled_regex.search(literal_pattern):
+                full_match = compiled_regex.fullmatch(literal_pattern) is not None
+                return _build_conflict(
+                    entry_a,
+                    entry_b,
+                    conflict_type="literal-regex",
+                    severity="high" if full_match else "medium",
+                    reason=(
+                        "Regex pattern fully matches a literal pattern."
+                        if full_match
+                        else "Regex pattern overlaps with a literal pattern and may trigger on the same input."
+                    ),
+                )
+        except re.error:
+            return None
+        return None
+
+    # regex-regex overlap
+    if type_a == "regex" and type_b == "regex":
+        body_a, flags_a = _parse_regex_pattern(pattern_a)
+        body_b, flags_b = _parse_regex_pattern(pattern_b)
+        if body_a == body_b and flags_a == flags_b:
+            return _build_conflict(
+                entry_a,
+                entry_b,
+                conflict_type="regex-regex",
+                severity="high",
+                reason="Regex entries are identical and likely redundant.",
+            )
+
+        prefix_a = _regex_literal_prefix(pattern_a)
+        prefix_b = _regex_literal_prefix(pattern_b)
+        if prefix_a and prefix_b:
+            normalized_prefix_a = prefix_a.casefold()
+            normalized_prefix_b = prefix_b.casefold()
+            if (
+                normalized_prefix_a.startswith(normalized_prefix_b)
+                or normalized_prefix_b.startswith(normalized_prefix_a)
+            ):
+                return _build_conflict(
+                    entry_a,
+                    entry_b,
+                    conflict_type="regex-regex",
+                    severity="low",
+                    reason="Regex entries share a literal prefix and may overlap on similar text.",
+                )
+
+        regex_a = _compile_entry_regex(entry_a)
+        regex_b = _compile_entry_regex(entry_b)
+        if not regex_a or not regex_b:
+            return None
+        samples = _regex_seed_samples(pattern_a) + _regex_seed_samples(pattern_b)
+        for sample in samples[:16]:
+            try:
+                if regex_a.search(sample) and regex_b.search(sample):
+                    return _build_conflict(
+                        entry_a,
+                        entry_b,
+                        conflict_type="regex-regex",
+                        severity="low",
+                        reason=f"Both regex entries match representative sample '{sample}'.",
+                    )
+            except re.error:
+                return None
+        return None
+
+    return None
+
+
+def _analyze_pattern_conflicts(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    conflicts: list[dict[str, Any]] = []
+    severity_weight = {"high": 3, "medium": 2, "low": 1}
+
+    indexed_entries = [entry for entry in entries if entry.get("id") is not None]
+    max_pairs = 2400
+    inspected_pairs = 0
+
+    for idx, entry_a in enumerate(indexed_entries):
+        for entry_b in indexed_entries[idx + 1 :]:
+            inspected_pairs += 1
+            if inspected_pairs > max_pairs:
+                break
+            conflict = _detect_pair_conflict(entry_a, entry_b)
+            if conflict:
+                conflicts.append(conflict)
+        if inspected_pairs > max_pairs:
+            break
+
+    conflicts.sort(
+        key=lambda item: (
+            severity_weight.get(str(item.get("severity")), 0),
+            int(item.get("entry_id_a", 0)),
+            int(item.get("entry_id_b", 0)),
+        ),
+        reverse=True,
+    )
+    return conflicts[:50]
 
 
 @router.post(
@@ -109,11 +401,20 @@ async def create_chat_dictionary(
     """
     service = ChatDictionaryService(db)
     try:
-        dict_id = service.create_dictionary(dictionary.name, dictionary.description)
+        dict_id = service.create_dictionary(
+            name=dictionary.name,
+            description=dictionary.description,
+            default_token_budget=dictionary.default_token_budget,
+            category=dictionary.category,
+            tags=dictionary.tags,
+            included_dictionary_ids=dictionary.included_dictionary_ids,
+        )
         dict_data = service.get_dictionary(dict_id)
         entries = service.get_entries(dictionary_id=dict_id) if dict_data else []
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error creating dictionary: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
@@ -137,12 +438,47 @@ async def create_chat_dictionary(
 )
 async def list_chat_dictionaries(
     include_inactive: bool = Query(False, description="Include inactive dictionaries"),
+    include_usage: bool = Query(False, description="Include chat usage summary per dictionary"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> DictionaryListResponse:
     """List all chat dictionaries for the current user."""
     try:
         service = ChatDictionaryService(db)
         dictionaries = service.list_dictionaries_with_entry_counts(include_inactive=include_inactive)
+        if include_usage and dictionaries:
+            usage_summary = service.get_dictionary_usage_summary(
+                dictionary_ids=[int(item.get("id")) for item in dictionaries if item.get("id") is not None],
+            )
+            for item in dictionaries:
+                dictionary_id_raw = item.get("id")
+                if dictionary_id_raw is None:
+                    continue
+                dictionary_id = int(dictionary_id_raw)
+                usage = usage_summary.get(dictionary_id) or {}
+                item["used_by_chat_count"] = int(usage.get("used_by_chat_count", 0))
+                item["used_by_active_chat_count"] = int(usage.get("used_by_active_chat_count", 0))
+                item["used_by_chat_refs"] = usage.get("used_by_chat_refs", [])
+
+        active_priority_rows = sorted(
+            (
+                row for row in dictionaries
+                if bool(row.get("is_active", True))
+            ),
+            key=lambda row: (
+                str(row.get("name") or "").strip().lower(),
+                int(row.get("id") or 0),
+            ),
+        )
+        priority_by_dictionary_id = {
+            int(row.get("id")): index + 1
+            for index, row in enumerate(active_priority_rows)
+            if row.get("id") is not None
+        }
+        for item in dictionaries:
+            dictionary_id = item.get("id")
+            if dictionary_id is None:
+                continue
+            item["processing_priority"] = priority_by_dictionary_id.get(int(dictionary_id))
 
         active_count = sum(1 for d in dictionaries if d.get("is_active", True))
         inactive_count = len(dictionaries) - active_count
@@ -216,13 +552,24 @@ async def update_chat_dictionary(
             dictionary_id,
             name=update.name,
             description=update.description,
+            category=update.category,
+            tags=update.tags,
+            included_dictionary_ids=update.included_dictionary_ids,
             is_active=update.is_active,
+            default_token_budget=update.default_token_budget,
+            update_category=("category" in update.model_fields_set),
+            update_tags=("tags" in update.model_fields_set),
+            update_included_dictionary_ids=("included_dictionary_ids" in update.model_fields_set),
+            update_default_token_budget=("default_token_budget" in update.model_fields_set),
+            expected_version=update.version,
         )
 
         dict_data = service.get_dictionary(dictionary_id) if success else None
         entries = service.get_entries(dictionary_id=dictionary_id) if success else []
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
@@ -511,6 +858,113 @@ async def delete_dictionary_entry(
 
 
 @router.post(
+    "/dictionaries/entries/bulk",
+    response_model=BulkOperationResponse,
+    summary="Bulk operations on dictionary entries",
+    description="Perform delete/activate/deactivate/group operations on multiple dictionary entries.",
+    tags=["chat-dictionaries"],
+)
+async def bulk_dictionary_entry_operations(
+    operation: BulkEntryOperation,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> BulkOperationResponse:
+    """Perform bulk operations on dictionary entries with partial-failure reporting."""
+    service = ChatDictionaryService(db)
+    try:
+        affected_count = 0
+        failed_ids: list[int] = []
+
+        for entry_id in operation.entry_ids:
+            try:
+                if operation.operation == "delete":
+                    success = service.delete_entry(entry_id)
+                elif operation.operation == "activate":
+                    success = service.update_entry(entry_id, enabled=True)
+                elif operation.operation == "deactivate":
+                    success = service.update_entry(entry_id, enabled=False)
+                elif operation.operation == "group":
+                    success = service.update_entry(entry_id, group=operation.group_name)
+                else:
+                    success = False
+
+                if success:
+                    affected_count += 1
+                else:
+                    failed_ids.append(entry_id)
+            except InputError as e:
+                logger.warning(
+                    f"Bulk operation '{operation.operation}' failed for entry {entry_id}: {e}"
+                )
+                failed_ids.append(entry_id)
+            except Exception as e:
+                logger.warning(
+                    f"Bulk operation '{operation.operation}' failed for entry {entry_id}: {e}"
+                )
+                failed_ids.append(entry_id)
+
+        message = (
+            f"Operation '{operation.operation}' completed: {affected_count} entries affected"
+        )
+        if failed_ids:
+            message += f", {len(failed_ids)} failed"
+
+        return BulkOperationResponse(
+            success=len(failed_ids) == 0,
+            affected_count=affected_count,
+            failed_ids=failed_ids,
+            message=message,
+        )
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Error performing bulk entry operation: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.put(
+    "/dictionaries/{dictionary_id}/entries/reorder",
+    response_model=DictionaryEntryReorderResponse,
+    summary="Reorder dictionary entries",
+    description="Persist a new execution order for all entries in a dictionary.",
+    tags=["chat-dictionaries"],
+)
+async def reorder_dictionary_entries(
+    dictionary_id: int,
+    reorder_request: DictionaryEntryReorderRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryEntryReorderResponse:
+    """Reorder entries for a dictionary using a full ordered list of entry IDs."""
+    service = ChatDictionaryService(db)
+    try:
+        dict_data = service.get_dictionary(dictionary_id)
+        if not dict_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+        affected_count = service.reorder_entries(dictionary_id, reorder_request.entry_ids)
+        ordered_entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
+        ordered_entry_ids = [
+            int(entry.get("id"))
+            for entry in ordered_entries
+            if entry.get("id") is not None
+        ]
+
+        return DictionaryEntryReorderResponse(
+            success=True,
+            dictionary_id=dictionary_id,
+            affected_count=affected_count,
+            entry_ids=ordered_entry_ids,
+            message=f"Reordered {affected_count} entries.",
+        )
+    except HTTPException:
+        raise
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Error reordering dictionary entries: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.post(
     "/dictionaries/process",
     response_model=ProcessTextResponse,
     summary="Process text through dictionaries",
@@ -539,6 +993,7 @@ async def process_text_with_dictionaries(
                 max_iterations=request.max_iterations,
                 token_budget=request.token_budget,
                 return_stats=True,
+                chat_id=request.chat_id,
             )
 
             token_budget_exceeded = any(issubclass(warning.category, TokenBudgetExceededWarning) for warning in caught)
@@ -554,6 +1009,7 @@ async def process_text_with_dictionaries(
             iterations=stats.get("iterations", 0),
             entries_used=stats.get("entries_used", []),
             token_budget_exceeded=stats.get("token_budget_exceeded", False),
+            token_budget_used=stats.get("token_budget_used"),
             processing_time_ms=processing_time_ms,
         )
     except InputError as e:
@@ -604,6 +1060,12 @@ async def import_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
+@router.get(
+    "/dictionaries/{dictionary_id}/export/markdown",
+    response_model=ExportDictionaryResponse,
+    include_in_schema=False,
+    tags=["chat-dictionaries"],
+)
 @router.get(
     "/dictionaries/{dictionary_id}/export",
     response_model=ExportDictionaryResponse,
@@ -703,6 +1165,175 @@ async def import_dictionary_json(
 
 
 @router.get(
+    "/dictionaries/{dictionary_id}/activity",
+    response_model=DictionaryActivityListResponse,
+    summary="List dictionary activity events",
+    description="Return recent transformation activity for a dictionary.",
+    tags=["chat-dictionaries"],
+)
+async def list_dictionary_activity(
+    dictionary_id: int,
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of events to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryActivityListResponse:
+    """Return paginated recent transformation activity for a dictionary."""
+    service = ChatDictionaryService(db)
+    try:
+        dict_data = service.get_dictionary(dictionary_id)
+        if not dict_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+        events, total = service.list_transform_activity(
+            dictionary_id,
+            limit=limit,
+            offset=offset,
+        )
+        return DictionaryActivityListResponse(
+            dictionary_id=dictionary_id,
+            events=events,
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing dictionary activity: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.get(
+    "/dictionaries/{dictionary_id}/versions",
+    response_model=DictionaryVersionListResponse,
+    summary="List dictionary version history",
+    description="Return paginated revision history snapshots for a dictionary.",
+    tags=["chat-dictionaries"],
+)
+async def list_dictionary_versions(
+    dictionary_id: int,
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of versions to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryVersionListResponse:
+    """Return paginated dictionary version history."""
+    service = ChatDictionaryService(db)
+    try:
+        dict_data = service.get_dictionary(dictionary_id)
+        if not dict_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+        versions, total = service.list_dictionary_versions(
+            dictionary_id,
+            limit=limit,
+            offset=offset,
+        )
+        return DictionaryVersionListResponse(
+            dictionary_id=dictionary_id,
+            versions=[
+                {
+                    **version,
+                    "created_at": coerce_datetime(version.get("created_at")),
+                }
+                for version in versions
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing dictionary versions: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.get(
+    "/dictionaries/{dictionary_id}/versions/{revision}",
+    response_model=DictionaryVersionDetailResponse,
+    summary="Get dictionary version snapshot",
+    description="Return metadata and entry payload for a specific dictionary revision.",
+    tags=["chat-dictionaries"],
+)
+async def get_dictionary_version(
+    dictionary_id: int,
+    revision: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryVersionDetailResponse:
+    """Get a specific dictionary revision snapshot."""
+    service = ChatDictionaryService(db)
+    try:
+        snapshot = service.get_dictionary_version(dictionary_id, revision)
+        if not snapshot:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary revision not found")
+
+        entries_payload = snapshot.get("entries") if isinstance(snapshot.get("entries"), list) else []
+        entry_responses = [
+            _entry_dict_to_response(entry_data, fallback_dictionary_id=dictionary_id)
+            for entry_data in entries_payload
+            if isinstance(entry_data, dict)
+        ]
+
+        dictionary_payload = dict(snapshot.get("dictionary") or {})
+        dictionary_payload.setdefault("id", int(dictionary_id))
+        dictionary_payload.setdefault("entry_count", len(entry_responses))
+        dictionary_payload.setdefault("used_by_chat_count", 0)
+        dictionary_payload.setdefault("used_by_active_chat_count", 0)
+        dictionary_payload.setdefault("used_by_chat_refs", [])
+        dictionary_payload["entry_count"] = len(entry_responses)
+        if dictionary_payload.get("created_at") is None:
+            dictionary_payload["created_at"] = datetime.datetime.now(datetime.timezone.utc)
+        if dictionary_payload.get("updated_at") is None:
+            dictionary_payload["updated_at"] = datetime.datetime.now(datetime.timezone.utc)
+        if dictionary_payload.get("version") is None:
+            dictionary_payload["version"] = 1
+
+        return DictionaryVersionDetailResponse(
+            dictionary_id=dictionary_id,
+            revision=int(snapshot.get("revision") or revision),
+            source_dictionary_version=snapshot.get("source_dictionary_version"),
+            change_type=str(snapshot.get("change_type") or "unspecified"),
+            summary=snapshot.get("summary"),
+            created_at=coerce_datetime(snapshot.get("created_at")),
+            dictionary=ChatDictionaryResponse(**dictionary_payload),
+            entries=entry_responses,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading dictionary revision: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.post(
+    "/dictionaries/{dictionary_id}/versions/{revision}/revert",
+    response_model=DictionaryVersionRevertResponse,
+    summary="Revert dictionary to a previous revision",
+    description="Restore dictionary metadata and entries from a specific version-history revision.",
+    tags=["chat-dictionaries"],
+)
+async def revert_dictionary_version(
+    dictionary_id: int,
+    revision: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryVersionRevertResponse:
+    """Revert dictionary to a previous version snapshot."""
+    service = ChatDictionaryService(db)
+    try:
+        result = service.revert_dictionary_to_revision(dictionary_id, revision)
+        return DictionaryVersionRevertResponse(**result)
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except InputError as e:
+        detail = str(e)
+        status_code_value = status.HTTP_404_NOT_FOUND if "not found" in detail.lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code_value, detail=detail) from e
+    except Exception as e:
+        logger.error(f"Error reverting dictionary revision: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.get(
     "/dictionaries/{dictionary_id}/statistics",
     response_model=DictionaryStatistics,
     summary="Get dictionary statistics",
@@ -732,8 +1363,28 @@ async def get_dictionary_statistics(
     regex_count = int(stats.get("regex_entries", 0))
     total_entries = int(stats.get("total_entries", len(entries)))
     literal_count = int(stats.get("literal_entries", total_entries - regex_count))
-    groups = list({e.get("group") for e in entries if e.get("group")})
+    groups = sorted({str(e.get("group")).strip() for e in entries if str(e.get("group") or "").strip()})
     avg_probability = sum(float(e.get("probability", 1.0)) for e in entries) / len(entries) if entries else 0.0
+    enabled_entries = sum(1 for entry in entries if bool(entry.get("enabled", True)))
+    disabled_entries = max(total_entries - enabled_entries, 0)
+    probabilistic_entries = int(stats.get("probabilistic_entries", 0))
+    timed_effect_entries = sum(1 for entry in entries if _entry_has_timed_effects(entry))
+    entry_usage = [
+        {
+            "entry_id": int(entry.get("id")),
+            "pattern": str(entry.get("pattern") or entry.get("key") or ""),
+            "usage_count": int(entry.get("usage_count", 0) or 0),
+            "last_used_at": _coerce_optional_datetime(entry.get("last_used_at")),
+        }
+        for entry in entries
+        if entry.get("id") is not None
+    ]
+    entry_usage.sort(
+        key=lambda item: (item.get("usage_count", 0), int(item.get("entry_id", 0))),
+        reverse=True,
+    )
+    zero_usage_entries = sum(1 for item in entry_usage if int(item.get("usage_count", 0) or 0) == 0)
+    pattern_conflicts = _analyze_pattern_conflicts(entries)
 
     return DictionaryStatistics(
         dictionary_id=dictionary_id,
@@ -741,8 +1392,18 @@ async def get_dictionary_statistics(
         total_entries=total_entries,
         regex_entries=regex_count,
         literal_entries=literal_count,
+        enabled_entries=enabled_entries,
+        disabled_entries=disabled_entries,
+        probabilistic_entries=probabilistic_entries,
+        timed_effect_entries=timed_effect_entries,
         groups=groups,
         average_probability=avg_probability,
-        total_usage_count=usage_stats.get("times_used"),
-        last_used=None,
+        created_at=coerce_datetime(dict_data.get("created_at")),
+        updated_at=coerce_datetime(dict_data.get("updated_at")),
+        zero_usage_entries=zero_usage_entries,
+        entry_usage=entry_usage,
+        pattern_conflict_count=len(pattern_conflicts),
+        pattern_conflicts=pattern_conflicts,
+        total_usage_count=int(usage_stats.get("times_used", 0) or 0),
+        last_used=_coerce_optional_datetime(usage_stats.get("last_used_at")),
     )

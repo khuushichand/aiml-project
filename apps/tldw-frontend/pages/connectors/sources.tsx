@@ -1,14 +1,13 @@
-import dynamic from "next/dynamic"
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
-export default dynamic(async () => {
-  const { useRouter } = await import("next/router")
-  const { useEffect } = await import("react")
-  const Page = () => {
-    const router = useRouter()
-    useEffect(() => {
-      void router.replace("/settings")
-    }, [router])
-    return null
-  }
-  return { default: Page }
-}, { ssr: false })
+export default function ConnectorSourcesRedirectPage() {
+  return (
+    <RoutePlaceholder
+      title="Connector Sources Is Coming Soon"
+      description="Source-specific connector workflows are not yet available on this route."
+      plannedPath="/connectors/sources"
+      primaryCtaHref="/connectors"
+      primaryCtaLabel="Open Connectors Hub"
+    />
+  );
+}

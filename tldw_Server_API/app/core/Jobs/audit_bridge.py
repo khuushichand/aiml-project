@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 try:
     from tldw_Server_API.app.core.Audit.unified_audit_service import (
@@ -28,7 +29,6 @@ except ImportError as e:  # pragma: no cover - audit optional
     logger.debug(f"Jobs audit integration unavailable: {e}")
 
 
-_TRUTHY = {"1", "true", "yes", "y", "on"}
 _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS = (
     ConnectionError,
     OSError,
@@ -48,7 +48,7 @@ def _audit_enabled() -> bool:
     try:
         return (
             UnifiedAuditService is not None
-            and str(os.getenv("JOBS_AUDIT_ENABLED", "")).strip().lower() in _TRUTHY
+            and is_truthy(os.getenv("JOBS_AUDIT_ENABLED"))
         )
     except (TypeError, ValueError):
         return False

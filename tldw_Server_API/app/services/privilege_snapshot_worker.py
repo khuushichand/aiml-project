@@ -96,7 +96,7 @@ async def run_privilege_snapshot_worker(stop_event: asyncio.Event | None = None)
                 worker_id=worker_id,
             )
         except Exception as exc:
-            logger.error("Failed to acquire privilege snapshot job: %s", exc)
+            logger.error("Failed to acquire privilege snapshot job: {}", exc)
             await asyncio.sleep(poll_interval)
             continue
 
@@ -116,9 +116,9 @@ async def run_privilege_snapshot_worker(stop_event: asyncio.Event | None = None)
                 lease_id=lease_id,
                 completion_token=lease_id,
             )
-            logger.info("Completed privilege snapshot job %s -> %s", job_id, snapshot_id)
+            logger.info("Completed privilege snapshot job {} -> {}", job_id, snapshot_id)
         except Exception as exc:
-            logger.exception("Privilege snapshot job %s failed: %s", job_id, exc)
+            logger.exception("Privilege snapshot job {} failed: {}", job_id, exc)
             job_manager.fail_job(
                 job_id,
                 error=str(exc),

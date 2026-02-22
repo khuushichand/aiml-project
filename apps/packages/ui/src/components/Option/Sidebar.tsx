@@ -8,7 +8,7 @@ import {
   Empty,
   Skeleton,
   Dropdown,
-  Menu,
+  type MenuProps,
   Tooltip,
   Input,
   Modal,
@@ -737,7 +737,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
         key={chat.id}
         className={`flex py-2 px-2 items-center gap-3 relative rounded-md truncate group transition-opacity duration-300 ease-in-out border ${
           serverChatId === chat.id
-            ? "bg-surface2 border-borderStrong text-text"
+            ? "bg-surface2 border-border-strong text-text"
             : "bg-surface text-text border-border hover:bg-surface2"
         }`}
       >
@@ -890,7 +890,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
 
       {showLocalChats && status === "error" && (
         <div className="flex justify-center items-center">
-          <span className="text-red-500">Error loading history</span>
+          <span className="text-danger">Error loading history</span>
         </div>
       )}
 
@@ -920,145 +920,147 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
                 )}
               </div>
               <div className="flex flex-col gap-2 mt-2">
-                {group.items.map((chat, index) => (
-                  <div
-                    key={chat.id}
-                    className={`flex py-2 px-2 items-start gap-2 relative rounded-md hover:pr-4 group transition-opacity duration-300 ease-in-out border ${
-                      historyId === chat.id
-                        ? "bg-surface2 border-borderStrong text-text"
-                        : "bg-surface text-text border-border hover:bg-surface2"
-                    }`}>
-                    {chat?.message_source === "copilot" && (
-                      <BotIcon className="size-3 text-text-subtle mt-1 flex-shrink-0" />
-                    )}
-                    {chat?.message_source === "branch" && (
-                      <GitBranch className="size-3 text-text-subtle mt-1 flex-shrink-0" />
-                    )}
-                    <button
-                      className="flex-1 overflow-hidden text-start w-full min-w-0"
-                      onClick={() => {
-                        void loadLocalConversation(chat.id)
-                      }}>
-                      <div className="flex flex-col gap-0.5">
-                        <span className="truncate font-medium">{chat.title}</span>
-                        {historyMetadata?.get(chat.id) && (
-                          <div className="flex items-center gap-2 text-xs text-text-subtle">
-                            <span className="flex items-center gap-1">
-                              <MessageSquare className="size-3" />
-                              {historyMetadata.get(chat.id)?.messageCount || 0}
-                            </span>
-                            {historyMetadata.get(chat.id)?.lastMessage && (
-                              <span>
-                                {formatRelativeTime(
-                                  historyMetadata.get(chat.id)?.lastMessage
-                                    ?.createdAt || chat.createdAt
-                                )}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        {historyMetadata?.get(chat.id)?.lastMessage && (
-                          <span className="text-xs text-text-subtle truncate">
-                            {truncateMessage(
-                              historyMetadata.get(chat.id)?.lastMessage
-                                ?.content || ""
-                            )}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                    <div className="flex items-center gap-2">
-                      <Dropdown
-                        overlay={
-                          <Menu id={`history-actions-${chat.id}`}>
-                            <Menu.Item
-                              key="pin"
-                              icon={
-                                chat.is_pinned ? (
-                                  <PinOffIcon className="w-4 h-4" />
-                                ) : (
-                                  <PinIcon className="w-4 h-4" />
-                                )
-                              }
-                              onClick={() =>
-                                pinChatHistory({
-                                  id: chat.id,
-                                  is_pinned: !chat.is_pinned
-                                })
-                              }
-                              disabled={pinLoading}>
-                              {chat.is_pinned
-                                ? t("common:unpin")
-                                : t("common:pin")}
-                            </Menu.Item>
-                            {isConnected && (
-                              <Menu.Item
-                                key="moveToFolder"
-                                icon={<FolderIcon className="w-4 h-4" />}
-                                onClick={() => {
-                                  setFolderPickerChatId(chat.id)
-                                  setFolderPickerOpen(true)
-                                  setOpenMenuFor(null)
-                                }}>
-                                {t("common:moveToFolder")}
-                              </Menu.Item>
-                            )}
-                            <Menu.Item
-                              key="edit"
-                              icon={<PencilIcon className="w-4 h-4" />}
-                              onClick={async () => {
-                                const newTitle = await promptInput({
-                                  title: t("editHistoryTitle", { defaultValue: "Rename chat" }),
-                                  defaultValue: chat.title,
-                                  okText: t("common:save", { defaultValue: "Save" }),
-                                  cancelText: t("common:cancel", { defaultValue: "Cancel" })
-                                })
-                                if (newTitle && newTitle !== chat.title) {
-                                  editHistory({ id: chat.id, title: newTitle })
-                                }
-                              }}>
-                              {t("common:edit")}
-                            </Menu.Item>
-                            <Menu.Item
-                              key="delete"
-                              icon={<Trash2 className="w-4 h-4" />}
-                              danger
-                              onClick={async () => {
-                                const ok = await confirmDanger({
-                                  title: t("common:confirmTitle", {
-                                    defaultValue: "Please confirm"
-                                  }),
-                                  content: t("deleteHistoryConfirmation"),
-                                  okText: t("common:delete", {
-                                    defaultValue: "Delete"
-                                  }),
-                                  cancelText: t("common:cancel", {
-                                    defaultValue: "Cancel"
-                                  })
-                                })
-                                if (!ok) return
-                                deleteHistory(chat.id)
-                              }}>
-                              {t("common:delete")}
-                            </Menu.Item>
-                          </Menu>
+                {group.items.map((chat) => {
+                  const historyMenuItems: MenuProps["items"] = [
+                    {
+                      key: "pin",
+                      icon: chat.is_pinned ? (
+                        <PinOffIcon className="w-4 h-4" />
+                      ) : (
+                        <PinIcon className="w-4 h-4" />
+                      ),
+                      label: chat.is_pinned ? t("common:unpin") : t("common:pin"),
+                      disabled: pinLoading,
+                      onClick: () =>
+                        pinChatHistory({
+                          id: chat.id,
+                          is_pinned: !chat.is_pinned
+                        })
+                    },
+                    ...(isConnected
+                      ? [
+                          {
+                            key: "moveToFolder",
+                            icon: <FolderIcon className="w-4 h-4" />,
+                            label: t("common:moveToFolder"),
+                            onClick: () => {
+                              setFolderPickerChatId(chat.id)
+                              setFolderPickerOpen(true)
+                              setOpenMenuFor(null)
+                            }
+                          }
+                        ]
+                      : []),
+                    {
+                      key: "edit",
+                      icon: <PencilIcon className="w-4 h-4" />,
+                      label: t("common:edit"),
+                      onClick: async () => {
+                        const newTitle = await promptInput({
+                          title: t("editHistoryTitle", { defaultValue: "Rename chat" }),
+                          defaultValue: chat.title,
+                          okText: t("common:save", { defaultValue: "Save" }),
+                          cancelText: t("common:cancel", { defaultValue: "Cancel" })
+                        })
+                        if (newTitle && newTitle !== chat.title) {
+                          editHistory({ id: chat.id, title: newTitle })
                         }
-                        trigger={["click"]}
-                        placement="bottomRight"
-                        open={openMenuFor === chat.id}
-                        onOpenChange={(o) => setOpenMenuFor(o ? chat.id : null)}>
-                        <IconButton
-                          className="text-text-subtle opacity-80 hover:opacity-100 h-11 w-11 sm:h-7 sm:w-7 sm:min-w-0 sm:min-h-0"
-                          ariaLabel={`${t("option:header.moreActions", "More actions")}: ${chat.title}`}
-                          hasPopup="menu"
-                          ariaExpanded={openMenuFor === chat.id}
-                          ariaControls={`history-actions-${chat.id}`}>
-                          <MoreVertical className="w-4 h-4" />
-                        </IconButton>
-                      </Dropdown>
+                      }
+                    },
+                    {
+                      key: "delete",
+                      icon: <Trash2 className="w-4 h-4" />,
+                      label: t("common:delete"),
+                      danger: true,
+                      onClick: async () => {
+                        const ok = await confirmDanger({
+                          title: t("common:confirmTitle", {
+                            defaultValue: "Please confirm"
+                          }),
+                          content: t("deleteHistoryConfirmation"),
+                          okText: t("common:delete", {
+                            defaultValue: "Delete"
+                          }),
+                          cancelText: t("common:cancel", {
+                            defaultValue: "Cancel"
+                          })
+                        })
+                        if (!ok) return
+                        deleteHistory(chat.id)
+                      }
+                    }
+                  ]
+
+                  return (
+                    <div
+                      key={chat.id}
+                      className={`flex py-2 px-2 items-start gap-2 relative rounded-md hover:pr-4 group transition-opacity duration-300 ease-in-out border ${
+                        historyId === chat.id
+                          ? "bg-surface2 border-border-strong text-text"
+                          : "bg-surface text-text border-border hover:bg-surface2"
+                      }`}>
+                      {chat?.message_source === "copilot" && (
+                        <BotIcon className="size-3 text-text-subtle mt-1 flex-shrink-0" />
+                      )}
+                      {chat?.message_source === "branch" && (
+                        <GitBranch className="size-3 text-text-subtle mt-1 flex-shrink-0" />
+                      )}
+                      <button
+                        className="flex-1 overflow-hidden text-start w-full min-w-0"
+                        onClick={() => {
+                          void loadLocalConversation(chat.id)
+                        }}>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="truncate font-medium">{chat.title}</span>
+                          {historyMetadata?.get(chat.id) && (
+                            <div className="flex items-center gap-2 text-xs text-text-subtle">
+                              <span className="flex items-center gap-1">
+                                <MessageSquare className="size-3" />
+                                {historyMetadata.get(chat.id)?.messageCount || 0}
+                              </span>
+                              {historyMetadata.get(chat.id)?.lastMessage && (
+                                <span>
+                                  {formatRelativeTime(
+                                    historyMetadata.get(chat.id)?.lastMessage
+                                      ?.createdAt || chat.createdAt
+                                  )}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {historyMetadata?.get(chat.id)?.lastMessage && (
+                            <span className="text-xs text-text-subtle truncate">
+                              {truncateMessage(
+                                historyMetadata.get(chat.id)?.lastMessage
+                                  ?.content || ""
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <Dropdown
+                          menu={{
+                            items: historyMenuItems,
+                            id: `history-actions-${chat.id}`
+                          }}
+                          trigger={["click"]}
+                          placement="bottomRight"
+                          open={openMenuFor === chat.id}
+                          onOpenChange={(o) => setOpenMenuFor(o ? chat.id : null)}>
+                          <IconButton
+                            className="text-text-subtle opacity-80 hover:opacity-100 h-11 w-11 sm:h-7 sm:w-7 sm:min-w-0 sm:min-h-0"
+                            ariaLabel={`${t("option:header.moreActions", "More actions")}: ${chat.title}`}
+                            hasPopup="menu"
+                            ariaExpanded={openMenuFor === chat.id}
+                            ariaControls={`history-actions-${chat.id}`}>
+                            <MoreVertical className="w-4 h-4" />
+                          </IconButton>
+                        </Dropdown>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           ))}

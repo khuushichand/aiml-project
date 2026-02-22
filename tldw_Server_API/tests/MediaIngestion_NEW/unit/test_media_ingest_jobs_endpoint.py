@@ -5,6 +5,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+
 
 pytestmark = pytest.mark.unit
 
@@ -102,3 +106,114 @@ def test_submit_media_ingest_jobs_creates_one_job_per_item(
     assert Path(file_payload["source"]).exists()
 
     shutil.rmtree(file_payload["temp_dir"], ignore_errors=True)
+
+
+def test_get_media_ingest_job_includes_result_media_id(
+    media_ingest_jobs_client,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs.db"))
+
+    from tldw_Server_API.app.core.Jobs import manager as jobs_manager
+
+    def fake_get_job(self, job_id):
+        return {
+            "id": int(job_id),
+            "domain": "media_ingest",
+            "job_type": "media_ingest_item",
+            "owner_user_id": "1",
+            "status": "completed",
+            "created_at": "2026-01-01T00:00:00Z",
+            "started_at": "2026-01-01T00:00:01Z",
+            "completed_at": "2026-01-01T00:00:05Z",
+            "cancelled_at": None,
+            "cancellation_reason": None,
+            "progress_percent": 100.0,
+            "progress_message": "completed",
+            "payload": {
+                "media_type": "video",
+                "source": "https://example.com/video",
+                "source_kind": "url",
+                "batch_id": "batch-1",
+            },
+            "result": {
+                "status": "Success",
+                "media_id": 321,
+            },
+            "error_message": None,
+        }
+
+    monkeypatch.setattr(jobs_manager.JobManager, "get_job", fake_get_job, raising=True)
+
+    resp = media_ingest_jobs_client.get(
+        "/api/v1/media/ingest/jobs/99",
+        headers={"X-API-KEY": "test-api-key-12345"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "completed"
+    assert body["media_type"] == "video"
+    assert body["source_kind"] == "url"
+    assert body["result"]["media_id"] == 321
+
+
+def test_get_media_ingest_job_rejects_boolean_admin_without_claims(monkeypatch, tmp_path):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-12345")
+    monkeypatch.setenv("SANDBOX_WS_REDIS_FANOUT", "0")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("SANDBOX_REDIS_URL", raising=False)
+    monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.delenv("JOBS_DB_URL", raising=False)
+
+    from tldw_Server_API.app.api.v1.endpoints.media.ingest_jobs import (
+        get_job_manager,
+        router as ingest_jobs_router,
+    )
+
+    app = FastAPI()
+    app.include_router(ingest_jobs_router, prefix="/api/v1/media", tags=["media"])
+
+    class _StubJobManager:
+        def get_job(self, _job_id: int):
+            return {
+                "id": 7,
+                "domain": "media_ingest",
+                "job_type": "media_ingest_item",
+                "owner_user_id": "2",
+                "status": "queued",
+                "payload": {},
+            }
+
+    async def _principal_override():
+        return AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["user"],
+            permissions=[],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+
+    async def _user_override():
+        return User(id=1, username="tester", email=None, is_active=True, is_admin=False)
+
+    app.dependency_overrides[get_job_manager] = lambda: _StubJobManager()
+    app.dependency_overrides[get_auth_principal] = _principal_override
+    app.dependency_overrides[get_request_user] = _user_override
+    try:
+        with TestClient(app) as client:
+            resp = client.get(
+                "/api/v1/media/ingest/jobs/7",
+                headers={"X-API-KEY": "test-api-key-12345"},
+            )
+            assert resp.status_code == 403
+    finally:
+        app.dependency_overrides.clear()

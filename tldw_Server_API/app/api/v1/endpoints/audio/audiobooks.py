@@ -66,6 +66,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib 
     extract_text_and_format_from_pdf,
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.testing import is_truthy
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
 
@@ -112,7 +113,7 @@ def _parse_bool(value: str | bool | None) -> bool | None:
         return None
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(str(value).strip().lower())
 
 
 def _resolve_subtitle_persist(request: SubtitleExportRequest) -> bool:
@@ -974,7 +975,7 @@ async def export_subtitles(
             try:
                 collections_db.delete_output_artifact(cached_row.id, hard=True)
             except _AUDIOBOOKS_DB_OPERATION_EXCEPTIONS as exc:
-                logger.warning("audiobook subtitles: failed to prune missing cache output: %s", exc)
+                logger.warning("audiobook subtitles: failed to prune missing cache output: {}", exc)
 
     try:
         content = generate_subtitles(
@@ -1036,7 +1037,7 @@ async def export_subtitles(
     try:
         collections_db.update_audiobook_output_usage(size_bytes)
     except _AUDIOBOOKS_DB_OPERATION_EXCEPTIONS as exc:
-        logger.warning("audiobook_quota: failed to increment subtitle usage: %s", exc)
+        logger.warning("audiobook_quota: failed to increment subtitle usage: {}", exc)
 
     project_id = metadata.get("project_id")
     if project_id:
@@ -1052,7 +1053,7 @@ async def export_subtitles(
         except KeyError:
             pass
         except _AUDIOBOOKS_DB_OPERATION_EXCEPTIONS as exc:
-            logger.warning("audiobook subtitles: failed to link artifact: %s", exc)
+            logger.warning("audiobook subtitles: failed to link artifact: {}", exc)
 
     response = PlainTextResponse(content)
     response.headers["X-Subtitle-Output-Id"] = str(row.id)

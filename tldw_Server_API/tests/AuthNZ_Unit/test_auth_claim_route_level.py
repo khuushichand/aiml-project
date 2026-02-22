@@ -206,9 +206,9 @@ async def test_require_roles_http_200_when_role_present(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_require_roles_http_200_for_admin_flag_even_without_role(monkeypatch):
+async def test_require_roles_http_200_for_admin_claim_even_without_role(monkeypatch):
     async def _stub_get_auth_principal(request):  # type: ignore[override]
-        return _make_principal(is_admin=True, roles=["user"], permissions=[])
+        return _make_principal(is_admin=False, roles=["user"], permissions=["*"])
 
     monkeypatch.setattr(
         auth_deps, "_resolve_auth_principal", _stub_get_auth_principal, raising=True
@@ -218,6 +218,21 @@ async def test_require_roles_http_200_for_admin_flag_even_without_role(monkeypat
     resp = local_client.get("/role-protected")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_require_roles_http_403_for_boolean_admin_without_admin_claims(monkeypatch):
+    async def _stub_get_auth_principal(request):  # type: ignore[override]
+        return _make_principal(is_admin=True, roles=["user"], permissions=[])
+
+    monkeypatch.setattr(
+        auth_deps, "_resolve_auth_principal", _stub_get_auth_principal, raising=True
+    )
+
+    local_client = TestClient(app)
+    resp = local_client.get("/role-protected")
+    assert resp.status_code == 403
+    assert "Required role" in resp.json().get("detail", "")
 
 
 @pytest.mark.asyncio

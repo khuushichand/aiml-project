@@ -277,6 +277,21 @@ class TestWebSearchAdapter:
         assert len(result["results"]) == 2  # Test mode returns 2 results
 
     @pytest.mark.asyncio
+    async def test_web_search_adapter_test_mode_y(self, monkeypatch, base_context):
+        """Test web search adapter treats TEST_MODE=y as test mode."""
+        monkeypatch.setenv("TEST_MODE", "y")
+        monkeypatch.setenv("TLDW_TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_web_search_adapter
+
+        config = {"query": "artificial intelligence", "engine": "google", "num_results": 5}
+
+        result = await run_web_search_adapter(config, base_context)
+
+        assert result.get("simulated") is True
+        assert result["query"] == "artificial intelligence"
+
+    @pytest.mark.asyncio
     async def test_web_search_adapter_missing_query(self, monkeypatch, base_context):
         """Test web search adapter returns error for missing query."""
         monkeypatch.setenv("TEST_MODE", "0")
@@ -420,6 +435,36 @@ class TestWebSearchAdapter:
         assert "error" not in result
         assert captured.get("search_engine") == "searx"
         assert captured.get("search_params", {}).get("searx_url") == "https://searx.example"
+        assert captured.get("search_params", {}).get("searx_json_mode") is True
+
+    @pytest.mark.asyncio
+    async def test_web_search_adapter_searx_json_mode_accepts_y(self, monkeypatch, base_context):
+        """Test searx_json_mode='y' is treated as enabled."""
+        monkeypatch.setenv("TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_web_search_adapter
+
+        captured = {}
+
+        def fake_perform_websearch(**kwargs):
+            captured.update(kwargs)
+            return {"results": [], "total_results_found": 0}
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
+            fake_perform_websearch,
+        )
+
+        result = await run_web_search_adapter(
+            {
+                "query": "q",
+                "engine": "searx",
+                "searx_json_mode": "y",
+            },
+            base_context,
+        )
+
+        assert "error" not in result
         assert captured.get("search_params", {}).get("searx_json_mode") is True
 
     @pytest.mark.asyncio
@@ -707,6 +752,21 @@ class TestRSSFetchAdapter:
 
         assert "results" in result
         assert "count" in result
+        assert result["results"][0]["title"] == "Test Item"
+
+    @pytest.mark.asyncio
+    async def test_rss_fetch_adapter_test_mode_y(self, monkeypatch, base_context):
+        """Test RSS fetch adapter treats TEST_MODE=y as test mode."""
+        monkeypatch.setenv("TEST_MODE", "y")
+        monkeypatch.setenv("TLDW_TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_rss_fetch_adapter
+
+        config = {"urls": ["https://example.com/feed.xml"], "limit": 5}
+
+        result = await run_rss_fetch_adapter(config, base_context)
+
+        assert "results" in result
         assert result["results"][0]["title"] == "Test Item"
 
     @pytest.mark.asyncio

@@ -9,7 +9,7 @@ so that behavior stays aligned with current authentication flows.
 """
 
 import os
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException, Request, status
 from loguru import logger
@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.exceptions import InactiveUserError
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _RESOLVER_MODE_EXCEPTIONS = (
     AttributeError,
@@ -61,6 +62,8 @@ _SINGLE_USER_COMPAT_EXCEPTIONS = (
     TypeError,
     ValueError,
 )
+_PLATFORM_ADMIN_ROLES = frozenset({"admin", "owner", "super_admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure", "admin"})
 
 
 def is_single_user_mode() -> bool:
@@ -120,11 +123,35 @@ def _peek_jwt_token_type(token: str) -> Optional[str]:
                 return str(raw_type)
     except _TOKEN_PEEK_EXCEPTIONS:
         return None
+    except Exception:  # noqa: BLE001 - malformed JWT segments should not block API-key fallback
+        return None
     return None
 
 
-def _resolve_service_identity(payload: dict) -> tuple[str, list[str]]:
-    """Derive service name and permissions list from a verified service token."""
+def _normalized_claim_values(
+    values: list[Any] | tuple[Any, ...] | set[Any] | None,
+) -> set[str]:
+    return {
+        str(value).strip().lower()
+        for value in (values or [])
+        if str(value).strip()
+    }
+
+
+def _claims_mark_admin(
+    *,
+    roles: list[str] | tuple[str, ...] | set[str] | None,
+    permissions: list[str] | tuple[str, ...] | set[str] | None,
+) -> bool:
+    normalized_roles = _normalized_claim_values(roles)
+    if normalized_roles & _PLATFORM_ADMIN_ROLES:
+        return True
+    normalized_permissions = _normalized_claim_values(permissions)
+    return bool(normalized_permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
+def _resolve_service_identity(payload: dict) -> tuple[str, list[str], list[str]]:
+    """Derive service name and claims from a verified service token."""
     service_name = payload.get("service")
     if not service_name:
         subject = payload.get("sub")
@@ -139,7 +166,15 @@ def _resolve_service_identity(payload: dict) -> tuple[str, list[str]]:
         permissions = [str(p) for p in permissions_raw if p]
     else:
         permissions = []
-    return str(service_name), permissions
+
+    roles_raw = payload.get("roles") or []
+    if isinstance(roles_raw, str):
+        roles = [roles_raw]
+    elif isinstance(roles_raw, (list, tuple, set)):
+        roles = [str(r) for r in roles_raw if r]
+    else:
+        roles = []
+    return str(service_name), permissions, roles
 
 
 def _is_test_context() -> bool:
@@ -147,7 +182,7 @@ def _is_test_context() -> bool:
     if os.getenv("PYTEST_CURRENT_TEST") is not None:
         return True
     for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
-        if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
+        if env_flag_enabled(flag):
             return True
     return False
 
@@ -205,10 +240,28 @@ def _build_principal_from_user(
     except (AttributeError, TypeError, ValueError):
         active_team_id = None
 
-    # Claims on the User model are the canonical source of truth
-    roles = list(getattr(user, "roles", []) or [])
-    permissions = list(getattr(user, "permissions", []) or [])
-    is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
+    # Claims on the User model are the canonical source of truth.
+    raw_roles = list(getattr(user, "roles", []) or [])
+    raw_role = getattr(user, "role", None)
+    if raw_role:
+        raw_roles.append(raw_role)
+    roles: list[str] = []
+    _seen_roles: set[str] = set()
+    for role in raw_roles:
+        role_text = str(role).strip()
+        if not role_text:
+            continue
+        role_key = role_text.lower()
+        if role_key in _seen_roles:
+            continue
+        _seen_roles.add(role_key)
+        roles.append(role_text)
+    permissions = [
+        str(permission)
+        for permission in (getattr(user, "permissions", []) or [])
+        if str(permission).strip()
+    ]
+    is_admin = _claims_mark_admin(roles=roles, permissions=permissions)
     username = None
     email = None
     try:
@@ -376,7 +429,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                         detail="Service tokens are restricted to local/internal requests",
                     )
 
-                service_name, permissions = _resolve_service_identity(payload)
+                service_name, permissions, roles = _resolve_service_identity(payload)
                 principal = AuthPrincipal(
                     kind="service",
                     user_id=None,
@@ -386,9 +439,9 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                     subject=f"service:{service_name}",
                     token_type="service",
                     jti=payload.get("jti"),
-                    roles=[],
+                    roles=roles,
                     permissions=permissions,
-                    is_admin=("admin" in permissions),
+                    is_admin=_claims_mark_admin(roles=roles, permissions=permissions),
                     org_ids=[],
                     team_ids=[],
                     active_org_id=None,
@@ -427,9 +480,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             else:
                 logger.exception("Error resolving principal from JWT: {}", exc)
                 raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Could not validate credentials",
-                    headers={"WWW-Authenticate": "Bearer"},
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Authentication failed due to internal error",
                 ) from exc
 
         if token is not None:
@@ -521,8 +573,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         except Exception as exc:
             logger.exception("Error resolving principal from API key: {}", exc)
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication failed",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Authentication failed due to internal error",
             ) from exc
 
         # authenticate_api_key_user populates request.state.auth / _auth_user; reuse if present.

@@ -32,6 +32,7 @@ from tldw_Server_API.app.core.Collections.utils import (
     hash_text_sha256,
 )
 from tldw_Server_API.app.core.config import load_comprehensive_config, settings
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.DB_Management.content_backend import (
     get_content_backend,
     load_content_db_settings,
@@ -95,15 +96,15 @@ def _resolve_output_size_bytes(user_id: str, storage_path: str | None) -> int | 
     try:
         user_int = int(user_id)
     except (TypeError, ValueError):
-        logger.warning("audiobook_quota: invalid user id for output size: %s", user_id)
+        logger.warning("audiobook_quota: invalid user id for output size: {}", user_id)
         return None
     try:
         outputs_dir = DatabasePaths.get_user_outputs_dir(user_int)
         return (outputs_dir / storage_path).stat().st_size
     except FileNotFoundError:
-        logger.warning("audiobook_quota: missing output file %s", storage_path)
+        logger.warning("audiobook_quota: missing output file {}", storage_path)
     except OSError as exc:
-        logger.warning("audiobook_quota: failed to stat %s: %s", storage_path, exc)
+        logger.warning("audiobook_quota: failed to stat {}: {}", storage_path, exc)
     return None
 
 _SQLITE_PRAGMA_TABLES = {
@@ -280,6 +281,7 @@ class CollectionsDatabase:
             self._owns_backend = False
         self.backend = backend
         self._fts_available = True
+        self._fts_supports_direct_delete = True
         self.ensure_schema()
         self._seed_watchlists_output_templates()
 
@@ -331,7 +333,7 @@ class CollectionsDatabase:
         try:
             self.backend.close_all()
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("collections_db: failed to close backend for user %s: %s", self.user_id, exc)
+            logger.debug("collections_db: failed to close backend for user {}: {}", self.user_id, exc)
 
     def __enter__(self) -> CollectionsDatabase:
         return self
@@ -379,7 +381,7 @@ class CollectionsDatabase:
         if isinstance(value, bool):
             return value
         raw = str(value).strip().lower()
-        if raw in {"1", "true", "yes", "on", "y"}:
+        if is_truthy(raw):
             return True
         if raw in {"0", "false", "no", "off", "n"}:
             return False
@@ -427,7 +429,7 @@ class CollectionsDatabase:
                 (),
             ).rows
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("collections backfill: audiobook_projects.project_id fetch failed: %s", exc)
+            logger.debug("collections backfill: audiobook_projects.project_id fetch failed: {}", exc)
             return
         updated = 0
         for row in rows:
@@ -448,9 +450,9 @@ class CollectionsDatabase:
                 )
                 updated += 1
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("collections backfill: audiobook_projects.project_id update failed: %s", exc)
+                logger.debug("collections backfill: audiobook_projects.project_id update failed: {}", exc)
         if updated:
-            logger.debug("collections backfill: audiobook_projects.project_id updated %s rows", updated)
+            logger.debug("collections backfill: audiobook_projects.project_id updated {} rows", updated)
 
     def ensure_schema(self) -> None:
         """Create tables if they do not already exist."""
@@ -1231,10 +1233,51 @@ class CollectionsDatabase:
                 self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
-                    logger.debug("collections backfill: content_items.%s already exists or skipped", column)
+                    logger.debug("collections backfill: content_items.{} already exists or skipped", column)
                 else:
                     raise
         self._fts_available = fts_available
+        self._refresh_fts_capabilities()
+
+    def _refresh_fts_capabilities(self) -> None:
+        """Refresh FTS behavior flags based on the concrete virtual table definition."""
+        self._fts_supports_direct_delete = True
+        if not self._fts_available:
+            return
+        if self.backend.backend_type != BackendType.SQLITE:
+            return
+        try:
+            row = self.backend.execute(
+                """
+                SELECT sql
+                FROM sqlite_master
+                WHERE name = 'content_items_fts'
+                LIMIT 1
+                """,
+                (),
+            ).first
+            ddl = str((row or {}).get("sql") or "").lower()
+            # content='' tables are contentless unless explicitly created with contentless_delete=1.
+            if "content=''" in ddl and "contentless_delete=1" not in ddl:
+                self._fts_supports_direct_delete = False
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("collections: failed to inspect content_items_fts capabilities: {}", exc)
+
+    @staticmethod
+    def _build_content_fts_metadata_text(
+        *,
+        notes: str | None,
+        tags: Iterable[str] | None,
+        metadata_json: str | None,
+    ) -> str:
+        metadata_text = metadata_json or ""
+        if notes:
+            metadata_text = f"{metadata_text}\n{notes}" if metadata_text else notes
+        if tags:
+            tag_text = " ".join([str(tag).strip() for tag in tags if tag])
+            if tag_text:
+                metadata_text = f"{metadata_text}\n{tag_text}" if metadata_text else tag_text
+        return metadata_text
 
     def _seed_watchlists_output_templates(self) -> None:
         seed_setting = settings.get("WATCHLISTS_SEED_OUTPUT_TEMPLATES")
@@ -1246,13 +1289,13 @@ class CollectionsDatabase:
         try:
             from tldw_Server_API.app.core.Watchlists import template_store
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("collections: watchlists template store unavailable: %s", exc)
+            logger.debug("collections: watchlists template store unavailable: {}", exc)
             return
 
         try:
             summaries = template_store.list_templates()
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("collections: failed to list watchlists templates: %s", exc)
+            logger.debug("collections: failed to list watchlists templates: {}", exc)
             return
 
         if not summaries:
@@ -1268,7 +1311,7 @@ class CollectionsDatabase:
             try:
                 record = template_store.load_template(name)
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("collections: failed to load watchlists template %s: %s", name, exc)
+                logger.debug("collections: failed to load watchlists template {}: {}", name, exc)
                 continue
             fmt = record.format.lower()
             type_ = self._infer_output_template_type(record.name, fmt)
@@ -1293,7 +1336,7 @@ class CollectionsDatabase:
                     )
                     existing.add(record.name)
                 except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.debug("collections: failed to seed watchlists template %s: %s", record.name, exc)
+                    logger.debug("collections: failed to seed watchlists template {}: {}", record.name, exc)
                 continue
 
             try:
@@ -1301,7 +1344,7 @@ class CollectionsDatabase:
             except KeyError:
                 continue
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("collections: failed to lookup watchlists template %s: %s", name, exc)
+                logger.debug("collections: failed to lookup watchlists template {}: {}", name, exc)
                 continue
 
             current_meta: dict[str, Any] = {}
@@ -1355,7 +1398,7 @@ class CollectionsDatabase:
                 try:
                     self.update_output_template(current.id, patch)
                 except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.debug("collections: failed to refresh watchlists template %s: %s", name, exc)
+                    logger.debug("collections: failed to refresh watchlists template {}: {}", name, exc)
 
     # ------------------------
     # Collections Tags helpers
@@ -1507,12 +1550,12 @@ class CollectionsDatabase:
             return {}
         placeholders = ",".join("?" for _ in ids)
         rows = self.backend.execute(
-            f"""
+            """
             SELECT cit.item_id AS item_id, ct.name AS name
             FROM content_item_tags cit
             JOIN collection_tags ct ON ct.id = cit.tag_id
             WHERE cit.item_id IN ({placeholders})
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(ids),
         ).rows
         mapping: dict[int, list[str]] = {item_id: [] for item_id in ids}
@@ -1533,21 +1576,45 @@ class CollectionsDatabase:
         notes: str | None,
         tags: list[str] | None,
         metadata_json: str | None,
+        previous_title: str | None = None,
+        previous_summary: str | None = None,
+        previous_notes: str | None = None,
+        previous_tags: list[str] | None = None,
+        previous_metadata_json: str | None = None,
+        has_previous_entry: bool = False,
     ) -> None:
         if not self._fts_available:
             return
         try:
-            metadata_text = metadata_json or ""
-            if notes:
-                metadata_text = f"{metadata_text}\n{notes}" if metadata_text else notes
-            if tags:
-                tag_text = " ".join([str(tag).strip() for tag in tags if tag])
-                if tag_text:
-                    metadata_text = f"{metadata_text}\n{tag_text}" if metadata_text else tag_text
-            self.backend.execute(
-                "DELETE FROM content_items_fts WHERE rowid = ?",
-                (item_id,),
+            metadata_text = self._build_content_fts_metadata_text(
+                notes=notes,
+                tags=tags,
+                metadata_json=metadata_json,
             )
+            had_previous = has_previous_entry or any(
+                value is not None for value in (previous_title, previous_summary, previous_notes, previous_metadata_json)
+            ) or bool(previous_tags)
+
+            if had_previous:
+                previous_metadata_text = self._build_content_fts_metadata_text(
+                    notes=previous_notes,
+                    tags=previous_tags,
+                    metadata_json=previous_metadata_json,
+                )
+                if self._fts_supports_direct_delete:
+                    self.backend.execute(
+                        "DELETE FROM content_items_fts WHERE rowid = ?",
+                        (item_id,),
+                    )
+                else:
+                    # Contentless FTS5 tables require the special delete command with the old indexed values.
+                    self.backend.execute(
+                        """
+                        INSERT INTO content_items_fts(content_items_fts, rowid, title, summary, metadata)
+                        VALUES('delete', ?, ?, ?, ?)
+                        """,
+                        (item_id, previous_title or "", previous_summary or "", previous_metadata_text),
+                    )
             self.backend.execute(
                 "INSERT INTO content_items_fts(rowid, title, summary, metadata) VALUES (?, ?, ?, ?)",
                 (item_id, title or "", summary or "", metadata_text),
@@ -1555,13 +1622,38 @@ class CollectionsDatabase:
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Collections FTS update failed for item {item_id}: {exc}")
 
-    def _delete_content_fts_entry(self, item_id: int) -> None:
+    def _delete_content_fts_entry(
+        self,
+        item_id: int,
+        *,
+        title: str | None = None,
+        summary: str | None = None,
+        notes: str | None = None,
+        tags: list[str] | None = None,
+        metadata_json: str | None = None,
+    ) -> None:
         if not self._fts_available:
             return
         try:
+            if self._fts_supports_direct_delete:
+                self.backend.execute(
+                    "DELETE FROM content_items_fts WHERE rowid = ?",
+                    (item_id,),
+                )
+                return
+
+            # Contentless FTS5 delete needs the original indexed values.
+            metadata_text = self._build_content_fts_metadata_text(
+                notes=notes,
+                tags=tags,
+                metadata_json=metadata_json,
+            )
             self.backend.execute(
-                "DELETE FROM content_items_fts WHERE rowid = ?",
-                (item_id,),
+                """
+                INSERT INTO content_items_fts(content_items_fts, rowid, title, summary, metadata)
+                VALUES('delete', ?, ?, ?, ?)
+                """,
+                (item_id, title or "", summary or "", metadata_text),
             )
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Collections FTS delete failed for item {item_id}: {exc}")
@@ -1699,13 +1791,13 @@ class CollectionsDatabase:
         def _lookup_existing() -> tuple[dict[str, Any] | None, int | None]:
             for column, value in selectors:
                 row = self.backend.execute(
-                    f"""
+                    """
                     SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
                            title, summary, notes, content_hash, word_count, published_at, status, favorite,
                            metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
                     FROM content_items
                     WHERE user_id = ? AND {column} = ?
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     (self.user_id, value),
                 ).first
                 if row:
@@ -1769,6 +1861,9 @@ class CollectionsDatabase:
             return current_canonical, current_domain, current_favorite, current_status
 
         existing_row, item_id = _lookup_existing()
+        existing_tags_for_fts: list[str] | None = None
+        if existing_row and item_id is not None:
+            existing_tags_for_fts = self._fetch_tags_for_item_ids([int(item_id)]).get(int(item_id), [])
         if existing_row and preserve_existing_on_null:
             preserved = _apply_preserve(existing_row)
             origin_type = preserved["origin_type"]
@@ -1843,6 +1938,7 @@ class CollectionsDatabase:
                 existing_row, item_id = _lookup_existing()
                 if not existing_row or item_id is None:
                     raise
+                existing_tags_for_fts = self._fetch_tags_for_item_ids([int(item_id)]).get(int(item_id), [])
                 if preserve_existing_on_null:
                     preserved = _apply_preserve(existing_row)
                     origin_type = preserved["origin_type"]
@@ -1916,7 +2012,7 @@ class CollectionsDatabase:
                 self.user_id,
             )
             self.backend.execute(
-                f"UPDATE content_items SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+                f"UPDATE content_items SET {', '.join(fields)} WHERE id = ? AND user_id = ?",  # nosec B608
                 params,
             )
             content_changed = not (prev_hash == content_hash or prev_hash is None and content_hash is None)
@@ -1939,6 +2035,12 @@ class CollectionsDatabase:
                 notes=row.notes,
                 tags=row.tags,
                 metadata_json=row.metadata_json,
+                previous_title=(existing_row.get("title") if existing_row else None),
+                previous_summary=(existing_row.get("summary") if existing_row else None),
+                previous_notes=(existing_row.get("notes") if existing_row else None),
+                previous_tags=existing_tags_for_fts,
+                previous_metadata_json=(existing_row.get("metadata_json") if existing_row else None),
+                has_previous_entry=bool(existing_row),
             )
         row.is_new = created
         row.content_changed = content_changed
@@ -2053,7 +2155,7 @@ class CollectionsDatabase:
             joins_sql = f" {' '.join(query_joins)}" if query_joins else ""
             base_from = f"FROM content_items ci{joins_sql}"
             subquery = f"SELECT ci.id {base_from} WHERE {where_sql} {group_by} {having}"
-            count_sql = f"SELECT COUNT(*) AS cnt FROM ({subquery}) AS subq"
+            count_sql = f"SELECT COUNT(*) AS cnt FROM ({subquery}) AS subq"  # nosec B608
             total = int(self.backend.execute(count_sql, tuple(clause_params)).scalar or 0)
 
             resolved_limit = limit if isinstance(limit, int) and limit > 0 else size
@@ -2175,7 +2277,7 @@ class CollectionsDatabase:
             params.append(_utcnow_iso())
             params.extend([item_id, self.user_id])
             self.backend.execute(
-                f"UPDATE content_items SET {', '.join(updates)} WHERE id = ? AND user_id = ?",
+                f"UPDATE content_items SET {', '.join(updates)} WHERE id = ? AND user_id = ?",  # nosec B608
                 tuple(params),
             )
 
@@ -2192,6 +2294,12 @@ class CollectionsDatabase:
                 notes=tgt.notes,
                 tags=tgt.tags,
                 metadata_json=tgt.metadata_json,
+                previous_title=existing.title,
+                previous_summary=existing.summary,
+                previous_notes=existing.notes,
+                previous_tags=existing.tags,
+                previous_metadata_json=existing.metadata_json,
+                has_previous_entry=True,
             )
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             pass
@@ -2204,11 +2312,17 @@ class CollectionsDatabase:
     def delete_content_item(self, item_id: int) -> None:
         """Delete a content item and its tags/FTS entry."""
         row = self.backend.execute(
-            "SELECT id FROM content_items WHERE id = ? AND user_id = ?",
+            """
+            SELECT id, title, summary, notes, metadata_json
+            FROM content_items
+            WHERE id = ? AND user_id = ?
+            """,
             (item_id, self.user_id),
         ).first
         if not row:
             raise KeyError("content_item_not_found")
+        tags_map = self._fetch_tags_for_item_ids([item_id])
+        existing_tags = tags_map.get(item_id, [])
 
         self.backend.execute(
             "DELETE FROM content_item_tags WHERE item_id = ?",
@@ -2219,7 +2333,63 @@ class CollectionsDatabase:
             (item_id, self.user_id),
         )
         with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
-            self._delete_content_fts_entry(item_id)
+            self._delete_content_fts_entry(
+                item_id,
+                title=row.get("title"),
+                summary=row.get("summary"),
+                notes=row.get("notes"),
+                tags=existing_tags,
+                metadata_json=row.get("metadata_json"),
+            )
+
+    def prune_content_items_for_source(
+        self,
+        *,
+        origin: str,
+        origin_id: int,
+        max_items: int | None = None,
+        retention_days: int | None = None,
+    ) -> int:
+        """Delete oldest content items for a source exceeding retention limits.
+
+        Returns count of deleted items.
+        """
+        deleted = 0
+        if retention_days and retention_days > 0:
+            cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
+            old_ids = [
+                int(r["id"])
+                for r in self.backend.execute(
+                    "SELECT id FROM content_items WHERE user_id = ? AND origin = ? AND origin_id = ? AND created_at < ?",
+                    (self.user_id, origin, origin_id, cutoff),
+                ).rows
+            ]
+            for item_id in old_ids:
+                with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
+                    self.delete_content_item(item_id)
+                    deleted += 1
+
+        if max_items and max_items > 0:
+            total = int(
+                self.backend.execute(
+                    "SELECT COUNT(*) AS cnt FROM content_items WHERE user_id = ? AND origin = ? AND origin_id = ?",
+                    (self.user_id, origin, origin_id),
+                ).scalar or 0
+            )
+            excess = total - max_items
+            if excess > 0:
+                excess_ids = [
+                    int(r["id"])
+                    for r in self.backend.execute(
+                        "SELECT id FROM content_items WHERE user_id = ? AND origin = ? AND origin_id = ? ORDER BY created_at ASC LIMIT ?",
+                        (self.user_id, origin, origin_id, excess),
+                    ).rows
+                ]
+                for item_id in excess_ids:
+                    with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
+                        self.delete_content_item(item_id)
+                        deleted += 1
+        return deleted
 
     # ------------------------
     # Output Templates API
@@ -2233,11 +2403,11 @@ class CollectionsDatabase:
             params.extend([like, like])
         where_sql = " AND ".join(where)
 
-        count_q = f"SELECT COUNT(*) AS cnt FROM output_templates WHERE {where_sql}"
+        count_q = f"SELECT COUNT(*) AS cnt FROM output_templates WHERE {where_sql}"  # nosec B608
         total = int(self.backend.execute(count_q, tuple(params)).scalar or 0)
 
         select_q = (
-            f"SELECT id, user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json "
+            f"SELECT id, user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json "  # nosec B608
             f"FROM output_templates WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(select_q, tuple(params + [limit, offset])).rows
@@ -2306,7 +2476,7 @@ class CollectionsDatabase:
         fields.append("updated_at = ?")
         params.append(_utcnow_iso())
         params.extend([template_id, self.user_id])
-        q = f"UPDATE output_templates SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        q = f"UPDATE output_templates SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("template_not_found")
@@ -2404,7 +2574,7 @@ class CollectionsDatabase:
         if not fields:
             return self.get_highlight(highlight_id)
         params.extend([highlight_id, self.user_id])
-        q = f"UPDATE reading_highlights SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        q = f"UPDATE reading_highlights SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("highlight_not_found")
@@ -2616,7 +2786,7 @@ class CollectionsDatabase:
         if not fields:
             return self.get_output_artifact(output_id)
         params.extend([output_id, self.user_id])
-        q = f"UPDATE outputs SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND deleted = 0"
+        q = f"UPDATE outputs SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND deleted = 0"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("output_not_found")
@@ -2625,7 +2795,7 @@ class CollectionsDatabase:
     def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> CollectionsDatabase.OutputArtifactRow:
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "  # nosec B608
             f"FROM outputs WHERE {cond}"
         )
         row = self.backend.execute(q, (output_id, self.user_id)).first
@@ -2662,7 +2832,7 @@ class CollectionsDatabase:
             try:
                 self.update_audiobook_output_usage(-size_bytes)
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.warning("audiobook_quota: failed to decrement usage: %s", exc)
+                logger.warning("audiobook_quota: failed to decrement usage: {}", exc)
         return ok
 
     def get_output_artifact_by_title(self, title: str, format_: str | None = None, include_deleted: bool = False) -> CollectionsDatabase.OutputArtifactRow:
@@ -2674,7 +2844,7 @@ class CollectionsDatabase:
         if not include_deleted:
             where.append("deleted = 0")
         q = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "  # nosec B608
             f"FROM outputs WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 1"
         )
         row = self.backend.execute(q, tuple(params)).first
@@ -2691,6 +2861,7 @@ class CollectionsDatabase:
         run_id: int | None = None,
         type_: str | None = None,
         workspace_tag: str | None = None,
+        metadata_origin: str | None = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
     ) -> tuple[list[CollectionsDatabase.OutputArtifactRow], int]:
@@ -2712,12 +2883,20 @@ class CollectionsDatabase:
         if workspace_tag:
             where.append("workspace_tag = ?")
             params.append(workspace_tag)
+        if metadata_origin:
+            origin = str(metadata_origin).strip()
+            if origin:
+                where.append("(metadata_json LIKE ? OR metadata_json LIKE ?)")
+                params.extend([
+                    f'%\"origin\":\"{origin}\"%',
+                    f'%\"origin\": \"{origin}\"%',
+                ])
         where_sql = " AND ".join(where)
 
-        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"
+        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"  # nosec B608
         total = int(self.backend.execute(cq, tuple(params)).scalar or 0)
         sq = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "  # nosec B608
             f"FROM outputs WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
@@ -2745,10 +2924,10 @@ class CollectionsDatabase:
             where.append("workspace_tag = ?")
             params.append(workspace_tag)
         where_sql = " AND ".join(where)
-        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"
+        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"  # nosec B608
         total = int(self.backend.execute(cq, tuple(params)).scalar or 0)
         sq = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "  # nosec B608
             f"FROM outputs WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
@@ -2836,7 +3015,7 @@ class CollectionsDatabase:
         try:
             user_int = int(self.user_id)
         except (TypeError, ValueError):
-            logger.warning("audiobook_quota: invalid user id for recompute: %s", self.user_id)
+            logger.warning("audiobook_quota: invalid user id for recompute: {}", self.user_id)
             return 0
         DatabasePaths.get_user_outputs_dir(user_int)
         total_bytes = 0
@@ -2867,7 +3046,7 @@ class CollectionsDatabase:
             fields.append("storage_path = ?")
             params.append(new_storage_path)
         params.extend([output_id, self.user_id])
-        q = f"UPDATE outputs SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND deleted = 0"
+        q = f"UPDATE outputs SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND deleted = 0"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("output_not_found")
@@ -2952,7 +3131,7 @@ class CollectionsDatabase:
             fields.append("settings_json = ?")
             params.append(settings_json)
         params.extend([project_id, self.user_id])
-        q = f"UPDATE audiobook_projects SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        q = f"UPDATE audiobook_projects SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("audiobook_project_not_found")
@@ -3267,7 +3446,7 @@ class CollectionsDatabase:
         fields.append("updated_at = ?")
         params.append(_utcnow_iso())
         params.extend([schedule_id, self.user_id])
-        q = f"UPDATE reading_digest_schedules SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        q = f"UPDATE reading_digest_schedules SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("reading_digest_schedule_not_found")
@@ -3330,10 +3509,10 @@ class CollectionsDatabase:
         """
         where = "user_id = ? AND tenant_id = ?"
         params: list[Any] = [self.user_id, tenant_id]
-        count_q = f"SELECT COUNT(*) AS cnt FROM reading_digest_schedules WHERE {where}"
+        count_q = f"SELECT COUNT(*) AS cnt FROM reading_digest_schedules WHERE {where}"  # nosec B608
         total = int(self.backend.execute(count_q, tuple(params)).scalar or 0)
         q = (
-            "SELECT * FROM reading_digest_schedules "
+            "SELECT * FROM reading_digest_schedules "  # nosec B608
             f"WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(q, (*params, limit, offset)).rows
@@ -3409,13 +3588,13 @@ class CollectionsDatabase:
             status_params.extend(disallow_statuses)
         if expected_next_run_at is None:
             q = (
-                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "
+                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "  # nosec B608
                 "WHERE id = ? AND user_id = ? AND next_run_at IS NULL"
                 f"{status_clause}"
             )
         else:
             q = (
-                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "
+                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "  # nosec B608
                 "WHERE id = ? AND user_id = ? AND next_run_at = ?"
                 f"{status_clause}"
             )
@@ -3537,7 +3716,7 @@ class CollectionsDatabase:
         """Fetch a file artifact by id."""
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
-            "SELECT id, user_id, file_type, title, structured_json, validation_json, export_status, export_format, "
+            "SELECT id, user_id, file_type, title, structured_json, validation_json, export_status, export_format, "  # nosec B608
             "export_storage_path, export_bytes, export_content_type, export_job_id, export_expires_at, export_consumed_at, metadata_json, created_at, updated_at, retention_until "
             f"FROM file_artifacts WHERE {cond}"
         )
@@ -3692,6 +3871,6 @@ class CollectionsDatabase:
         if not ids:
             return 0
         placeholders = ",".join(["?"] * len(ids))
-        q = f"DELETE FROM file_artifacts WHERE user_id = ? AND id IN ({placeholders})"
+        q = f"DELETE FROM file_artifacts WHERE user_id = ? AND id IN ({placeholders})"  # nosec B608
         res = self.backend.execute(q, tuple([self.user_id] + list(ids)))
         return int(res.rowcount or 0)

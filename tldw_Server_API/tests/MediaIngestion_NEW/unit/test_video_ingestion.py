@@ -1,5 +1,6 @@
 from pathlib import Path
 from unittest.mock import patch
+import wave
 
 import pytest
 
@@ -394,8 +395,12 @@ def test_process_single_video_remote_download_success(
 ):
     mock_extract_metadata.return_value = {"title": "Online Clip"}
 
-    downloaded_file = tmp_path / "downloaded.m4a"
-    downloaded_file.write_bytes(b"\x00\x01")
+    downloaded_file = tmp_path / "downloaded.wav"
+    with wave.open(str(downloaded_file), "wb") as wave_file:
+        wave_file.setnchannels(1)
+        wave_file.setsampwidth(2)
+        wave_file.setframerate(8000)
+        wave_file.writeframes(b"\x00\x00" * 8)
     mock_download.return_value = str(downloaded_file)
 
     mock_transcribe.return_value = ("audio.wav", [{"Text": "hello", "Time_Start": 0, "Time_End": 1}])
@@ -431,6 +436,55 @@ def test_process_single_video_remote_download_success(
     assert result["status"] == "Success"
     assert result["processing_source"] == str(downloaded_file)
     mock_download.assert_called_once()
+
+
+@patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.perform_transcription")
+@patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.download_video")
+@patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.extract_metadata")
+def test_process_single_video_remote_download_validation_rejected(
+    mock_extract_metadata,
+    mock_download,
+    mock_transcribe,
+    tmp_path,
+):
+    mock_extract_metadata.return_value = {"title": "Online Clip"}
+    downloaded_file = tmp_path / "downloaded_payload.exe"
+    downloaded_file.write_bytes(b"MZ")
+    mock_download.return_value = str(downloaded_file)
+    mock_transcribe.side_effect = AssertionError(
+        "perform_transcription should not run when URL validation fails"
+    )
+
+    result = process_single_video(
+        video_input="https://example.com/video",
+        start_seconds=0,
+        end_seconds=None,
+        diarize=False,
+        vad_use=False,
+        transcription_model="whisper-small",
+        transcription_language="en",
+        perform_analysis=False,
+        custom_prompt=None,
+        system_prompt=None,
+        perform_chunking=False,
+        chunk_method=None,
+        max_chunk_size=1000,
+        chunk_overlap=0,
+        use_adaptive_chunking=False,
+        use_multi_level_chunking=False,
+        chunk_language=None,
+        summarize_recursively=False,
+        api_name=None,
+        use_cookies=False,
+        cookies=None,
+        timestamp_option=False,
+        temp_dir=str(tmp_path),
+        keep_intermediate_audio=False,
+        perform_diarization=False,
+    )
+
+    assert result["status"] == "Error"
+    assert "downloaded file failed validation" in str(result.get("error", "")).lower()
 
 
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_single_video")

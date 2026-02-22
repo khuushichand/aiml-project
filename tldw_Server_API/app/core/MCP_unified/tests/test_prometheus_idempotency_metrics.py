@@ -22,12 +22,12 @@ def _setup_env():
         from tldw_Server_API.app.core.MCP_unified.config import get_config as _gc
         _gc.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.MCP_unified.security.ip_filter import get_ip_access_controller as _gip
         _gip.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
 
 class IdempWriteModule(BaseModule):

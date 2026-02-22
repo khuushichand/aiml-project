@@ -1,9 +1,9 @@
 import React, { lazy, Suspense, useState, useContext } from "react"
 
-import { Drawer, Tooltip } from "antd"
+import { Button, Drawer, Modal, Tooltip } from "antd"
 import { EraserIcon, XIcon } from "lucide-react"
 import { IconButton } from "@/components/Common/IconButton"
-import { useLocation } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { useQueryClient } from "@tanstack/react-query"
 import { useShallow } from "zustand/react/shallow"
@@ -29,11 +29,33 @@ import { useMigration } from "@/hooks/useMigration"
 import { useStorageMigrations } from "@/hooks/useStorageMigrations"
 import { useLayoutEffectsOwner } from "@/hooks/useLayoutEffectsOwner"
 import { useChatSidebar } from "@/hooks/useFeatureFlags"
+import { useMobile } from "@/hooks/useMediaQuery"
+import { useSetting } from "@/hooks/useSetting"
+import { useServerOnline } from "@/hooks/useServerOnline"
 import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { setSettingsReturnTo } from "@/utils/settings-return"
 import { WorkflowIntegrationHost } from "@/components/Common/Workflow"
+import {
+  DOCUMENT_WORKSPACE_PATH,
+  WORKSPACE_PLAYGROUND_PATH
+} from "@/routes/route-paths"
+import {
+  CHAT_BACKGROUND_IMAGE_SETTING,
+  HEADER_SHORTCUTS_EXPANDED_SETTING
+} from "@/services/settings/ui-settings"
+import { setSetting } from "@/services/settings/registry"
+import {
+  BACKEND_UNREACHABLE_EVENT,
+  type BackendUnreachableDetail
+} from "@/services/request-events"
+import {
+  useConnectionActions,
+  useConnectionState,
+  useConnectionUxState
+} from "@/hooks/useConnectionState"
+import { ConnectionPhase } from "@/types/connection"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -82,11 +104,38 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     (state) => state.setChatSidebarCollapsed
   )
   const { t } = useTranslation(["option", "common", "settings"])
+  const navigate = useNavigate()
   const [openModelSettings, setOpenModelSettings] = useState(false)
   const { isLoading: migrationLoading } = useMigration()
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
+  const isMobileViewport = useMobile()
+  useServerOnline()
   const location = useLocation()
+  const mobileSidebarPathRef = React.useRef(location.pathname)
+  const { phase, isConnected } = useConnectionState()
+  const { checkOnce } = useConnectionActions()
+  const { isChecking } = useConnectionUxState()
+  const [backendUnavailableDetail, setBackendUnavailableDetail] =
+    useState<BackendUnreachableDetail | null>(null)
+  const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
+  const isChatScreen = location.pathname === "/chat"
+  const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
+  const isWorkspacePlayground = location.pathname === WORKSPACE_PLAYGROUND_PATH
+  const isMediaMultiRoute = location.pathname === "/media-multi"
+  const isViewportConstrainedRoute =
+    isDocumentWorkspace ||
+    isWorkspacePlayground ||
+    isMediaMultiRoute
+  const chatScreenBackgroundStyle =
+    isChatScreen && chatBackgroundImage
+      ? {
+          backgroundImage: `url(${chatBackgroundImage})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat"
+        }
+      : undefined
   const { clearChat, useOCR, chatMode, setChatMode, webSearch, setWebSearch } =
     useMessageOption()
   const queryClient = useQueryClient()
@@ -110,15 +159,85 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     setSettingsReturnTo(path)
   }, [isLayoutEffectsOwner, location.pathname, location.search, location.hash])
 
+  React.useEffect(() => {
+    setChatSidebarCollapsed(true)
+    void setSetting(HEADER_SHORTCUTS_EXPANDED_SETTING, false).catch(() => {
+      // ignore storage write failures
+    })
+  }, [location.pathname, setChatSidebarCollapsed])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onBackendUnreachable = (event: Event) => {
+      const detail = (event as CustomEvent<BackendUnreachableDetail | undefined>)
+        ?.detail
+      if (!detail || typeof detail !== "object") return
+      setBackendUnavailableDetail(detail)
+      void checkOnce().catch(() => undefined)
+    }
+
+    window.addEventListener(
+      BACKEND_UNREACHABLE_EVENT,
+      onBackendUnreachable as EventListener
+    )
+    return () => {
+      window.removeEventListener(
+        BACKEND_UNREACHABLE_EVENT,
+        onBackendUnreachable as EventListener
+      )
+    }
+  }, [checkOnce])
+
+  React.useEffect(() => {
+    if (isConnected && phase === ConnectionPhase.CONNECTED) {
+      setBackendUnavailableDetail(null)
+    }
+  }, [isConnected, phase])
+
+  const closeBackendUnavailableModal = React.useCallback(() => {
+    setBackendUnavailableDetail(null)
+  }, [])
+
+  const openHealthDiagnostics = React.useCallback(() => {
+    setBackendUnavailableDetail(null)
+    navigate("/settings/health")
+  }, [navigate])
+
+  const retryConnectionCheck = React.useCallback(() => {
+    void checkOnce().catch(() => undefined)
+  }, [checkOnce])
+
   // Create toggle function for sidebar
   const toggleSidebar = () => {
     if (hideSidebar) return
     if (showChatSidebar && !hideHeader) {
+      if (isMobileViewport) {
+        setSidebarOpen((prev) => !prev)
+        return
+      }
       setChatSidebarCollapsed((prev) => !prev)
       return
     }
     setSidebarOpen((prev) => !prev)
   }
+
+  React.useEffect(() => {
+    if (isMobileViewport && !showChatSidebar) return
+    if (!isMobileViewport && sidebarOpen) {
+      setSidebarOpen(false)
+    }
+  }, [isMobileViewport, showChatSidebar, sidebarOpen])
+
+  React.useEffect(() => {
+    if (!isMobileViewport || !showChatSidebar) {
+      mobileSidebarPathRef.current = location.pathname
+      return
+    }
+    if (location.pathname !== mobileSidebarPathRef.current && sidebarOpen) {
+      setSidebarOpen(false)
+    }
+    mobileSidebarPathRef.current = location.pathname
+  }, [isMobileViewport, showChatSidebar, sidebarOpen, location.pathname])
 
   const handleIngestPage = () => {
     if (typeof window !== "undefined") {
@@ -212,9 +331,15 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   )
 
   return (
-    <div className="flex min-h-screen w-full">
+    <div
+      className={classNames(
+        "relative flex w-full",
+        isViewportConstrainedRoute ? "h-screen min-h-0" : "min-h-screen"
+      )}
+      style={chatScreenBackgroundStyle}
+    >
       {/* Persistent ChatSidebar when feature flag enabled */}
-      {showChatSidebar && !hideHeader && !hideSidebar && (
+      {showChatSidebar && !hideHeader && !hideSidebar && !isMobileViewport && (
         <ChatSidebar
           collapsed={chatSidebarCollapsed}
           onToggleCollapse={() => setChatSidebarCollapsed((prev) => !prev)}
@@ -233,11 +358,20 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
             {shortcutLoading && renderShortcutOverlay()}
           </div>
         ) : (
-          <div className="relative flex min-h-[135vh] flex-col pt-2 sm:pt-3">
+          <div
+            className={classNames(
+              "relative flex flex-col",
+              isViewportConstrainedRoute ? "min-h-0 flex-1" : "min-h-[135vh]"
+            )}
+          >
             <div className="relative z-20 w-full">
               <Header
                 onToggleSidebar={hideSidebar ? undefined : toggleSidebar}
-                sidebarCollapsed={chatSidebarCollapsed}
+                sidebarCollapsed={
+                  showChatSidebar && isMobileViewport
+                    ? !sidebarOpen
+                    : chatSidebarCollapsed
+                }
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -245,6 +379,33 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
               {shortcutLoading && renderShortcutOverlay()}
             </div>
           </div>
+        )}
+        {/* Mobile Drawer for ChatSidebar when the persistent sidebar is enabled */}
+        {!hideHeader && showChatSidebar && !hideSidebar && isMobileViewport && (
+          <Drawer
+            title={
+              <div className="flex items-center justify-between">
+                <span>{t("common:chatSidebar.title", "Chats")}</span>
+                <IconButton
+                  onClick={() => setSidebarOpen(false)}
+                  ariaLabel={t("common:close", { defaultValue: "Close" }) as string}
+                  title={t("common:close", { defaultValue: "Close" }) as string}
+                  className="h-10 w-10 sm:h-7 sm:w-7 sm:min-h-0 sm:min-w-0"
+                >
+                  <XIcon className="h-5 w-5 text-text-muted" />
+                </IconButton>
+              </div>
+            }
+            placement="left"
+            closeIcon={null}
+            onClose={() => setSidebarOpen(false)}
+            open={sidebarOpen}
+          >
+            <ChatSidebar
+              collapsed={false}
+              onToggleCollapse={() => setSidebarOpen(false)}
+            />
+          </Drawer>
         )}
         {/* Legacy Drawer sidebar - only shown when new ChatSidebar feature is disabled */}
         {!hideHeader && !showChatSidebar && !hideSidebar && (
@@ -366,6 +527,48 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
         {/* Workflow landing modal + active workflow overlay */}
         <WorkflowIntegrationHost autoShowPaths={["/"]} />
+
+        <Modal
+          title={t(
+            "sidepanel:connectionBanner.unreachableTitle",
+            "Can't reach your tldw server"
+          )}
+          open={Boolean(backendUnavailableDetail)}
+          onCancel={closeBackendUnavailableModal}
+          maskClosable={false}
+          destroyOnHidden
+          footer={[
+            <Button key="dismiss" onClick={closeBackendUnavailableModal}>
+              {t("common:dismiss", "Dismiss")}
+            </Button>,
+            <Button key="health" onClick={openHealthDiagnostics}>
+              {t(
+                "settings:healthSummary.diagnostics",
+                "Health & diagnostics"
+              )}
+            </Button>,
+            <Button
+              key="retry"
+              type="primary"
+              loading={isChecking}
+              onClick={retryConnectionCheck}
+            >
+              {t("common:retry", "Retry")}
+            </Button>
+          ]}
+        >
+          <p className="text-sm text-text">
+            {t(
+              "sidepanel:connectionBanner.unreachableBody",
+              "Check that your server is running and accessible."
+            )}
+          </p>
+          {backendUnavailableDetail && (
+            <p className="mt-2 break-all text-xs text-text-subtle">
+              {`${backendUnavailableDetail.message} (${backendUnavailableDetail.method} ${backendUnavailableDetail.path})`}
+            </p>
+          )}
+        </Modal>
       </main>
     </div>
   )

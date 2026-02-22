@@ -40,6 +40,7 @@ from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     handle_kanban_db_error,
     kanban_rate_limit,
 )
+from tldw_Server_API.app.api.v1.endpoints.kanban._kanban_utils import resolve_limit_offset
 from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
     PaginationInfo,
     SearchRequest,
@@ -417,6 +418,8 @@ async def search_cards_get(
     search_mode: str = Query("fts", description="Search mode: fts, vector, or hybrid"),
     limit: int = Query(20, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Results to skip"),
+    page: Optional[int] = Query(None, ge=1, description="Legacy page number (1-indexed)"),
+    per_page: Optional[int] = Query(None, ge=1, le=100, description="Legacy page size"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> SearchResponse:
     """
@@ -439,6 +442,8 @@ async def search_cards_get(
         parsed_label_ids: Optional[list[int]] = None
         if label_ids:
             parsed_label_ids = [int(lid.strip()) for lid in label_ids.split(",")]
+
+        limit, offset = resolve_limit_offset(limit=limit, offset=offset, page=page, per_page=per_page)
 
         return _execute_search(
             db=db,

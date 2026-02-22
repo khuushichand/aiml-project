@@ -63,13 +63,13 @@ const SortablePreviewHeader: React.FC<{
     >
       <span
         ref={handleRef}
-        className="cursor-grab hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity"
+        className="cursor-grab hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
       >
         <GripVertical className="h-4 w-4" />
       </span>
       <div className="flex-1">
         <div className="font-medium">{column.name}</div>
-        <div className="text-xs text-zinc-400">{column.type}</div>
+        <div className="text-xs text-text-subtle">{column.type}</div>
       </div>
       <Popconfirm
         title={t("dataTables:deleteColumn", "Delete column?")}
@@ -78,7 +78,7 @@ const SortablePreviewHeader: React.FC<{
         cancelText={t("common:cancel", "Cancel")}
         okButtonProps={{ danger: true }}
       >
-        <button className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity p-1">
+        <button className="opacity-0 group-hover:opacity-100 hover:text-danger transition-opacity p-1">
           <Trash2 className="h-3 w-3" />
         </button>
       </Popconfirm>
@@ -416,7 +416,7 @@ export const TablePreview: React.FC = () => {
           okButtonProps={{ danger: true }}
         >
           <Tooltip title={t("dataTables:deleteRow", "Delete row")}>
-            <button className="text-zinc-400 hover:text-red-500 p-1">
+            <button className="text-text-subtle hover:text-danger p-1">
               <Trash2 className="h-4 w-4" />
             </button>
           </Tooltip>
@@ -441,13 +441,13 @@ export const TablePreview: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center py-16">
         <Spin size="large" />
-        <p className="mt-4 text-zinc-500 dark:text-zinc-400">
+        <p className="mt-4 text-text-muted">
           <span className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 animate-pulse" />
             {t("dataTables:generating", "Generating table from your sources...")}
           </span>
         </p>
-        <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-2">
+        <p className="text-xs text-text-subtle mt-2">
           {t("dataTables:generatingNote", "This may take a moment depending on the amount of data.")}
         </p>
       </div>
@@ -460,7 +460,7 @@ export const TablePreview: React.FC = () => {
       <div className="space-y-4">
         <Alert
           type="error"
-          message={t("dataTables:generationFailed", "Generation Failed")}
+          title={t("dataTables:generationFailed", "Generation Failed")}
           description={generationError}
           showIcon
         />
@@ -493,7 +493,7 @@ export const TablePreview: React.FC = () => {
       {generationWarnings.length > 0 && (
         <Alert
           type="warning"
-          message={t("dataTables:warnings", "Warnings")}
+          title={t("dataTables:warnings", "Warnings")}
           description={
             <ul className="list-disc list-inside">
               {generationWarnings.map((warning, index) => (
@@ -543,14 +543,14 @@ export const TablePreview: React.FC = () => {
 
       {/* Dirty indicator */}
       {editingState.isDirty && (
-        <div className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
-          <span className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+        <div className="text-xs text-warn flex items-center gap-1">
+          <span className="w-2 h-2 bg-warn rounded-full animate-pulse" />
           {t("dataTables:previewModified", "You've modified the preview. Changes will be saved with the table.")}
         </div>
       )}
 
       {/* Table info */}
-      <div className="text-sm text-zinc-600 dark:text-zinc-400">
+      <div className="text-sm text-text-muted">
         <span className="font-medium">{editingRows.length || generatedTable?.rows?.length || 0}</span>{" "}
         {t("dataTables:rows", "rows")} &bull;{" "}
         <span className="font-medium">{(editingTable?.columns || generatedTable?.columns)?.length || 0}</span>{" "}
@@ -577,11 +577,11 @@ export const TablePreview: React.FC = () => {
       </DragDropProvider>
 
       {/* Prompt used */}
-      <div className="mt-4 p-3 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
-        <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+      <div className="mt-4 p-3 bg-surface rounded-lg">
+        <p className="text-xs font-medium text-text-muted mb-1">
           {t("dataTables:promptUsed", "Prompt used:")}
         </p>
-        <p className="text-sm text-zinc-700 dark:text-zinc-300 italic">
+        <p className="text-sm text-text italic">
           "{prompt}"
         </p>
       </div>

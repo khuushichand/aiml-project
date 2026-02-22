@@ -7,13 +7,14 @@ These tests verify that:
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 import pytest
+from fastapi import HTTPException
 from unittest.mock import AsyncMock
 
 from tldw_Server_API.app.api.v1.endpoints import billing as billing_endpoint
-from tldw_Server_API.app.core.Billing import enforcement as enforcement_module
 from tldw_Server_API.app.core.Billing.enforcement import UsageSummary
 from tldw_Server_API.app.core.Billing.subscription_service import SubscriptionStatus
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
@@ -152,8 +153,20 @@ async def test_get_usage_maps_usage_summary_to_current_usage(monkeypatch) -> Non
         raising=False,
     )
 
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=42)
+
     # Call the endpoint function directly.
-    response = await billing_endpoint.get_usage(org_id=42)
+    response = await billing_endpoint.get_usage(org_id=42, principal=principal)
 
     # Verify the mapping to current_usage passed into check_usage.
     assert fake_service.check_usage.call_count == 1
@@ -227,7 +240,18 @@ async def test_get_usage_propagates_limit_flags_and_checks(monkeypatch) -> None:
         raising=False,
     )
 
-    response = await billing_endpoint.get_usage(org_id=99)
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=99)
+    response = await billing_endpoint.get_usage(org_id=99, principal=principal)
 
     assert response.has_warnings is True
     assert response.has_exceeded is True
@@ -267,7 +291,18 @@ async def test_get_subscription_positive_path(monkeypatch) -> None:
         raising=False,
     )
 
-    response = await billing_endpoint.get_subscription(org_id=123)
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=123)
+    response = await billing_endpoint.get_subscription(org_id=123, principal=principal)
 
     assert response.org_id == 123
     assert response.plan_name == "pro"
@@ -278,3 +313,452 @@ async def test_get_subscription_positive_path(monkeypatch) -> None:
     assert response.trial_end is None
     assert response.cancel_at_period_end is False
     assert response.limits == {"api_calls_day": 100}
+
+
+@pytest.mark.asyncio
+async def test_create_checkout_rejects_inactive_owner_membership(monkeypatch) -> None:
+    """Billing management should reject inactive memberships even with owner role."""
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+
+    async def _inactive_membership(user_id: int, org_id: int) -> Dict[str, Any]:
+        return {"org_id": org_id, "user_id": user_id, "role": "owner", "status": "inactive"}
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_get_user_org_membership",
+        _inactive_membership,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=5,
+        username="owner",
+        email="owner@example.test",
+    )
+    body = billing_endpoint.CheckoutRequest(
+        plan_name="pro",
+        billing_cycle="monthly",
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_endpoint.create_checkout(body=body, org_id=10, principal=principal)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_cancel_subscription_maps_runtime_error_to_503(monkeypatch) -> None:
+    """cancel_subscription should map service RuntimeError failures to 503."""
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+
+    class _FailingService:
+        async def cancel_subscription(self, *args, **kwargs):
+            raise RuntimeError("stripe unavailable")
+
+    async def _fake_get_subscription_service():
+        return _FailingService()
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "get_subscription_service",
+        _fake_get_subscription_service,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=17, username="owner", email="owner@gmail.com")
+    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
+    body = billing_endpoint.CancelSubscriptionRequest(at_period_end=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_endpoint.cancel_subscription(
+            body=body,
+            request=request,
+            org_id=10,
+            principal=principal,
+        )
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_resume_subscription_maps_runtime_error_to_503(monkeypatch) -> None:
+    """resume_subscription should map service RuntimeError failures to 503."""
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+
+    class _FailingService:
+        async def resume_subscription(self, *args, **kwargs):
+            raise RuntimeError("stripe unavailable")
+
+    async def _fake_get_subscription_service():
+        return _FailingService()
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "get_subscription_service",
+        _fake_get_subscription_service,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=17, username="owner", email="owner@gmail.com")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_endpoint.resume_subscription(
+            org_id=10,
+            principal=principal,
+        )
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_create_checkout_maps_stripe_provider_error_to_502(monkeypatch) -> None:
+    """create_checkout should map Stripe provider failures to controlled 502 responses."""
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_is_stripe_provider_error",
+        lambda exc: True,
+        raising=False,
+    )
+
+    class _StripeFailingService:
+        async def get_plan_for_checkout(self, plan_name: str):
+            return {"id": 2, "name": "pro", "is_active": True}
+
+        async def create_checkout_session(self, **kwargs):
+            raise Exception("stripe down")
+
+    async def _fake_get_subscription_service():
+        return _StripeFailingService()
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "get_subscription_service",
+        _fake_get_subscription_service,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=17, username="owner", email="owner@gmail.com")
+    body = billing_endpoint.CheckoutRequest(
+        plan_name="pro",
+        billing_cycle="monthly",
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_endpoint.create_checkout(body=body, org_id=10, principal=principal)
+
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_create_portal_maps_stripe_provider_error_to_502(monkeypatch) -> None:
+    """create_portal should map Stripe provider failures to controlled 502 responses."""
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_is_stripe_provider_error",
+        lambda exc: True,
+        raising=False,
+    )
+
+    class _StripeFailingService:
+        async def create_portal_session(self, **kwargs):
+            raise Exception("stripe down")
+
+    async def _fake_get_subscription_service():
+        return _StripeFailingService()
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "get_subscription_service",
+        _fake_get_subscription_service,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=17, username="owner", email="owner@gmail.com")
+    body = billing_endpoint.PortalRequest(return_url="https://example.test/account")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_endpoint.create_portal(body=body, org_id=10, principal=principal)
+
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_create_checkout_rejects_disallowed_redirect_host(monkeypatch) -> None:
+    """create_checkout should reject redirect hosts outside BILLING_ALLOWED_REDIRECT_HOSTS."""
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setenv("BILLING_ALLOWED_REDIRECT_HOSTS", "example.test")
+
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+
+    class _CheckoutService:
+        async def get_plan_for_checkout(self, plan_name: str):
+            return {"id": 2, "name": "pro", "is_active": True}
+
+        async def create_checkout_session(self, **kwargs):
+            raise AssertionError("create_checkout_session should not be called for invalid redirect host")
+
+    async def _fake_get_subscription_service():
+        return _CheckoutService()
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "get_subscription_service",
+        _fake_get_subscription_service,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=17, username="owner", email="owner@example.test")
+    body = billing_endpoint.CheckoutRequest(
+        plan_name="pro",
+        billing_cycle="monthly",
+        success_url="https://evil.test/success",
+        cancel_url="https://example.test/cancel",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_endpoint.create_checkout(body=body, org_id=10, principal=principal)
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_create_checkout_rejects_http_redirect_when_https_required(monkeypatch) -> None:
+    """create_checkout should reject non-HTTPS redirect URLs when required."""
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setenv("BILLING_REDIRECT_REQUIRE_HTTPS", "true")
+
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+
+    class _CheckoutService:
+        async def get_plan_for_checkout(self, plan_name: str):
+            return {"id": 2, "name": "pro", "is_active": True}
+
+        async def create_checkout_session(self, **kwargs):
+            raise AssertionError("create_checkout_session should not be called for HTTP redirects")
+
+    async def _fake_get_subscription_service():
+        return _CheckoutService()
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "get_subscription_service",
+        _fake_get_subscription_service,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=17, username="owner", email="owner@gmail.com")
+    body = billing_endpoint.CheckoutRequest(
+        plan_name="pro",
+        billing_cycle="monthly",
+        success_url="http://example.test/success",
+        cancel_url="https://example.test/cancel",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_endpoint.create_checkout(body=body, org_id=10, principal=principal)
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_create_checkout_rejects_when_allowlist_required_but_missing(monkeypatch) -> None:
+    """create_checkout should fail when strict allowlist mode is enabled without host config."""
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setenv("BILLING_REDIRECT_ALLOWLIST_REQUIRED", "true")
+    monkeypatch.delenv("BILLING_ALLOWED_REDIRECT_HOSTS", raising=False)
+
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+
+    class _CheckoutService:
+        async def get_plan_for_checkout(self, plan_name: str):
+            return {"id": 2, "name": "pro", "is_active": True}
+
+        async def create_checkout_session(self, **kwargs):
+            raise AssertionError("create_checkout_session should not be called without allowlist config")
+
+    async def _fake_get_subscription_service():
+        return _CheckoutService()
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "get_subscription_service",
+        _fake_get_subscription_service,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=17, username="owner", email="owner@gmail.com")
+    body = billing_endpoint.CheckoutRequest(
+        plan_name="pro",
+        billing_cycle="monthly",
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_endpoint.create_checkout(body=body, org_id=10, principal=principal)
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_create_portal_rejects_disallowed_redirect_host(monkeypatch) -> None:
+    """create_portal should reject return_url hosts outside BILLING_ALLOWED_REDIRECT_HOSTS."""
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setenv("BILLING_ALLOWED_REDIRECT_HOSTS", "example.test")
+
+    async def _allow_billing_access(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "_require_billing_org_access",
+        _allow_billing_access,
+        raising=False,
+    )
+
+    class _PortalService:
+        async def create_portal_session(self, **kwargs):
+            raise AssertionError("create_portal_session should not be called for invalid redirect host")
+
+    async def _fake_get_subscription_service():
+        return _PortalService()
+
+    monkeypatch.setattr(
+        billing_endpoint,
+        "get_subscription_service",
+        _fake_get_subscription_service,
+        raising=False,
+    )
+
+    principal = AuthPrincipal(kind="user", user_id=17, username="owner", email="owner@example.test")
+    body = billing_endpoint.PortalRequest(return_url="https://evil.test/account")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_endpoint.create_portal(body=body, org_id=10, principal=principal)
+
+    assert exc_info.value.status_code == 400

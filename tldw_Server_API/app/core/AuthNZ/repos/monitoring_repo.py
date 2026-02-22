@@ -25,6 +25,10 @@ class AuthnzMonitoringRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres_backend(self) -> bool:
+        """Return True when the underlying DatabasePool is using PostgreSQL."""
+        return bool(getattr(self.db_pool, "pool", None))
+
     async def insert_metric_audit_log(self, action: str, details_json: str, created_at: datetime) -> None:
         """
         Insert a metric record into ``audit_logs``.
@@ -35,7 +39,7 @@ class AuthnzMonitoringRepo:
         try:
             normalized = _strip_tzinfo(created_at)
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     await conn.execute(
                         """
                         INSERT INTO audit_logs (action, details, created_at)
@@ -70,7 +74,7 @@ class AuthnzMonitoringRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 deleted = 0
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     cutoff_param = _strip_tzinfo(cutoff)
                     result = await conn.execute(
                         "DELETE FROM audit_logs WHERE created_at < $1",
@@ -104,8 +108,7 @@ class AuthnzMonitoringRepo:
         The result mirrors the row consumed by ``AuthNZMonitor.get_metrics_summary``.
         """
         try:
-            is_postgres = getattr(self.db_pool, "pool", None) is not None
-            if is_postgres:
+            if self._is_postgres_backend():
                 cutoff_param = _strip_tzinfo(cutoff)
                 query = """
                 SELECT
@@ -166,8 +169,7 @@ class AuthnzMonitoringRepo:
         Return the count of active sessions at the given timestamp.
         """
         try:
-            is_postgres = getattr(self.db_pool, "pool", None) is not None
-            if is_postgres:
+            if self._is_postgres_backend():
                 expires_param = _strip_tzinfo(now)
                 query = """
                 SELECT COUNT(*) as active_sessions
@@ -235,8 +237,7 @@ class AuthnzMonitoringRepo:
         Each item includes ``action``, ``details``, and ``created_at``.
         """
         try:
-            is_postgres = getattr(self.db_pool, "pool", None) is not None
-            if is_postgres:
+            if self._is_postgres_backend():
                 query = """
                 SELECT action, details, created_at
                 FROM audit_logs

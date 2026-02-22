@@ -446,8 +446,10 @@ export default function UserApiKeysPage() {
                       <Button
                         onClick={handleCreateVirtualKey}
                         disabled={creatingVirtualKey || !virtualKeyName.trim() || selectedScopes.length === 0}
+                        loading={creatingVirtualKey}
+                        loadingText="Creating..."
                       >
-                        {creatingVirtualKey ? 'Creating...' : 'Create Virtual Key'}
+                        Create Virtual Key
                       </Button>
                       <Button variant="outline" onClick={() => setShowVirtualKeyForm(false)}>
                         Cancel

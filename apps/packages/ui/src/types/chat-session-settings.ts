@@ -52,4 +52,5 @@ export type ChatSettingsRecord = {
   characterMemoryById?: Record<string, CharacterMemoryEntry>
   chatGenerationOverride?: ChatGenerationOverride | null
   summary?: ChatSummary | null
+  imageEventSyncMode?: "off" | "on"
 } & Record<string, unknown>

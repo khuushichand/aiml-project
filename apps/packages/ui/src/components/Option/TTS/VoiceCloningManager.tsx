@@ -423,7 +423,7 @@ export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
         <Alert
           type="warning"
           showIcon
-          message="Provider disabled on server"
+          title="Provider disabled on server"
           description="Enable this provider in Config_Files/tts_providers_config.yaml to upload voices."
         />
       )}
@@ -556,7 +556,7 @@ export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
                 <Alert
                   type="warning"
                   showIcon
-                  message="Voice roles need attention"
+                  title="Voice roles need attention"
                   description={voiceRoleError}
                 />
               )}

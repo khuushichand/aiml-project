@@ -342,6 +342,7 @@ class TestValidateProviderName:
         known_providers = [
             "openai", "anthropic", "cohere", "groq",
             "openrouter", "deepseek", "mistral", "google", "qwen",
+            "novita", "poe", "together",
             "llama.cpp", "kobold", "ooba", "ollama", "bedrock",
             "huggingface", "tabbyapi", "vllm", "local-llm", "aphrodite",
             "custom-openai-api", "custom-openai-api-2", "moonshot", "zai"

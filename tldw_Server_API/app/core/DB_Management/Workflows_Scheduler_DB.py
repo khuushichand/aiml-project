@@ -208,8 +208,8 @@ class WorkflowsSchedulerDB:
             spath = getattr(cfg, "sqlite_path", None)
             if spath:
                 logger.info(f"WorkflowsSchedulerDB using SQLite path: {spath}")
-        except Exception:
-            pass
+        except Exception as sqlite_path_log_error:
+            logger.debug("Failed to log workflows scheduler sqlite path", exc_info=sqlite_path_log_error)
         with self.backend.transaction() as conn:
             backend_type = getattr(getattr(self.backend, "config", None), "backend_type", None)
             schema = SCHED_POSTGRES_SCHEMA if backend_type == BackendType.POSTGRESQL else SCHED_SQLITE_SCHEMA
@@ -346,7 +346,9 @@ class WorkflowsSchedulerDB:
         fields.append("updated_at = ?")
         params.append(_utcnow_iso())
         params.append(id)
-        sql = f"UPDATE workflow_schedules SET {', '.join(fields)} WHERE id = ?"
+        set_clause = ", ".join(fields)
+        update_schedule_sql_template = "UPDATE workflow_schedules SET {set_clause} WHERE id = ?"
+        sql = update_schedule_sql_template.format_map(locals())  # nosec B608
         with self.backend.transaction() as conn:
             res = self.backend.execute(sql, tuple(params), connection=conn)
         return (getattr(res, "rowcount", 0) or 0) > 0

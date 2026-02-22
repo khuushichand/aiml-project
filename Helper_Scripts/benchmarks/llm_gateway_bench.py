@@ -353,8 +353,8 @@ async def run_step(
                 await asyncio.sleep(max(0.1, metrics_interval_s))
                 try:
                     await _scrape_metrics_once(metrics_client, metrics_url)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"metrics poll scrape failed (non-fatal): {exc}")
 
         poll_task = asyncio.create_task(_poll_metrics())
     else:

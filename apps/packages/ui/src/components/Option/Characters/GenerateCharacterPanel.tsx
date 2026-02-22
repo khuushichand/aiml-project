@@ -12,6 +12,7 @@ import { Link } from "react-router-dom"
 import { fetchChatModels } from "@/services/tldw-server"
 import { useStorage } from "@plasmohq/storage/hook"
 import { getProviderDisplayName } from "@/utils/provider-registry"
+import { resolveStartupSelectedModel } from "@/utils/model-startup-selection"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { GeneratedCharacter } from "@/services/character-generation"
 
@@ -142,7 +143,7 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
 }) => {
   const { t } = useTranslation(["settings", "common"])
   const [concept, setConcept] = React.useState("")
-  const [selectedModel, setSelectedModel] = useStorage<string | null>(
+  const [selectedModel, setSelectedModel, selectedModelMeta] = useStorage<string | null>(
     "characterGenModel",
     null
   )
@@ -192,7 +193,7 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
   // Fetch available models
   const { data: models, isLoading: modelsLoading } = useQuery<ChatModel[]>({
     queryKey: ["getAllModelsForGeneration"],
-    queryFn: () => fetchChatModels({ returnEmpty: false })
+    queryFn: () => fetchChatModels({ returnEmpty: true })
   })
 
   const hasModels = Array.isArray(models) && models.length > 0
@@ -203,10 +204,15 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
 
   // Auto-select first model if none selected
   React.useEffect(() => {
-    if (!selectedModel && hasModels && models) {
-      setSelectedModel(models[0].model)
+    const nextModel = resolveStartupSelectedModel({
+      currentModel: selectedModel,
+      models,
+      isCurrentModelHydrating: selectedModelMeta.isLoading
+    })
+    if (nextModel) {
+      setSelectedModel(nextModel)
     }
-  }, [selectedModel, hasModels, models, setSelectedModel])
+  }, [models, selectedModel, selectedModelMeta.isLoading, setSelectedModel])
 
   const handleGenerate = () => {
     if (!concept.trim()) return
@@ -316,7 +322,7 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
       <Alert
         type="info"
         showIcon
-        message={t("settings:manageCharacters.generate.noModelsTitle", {
+        title={t("settings:manageCharacters.generate.noModelsTitle", {
           defaultValue: "No models available"
         })}
         description={
@@ -357,7 +363,7 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
         <Alert
           type="error"
           showIcon
-          message={parsedError.message}
+          title={parsedError.message}
           description={
             <div className="flex items-center justify-between gap-2 mt-1">
               <span className="text-sm">{parsedError.action}</span>
@@ -384,8 +390,8 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
               showInfo={false}
               size="small"
               strokeColor={{
-                '0%': '#6366f1',
-                '100%': '#8b5cf6'
+                '0%': "rgb(var(--color-primary))",
+                '100%': "rgb(var(--color-accent))"
               }}
               className="flex-1"
             />
@@ -632,6 +638,7 @@ export const GenerationPreviewModal: React.FC<GenerationPreviewModalProps> = ({
         </Button>
       ]}
       destroyOnHidden
+      rootClassName="characters-motion-modal"
       aria-describedby="generation-preview-content">
       <div id="generation-preview-content">
         {previewContent}

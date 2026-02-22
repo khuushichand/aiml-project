@@ -129,4 +129,33 @@ describe("connection store stability", () => {
       })
     )
   })
+
+  it("surfaces a CORS hint for cross-origin network-blocked health checks", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.SEARCHING,
+      serverUrl: "http://192.168.5.186:8000",
+      isConnected: false,
+      isChecking: false,
+      lastCheckedAt: Date.now() - 60_000,
+      consecutiveFailures: 0
+    })
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://192.168.5.186:8000",
+      authMode: "single-user",
+      apiKey: "test-key"
+    } as any)
+    mockedApiSend.mockResolvedValue({
+      ok: false,
+      status: 0,
+      error: "NetworkError when attempting to fetch resource."
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.ERROR)
+    expect(state.errorKind).toBe("unreachable")
+    expect(state.lastError).toContain("Likely CORS mismatch")
+    expect(state.lastError).toContain("ALLOWED_ORIGINS")
+  })
 })

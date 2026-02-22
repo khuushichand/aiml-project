@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, PromptStudioDatabase
 
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
     EventBroadcaster,
@@ -36,6 +37,7 @@ _MCTS_NONCRITICAL_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
     sqlite3.Error,
+    DatabaseError,
 )
 
 try:
@@ -47,7 +49,7 @@ except _MCTS_IMPORT_EXCEPTIONS:  # pragma: no cover - optional in minimal builds
     ws_connection_manager = None
 import contextlib
 
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 class MCTSOptimizer:
@@ -107,6 +109,15 @@ class MCTSOptimizer:
         target_metric: MetricType = MetricType.ACCURACY,
         strategy_params: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
+        def _coerce_bool(value: Any, default: bool) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(int(value))
+            return is_truthy(str(value))
+
         params = strategy_params or {}
         n_sims = int(params.get("mcts_simulations") or max_iterations or 20)
         early_no_improve = int(params.get("early_stop_no_improve") or 5)
@@ -117,14 +128,14 @@ class MCTSOptimizer:
         score_bin_size = float(params.get("score_dedup_bin") or 0.1)
         token_budget = int(params.get("token_budget") or 0)  # 0 => unlimited
         scorer_model = params.get("scorer_model")
-        feedback_enabled = bool(params.get("feedback_enabled", True))
+        feedback_enabled = _coerce_bool(params.get("feedback_enabled"), True)
         feedback_threshold = float(params.get("feedback_threshold", 6.0))
         feedback_max_retries = int(params.get("feedback_max_retries", 2))
         ws_throttle_every = int(params.get("ws_throttle_every") or max(1, int(n_sims // 50) or 1))
         trace_top_k = int(params.get("trace_top_k") or 3)
         # Debugging/observability of decisions
         import os as _os
-        debug_decisions = str(_os.getenv("PROMPT_STUDIO_MCTS_DEBUG_DECISIONS", "false")).lower() in {"1", "true", "yes", "on"}
+        debug_decisions = is_truthy(_os.getenv("PROMPT_STUDIO_MCTS_DEBUG_DECISIONS", "false"))
 
         # Configure scorer
         if scorer_model:
@@ -139,7 +150,7 @@ class MCTSOptimizer:
         self.scorer.set_token_callback(_add_tokens)
 
         logger.info(
-            "MCTS starting: prompt=%s sims=%s depth=%s c=%.2f",
+            'MCTS starting: prompt={} sims={} depth={} c={}',
             initial_prompt_id,
             n_sims,
             max_depth,
@@ -191,7 +202,7 @@ class MCTSOptimizer:
 
         for sim in range(1, n_sims + 1):
             if token_budget and self._tokens_spent >= token_budget:
-                logger.info("MCTS token budget exhausted: %s >= %s", self._tokens_spent, token_budget)
+                logger.info("MCTS token budget exhausted: {} >= {}", self._tokens_spent, token_budget)
                 break
             # Selection & Expansion
             path: list[MCTSOptimizer._Node] = [root]
@@ -226,7 +237,7 @@ class MCTSOptimizer:
                             ]
                             chosen, chosen_uct = max(scored_children, key=lambda p: p[1])
                             logger.debug(
-                                "mcts.select depth=%s chose_child_bin=%s uct=%.4f",
+                                'mcts.select depth={} chose_child_bin={} uct={}',
                                 node.segment_index,
                                 getattr(chosen, "score_bin", None),
                                 float(chosen_uct),
@@ -282,7 +293,7 @@ class MCTSOptimizer:
             else:
                 no_improve_streak += 1
                 if no_improve_streak >= early_no_improve:
-                    logger.info("MCTS early stop: no improvement for %s sims", early_no_improve)
+                    logger.info("MCTS early stop: no improvement for {} sims", early_no_improve)
                     break
 
             # Throttled WS + per-iteration persistence
@@ -300,6 +311,18 @@ class MCTSOptimizer:
                         max_iterations=n_sims,
                         current_metric=float(score),
                         best_metric=float(best_score),
+                        extra_data={
+                            "strategy": "mcts",
+                            "sim_index": sim,
+                            "depth": int(node.segment_index),
+                            "reward": float(score),
+                            "best_reward": float(best_score),
+                            "token_spend_so_far": int(self._tokens_spent),
+                            "trace_summary": {
+                                "prompt_id": prompt_id,
+                                "system_hash": sys_hash,
+                            },
+                        },
                     )
 
             # Persist iteration record (throttled similarly to WS)
@@ -424,6 +447,16 @@ class MCTSOptimizer:
                     "mcts_max_depth": max_depth,
                     "prompt_candidates_per_node": k_candidates,
                     "mcts_exploration_c": exploration_c,
+                    "mcts_simulations": n_sims,
+                    "min_quality": min_quality,
+                    "score_dedup_bin": score_bin_size,
+                    "token_budget": token_budget,
+                    "scorer_model": str(scorer_model) if scorer_model is not None else None,
+                    "feedback_enabled": bool(feedback_enabled),
+                    "feedback_threshold": feedback_threshold,
+                    "feedback_max_retries": feedback_max_retries,
+                    "ws_throttle_every": ws_throttle_every,
+                    "trace_top_k": trace_top_k,
                 },
             },
         }

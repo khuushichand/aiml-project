@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.testing import is_truthy
 
 _SETTINGS_LOOKUP_EXCEPTIONS = (AttributeError, OSError, RuntimeError, TypeError, ValueError)
 _FORM_ACCESS_EXCEPTIONS = (AttributeError, RuntimeError, TypeError, ValueError)
@@ -199,7 +200,7 @@ async def extract_claims_if_requested(
     except (TypeError, ValueError):
         budget_tokens = None
     if isinstance(budget_strict, str):
-        budget_strict = budget_strict.strip().lower() in {"1", "true", "yes", "on"}
+        budget_strict = is_truthy(budget_strict)
     budget = resolve_claims_job_budget(
         settings=settings,
         max_cost_usd=budget_usd,

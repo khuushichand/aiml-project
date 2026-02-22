@@ -100,4 +100,4 @@ def test_rebuild_all_stale_policy_enqueues_expected_media(monkeypatch):
     try:
         db.close_connection()
     except Exception:
-        pass
+        _ = None

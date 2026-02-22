@@ -28,18 +28,39 @@ import { useTranslation } from "react-i18next"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
+import { trackFlashcardsShortcutHintTelemetry } from "@/utils/flashcards-shortcut-hint-telemetry"
 import { processInChunks } from "@/utils/chunk-processing"
 import {
   useDecksQuery,
   useManageQuery,
   useUpdateFlashcardMutation,
+  useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
   useCardsKeyboardNav,
-  type DueStatus
+  useTagSuggestionsQuery,
+  getManageServerOrderBy,
+  type DueStatus,
+  type ManageSortBy
 } from "../hooks"
 import { MarkdownWithBoundary, FlashcardActionsMenu, FlashcardEditDrawer, FlashcardCreateDrawer } from "../components"
+import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { formatCardType } from "../utils/model-type-labels"
-import type { Flashcard, FlashcardUpdate } from "@/services/flashcards"
+import { getFlashcardSourceMeta } from "../utils/source-reference"
+import {
+  formatFlashcardsUiErrorMessage,
+  mapFlashcardsUiError
+} from "../utils/error-taxonomy"
+import { trackFlashcardsErrorRecoveryTelemetry } from "@/utils/flashcards-error-recovery-telemetry"
+import { useFlashcardsShortcutHintDensity } from "../hooks/useFlashcardsShortcutHintDensity"
+import {
+  createFlashcard,
+  deleteFlashcard,
+  getFlashcard,
+  listFlashcards,
+  updateFlashcard,
+  type Flashcard,
+  type FlashcardUpdate
+} from "@/services/flashcards"
 
 dayjs.extend(relativeTime)
 
@@ -55,9 +76,15 @@ type PendingDeletion = {
   batchId: string
 }
 
+type MoveUndoSnapshot = {
+  uuid: string
+  previousDeckId: number | null
+}
+
 interface ManageTabProps {
   onNavigateToImport: () => void
   onReviewCard: (card: Flashcard) => void
+  openCreateSignal?: number
   isActive: boolean
 }
 
@@ -68,6 +95,7 @@ interface ManageTabProps {
 export const ManageTab: React.FC<ManageTabProps> = ({
   onNavigateToImport,
   onReviewCard,
+  openCreateSignal,
   isActive
 }) => {
   const { t } = useTranslation(["option", "common"])
@@ -75,6 +103,30 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const message = useAntdMessage()
   const confirmDanger = useConfirmDanger()
   const { showUndoNotification } = useUndoNotification()
+  const reportUiError = React.useCallback(
+    (error: unknown, operation: string, fallback: string) => {
+      const mapped = mapFlashcardsUiError(error, {
+        operation,
+        fallback
+      })
+      console.warn("[flashcards:error]", {
+        code: mapped.code,
+        status: mapped.status,
+        operation,
+        raw: mapped.rawMessage
+      })
+      void trackFlashcardsErrorRecoveryTelemetry({
+        type: "flashcards_mutation_failed",
+        surface: "cards",
+        operation,
+        error_code: mapped.code,
+        status: mapped.status ?? null,
+        retriable: mapped.code !== "FLASHCARDS_VALIDATION"
+      })
+      message.error(formatFlashcardsUiErrorMessage(mapped))
+    },
+    [message]
+  )
 
   // Track pending deletions for soft-delete with undo + trash view
   const [pendingDeletions, setPendingDeletions] = React.useState<Record<string, PendingDeletion>>({})
@@ -93,24 +145,103 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [mDeckId, setMDeckId] = React.useState<number | null | undefined>(undefined)
   const [mQuery, setMQuery] = React.useState("")
   const [mQueryInput, setMQueryInput] = React.useState("")
-  const [mTag, setMTag] = React.useState<string | undefined>(undefined)
+  const [mTags, setMTags] = React.useState<string[]>([])
+  const [mTagInput, setMTagInput] = React.useState("")
   const [mDue, setMDue] = React.useState<DueStatus>("all")
+  const [mSort, setMSort] = React.useState<ManageSortBy>("due")
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(20)
   const [listDensity, setListDensity] = React.useState<"compact" | "expanded">("compact")
+  const [shortcutHintDensity, setShortcutHintDensity] = useFlashcardsShortcutHintDensity()
+  React.useEffect(() => {
+    if (!isActive || viewMode !== "cards" || shortcutHintDensity === "hidden") return
+    void trackFlashcardsShortcutHintTelemetry({
+      type: "flashcards_shortcut_hints_exposed",
+      surface: "cards",
+      density: shortcutHintDensity
+    })
+  }, [isActive, viewMode, shortcutHintDensity])
+  const cycleShortcutHintDensity = React.useCallback(() => {
+    void setShortcutHintDensity((prev) => {
+      const next =
+        prev === "expanded"
+          ? "compact"
+          : prev === "compact"
+            ? "hidden"
+            : "expanded"
+      void trackFlashcardsShortcutHintTelemetry({
+        type: "flashcards_shortcut_hint_density_changed",
+        surface: "cards",
+        from_density: prev,
+        to_density: next
+      })
+      if (next === "hidden" && prev !== "hidden") {
+        void trackFlashcardsShortcutHintTelemetry({
+          type: "flashcards_shortcut_hints_dismissed",
+          surface: "cards",
+          from_density: prev
+        })
+      }
+      return next
+    })
+  }, [setShortcutHintDensity])
+  const shortcutHintToggleLabel =
+    shortcutHintDensity === "expanded"
+      ? t("option:flashcards.shortcutHintsCompact", {
+          defaultValue: "Compact hints"
+        })
+      : shortcutHintDensity === "compact"
+        ? t("option:flashcards.shortcutHintsHide", {
+            defaultValue: "Hide hints"
+          })
+        : t("option:flashcards.shortcutHintsShow", {
+            defaultValue: "Show hints"
+          })
 
   // Check if any filters are active
-  const hasActiveFilters = !!(mQuery || mTag || mDeckId != null || mDue !== "all")
+  const hasActiveFilters = !!(mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all")
 
   // Clear all filters
   const clearAllFilters = () => {
     setMQuery("")
     setMQueryInput("")
-    setMTag(undefined)
+    setMTags([])
+    setMTagInput("")
     setMDeckId(undefined)
     setMDue("all")
+    setMSort("due")
     setPage(1)
   }
+
+  const addTagFilter = React.useCallback((rawValue: string) => {
+    const normalized = rawValue.trim()
+    if (!normalized) return
+    setMTags((prev) => {
+      const exists = prev.some((tag) => tag.toLowerCase() === normalized.toLowerCase())
+      if (exists) return prev
+      return [...prev, normalized]
+    })
+    setMTagInput("")
+    setPage(1)
+  }, [])
+
+  const removeTagFilter = React.useCallback((targetTag: string) => {
+    setMTags((prev) =>
+      prev.filter((tag) => tag.toLowerCase() !== targetTag.toLowerCase())
+    )
+    setPage(1)
+  }, [])
+
+  const tagSuggestionsQuery = useTagSuggestionsQuery(mDeckId)
+
+  const filteredTagSuggestions = React.useMemo(() => {
+    const selected = new Set(mTags.map((tag) => tag.toLowerCase()))
+    const input = mTagInput.trim().toLowerCase()
+    return (tagSuggestionsQuery.data || [])
+      .filter((tag) => !selected.has(tag.toLowerCase()))
+      .filter((tag) => (input ? tag.toLowerCase().includes(input) : true))
+      .slice(0, 8)
+  }, [mTags, mTagInput, tagSuggestionsQuery.data])
 
   // Selection state
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
@@ -157,8 +288,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const manageQuery = useManageQuery({
     deckId: mDeckId,
     query: mQuery,
-    tag: mTag,
+    tags: mTags,
     dueStatus: mDue,
+    sortBy: mSort,
     page,
     pageSize
   })
@@ -181,7 +313,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   React.useEffect(() => {
     setSelectedIds(new Set())
     setSelectAllAcross(false)
-  }, [mDeckId, mQuery, mTag, mDue])
+  }, [mDeckId, mQuery, mTags, mDue, mSort])
 
   React.useEffect(() => {
     return () => {
@@ -242,18 +374,64 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const someOnPageSelected = selectedOnPageCount > 0 && selectedOnPageCount < pageCount
 
   const updateMutation = useUpdateFlashcardMutation()
+  const resetSchedulingMutation = useResetFlashcardSchedulingMutation()
   const deleteMutation = useDeleteFlashcardMutation()
+
+  const compactSchedulingLabels = React.useCallback(
+    (card: Flashcard) => ({
+      memoryStrength: t("option:flashcards.schedulingMemoryStrengthCompact", {
+        defaultValue: "Memory {{value}}",
+        value: card.ef.toFixed(2)
+      }),
+      nextReviewGap: t("option:flashcards.schedulingNextReviewGapCompact", {
+        defaultValue: "Next gap {{count}}d",
+        count: Math.max(0, card.interval_days)
+      }),
+      recallRuns: t("option:flashcards.schedulingRecallRunsCompact", {
+        defaultValue: "Recall runs {{count}}",
+        count: Math.max(0, card.repetitions)
+      }),
+      relearns: t("option:flashcards.schedulingRelearnsCompact", {
+        defaultValue: "Relearns {{count}}",
+        count: Math.max(0, card.lapses)
+      })
+    }),
+    [t]
+  )
+
+  const expandedSchedulingLabels = React.useCallback(
+    (card: Flashcard) => ({
+      memoryStrength: t("option:flashcards.schedulingMemoryStrengthExpanded", {
+        defaultValue: "Memory strength {{value}}",
+        value: card.ef.toFixed(2)
+      }),
+      nextReviewGap: t("option:flashcards.schedulingNextReviewGapExpanded", {
+        defaultValue: "Next review gap {{count}}d",
+        count: Math.max(0, card.interval_days)
+      }),
+      recallRuns: t("option:flashcards.schedulingRecallRunsExpanded", {
+        defaultValue: "Recall runs {{count}}",
+        count: Math.max(0, card.repetitions)
+      }),
+      relearns: t("option:flashcards.schedulingRelearnsExpanded", {
+        defaultValue: "Relearns {{count}}",
+        count: Math.max(0, card.lapses)
+      })
+    }),
+    [t]
+  )
 
   // Reset focused index when page or filters change
   React.useEffect(() => {
     setFocusedIndex(-1)
-  }, [page, pageSize, mDeckId, mQuery, mTag, mDue])
+  }, [page, pageSize, mDeckId, mQuery, mTags, mDue, mSort])
 
   async function fetchAllItemsAcrossFilters(): Promise<Flashcard[]> {
-    const { listFlashcards } = await import("@/services/flashcards")
     const items: Flashcard[] = []
     const maxPerPage = 1000
     const MAX_ITEMS_CAP = 10000
+    const primaryTag = mTags[0]
+    const remainingTags = new Set(mTags.slice(1).map((tag) => tag.toLowerCase()))
     const total = totalCount
     if (total > MAX_ITEMS_CAP) {
       message.warning(
@@ -271,13 +449,28 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       const res = await listFlashcards({
         deck_id: mDeckId ?? undefined,
         q: mQuery || undefined,
-        tag: mTag || undefined,
+        tag: primaryTag,
         due_status: mDue,
         limit: maxPerPage,
         offset,
-        order_by: "due_at"
+        order_by: getManageServerOrderBy(mSort)
       })
-      items.push(...(res.items || []))
+      const chunkItems = res.items || []
+      if (remainingTags.size === 0) {
+        items.push(...chunkItems)
+      } else {
+        items.push(
+          ...chunkItems.filter((card) => {
+            const tagSet = new Set(
+              (card.tags || []).map((tag) => String(tag || "").trim().toLowerCase())
+            )
+            for (const tag of remainingTags) {
+              if (!tagSet.has(tag)) return false
+            }
+            return true
+          })
+        )
+      }
       if (!res.items || res.items.length < maxPerPage) break
     }
     return items
@@ -296,12 +489,119 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [moveOpen, setMoveOpen] = React.useState(false)
   const [moveCard, setMoveCard] = React.useState<Flashcard | null>(null)
   const [moveDeckId, setMoveDeckId] = React.useState<number | null>(null)
+  const [bulkTagOpen, setBulkTagOpen] = React.useState(false)
+  const [bulkTagMode, setBulkTagMode] = React.useState<"add" | "remove">("add")
+  const [bulkTagInput, setBulkTagInput] = React.useState("")
 
   const openBulkMove = () => {
     if (!anySelection) return
     setMoveCard(null)
     setMoveDeckId(null)
     setMoveOpen(true)
+  }
+
+  const openBulkTagEditor = (mode: "add" | "remove") => {
+    if (!anySelection) return
+    setBulkTagMode(mode)
+    setBulkTagInput("")
+    setBulkTagOpen(true)
+  }
+
+  const submitBulkTagEdit = async () => {
+    try {
+      const parsedTags = Array.from(
+        new Set(
+          bulkTagInput
+            .split(/[,\s]+/)
+            .map((tag) => tag.trim())
+            .filter(Boolean)
+        )
+      )
+      if (parsedTags.length === 0) {
+        message.error(
+          t("option:flashcards.bulkTagValidation", {
+            defaultValue: "Enter at least one tag."
+          })
+        )
+        return
+      }
+
+      const selectedItems = await getSelectedItems()
+      if (selectedItems.length === 0) {
+        message.info(
+          t("option:flashcards.bulkTagNoSelection", {
+            defaultValue: "No cards selected."
+          })
+        )
+        return
+      }
+
+      let changedCount = 0
+      await processInChunks(
+        selectedItems,
+        BULK_MUTATION_CHUNK_SIZE,
+        async (chunk) => {
+          const results = await Promise.allSettled(
+            chunk.map(async (card) => {
+              const full = await getFlashcard(card.uuid)
+              const currentTags = Array.isArray(full.tags) ? full.tags : []
+              const currentTagSet = new Set(currentTags.map((tag) => tag.trim()))
+              let nextTags = currentTags
+              if (bulkTagMode === "add") {
+                for (const tag of parsedTags) currentTagSet.add(tag)
+                nextTags = Array.from(currentTagSet)
+              } else {
+                const removeSet = new Set(parsedTags.map((tag) => tag.toLowerCase()))
+                nextTags = currentTags.filter(
+                  (tag) => !removeSet.has(String(tag || "").trim().toLowerCase())
+                )
+              }
+              const changed =
+                nextTags.length !== currentTags.length ||
+                nextTags.some((tag, index) => tag !== currentTags[index])
+              if (!changed) return
+              await updateFlashcard(card.uuid, {
+                tags: nextTags,
+                expected_version: full.version
+              })
+              changedCount += 1
+            })
+          )
+          const failures = results.filter((result) => result.status === "rejected")
+          if (failures.length > 0) {
+            console.warn(`${failures.length} bulk tag updates failed in chunk`)
+          }
+        }
+      )
+
+      clearSelection()
+      setBulkTagOpen(false)
+      setBulkTagInput("")
+      await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
+
+      if (changedCount === 0) {
+        message.info(
+          t("option:flashcards.bulkTagNoChanges", {
+            defaultValue: "No tag changes were needed."
+          })
+        )
+        return
+      }
+
+      message.success(
+        bulkTagMode === "add"
+          ? t("option:flashcards.bulkTagAddSuccess", {
+              defaultValue: "Added tags on {{count}} cards.",
+              count: changedCount
+            })
+          : t("option:flashcards.bulkTagRemoveSuccess", {
+              defaultValue: "Removed tags on {{count}} cards.",
+              count: changedCount
+            })
+      )
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : "Bulk tag update failed")
+    }
   }
 
   const executeBulkDelete = React.useCallback(
@@ -312,7 +612,6 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       const showProgress = options?.showProgress ?? true
       const showSuccessMessage = options?.showSuccessMessage ?? true
       const shouldClearSelection = options?.clearSelection ?? true
-      const { deleteFlashcard } = await import("@/services/flashcards")
       const total = items.length
       if (showProgress) {
         setBulkProgress({
@@ -604,10 +903,15 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   // Create drawer
   const [createOpen, setCreateOpen] = React.useState(false)
 
+  React.useEffect(() => {
+    if (!openCreateSignal) return
+    setViewMode("cards")
+    setCreateOpen(true)
+  }, [openCreateSignal])
+
   // Quick actions: duplicate
   const duplicateCard = async (card: Flashcard) => {
     try {
-      const { createFlashcard } = await import("@/services/flashcards")
       await createFlashcard({
         deck_id: card.deck_id ?? undefined,
         front: card.front,
@@ -639,14 +943,24 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   }
 
   const submitMove = async () => {
-    const { updateFlashcard, getFlashcard } = await import("@/services/flashcards")
     try {
+      const undoSnapshots: MoveUndoSnapshot[] = []
+      let movedCount = 0
       if (moveCard) {
         const full = await getFlashcard(moveCard.uuid)
-        await updateFlashcard(moveCard.uuid, {
-          deck_id: moveDeckId ?? null,
-          expected_version: full.version
-        })
+        const previousDeckId = full.deck_id ?? null
+        const targetDeckId = moveDeckId ?? null
+        if (previousDeckId !== targetDeckId) {
+          await updateFlashcard(moveCard.uuid, {
+            deck_id: targetDeckId,
+            expected_version: full.version
+          })
+          undoSnapshots.push({
+            uuid: moveCard.uuid,
+            previousDeckId
+          })
+          movedCount += 1
+        }
       } else {
         if (moveDeckId == null) {
           message.error(
@@ -665,10 +979,19 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               const results = await Promise.allSettled(
                 chunk.map(async (c) => {
                   const full = await getFlashcard(c.uuid)
+                  const previousDeckId = full.deck_id ?? null
+                  if (previousDeckId === moveDeckId) {
+                    return
+                  }
                   await updateFlashcard(c.uuid, {
                     deck_id: moveDeckId,
                     expected_version: full.version
                   })
+                  undoSnapshots.push({
+                    uuid: c.uuid,
+                    previousDeckId
+                  })
+                  movedCount += 1
                 })
               )
               const failures = results.filter((r) => r.status === "rejected")
@@ -684,10 +1007,64 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       setMoveCard(null)
       setMoveDeckId(null)
       await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
+      if (movedCount === 0) {
+        message.info(
+          t("option:flashcards.bulkMoveNoChanges", {
+            defaultValue: "No cards needed moving."
+          })
+        )
+        return
+      }
+      showUndoNotification({
+        title: moveCard
+          ? t("option:flashcards.cardMoved", {
+              defaultValue: "Card moved"
+            })
+          : t("option:flashcards.cardsMoved", {
+              defaultValue: "{{count}} cards moved",
+              count: movedCount
+            }),
+        description: t("option:flashcards.moveUndoHint", {
+          defaultValue: "Undo within {{seconds}}s to revert this move.",
+          seconds: DELETE_UNDO_SECONDS
+        }),
+        duration: DELETE_UNDO_SECONDS,
+        onUndo: async () => {
+          await processInChunks(
+            undoSnapshots,
+            BULK_MUTATION_CHUNK_SIZE,
+            async (chunk) => {
+              const results = await Promise.allSettled(
+                chunk.map(async (snapshot) => {
+                  const latest = await getFlashcard(snapshot.uuid)
+                  await updateFlashcard(snapshot.uuid, {
+                    deck_id: snapshot.previousDeckId,
+                    expected_version: latest.version
+                  })
+                })
+              )
+              const failed = results.filter((r) => r.status === "rejected")
+              if (failed.length > 0) {
+                throw new Error(
+                  t("option:flashcards.moveUndoPartialFailure", {
+                    defaultValue: "Some cards could not be restored."
+                  })
+                )
+              }
+            }
+          )
+          await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
+        }
+      })
       message.success(t("common:updated", { defaultValue: "Updated" }))
     } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : "Move failed"
-      message.error(errorMessage)
+      reportUiError(
+        e,
+        "moving cards",
+        t("option:flashcards.moveFailed", {
+          defaultValue: "Move failed."
+        })
+      )
     }
   }
 
@@ -723,21 +1100,91 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   })
 
   const doUpdate = async (values: FlashcardUpdate) => {
-    const { updateFlashcard } = await import("@/services/flashcards")
     try {
       if (!editing) return
-      await updateFlashcard(editing.uuid, values)
+      const editingUuid = editing.uuid
+      const previous = await getFlashcard(editingUuid)
+      await updateMutation.mutateAsync({
+        uuid: editingUuid,
+        update: values
+      })
+      showUndoNotification({
+        title: t("option:flashcards.cardUpdated", {
+          defaultValue: "Card updated"
+        }),
+        description: t("option:flashcards.editUndoHint", {
+          defaultValue: "Undo within {{seconds}}s to restore previous content.",
+          seconds: DELETE_UNDO_SECONDS
+        }),
+        duration: DELETE_UNDO_SECONDS,
+        onUndo: async () => {
+          const latest = await getFlashcard(editingUuid)
+          await updateMutation.mutateAsync({
+            uuid: editingUuid,
+            update: {
+              deck_id: previous.deck_id ?? null,
+              front: previous.front,
+              back: previous.back,
+              notes: previous.notes ?? null,
+              extra: previous.extra ?? null,
+              tags: previous.tags ?? [],
+              is_cloze: previous.is_cloze,
+              model_type: previous.model_type,
+              reverse: previous.reverse,
+              expected_version: latest.version
+            }
+          })
+        }
+      })
       message.success(t("common:updated", { defaultValue: "Updated" }))
       setEditOpen(false)
       setEditing(null)
-      await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
     } catch (e: unknown) {
       if (typeof e === "object" && e && "errorFields" in e) {
         const { errorFields } = e as { errorFields?: unknown }
         if (errorFields) return
       }
-      const errorMessage = e instanceof Error ? e.message : "Update failed"
-      message.error(errorMessage)
+      const mapped = mapFlashcardsUiError(e, {
+        operation: "updating this card",
+        fallback: t("option:flashcards.updateFailed", {
+          defaultValue: "Update failed."
+        })
+      })
+      if (mapped.code === "FLASHCARDS_VERSION_CONFLICT" && editing) {
+        try {
+          const latest = await getFlashcard(editing.uuid)
+          setEditing(latest)
+          message.warning(
+            t("option:flashcards.updateConflictReloaded", {
+              defaultValue:
+                "This card changed elsewhere. Reloaded latest data; review and save again. [FLASHCARDS_VERSION_CONFLICT]"
+            })
+          )
+          void trackFlashcardsErrorRecoveryTelemetry({
+            type: "flashcards_recovered_by_reload",
+            surface: "cards",
+            operation: "updating this card",
+            error_code: mapped.code
+          })
+          return
+        } catch (reloadError: unknown) {
+          reportUiError(
+            reloadError,
+            "reloading the latest card state",
+            t("option:flashcards.cardReloadFailed", {
+              defaultValue: "Failed to reload card."
+            })
+          )
+          return
+        }
+      }
+      console.warn("[flashcards:error]", {
+        code: mapped.code,
+        status: mapped.status,
+        operation: "updating this card",
+        raw: mapped.rawMessage
+      })
+      message.error(formatFlashcardsUiErrorMessage(mapped))
     }
   }
 
@@ -767,15 +1214,48 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           : undoHint
       })
     } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : "Delete failed"
-      message.error(errorMessage)
+      reportUiError(
+        e,
+        "deleting this card",
+        t("option:flashcards.deleteFailed", {
+          defaultValue: "Delete failed."
+        })
+      )
+    }
+  }
+
+  const doResetScheduling = async () => {
+    try {
+      if (!editing) return
+      await resetSchedulingMutation.mutateAsync({
+        uuid: editing.uuid,
+        expectedVersion: editing.version
+      })
+      message.success(
+        t("option:flashcards.schedulingResetSuccess", {
+          defaultValue: "Scheduling reset to new-card defaults."
+        })
+      )
+      setEditOpen(false)
+      setEditing(null)
+    } catch (e: unknown) {
+      reportUiError(
+        e,
+        "resetting scheduling",
+        t("option:flashcards.resetSchedulingFailed", {
+          defaultValue: "Reset scheduling failed."
+        })
+      )
     }
   }
 
   return (
     <>
       <div>
-        <div className="mb-3 flex items-center justify-between gap-2">
+        <div
+          className="mb-3 flex items-center justify-between gap-2"
+          data-testid="flashcards-manage-topbar"
+        >
           <div className="flex items-center gap-3">
             <Segmented
               value={viewMode}
@@ -802,12 +1282,61 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             />
             {/* Keyboard shortcut hint */}
             {viewMode === "cards" && (
-              <Tooltip title={t("option:flashcards.keyboardShortcutsHint", { defaultValue: "Press ? for keyboard shortcuts" })}>
-                <span className="inline-flex items-center gap-1 text-xs text-text-muted cursor-help">
-                  <Keyboard className="size-3.5" aria-hidden="true" />
-                  <span className="hidden sm:inline">?</span>
-                </span>
-              </Tooltip>
+              <div
+                className="hidden md:flex items-center gap-1.5"
+                data-testid="flashcards-manage-shortcut-chips"
+              >
+                <Tooltip
+                  title={t("option:flashcards.keyboardShortcutsHint", {
+                    defaultValue: "Press ? for keyboard shortcuts"
+                  })}
+                >
+                  <span className="inline-flex items-center gap-1 text-xs text-text-muted cursor-help">
+                    <Keyboard className="size-3.5" aria-hidden="true" />
+                    <span>?</span>
+                  </span>
+                </Tooltip>
+                {shortcutHintDensity === "expanded" && (
+                  <>
+                    <Tag className="!m-0 text-[11px]">
+                      {t("option:flashcards.shortcutChipManageNav", {
+                        defaultValue: "J/K Navigate"
+                      })}
+                    </Tag>
+                    <Tag className="!m-0 text-[11px]">
+                      {t("option:flashcards.shortcutChipManageEdit", {
+                        defaultValue: "Enter Edit"
+                      })}
+                    </Tag>
+                    <Tag className="!m-0 text-[11px]">
+                      {t("option:flashcards.shortcutChipManageSelect", {
+                        defaultValue: "Space Select"
+                      })}
+                    </Tag>
+                    <Tag className="!m-0 text-[11px]">
+                      {t("option:flashcards.shortcutChipManageDelete", {
+                        defaultValue: "Delete Remove"
+                      })}
+                    </Tag>
+                  </>
+                )}
+                {shortcutHintDensity === "compact" && (
+                  <Tag className="!m-0 text-[11px]">
+                    {t("option:flashcards.shortcutChipManageCompact", {
+                      defaultValue: "J/K · Enter · Space · Delete"
+                    })}
+                  </Tag>
+                )}
+                <Button
+                  type="link"
+                  size="small"
+                  className="!h-auto !px-0 text-xs"
+                  onClick={cycleShortcutHintDensity}
+                  data-testid="flashcards-manage-shortcut-hints-toggle"
+                >
+                  {shortcutHintToggleLabel}
+                </Button>
+              </div>
             )}
           </div>
           {viewMode === "trash" && pendingDeletionCount > 0 && (
@@ -862,24 +1391,72 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               trigger="click"
               placement="bottomLeft"
               content={
-                <div className="w-64 space-y-2">
+                <div className="w-72 space-y-2">
                   <div className="text-sm font-medium text-text-muted">
-                    {t("option:flashcards.filterByTag", { defaultValue: "Filter by tag" })}
+                    {t("option:flashcards.filterByTag", {
+                      defaultValue: "Filter by tag"
+                    })}
                   </div>
                   <Input
-                    placeholder={t("option:flashcards.tagPlaceholder", { defaultValue: "Enter tag..." })}
-                    value={mTag}
+                    placeholder={t("option:flashcards.tagPlaceholder", {
+                      defaultValue: "Type a tag and press Enter"
+                    })}
+                    value={mTagInput}
                     onChange={(e) => {
-                      setMTag(e.target.value || undefined)
-                      setPage(1)
+                      setMTagInput(e.target.value)
+                    }}
+                    onPressEnter={() => addTagFilter(mTagInput)}
+                    onKeyDown={(event) => {
+                      if (event.key === ",") {
+                        event.preventDefault()
+                        addTagFilter(mTagInput)
+                      }
                     }}
                     allowClear
-                    data-testid="flashcards-manage-tag"
+                    data-testid="flashcards-manage-tag-input"
                   />
+                  <div className="flex flex-wrap gap-1" data-testid="flashcards-manage-tag-selected">
+                    {mTags.length > 0 ? (
+                      mTags.map((tag) => (
+                        <Tag
+                          key={tag.toLowerCase()}
+                          closable
+                          onClose={(event) => {
+                            event.preventDefault()
+                            removeTagFilter(tag)
+                          }}
+                          className="!m-0"
+                        >
+                          {tag}
+                        </Tag>
+                      ))
+                    ) : (
+                      <Text type="secondary" className="text-xs">
+                        {t("option:flashcards.tagFilterMatchAllHint", {
+                          defaultValue: "Add one or more tags. Cards must match all selected tags."
+                        })}
+                      </Text>
+                    )}
+                  </div>
+                  {filteredTagSuggestions.length > 0 && (
+                    <div className="flex flex-wrap gap-1" data-testid="flashcards-manage-tag-suggestions">
+                      {filteredTagSuggestions.map((tag) => (
+                        <Button
+                          key={tag.toLowerCase()}
+                          size="small"
+                          type="default"
+                          onClick={() => addTagFilter(tag)}
+                          className="!h-6 !px-2 !text-xs"
+                        >
+                          {tag}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               }
             >
-              <Badge dot={!!mTag} offset={[-4, 4]}>
+              <Badge dot={mTags.length > 0} offset={[-4, 4]}>
                 <Button icon={<Filter className="size-4" />}>
                   {t("option:flashcards.moreFilters", { defaultValue: "More" })}
                 </Button>
@@ -891,6 +1468,32 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               </Button>
             )}
           </div>
+
+          {mTags.length > 0 && (
+            <div
+              className="flex flex-wrap items-center gap-1.5"
+              data-testid="flashcards-manage-active-tag-filters"
+            >
+              <Text type="secondary" className="text-xs">
+                {t("option:flashcards.activeTagFilters", {
+                  defaultValue: "Tag filters:"
+                })}
+              </Text>
+              {mTags.map((tag) => (
+                <Tag
+                  key={`active-${tag.toLowerCase()}`}
+                  closable
+                  onClose={(event) => {
+                    event.preventDefault()
+                    removeTagFilter(tag)
+                  }}
+                  className="!m-0"
+                >
+                  {tag}
+                </Tag>
+              ))}
+            </div>
+          )}
 
           {/* Due status as segmented control + density toggle */}
           <div className="flex items-center justify-between gap-2">
@@ -920,27 +1523,73 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                 }
               ]}
             />
-            <Tooltip
-              title={
-                listDensity === "compact"
-                  ? t("option:flashcards.expandedView", { defaultValue: "Expanded view" })
-                  : t("option:flashcards.compactView", { defaultValue: "Compact view" })
-              }
-            >
-              <Button
-                type="text"
-                icon={listDensity === "compact" ? <LayoutList className="size-4" /> : <ListIcon className="size-4" />}
-                onClick={() => setListDensity((d) => (d === "compact" ? "expanded" : "compact"))}
-                data-testid="flashcards-density-toggle"
+            <div className="flex items-center gap-2">
+              <Select<ManageSortBy>
+                value={mSort}
+                className="min-w-44"
+                onChange={(value) => {
+                  setMSort(value)
+                  setPage(1)
+                }}
+                data-testid="flashcards-manage-sort-select"
+                options={[
+                  {
+                    value: "due",
+                    label: t("option:flashcards.sortDueDate", {
+                      defaultValue: "Sort: Due date"
+                    })
+                  },
+                  {
+                    value: "created",
+                    label: t("option:flashcards.sortCreatedDate", {
+                      defaultValue: "Sort: Created"
+                    })
+                  },
+                  {
+                    value: "ease",
+                    label: t("option:flashcards.sortEaseFactor", {
+                      defaultValue: "Sort: Ease factor"
+                    })
+                  },
+                  {
+                    value: "last_reviewed",
+                    label: t("option:flashcards.sortLastReviewed", {
+                      defaultValue: "Sort: Last reviewed"
+                    })
+                  },
+                  {
+                    value: "front_alpha",
+                    label: t("option:flashcards.sortFrontAlpha", {
+                      defaultValue: "Sort: Front (A-Z)"
+                    })
+                  }
+                ]}
               />
-            </Tooltip>
+              <Tooltip
+                title={
+                  listDensity === "compact"
+                    ? t("option:flashcards.expandedView", { defaultValue: "Expanded view" })
+                    : t("option:flashcards.compactView", { defaultValue: "Compact view" })
+                }
+              >
+                <Button
+                  type="text"
+                  icon={listDensity === "compact" ? <LayoutList className="size-4" /> : <ListIcon className="size-4" />}
+                  onClick={() => setListDensity((d) => (d === "compact" ? "expanded" : "compact"))}
+                  data-testid="flashcards-density-toggle"
+                />
+              </Tooltip>
+            </div>
           </div>
         </div>
         )}
 
         {/* Selection Summary Bar - simplified to two modes */}
         {viewMode === "cards" && (
-        <div className="mb-2 flex items-center gap-3">
+        <div
+          className="mb-2 flex items-center gap-3"
+          data-testid="flashcards-manage-selection-summary"
+        >
           {/* 44px touch target wrapper for checkbox */}
           <span className="inline-flex items-center justify-center min-w-11 min-h-11">
             <Checkbox
@@ -974,7 +1623,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                   }
                   showZero={false}
                   className="mr-1"
-                  style={{ backgroundColor: selectAllAcross ? "#1890ff" : "#52c41a" }}
+                  style={{ backgroundColor: selectAllAcross ? "rgb(var(--color-primary))" : "rgb(var(--color-success))" }}
                   title={selectAllAcross ? t("option:flashcards.allResults", { defaultValue: "All results" }) : t("option:flashcards.thisPage", { defaultValue: "This page" })}
                 />
                 <span className="text-text-muted flex items-center gap-1">
@@ -1018,31 +1667,23 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               <Empty
                 description={t("option:flashcards.noCardsTitle", {
                   defaultValue:
-                    mQuery || mTag || mDeckId != null || mDue !== "all"
+                    mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all"
                       ? "No cards match your filters"
                       : "No flashcards yet"
                 })}
               >
-                <Space direction="vertical" align="center">
+                <Space orientation="vertical" align="center">
                   <Text type="secondary">
                     {t("option:flashcards.noCardsDescription", {
                       defaultValue:
-                        mQuery || mTag || mDeckId != null || mDue !== "all"
+                        mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all"
                           ? "Try adjusting your search, deck, tag, or due filters."
                           : "Create cards from your notes and media, or import an existing deck."
                     })}
                   </Text>
                   <Space>
-                    {mQuery || mTag || mDeckId != null || mDue !== "all" ? (
-                      <Button
-                        onClick={() => {
-                          setMQuery("")
-                          setMQueryInput("")
-                          setMTag(undefined)
-                          setMDeckId(undefined)
-                          setMDue("all")
-                        }}
-                      >
+                    {mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all" ? (
+                      <Button onClick={clearAllFilters}>
                         {t("option:flashcards.clearFilters", {
                           defaultValue: "Clear filters"
                         })}
@@ -1051,7 +1692,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       <>
                         <Button type="primary" onClick={() => setCreateOpen(true)}>
                           {t("option:flashcards.noCardsCreateCta", {
-                            defaultValue: "Create your first card"
+                            defaultValue: "Create card"
                           })}
                         </Button>
                         <Button onClick={onNavigateToImport}>
@@ -1068,6 +1709,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           }}
           renderItem={(item, index) => {
             const isFocused = index === focusedIndex
+            const compactSchedule = compactSchedulingLabels(item)
+            const expandedSchedule = expandedSchedulingLabels(item)
+            const sourceMeta = getFlashcardSourceMeta(item)
             return (
             <List.Item
               data-testid={`flashcard-item-${item.uuid}`}
@@ -1111,24 +1755,74 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       {/* Due status indicator */}
                       {item.due_at && dayjs(item.due_at).isBefore(dayjs()) && (
                         <Tooltip title={t("option:flashcards.dueNow", { defaultValue: "Due now" })}>
-                          <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                          <span className="inline-block w-2 h-2 rounded-full bg-success" />
                         </Tooltip>
                       )}
                       <Text className="flex-1 truncate">{item.front}</Text>
                     </div>
                   }
                   description={
-                    <div className="flex items-center gap-2 text-xs">
-                      {item.deck_id != null && (
-                        <span className="text-text-muted">
-                          {(decksQuery.data || []).find((d) => d.id === item.deck_id)?.name || `Deck ${item.deck_id}`}
-                        </span>
-                      )}
-                      {item.due_at && (
-                        <span className="text-text-subtle">
-                          {dayjs(item.due_at).fromNow()}
-                        </span>
-                      )}
+                    <div className="flex flex-col gap-0.5 text-xs">
+                      <div className="flex items-center gap-2">
+                        {item.deck_id != null && (
+                          <span className="text-text-muted">
+                            {(decksQuery.data || []).find((d) => d.id === item.deck_id)?.name || `Deck ${item.deck_id}`}
+                          </span>
+                        )}
+                        {item.due_at && (
+                          <span className="text-text-subtle">
+                            {dayjs(item.due_at).fromNow()}
+                          </span>
+                        )}
+                        {sourceMeta && (
+                          sourceMeta.href ? (
+                            <a
+                              href={sourceMeta.href}
+                              onClick={(event) => event.stopPropagation()}
+                              className="text-primary hover:underline"
+                              title={t("option:flashcards.sourceOpenLink", {
+                                defaultValue: "Open source"
+                              })}
+                            >
+                              {sourceMeta.label}
+                            </a>
+                          ) : (
+                            <span className="text-text-subtle">
+                              {sourceMeta.label}
+                            </span>
+                          )
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-text-subtle">
+                        <Tooltip
+                          title={t("option:flashcards.schedulingMemoryStrengthHelp", {
+                            defaultValue: "SM-2 ease factor (how fast review gaps grow)."
+                          })}
+                        >
+                          <span>{compactSchedule.memoryStrength}</span>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingNextGapHelp", {
+                            defaultValue: "SM-2 interval (days until next review)."
+                          })}
+                        >
+                          <span>{compactSchedule.nextReviewGap}</span>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingRecallRunsHelp", {
+                            defaultValue: "SM-2 repetitions (successful recalls)."
+                          })}
+                        >
+                          <span>{compactSchedule.recallRuns}</span>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingRelearnsHelp", {
+                            defaultValue: "SM-2 lapses (times forgotten)."
+                          })}
+                        >
+                          <span>{compactSchedule.relearns}</span>
+                        </Tooltip>
+                      </div>
                     </div>
                   }
                 />
@@ -1156,6 +1850,27 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                         {(item.tags || []).map((tg) => (
                           <Tag key={tg}>{tg}</Tag>
                         ))}
+                        {sourceMeta && (
+                          <Tag
+                            color={
+                              sourceMeta.unavailable
+                                ? "default"
+                                : sourceMeta.type === "media"
+                                  ? "blue"
+                                  : sourceMeta.type === "note"
+                                    ? "gold"
+                                    : "green"
+                            }
+                          >
+                            {sourceMeta.href ? (
+                              <a href={sourceMeta.href} onClick={(event) => event.stopPropagation()}>
+                                {sourceMeta.label}
+                              </a>
+                            ) : (
+                              sourceMeta.label
+                            )}
+                          </Tag>
+                        )}
                         {item.due_at && (
                           <Tag color="green">
                             {t("option:flashcards.due", { defaultValue: "Due" })}:{" "}
@@ -1163,6 +1878,34 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                             {dayjs(item.due_at).format("YYYY-MM-DD HH:mm")})
                           </Tag>
                         )}
+                        <Tooltip
+                          title={t("option:flashcards.schedulingMemoryStrengthHelp", {
+                            defaultValue: "SM-2 ease factor (how fast review gaps grow)."
+                          })}
+                        >
+                          <Tag>{expandedSchedule.memoryStrength}</Tag>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingNextGapHelp", {
+                            defaultValue: "SM-2 interval (days until next review)."
+                          })}
+                        >
+                          <Tag>{expandedSchedule.nextReviewGap}</Tag>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingRecallRunsHelp", {
+                            defaultValue: "SM-2 repetitions (successful recalls)."
+                          })}
+                        >
+                          <Tag>{expandedSchedule.recallRuns}</Tag>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingRelearnsHelp", {
+                            defaultValue: "SM-2 lapses (times forgotten)."
+                          })}
+                        >
+                          <Tag>{expandedSchedule.relearns}</Tag>
+                        </Tooltip>
                       </div>
                     }
                   />
@@ -1284,7 +2027,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               </span>
             }
             showZero={false}
-            style={{ backgroundColor: selectAllAcross ? "#1890ff" : "#52c41a" }}
+            style={{ backgroundColor: selectAllAcross ? "rgb(var(--color-primary))" : "rgb(var(--color-success))" }}
           />
           <span className="text-sm text-text-muted">
             {selectAllAcross
@@ -1295,6 +2038,12 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           <Space>
             <Button size="small" onClick={openBulkMove}>
               {t("option:flashcards.bulkMove", { defaultValue: "Move" })}
+            </Button>
+            <Button size="small" onClick={() => openBulkTagEditor("add")}>
+              {t("option:flashcards.bulkAddTag", { defaultValue: "Add tag" })}
+            </Button>
+            <Button size="small" onClick={() => openBulkTagEditor("remove")}>
+              {t("option:flashcards.bulkRemoveTag", { defaultValue: "Remove tag" })}
             </Button>
             <Button size="small" onClick={handleExportSelected}>
               {t("option:flashcards.export", { defaultValue: "Export" })}
@@ -1310,6 +2059,47 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         </div>
       )}
 
+      <Modal
+        open={bulkTagOpen}
+        title={
+          bulkTagMode === "add"
+            ? t("option:flashcards.bulkAddTagTitle", {
+                defaultValue: "Add tags to selected cards"
+              })
+            : t("option:flashcards.bulkRemoveTagTitle", {
+                defaultValue: "Remove tags from selected cards"
+              })
+        }
+        onCancel={() => {
+          setBulkTagOpen(false)
+          setBulkTagInput("")
+        }}
+        onOk={submitBulkTagEdit}
+        okText={
+          bulkTagMode === "add"
+            ? t("option:flashcards.bulkAddTag", { defaultValue: "Add tag" })
+            : t("option:flashcards.bulkRemoveTag", { defaultValue: "Remove tag" })
+        }
+      >
+        <Space orientation="vertical" className="w-full">
+          <Text type="secondary">
+            {t("option:flashcards.bulkTagDescription", {
+              defaultValue:
+                "Enter one or more tags separated by commas or spaces."
+            })}
+          </Text>
+          <Input
+            value={bulkTagInput}
+            onChange={(event) => setBulkTagInput(event.target.value)}
+            onPressEnter={submitBulkTagEdit}
+            placeholder={t("option:flashcards.bulkTagPlaceholder", {
+              defaultValue: "example-tag, chapter-1"
+            })}
+            data-testid="flashcards-bulk-tag-input"
+          />
+        </Space>
+      </Modal>
+
       {/* Move Drawer */}
       <Drawer
         title={
@@ -1318,7 +2108,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             : t("option:flashcards.bulkMove", { defaultValue: "Bulk Move" })
         }
         placement="right"
-        width={360}
+        styles={{ wrapper: { width: FLASHCARDS_DRAWER_WIDTH_PX } }}
         open={moveOpen}
         onClose={() => {
           setMoveOpen(false)
@@ -1326,16 +2116,17 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           setMoveDeckId(null)
         }}
         footer={
-          <div className="flex justify-between">
-            <Button
-              onClick={() => {
-                setMoveOpen(false)
-                setMoveCard(null)
-                setMoveDeckId(null)
-              }}
-            >
-              {t("common:cancel", { defaultValue: "Cancel" })}
-            </Button>
+          <div className="flex justify-end">
+            <Space>
+              <Button
+                onClick={() => {
+                  setMoveOpen(false)
+                  setMoveCard(null)
+                  setMoveDeckId(null)
+                }}
+              >
+                {t("common:cancel", { defaultValue: "Cancel" })}
+              </Button>
             <Button
               type="primary"
               onClick={submitMove}
@@ -1343,6 +2134,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             >
               {t("option:flashcards.move", { defaultValue: "Move" })}
             </Button>
+            </Space>
           </div>
         }
       >
@@ -1369,7 +2161,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         card={editing}
         onSave={doUpdate}
         onDelete={doDelete}
-        isLoading={updateMutation.isPending}
+        onResetScheduling={doResetScheduling}
+        isLoading={updateMutation.isPending || resetSchedulingMutation.isPending}
         decks={decksQuery.data || []}
         decksLoading={decksQuery.isLoading}
       />
@@ -1384,7 +2177,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
       {/* Floating Action Button for creating cards */}
       {viewMode === "cards" && !anySelection && (
-        <Tooltip title={t("option:flashcards.createCard", { defaultValue: "Create Flashcard" })}>
+        <Tooltip title={t("option:flashcards.createCard", { defaultValue: "Create card" })}>
           <Button
             type="primary"
             shape="circle"
@@ -1456,7 +2249,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           <Alert
             type="warning"
             showIcon
-            message={t("option:flashcards.bulkDeleteLargeWarning", {
+            title={t("option:flashcards.bulkDeleteLargeWarning", {
               defaultValue: "These cards will move to Trash for {{seconds}} seconds.",
               seconds: DELETE_UNDO_SECONDS
             })}

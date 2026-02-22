@@ -154,7 +154,7 @@ async def get_skills_context(
     Returns formatted skill descriptions suitable for including in chat context.
     """
     try:
-        payload = service.get_context_payload()
+        payload = await service.get_context_payload_async()
         return SkillContextPayload(
             available_skills=[
                 SkillSummary(**s) for s in payload["available_skills"]
@@ -447,8 +447,21 @@ async def execute_skill(
         executor = SkillExecutor()
         ctx = None
         if current_user and getattr(current_user, "id", None) is not None:
+            # Populate full RequestContext for fork mode support
+            try:
+                from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
+                default_provider = DEFAULT_LLM_PROVIDER
+            except Exception:
+                default_provider = "openai"
+            try:
+                from tldw_Server_API.app.core.config import load_and_log_configs
+                app_config = load_and_log_configs()
+            except Exception:
+                app_config = None
             ctx = RequestContext(
                 user_id=current_user.id,
+                default_provider=default_provider,
+                app_config=app_config,
                 client_id=getattr(service.db, "client_id", None) if getattr(service, "db", None) else None,
             )
         result = await executor.execute(
@@ -476,6 +489,26 @@ async def execute_skill(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
         ) from e
+
+
+@router.post(
+    "/seed",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Seed built-in example skills",
+    description="Copy built-in example skills (summarize, code-review) into the user's skills directory.",
+)
+async def seed_builtin_skills(
+    overwrite: bool = False,
+    service: SkillsService = Depends(get_skills_service),
+):
+    """Seed built-in example skills.
+
+    Args:
+        overwrite: If true, replace existing skills with same names.
+    """
+    seeded = await service.seed_builtin_skills(overwrite=overwrite)
+    return {"seeded": seeded, "count": len(seeded)}
 
 
 #

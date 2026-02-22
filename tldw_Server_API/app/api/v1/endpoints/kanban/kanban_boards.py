@@ -19,7 +19,10 @@ from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     handle_kanban_db_error,
     kanban_rate_limit,
 )
-from tldw_Server_API.app.api.v1.endpoints.kanban._kanban_utils import to_db_timestamp
+from tldw_Server_API.app.api.v1.endpoints.kanban._kanban_utils import (
+    resolve_limit_offset,
+    to_db_timestamp,
+)
 from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
     ActivitiesListResponse,
     ActivityResponse,
@@ -117,6 +120,8 @@ async def list_boards(
     include_deleted: bool = Query(False, description="Include soft-deleted boards"),
     limit: int = Query(50, ge=1, le=200, description="Maximum boards to return"),
     offset: int = Query(0, ge=0, description="Number of boards to skip"),
+    page: Optional[int] = Query(None, ge=1, description="Legacy page number (1-indexed)"),
+    per_page: Optional[int] = Query(None, ge=1, le=200, description="Legacy page size"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> BoardListResponse:
     """
@@ -125,6 +130,7 @@ async def list_boards(
     Results are paginated and ordered by last update time (most recent first).
     """
     try:
+        limit, offset = resolve_limit_offset(limit=limit, offset=offset, page=page, per_page=per_page)
         boards, total = db.list_boards(
             include_archived=include_archived,
             include_deleted=include_deleted,
@@ -341,6 +347,8 @@ async def get_board_activities(
     entity_type: Optional[str] = Query(None, description="Filter by entity_type"),
     limit: int = Query(50, ge=1, le=200, description="Maximum activities to return"),
     offset: int = Query(0, ge=0, description="Number of activities to skip"),
+    page: Optional[int] = Query(None, ge=1, description="Legacy page number (1-indexed)"),
+    per_page: Optional[int] = Query(None, ge=1, le=200, description="Legacy page size"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> ActivitiesListResponse:
     """
@@ -354,6 +362,7 @@ async def get_board_activities(
             detail="created_after must be less than or equal to created_before.",
         )
     try:
+        limit, offset = resolve_limit_offset(limit=limit, offset=offset, page=page, per_page=per_page)
         activities, total = db.get_board_activities(
             board_id=board_id,
             list_id=list_id,

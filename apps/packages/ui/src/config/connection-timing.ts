@@ -4,7 +4,7 @@
 
 // While disconnected, poll frequently so newly started or fixed
 // servers are detected quickly.
-export const DISCONNECTED_POLL_INTERVAL_MS = 2_000
+export const DISCONNECTED_POLL_INTERVAL_MS = 5_000
 
 // Once connected, back off to a light-touch health check interval.
 // NOTE: If you change this value, keep CONNECTED_THROTTLE_MS slightly

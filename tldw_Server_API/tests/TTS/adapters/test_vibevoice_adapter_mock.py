@@ -6,7 +6,6 @@ import pytest
 pytestmark = pytest.mark.unit
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-import torch
 #
 # Local Imports
 from tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter import VibeVoiceAdapter
@@ -44,7 +43,7 @@ class TestVibeVoiceAdapterMock:
         assert adapter.config.get("vibevoice_workspace_id") == "workspace-123"
         assert adapter.variant == "1.5B"
         assert adapter.model_path == "./models/vibevoice"
-        assert adapter.device == "cuda" if torch.cuda.is_available() else "cpu"
+        assert adapter.device in {"cpu", "cuda", "mps"}
 
     async def test_variant_configuration(self):
         """Test model variant configuration"""
@@ -131,19 +130,19 @@ class TestVibeVoiceAdapterMock:
     async def test_device_selection(self):
         """Test device selection for inference"""
         # Test CUDA selection
-        with patch('torch.cuda.is_available', return_value=True):
+        with patch('tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter._torch_cuda_available', return_value=True):
             adapter = VibeVoiceAdapter({"vibevoice_device": "cuda"})
             assert adapter.device == "cuda"
 
         # Test MPS selection on macOS
         with patch('platform.system', return_value="Darwin"):
-            with patch('torch.backends.mps.is_available', return_value=True):
+            with patch('tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter._torch_mps_available', return_value=True):
                 adapter = VibeVoiceAdapter({"vibevoice_device": "mps"})
                 # Would be mps if available
 
         # Test CPU fallback on auto-detect (no explicit device)
-        with patch('torch.cuda.is_available', return_value=False):
-            with patch('torch.backends.mps.is_available', return_value=False):
+        with patch('tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter._torch_cuda_available', return_value=False):
+            with patch('tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter._torch_mps_available', return_value=False):
                 adapter = VibeVoiceAdapter({})
                 assert adapter.device == "cpu"
 
@@ -157,8 +156,12 @@ class TestVibeVoiceAdapterMock:
 
         adapter = VibeVoiceAdapter({})
 
-        success = await adapter.initialize()
-        assert success is False
+        with patch(
+            'tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter._get_torch',
+            return_value=MagicMock(),
+        ):
+            success = await adapter.initialize()
+            assert success is False
 
     async def test_model_loading_error_handling(self):
         """Test error handling during model loading"""
@@ -167,9 +170,13 @@ class TestVibeVoiceAdapterMock:
         })
 
         with patch('os.path.exists', return_value=False):
-            success = await adapter.initialize()
-            assert not success
-            assert adapter._status == ProviderStatus.ERROR
+            with patch(
+                'tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter._get_torch',
+                return_value=MagicMock(),
+            ):
+                success = await adapter.initialize()
+                assert not success
+                assert adapter._status == ProviderStatus.ERROR
 
     async def test_generation_without_initialization(self):
         """Test generation fails without initialization"""
@@ -181,8 +188,9 @@ class TestVibeVoiceAdapterMock:
             format=AudioFormat.WAV
         )
 
-        with pytest.raises(Exception):  # Should raise provider not configured
-            await adapter.generate(request)
+        with patch.object(adapter, "ensure_initialized", new=AsyncMock(return_value=False)):
+            with pytest.raises(Exception):  # Should raise provider not configured
+                await adapter.generate(request)
 
     async def test_multilingual_support(self):
         """Test multilingual capabilities"""
@@ -235,15 +243,16 @@ class TestVibeVoiceAdapterMock:
         adapter._initialized = True
         adapter._status = ProviderStatus.AVAILABLE
 
-        with patch('torch.cuda.is_available', return_value=True):
-            with patch('torch.cuda.empty_cache') as mock_empty_cache:
+        fake_torch = MagicMock()
+        with patch('tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter._torch_cuda_available', return_value=True):
+            with patch('tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter._get_torch', return_value=fake_torch):
                 await adapter.close()
 
                 assert adapter.model is None
                 # Tokenizer attribute may not be present; ensure adapter closed state
                 assert adapter._initialized is False
                 assert adapter._status == ProviderStatus.DISABLED
-                mock_empty_cache.assert_called_once()
+                fake_torch.cuda.empty_cache.assert_called_once()
 
     async def test_context_length_limits(self):
         """Test context length limits based on variant"""

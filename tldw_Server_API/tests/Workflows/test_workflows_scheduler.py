@@ -9,6 +9,10 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
+from tldw_Server_API.app.services import workflows_scheduler as workflows_scheduler_mod
 from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
 
 
@@ -37,7 +41,7 @@ def client_admin(monkeypatch, auth_headers):
     try:
         asyncio.run(svc.stop())
     except Exception:
-        pass
+        _ = None
     fastapi_app.dependency_overrides.clear()
 
 
@@ -128,6 +132,45 @@ def test_next_run_persisted_after_create(client_admin):
     assert isinstance(data.get("next_run_at"), str) and len(data["next_run_at"]) > 0
 
 
+def test_get_tolerates_default_and_user_db_lookup_errors(monkeypatch, tmp_path):
+    svc = workflows_scheduler_mod._WFRecurringScheduler()
+    target = object()
+
+    class _BrokenDefaultDB:
+        def get_schedule(self, _schedule_id: str):
+            raise BackendDatabaseError("SQLite error: no such table: workflow_schedules")
+
+    class _BrokenUserDB:
+        def get_schedule(self, _schedule_id: str):
+            raise BackendDatabaseError("SQLite error: no such table: workflow_schedules")
+
+    class _GoodUserDB:
+        def get_schedule(self, schedule_id: str):
+            return target if schedule_id == "wf-1" else None
+
+    (tmp_path / "101").mkdir()
+    (tmp_path / "202").mkdir()
+    (tmp_path / "not-a-user").mkdir()
+
+    monkeypatch.setattr(svc, "_db", _BrokenDefaultDB())
+    monkeypatch.setattr(
+        workflows_scheduler_mod.DatabasePaths,
+        "get_user_db_base_dir",
+        lambda: tmp_path,
+    )
+
+    def _get_db(uid: int):
+        if uid == 101:
+            return _BrokenUserDB()
+        if uid == 202:
+            return _GoodUserDB()
+        raise AssertionError(f"Unexpected user id: {uid}")
+
+    monkeypatch.setattr(svc, "_get_db", _get_db)
+
+    assert svc.get("wf-1") is target
+
+
 @pytest.mark.asyncio
 async def test_history_updates_on_fire(monkeypatch):
     # Start service directly without TestClient overhead for this unit test
@@ -165,5 +208,84 @@ async def test_history_updates_on_fire(monkeypatch):
     # last_run_at populated, last_status moved to queued
     assert isinstance(s.last_run_at, str) and len(s.last_run_at) > 0
     assert s.last_status in ("pending", "queued", "error", "running")
+
+    await svc.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_workflows_scheduler_enabled_with_y(monkeypatch):
+    monkeypatch.setenv("WORKFLOWS_SCHEDULER_ENABLED", "y")
+    calls = {"start": 0, "stop": 0}
+
+    class _StubService:
+        async def start(self) -> None:
+            calls["start"] += 1
+
+        async def stop(self) -> None:
+            calls["stop"] += 1
+
+    stub = _StubService()
+    monkeypatch.setattr(workflows_scheduler_mod, "get_workflows_scheduler", lambda: stub)
+
+    task = await workflows_scheduler_mod.start_workflows_scheduler()
+    assert task is not None
+    assert calls["start"] == 1
+
+    await workflows_scheduler_mod.stop_workflows_scheduler(task)
+    assert calls["stop"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_schedule_mints_virtual_key_when_enabled_with_y(monkeypatch):
+    monkeypatch.setenv("WORKFLOWS_MINT_VIRTUAL_KEYS", "y")
+    svc = get_workflows_scheduler()
+    await svc.start()
+    sid = svc.create(
+        tenant_id="default",
+        user_id="1",
+        workflow_id=None,
+        name="vk-y",
+        cron="*/5 * * * *",
+        timezone="UTC",
+        inputs={},
+        run_mode="async",
+        validation_mode="block",
+        enabled=True,
+        concurrency_mode="skip",
+        misfire_grace_sec=60,
+        coalesce=True,
+    )
+
+    captured: dict[str, Any] = {}
+
+    class _StubScheduler:
+        async def submit(self, *args: Any, **kwargs: Any) -> str:
+            captured["payload"] = kwargs.get("payload")
+            return "task-vk"
+
+    class _StubJWTService:
+        def __init__(self, settings) -> None:  # noqa: ANN001
+            self.settings = settings
+
+        def create_virtual_access_token(self, **kwargs: Any) -> str:
+            captured["vk_kwargs"] = kwargs
+            return "vk-token-y"
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.jwt_service.JWTService",
+        _StubJWTService,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.settings.get_settings",
+        lambda: object(),
+    )
+    svc._core_scheduler = _StubScheduler()  # type: ignore[attr-defined]
+
+    await svc._run_schedule(sid)  # type: ignore[attr-defined]
+
+    assert captured.get("vk_kwargs") is not None
+    payload = captured.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("secrets", {}).get("jwt") == "vk-token-y"
 
     await svc.stop()

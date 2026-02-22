@@ -27,7 +27,7 @@ def client_with_user(monkeypatch):
             if path.exists():
                 path.unlink()
     except Exception:
-        pass
+        _ = None
 
     mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")

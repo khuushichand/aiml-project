@@ -18,6 +18,7 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import StoragePathValidationError
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 MIN_INTERVAL_SECONDS = 60
 _FILES_EXPORT_GC_NONCRITICAL_EXCEPTIONS = (
@@ -100,7 +101,7 @@ async def _purge_expired_exports_for_user(user_id: int, now_iso: str) -> tuple[i
 
 async def start_file_artifacts_export_gc_scheduler() -> asyncio.Task | None:
     """Start the file export GC scheduler task or return None if disabled."""
-    enabled = os.getenv("FILES_EXPORT_GC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    enabled = env_flag_enabled("FILES_EXPORT_GC_ENABLED")
     if not enabled:
         return None
     try:

@@ -13,13 +13,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormField } from '@/components/ui/form';
-import { Plus, Eye, Search, BookmarkPlus, BookmarkX } from 'lucide-react';
+import { Plus, Eye, Search, BookmarkPlus, BookmarkX, Pencil, Trash2 } from 'lucide-react';
 import { Organization } from '@/types';
 import { api } from '@/lib/api-client';
 import { TableSkeleton } from '@/components/ui/skeleton';
@@ -51,6 +52,13 @@ function OrganizationsPageContent() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [createError, setCreateError] = useState('');
+  const [creatingOrganization, setCreatingOrganization] = useState(false);
+  const [editingOrganization, setEditingOrganization] = useState<Organization | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editSlug, setEditSlug] = useState('');
+  const [editError, setEditError] = useState('');
+  const [updatingOrganization, setUpdatingOrganization] = useState(false);
+  const [deletingOrganizationId, setDeletingOrganizationId] = useState<number | null>(null);
   const [totalItems, setTotalItems] = useState(0);
   const [slugTouched, setSlugTouched] = useState(false);
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
@@ -156,6 +164,7 @@ function OrganizationsPageContent() {
 
   const handleSubmit = organizationForm.handleSubmit(async (data) => {
     setCreateError('');
+    setCreatingOrganization(true);
     try {
       await api.createOrganization(data);
       setShowCreateForm(false);
@@ -170,6 +179,8 @@ function OrganizationsPageContent() {
           : 'Failed to create organization';
       setCreateError(message);
       showError('Create organization failed', message);
+    } finally {
+      setCreatingOrganization(false);
     }
   });
 
@@ -184,6 +195,8 @@ function OrganizationsPageContent() {
 
   const nameField = organizationForm.register('name');
   const slugField = organizationForm.register('slug');
+  const nameError = organizationForm.formState.errors.name;
+  const slugError = organizationForm.formState.errors.slug;
 
   const handleSearchChange = (value: string) => {
     setSearchQuery(value || undefined);
@@ -238,6 +251,87 @@ function OrganizationsPageContent() {
     success('Saved view removed', `"${view.name}" deleted.`);
   };
 
+  const openEditOrganizationDialog = (organization: Organization) => {
+    setEditingOrganization(organization);
+    setEditName(organization.name || '');
+    setEditSlug(organization.slug || '');
+    setEditError('');
+  };
+
+  const closeEditOrganizationDialog = () => {
+    setEditingOrganization(null);
+    setEditName('');
+    setEditSlug('');
+    setEditError('');
+  };
+
+  const validateSlug = (slug: string): string | null => {
+    if (!slug) return 'Slug is required.';
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      return 'Slug must be lowercase letters, numbers, and hyphens.';
+    }
+    return null;
+  };
+
+  const handleUpdateOrganization = async () => {
+    if (!editingOrganization) return;
+    const trimmedName = editName.trim();
+    const trimmedSlug = editSlug.trim();
+
+    if (!trimmedName) {
+      setEditError('Organization name is required.');
+      return;
+    }
+    const slugValidationError = validateSlug(trimmedSlug);
+    if (slugValidationError) {
+      setEditError(slugValidationError);
+      return;
+    }
+
+    try {
+      setUpdatingOrganization(true);
+      setEditError('');
+      await api.updateOrganization(String(editingOrganization.id), {
+        name: trimmedName,
+        slug: trimmedSlug,
+      });
+      success('Organization updated', `${trimmedName} has been updated.`);
+      closeEditOrganizationDialog();
+      await loadOrganizations();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to update organization.';
+      setEditError(message);
+      showError('Update organization failed', message);
+    } finally {
+      setUpdatingOrganization(false);
+    }
+  };
+
+  const handleDeleteOrganization = async (organization: Organization) => {
+    try {
+      const members = await api.getOrgMembers(String(organization.id));
+      const memberCount = Array.isArray(members) ? members.length : 0;
+      const confirmed = await confirm({
+        title: 'Delete organization',
+        message: `Delete "${organization.name}"? This organization has ${memberCount} member${memberCount === 1 ? '' : 's'}.`,
+        confirmText: 'Delete',
+        variant: 'danger',
+        icon: 'delete',
+      });
+      if (!confirmed) return;
+
+      setDeletingOrganizationId(organization.id);
+      await api.deleteOrganization(String(organization.id));
+      success('Organization deleted', `${organization.name} has been deleted.`);
+      await loadOrganizations();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to delete organization.';
+      showError('Delete organization failed', message);
+    } finally {
+      setDeletingOrganizationId((current) => (current === organization.id ? null : current));
+    }
+  };
+
   const totalPages = Math.ceil(totalItems / pageSize);
   const paginatedOrganizations = organizations;
 
@@ -275,6 +369,8 @@ function OrganizationsPageContent() {
                           <Input
                             id="name"
                             placeholder="e.g., Acme Corporation"
+                            aria-invalid={nameError ? 'true' : undefined}
+                            aria-describedby={nameError ? 'name-error' : undefined}
                             {...nameField}
                             onChange={(e) => {
                               nameField.onChange(e);
@@ -287,6 +383,8 @@ function OrganizationsPageContent() {
                           <Input
                             id="slug"
                             placeholder="e.g., acme-corp"
+                            aria-invalid={slugError ? 'true' : undefined}
+                            aria-describedby={slugError ? 'slug-error' : undefined}
                             {...slugField}
                             onChange={(e) => {
                               slugField.onChange(e);
@@ -300,7 +398,9 @@ function OrganizationsPageContent() {
                       </div>
 
                       <div className="flex gap-2">
-                        <Button type="submit">Create Organization</Button>
+                        <Button type="submit" loading={creatingOrganization} loadingText="Creating...">
+                          Create Organization
+                        </Button>
                         <Button type="button" variant="outline" onClick={() => setShowCreateForm(false)}>
                           Cancel
                         </Button>
@@ -419,9 +519,29 @@ function OrganizationsPageContent() {
                     <TableSkeleton rows={3} columns={5} />
                   </div>
                 ) : organizations.length === 0 ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    {searchQuery ? 'No organizations match your search' : 'No organizations found. Create one to get started.'}
-                  </div>
+                  <EmptyState
+                    icon={Plus}
+                    title={searchQuery ? 'No organizations match your search' : 'No organizations found'}
+                    description={
+                      searchQuery
+                        ? 'Try a different query or clear the search.'
+                        : 'Create your first organization to get started.'
+                    }
+                    actions={[
+                      searchQuery
+                        ? {
+                            label: 'Clear search',
+                            onClick: () => {
+                              setSearchQuery(undefined);
+                              resetPagination();
+                            },
+                          }
+                        : {
+                            label: 'Create organization',
+                            onClick: () => setShowCreateForm(true),
+                          },
+                    ]}
+                  />
                 ) : (
                   <>
                     <Table>
@@ -444,12 +564,33 @@ function OrganizationsPageContent() {
                             </TableCell>
                             <TableCell>{new Date(org.created_at).toLocaleDateString()}</TableCell>
                             <TableCell className="text-right">
-                              <Link href={`/organizations/${org.id}/analytics`}>
-                                <Button variant="outline" size="sm">
-                                  <Eye className="mr-2 h-4 w-4" />
-                                  Manage
+                              <div className="flex justify-end gap-2">
+                                <Link href={`/organizations/${org.id}`}>
+                                  <Button variant="outline" size="sm">
+                                    <Eye className="mr-2 h-4 w-4" />
+                                    Manage
+                                  </Button>
+                                </Link>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => openEditOrganizationDialog(org)}
+                                >
+                                  <Pencil className="mr-2 h-4 w-4" />
+                                  Edit
                                 </Button>
-                              </Link>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleDeleteOrganization(org)}
+                                  disabled={deletingOrganizationId === org.id}
+                                  loading={deletingOrganizationId === org.id}
+                                  loadingText="Deleting..."
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                  Delete
+                                </Button>
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -471,6 +612,63 @@ function OrganizationsPageContent() {
                 )}
               </CardContent>
             </Card>
+
+            <Dialog
+              open={Boolean(editingOrganization)}
+              onOpenChange={(open) => {
+                if (!open) closeEditOrganizationDialog();
+              }}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit Organization</DialogTitle>
+                  <DialogDescription>
+                    Update organization name and slug.
+                  </DialogDescription>
+                </DialogHeader>
+                {editError && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{editError}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="space-y-4 py-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-org-name">Organization Name</Label>
+                    <Input
+                      id="edit-org-name"
+                      value={editName}
+                      onChange={(event) => setEditName(event.target.value)}
+                      placeholder="Organization name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-org-slug">Slug</Label>
+                    <Input
+                      id="edit-org-slug"
+                      value={editSlug}
+                      onChange={(event) => setEditSlug(event.target.value)}
+                      placeholder="organization-slug"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Slug must be unique across organizations.
+                    </p>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={closeEditOrganizationDialog}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleUpdateOrganization}
+                    disabled={updatingOrganization}
+                    loading={updatingOrganization}
+                    loadingText="Saving..."
+                  >
+                    Save Changes
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
       </ResponsiveLayout>
     </PermissionGuard>

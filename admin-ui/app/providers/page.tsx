@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -14,8 +15,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Cpu, RefreshCw, CheckCircle, XCircle, Key, ExternalLink, Plus, Trash2, Search, Building2, User, Settings, Activity } from 'lucide-react';
+import { Cpu, RefreshCw, CheckCircle, XCircle, Key, ExternalLink, Plus, Trash2, Search, Building2, User, Settings, Activity, ChevronRight, ChevronDown } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { getDeprecatedModelNotice } from '@/lib/deprecated-models';
+import { buildProviderTokenTrendMap, buildSparklinePoints } from '@/lib/provider-token-trends';
 import { LLMProvider, LLMProviderOverride, User as UserType, Organization } from '@/types';
 
 interface ByokKey {
@@ -68,11 +71,164 @@ interface AddByokDialogState {
   isAdding: boolean;
 }
 
+interface DeprecatedModelDialogState {
+  isOpen: boolean;
+  providerName: string;
+  modelName: string;
+  replacement: string;
+  requestsLast7d: number | null;
+  isLoading: boolean;
+}
+
+interface LlmUsageSummaryRow {
+  group_value: string;
+  group_value_secondary?: string | null;
+  requests: number;
+  errors: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  latency_avg_ms?: number | null;
+}
+
+interface LlmUsageLogRow {
+  model?: string | null;
+  status?: number | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  total_cost_usd?: number | null;
+  latency_ms?: number | null;
+}
+
+interface ProviderUsageMetrics {
+  requests: number;
+  errors: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  totalCostUsd: number;
+  avgLatencyMs: number | null;
+}
+
+interface ProviderModelUsageMetrics {
+  model: string;
+  requests: number;
+  errors: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  totalCostUsd: number;
+  avgLatencyMs: number | null;
+}
+
+interface ProviderModelUsageState {
+  isLoading: boolean;
+  isLoaded: boolean;
+  error: string;
+  items: ProviderModelUsageMetrics[];
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
 const getStringValue = (value: unknown): string =>
   typeof value === 'string' ? value : '';
+
+const USAGE_WINDOW_DAYS = 7;
+const TREND_DAYS = 7;
+const compactNumberFormatter = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+const currencyFormatter = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+const percentFormatter = new Intl.NumberFormat('en-US', {
+  style: 'percent',
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
+
+const getUsageWindow = () => {
+  const end = new Date();
+  const start = new Date(end.getTime() - USAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+};
+
+const normalizeLlmSummaryRows = (payload: unknown): LlmUsageSummaryRow[] => {
+  if (Array.isArray(payload)) return payload as LlmUsageSummaryRow[];
+  if (isRecord(payload) && Array.isArray(payload.items)) {
+    return payload.items as LlmUsageSummaryRow[];
+  }
+  return [];
+};
+
+const normalizeLlmUsageLogRows = (payload: unknown): LlmUsageLogRow[] => {
+  if (Array.isArray(payload)) return payload as LlmUsageLogRow[];
+  if (isRecord(payload) && Array.isArray(payload.items)) {
+    return payload.items as LlmUsageLogRow[];
+  }
+  return [];
+};
+
+const formatCompactNumber = (value: number) => compactNumberFormatter.format(value);
+
+const formatCurrency = (value: number) => currencyFormatter.format(value);
+
+const formatErrorRate = (errors: number, requests: number) =>
+  requests > 0 ? percentFormatter.format(errors / requests) : '0.0%';
+
+const formatLatency = (latencyMs: number | null) => {
+  if (latencyMs === null || !Number.isFinite(latencyMs)) return '—';
+  return `${Math.round(latencyMs)} ms`;
+};
+
+interface ProviderTrendSparklineProps {
+  providerKey: string;
+  providerLabel: string;
+  series: number[];
+}
+
+function ProviderTrendSparkline({ providerKey, providerLabel, series }: ProviderTrendSparklineProps) {
+  const normalizedSeries = series.length > 0
+    ? series
+    : Array.from({ length: TREND_DAYS }, () => 0);
+  const points = buildSparklinePoints(normalizedSeries);
+  const totalTokens = normalizedSeries.reduce((sum, value) => sum + value, 0);
+  const hasUsage = totalTokens > 0;
+
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-border/80 bg-background px-2 py-1.5">
+      <div className="min-w-0">
+        <div className="truncate text-xs font-medium">{providerLabel}</div>
+        <div className="text-[11px] text-muted-foreground">
+          {hasUsage ? `${formatCompactNumber(totalTokens)} tokens` : 'No usage'}
+        </div>
+      </div>
+      <svg
+        data-testid={`provider-token-sparkline-${providerKey}`}
+        role="img"
+        aria-label={`${providerLabel} token trend`}
+        viewBox="0 0 84 24"
+        className="h-6 w-20 shrink-0"
+      >
+        <polyline
+          fill="none"
+          stroke={hasUsage ? 'currentColor' : '#94a3b8'}
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          points={points}
+        />
+      </svg>
+    </div>
+  );
+}
 
 interface ByokKeysTableProps {
   keys: ByokKey[];
@@ -118,12 +274,10 @@ function ByokKeysTable({ keys, onDelete, formatProviderName, deletingProvider }:
                 disabled={isDeleting}
                 title={isDeleting ? 'Deleting key' : 'Delete key'}
                 aria-label={isDeleting ? 'Deleting key' : 'Delete key'}
+                loading={isDeleting}
+                className="text-red-500 hover:text-red-500"
               >
-                {isDeleting ? (
-                  <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
-                ) : (
-                  <Trash2 className="h-4 w-4 text-red-500" />
-                )}
+                <Trash2 className="h-4 w-4" />
               </Button>
             </TableCell>
           </TableRow>
@@ -139,6 +293,12 @@ export default function ProvidersPage() {
   const { success: toastSuccess, error: toastError } = useToast();
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [providerOverrides, setProviderOverrides] = useState<Record<string, LLMProviderOverride>>({});
+  const [providerUsageSummary, setProviderUsageSummary] = useState<Record<string, ProviderUsageMetrics>>({});
+  const [providerUsageUnavailable, setProviderUsageUnavailable] = useState(false);
+  const [providerTokenTrends, setProviderTokenTrends] = useState<Record<string, number[]>>({});
+  const [providerTokenTrendUnavailable, setProviderTokenTrendUnavailable] = useState(false);
+  const [expandedProviderUsageRows, setExpandedProviderUsageRows] = useState<Record<string, boolean>>({});
+  const [providerModelUsage, setProviderModelUsage] = useState<Record<string, ProviderModelUsageState>>({});
   const [loading, setLoading] = useState(true);
   const [overrideDialog, setOverrideDialog] = useState<OverrideDialogState>({
     isOpen: false,
@@ -179,6 +339,14 @@ export default function ProvidersPage() {
     apiKey: '',
     isAdding: false,
   });
+  const [deprecatedModelDialog, setDeprecatedModelDialog] = useState<DeprecatedModelDialogState>({
+    isOpen: false,
+    providerName: '',
+    modelName: '',
+    replacement: '',
+    requestsLast7d: null,
+    isLoading: false,
+  });
 
   const updateOverrideDialog = (updates: Partial<OverrideDialogState>) => {
     setOverrideDialog((prev) => ({ ...prev, ...updates }));
@@ -195,13 +363,27 @@ export default function ProvidersPage() {
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
+      const usageWindow = getUsageWindow();
 
-      const [providersData, usersData, orgsData, overridesData] = await Promise.allSettled([
+      const [providersData, usersData, orgsData, overridesData, usageSummaryData, usageTrendData] = await Promise.allSettled([
         api.getLLMProviders(),
         api.getUsers(),
         api.getOrganizations(),
         api.getLLMProviderOverrides(),
+        api.getLlmUsageSummary({
+          group_by: 'provider',
+          start: usageWindow.start,
+          end: usageWindow.end,
+        }),
+        api.getLlmUsageSummary({
+          group_by: ['provider', 'day'],
+          start: usageWindow.start,
+          end: usageWindow.end,
+        }),
       ]);
+
+      setExpandedProviderUsageRows({});
+      setProviderModelUsage({});
 
       if (providersData.status === 'fulfilled') {
         let providersArray: LLMProvider[] = [];
@@ -243,8 +425,48 @@ export default function ProvidersPage() {
         });
         setProviderOverrides(map);
       }
+
+      if (usageSummaryData.status === 'fulfilled') {
+        const rows = normalizeLlmSummaryRows(usageSummaryData.value);
+        const nextSummary: Record<string, ProviderUsageMetrics> = {};
+        rows.forEach((row) => {
+          const key = row.group_value?.trim().toLowerCase();
+          if (!key) return;
+          nextSummary[key] = {
+            requests: Number.isFinite(row.requests) ? row.requests : 0,
+            errors: Number.isFinite(row.errors) ? row.errors : 0,
+            inputTokens: Number.isFinite(row.input_tokens) ? row.input_tokens : 0,
+            outputTokens: Number.isFinite(row.output_tokens) ? row.output_tokens : 0,
+            totalTokens: Number.isFinite(row.total_tokens) ? row.total_tokens : 0,
+            totalCostUsd: Number.isFinite(row.total_cost_usd) ? row.total_cost_usd : 0,
+            avgLatencyMs: Number.isFinite(row.latency_avg_ms ?? NaN) ? (row.latency_avg_ms ?? null) : null,
+          };
+        });
+        setProviderUsageSummary(nextSummary);
+        setProviderUsageUnavailable(false);
+      } else {
+        setProviderUsageSummary({});
+        setProviderUsageUnavailable(true);
+      }
+
+      if (usageTrendData.status === 'fulfilled') {
+        const rows = normalizeLlmSummaryRows(usageTrendData.value);
+        const trendMap = buildProviderTokenTrendMap(rows, {
+          days: TREND_DAYS,
+          endDate: new Date(usageWindow.end),
+        });
+        setProviderTokenTrends(trendMap);
+        setProviderTokenTrendUnavailable(false);
+      } else {
+        setProviderTokenTrends({});
+        setProviderTokenTrendUnavailable(true);
+      }
     } catch (err: unknown) {
       console.error('Failed to load data:', err);
+      setProviderUsageSummary({});
+      setProviderUsageUnavailable(true);
+      setProviderTokenTrends({});
+      setProviderTokenTrendUnavailable(true);
       toastError('Failed to load providers', err instanceof Error ? err.message : 'Failed to load data');
     } finally {
       setLoading(false);
@@ -559,6 +781,169 @@ export default function ProvidersPage() {
     }
   };
 
+  const loadProviderModelUsage = useCallback(async (providerName: string): Promise<ProviderModelUsageMetrics[] | null> => {
+    const providerKey = providerName.toLowerCase();
+    setProviderModelUsage((prev) => ({
+      ...prev,
+      [providerKey]: {
+        ...(prev[providerKey] ?? {
+          isLoading: false,
+          isLoaded: false,
+          error: '',
+          items: [],
+        }),
+        isLoading: true,
+        error: '',
+      },
+    }));
+    try {
+      const usageWindow = getUsageWindow();
+      const usageLog = await api.getLlmUsage({
+        provider: providerName,
+        start: usageWindow.start,
+        end: usageWindow.end,
+        page: '1',
+        limit: '500',
+      });
+      const rows = normalizeLlmUsageLogRows(usageLog);
+      const aggregates = new Map<string, {
+        requests: number;
+        errors: number;
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        totalCostUsd: number;
+        latencySum: number;
+        latencyCount: number;
+      }>();
+
+      rows.forEach((row) => {
+        const modelName = typeof row.model === 'string' && row.model.trim().length > 0
+          ? row.model
+          : '(unknown)';
+        const current = aggregates.get(modelName) ?? {
+          requests: 0,
+          errors: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          totalCostUsd: 0,
+          latencySum: 0,
+          latencyCount: 0,
+        };
+        current.requests += 1;
+        if ((row.status ?? 0) >= 400) current.errors += 1;
+        current.inputTokens += Number.isFinite(row.prompt_tokens ?? NaN) ? (row.prompt_tokens ?? 0) : 0;
+        current.outputTokens += Number.isFinite(row.completion_tokens ?? NaN) ? (row.completion_tokens ?? 0) : 0;
+        if (Number.isFinite(row.total_tokens ?? NaN)) {
+          current.totalTokens += row.total_tokens ?? 0;
+        } else {
+          current.totalTokens += (row.prompt_tokens ?? 0) + (row.completion_tokens ?? 0);
+        }
+        current.totalCostUsd += Number.isFinite(row.total_cost_usd ?? NaN) ? (row.total_cost_usd ?? 0) : 0;
+        if (Number.isFinite(row.latency_ms ?? NaN)) {
+          current.latencySum += row.latency_ms ?? 0;
+          current.latencyCount += 1;
+        }
+        aggregates.set(modelName, current);
+      });
+
+      const items: ProviderModelUsageMetrics[] = Array.from(aggregates.entries())
+        .map(([model, data]) => ({
+          model,
+          requests: data.requests,
+          errors: data.errors,
+          inputTokens: data.inputTokens,
+          outputTokens: data.outputTokens,
+          totalTokens: data.totalTokens,
+          totalCostUsd: data.totalCostUsd,
+          avgLatencyMs: data.latencyCount > 0 ? data.latencySum / data.latencyCount : null,
+        }))
+        .sort((a, b) => b.requests - a.requests || b.totalCostUsd - a.totalCostUsd);
+
+      setProviderModelUsage((prev) => ({
+        ...prev,
+        [providerKey]: {
+          isLoading: false,
+          isLoaded: true,
+          error: '',
+          items,
+        },
+      }));
+      return items;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load model usage';
+      setProviderModelUsage((prev) => ({
+        ...prev,
+        [providerKey]: {
+          isLoading: false,
+          isLoaded: true,
+          error: message,
+          items: [],
+        },
+      }));
+      toastError('Failed to load model breakdown', message);
+      return null;
+    }
+  }, [toastError]);
+
+  const toggleProviderUsageRow = useCallback((providerName: string) => {
+    const providerKey = providerName.toLowerCase();
+    const isExpanded = expandedProviderUsageRows[providerKey] ?? false;
+    setExpandedProviderUsageRows((prev) => ({
+      ...prev,
+      [providerKey]: !isExpanded,
+    }));
+    if (!isExpanded) {
+      const usageState = providerModelUsage[providerKey];
+      if (!usageState?.isLoaded && !usageState?.isLoading) {
+        void loadProviderModelUsage(providerName);
+      }
+    }
+  }, [expandedProviderUsageRows, loadProviderModelUsage, providerModelUsage]);
+
+  const openDeprecatedModelDialog = useCallback(async (providerName: string, modelName: string) => {
+    const notice = getDeprecatedModelNotice(modelName);
+    if (!notice) return;
+
+    setDeprecatedModelDialog({
+      isOpen: true,
+      providerName,
+      modelName,
+      replacement: notice.replacement,
+      requestsLast7d: null,
+      isLoading: true,
+    });
+
+    const providerKey = providerName.toLowerCase();
+    const existingUsageState = providerModelUsage[providerKey];
+    let usageItems = existingUsageState?.isLoaded ? (existingUsageState.items ?? []) : null;
+    if (!usageItems) {
+      usageItems = await loadProviderModelUsage(providerName);
+    }
+
+    const requestsLast7d = usageItems
+      ? usageItems.reduce((total, usageItem) => {
+        const usageNotice = getDeprecatedModelNotice(usageItem.model);
+        if (usageNotice?.id === notice.id) {
+          return total + usageItem.requests;
+        }
+        return total;
+      }, 0)
+      : null;
+
+    setDeprecatedModelDialog((prev) => {
+      if (!prev.isOpen || prev.providerName !== providerName || prev.modelName !== modelName) {
+        return prev;
+      }
+      return {
+        ...prev,
+        requestsLast7d: requestsLast7d ?? 0,
+        isLoading: false,
+      };
+    });
+  }, [loadProviderModelUsage, providerModelUsage]);
+
   const filteredUsers = byokState.users.filter(
     (u) =>
       byokState.userSearch === '' ||
@@ -680,10 +1065,34 @@ export default function ProvidersPage() {
                   <CardHeader>
                     <CardTitle>Configured Providers</CardTitle>
                     <CardDescription>
-                      All LLM providers available in the system
+                      All LLM providers available in the system, including usage and cost in the last {USAGE_WINDOW_DAYS} days
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
+                    <div className="mb-4 space-y-2 rounded-lg border border-border/80 bg-muted/20 p-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Token Trend ({TREND_DAYS}d)
+                      </div>
+                      {providerTokenTrendUnavailable ? (
+                        <p className="text-xs text-muted-foreground">
+                          Token trend data is currently unavailable.
+                        </p>
+                      ) : (
+                        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          {providers.map((provider) => {
+                            const providerKey = provider.name.toLowerCase();
+                            return (
+                              <ProviderTrendSparkline
+                                key={`trend-${provider.name}`}
+                                providerKey={providerKey}
+                                providerLabel={formatProviderName(provider.name)}
+                                series={providerTokenTrends[providerKey] ?? []}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                     {loading ? (
                       <div className="text-center text-muted-foreground py-8">Loading...</div>
                     ) : providers.length === 0 ? (
@@ -699,6 +1108,10 @@ export default function ProvidersPage() {
                           <TableHead>Provider</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Models</TableHead>
+                          <TableHead className="text-right">Requests (7d)</TableHead>
+                          <TableHead className="text-right">Tokens (7d)</TableHead>
+                          <TableHead className="text-right">Cost (7d)</TableHead>
+                          <TableHead className="text-right">Error Rate</TableHead>
                           <TableHead>Override</TableHead>
                           <TableHead className="text-right">Actions</TableHead>
                           </TableRow>
@@ -707,98 +1120,223 @@ export default function ProvidersPage() {
                           {providers.map((provider) => {
                             const docsUrl = getProviderDocs(provider.name);
                             const override = getOverrideForProvider(provider);
+                            const providerKey = provider.name.toLowerCase();
+                            const usageMetrics = providerUsageSummary[providerKey];
+                            const modelUsageState = providerModelUsage[providerKey];
+                            const isExpanded = expandedProviderUsageRows[providerKey] ?? false;
+                            const usageRequests = providerUsageUnavailable
+                              ? '—'
+                              : formatCompactNumber(usageMetrics?.requests ?? 0);
+                            const usageTokens = providerUsageUnavailable
+                              ? '—'
+                              : formatCompactNumber(usageMetrics?.totalTokens ?? 0);
+                            const usageCost = providerUsageUnavailable
+                              ? '—'
+                              : formatCurrency(usageMetrics?.totalCostUsd ?? 0);
+                            const usageErrorRate = providerUsageUnavailable
+                              ? '—'
+                              : formatErrorRate(usageMetrics?.errors ?? 0, usageMetrics?.requests ?? 0);
                             return (
-                              <TableRow key={provider.name}>
-                                <TableCell>
-                                  <div className="flex items-center gap-2">
-                                    <div className="font-medium">{formatProviderName(provider.name)}</div>
-                                    <code className="text-xs bg-muted px-1 rounded">{provider.name}</code>
-                                  </div>
-                                </TableCell>
-                                <TableCell>
-                                  {provider.enabled ? (
-                                    <Badge variant="default" className="bg-green-500">
-                                      <CheckCircle className="mr-1 h-3 w-3" />
-                                      Enabled
-                                    </Badge>
-                                  ) : (
-                                    <Badge variant="secondary">
-                                      <XCircle className="mr-1 h-3 w-3" />
-                                      Disabled
-                                    </Badge>
-                                  )}
-                                </TableCell>
-                                <TableCell>
-                                  {provider.models && provider.models.length > 0 ? (
-                                    <div className="flex flex-wrap gap-1 max-w-md">
-                                      {provider.models.slice(0, 3).map((model: string) => (
-                                        <Badge key={model} variant="outline" className="text-xs">
-                                          {model}
-                                        </Badge>
-                                      ))}
-                                      {provider.models.length > 3 && (
-                                        <Badge variant="outline" className="text-xs">
-                                          +{provider.models.length - 3} more
-                                        </Badge>
-                                      )}
+                              <Fragment key={provider.name}>
+                                <TableRow>
+                                  <TableCell>
+                                    <div className="flex items-center gap-2">
+                                      <div className="font-medium">{formatProviderName(provider.name)}</div>
+                                      <code className="text-xs bg-muted px-1 rounded">{provider.name}</code>
                                     </div>
-                                  ) : (
-                                    <span className="text-muted-foreground text-sm">-</span>
-                                  )}
-                                </TableCell>
-                                <TableCell>
-                                  {override ? (
-                                    <div className="space-y-1">
-                                      <Badge variant="outline" className="text-xs">
-                                        Override {override.is_enabled === false ? 'disabled' : 'active'}
+                                  </TableCell>
+                                  <TableCell>
+                                    {provider.enabled ? (
+                                      <Badge variant="default" className="bg-green-500">
+                                        <CheckCircle className="mr-1 h-3 w-3" />
+                                        Enabled
                                       </Badge>
-                                      {override.allowed_models?.length ? (
-                                        <div className="text-xs text-muted-foreground">
-                                          {override.allowed_models.length} models allowlisted
-                                        </div>
-                                      ) : null}
-                                      {override.api_key_hint ? (
-                                        <div className="text-xs text-muted-foreground">
-                                          Key • ****{override.api_key_hint}
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  ) : (
-                                    <span className="text-muted-foreground text-sm">-</span>
-                                  )}
-                                </TableCell>
-                                <TableCell className="text-right">
-                                  <div className="flex justify-end gap-2">
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => openOverrideDialog(provider)}
-                                      title="Manage override"
-                                    >
-                                      <Settings className="h-4 w-4" />
-                                    </Button>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => handleTestProvider(provider)}
-                                      disabled={testingProvider === provider.name}
-                                      title="Test connectivity"
-                                    >
-                                      <Activity className={`h-4 w-4 ${testingProvider === provider.name ? 'animate-spin' : ''}`} />
-                                    </Button>
-                                    {docsUrl ? (
+                                    ) : (
+                                      <Badge variant="secondary">
+                                        <XCircle className="mr-1 h-3 w-3" />
+                                        Disabled
+                                      </Badge>
+                                    )}
+                                  </TableCell>
+                                  <TableCell>
+                                    {provider.models && provider.models.length > 0 ? (
+                                      <div className="flex flex-wrap gap-1 max-w-md">
+                                        {provider.models.slice(0, 3).map((model: string) => {
+                                          const deprecatedNotice = getDeprecatedModelNotice(model);
+                                          return (
+                                            <div key={model} className="inline-flex items-center gap-1">
+                                              <Badge variant="outline" className="text-xs">
+                                                {model}
+                                              </Badge>
+                                              {deprecatedNotice ? (
+                                                <button
+                                                  type="button"
+                                                  className="inline-flex items-center rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900 hover:bg-amber-200"
+                                                  onClick={() => { void openDeprecatedModelDialog(provider.name, model); }}
+                                                  title={`View deprecation details for ${model}`}
+                                                  aria-label={`View deprecation details for ${model}`}
+                                                >
+                                                  Deprecated
+                                                </button>
+                                              ) : null}
+                                            </div>
+                                          );
+                                        })}
+                                        {provider.models.length > 3 && (
+                                          <Badge variant="outline" className="text-xs">
+                                            +{provider.models.length - 3} more
+                                          </Badge>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-muted-foreground text-sm">-</span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">{usageRequests}</TableCell>
+                                  <TableCell className="text-right tabular-nums">{usageTokens}</TableCell>
+                                  <TableCell className="text-right tabular-nums">{usageCost}</TableCell>
+                                  <TableCell className="text-right tabular-nums">{usageErrorRate}</TableCell>
+                                  <TableCell>
+                                    {override ? (
+                                      <div className="space-y-1">
+                                        <Badge variant="outline" className="text-xs">
+                                          Override {override.is_enabled === false ? 'disabled' : 'active'}
+                                        </Badge>
+                                        {override.allowed_models?.length ? (
+                                          <div className="text-xs text-muted-foreground">
+                                            {override.allowed_models.length} models allowlisted
+                                          </div>
+                                        ) : null}
+                                        {override.api_key_hint ? (
+                                          <div className="text-xs text-muted-foreground">
+                                            Key • ****{override.api_key_hint}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    ) : (
+                                      <span className="text-muted-foreground text-sm">-</span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    <div className="flex justify-end gap-2">
                                       <Button
                                         variant="ghost"
                                         size="sm"
-                                        onClick={() => window.open(docsUrl, '_blank')}
-                                        title="Open documentation"
+                                        onClick={() => toggleProviderUsageRow(provider.name)}
+                                        title={isExpanded ? 'Hide model breakdown' : 'Show model breakdown'}
+                                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} model usage for ${provider.name}`}
                                       >
-                                        <ExternalLink className="h-4 w-4" />
+                                        {isExpanded ? (
+                                          <ChevronDown className="h-4 w-4" />
+                                        ) : (
+                                          <ChevronRight className="h-4 w-4" />
+                                        )}
                                       </Button>
-                                    ) : null}
-                                  </div>
-                                </TableCell>
-                              </TableRow>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => openOverrideDialog(provider)}
+                                        title="Manage override"
+                                      >
+                                        <Settings className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleTestProvider(provider)}
+                                        disabled={testingProvider === provider.name}
+                                        loading={testingProvider === provider.name}
+                                        title="Test connectivity"
+                                      >
+                                        <Activity className="h-4 w-4" />
+                                      </Button>
+                                      {docsUrl ? (
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => window.open(docsUrl, '_blank')}
+                                          title="Open documentation"
+                                        >
+                                          <ExternalLink className="h-4 w-4" />
+                                        </Button>
+                                      ) : null}
+                                      <Link
+                                        href={`/usage?group_by=provider&provider=${encodeURIComponent(provider.name)}`}
+                                        className="inline-flex h-9 items-center rounded-md px-2 text-xs font-medium text-primary hover:bg-accent hover:text-accent-foreground"
+                                      >
+                                        View usage
+                                      </Link>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                                {isExpanded ? (
+                                  <TableRow className="bg-muted/30">
+                                    <TableCell colSpan={9}>
+                                      <div className="space-y-3 py-2">
+                                        <div className="text-sm font-medium">
+                                          Per-model usage ({USAGE_WINDOW_DAYS}d)
+                                        </div>
+                                        {modelUsageState?.isLoading ? (
+                                          <div className="text-sm text-muted-foreground">Loading model usage...</div>
+                                        ) : modelUsageState?.error ? (
+                                          <div className="text-sm text-red-600">{modelUsageState.error}</div>
+                                        ) : (modelUsageState?.items?.length ?? 0) === 0 ? (
+                                          <div className="text-sm text-muted-foreground">
+                                            No model usage recorded in the last {USAGE_WINDOW_DAYS} days.
+                                          </div>
+                                        ) : (
+                                          <Table>
+                                            <TableHeader>
+                                              <TableRow>
+                                                <TableHead>Model</TableHead>
+                                                <TableHead className="text-right">Requests</TableHead>
+                                                <TableHead className="text-right">Input Tokens</TableHead>
+                                                <TableHead className="text-right">Output Tokens</TableHead>
+                                                <TableHead className="text-right">Total Tokens</TableHead>
+                                                <TableHead className="text-right">Cost</TableHead>
+                                                <TableHead className="text-right">Avg Latency</TableHead>
+                                                <TableHead className="text-right">Error Rate</TableHead>
+                                              </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                              {modelUsageState?.items.map((item) => {
+                                                const deprecatedNotice = getDeprecatedModelNotice(item.model);
+                                                return (
+                                                  <TableRow key={`${provider.name}-${item.model}`}>
+                                                    <TableCell>
+                                                      <div className="flex flex-wrap items-center gap-2">
+                                                        <code className="text-xs bg-muted px-2 py-1 rounded">{item.model}</code>
+                                                        {deprecatedNotice ? (
+                                                          <button
+                                                            type="button"
+                                                            className="inline-flex items-center rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900 hover:bg-amber-200"
+                                                            onClick={() => { void openDeprecatedModelDialog(provider.name, item.model); }}
+                                                            title={`View deprecation details for ${item.model}`}
+                                                            aria-label={`View deprecation details for ${item.model}`}
+                                                          >
+                                                            Deprecated
+                                                          </button>
+                                                        ) : null}
+                                                      </div>
+                                                    </TableCell>
+                                                    <TableCell className="text-right tabular-nums">{formatCompactNumber(item.requests)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums">{formatCompactNumber(item.inputTokens)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums">{formatCompactNumber(item.outputTokens)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums">{formatCompactNumber(item.totalTokens)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums">{formatCurrency(item.totalCostUsd)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums">{formatLatency(item.avgLatencyMs)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums">{formatErrorRate(item.errors, item.requests)}</TableCell>
+                                                  </TableRow>
+                                                );
+                                              })}
+                                            </TableBody>
+                                          </Table>
+                                        )}
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                ) : null}
+                              </Fragment>
                             );
                           })}
                         </TableBody>
@@ -1036,6 +1574,59 @@ export default function ProvidersPage() {
             </Tabs>
           </div>
 
+        <Dialog
+          open={deprecatedModelDialog.isOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              setDeprecatedModelDialog({
+                isOpen: false,
+                providerName: '',
+                modelName: '',
+                replacement: '',
+                requestsLast7d: null,
+                isLoading: false,
+              });
+            } else {
+              setDeprecatedModelDialog((prev) => ({ ...prev, isOpen: true }));
+            }
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Deprecated Model Warning</DialogTitle>
+              <DialogDescription>
+                {deprecatedModelDialog.modelName
+                  ? `${deprecatedModelDialog.modelName} (${formatProviderName(deprecatedModelDialog.providerName)})`
+                  : 'Model deprecation details'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 text-sm">
+              {deprecatedModelDialog.isLoading ? (
+                <p className="text-muted-foreground">Loading recent usage...</p>
+              ) : (
+                <p>
+                  This model is deprecated. {deprecatedModelDialog.requestsLast7d ?? 0} requests used it in the last {USAGE_WINDOW_DAYS} days. Consider migrating to {deprecatedModelDialog.replacement}.
+                </p>
+              )}
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setDeprecatedModelDialog({
+                  isOpen: false,
+                  providerName: '',
+                  modelName: '',
+                  replacement: '',
+                  requestsLast7d: null,
+                  isLoading: false,
+                })}
+              >
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Provider Override Dialog */}
         <Dialog
           open={overrideDialog.isOpen}
@@ -1122,15 +1713,10 @@ export default function ProvidersPage() {
                     variant="destructive"
                     onClick={handleDeleteOverride}
                     disabled={overrideDialog.isDeleting || overrideDialog.isSaving}
+                    loading={overrideDialog.isDeleting}
+                    loadingText="Removing..."
                   >
-                    {overrideDialog.isDeleting ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Removing...
-                      </>
-                    ) : (
-                      'Remove Override'
-                    )}
+                    Remove Override
                   </Button>
                 )}
               </div>
@@ -1138,8 +1724,8 @@ export default function ProvidersPage() {
                 <Button variant="outline" onClick={() => updateOverrideDialog({ isOpen: false })}>
                   Cancel
                 </Button>
-                <Button onClick={handleSaveOverride} disabled={overrideDialog.isSaving}>
-                  {overrideDialog.isSaving ? 'Saving...' : 'Save'}
+                <Button onClick={handleSaveOverride} disabled={overrideDialog.isSaving} loading={overrideDialog.isSaving} loadingText="Saving...">
+                  Save
                 </Button>
               </div>
             </DialogFooter>
@@ -1239,8 +1825,10 @@ export default function ProvidersPage() {
                   addByokDialog.isAdding ||
                   !canSubmitByok
                 }
+                loading={addByokDialog.isAdding}
+                loadingText="Adding..."
               >
-                {addByokDialog.isAdding ? 'Adding...' : 'Add Key'}
+                Add Key
               </Button>
             </DialogFooter>
           </DialogContent>

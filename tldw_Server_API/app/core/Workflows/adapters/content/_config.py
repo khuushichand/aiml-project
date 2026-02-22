@@ -194,6 +194,37 @@ class NewsletterGenerateConfig(BaseAdapterConfig):
     model: str | None = Field(None, description="Model for generation")
 
 
+class AudioBriefingComposeConfig(BaseAdapterConfig):
+    """Config for audio briefing script composition adapter."""
+
+    items: list[dict[str, Any]] | None = Field(None, description="Article summaries [{title, summary, url}]")
+    target_audio_minutes: int = Field(10, ge=1, le=60, description="Target audio duration in minutes")
+    output_language: str = Field("en", description="Language for generated spoken script (e.g., 'en', 'es')")
+    provider: str | None = Field(None, description="LLM provider")
+    model: str | None = Field(None, description="LLM model")
+    temperature: float = Field(0.5, ge=0.0, le=2.0, description="LLM temperature")
+    max_tokens: int | None = Field(None, ge=100, description="Max LLM output tokens")
+    system_prompt_override: str | None = Field(None, description="Override default system prompt")
+    voice_map: dict[str, str] | None = Field(None, description="Voice marker -> Kokoro voice ID mapping")
+    multi_voice: bool = Field(True, description="Enable multi-voice markers in script")
+    persona_summarize: bool = Field(
+        False,
+        description="Pre-summarize each item in persona voice before final script composition",
+    )
+    persona_id: str | None = Field(
+        None,
+        description="Persona identifier/style hint used for per-item pre-summarization",
+    )
+    persona_provider: str | None = Field(
+        None,
+        description="Optional provider override for persona pre-summarization",
+    )
+    persona_model: str | None = Field(
+        None,
+        description="Optional model override for persona pre-summarization",
+    )
+
+
 class DiagramGenerateConfig(BaseAdapterConfig):
     """Config for diagram generation adapter."""
 

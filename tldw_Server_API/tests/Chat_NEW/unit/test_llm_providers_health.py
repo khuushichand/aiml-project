@@ -29,7 +29,16 @@ def test_llm_providers_includes_health(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
 
     with TestClient(app) as client:
-        with patch("tldw_Server_API.app.api.v1.endpoints.llm_providers.get_provider_manager", return_value=_FakeProviderManager()):
+        with (
+            patch(
+                "tldw_Server_API.app.api.v1.endpoints.llm_providers.get_provider_manager",
+                return_value=_FakeProviderManager(),
+            ),
+            patch(
+                "tldw_Server_API.app.api.v1.endpoints.llm_providers.discover_models_from_endpoint",
+                return_value=[],
+            ),
+        ):
             resp = client.get("/api/v1/llm/providers")
             assert resp.status_code == 200
             data = resp.json()

@@ -128,7 +128,7 @@ async def test_admin_endpoints_pg(test_db_pool):
                 )
             except Exception:
                 # Best-effort; do not fail tests if state attachment fails
-                pass
+                _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override
@@ -316,7 +316,7 @@ async def test_org_member_list_pagination_filters_pg(test_db_pool):
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override

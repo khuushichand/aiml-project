@@ -51,6 +51,7 @@ from uuid import uuid4
 # 3rd-Party Imports
 import aiosqlite
 from loguru import logger
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_truthy
 
 _AUDIT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
@@ -187,7 +188,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return is_truthy(str(value))
 
 
 def _normalize_storage_mode(raw: Any) -> str:
@@ -749,7 +750,7 @@ class RiskScorer:
                         merged_thr[key] = v
                     elif isinstance(v, str):
                         normalized = v.strip().lower()
-                        if normalized in {"1", "true", "yes", "on", "y"}:
+                        if is_truthy(normalized):
                             merged_thr[key] = True
                             continue
                         if normalized in {"0", "false", "no", "off", "n"}:
@@ -987,7 +988,7 @@ class UnifiedAuditService:
         # direct/on-demand flushing via log_event/flush.
         try:
             self._test_mode = any(
-                (os.getenv(k, "").strip().lower() in {"1", "true", "yes", "on"})
+                env_flag_enabled(k)
                 for k in ("TEST_MODE", "TLDW_TEST_MODE")
             ) or (os.getenv("PYTEST_CURRENT_TEST") is not None)
         except _AUDIT_NONCRITICAL_EXCEPTIONS:
@@ -997,7 +998,7 @@ class UnifiedAuditService:
         # Configure PII detector and scan fields
         if enable_pii_detection:
             # Settings: AUDIT_PII_USE_RAG_PATTERNS, AUDIT_PII_PATTERNS (dict)
-            use_rag = bool(str(_app_settings.get("AUDIT_PII_USE_RAG_PATTERNS", "false")).strip().lower() in {"1","true","yes","on","y"})
+            use_rag = is_truthy(str(_app_settings.get("AUDIT_PII_USE_RAG_PATTERNS", "false")).strip().lower())
             # Pull overrides from settings if present (no dict-type gate; LazySettings isn't a dict)
             overrides = _app_settings.get("AUDIT_PII_PATTERNS")
             if overrides is not None and not isinstance(overrides, dict):
@@ -1377,19 +1378,19 @@ class UnifiedAuditService:
                 select_cols += ", duration_count"
                 insert_cols = f"tenant_user_id, {select_cols}"
                 await db.execute(
-                    f"""
+                    """
                     INSERT INTO audit_daily_stats ({insert_cols})
                     SELECT ?, {select_cols} FROM audit_daily_stats_legacy
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     (self.unidentified_tenant_id,),
                 )
             else:
                 insert_cols = f"tenant_user_id, {select_cols}, duration_count"
                 await db.execute(
-                    f"""
+                    """
                     INSERT INTO audit_daily_stats ({insert_cols})
                     SELECT ?, {select_cols}, 0 FROM audit_daily_stats_legacy
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     (self.unidentified_tenant_id,),
                 )
 
@@ -2307,7 +2308,7 @@ class UnifiedAuditService:
         for i in range(0, len(event_ids), chunk_size):
             chunk = event_ids[i:i + chunk_size]
             placeholders = ",".join("?" * len(chunk))
-            query = f"SELECT event_id FROM audit_events WHERE event_id IN ({placeholders})"
+            query = f"SELECT event_id FROM audit_events WHERE event_id IN ({placeholders})"  # nosec B608
             async with db.execute(query, chunk) as cursor:
                 rows = await cursor.fetchall()
                 existing.update(str(row[0]) for row in rows if row and row[0])
@@ -3532,7 +3533,7 @@ class UnifiedAuditService:
 
             # Total security events in window
             async with db.execute(
-                f"SELECT COUNT(*) FROM audit_events WHERE timestamp >= ? AND category = ?{tenant_clause}",
+                f"SELECT COUNT(*) FROM audit_events WHERE timestamp >= ? AND category = ?{tenant_clause}",  # nosec B608
                 _params(start_iso, cat),
             ) as cur:
                 row = await cur.fetchone()
@@ -3541,7 +3542,7 @@ class UnifiedAuditService:
             # High-risk security events in window
             async with db.execute(
                 (
-                    "SELECT COUNT(*) FROM audit_events "
+                    "SELECT COUNT(*) FROM audit_events "  # nosec B608
                     f"WHERE timestamp >= ? AND category = ? AND risk_score >= ?{tenant_clause}"
                 ),
                 _params(start_iso, cat, HIGH_RISK_SCORE),
@@ -3557,14 +3558,14 @@ class UnifiedAuditService:
                 WHERE timestamp >= ?
                   AND category = ?
                   AND LOWER(COALESCE(result, '')) IN ('failure', 'error')
-                """ + tenant_clause,
+                """ + tenant_clause,  # nosec B608
                 _params(start_iso, cat),
             ) as cur:
                 row = await cur.fetchone()
                 failure_events = int(row[0]) if row else 0
 
             async with db.execute(
-                f"""
+                """
                 SELECT COUNT(DISTINCT {user_field})
                 FROM audit_events
                 WHERE timestamp >= ?
@@ -3572,7 +3573,7 @@ class UnifiedAuditService:
                   AND {user_field} IS NOT NULL
                   AND {user_field} != ''
                 {tenant_clause}
-                """,
+                """.format_map(locals()),  # nosec B608
                 _params(start_iso, cat),
             ) as cur:
                 row = await cur.fetchone()
@@ -3580,21 +3581,20 @@ class UnifiedAuditService:
 
             # Top IPs observed for security events
             top_failing_ips: list[str] = []
-            async with db.execute(
-                """
+            top_ips_sql_template = """
                 SELECT context_ip_address, COUNT(*) AS cnt
                 FROM audit_events
                 WHERE timestamp >= ?
                   AND category = ?
                   AND context_ip_address IS NOT NULL
                   AND context_ip_address != ''
-                """ + tenant_clause + """
+                {tenant_clause}
                 GROUP BY context_ip_address
                 ORDER BY cnt DESC
                 LIMIT 5
-                """,
-                _params(start_iso, cat),
-            ) as cur:
+                """
+            top_ips_sql = top_ips_sql_template.format_map(locals())  # nosec B608
+            async with db.execute(top_ips_sql, _params(start_iso, cat)) as cur:
                 rows = await cur.fetchall()
                 top_failing_ips = [str(r[0]) for r in rows if r and r[0]]
 

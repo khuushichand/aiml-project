@@ -252,7 +252,8 @@ class EventBroadcaster:
     async def broadcast_optimization_iteration(self, optimization_id: int,
                                               iteration: int, max_iterations: int,
                                               current_metric: float,
-                                              best_metric: float):
+                                              best_metric: float,
+                                              extra_data: Optional[dict[str, Any]] = None):
         """
         Broadcast optimization iteration update.
 
@@ -262,6 +263,7 @@ class EventBroadcaster:
             max_iterations: Maximum iterations
             current_metric: Current iteration metric
             best_metric: Best metric so far
+            extra_data: Additional payload fields to include
         """
         data = {
             "optimization_id": optimization_id,
@@ -271,6 +273,8 @@ class EventBroadcaster:
             "best_metric": best_metric,
             "progress": (iteration / max_iterations * 100) if max_iterations > 0 else 0
         }
+        if extra_data:
+            data.update(extra_data)
 
         await self.broadcast_event(
             event_type=EventType.OPTIMIZATION_ITERATION,

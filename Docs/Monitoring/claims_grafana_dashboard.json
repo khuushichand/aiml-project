@@ -1,0 +1,143 @@
+{
+  "title": "tldw_server — Claims Monitoring",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Claims provider request rate",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (provider) (rate(claims_provider_requests_total[5m]))",
+          "legendFormat": "{{provider}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Claims provider error rate",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (provider, reason) (rate(claims_provider_errors_total[5m]))",
+          "legendFormat": "{{provider}}/{{reason}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rebuild queue size",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "claims_rebuild_queue_size",
+          "legendFormat": "queue"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rebuild heartbeat age (sec)",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "time() - claims_rebuild_worker_heartbeat_timestamp",
+          "legendFormat": "age"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Review queue size",
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "claims_review_queue_size",
+          "legendFormat": "queue"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Unsupported ratio (RAG)",
+      "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(rag_unsupported_claims_total[5m])) / clamp_min(sum(rate(rag_total_claims_checked_total[5m])), 1)",
+          "legendFormat": "unsupported_ratio"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Alert webhook failures",
+      "gridPos": {"x": 0, "y": 24, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(claims_alert_webhook_failed_total[5m]))",
+          "legendFormat": "failures"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Alert webhook latency (p50/p95)",
+      "gridPos": {"x": 12, "y": 24, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(claims_alert_webhook_latency_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(claims_alert_webhook_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Claims parse error ratio (10m)",
+      "gridPos": {"x": 0, "y": 32, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(increase(claims_output_parse_events_total{outcome=\"error\"}[10m])) / clamp_min(sum(increase(claims_provider_requests_total{mode=~\"extract|verify|ingestion\"}[10m])), 1)",
+          "legendFormat": "parse_error_ratio"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Claims fallback ratio (10m)",
+      "gridPos": {"x": 12, "y": 32, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(increase(claims_fallback_total[10m])) / clamp_min(sum(increase(claims_provider_requests_total{mode=~\"extract|verify|ingestion\"}[10m])), 1)",
+          "legendFormat": "fallback_ratio"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Claims fallback reasons by mode",
+      "gridPos": {"x": 0, "y": 40, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (mode, reason) (rate(claims_fallback_total[5m]))",
+          "legendFormat": "{{mode}}/{{reason}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Claims response format selection",
+      "gridPos": {"x": 12, "y": 40, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (mode, response_format_type) (rate(claims_response_format_selected_total[5m]))",
+          "legendFormat": "{{mode}}/{{response_format_type}}"
+        }
+      ]
+    }
+  ]
+}

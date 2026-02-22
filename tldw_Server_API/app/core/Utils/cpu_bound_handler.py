@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.Utils.executor_registry import (
     register_executor,
     shutdown_executor_sync,
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 #
 #######################################################################################################################
@@ -57,8 +58,7 @@ def get_cpu_thread_pool() -> ThreadPoolExecutor:
 
 
 def _env_flag_true(name: str) -> bool:
-    val = os.getenv(name, "").strip().lower()
-    return val in {"1", "true", "yes", "on"}
+    return env_flag_enabled(name)
 
 
 def _get_worker_count(default: int = 4) -> int:
@@ -139,13 +139,12 @@ async def run_cpu_bound_thread(func: Callable[..., T], *args, **kwargs) -> T:
         The function's return value
     """
     loop = asyncio.get_event_loop()
+    partial_func = functools.partial(func, *args, **kwargs)
 
     try:
         result = await loop.run_in_executor(
             get_cpu_thread_pool(),
-            func,
-            *args,
-            **kwargs,
+            partial_func,
         )
         return result
     except Exception as e:

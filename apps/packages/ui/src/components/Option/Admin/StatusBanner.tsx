@@ -1,6 +1,7 @@
 import React from "react"
 import { Tag, Button, Space, Spin, Alert } from "antd"
 import { RefreshCw, Square } from "lucide-react"
+import { sanitizeAdminErrorMessage } from "./admin-error-utils"
 
 type StatusState = "running" | "online" | "stopped" | "offline" | "loading" | "active" | "inactive" | "unknown"
 
@@ -67,19 +68,23 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
 
   if (loading) {
     return (
-      <div className={`flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800 ${className || ""}`}>
+      <div className={`flex items-center gap-2 rounded-lg border border-border bg-bg p-3 ${className || ""}`}>
         <Spin size="small" />
-        <span className="text-sm text-gray-500">Loading status...</span>
+        <span className="text-sm text-text-muted">Loading status...</span>
       </div>
     )
   }
 
   if (error) {
+    const safeError = sanitizeAdminErrorMessage(
+      error,
+      "Unable to load status details."
+    )
     return (
       <Alert
         type="error"
-        message="Status Error"
-        description={error}
+        title="Status Error"
+        description={safeError}
         showIcon
         className={className}
         action={
@@ -94,7 +99,7 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
   }
 
   return (
-    <div className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800 ${className || ""}`}>
+    <div className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-bg p-3 ${className || ""}`}>
       <Space wrap size="middle">
         <Tag color={stateColor} className="m-0">
           {displayState}
@@ -102,9 +107,9 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
         {items.map((item, index) =>
           item.value != null ? (
             <Space key={index} size="small" className="text-sm">
-              <span className="text-gray-500 dark:text-gray-400">{item.label}:</span>
+              <span className="text-text-muted">{item.label}:</span>
               {item.code ? (
-                <code className="rounded bg-gray-200 px-1.5 py-0.5 text-xs dark:bg-gray-700">
+                <code className="rounded bg-surface2 px-1.5 py-0.5 text-xs">
                   {String(item.value)}
                 </code>
               ) : (

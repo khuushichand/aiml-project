@@ -13,8 +13,13 @@ export {
   getTutorialById,
   getPrimaryTutorialForRoute,
   hasTutorialsForRoute,
-  getTutorialCountForRoute
+  getTutorialCountForRoute,
+  normalizeTutorialRoute
 } from "./registry"
 
 // Tutorial definitions (for direct access if needed)
 export { playgroundTutorials } from "./definitions/playground"
+export { workspacePlaygroundTutorials } from "./definitions/workspace-playground"
+export { mediaTutorials } from "./definitions/media"
+export { knowledgeTutorials } from "./definitions/knowledge"
+export { charactersTutorials } from "./definitions/characters"

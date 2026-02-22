@@ -7,6 +7,7 @@ import shlex
 from dataclasses import dataclass, field
 
 from tldw_Server_API.app.core.config import get_config_section
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 @dataclass
@@ -105,7 +106,7 @@ def load_acp_runner_config() -> ACPRunnerConfig:
 def _parse_bool(raw: str | None, default: bool = False) -> bool:
     if raw is None:
         return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+    return is_truthy(raw)
 
 
 def _parse_int(raw: str | None, default: int) -> int:

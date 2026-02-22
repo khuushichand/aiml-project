@@ -123,7 +123,7 @@ def test_adapter_stream_normalizes_httpx_errors(monkeypatch, provider_key: str, 
         monkeypatch.setenv(f"LLM_ADAPTERS_NATIVE_HTTP_{provider_key.upper()}", "1")
     except Exception:
         # Some providers use other flags; adapters prefer native path when adapters are enabled in tests
-        pass
+        _ = None
 
     # Import adapter class dynamically
     parts = adapter_cls_path.split(".")

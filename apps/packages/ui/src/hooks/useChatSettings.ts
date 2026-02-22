@@ -60,6 +60,47 @@ export const useChatSettings = () => {
     "useMarkdownForUserMessage",
     DEFAULT_CHAT_SETTINGS.useMarkdownForUserMessage
   )
+  const [chatRichTextMode, setChatRichTextMode] = useStorage(
+    "chatRichTextMode",
+    DEFAULT_CHAT_SETTINGS.chatRichTextMode
+  )
+  const [chatRichTextStylePreset, setChatRichTextStylePreset] = useStorage(
+    "chatRichTextStylePreset",
+    DEFAULT_CHAT_SETTINGS.chatRichTextStylePreset
+  )
+  const [chatRichItalicColor, setChatRichItalicColor] = useStorage(
+    "chatRichItalicColor",
+    DEFAULT_CHAT_SETTINGS.chatRichItalicColor
+  )
+  const [chatRichItalicFont, setChatRichItalicFont] = useStorage(
+    "chatRichItalicFont",
+    DEFAULT_CHAT_SETTINGS.chatRichItalicFont
+  )
+  const [chatRichBoldColor, setChatRichBoldColor] = useStorage(
+    "chatRichBoldColor",
+    DEFAULT_CHAT_SETTINGS.chatRichBoldColor
+  )
+  const [chatRichBoldFont, setChatRichBoldFont] = useStorage(
+    "chatRichBoldFont",
+    DEFAULT_CHAT_SETTINGS.chatRichBoldFont
+  )
+  const [chatRichQuoteTextColor, setChatRichQuoteTextColor] = useStorage(
+    "chatRichQuoteTextColor",
+    DEFAULT_CHAT_SETTINGS.chatRichQuoteTextColor
+  )
+  const [chatRichQuoteFont, setChatRichQuoteFont] = useStorage(
+    "chatRichQuoteFont",
+    DEFAULT_CHAT_SETTINGS.chatRichQuoteFont
+  )
+  const [chatRichQuoteBorderColor, setChatRichQuoteBorderColor] = useStorage(
+    "chatRichQuoteBorderColor",
+    DEFAULT_CHAT_SETTINGS.chatRichQuoteBorderColor
+  )
+  const [chatRichQuoteBackgroundColor, setChatRichQuoteBackgroundColor] =
+    useStorage(
+      "chatRichQuoteBackgroundColor",
+      DEFAULT_CHAT_SETTINGS.chatRichQuoteBackgroundColor
+    )
   const [copyAsFormattedText, setCopyAsFormattedText] = useStorage(
     "copyAsFormattedText",
     DEFAULT_CHAT_SETTINGS.copyAsFormattedText
@@ -144,6 +185,26 @@ export const useChatSettings = () => {
     setAutoCopyResponseToClipboard,
     useMarkdownForUserMessage,
     setUseMarkdownForUserMessage,
+    chatRichTextMode,
+    setChatRichTextMode,
+    chatRichTextStylePreset,
+    setChatRichTextStylePreset,
+    chatRichItalicColor,
+    setChatRichItalicColor,
+    chatRichItalicFont,
+    setChatRichItalicFont,
+    chatRichBoldColor,
+    setChatRichBoldColor,
+    chatRichBoldFont,
+    setChatRichBoldFont,
+    chatRichQuoteTextColor,
+    setChatRichQuoteTextColor,
+    chatRichQuoteFont,
+    setChatRichQuoteFont,
+    chatRichQuoteBorderColor,
+    setChatRichQuoteBorderColor,
+    chatRichQuoteBackgroundColor,
+    setChatRichQuoteBackgroundColor,
     copyAsFormattedText,
     setCopyAsFormattedText,
     allowExternalImages,

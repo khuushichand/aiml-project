@@ -61,4 +61,4 @@ def test_sync_log_entity_column_adapts_to_entity_uuid_on_postgres(tmp_path, pg_d
             try:
                 backend.get_pool().close_all()
             except Exception:
-                pass
+                _ = None

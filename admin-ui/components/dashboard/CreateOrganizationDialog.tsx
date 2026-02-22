@@ -91,8 +91,8 @@ export function CreateOrganizationDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={creating}>
-              {creating ? 'Creating…' : 'Create organization'}
+            <Button type="submit" loading={creating} loadingText="Creating…">
+              Create organization
             </Button>
           </DialogFooter>
         </form>

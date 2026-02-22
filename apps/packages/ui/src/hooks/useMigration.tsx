@@ -31,6 +31,13 @@ export const useMigration = () => {
   const migrationMutation = useMutation<MigrationResult, Error>({
     mutationFn: async () => {
       try {
+        // Skip migration entirely when chrome.storage is unavailable
+        // (i.e. running as a web app, not a Chrome extension).
+        // There is no legacy data to migrate in this context.
+        if (typeof chrome === "undefined" || !chrome?.storage?.local) {
+          return { success: true, needsReload: false }
+        }
+
         const isMigrated = await getIsMigrated()
         if (isMigrated) {
           return { success: false, needsReload: false }

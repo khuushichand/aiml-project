@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useToast } from '@/components/ui/toast';
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 import type { AuditLog } from '@/types';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -33,10 +33,45 @@ type MetricSample = {
   value: number;
 };
 
+type AdminByokUserKeyItem = {
+  provider: string;
+  key_hint?: string;
+  last_used_at?: string;
+  allowed?: boolean;
+};
+
+type LlmUsageLogItem = {
+  user_id?: number | null;
+  provider?: string | null;
+  total_tokens?: number | null;
+  total_cost_usd?: number | null;
+};
+
+type ByokUserUsageRow = {
+  user_id: number;
+  username: string;
+  provider: string;
+  key_hint?: string;
+  last_used_at?: string;
+  requests: number;
+  total_tokens: number;
+  total_cost_usd: number;
+};
+
 type ResolutionSummary = {
   source: string;
   count: number;
   share: string;
+};
+
+type OpenAIOAuthStatus = {
+  provider: 'openai';
+  connected: boolean;
+  auth_source: 'api_key' | 'oauth' | 'none';
+  updated_at?: string | null;
+  last_used_at?: string | null;
+  expires_at?: string | null;
+  scope?: string | null;
 };
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -110,6 +145,12 @@ const formatCount = (value: number | null) => {
   return `${(value / 1000000).toFixed(1)}m`;
 };
 
+const formatUsd = (value: number) => new Intl.NumberFormat(undefined, {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 2,
+}).format(value);
+
 const PROVIDER_OPTIONS = [
   'openai',
   'anthropic',
@@ -138,6 +179,13 @@ export default function ByokDashboardPage() {
   const [auditEntries, setAuditEntries] = useState<AuditLog[]>([]);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [byokUsageRows, setByokUsageRows] = useState<ByokUserUsageRow[]>([]);
+  const [byokUsageLoading, setByokUsageLoading] = useState(false);
+  const [byokUsageError, setByokUsageError] = useState<string | null>(null);
+  const [openAIOAuthStatus, setOpenAIOAuthStatus] = useState<OpenAIOAuthStatus | null>(null);
+  const [openAIOAuthLoading, setOpenAIOAuthLoading] = useState(false);
+  const [openAIOAuthError, setOpenAIOAuthError] = useState<string | null>(null);
+  const [openAIOAuthAction, setOpenAIOAuthAction] = useState<string | null>(null);
 
   // Shared Provider Keys
   const [sharedKeys, setSharedKeys] = useState<SharedProviderKey[]>([]);
@@ -228,6 +276,131 @@ export default function ByokDashboardPage() {
     }
   }, [selectedOrg?.id]);
 
+  const loadByokUsage = useCallback(async () => {
+    setByokUsageLoading(true);
+    setByokUsageError(null);
+    try {
+      const users: Array<{ id: number; username: string }> = [];
+      let page = 1;
+      let pages = 1;
+      do {
+        const usersPage = await api.getUsersPage({
+          page: String(page),
+          limit: '100',
+          ...(selectedOrg?.id ? { org_id: String(selectedOrg.id) } : {}),
+        });
+        users.push(...usersPage.items.map((user) => ({ id: user.id, username: user.username })));
+        pages = usersPage.pages > 0
+          ? usersPage.pages
+          : Math.max(1, Math.ceil(usersPage.total / Math.max(usersPage.limit, 1)));
+        if (usersPage.items.length === 0) {
+          break;
+        }
+        page += 1;
+      } while (page <= pages);
+
+      const byokKeyResults = await Promise.allSettled(
+        users.map(async (user) => ({
+          userId: user.id,
+          username: user.username,
+          response: await api.getAdminUserByokKeys(String(user.id)) as {
+            items?: AdminByokUserKeyItem[];
+          },
+        }))
+      );
+
+      const userProviderKeyMap = new Map<
+      string,
+      {
+        user_id: number;
+        username: string;
+        provider: string;
+        key_hint?: string;
+        last_used_at?: string;
+      }
+      >();
+
+      byokKeyResults.forEach((result) => {
+        if (result.status !== 'fulfilled') {
+          return;
+        }
+        const keyItems = Array.isArray(result.value.response.items)
+          ? result.value.response.items
+          : [];
+        keyItems.forEach((item) => {
+          const provider = (item.provider || '').trim().toLowerCase();
+          if (!provider) return;
+          const key = `${result.value.userId}:${provider}`;
+          userProviderKeyMap.set(key, {
+            user_id: result.value.userId,
+            username: result.value.username,
+            provider,
+            key_hint: item.key_hint,
+            last_used_at: item.last_used_at,
+          });
+        });
+      });
+
+      const usageItems: LlmUsageLogItem[] = [];
+      let usagePage = 1;
+      let usagePages = 1;
+      do {
+        const usageResponse = await api.getLlmUsage({
+          page: String(usagePage),
+          limit: '500',
+          ...(selectedOrg?.id ? { org_id: String(selectedOrg.id) } : {}),
+        }) as {
+          items?: LlmUsageLogItem[];
+          total?: number;
+          page?: number;
+          limit?: number;
+        };
+        const items = Array.isArray(usageResponse.items) ? usageResponse.items : [];
+        usageItems.push(...items);
+
+        const total = typeof usageResponse.total === 'number' ? usageResponse.total : items.length;
+        const limit = typeof usageResponse.limit === 'number' ? usageResponse.limit : 500;
+        usagePages = Math.min(10, Math.max(1, Math.ceil(total / Math.max(limit, 1))));
+        if (items.length === 0) {
+          break;
+        }
+        usagePage += 1;
+      } while (usagePage <= usagePages);
+
+      const usageByUserProvider = new Map<string, { requests: number; total_tokens: number; total_cost_usd: number }>();
+
+      usageItems.forEach((item) => {
+        if (!item.user_id || !item.provider) return;
+        const key = `${item.user_id}:${item.provider.toLowerCase()}`;
+        if (!userProviderKeyMap.has(key)) {
+          return;
+        }
+        const current = usageByUserProvider.get(key) || { requests: 0, total_tokens: 0, total_cost_usd: 0 };
+        current.requests += 1;
+        current.total_tokens += Number(item.total_tokens || 0);
+        current.total_cost_usd += Number(item.total_cost_usd || 0);
+        usageByUserProvider.set(key, current);
+      });
+
+      const rows = [...userProviderKeyMap.entries()].map(([key, metadata]) => {
+        const usage = usageByUserProvider.get(key) || { requests: 0, total_tokens: 0, total_cost_usd: 0 };
+        return {
+          ...metadata,
+          requests: usage.requests,
+          total_tokens: usage.total_tokens,
+          total_cost_usd: usage.total_cost_usd,
+        } satisfies ByokUserUsageRow;
+      }).sort((a, b) => b.total_cost_usd - a.total_cost_usd);
+
+      setByokUsageRows(rows);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load per-user BYOK usage.';
+      setByokUsageError(message);
+    } finally {
+      setByokUsageLoading(false);
+    }
+  }, [selectedOrg?.id]);
+
   const loadSharedKeys = useCallback(async () => {
     const requestId = sharedKeysRequestIdRef.current + 1;
     sharedKeysRequestIdRef.current = requestId;
@@ -258,6 +431,114 @@ export default function ByokDashboardPage() {
       }
     }
   }, [selectedOrg?.id]);
+
+  const loadOpenAIOAuthStatus = useCallback(async () => {
+    setOpenAIOAuthLoading(true);
+    setOpenAIOAuthError(null);
+    try {
+      const status = await api.getOpenAIOAuthStatus() as OpenAIOAuthStatus;
+      setOpenAIOAuthStatus(status);
+    } catch (err) {
+      if (err instanceof ApiError && [403, 501].includes(err.status)) {
+        setOpenAIOAuthStatus(null);
+        setOpenAIOAuthError('OpenAI OAuth is not enabled in this deployment.');
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Failed to load OpenAI OAuth status.';
+      setOpenAIOAuthError(message);
+    } finally {
+      setOpenAIOAuthLoading(false);
+    }
+  }, []);
+
+  const handleConnectOpenAIOAuth = async () => {
+    try {
+      setOpenAIOAuthAction('connect');
+      const returnPath = typeof window !== 'undefined' && window.location.pathname
+        ? window.location.pathname
+        : '/byok';
+      const response = await api.startOpenAIOAuth({ return_path: returnPath }) as {
+        auth_url?: string;
+      };
+      const authUrl = typeof response?.auth_url === 'string' ? response.auth_url.trim() : '';
+      if (!authUrl) {
+        throw new Error('OAuth authorize response is missing auth_url.');
+      }
+      if (typeof window !== 'undefined') {
+        const popup = window.open(authUrl, '_blank', 'noopener,noreferrer');
+        if (!popup) {
+          window.location.assign(authUrl);
+          return;
+        }
+      }
+      toastSuccess(
+        'OAuth started',
+        'Finish authorization in the opened tab, then refresh status.'
+      );
+      await loadOpenAIOAuthStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start OpenAI OAuth flow.';
+      showError('OAuth connect failed', message);
+    } finally {
+      setOpenAIOAuthAction(null);
+    }
+  };
+
+  const handleRefreshOpenAIOAuth = async () => {
+    try {
+      setOpenAIOAuthAction('refresh');
+      await api.refreshOpenAIOAuth();
+      toastSuccess('OAuth refreshed', 'OpenAI OAuth token was refreshed.');
+      await loadOpenAIOAuthStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to refresh OpenAI OAuth token.';
+      showError('OAuth refresh failed', message);
+    } finally {
+      setOpenAIOAuthAction(null);
+    }
+  };
+
+  const handleSwitchOpenAICredentialSource = async (authSource: 'api_key' | 'oauth') => {
+    try {
+      setOpenAIOAuthAction(`switch-${authSource}`);
+      await api.switchOpenAICredentialSource(authSource);
+      toastSuccess(
+        'Credential source updated',
+        authSource === 'oauth'
+          ? 'OpenAI now uses OAuth credentials.'
+          : 'OpenAI now uses your API key.'
+      );
+      await loadOpenAIOAuthStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to switch OpenAI credential source.';
+      showError('Switch failed', message);
+    } finally {
+      setOpenAIOAuthAction(null);
+    }
+  };
+
+  const handleDisconnectOpenAIOAuth = async () => {
+    const confirmed = await confirm({
+      title: 'Disconnect OpenAI OAuth',
+      message: 'Disconnect OAuth credentials for OpenAI?',
+      confirmText: 'Disconnect',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!confirmed) return;
+
+    try {
+      setOpenAIOAuthAction('disconnect');
+      await api.disconnectOpenAIOAuth();
+      toastSuccess('OAuth disconnected', 'OpenAI OAuth credentials were removed.');
+      await loadOpenAIOAuthStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to disconnect OpenAI OAuth.';
+      showError('Disconnect failed', message);
+    } finally {
+      setOpenAIOAuthAction(null);
+    }
+  };
 
   const handleAddSharedKey = async () => {
     if (!newKeyValue.trim()) {
@@ -337,7 +618,9 @@ export default function ByokDashboardPage() {
     loadMetrics();
     loadAudit();
     loadSharedKeys();
-  }, [loadMetrics, loadAudit, loadSharedKeys]);
+    loadByokUsage();
+    loadOpenAIOAuthStatus();
+  }, [loadMetrics, loadAudit, loadSharedKeys, loadByokUsage, loadOpenAIOAuthStatus]);
 
   const summaryCards = useMemo(() => {
     const byokTotal = sumValues(
@@ -385,6 +668,14 @@ export default function ByokDashboardPage() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
   }, [missingByOperation]);
+
+  const openAIOAuthStatusLabel = useMemo(() => {
+    if (!openAIOAuthStatus) return 'Not connected';
+    if (openAIOAuthStatus.auth_source === 'oauth') return 'Connected (OAuth)';
+    if (openAIOAuthStatus.auth_source === 'api_key') return 'API Key';
+    if (openAIOAuthStatus.connected) return 'Connected';
+    return 'Not connected';
+  }, [openAIOAuthStatus]);
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
@@ -435,6 +726,60 @@ export default function ByokDashboardPage() {
               </Card>
             ))}
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Per-User BYOK Usage</CardTitle>
+              <CardDescription>
+                Aggregated from recent LLM usage logs and cross-referenced with configured user BYOK providers.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {byokUsageError && (
+                <Alert variant="destructive" className="mb-3">
+                  <AlertDescription>{byokUsageError}</AlertDescription>
+                </Alert>
+              )}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>User</TableHead>
+                    <TableHead>Provider</TableHead>
+                    <TableHead>Key Hint</TableHead>
+                    <TableHead>Requests</TableHead>
+                    <TableHead>Tokens</TableHead>
+                    <TableHead>Cost (USD)</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {byokUsageLoading && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-muted-foreground">
+                        Loading per-user BYOK usage...
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!byokUsageLoading && byokUsageRows.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-muted-foreground">
+                        No user BYOK usage data found.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {byokUsageRows.map((row) => (
+                    <TableRow key={`${row.user_id}:${row.provider}`}>
+                      <TableCell>{row.username}</TableCell>
+                      <TableCell className="capitalize">{row.provider}</TableCell>
+                      <TableCell className="text-muted-foreground">{row.key_hint || '—'}</TableCell>
+                      <TableCell>{formatCount(row.requests)}</TableCell>
+                      <TableCell>{formatCount(row.total_tokens)}</TableCell>
+                      <TableCell>{formatUsd(row.total_cost_usd)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
 
           <div className="grid gap-4 lg:grid-cols-3">
             <Card>
@@ -491,12 +836,114 @@ export default function ByokDashboardPage() {
                     </div>
                   ))
                 )}
-                <Button variant="secondary" size="sm" disabled>
-                  Validation sweep coming soon
-                </Button>
+                <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
+                  Validation sweep control is hidden until backend batch validation support is available.
+                </div>
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base">OpenAI OAuth (Personal)</CardTitle>
+                  <CardDescription>
+                    Connect your own OpenAI subscription for BYOK usage and switch between OAuth/API key sources.
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={openAIOAuthStatus?.auth_source === 'oauth' ? 'default' : 'outline'}>
+                    {openAIOAuthStatusLabel}
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={loadOpenAIOAuthStatus}
+                    disabled={openAIOAuthLoading || openAIOAuthAction !== null}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    {openAIOAuthLoading ? 'Refreshing…' : 'Refresh status'}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {openAIOAuthError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{openAIOAuthError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground sm:grid-cols-2">
+                <div>
+                  <div className="font-medium text-foreground">Source</div>
+                  <div>{openAIOAuthStatus?.auth_source || 'none'}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground">Expires</div>
+                  <div>{openAIOAuthStatus?.expires_at ? new Date(openAIOAuthStatus.expires_at).toLocaleString() : '—'}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground">Scope</div>
+                  <div>{openAIOAuthStatus?.scope || '—'}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground">Last used</div>
+                  <div>{openAIOAuthStatus?.last_used_at ? new Date(openAIOAuthStatus.last_used_at).toLocaleString() : '—'}</div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={handleConnectOpenAIOAuth}
+                  disabled={openAIOAuthAction !== null || !!openAIOAuthError}
+                  loading={openAIOAuthAction === 'connect'}
+                  loadingText="Starting..."
+                >
+                  Connect OpenAI
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleRefreshOpenAIOAuth}
+                  disabled={openAIOAuthAction !== null || !openAIOAuthStatus?.connected}
+                >
+                  Refresh OAuth
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleSwitchOpenAICredentialSource('oauth')}
+                  disabled={
+                    openAIOAuthAction !== null
+                    || openAIOAuthStatus?.auth_source === 'oauth'
+                    || !openAIOAuthStatus?.connected
+                  }
+                >
+                  Use OAuth
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleSwitchOpenAICredentialSource('api_key')}
+                  disabled={
+                    openAIOAuthAction !== null
+                    || openAIOAuthStatus?.auth_source !== 'oauth'
+                  }
+                >
+                  Use API Key Instead
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={handleDisconnectOpenAIOAuth}
+                  disabled={openAIOAuthAction !== null || !openAIOAuthStatus?.connected}
+                >
+                  Disconnect
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                OAuth opens in a new tab. After completing the provider flow, refresh status here.
+              </p>
+            </CardContent>
+          </Card>
 
           {/* Shared Provider Keys (Organization-Level) */}
           <Card>
@@ -571,8 +1018,13 @@ export default function ByokDashboardPage() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <Button onClick={handleAddSharedKey} disabled={addingKey || !newKeyValue.trim()}>
-                      {addingKey ? 'Adding...' : 'Add Key'}
+                    <Button
+                      onClick={handleAddSharedKey}
+                      disabled={addingKey || !newKeyValue.trim()}
+                      loading={addingKey}
+                      loadingText="Adding..."
+                    >
+                      Add Key
                     </Button>
                     <Button variant="outline" onClick={resetAddKeyForm}>
                       Cancel

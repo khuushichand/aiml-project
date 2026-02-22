@@ -12,7 +12,7 @@ import type { TutorialDefinition } from "../registry"
  */
 const playgroundBasics: TutorialDefinition = {
   id: "playground-basics",
-  routePattern: "/options/playground",
+  routePattern: "/chat",
   labelKey: "tutorials:playground.basics.label",
   labelFallback: "Chat Basics",
   descriptionKey: "tutorials:playground.basics.description",
@@ -49,7 +49,7 @@ const playgroundBasics: TutorialDefinition = {
       placement: "top"
     },
     {
-      target: '[data-testid="prompt-selector"]',
+      target: '[data-testid="chat-prompt-select"]',
       titleKey: "tutorials:playground.basics.promptTitle",
       titleFallback: "System Prompts",
       contentKey: "tutorials:playground.basics.promptContent",
@@ -58,7 +58,7 @@ const playgroundBasics: TutorialDefinition = {
       placement: "bottom"
     },
     {
-      target: '[data-testid="new-chat-button"], [data-testid="chat-sidebar-new"]',
+      target: '[data-testid="new-chat-button"], [data-testid="chat-sidebar-new-chat"]',
       titleKey: "tutorials:playground.basics.newChatTitle",
       titleFallback: "Start Fresh",
       contentKey: "tutorials:playground.basics.newChatContent",
@@ -75,7 +75,7 @@ const playgroundBasics: TutorialDefinition = {
  */
 const playgroundTools: TutorialDefinition = {
   id: "playground-tools",
-  routePattern: "/options/playground",
+  routePattern: "/chat",
   labelKey: "tutorials:playground.tools.label",
   labelFallback: "Tools & Attachments",
   descriptionKey: "tutorials:playground.tools.description",
@@ -96,7 +96,7 @@ const playgroundTools: TutorialDefinition = {
       disableBeacon: true
     },
     {
-      target: '[data-testid="knowledge-search-toggle"], [data-testid="rag-toggle"]',
+      target: '[data-testid="knowledge-search-toggle"]',
       titleKey: "tutorials:playground.tools.knowledgeTitle",
       titleFallback: "Knowledge Search",
       contentKey: "tutorials:playground.tools.knowledgeContent",
@@ -114,7 +114,7 @@ const playgroundTools: TutorialDefinition = {
       placement: "top"
     },
     {
-      target: '[data-testid="file-upload-button"], [data-testid="attach-file"]',
+      target: '[data-testid="attachment-button"]',
       titleKey: "tutorials:playground.tools.uploadTitle",
       titleFallback: "Attach Files",
       contentKey: "tutorials:playground.tools.uploadContent",
@@ -123,16 +123,7 @@ const playgroundTools: TutorialDefinition = {
       placement: "top"
     },
     {
-      target: '[data-testid="quick-ingest-button"], [data-testid="ingest-button"]',
-      titleKey: "tutorials:playground.tools.ingestTitle",
-      titleFallback: "Quick Ingest",
-      contentKey: "tutorials:playground.tools.ingestContent",
-      contentFallback:
-        "Use Quick Ingest to add web pages, PDFs, or other content to your knowledge base for later reference.",
-      placement: "top"
-    },
-    {
-      target: '[data-testid="mcp-tools-toggle"], [data-testid="tools-menu"]',
+      target: '[data-testid="mcp-tools-toggle"]',
       titleKey: "tutorials:playground.tools.mcpTitle",
       titleFallback: "MCP Tools",
       contentKey: "tutorials:playground.tools.mcpContent",
@@ -145,11 +136,11 @@ const playgroundTools: TutorialDefinition = {
 
 /**
  * Playground Voice Tutorial
- * Covers: Voice chat, dictation, text-to-speech
+ * Covers: Voice chat, dictation
  */
 const playgroundVoice: TutorialDefinition = {
   id: "playground-voice",
-  routePattern: "/options/playground",
+  routePattern: "/chat",
   labelKey: "tutorials:playground.voice.label",
   labelFallback: "Voice Chat",
   descriptionKey: "tutorials:playground.voice.description",
@@ -171,31 +162,13 @@ const playgroundVoice: TutorialDefinition = {
       disableBeacon: true
     },
     {
-      target: '[data-testid="dictation-button"], [data-testid="speech-to-text"]',
+      target: '[data-testid="dictation-button"]',
       titleKey: "tutorials:playground.voice.dictationTitle",
       titleFallback: "Dictation",
       contentKey: "tutorials:playground.voice.dictationContent",
       contentFallback:
         "Use dictation to speak your messages instead of typing. Great for longer inputs or when your hands are busy.",
       placement: "top"
-    },
-    {
-      target: '[data-testid="tts-button"], [data-testid="read-aloud"]',
-      titleKey: "tutorials:playground.voice.ttsTitle",
-      titleFallback: "Text-to-Speech",
-      contentKey: "tutorials:playground.voice.ttsContent",
-      contentFallback:
-        "Click on any AI response to have it read aloud. Customize the voice and speed in Settings.",
-      placement: "top"
-    },
-    {
-      target: '[data-testid="voice-settings"], [data-testid="voice-chat-settings"]',
-      titleKey: "tutorials:playground.voice.settingsTitle",
-      titleFallback: "Voice Settings",
-      contentKey: "tutorials:playground.voice.settingsContent",
-      contentFallback:
-        "Configure voice chat settings including the voice model, auto-send timing, and trigger phrases.",
-      placement: "left"
     }
   ]
 }

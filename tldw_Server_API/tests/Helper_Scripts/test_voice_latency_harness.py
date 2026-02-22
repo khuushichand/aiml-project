@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 import numpy as np
 
 from Helper_Scripts.voice_latency_harness.run import (
+    HarnessResult,
     _extract_histogram_percentiles,
     _parse_prometheus_histograms,
     _percentiles,
@@ -58,3 +60,28 @@ def test_parse_prometheus_histograms_and_extract() -> None:
     p = _extract_histogram_percentiles(metrics, "stt_final_latency_seconds")
     assert "p50" in p and "p90" in p
     assert p["p50"] > 0
+
+
+def test_harness_result_json_schema_shape() -> None:
+    """HarnessResult JSON should include Stage 4 schema keys and required metric maps."""
+    result = HarnessResult(
+        run_id="voice-latency-test",
+        fixture={"mode": "short", "base_url": "http://127.0.0.1:8000"},
+        runs={"requested": 1, "completed": 1, "mode": "short"},
+        metrics={
+            "stt_final_latency_seconds": {"p50": 0.1, "p90": 0.2},
+            "tts_ttfb_seconds": {"p50": 0.05, "p90": 0.1},
+            "voice_to_voice_seconds": {"p50": 0.2, "p90": 0.3},
+        },
+        raw_metrics={},
+    )
+    payload = result.to_json()
+    data = json.loads(payload)
+
+    assert data["run_id"] == "voice-latency-test"
+    assert "fixture" in data and isinstance(data["fixture"], dict)
+    assert "runs" in data and isinstance(data["runs"], dict)
+    assert "metrics" in data and isinstance(data["metrics"], dict)
+    assert "stt_final_latency_seconds" in data["metrics"]
+    assert "tts_ttfb_seconds" in data["metrics"]
+    assert "voice_to_voice_seconds" in data["metrics"]

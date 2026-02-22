@@ -32,7 +32,10 @@
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
 - [Quickstart](#quickstart)
-  - [Run the API](#run-the-api)
+  - [At-a-Glance Commands](#at-a-glance-commands)
+  - [No-Docker Path (Makefile)](#no-docker-path-makefile)
+  - [Manual Setup](#manual-setup)
+  - [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui)
   - [Run the Web UI (WIP)](#run-the-web-ui-wip)
   - [Docker Compose](#docker-compose)
   - [Supporting Services via Docker](#supporting-services-via-docker)
@@ -74,7 +77,7 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-**New here?** Jump to [Quickstart](#quickstart) or try `make quickstart` after cloning.
+**New here?** Jump to [Quickstart](#quickstart) or try `make quickstart-install` after cloning.
 
 
 ## Current Status
@@ -168,31 +171,93 @@ See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.m
 
 ## Quickstart
 
-### Fastest Path (One Command)
+`pip install tldw_server` is not generally available yet (PyPI publishing is in progress).
+For now, use this repository checkout with the Makefile targets below.
+
+### At-a-Glance Commands
+
+```bash
+# No Docker: installs deps, initializes auth, starts API
+git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
+make quickstart-install
+# If `python3` is older than 3.10 on your machine:
+# make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
+
+# Docker: API only
+make quickstart-docker
+
+# Docker: API + WebUI
+make quickstart-docker-webui
+# Optional (non-localhost deployments):
+# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
+```
+
+### No-Docker Path (Makefile)
 
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
-make quickstart
+make quickstart-install
+# If `python3` is older than 3.10 on your machine:
+# make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 ```
 
-This creates a minimal `.env`, initializes auth, and starts the server. Verify with:
+This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
 ```bash
 curl http://localhost:8000/health  # No auth needed!
 ```
 
+Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
+
 ### Manual Setup
 
-Prerequisites: Python 3.11+ and ffmpeg (`brew install ffmpeg` or `apt install ffmpeg`)
+Supported Python versions for quickstart/manual setup:
+- Minimum: Python 3.10+
+- CI-tested: Python 3.11, 3.12, and 3.13
+- Recommended for local development: Python 3.12
+
+Prerequisites: Python, ffmpeg, and (for audio capture paths) PyAudio/PortAudio.
+
+Platform setup examples:
+```bash
+# macOS (Homebrew)
+brew install ffmpeg portaudio
+
+# Ubuntu/Debian
+sudo apt update
+sudo apt install -y ffmpeg portaudio19-dev python3-pyaudio
+
+# Fedora/RHEL (RPM Fusion may be needed for ffmpeg)
+sudo dnf install -y ffmpeg portaudio-devel python3-pyaudio
+```
+
+Windows prerequisites:
+- Install ffmpeg (for example with `winget` or Chocolatey).
+- Install PyAudio inside the activated venv with `pip install pyaudio`; if wheel/build fails, install Microsoft C++ Build Tools and retry.
 
 1) **Install**
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+# macOS/Linux: choose a supported interpreter explicitly (3.12 recommended)
+python3.12 -m venv .venv  # or python3.13 / python3.11 / python3.10
+source .venv/bin/activate
+
+# Windows (PowerShell)
+py -3.12 -m venv .venv  # or -3.13 / -3.11 / -3.10
+.venv\Scripts\Activate.ps1
+
+# Confirm venv interpreter version
+python --version
+
 pip install -e .
 ```
 
-2) **Configure** (minimal .env)
+PyAudio/PortAudio install notes by platform:
+- Linux: install distro packages (`portaudio19-dev` + `python3-pyaudio` on Debian/Ubuntu, `portaudio-devel` + `python3-pyaudio` on Fedora/RHEL).
+- macOS: `brew install portaudio` then `pip install pyaudio`.
+- Windows: `pip install pyaudio` inside the venv; if wheel build fails, install Microsoft C++ Build Tools and retry.
+
+2) **Configure** (minimal `tldw_Server_API/Config_Files/.env`)
 ```bash
-cat > .env << 'EOF'
+cat > tldw_Server_API/Config_Files/.env << 'EOF'
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=my-secure-key-at-least-16-chars
 DATABASE_URL=sqlite:///./Databases/users.db
@@ -227,9 +292,11 @@ pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
 pip install -e ".[dev]"           # tests, linters, tooling
 pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
 
-# pyaudio (needed for audio processing)
-# Linux: sudo apt install python3-pyaudio
+# pyaudio (needed for audio capture and some processing paths)
+# Linux (Ubuntu/Debian): sudo apt install -y portaudio19-dev python3-pyaudio
+# Linux (Fedora/RHEL):   sudo dnf install -y portaudio-devel python3-pyaudio
 # macOS: brew install portaudio && pip install pyaudio
+# Windows (PowerShell):   pip install pyaudio  # if build fails, install Microsoft C++ Build Tools
 ```
 
 MCP secrets (`MCP_JWT_SECRET`, `MCP_API_KEY_SALT`) are auto-generated per-process
@@ -237,11 +304,11 @@ when MCP runs with local-only defaults (loopback IP/origin restrictions).
 These ephemeral secrets do not persist across restarts.
 
 For shared or production deployments (when MCP is accessible beyond localhost),
-set these explicitly in `.env` and rotate regularly.
-Run these commands in your shell and paste the resulting values into your `.env`
+set these explicitly in `tldw_Server_API/Config_Files/.env` and rotate regularly.
+Run these commands in your shell and paste the resulting values into `tldw_Server_API/Config_Files/.env`
 (do not paste the command templates themselves):
 ```bash
-# Generate secure secrets — run each command, then copy the output into .env
+# Generate secure secrets — run each command, then copy the output into tldw_Server_API/Config_Files/.env
 openssl rand -base64 32   # paste the output as the value for MCP_JWT_SECRET
 openssl rand -base64 32   # paste the output as the value for MCP_API_KEY_SALT
 ```
@@ -253,9 +320,72 @@ See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details
 | I want to... | Guide |
 |--------------|-------|
 | Try it in 5 minutes with hand-holding | [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) |
+| Start from Tire Kicker, then launch the WebUI | [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui) |
 | Build apps against the API locally | [Local Development Guide](Docs/Getting_Started/Local_Development.md) |
 | Run on my home server with Docker | [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) |
 | Deploy for a team with proper security | [Production Guide](Docs/Getting_Started/Production.md) |
+
+### Tire Kicker: Add the WebUI
+
+If you already completed the [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) and your API is running at `http://127.0.0.1:8000`, use this add-on path.
+
+Install Bun (if needed):
+
+```bash
+# macOS/Linux
+curl -fsSL https://bun.sh/install | bash
+
+# Windows (PowerShell)
+powershell -c "irm bun.sh/install.ps1 | iex"
+
+# Open a new terminal, then verify:
+bun --version
+```
+
+Set up the WebUI project and install dependencies:
+
+```bash
+# from the repo root
+cd apps/tldw-frontend
+cp .env.local.example .env.local
+bun install
+```
+
+Run the WebUI:
+
+```bash
+bun run dev -- -p 8080
+```
+
+Confirm `.env.local` contains:
+```bash
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_API_VERSION=v1
+# Optional in single-user mode:
+# NEXT_PUBLIC_X_API_KEY=your_single_user_api_key
+```
+
+Open `http://localhost:8080`.
+
+Access from another device on your network (for example, phone/tablet):
+
+```bash
+# 1) Run API on all interfaces
+python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
+
+# 2) In tldw_Server_API/Config_Files/.env, allow the WebUI origin:
+# ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
+
+# 3) In apps/tldw-frontend/.env.local, point WebUI to the server IP:
+# NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:8000
+
+# 4) Run WebUI on all interfaces
+bun run dev -- -H 0.0.0.0 -p 8080
+```
+
+Then open `http://YOUR_SERVER_IP:8080` from your mobile device (same LAN), and ensure ports `8000` and `8080` are reachable on your server/firewall.
+
+Security note: avoid exposing this quickstart setup directly to the public internet. For internet-facing access, use HTTPS with a reverse proxy and follow `Docs/Getting_Started/Production.md`.
 
 ### Sidecar workers (optional)
 
@@ -275,8 +405,30 @@ In-process workers are fine for light dev use, but SQLite + multiple Uvicorn wor
 ### Run the Web UI (WIP)
 
 The current Next.js UI is a work in progress and may be unstable, buggy, or rough around the edges.
-Make sure the API from the section above is running.
-Requires Node.js and npm (or yarn/pnpm).
+Use Bun (recommended) or Node.js with npm/yarn/pnpm.
+
+Quickest full-stack path (containerized API + WebUI):
+```bash
+make quickstart-docker-webui
+# API:   http://localhost:8000
+# WebUI: http://localhost:8080
+# Optional (non-localhost deployments):
+# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
+```
+
+Local WebUI development (API should already be running, for example via `make quickstart`):
+
+If Bun is not installed yet, install it first:
+```bash
+# macOS/Linux
+curl -fsSL https://bun.sh/install | bash
+
+# Windows (PowerShell)
+powershell -c "irm bun.sh/install.ps1 | iex"
+
+# Open a new terminal and verify:
+bun --version
+```
 
 1) From the repo root:
 ```bash
@@ -293,10 +445,30 @@ NEXT_PUBLIC_API_VERSION=v1
 ```
 3) Install and run the dev server (use port 8080 to match default CORS):
 ```bash
-npm install
-npm run dev -- -p 8080
+bun install
+bun run dev -- -p 8080
+
+# npm fallback:
+# npm install
+# npm run dev -- -p 8080
 ```
 Open http://localhost:8080
+
+Access from another device on your network (for example, phone/tablet):
+```bash
+# API (from repo root)
+python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
+
+# tldw_Server_API/Config_Files/.env
+# ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
+
+# apps/tldw-frontend/.env.local
+# NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:8000
+
+# WebUI
+bun run dev -- -H 0.0.0.0 -p 8080
+```
+Then open `http://YOUR_SERVER_IP:8080` from your mobile device on the same network.
 
 Tip: http://127.0.0.1:8000/api/v1/config/quickstart redirects to your configured quickstart target.
 
@@ -308,13 +480,28 @@ make quickstart-docker
 curl http://localhost:8000/health  # Verify
 ```
 
+Quick start with Docker + containerized WebUI:
+```bash
+make quickstart-docker-webui
+# API:   http://localhost:8000
+# WebUI: http://localhost:8080
+# Optional (non-localhost deployments):
+# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
+```
+
 Or manually:
 ```bash
 # Single-user mode (simplest)
-docker compose -f Dockerfiles/docker-compose.yml up -d --build
-docker compose -f Dockerfiles/docker-compose.yml exec app \
-  python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
 curl http://localhost:8000/health  # Verify
+```
+
+On first start in `single_user` mode, the app container now:
+- Ensures `SINGLE_USER_API_KEY` is secure (generates one if missing/placeholder).
+- Runs `AuthNZ.initialize --non-interactive` once per persisted Docker data volume.
+- View the configured key with:
+```bash
+grep '^SINGLE_USER_API_KEY=' tldw_Server_API/Config_Files/.env
 ```
 
 <details>
@@ -328,6 +515,9 @@ docker compose -f Dockerfiles/docker-compose.postgres.yml up -d
 
 # Dev overlay — unified streaming (non-prod)
 docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build
+
+# WebUI overlay (Next.js container on :8080)
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d --build
 
 # Check status
 docker compose -f Dockerfiles/docker-compose.yml ps
@@ -344,7 +534,11 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.p
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
-- The primary UI is the Next.js WebUI in `apps/tldw-frontend/` (run separately).
+- For `Dockerfiles/docker-compose.webui.yml`, `NEXT_PUBLIC_API_URL` is injected at WebUI build time and must be externally reachable by browsers (Docker host IP/name, reverse-proxy URL, or public domain), not an internal `localhost` default.
+- `NEXT_PUBLIC_API_VERSION` and `NEXT_PUBLIC_X_API_KEY` are also build-time public values in the client bundle; set them explicitly for your target deployment/auth mode.
+- If you need per-environment API URLs without rebuilding the WebUI image, switch to a runtime env-substitution strategy instead of compile-time `NEXT_PUBLIC_*` build args.
+- The primary UI is the Next.js WebUI in `apps/tldw-frontend/`.
+  - Run it separately for development, or use `Dockerfiles/docker-compose.webui.yml` for a containerized WebUI.
   - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
 
 ### Supporting Services via Docker
@@ -787,6 +981,8 @@ Run locally
 - `Docs/Documentation.md` - documentation index and developer guide links
 - `Docs/About.md` - project background and philosophy
 - Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
+- Packaging and releases: `Docs/Development/PyPI_Publishing.md`
+- Distribution strategy (API + WebUI): `Docs/Development/Packaging_and_Distribution_Strategy.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
 - TTS onboarding: `Docs/User_Guides/TTS_Getting_Started.md` – hosted/local provider setup, verification, and troubleshooting

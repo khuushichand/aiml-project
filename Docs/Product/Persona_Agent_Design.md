@@ -13,27 +13,45 @@ https://github.com/VectorSpaceLab/general-agentic-memory
 
 Introduce a first-class Persona agent (text + optional voice + avatar) that chats naturally, remembers context, and uses server tools (via MCP Unified) to help with ingestion, search, analysis, and exports. Actions are transparent, previewed, and require confirmation for impactful operations.
 
-## Current Status (v0.2.x dev)
+## Current Status (v0.2.x dev, verified 2026-02-09)
 
-- Feature flag: endpoints/WS are gated; disabled state returns empty catalog/404 and WS notice.
-  - Config: `[persona] enabled=true` in `tldw_Server_API/Config_Files/config.txt`.
-  - Exposed at runtime via `GET /api/v1/config/docs-info` under `capabilities.persona`.
-- Endpoints: `GET /catalog`, `POST /session`, `WS /stream` implemented (scaffold).
-  - WS loop: plan → confirm → act using MCP tools; naive plan heuristics; per-step confirmations expected from client.
-  - RBAC: allow_export/allow_delete gates enforced server-side per step.
-- MCP Unified: tool calls use existing unified server with user-scoped execution.
-- WebUI: Persona tab (preview) and basic dock wiring; visibility follows capabilities.
-- Tests: basic WS plan/confirm smoke test.
+- Implemented (backend scaffold):
+  - Feature-flag plumbing (`PERSONA_ENABLED`, persona RBAC config) and docs-info capability exposure.
+  - Persona endpoints scaffolded: `GET /api/v1/persona/catalog`, `POST /api/v1/persona/session`, `WS /api/v1/persona/stream`.
+  - Basic WS flow: `user_message -> tool_plan`, `confirm_plan -> tool_call/tool_result`.
+  - Basic tests exist for catalog, WS smoke flow, and WS metrics.
+- Partially implemented:
+  - MCP tool execution integration exists with server-stored plan validation keyed by `plan_id`.
+  - RBAC-style export/delete string checks exist in persona WS, but full policy/scoping behavior depends on MCP user identity.
+  - WebUI/extension persona surface is wired (`/persona`), capability-gated, and supports basic stream flow (connect/session/message/plan confirm-cancel) with route parity checks, component stream-flow tests, and Playwright route/workflow checks (including a live backend WS workflow test that runs when persona capability is enabled); deep backend tool-execution scenarios remain limited.
+- Not yet implemented:
+  - Full voice protocol (`audio_chunk`, `partial_transcript`, `tts_audio` binary stream).
+  - Persistent session/persona memory integration with personalization store.
+  - Per-tool policy scopes and explicit policy objects beyond string-based export/delete checks.
+- Important caveat:
+  - Persona endpoints now require authentication; anonymous interaction is not allowed.
 
 ## Changelog
 
 - v0.2.x dev
-  - Feature flag gating and capability exposure via `/api/v1/config/docs-info`.
-  - Implemented persona endpoints (catalog, session) and WS stream with plan → confirm → act loop and RBAC guards.
-  - Integrated MCP Unified tool calls; added WebUI tab visibility based on capabilities.
-  - Added minimal WS smoke test for plan/confirm flow.
+  - Added feature flag and capability exposure via `/api/v1/config/docs-info`.
+  - Added scaffold persona endpoints (catalog, session) and WS stream with a naive plan → confirm → act loop.
+  - Integrated scaffold MCP Unified tool execution path and basic RBAC-style export/delete checks.
+  - Added minimal WS smoke and metrics tests for the scaffold flow.
+  - Hardened auth contract: persona HTTP endpoints require auth; WS stream rejects unauthenticated clients.
+  - Normalized disabled behavior: persona catalog/session return `404` when persona is disabled.
+  - Standardized WS tool result payload on `output` (with temporary `result` compatibility alias).
 - v0.1.0
   - Initial draft design with goals, architecture, and API outline.
+
+## `tool_result.result` Deprecation Plan (set 2026-02-09)
+
+- Canonical contract now: `tool_result.output`.
+- Compatibility window: through `2026-06-30`, server continues emitting both `output` and legacy `result`.
+- Client behavior during window:
+  - Read `output` first.
+  - Fall back to `result` only for older server compatibility.
+- Planned removal window: starting `2026-07-01` (or next compatible minor/major release after that date), stop emitting `result` once WebUI/extension compatibility checks are green in CI for output-only payloads.
 
 ## Goals
 
@@ -85,24 +103,43 @@ Introduce a first-class Persona agent (text + optional voice + avatar) that chat
 Base path: `/api/v1/persona`
 
 - `GET /catalog`
+  - Auth: required (Bearer token or `X-API-KEY`)
+  - Disabled behavior: `404 { "detail": "Persona disabled" }`
   - Res: `[ { id, name, description, voice, avatar_url, capabilities, default_tools } ]`
 
 - `POST /session`
+  - Auth: required (Bearer token or `X-API-KEY`)
+  - Disabled behavior: `404 { "detail": "Persona disabled" }`
   - Req: `{ persona_id, project_id?, resume_session_id? }`
   - Res: `{ session_id, persona: {...}, scopes: [...] }`
 
+- `GET /sessions`
+  - Auth: required
+  - Disabled behavior: `404 { "detail": "Persona disabled" }`
+  - Query: `persona_id?`, `limit?`
+  - Res: `[ { session_id, persona_id, created_at, updated_at, turn_count, pending_plan_count, preferences } ]`
+
+- `GET /sessions/{session_id}`
+  - Auth: required
+  - Disabled behavior: `404 { "detail": "Persona disabled" }`
+  - Query: `limit_turns?`
+  - Res: `{ session_id, persona_id, created_at, updated_at, turn_count, pending_plan_count, preferences, turns: [...] }`
+
 - `WS /stream` (bi-directional)
+  - Auth: required before interaction (`Authorization: Bearer ...`, `X-API-KEY`, or `token`/`api_key` query params)
+  - Missing/invalid auth: connection is closed (`1008` policy violation)
   - Client → Server messages (JSON):
-    - `user_message`: `{ session_id, text }`
+    - `user_message`: `{ session_id, text, use_memory_context?, memory_top_k? }`
     - `audio_chunk`: `{ session_id, audio_format, bytes_base64 }`
     - `confirm_plan`: `{ session_id, plan_id, approved_steps: [idx...] }`
     - `cancel`: `{ session_id, reason? }`
   - Server → Client events (JSON frames; audio in separate binary frames if supported):
     - `assistant_delta`: `{ session_id, text_delta }`
     - `partial_transcript`: `{ session_id, text_delta }`
-    - `tool_plan`: `{ session_id, plan_id, steps: [ { idx, tool, args, description } ] }`
+    - `tool_plan`: `{ session_id, plan_id, steps: [ { idx, tool, args, description, policy } ], memory?: { enabled, requested_top_k, applied_count } }`
     - `tool_call`: `{ session_id, step_idx, tool, args }`
     - `tool_result`: `{ session_id, step_idx, ok, output, error? }`
+      - Compatibility: `result` may also be present temporarily as an alias for `output`.
     - `tts_audio`: `{ session_id, audio_format, chunk_id }` (binary follows)
     - `notice`: `{ session_id, level, message }`
 
@@ -111,7 +148,8 @@ Base path: `/api/v1/persona`
 Schemas live under: `tldw_Server_API/app/api/v1/schemas/persona.py`
 
 Implementation notes:
-- WS accepts `token`/`api_key` similar to MCP; resolves single-user id when applicable.
+- WS accepts auth via headers and query params, and requires successful auth before stream interaction.
+- For compatibility with HTTP auth behavior, single-user/non-JWT bearer values are treated as API keys.
 - Tool name → module mapping is minimal; error messages returned for unknown/forbidden tools.
 - Client is responsible for rendering plan steps and sending back approvals.
 
@@ -165,6 +203,7 @@ Runtime capability surface:
 ## Security & Permissions
 
 - AuthNZ: Sessions tied to `user_id`; RBAC governs tool access and scope.
+- WS persona interactions require authentication; anonymous sessions are not permitted.
 - Confirmations required for destructive actions; audit log entries for all tool calls.
 - Rate limiting on WS messages and tool executions; backpressure handling on TTS.
 

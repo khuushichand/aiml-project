@@ -115,13 +115,36 @@ def parse_override_entries(raw: Any, provider_hint: str | None = None) -> list[P
     if raw is None:
         return entries
 
+    # Structured config shape:
+    # {
+    #   "global": [...],
+    #   "providers": {"kokoro": [...], "other": [...]}
+    # }
+    if isinstance(raw, dict) and ("global" in raw or "providers" in raw):
+        global_entries = parse_override_entries(raw.get("global"), provider_hint=None)
+        entries.extend(global_entries)
+
+        providers_raw = raw.get("providers")
+        if isinstance(providers_raw, dict):
+            for provider_name, provider_entries_raw in providers_raw.items():
+                provider_key = str(provider_name).strip().lower()
+                if not provider_key:
+                    continue
+                provider_entries = parse_override_entries(provider_entries_raw, provider_hint=provider_key)
+                entries.extend(provider_entries)
+        return _normalize_entries(entries)
+
     # Dict mapping term -> phoneme
     if isinstance(raw, dict) and not {"term", "phonemes"} <= set(raw.keys()):
         for term, phonemes in raw.items():
+            # Keep mapping mode strict: values should be scalars.
+            if isinstance(phonemes, (dict, list, tuple)):
+                logger.debug(f"Skipping invalid phoneme mapping for '{term}': expected scalar value")
+                continue
             ent = _coerce_entry({"term": term, "phonemes": phonemes}, provider_hint)
             if ent:
                 entries.append(ent)
-        return entries[:_MAX_OVERRIDE_ENTRIES]
+        return _normalize_entries(entries)
 
     # List/tuple payloads or single dict
     if isinstance(raw, (list, tuple)):
@@ -134,7 +157,29 @@ def parse_override_entries(raw: Any, provider_hint: str | None = None) -> list[P
         if ent:
             entries.append(ent)
 
-    return entries[:_MAX_OVERRIDE_ENTRIES]
+    return _normalize_entries(entries)
+
+
+def _normalize_entries(entries: Sequence[PhonemeOverrideEntry]) -> list[PhonemeOverrideEntry]:
+    """Normalize terms/providers and clamp list size."""
+    cleaned: list[PhonemeOverrideEntry] = []
+    for ent in entries:
+        term = str(ent.term or "").strip()
+        phonemes = str(ent.phonemes or "").strip()
+        if not term or not phonemes:
+            continue
+        lang = str(ent.lang).strip() if ent.lang is not None else None
+        provider = str(ent.provider).strip().lower() if ent.provider is not None else None
+        cleaned.append(
+            PhonemeOverrideEntry(
+                term=term,
+                phonemes=phonemes,
+                lang=(lang or None),
+                boundary=bool(ent.boundary),
+                provider=(provider or None),
+            )
+        )
+    return cleaned[:_MAX_OVERRIDE_ENTRIES]
 
 
 def load_override_entries(path_hint: str | None = None) -> list[PhonemeOverrideEntry]:
@@ -204,7 +249,7 @@ def merge_override_entries(*entry_sets: Iterable[PhonemeOverrideEntry]) -> list[
                 continue
             key = (ent.term.lower(), (ent.lang or "").lower())
             merged[key] = ent
-    return list(merged.values())[:_MAX_OVERRIDE_ENTRIES]
+    return _normalize_entries(list(merged.values()))
 
 
 def apply_overrides_to_text(
@@ -224,7 +269,10 @@ def apply_overrides_to_text(
 
     lang_prefix = (lang_hint or "").split("-")[0].lower() if lang_hint else None
     updated = text
-    for ent in entries:
+
+    # Resolve overlap deterministically: apply longer terms first.
+    sorted_entries = sorted(entries, key=lambda e: len(e.term), reverse=True)
+    for ent in sorted_entries:
         if ent.lang and lang_prefix and not ent.lang.lower().startswith(lang_prefix):
             continue
         pattern = re.compile(

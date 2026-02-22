@@ -646,17 +646,35 @@ class OptimizationEngine:
             optimization.get("optimization_config") or optimization.get("optimizer_config"),
             {},
         )
+        if str(optimization.get("status") or "").lower() == "cancelled":
+            return {
+                "optimization_id": optimization_id,
+                "optimized_prompt_id": optimization.get("optimized_prompt_id")
+                or optimization.get("initial_prompt_id"),
+                "iterations": int(optimization.get("iterations_completed") or 0),
+                "status": "cancelled",
+            }
         # Support both legacy "strategy" and new "optimizer_type" fields
         strategy = (
             config.get("strategy") or optimization.get("optimizer_type") or config.get("optimizer_type") or "mipro"
         )
         strategy = str(strategy).lower()
 
-        test_case_ids = self._coerce_json_value(optimization.get("test_case_ids"), [])
+        test_case_ids = self._coerce_json_value(
+            optimization.get("test_case_ids")
+            if optimization.get("test_case_ids") is not None
+            else config.get("test_case_ids"),
+            [],
+        )
         if not isinstance(test_case_ids, list):
             test_case_ids = []
 
-        model_config = self._coerce_json_value(optimization.get("model_config"), {})
+        model_config = self._coerce_json_value(
+            optimization.get("model_config")
+            or config.get("model_config")
+            or config.get("model_configuration"),
+            {},
+        )
         if isinstance(model_config, list):
             model_config = model_config[0] if model_config else {}
         if not isinstance(model_config, dict):
@@ -700,8 +718,12 @@ class OptimizationEngine:
             else:
                 raise ValueError(f"Unknown optimization strategy: {strategy}")
 
-            # Update optimization with results
-            self._update_optimization_results(optimization_id, results)
+            latest = self._get_optimization(optimization_id) or {}
+            if str(latest.get("status") or "").lower() == "cancelled":
+                self._update_cancelled_optimization_results(optimization_id, results)
+            else:
+                # Update optimization with results
+                self._update_optimization_results(optimization_id, results)
 
             return results
 
@@ -727,9 +749,8 @@ class OptimizationEngine:
             mark_completed=mark_completed,
         )
 
-    def _update_optimization_results(self, optimization_id: int, results: dict[str, Any]):
-        """Update optimization with results."""
-        # Merge additional final metrics if provided by strategy (e.g., trace, tokens, branching)
+    @staticmethod
+    def _build_final_metrics(results: dict[str, Any]) -> dict[str, Any]:
         final_metrics: dict[str, Any] = {"score": results.get("final_score", 0)}
         if isinstance(results.get("final_metrics"), dict):
             try:
@@ -738,8 +759,13 @@ class OptimizationEngine:
                 if "score" in extra and extra["score"] is None:
                     extra.pop("score")
                 final_metrics.update(extra)
-            except Exception:
-                pass
+            except Exception as metric_merge_error:
+                logger.debug("Optimization engine failed to merge extra metric payload", exc_info=metric_merge_error)
+        return final_metrics
+
+    def _update_optimization_results(self, optimization_id: int, results: dict[str, Any]):
+        """Update optimization with results."""
+        final_metrics = self._build_final_metrics(results)
 
         self.db.complete_optimization(
             optimization_id,
@@ -750,4 +776,22 @@ class OptimizationEngine:
             improvement_percentage=results.get("improvement", 0) * 100,
             total_tokens=results.get("total_tokens"),
             total_cost=results.get("total_cost"),
+        )
+
+    def _update_cancelled_optimization_results(self, optimization_id: int, results: dict[str, Any]) -> None:
+        """Persist partial metrics for a cancelled optimization without reviving it."""
+        updates: dict[str, Any] = {
+            "optimized_prompt_id": results.get("optimized_prompt_id"),
+            "iterations_completed": results.get("iterations", 0),
+            "initial_metrics": {"score": results.get("initial_score", 0)},
+            "final_metrics": self._build_final_metrics(results),
+            "improvement_percentage": results.get("improvement", 0) * 100,
+            "total_tokens": results.get("total_tokens"),
+            "total_cost": results.get("total_cost"),
+        }
+        updates = {k: v for k, v in updates.items() if v is not None}
+        self.db.update_optimization(
+            optimization_id,
+            updates,
+            set_completed_at=True,
         )

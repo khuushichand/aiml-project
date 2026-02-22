@@ -33,7 +33,7 @@ export const WorkflowContainer: React.FC = () => {
       default:
         return (
           <div className="flex items-center justify-center h-full">
-            <p className="text-textMuted">
+            <p className="text-text-muted">
               Workflow "{activeWorkflow.workflowId}" not implemented yet.
             </p>
           </div>

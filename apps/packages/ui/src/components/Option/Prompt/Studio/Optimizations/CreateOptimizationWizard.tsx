@@ -274,7 +274,7 @@ export const CreateOptimizationWizard: React.FC<
             <Alert
               type="info"
               showIcon
-              message={t(
+              title={t(
                 "managePrompts.studio.optimizations.wizard.selectPromptInfo",
                 {
                   defaultValue:
@@ -318,7 +318,7 @@ export const CreateOptimizationWizard: React.FC<
             <Alert
               type="info"
               showIcon
-              message={t(
+              title={t(
                 "managePrompts.studio.optimizations.wizard.selectTestCasesInfo",
                 {
                   defaultValue:
@@ -522,7 +522,7 @@ export const CreateOptimizationWizard: React.FC<
             <Alert
               type="success"
               showIcon
-              message={t(
+              title={t(
                 "managePrompts.studio.optimizations.wizard.reviewInfo",
                 {
                   defaultValue:

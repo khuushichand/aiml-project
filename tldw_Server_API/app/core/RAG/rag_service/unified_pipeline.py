@@ -26,6 +26,11 @@ from typing import Any, Callable, Literal, Optional, cast
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import (
+    is_test_mode as _shared_is_test_mode,
+    is_truthy as _shared_is_truthy,
+)
+
 # Optional dependency placeholders (typed as Any to keep mypy tolerant for missing deps).
 _get_telemetry_manager: Any = None
 _spell_check_query: Any = None
@@ -202,6 +207,61 @@ QueryAnalyzer = _QueryAnalyzer
 QueryIntent = _QueryIntent
 QueryRouter = _QueryRouter
 QueryRewriter = _QueryRewriter
+
+# Query classifier (agentic search routing)
+_classify_and_reformulate: Any = None
+_QueryClassification: Any = None
+_research_loop: Any = None
+_create_default_registry: Any = None
+try:
+    from .query_classifier import (
+        QueryClassification as _QueryClassification,
+        classify_and_reformulate as _classify_and_reformulate,
+    )
+    from .research_agent import (
+        create_default_registry as _create_default_registry,
+        research_loop as _research_loop,
+    )
+except ImportError:
+    _classify_and_reformulate = None
+    _QueryClassification = None
+    _research_loop = None
+    _create_default_registry = None
+
+classify_and_reformulate = _classify_and_reformulate
+QueryClassification = _QueryClassification
+research_loop = _research_loop
+create_default_registry = _create_default_registry
+
+# Suggestion generator
+_generate_suggestions: Any = None
+try:
+    from .suggestion_generator import generate_suggestions as _generate_suggestions
+except ImportError:
+    _generate_suggestions = None
+generate_suggestions = _generate_suggestions
+
+# Structured response writer
+_format_context_xml: Any = None
+_build_writer_system_prompt: Any = None
+_build_writer_user_prompt: Any = None
+_get_writer_depth_policy: Any = None
+try:
+    from .response_writer import (
+        build_writer_system_prompt as _build_writer_system_prompt,
+        build_writer_user_prompt as _build_writer_user_prompt,
+        format_context_xml as _format_context_xml,
+        get_writer_depth_policy as _get_writer_depth_policy,
+    )
+except ImportError:
+    _format_context_xml = None
+    _build_writer_system_prompt = None
+    _build_writer_user_prompt = None
+    _get_writer_depth_policy = None
+format_context_xml = _format_context_xml
+build_writer_system_prompt = _build_writer_system_prompt
+build_writer_user_prompt = _build_writer_user_prompt
+get_writer_depth_policy = _get_writer_depth_policy
 
 # HyDE utilities
 try:
@@ -898,6 +958,7 @@ async def unified_rag_pipeline(
     enable_generation: bool = True,
     strict_extractive: bool = False,
     generation_model: Optional[str] = None,
+    generation_provider: Optional[str] = None,
     generation_prompt: Optional[str] = None,
     max_generation_tokens: int = 500,
     # Abstention & multi-turn synthesis
@@ -1074,6 +1135,45 @@ async def unified_rag_pipeline(
     # ========== FAITHFULNESS EVALUATION ==========
     enable_faithfulness_eval: bool = False,
 
+    # ========== SEARCH AGENT / RESEARCH ==========
+    # Multi-mode search depth (speed/balanced/quality) - sets parameter presets
+    search_depth_mode: Optional[Literal["speed", "balanced", "quality"]] = None,
+    # LLM-based query classification (routes queries intelligently)
+    enable_query_classification: bool = False,
+    # Chat history for conversational follow-up reformulation
+    chat_history: Optional[list[dict[str, str]]] = None,
+    # Standalone query reformulation for chat context
+    enable_query_reformulation: bool = True,
+    # Iterative agentic research loop
+    enable_research_loop: bool = False,
+    # Discussion/forum search
+    enable_discussion_search: bool = False,
+    discussion_platforms: Optional[list[str]] = None,  # ["reddit", "stackoverflow", "hackernews"]
+    # URL scraping action availability in research loop
+    search_url_scraping: bool = True,
+    # Research progress streaming
+    enable_research_progress: bool = False,
+    research_progress_callback: Optional[Callable] = None,
+    # Research loop iteration overrides
+    research_max_iterations: Optional[int] = None,
+    research_max_iterations_speed: int = 0,
+    research_max_iterations_balanced: int = 0,
+    research_max_iterations_quality: int = 0,
+    # Classifier LLM settings (uses default if empty)
+    classifier_provider: Optional[str] = None,
+    classifier_model: Optional[str] = None,
+
+    # ========== FOLLOW-UP SUGGESTIONS ==========
+    enable_suggestions: bool = False,
+    num_suggestions: int = 5,
+
+    # ========== STRUCTURED RESPONSE WRITER ==========
+    enable_structured_response: bool = False,
+
+    # ========== MEDIA SEARCH ==========
+    enable_image_search: bool = False,
+    enable_video_search: bool = False,
+
     # ========== ADDITIONAL PARAMETERS ==========
     **kwargs: Any
 ) -> UnifiedPipelineResult:
@@ -1152,6 +1252,58 @@ async def unified_rag_pipeline(
 
     # Normalize common alias/compat args
     expand_query = expand_query or kwargs.get("enable_expansion", False)
+
+    # ========== SEARCH DEPTH MODE PRESETS ==========
+    # Apply parameter presets based on search_depth_mode. Individual parameter
+    # overrides (if explicitly non-default) take precedence over mode presets.
+    if search_depth_mode is not None:
+        _mode_presets = {
+            "speed": {
+                "top_k": 3,
+                "enable_reranking": False,
+                "reranking_strategy": "none",
+                "expand_query": False,
+                "enable_hyde": False,
+                "enable_web_fallback": False,
+                "enable_multi_vector_passages": False,
+            },
+            "balanced": {
+                "top_k": 10,
+                "enable_reranking": True,
+                "reranking_strategy": "flashrank",
+                "expand_query": True,
+                "enable_hyde": False,
+                "enable_web_fallback": False,
+                "enable_multi_vector_passages": False,
+            },
+            "quality": {
+                "top_k": 25,
+                "enable_reranking": True,
+                "reranking_strategy": "two_tier",
+                "expand_query": True,
+                "enable_hyde": True,
+                "enable_web_fallback": True,
+                "enable_multi_vector_passages": True,
+            },
+        }
+        presets = _mode_presets.get(search_depth_mode, {})
+        # Only apply preset if the caller didn't explicitly set the param
+        # (we check against the function defaults)
+        if presets:
+            if top_k == 10:
+                top_k = presets.get("top_k", top_k)
+            if enable_reranking is True and "enable_reranking" in presets:
+                enable_reranking = presets["enable_reranking"]
+            if reranking_strategy == "flashrank" and "reranking_strategy" in presets:
+                reranking_strategy = presets["reranking_strategy"]
+            if not expand_query and presets.get("expand_query"):
+                expand_query = True
+            if not enable_hyde and presets.get("enable_hyde"):
+                enable_hyde = True
+            if not enable_web_fallback and presets.get("enable_web_fallback"):
+                enable_web_fallback = True
+            if not enable_multi_vector_passages and presets.get("enable_multi_vector_passages"):
+                enable_multi_vector_passages = True
 
     # Initialize result and timing
     start_time = time.time()
@@ -1321,12 +1473,359 @@ async def unified_rag_pipeline(
             else:
                 result.errors.append("Spell check module not available")
                 logger.warning("Spell check requested but module not available")
+        # ========== QUERY CLASSIFICATION & REFORMULATION ==========
+        _classification = None
+        _skip_retrieval_stack = False
+        _skip_retrieval_reason: Optional[str] = None
+        _skip_local_retrieval = False
+
+        async def _prefetch_routed_external_docs(
+            *,
+            query_text: str,
+            use_web: bool,
+            use_academic: bool,
+            use_discussions: bool,
+        ) -> list["Document"]:
+            """Best-effort external prefetch when classification disables local DB search."""
+            prefetched_docs: list[Document] = []
+            max_results = max(1, min(int(top_k or 10), 25))
+            seen_ids: set[str] = set()
+
+            def _append_doc(doc: Document) -> None:
+                if doc.id in seen_ids:
+                    return
+                seen_ids.add(doc.id)
+                prefetched_docs.append(doc)
+
+            # Discussion-prefetch first for opinion/experience-focused questions.
+            if use_discussions and enable_discussion_search:
+                try:
+                    from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import search_discussions
+
+                    discussion_results = await search_discussions(
+                        query=query_text,
+                        platforms=discussion_platforms,
+                        max_results=max_results,
+                    )
+                    for item in discussion_results or []:
+                        doc_id = str(item.get("url") or item.get("id") or f"discussion:{len(prefetched_docs)}")
+                        _append_doc(Document(
+                            id=doc_id,
+                            content=str(item.get("content", "")),
+                            metadata={
+                                "title": item.get("title", ""),
+                                "url": item.get("url", ""),
+                                "source_type": "discussion",
+                                "platform": item.get("platform", ""),
+                            },
+                            source=DataSource.WEB_CONTENT,
+                            score=float(item.get("score", 0.5) or 0.5),
+                        ))
+                except Exception as exc:  # noqa: BLE001 - best effort
+                    result.errors.append(f"Discussion prefetch failed: {exc}")
+
+            # Academic/web prefetch via existing web search processor.
+            if use_academic or use_web:
+                try:
+                    from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import (
+                        perform_websearch,
+                        process_web_search_results,
+                    )
+
+                    web_query = query_text
+                    if use_academic:
+                        web_query = (
+                            f"{query_text} "
+                            "site:arxiv.org OR site:scholar.google.com OR site:semanticscholar.org"
+                        )
+
+                    raw_results = await asyncio.to_thread(
+                        perform_websearch,
+                        search_engine="duckduckgo",
+                        search_query=web_query,
+                        content_country="US",
+                        search_lang="en",
+                        output_lang="en",
+                        result_count=max_results,
+                    )
+                    processed = process_web_search_results(raw_results, "duckduckgo")
+                    for item in (processed.get("results", []) or [])[:max_results]:
+                        url = str(item.get("url", ""))
+                        if not url:
+                            continue
+                        source_type = "academic" if use_academic else "web"
+                        _append_doc(Document(
+                            id=url,
+                            content=str(item.get("content", item.get("snippet", ""))),
+                            metadata={
+                                "title": item.get("title", ""),
+                                "url": url,
+                                "source_type": source_type,
+                            },
+                            source=DataSource.WEB_CONTENT,
+                            score=float(item.get("score", 0.5) or 0.5),
+                        ))
+                except Exception as exc:  # noqa: BLE001 - best effort
+                    result.errors.append(f"Web/academic prefetch failed: {exc}")
+
+            return prefetched_docs[:max_results]
+
+        if enable_query_classification and classify_and_reformulate is not None:
+            try:
+                _cls_start = time.time()
+                _cls_provider = classifier_provider or generation_provider or "openai"
+                _cls_model = classifier_model or generation_model
+                _classification = await classify_and_reformulate(
+                    query=query,
+                    chat_history=chat_history,
+                    llm_provider=_cls_provider,
+                    llm_model=_cls_model,
+                )
+                result.timings["query_classification"] = time.time() - _cls_start
+                result.metadata["query_classification"] = {
+                    "skip_search": _classification.skip_search,
+                    "search_local_db": _classification.search_local_db,
+                    "search_web": _classification.search_web,
+                    "search_academic": _classification.search_academic,
+                    "search_discussions": _classification.search_discussions,
+                    "detected_intent": _classification.detected_intent,
+                    "confidence": _classification.confidence,
+                    "reasoning": _classification.reasoning,
+                }
+
+                # Apply classification decisions
+                if _classification.skip_search:
+                    # Skip retrieval entirely, return early with generation only
+                    logger.info(f"Query classification: skip_search=True for '{query[:80]}'")
+                    result.metadata["classification_skip_search"] = True
+                    _skip_retrieval_stack = True
+                    _skip_retrieval_reason = "classification_skip_search"
+                    # If generation is enabled, we still want to generate a response
+                    # but without search context — this is handled downstream
+
+                # Apply reformulated query
+                if _classification.standalone_query and _classification.standalone_query != query:
+                    result.metadata["reformulated_query"] = _classification.standalone_query
+                    query = _classification.standalone_query
+                    logger.debug(f"Query reformulated to: {query[:100]}")
+
+                # Route web fallback based on classification
+                if _classification.search_web and not enable_web_fallback:
+                    enable_web_fallback = True
+                if _classification.search_discussions and not enable_discussion_search:
+                    enable_discussion_search = True
+                if not _classification.search_local_db:
+                    _skip_local_retrieval = True
+                    result.metadata["classification_local_retrieval"] = "disabled"
+
+                    # If local retrieval is disabled but external routes are requested,
+                    # prefetch external docs directly in non-research-loop mode.
+                    if (
+                        not enable_research_loop
+                        and (_classification.search_web or _classification.search_academic or _classification.search_discussions)
+                    ):
+                        external_docs = await _prefetch_routed_external_docs(
+                            query_text=query,
+                            use_web=bool(_classification.search_web),
+                            use_academic=bool(_classification.search_academic),
+                            use_discussions=bool(_classification.search_discussions),
+                        )
+                        if external_docs:
+                            result.documents = external_docs
+                            _skip_retrieval_stack = True
+                            _skip_retrieval_reason = "classification_external_prefetch"
+                            result.metadata["classification_external_prefetch"] = {
+                                "enabled": True,
+                                "document_count": len(external_docs),
+                                "search_web": bool(_classification.search_web),
+                                "search_academic": bool(_classification.search_academic),
+                                "search_discussions": bool(_classification.search_discussions),
+                            }
+                        else:
+                            _skip_retrieval_stack = True
+                            _skip_retrieval_reason = "classification_local_disabled"
+                            result.metadata["classification_external_prefetch"] = {
+                                "enabled": True,
+                                "document_count": 0,
+                                "search_web": bool(_classification.search_web),
+                                "search_academic": bool(_classification.search_academic),
+                                "search_discussions": bool(_classification.search_discussions),
+                            }
+
+            except Exception as _cls_exc:
+                logger.warning(f"Query classification failed: {_cls_exc!r}")
+                result.errors.append(f"Query classification failed: {_cls_exc}")
+        elif chat_history and enable_query_reformulation and classify_and_reformulate is not None:
+            # Even without full classification, do reformulation if chat history present
+            try:
+                from .query_classifier import reformulate_query as _reformulate_q
+                _ref_start = time.time()
+                _ref_provider = classifier_provider or generation_provider or "openai"
+                _ref_model = classifier_model or generation_model
+                reformulated = await _reformulate_q(
+                    query=query,
+                    chat_history=chat_history,
+                    llm_provider=_ref_provider,
+                    llm_model=_ref_model,
+                )
+                if reformulated and reformulated != query:
+                    result.metadata["reformulated_query"] = reformulated
+                    query = reformulated
+                result.timings["query_reformulation"] = time.time() - _ref_start
+            except Exception as _ref_exc:
+                logger.warning(f"Query reformulation failed: {_ref_exc!r}")
+
+        # ========== AGENTIC RESEARCH LOOP ==========
+        # If research loop is enabled and we're in balanced/quality mode,
+        # delegate to the research agent instead of the standard pipeline
+        if (
+            enable_research_loop
+            and research_loop is not None
+            and _classification is not None
+            and not _classification.skip_search
+        ):
+            try:
+                _research_start = time.time()
+                _research_mode = search_depth_mode or "balanced"
+                _db_ctx = {
+                    "media_db_path": media_db_path,
+                    "notes_db_path": notes_db_path,
+                    "character_db_path": character_db_path,
+                    "kanban_db_path": kanban_db_path,
+                }
+                if media_db is not None:
+                    _db_ctx["media_db"] = media_db
+                if chacha_db is not None:
+                    _db_ctx["chacha_db"] = chacha_db
+
+                def _positive_int_or_none(value: Any) -> Optional[int]:
+                    try:
+                        ivalue = int(value)
+                    except (TypeError, ValueError):
+                        return None
+                    return ivalue if ivalue > 0 else None
+
+                _mode_specific_overrides = {
+                    "speed": _positive_int_or_none(research_max_iterations_speed),
+                    "balanced": _positive_int_or_none(research_max_iterations_balanced),
+                    "quality": _positive_int_or_none(research_max_iterations_quality),
+                }
+                _effective_max_iterations = _positive_int_or_none(research_max_iterations)
+                if _effective_max_iterations is None:
+                    _effective_max_iterations = _mode_specific_overrides.get(_research_mode)
+                if _effective_max_iterations is None:
+                    with contextlib.suppress(TypeError, ValueError):
+                        import os as _os
+                        _env_key = f"SEARCH_MAX_ITERATIONS_{_research_mode.upper()}"
+                        _effective_max_iterations = _positive_int_or_none(_os.getenv(_env_key))
+
+                _progress_cb = research_progress_callback if enable_research_progress else None
+                _registry = None
+                if create_default_registry is not None:
+                    with contextlib.suppress(TypeError, ValueError):
+                        _registry = create_default_registry(
+                            discussion_platforms=discussion_platforms,
+                            enable_url_scraping=bool(search_url_scraping),
+                            enable_image_search=bool(enable_image_search),
+                            enable_video_search=bool(enable_video_search),
+                            on_progress=_progress_cb,
+                        )
+
+                _research_output = await research_loop(
+                    query=query,
+                    classification=_classification,
+                    mode=_research_mode,
+                    llm_provider=classifier_provider or generation_provider or "openai",
+                    llm_model=classifier_model or generation_model,
+                    max_iterations=_effective_max_iterations,
+                    on_progress=_progress_cb,
+                    registry=_registry,
+                    db_context=_db_ctx,
+                    discussion_platforms=discussion_platforms,
+                    enable_url_scraping=bool(search_url_scraping),
+                    enable_image_search=bool(enable_image_search),
+                    enable_video_search=bool(enable_video_search),
+                )
+
+                # Convert research results to Document objects
+                from .types import Document as _Doc, DataSource as _DS
+                _research_docs = []
+                for r_item in _research_output.all_results:
+                    _research_docs.append(_Doc(
+                        id=str(r_item.get("id", r_item.get("url", ""))),
+                        content=str(r_item.get("content", "")),
+                        metadata={
+                            "title": r_item.get("title", ""),
+                            "url": r_item.get("url", ""),
+                            "source_type": r_item.get("source", "research"),
+                            "platform": r_item.get("platform", ""),
+                        },
+                        source=_DS.WEB_CONTENT if r_item.get("source") in ("web", "discussion", "academic", "scraped_url") else _DS.MEDIA_DB,
+                        score=float(r_item.get("score", 0.5)),
+                    ))
+
+                result.documents = _research_docs
+                result.timings["research_loop"] = time.time() - _research_start
+                result.metadata["research"] = {
+                    "total_iterations": _research_output.total_iterations,
+                    "total_results": _research_output.total_results,
+                    "completed": _research_output.completed,
+                    "final_reasoning": _research_output.final_reasoning,
+                    "max_iterations_requested": _effective_max_iterations,
+                    "url_scraping_enabled": bool(search_url_scraping),
+                    "discussion_platforms": discussion_platforms or ["reddit", "stackoverflow", "hackernews"],
+                    "url_dedup": _research_output.metadata.get("url_dedup", {}),
+                    "steps": [
+                        {
+                            "iteration": s.iteration,
+                            "action": s.action_name,
+                            "reasoning": s.reasoning,
+                            "result_count": s.output.result_count if s.output else 0,
+                            "duration_sec": s.duration_sec,
+                        }
+                        for s in _research_output.steps
+                    ],
+                }
+
+                # Collect media search results from research steps
+                if enable_image_search or enable_video_search:
+                    _images = []
+                    _videos = []
+                    for _step in _research_output.steps:
+                        if _step.output and _step.output.success and _step.output.results:
+                            _step_type = (_step.output.metadata or {}).get("type", "")
+                            if _step_type == "images":
+                                _images.extend(_step.output.results)
+                            elif _step_type == "videos":
+                                _videos.extend(_step.output.results)
+                    if _images:
+                        result.metadata["images"] = _images
+                    if _videos:
+                        result.metadata["videos"] = _videos
+
+                logger.info(
+                    f"Research loop completed: {_research_output.total_iterations} iterations, "
+                    f"{_research_output.total_results} results in "
+                    f"{_research_output.total_duration_sec:.2f}s"
+                )
+
+                # Skip cache/retrieval after a successful research loop so the
+                # assembled research evidence remains the source of truth.
+                _skip_retrieval_stack = True
+                _skip_retrieval_reason = "research_loop"
+                result.metadata["research_retrieval_bypassed"] = True
+
+            except Exception as _res_exc:
+                logger.warning(f"Research loop failed, falling back to standard pipeline: {_res_exc!r}")
+                result.errors.append(f"Research loop failed: {_res_exc}")
+                # Fall through to standard pipeline
+
         # ========== PRODUCTION DEFAULTS (env-based) ==========
         # If running in production, enable stricter guardrails by default
         try:
             import os as _os
-            _prod_env = str(_os.getenv("tldw_production", "false")).strip().lower() in {"1", "true", "yes", "on"}
-            _strict_env = str(_os.getenv("RAG_GUARDRAILS_STRICT", "false")).strip().lower() in {"1", "true", "yes", "on"}
+            _prod_env = _shared_is_truthy(_os.getenv("tldw_production", "false"))
+            _strict_env = _shared_is_truthy(_os.getenv("RAG_GUARDRAILS_STRICT", "false"))
             if _prod_env or _strict_env:
                 if not enable_numeric_fidelity:
                     enable_numeric_fidelity = True
@@ -1562,7 +2061,7 @@ async def unified_rag_pipeline(
 
         # ========== CACHE CHECK ==========
         cached_documents = None
-        if enable_cache:
+        if enable_cache and not _skip_retrieval_stack and not _skip_local_retrieval:
             cache_start = time.time()
             cache = _get_cache_instance()
 
@@ -1642,6 +2141,14 @@ async def unified_rag_pipeline(
             result.timings["cache_check"] = time.time() - cache_start
             if metrics:
                 metrics.cache_lookup_time = result.timings["cache_check"]
+        elif _skip_retrieval_stack or _skip_local_retrieval:
+            result.metadata["cache_bypassed"] = {
+                "reason": (
+                    _skip_retrieval_reason
+                    if _skip_retrieval_stack
+                    else "classification_local_disabled"
+                )
+            }
 
         # ========== INTENT-BASED WEIGHTING (optional) ==========
         if adaptive_hybrid_weights and search_mode == "hybrid":
@@ -1780,7 +2287,7 @@ async def unified_rag_pipeline(
                 pass
 
         # ========== DOCUMENT RETRIEVAL ==========
-        if not result.cache_hit:
+        if not result.cache_hit and not _skip_retrieval_stack and not _skip_local_retrieval:
             retrieval_start = time.time()
             try:
                 # --- OTEL: retrieval span ---
@@ -1843,7 +2350,6 @@ async def unified_rag_pipeline(
                     )
                     # Optional date filter
                     if enable_date_filter and date_range and isinstance(date_range, dict):
-                        from datetime import datetime
                         try:
                             start = datetime.fromisoformat(date_range.get("start", "")) if date_range.get("start") else None
                             end = datetime.fromisoformat(date_range.get("end", "")) if date_range.get("end") else None
@@ -1856,7 +2362,6 @@ async def unified_rag_pipeline(
                         tf = result.metadata.get("temporal_filter") if isinstance(result.metadata, dict) else None
                         if isinstance(tf, dict):
                             try:
-                                from datetime import datetime
                                 start_val = tf.get("start")
                                 end_val = tf.get("end")
                                 if start_val and end_val:
@@ -2364,6 +2869,7 @@ async def unified_rag_pipeline(
                 ConnectionError,
                 OSError,
                 RuntimeError,
+                Exception,
                 TypeError,
                 ValueError,
                 asyncio.TimeoutError,
@@ -2432,6 +2938,18 @@ async def unified_rag_pipeline(
                 if _otel_cm is not None:
                     with contextlib.suppress(ImportError, RuntimeError, TypeError, ValueError):
                         _otel_cm.__exit__(None, None, None)
+        elif _skip_retrieval_stack:
+            result.timings["retrieval"] = 0.0
+            result.metadata["retrieval_bypassed"] = {
+                "reason": _skip_retrieval_reason or "retrieval_bypassed",
+                "documents_preserved": int(len(result.documents or [])),
+            }
+        elif _skip_local_retrieval:
+            result.timings["retrieval"] = 0.0
+            result.metadata["retrieval_bypassed"] = {
+                "reason": "classification_local_disabled",
+                "documents_preserved": int(len(result.documents or [])),
+            }
 
         # ========== MULTI-VECTOR PASSAGES (optional, pre-rerank) ==========
         if enable_multi_vector_passages and result.documents:
@@ -3650,7 +4168,6 @@ async def unified_rag_pipeline(
                         if isinstance(created, (int, float)):
                             ts = float(created)
                         elif isinstance(created, str) and created:
-                            from datetime import datetime
                             ts = datetime.fromisoformat(created.replace('Z','+00:00')).timestamp()
                     except (TypeError, ValueError):
                         ts = None
@@ -3946,6 +4463,7 @@ async def unified_rag_pipeline(
                         _attrs = {
                             "rag.phase": "generation",
                             "rag.model": str(generation_model or ""),
+                            "rag.provider": str(generation_provider or ""),
                             "rag.multi_turn": bool(enable_multi_turn_synthesis),
                         }
                         _otel_cm_gen = _tr.start_as_current_span("rag.generation")
@@ -3987,11 +4505,56 @@ async def unified_rag_pipeline(
                         result.errors.append(f"Strict extractive assembly failed: {_se}")
                         result.generated_answer = None
                 elif AnswerGenerator:
-                    generator = AnswerGenerator(model=generation_model)
+                    generator = AnswerGenerator(
+                        model=generation_model,
+                        provider=generation_provider,
+                    )
 
                     # Prepare base context from top documents
                     context_docs = (result.documents[:5] if result.documents else [])
-                    context = "\n\n".join([getattr(doc, 'content', str(doc)) for doc in context_docs])
+
+                    # Structured response writer: XML-tagged context with citation rules
+                    if enable_structured_response and format_context_xml is not None and build_writer_system_prompt is not None:
+                        _writer_chunks = []
+                        for _wd in context_docs:
+                            _wd_meta = getattr(_wd, 'metadata', {}) or {}
+                            _writer_chunks.append({
+                                "content": getattr(_wd, 'content', str(_wd)),
+                                "title": _wd_meta.get("title", ""),
+                                "url": _wd_meta.get("url", "") or _wd_meta.get("source", ""),
+                                "metadata": _wd_meta,
+                            })
+                        context = format_context_xml(_writer_chunks)
+                        _writer_mode = search_depth_mode or "balanced"
+                        _writer_policy = None
+                        if get_writer_depth_policy is not None:
+                            with contextlib.suppress(TypeError, ValueError):
+                                _writer_policy = get_writer_depth_policy(
+                                    mode=_writer_mode,
+                                    max_generation_tokens=max_generation_tokens,
+                                )
+                        _writer_sys = build_writer_system_prompt(
+                            mode=_writer_mode,
+                            max_generation_tokens=max_generation_tokens,
+                        )
+                        # Override generation_prompt with structured writer prompt
+                        if not generation_prompt:
+                            generation_prompt = _writer_sys
+                        else:
+                            generation_prompt = f"{generation_prompt}\n\n{_writer_sys}"
+                        if build_writer_user_prompt is not None:
+                            context = build_writer_user_prompt(query=query, context_xml=context)
+                        result.metadata.setdefault("structured_writer", {})
+                        result.metadata["structured_writer"].update({
+                            "enabled": True,
+                            "mode": _writer_mode,
+                            "context_results": len(_writer_chunks),
+                            "max_generation_tokens": int(max_generation_tokens),
+                        })
+                        if isinstance(_writer_policy, dict):
+                            result.metadata["structured_writer"]["depth_policy"] = _writer_policy
+                    else:
+                        context = "\n\n".join([getattr(doc, 'content', str(doc)) for doc in context_docs])
 
                     if enable_multi_turn_synthesis:
                         # Strict budget control
@@ -4105,6 +4668,24 @@ async def unified_rag_pipeline(
                         pass
                     if metrics:
                         metrics.generation_time = result.timings["answer_generation"]
+
+                    # Follow-up suggestions generation (bounded-latency, best effort)
+                    if enable_suggestions and generate_suggestions is not None and result.generated_answer:
+                        try:
+                            _suggestions_start = time.time()
+                            _suggestions = await generate_suggestions(
+                                query=query,
+                                response_text=str(result.generated_answer),
+                                chat_history=chat_history,
+                                llm_provider=classifier_provider or generation_provider or "openai",
+                                llm_model=classifier_model or generation_model,
+                                num_suggestions=num_suggestions,
+                                llm_timeout_sec=3.0,
+                            )
+                            result.metadata["suggestions"] = _suggestions
+                            result.timings["suggestions"] = time.time() - _suggestions_start
+                        except Exception as _sug_exc:
+                            logger.debug(f"Suggestion generation failed: {_sug_exc!r}")
 
             except ImportError:
                 result.errors.append("Generation module not available")
@@ -4340,7 +4921,7 @@ async def unified_rag_pipeline(
                         except (TypeError, ValueError):
                             budget_tokens = None
                         if isinstance(budget_strict, str):
-                            budget_strict = budget_strict.strip().lower() in {"1", "true", "yes", "on"}
+                            budget_strict = _shared_is_truthy(budget_strict)
                         job_budget = resolve_claims_job_budget(
                             settings=settings_obj,
                             max_cost_usd=budget_usd,
@@ -4652,7 +5233,10 @@ async def unified_rag_pipeline(
                                             # Attempt quick regeneration if generator is available
                                             if AnswerGenerator:
                                                 try:
-                                                    generator = AnswerGenerator(model=generation_model)
+                                                    generator = AnswerGenerator(
+                                                        model=generation_model,
+                                                        provider=generation_provider,
+                                                    )
                                                     context = "\n\n".join([getattr(d, 'content', str(d)) for d in (result.documents[:5] if result.documents else [])])
                                                     regen = await generator.generate(query=query, context=context, prompt_template=generation_prompt, max_tokens=max_generation_tokens)
                                                     if isinstance(regen, dict) and regen.get("answer"):
@@ -4714,6 +5298,7 @@ async def unified_rag_pipeline(
                     character_db_path=character_db_path,
                     user_id=user_id,
                     generation_model=generation_model,
+                    generation_provider=generation_provider,
                     existing_claims=claims_payload,
                     existing_summary=factuality_payload,
                     search_mode=search_mode,
@@ -4835,6 +5420,7 @@ async def unified_rag_pipeline(
                             enable_chunk_citations=enable_chunk_citations,
                             enable_generation=bool(adaptive_rerun_include_generation),
                             generation_model=generation_model,
+                            generation_provider=generation_provider,
                             generation_prompt=generation_prompt,
                             max_generation_tokens=max_generation_tokens,
                             # Disable post-verification in rerun to avoid loops
@@ -4873,6 +5459,7 @@ async def unified_rag_pipeline(
                                 character_db_path=character_db_path,
                                 user_id=user_id,
                                 generation_model=generation_model,
+                                generation_provider=generation_provider,
                                 search_mode=search_mode,
                                 hybrid_alpha=hybrid_alpha,
                                 top_k=top_k,
@@ -5215,7 +5802,7 @@ async def unified_rag_pipeline(
         asyncio.TimeoutError,
     ) as e:
         result.errors.append(f"Pipeline error: {str(e)}")
-        logger.error(f"Unified pipeline error: {e}")
+        logger.exception("Unified pipeline error: {}", e)
         if fallback_on_error:
             return {
                 "query": query,
@@ -5296,7 +5883,8 @@ async def unified_rag_pipeline(
 
                             _f_cfg = _load_cfg() or {}
                             _f_prov = (
-                                _f_cfg.get("RAG_DEFAULT_LLM_PROVIDER")
+                                generation_provider
+                                or _f_cfg.get("RAG_DEFAULT_LLM_PROVIDER")
                                 or _f_cfg.get("default_api")
                                 or "openai"
                             ).strip()
@@ -5349,7 +5937,7 @@ async def unified_rag_pipeline(
         # Debug output if requested
         if debug_mode:
             try:
-                _qh = hashlib.md5((query or "").encode("utf-8")).hexdigest()[:8]
+                _qh = hashlib.md5((query or "").encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
                 logger.debug(f"Query hash={_qh} len={len(query or '')}")
             except (AttributeError, TypeError, ValueError):
                 logger.debug("Received query (hash unavailable)")
@@ -5474,13 +6062,8 @@ async def unified_batch_pipeline(
     # Near-duplicate clustering via cosine similarity of embeddings (best-effort)
     clusters: dict[int, list[int]] = {}
     import os as _os
-    _disable_cluster = str(_os.getenv("RAG_BATCH_DISABLE_CLUSTERING", "")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    _test_mode = str(_os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    _disable_cluster = _shared_is_truthy(_os.getenv("RAG_BATCH_DISABLE_CLUSTERING", ""))
+    _test_mode = _shared_is_test_mode()
     if _disable_cluster or _test_mode:
         clusters = {i: [i] for i in range(len(unique_keys))}
     else:

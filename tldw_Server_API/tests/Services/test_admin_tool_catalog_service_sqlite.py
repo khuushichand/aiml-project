@@ -88,3 +88,79 @@ async def test_admin_tool_catalog_sqlite_duplicate_guard():
         _ = await svc.create_tool_catalog(db, name="uniquecat", description=None, org_id=None, team_id=None, is_active=True)
         with pytest.raises(ToolCatalogConflictError):
             await svc.create_tool_catalog(db, name="uniquecat", description=None, org_id=None, team_id=None, is_active=True)
+
+
+@pytest.mark.asyncio
+async def test_list_visible_tool_catalogs_sqlite_scope_filters():
+    _setup_sqlite_env(tmp_name=f"users_tool_catalog_visible_{int(time.time())}.db")
+
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+
+    await reset_db_pool()
+    pool = await get_db_pool()
+
+    async with pool.transaction() as db:
+        # Ensure org/team rows exist for FK-backed catalog scope checks.
+        await db.execute(
+            "INSERT OR IGNORE INTO organizations (id, name, slug, owner_user_id, is_active) VALUES (?, ?, ?, NULL, 1)",
+            (701, "org-visible", "org-visible"),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO teams (id, org_id, name, slug, description, is_active) VALUES (?, ?, ?, ?, NULL, 1)",
+            (801, 701, "team-visible", "team-visible"),
+        )
+
+        global_cat = await svc.create_tool_catalog(
+            db,
+            name="global-visible-cat",
+            description=None,
+            org_id=None,
+            team_id=None,
+            is_active=True,
+        )
+        org_cat = await svc.create_tool_catalog(
+            db,
+            name="org-visible-cat",
+            description=None,
+            org_id=701,
+            team_id=None,
+            is_active=True,
+        )
+        team_cat = await svc.create_tool_catalog(
+            db,
+            name="team-visible-cat",
+            description=None,
+            org_id=None,
+            team_id=801,
+            is_active=True,
+        )
+
+        visible_all = await svc.list_visible_tool_catalogs(
+            db,
+            scope_norm="all",
+            admin_all=True,
+            org_ids=set(),
+            team_ids=set(),
+        )
+        visible_ids = {int(row["id"]) for row in visible_all}
+        assert int(global_cat["id"]) in visible_ids
+        assert int(org_cat["id"]) in visible_ids
+        assert int(team_cat["id"]) in visible_ids
+
+        visible_org = await svc.list_visible_tool_catalogs(
+            db,
+            scope_norm="org",
+            admin_all=False,
+            org_ids={701},
+            team_ids=set(),
+        )
+        assert {int(row["id"]) for row in visible_org} == {int(org_cat["id"])}
+
+        visible_team = await svc.list_visible_tool_catalogs(
+            db,
+            scope_norm="team",
+            admin_all=False,
+            org_ids=set(),
+            team_ids={801},
+        )
+        assert {int(row["id"]) for row in visible_team} == {int(team_cat["id"])}

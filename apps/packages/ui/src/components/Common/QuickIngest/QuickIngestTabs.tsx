@@ -105,6 +105,9 @@ export const QuickIngestTabs: React.FC<QuickIngestTabsProps> = ({
         if (badges.isProcessing) {
           return qi("tabs.resultsAriaProcessing", "Results tab, processing in progress")
         }
+        if (badges.hasFailure) {
+          return qi("tabs.resultsAriaFailed", "Results tab, last run failed")
+        }
         return qi("tabs.resultsAria", "Results tab")
     }
   }
@@ -124,7 +127,7 @@ export const QuickIngestTabs: React.FC<QuickIngestTabsProps> = ({
         if (badges.optionsModified) {
           return (
             <span
-              className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-amber-500"
+              className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-warn"
               aria-hidden="true"
             />
           )
@@ -135,6 +138,14 @@ export const QuickIngestTabs: React.FC<QuickIngestTabsProps> = ({
           return (
             <Loader2
               className="ml-1.5 h-3.5 w-3.5 animate-spin text-primary"
+              aria-hidden="true"
+            />
+          )
+        }
+        if (badges.hasFailure) {
+          return (
+            <span
+              className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-danger"
               aria-hidden="true"
             />
           )

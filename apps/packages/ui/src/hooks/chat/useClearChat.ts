@@ -132,6 +132,7 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
     useStoreMessageOption.setState({
       compareSelectionByCluster: {},
       compareCanonicalByCluster: {},
+      compareContinuationModeByCluster: {},
       compareSplitChats: {},
       compareActiveModelsByCluster: {}
     })

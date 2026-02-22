@@ -44,6 +44,7 @@ ROLE_HIERARCHY = {
 }
 
 ACTIVE_MEMBERSHIP_STATUSES = {"active"}
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _role_at_least(user_role: str, required_role: str) -> bool:
@@ -67,6 +68,22 @@ def _role_allowed(user_role: str, allowed_roles: list[str]) -> bool:
     if not allowed_roles:
         return True
     return any(_role_at_least(user_role, role) for role in allowed_roles)
+
+
+def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 async def _get_user_org_membership(
@@ -114,7 +131,7 @@ def require_org_role(*allowed_roles: str):
         principal: AuthPrincipal = Depends(get_auth_principal),
     ) -> OrgContext:
         # Platform admins bypass role checks
-        if principal.is_admin:
+        if _principal_has_admin_claims(principal):
             logger.debug(f"Platform admin {principal.user_id} accessing org {org_id}")
             return OrgContext(
                 org_id=org_id,
@@ -196,7 +213,7 @@ def require_team_role(*allowed_roles: str):
         principal: AuthPrincipal = Depends(get_auth_principal),
     ) -> TeamContext:
         # Platform admins bypass all checks
-        if principal.is_admin:
+        if _principal_has_admin_claims(principal):
             return TeamContext(
                 org_id=org_id,
                 team_id=team_id,
@@ -306,7 +323,7 @@ async def get_active_org_id(
     # Check explicit org_id first
     if org_id is not None:
         membership = await _get_user_org_membership(principal.user_id, org_id)
-        if not membership and not principal.is_admin:
+        if not membership and not _principal_has_admin_claims(principal):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to the specified organization",
@@ -315,7 +332,7 @@ async def get_active_org_id(
 
     # Check header next
     if x_tldw_org_id is not None:
-        if principal.is_admin:
+        if _principal_has_admin_claims(principal):
             return x_tldw_org_id
         membership = await _get_user_org_membership(principal.user_id, x_tldw_org_id)
         if membership:

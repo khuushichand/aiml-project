@@ -13,6 +13,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs and enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
 - `ALLOWED_ORIGINS`: CORS allowlist. Comma-separated or JSON array.
+- `CORS_ALLOW_CREDENTIALS`: Enable credentialed CORS responses (`true|false`). Default `false`.
 - `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. When set, the parent directory is treated as the config root for auxiliary assets (e.g., `Synonyms/`).
 - `TLDW_CONFIG_DIR`: Explicit directory containing `config.txt` and related config assets. Checked after `TLDW_CONFIG_PATH`.
 - `ENABLE_SECURITY_HEADERS`: Enable security headers middleware (defaults to true in production).
@@ -24,6 +25,20 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `USER_DB_BASE_DIR`: Base directory for per-user DBs and assets (defined in `tldw_Server_API.app.core.config`). Defaults to `Databases/user_databases` under the repo root; relative paths resolve from repo root and `~` expands. Override via environment variable or `Config_Files/config.txt` as needed.
 - `USER_DB_BASE_DIR_ALLOWED_ROOTS` / `TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS`: Optional allowlist for setup-time changes to `USER_DB_BASE_DIR`. Comma- or colon-separated list of parent directories permitted for the new base.
 - `USER_DB_BASE`: Deprecated alias for `USER_DB_BASE_DIR` (used only by rewrite cache resolution).
+
+## Unified Circuit Breaker (Registry + Cross-Worker Semantics)
+- `CIRCUIT_BREAKER_REGISTRY_MODE`: Registry storage mode (`auto|memory|persistent` plus synonyms). Default `auto`.
+  - `auto`: Uses persistent shared state in normal runtime and in-memory state under explicit pytest runtime.
+  - `memory`: Process-local registry only (no cross-worker synchronization).
+  - `persistent`: Shared DB-backed registry with optimistic locking and lease coordination.
+- `CIRCUIT_BREAKER_REGISTRY_DB_PATH`: Optional path override for shared registry DB. Relative paths resolve from project root.
+- `CIRCUIT_BREAKER_PERSIST_MAX_RETRIES`: Max optimistic-lock merge/retry attempts per persist operation (default `4`, clamped to `>=1`).
+- `CIRCUIT_BREAKER_HALF_OPEN_LEASE_TTL_SECONDS`: TTL for distributed HALF_OPEN probe leases (default `120.0`, clamped to `>=1.0`).
+
+Operational notes:
+- For multi-worker deployments, prefer `CIRCUIT_BREAKER_REGISTRY_MODE=persistent`.
+- If `CIRCUIT_BREAKER_PERSIST_MAX_RETRIES` is too low under heavy write contention, `circuit_breaker_persist_conflicts_total` may spike and stale local mutations can be dropped after retry exhaustion.
+- If `CIRCUIT_BREAKER_HALF_OPEN_LEASE_TTL_SECONDS` is too high, abandoned probe slots take longer to self-heal; if too low, long-running probes can lose their lease before completion.
 
 ## OCR (PDF pipeline)
 - `OCR_PAGE_CONCURRENCY`: Per-page OCR concurrency (default `1`).
@@ -122,6 +137,12 @@ Notes:
 - `INGEST_DEDUP_THRESHOLD`: Jaccard similarity threshold for shingle-based dedupe (0-1, default `0.9`).
 - Chunker adaptive controls are primarily request-level, but ingestion defaults set `adaptive=true` and `adaptive_overlap=true`.
 
+### Web Scraping Ephemeral Store
+- `EPHEMERAL_STORE_TTL_SECONDS`: Default TTL for ephemeral web-scraping results (seconds). Default `900`.
+- `EPHEMERAL_STORE_MAX_ENTRIES`: Maximum number of in-memory ephemeral entries retained before oldest-first eviction. Default `256`.
+- `EPHEMERAL_STORE_MAX_BYTES`: Optional aggregate payload size cap (bytes) for the in-memory ephemeral store. Default `0` (disabled).
+  - Applies to process-local storage (`app/services/ephemeral_store.py`) used by ephemeral scraping/result retrieval paths.
+
 ### RAG Adaptive Post-Verification
 - `RAG_ADAPTIVE_TIME_BUDGET_SEC`: Optional hard cap (seconds) for post-generation verification and repair. When unset or `0`, no cap is applied. Other knobs are request-level (`enable_post_verification`, `adaptive_max_retries`, `adaptive_unsupported_threshold`, `adaptive_max_claims`).
 - `RAG_ADAPTIVE_ADVANCED_REWRITES`: Toggle advanced rewrite strategy (HyDE + multi-strategy + diversity) for the adaptive pass. `true|false` (default `true`). When `false`, the adaptive pass uses a simple single-query retrieval.
@@ -198,6 +219,21 @@ Notes:
 - `DATA_TABLES_LLM_MAX_TOKENS`: LLM response token budget for table generation (default `2000`).
 - `DATA_TABLES_LLM_TEMPERATURE`: LLM temperature for table generation (default `0.2`).
 
+## Chat Commands & Weather
+- `CHAT_COMMANDS_ENABLED`: Enable slash-command preprocessing (`true|false`, default `false`).
+- `CHAT_COMMAND_INJECTION_MODE`: Slash-command injection mode (`system|preface|replace`, default `system`).
+- `CHAT_COMMANDS_REQUIRE_PERMISSIONS`: Require per-command RBAC permission checks (`true|false`, default `false`).
+- `CHAT_COMMANDS_RATE_LIMIT_USER`: Per-user, per-command RPM limit (accepts `10` or `10/min`; default `10`).
+- `CHAT_COMMANDS_RATE_LIMIT`: Backward-compatible alias for `CHAT_COMMANDS_RATE_LIMIT_USER`.
+- `CHAT_COMMANDS_RATE_LIMIT_GLOBAL`: Global, per-command RPM limit (accepts `100` or `100/min`; default `100`).
+- `CHAT_COMMANDS_MAX_CHARS`: Max characters injected from a slash-command result (default `300`).
+- `DEFAULT_LOCATION`: Optional fallback location for `/weather` when no argument is supplied.
+- `WEATHER_PROVIDER`: Weather backend (`openweather`, `noop`, `none`, `disabled`; default `openweather`).
+- `OPENWEATHER_API_KEY`: API key for the `openweather` provider.
+- `WEATHER_UNITS`: Unit system for weather summaries (`metric|imperial`, default `metric`).
+- `WEATHER_LANG`: OpenWeather language code for descriptions (default `en`).
+- `WEATHER_TIMEOUT_MS`: OpenWeather HTTP timeout in milliseconds (default `1500`).
+
 ## Chatbooks
 - `CHATBOOKS_JOBS_BACKEND`: Backend is fixed to "core"; this environment variable exists for compatibility and is ignored.
 - `CHATBOOKS_CORE_WORKER_ENABLED`: Enable shared Chatbooks worker when backend=core (default `true`).
@@ -209,21 +245,97 @@ Notes:
 - `CHATBOOKS_CLEANUP_INTERVAL_SEC`: Scheduled cleanup cadence in seconds (set `0` to disable scheduling).
 - `CHATBOOKS_EVAL_EXPORT_MAX_ROWS`: Max rows exported per evaluation run (default `200`).
 - `CHATBOOKS_BINARY_LIMITS_MB`: JSON map of content type to max bundled size in MB (for example, `{"media": 0, "conversations": 10, "generated_docs": 25}`).
+- `CHATBOOKS_TEMPLATE_MODE`: Default Chatbooks template mode (`pass_through|render_on_export`; default `pass_through`).
+- `CHATBOOKS_TEMPLATE_DEFAULTS_JSON`: JSON object merged into Chatbooks template defaults (optional).
+- `CHATBOOKS_TEMPLATE_TIMEZONE`: Default timezone used for Chatbooks template rendering (default `UTC`).
+- `CHATBOOKS_TEMPLATE_LOCALE`: Optional default locale used for Chatbooks template rendering.
 - `CHATBOOKS_IMPORT_DICT_STRICT`: When true, skip dictionaries with fatal validation errors instead of importing with warnings.
 
 ## Audio Jobs
 - `AUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Audio Jobs worker (`true|false`, default follows route policy for `audio-jobs`). When true, the worker starts at app startup and polls the Jobs backend for the `audio` domain pipeline stages.
 - `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition for fairness across users (`true|false`, default `false`). When enabled, the worker preferentially acquires jobs for owners under their concurrent-job caps.
-- `AUDIO_QUOTA_USE_REDIS`: Use Redis for distributed audio concurrency tracking (`true|false`, default `true` when `REDIS_URL` is set). Falls back to in-process counters when disabled or unavailable.
+- `REDIS_URL`: Optional Redis URL used by Resource Governor when `RG_BACKEND=redis`.
 
 ## Media Ingest Jobs
 - `MEDIA_INGEST_JOBS_WORKER_ENABLED`: Enable the in-process media ingest jobs worker (`true|false`, default follows route policy for `media`). When true, the worker starts at app startup and polls the Jobs backend for the `media_ingest` domain.
+
+## Email Search Rollout
+- `EMAIL_NATIVE_PERSIST_ENABLED`: Enable normalized email persistence on ingest (`true|false`, default `true`).
+- `EMAIL_OPERATOR_SEARCH_ENABLED`: Enable normalized email operator search APIs and bridge support (`true|false`, default `true`).
+- `EMAIL_MEDIA_SEARCH_DELEGATION_MODE`: Default `/api/v1/media/search` delegation mode for email-only scope when `email_query_mode` is not explicitly set. Allowed: `opt_in` (default, delegate only when `email_query_mode=operators`) or `auto_email` (delegate automatically when `media_types=['email']` and operator search is enabled).
+- `EMAIL_GMAIL_CONNECTOR_ENABLED`: Enable Gmail source/sync endpoints (`true|false`, default `false`).
+
+## Email Connector Sync
+- `EMAIL_SYNC_RETRY_MAX_ATTEMPTS`: Maximum retry budget for failed Gmail sync runs before a source is skipped until operator intervention/data correction (default `5`).
+- `EMAIL_SYNC_RETRY_BASE_SECONDS`: Base retry backoff duration in seconds (default `60`).
+- `EMAIL_SYNC_RETRY_MAX_BACKOFF_SECONDS`: Maximum exponential backoff cap in seconds (default `3600`).
+- `EMAIL_SYNC_CURSOR_RECOVERY_WINDOW_DAYS`: Window (days) used for bounded replay when Gmail `startHistoryId` is invalid/expired (default `7`).
+- `EMAIL_SYNC_CURSOR_RECOVERY_MAX_MESSAGES`: Max replay message cap for invalid-cursor recovery runs (default `2000`).
 
 Pytest markers
 - `-m jobs`: Run all core Jobs tests (SQLite + PG-gated).
 - `-m pg_jobs`: Run Postgres-only Jobs tests (requires JOBS_DB_URL and psycopg).
 - `-m pg_jobs_stress`: Run heavier multi-process concurrency tests for PG (opt-in only).
   - Also set `RUN_PG_JOBS_STRESS=1` to enable these tests during runs.
+
+## Resource Governor (Unified Rate Limiting)
+
+The Resource Governor (RG) is the **primary enforcement path** for all rate limiting. Some deprecated module-local compatibility knobs remain during cutover and will be removed once shadow-mode exit criteria are met (see `Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`). AuthNZ dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not enforce fallback 429 behavior.
+
+### Core Settings
+- `RG_ENABLED`: Master toggle for Resource Governor enforcement (`true|1|false|0`). Resolution: env var > `config.txt` `[ResourceGovernor] enabled` > default `false`.
+- `RG_BACKEND`: Backend type (`memory` | `redis`). Default `memory`. Redis requires `REDIS_URL`.
+- `RG_POLICY_PATH`: Path to YAML policy file. Default `tldw_Server_API/Config_Files/resource_governor_policies.yaml`.
+- `RG_POLICY_STORE`: Policy persistence backend (`yaml` | `db`). Default `yaml`.
+- `RG_POLICY_RELOAD_ENABLED`: Enable hot-reload of policy changes (`true|false`). Default `true`.
+- `RG_POLICY_RELOAD_INTERVAL_SEC`: Policy reload check interval in seconds. Default `30`.
+- `RG_ROUTE_MAP_AUDIT`: When `true`, log warnings for HTTP routes not covered by the RG route map.
+- `RG_REDIS_FAIL_MODE`: Behavior when Redis is unavailable (`fail_open` | `fail_closed` | `fallback_memory`). Default `fail_open`.
+
+### Client Identity
+- `RG_TRUSTED_PROXIES`: Comma-separated list of trusted proxy IPs for `X-Forwarded-For` resolution.
+- `RG_CLIENT_IP_HEADER`: Custom header for client IP extraction (e.g., `CF-Connecting-IP`).
+
+### Per-Module Policy Overrides
+- `RG_CHAT_POLICY_ID`: Override chat policy ID (default `chat.default`).
+- `RG_EMBEDDINGS_POLICY_ID`: Override embeddings policy ID (default `embeddings.default`).
+- `RG_EMBEDDINGS_SERVER_POLICY_ID`: Override embeddings server policy ID.
+- `RG_EMBEDDINGS_SERVER_SYNC_TIMEOUT_SEC`: Timeout for synchronous RG enforcement in the embeddings server thread.
+- `RG_CHARACTER_CHAT_POLICY_ID`: Override character chat policy ID.
+- `RG_CHARACTER_CHAT_ENFORCE_REQUESTS`: Enable RG request enforcement for character chat (`true|1`).
+- `RG_EVALUATIONS_POLICY_ID`: Override evaluations policy ID (default `evals.free`).
+- `RG_WEB_SCRAPING_POLICY_ID`: Override web scraping policy ID.
+
+### Shadow / Migration
+- `RG_SHADOW_CHAT`: Enable shadow-mode comparison for chat (emit mismatch metrics without enforcing). Used during migration validation.
+- `RG_METRICS_ENTITY_LABEL`: Include entity labels in Prometheus metrics (`true|false`). Default `false` (high cardinality).
+
+### Debug / Test-Only
+- `RG_DEBUG`: Enable verbose RG decision logging.
+- `RG_TEST_DISABLE_ACCEPT_WINDOW`: Test-only: disable acceptance window logic.
+- `RG_TEST_FORCE_STUB_RATE`: Test-only: force stub rate values.
+- `RG_TEST_PURGE_LEASES_BEFORE_RESERVE`: Test-only: purge concurrency leases before each reserve call.
+- `RG_REAL_REDIS_URL`: Test-only: real Redis URL for integration tests.
+
+### Legacy Rate Limit Knobs (Deprecated Compatibility)
+
+The following env vars are retained as **deprecated compatibility knobs** during cutover. RG policy configuration is the authoritative enforcement path.
+
+#### Chat (deprecated compatibility)
+- `TEST_CHAT_PER_USER_RPM`: Per-user requests per minute (test override).
+- `TEST_CHAT_PER_CONVERSATION_RPM`: Per-conversation requests per minute (test override).
+- `TEST_CHAT_GLOBAL_RPM`: Global requests per minute (test override).
+- `TEST_CHAT_TOKENS_PER_MINUTE`: Token limit per user per minute (test override).
+- `TEST_CHAT_BURST_MULTIPLIER`: Burst multiplier (test override).
+
+#### Embeddings (deprecated compatibility)
+- `EMBEDDINGS_RATE_LIMIT_PER_MINUTE`: Per-user embeddings requests per minute.
+- `EMBEDDINGS_RATE_LIMIT_MODE`: Rate limit mode (`tokens` or other). Controls whether token-based limiting is applied.
+
+#### Character Chat (deprecated compatibility)
+- `CHARACTER_RATE_LIMIT_OPS`: Per-window operation limit. Superseded by RG policy.
+- `CHARACTER_RATE_LIMIT_WINDOW`: Window size in seconds. Superseded by RG policy.
+- `CHARACTER_RATE_LIMIT_ENABLED`: Enable/disable character chat rate limiting. Superseded by `RG_CHARACTER_CHAT_ENFORCE_REQUESTS`.
 
 ## AuthNZ (Authentication)
 - `AUTH_MODE`: `single_user` | `multi_user`.
@@ -235,9 +347,6 @@ Pytest markers
 - `REDIS_URL`: Optional Redis URL for sessions (`redis://` or `rediss://`).
 - `ENABLE_REGISTRATION`: Enable user registration (`true|false`).
 - `REQUIRE_REGISTRATION_CODE`: Require code to register (`true|false`).
-- `RATE_LIMIT_ENABLED`: Auth endpoints rate limit toggle (`true|false`).
-- `RATE_LIMIT_PER_MINUTE`: Requests per minute (default 60).
-- `RATE_LIMIT_BURST`: Burst size (default 10).
 - `SECURITY_ALERTS_ENABLED`: Enable AuthNZ security alert dispatching (`true|false`, default `false`).
 - `SECURITY_ALERT_MIN_SEVERITY`: Minimum severity to deliver (`low|medium|high|critical`, default `high`).
 - `SECURITY_ALERT_FILE_PATH`: JSONL file sink for security alerts (default `Databases/security_alerts.log`).
@@ -261,12 +370,16 @@ Pytest markers
 
 Config file support (optional):
 - Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `redis_url`, plus security alert keys (`security_alerts_enabled`, `security_alert_min_severity`, `security_alert_file_path`, `security_alert_webhook_url`, `security_alert_webhook_headers`, `security_alert_email_to`, `security_alert_email_from`, `security_alert_email_subject_prefix`, `security_alert_smtp_host`, `security_alert_smtp_port`, `security_alert_smtp_starttls`, `security_alert_smtp_username`, `security_alert_smtp_password`, `security_alert_smtp_timeout`, `security_alert_file_min_severity`, `security_alert_webhook_min_severity`, `security_alert_email_min_severity`).
-- Section `[Image-Generation]` in `Config_Files/config.txt` can define: `default_backend`, `enabled_backends`, `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`, `sd_cpp_binary_path`, `sd_cpp_diffusion_model_path`, `sd_cpp_model_path`, `sd_cpp_llm_path`, `sd_cpp_vae_path`, `sd_cpp_lora_paths`, `sd_cpp_allowed_extra_params`, `sd_cpp_default_steps`, `sd_cpp_default_cfg_scale`, `sd_cpp_default_sampler`, `sd_cpp_device`, `sd_cpp_timeout_seconds`.
+- Section `[Image-Generation]` in `Config_Files/config.txt` can define: `default_backend`, `enabled_backends`, `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`, `sd_cpp_binary_path`, `sd_cpp_diffusion_model_path`, `sd_cpp_model_path`, `sd_cpp_llm_path`, `sd_cpp_vae_path`, `sd_cpp_lora_paths`, `sd_cpp_allowed_extra_params`, `sd_cpp_default_steps`, `sd_cpp_default_cfg_scale`, `sd_cpp_default_sampler`, `sd_cpp_device`, `sd_cpp_timeout_seconds`, `swarmui_base_url`, `swarmui_default_model`, `swarmui_swarm_token`, `swarmui_allowed_extra_params`, `swarmui_timeout_seconds`, `openrouter_image_base_url`, `openrouter_image_api_key`, `openrouter_image_default_model`, `openrouter_image_allowed_extra_params`, `openrouter_image_timeout_seconds`, `novita_image_base_url`, `novita_image_api_key`, `novita_image_default_model`, `novita_image_allowed_extra_params`, `novita_image_timeout_seconds`, `novita_image_poll_interval_seconds`, `together_image_base_url`, `together_image_api_key`, `together_image_default_model`, `together_image_allowed_extra_params`, `together_image_timeout_seconds`.
 
 ## Chat / UI
 - `CHAT_SAVE_DEFAULT`: Persist new chats by default (`true|false`).
 - `DEFAULT_CHAT_SAVE`: Legacy alias; same as above.
 - `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
+- `PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS`: Default persona exemplar budget for character chat when request override is omitted (default `600`, clamped to `1..20000`).
+- `PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED`: Auto-adjust persona exemplar budget after sustained IOO alerts (`true|false`, default `true`).
+- `PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR`: Multiplicative downshift applied when auto-adjust triggers (default `0.75`, clamped to `0.10..0.95`).
+- `PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS`: Lower bound for auto-adjusted persona exemplar budget (default `240`, clamped to `1..20000`).
 
 ### Tokenizer (Chat Dictionaries & World Books)
 - `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`
@@ -362,6 +475,7 @@ Quick start (local dev):
 ## LLM Provider Keys
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `COHERE_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `HUGGINGFACE_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `QWEN_API_KEY`
 - Additional provider-specific variables as required by their APIs.
+- `OPENROUTER_MODEL_DISCOVERY_TTL_SECONDS`: TTL for cached OpenRouter `/models` discovery results used by `/api/v1/llm/models/metadata` (default `600`, minimum `30`). Use `refresh_openrouter=true` on the metadata endpoint to force an immediate refresh.
 
 ## MCP Unified
 - `MCP_JWT_SECRET`: Secret used by the MCP server for issuing/verifying tokens.
@@ -488,6 +602,7 @@ Non‑prod defaults
 | `STREAM_IDLE_TIMEOUT_S`         | (disabled)          | Idle timeout for SSE streams (seconds) |
 | `AUDIO_WS_IDLE_TIMEOUT_S`       | (disabled)          | Optional idle timeout for Audio WebSocket (seconds); overrides `STREAM_IDLE_TIMEOUT_S` for audio handler |
 | `AUDIO_WS_QUOTA_CLOSE_1008`     | `0`                 | When `1`, Audio WS closes with 1008 for quota/rate-limit instead of legacy 4003 |
+| `AUDIO_WS_COMPAT_ERROR_TYPE`    | `1`                 | When `1`, Audio WS error payloads include legacy `error_type` alias in addition to canonical `code`; set `0` to disable alias during migration |
 | `STREAM_MAX_DURATION_S`         | (disabled)          | Maximum duration for SSE streams (seconds) |
 | `STREAM_QUEUE_MAXSIZE`          | `256`               | Default bounded queue size for SSE streams |
 | `STREAM_PROVIDER_CONTROL_PASSTHRU` | `0`              | Preserve provider SSE control lines (`event/id/retry`) when `1` |

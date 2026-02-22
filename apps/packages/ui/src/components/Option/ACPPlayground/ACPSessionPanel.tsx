@@ -24,7 +24,14 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
   const [accessToken] = useStorage("accessToken", "")
 
   // Store
-  const sessions = useACPSessionsStore((s) => s.getSessions())
+  const sessionsById = useACPSessionsStore((s) => s.sessions)
+  const sessions = React.useMemo(
+    () =>
+      Object.values(sessionsById).sort(
+        (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+      ),
+    [sessionsById]
+  )
   const activeSessionId = useACPSessionsStore((s) => s.activeSessionId)
   const setActiveSession = useACPSessionsStore((s) => s.setActiveSession)
   const closeSession = useACPSessionsStore((s) => s.closeSession)

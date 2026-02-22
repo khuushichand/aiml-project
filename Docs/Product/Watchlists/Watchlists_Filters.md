@@ -1,8 +1,8 @@
 # Watchlists Job Filters - Schema and Examples (v0.1)
 
-Status: In Progress
+Status: Implemented (v1)
 Owners: Watchlists Backend + WebUI
-Updated: 2025-10-28
+Updated: 2026-02-07
 
 This document specifies the JSON schema for job-level filters in Watchlists, provides evaluation semantics, and shows common examples. Filters are attached to `scrape_jobs` and are evaluated when selecting items from runs before they are surfaced in outputs.
 
@@ -94,9 +94,9 @@ Flag suspicious terms:
 }
 ```
 
-## API Endpoints (planned)
+## API Endpoints (implemented)
 
 - `PATCH /api/v1/watchlists/jobs/{id}/filters` - replace full set
 - `POST /api/v1/watchlists/jobs/{id}/filters:add` - append one or more
 
-Refer to: `Docs/Product/Watchlists_Subscriptions_Bridge_PRD.md` for the full Watchlists bridge and feature scope.
+Refer to: `Docs/Product/Watchlists/Watchlists_Subscriptions_Bridge_PRD.md` for the full Watchlists bridge and feature scope.

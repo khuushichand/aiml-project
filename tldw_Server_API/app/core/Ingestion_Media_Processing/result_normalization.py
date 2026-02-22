@@ -64,9 +64,9 @@ def normalize_process_batch(batch: dict[str, Any]) -> dict[str, Any]:
     """
     try:
         batch["results"] = sort_results_success_first(batch.get("results") or [])
-    except Exception:
+    except Exception as sort_error:
         # Keep batch unchanged on any sorting error; callers preserve behavior.
-        pass
+        _ = sort_error
 
     # Ensure common keys exist; keep existing counts if already set.
     batch.setdefault("processed_count", int(batch.get("processed_count", 0) or 0))

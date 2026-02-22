@@ -23,6 +23,7 @@ interface TextSelectionPopoverProps {
   epubCfi?: string
 }
 
+// theme-exempt: user annotation colors
 const HIGHLIGHT_COLORS: Array<{ key: AnnotationColor; label: string; color: string }> = [
   { key: "yellow", label: "Yellow", color: "#fef08a" },
   { key: "green", label: "Green", color: "#bbf7d0" },

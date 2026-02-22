@@ -35,10 +35,10 @@ async def _get_orgs_teams_repo() -> AuthnzOrgsTeamsRepo:
                 )
 
                 await ensure_authnz_core_tables_pg(pool)
-            except Exception:
+            except Exception as ensure_tables_error:
                 # Best-effort: org APIs will still raise concrete SQL errors if the schema
                 # is missing; don't mask them here.
-                pass
+                _ = ensure_tables_error
     return AuthnzOrgsTeamsRepo(pool)
 
 
@@ -166,6 +166,15 @@ async def list_memberships_for_user(user_id: int) -> list[dict[str, Any]]:
     """
     repo = await _get_orgs_teams_repo()
     return await repo.list_memberships_for_user(user_id)
+
+
+async def list_active_team_memberships_for_user(user_id: int) -> list[dict[str, Any]]:
+    """List active team memberships (and org_id) for a given user.
+
+    Returns: list of {team_id, org_id, role}
+    """
+    repo = await _get_orgs_teams_repo()
+    return await repo.list_active_team_memberships_for_user(user_id)
 
 
 # ============================

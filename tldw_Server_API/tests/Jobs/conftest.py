@@ -4,7 +4,7 @@ import pytest
 try:
     from tldw_Server_API.tests._plugins.postgres import *  # noqa: F401,F403
 except Exception:
-    pass
+    _ = None
 
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
@@ -157,7 +157,7 @@ def jobs_pg_dsn(pg_temp_db, monkeypatch):
         from tldw_Server_API.app.core.Jobs.manager import JobManager
         JobManager.set_acquire_gate(False)
     except Exception:
-        pass
+        _ = None
     # Bind to env for code under test
     monkeypatch.setenv("JOBS_DB_URL", dsn)
     return dsn

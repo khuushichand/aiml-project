@@ -126,7 +126,7 @@ def _embeddings_jobs_backend() -> str:
     raw = (os.getenv("EMBEDDINGS_JOBS_BACKEND") or os.getenv("TLDW_JOBS_BACKEND") or "").strip().lower()
     if raw in {"jobs", "core", ""}:
         return "jobs"
-    logger.warning("Embeddings jobs backend override %s ignored; core Jobs is the only backend.", raw)
+    logger.warning("Embeddings jobs backend override {} ignored; core Jobs is the only backend.", raw)
     return "jobs"
 
 

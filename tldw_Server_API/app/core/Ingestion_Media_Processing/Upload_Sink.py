@@ -49,6 +49,13 @@ _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
 )
+if puremagic is not None:
+    _puremagic_error = getattr(puremagic, "PureError", None)
+    if isinstance(_puremagic_error, type) and issubclass(_puremagic_error, Exception):
+        _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS = (
+            *_UPLOAD_SINK_NONCRITICAL_EXCEPTIONS,
+            _puremagic_error,
+        )
 
 
 class FileValidationError(Exception):
@@ -114,7 +121,7 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
     "audio": {
         "allowed_extensions": {'.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a'},
         "allowed_mimetypes": {'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/flac', 'audio/aac', 'audio/ogg',
-                              'audio/mp4', 'audio/x-m4a'},
+                              'audio/mp4', 'audio/x-m4a', 'audio/mp4a-latm'},
         "max_size_mb": media_config.get('max_audio_file_size_mb', 500),
     },
     "video": {
@@ -169,14 +176,14 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
         "allowed_extensions": {'.html', '.htm'},
         "allowed_mimetypes": {'text/html'},
         "max_size_mb": 5,
-        "sanitize": True,  # Flag to indicate sanitization should be applied
+        "sanitize": bool(media_config.get('sanitize_html_uploads', True)),
     },
     "xml": {
         # Include SVG as XML for safer handling
         "allowed_extensions": {'.xml', '.opml', '.svg'},
         "allowed_mimetypes": {'text/xml', 'application/xml', 'image/svg+xml'},
         "max_size_mb": 10,
-        "sanitize": True,  # Flag to indicate sanitization should be applied
+        "sanitize": bool(media_config.get('sanitize_xml_uploads', True)),
     },
     "archive": {
         "allowed_extensions": {'.zip', '.tar', '.tgz', '.tar.gz', '.tbz2', '.tar.bz2', '.txz', '.tar.xz'},

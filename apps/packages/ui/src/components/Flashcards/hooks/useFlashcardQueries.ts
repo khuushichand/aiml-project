@@ -6,9 +6,14 @@ import {
   createDeck,
   updateFlashcard,
   deleteFlashcard,
+  resetFlashcardScheduling,
   reviewFlashcard,
+  generateFlashcards,
   getFlashcard,
   importFlashcards,
+  importFlashcardsJson,
+  importFlashcardsApkg,
+  getFlashcardsAnalyticsSummary,
   exportFlashcards,
   exportFlashcardsFile,
   getFlashcardsImportLimits,
@@ -19,8 +24,16 @@ import {
 } from "@/services/flashcards"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { isTutorialResidueCard, pickFirstReviewableCard } from "../utils/review-card-hygiene"
 
 export type DueStatus = "new" | "learning" | "due" | "all"
+
+export interface DueCounts {
+  due: number
+  new: number
+  learning: number
+  total: number
+}
 
 export interface UseFlashcardQueriesOptions {
   enabled?: boolean
@@ -33,6 +46,26 @@ const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
       typeof query.queryKey[0] === "string" &&
       query.queryKey[0].startsWith("flashcards:")
   })
+
+const getListTotal = (res: { total?: number | null; count?: number }) => (res.total ?? res.count ?? 0)
+
+async function fetchDueCounts(deckId?: number | null): Promise<DueCounts> {
+  const [due, newCards, learning] = await Promise.all([
+    listFlashcards({ deck_id: deckId ?? undefined, due_status: "due", limit: 1, offset: 0 }),
+    listFlashcards({ deck_id: deckId ?? undefined, due_status: "new", limit: 1, offset: 0 }),
+    listFlashcards({ deck_id: deckId ?? undefined, due_status: "learning", limit: 1, offset: 0 })
+  ])
+
+  const dueTotal = getListTotal(due)
+  const newTotal = getListTotal(newCards)
+  const learningTotal = getListTotal(learning)
+  return {
+    due: dueTotal,
+    new: newTotal,
+    learning: learningTotal,
+    total: dueTotal + newTotal + learningTotal
+  }
+}
 
 /**
  * Hook for fetching flashcard decks
@@ -52,6 +85,7 @@ export function useDecksQuery(options?: UseFlashcardQueriesOptions) {
  */
 export function useReviewQuery(deckId: number | null | undefined, options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const REVIEW_SCAN_LIMIT = 25
 
   return useQuery({
     queryKey: ["flashcards:review:next", deckId],
@@ -60,30 +94,70 @@ export function useReviewQuery(deckId: number | null | undefined, options?: UseF
         deck_id: deckId ?? undefined,
         due_status: "due",
         order_by: "due_at",
-        limit: 1,
+        limit: REVIEW_SCAN_LIMIT,
         offset: 0
       })
-      const dueCard = dueRes.items?.[0]
+      const dueCard = pickFirstReviewableCard(dueRes.items)
       if (dueCard) return dueCard
 
       const newRes = await listFlashcards({
         deck_id: deckId ?? undefined,
         due_status: "new",
         order_by: "created_at",
-        limit: 1,
+        limit: REVIEW_SCAN_LIMIT,
         offset: 0
       })
-      const newCard = newRes.items?.[0]
+      const newCard = pickFirstReviewableCard(newRes.items)
       if (newCard) return newCard
 
       const learningRes = await listFlashcards({
         deck_id: deckId ?? undefined,
         due_status: "learning",
         order_by: "due_at",
-        limit: 1,
+        limit: REVIEW_SCAN_LIMIT,
         offset: 0
       })
-      return learningRes.items?.[0] || null
+      return pickFirstReviewableCard(learningRes.items)
+    },
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching a cram-mode queue (cards regardless of due state), optionally filtered by tag.
+ */
+export function useCramQueueQuery(
+  deckId: number | null | undefined,
+  tag?: string | null,
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const MAX_QUEUE_SIZE = 1000
+  const PAGE_SIZE = 200
+
+  return useQuery({
+    queryKey: ["flashcards:review:cram-queue", deckId ?? null, tag ?? null],
+    queryFn: async (): Promise<Flashcard[]> => {
+      const queue: Flashcard[] = []
+      let offset = 0
+
+      while (queue.length < MAX_QUEUE_SIZE) {
+        const res = await listFlashcards({
+          deck_id: deckId ?? undefined,
+          tag: tag || undefined,
+          due_status: "all",
+          order_by: "due_at",
+          limit: PAGE_SIZE,
+          offset
+        })
+        const items = res.items || []
+        if (items.length === 0) break
+        queue.push(...items.filter((card) => !isTutorialResidueCard(card)))
+        if (items.length < PAGE_SIZE) break
+        offset += PAGE_SIZE
+      }
+
+      return queue.slice(0, MAX_QUEUE_SIZE)
     },
     enabled: options?.enabled ?? flashcardsEnabled
   })
@@ -96,28 +170,210 @@ export interface ManageQueryParams {
   deckId?: number | null
   query?: string
   tag?: string
+  tags?: string[]
   dueStatus?: DueStatus
+  sortBy?: ManageSortBy
   page?: number
   pageSize?: number
+}
+
+export type ManageSortBy =
+  | "due"
+  | "created"
+  | "ease"
+  | "last_reviewed"
+  | "front_alpha"
+
+const parseTimestamp = (value?: string | null): number => {
+  if (!value) return Number.POSITIVE_INFINITY
+  const parsed = new Date(value).getTime()
+  if (Number.isNaN(parsed)) return Number.POSITIVE_INFINITY
+  return parsed
+}
+
+export const getManageServerOrderBy = (
+  sortBy: ManageSortBy
+): "due_at" | "created_at" => (sortBy === "created" ? "created_at" : "due_at")
+
+export const applyManageClientSort = (
+  items: Flashcard[],
+  sortBy: ManageSortBy
+): Flashcard[] => {
+  const next = [...items]
+  switch (sortBy) {
+    case "created":
+      return next.sort((a, b) => parseTimestamp(a.created_at) - parseTimestamp(b.created_at))
+    case "ease":
+      return next.sort((a, b) => a.ef - b.ef)
+    case "last_reviewed":
+      return next.sort((a, b) => {
+        const left = a.last_reviewed_at
+          ? new Date(a.last_reviewed_at).getTime()
+          : null
+        const right = b.last_reviewed_at
+          ? new Date(b.last_reviewed_at).getTime()
+          : null
+        if (left === null && right === null) return 0
+        if (left === null) return 1
+        if (right === null) return -1
+        if (left === right) return 0
+        return right - left
+      })
+    case "front_alpha":
+      return next.sort((a, b) =>
+        (a.front || "").localeCompare(b.front || "", undefined, {
+          sensitivity: "base"
+        })
+      )
+    case "due":
+    default:
+      return next.sort((a, b) => parseTimestamp(a.due_at) - parseTimestamp(b.due_at))
+  }
+}
+
+export const normalizeManageTags = (
+  tags?: string[] | null,
+  singleTag?: string | null
+): string[] => {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  const input = [...(tags || []), singleTag || ""]
+  for (const raw of input) {
+    const tag = String(raw || "").trim().toLowerCase()
+    if (!tag || seen.has(tag)) continue
+    seen.add(tag)
+    normalized.push(tag)
+  }
+  return normalized
+}
+
+export const cardHasAllTags = (card: Flashcard, normalizedTags: string[]): boolean => {
+  if (normalizedTags.length === 0) return true
+  const cardTags = new Set((card.tags || []).map((tag) => String(tag || "").trim().toLowerCase()))
+  return normalizedTags.every((tag) => cardTags.has(tag))
 }
 
 export function useManageQuery(params: ManageQueryParams, options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
 
-  const { deckId, query, tag, dueStatus = "all", page = 1, pageSize = 20 } = params
+  const {
+    deckId,
+    query,
+    tag,
+    tags,
+    dueStatus = "all",
+    sortBy = "due",
+    page = 1,
+    pageSize = 20
+  } = params
+  const normalizedTags = normalizeManageTags(tags, tag)
+  const primaryTag = normalizedTags[0]
 
   return useQuery({
-    queryKey: ["flashcards:list", deckId, query, tag, dueStatus, page, pageSize],
-    queryFn: async () =>
-      await listFlashcards({
+    queryKey: [
+      "flashcards:list",
+      deckId,
+      query,
+      normalizedTags.join("|"),
+      dueStatus,
+      sortBy,
+      page,
+      pageSize
+    ],
+    queryFn: async () => {
+      if (normalizedTags.length > 1) {
+        const bulk: Flashcard[] = []
+        const PAGE_SCAN_SIZE = 500
+        const MAX_SCAN = 10000
+        let offset = 0
+
+        while (offset < MAX_SCAN) {
+          const chunk = await listFlashcards({
+            deck_id: deckId ?? undefined,
+            q: query || undefined,
+            tag: primaryTag,
+            due_status: dueStatus,
+            limit: PAGE_SCAN_SIZE,
+            offset,
+            order_by: getManageServerOrderBy(sortBy)
+          })
+          const items = chunk.items || []
+          if (items.length === 0) break
+          bulk.push(...items.filter((card) => cardHasAllTags(card, normalizedTags)))
+          if (items.length < PAGE_SCAN_SIZE) break
+          offset += PAGE_SCAN_SIZE
+        }
+
+        const sorted = applyManageClientSort(bulk, sortBy)
+        const start = (page - 1) * pageSize
+        const pageItems = sorted.slice(start, start + pageSize)
+        return {
+          items: pageItems,
+          count: pageItems.length,
+          total: sorted.length
+        }
+      }
+
+      const response = await listFlashcards({
         deck_id: deckId ?? undefined,
         q: query || undefined,
-        tag: tag || undefined,
+        tag: primaryTag,
         due_status: dueStatus,
         limit: pageSize,
         offset: (page - 1) * pageSize,
-        order_by: "due_at"
-      }),
+        order_by: getManageServerOrderBy(sortBy)
+      })
+      return {
+        ...response,
+        items: applyManageClientSort(response.items || [], sortBy)
+      }
+    },
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching tag suggestions for autocomplete/multi-tag filter chips.
+ */
+export function useTagSuggestionsQuery(
+  deckId?: number | null,
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+
+  return useQuery({
+    queryKey: ["flashcards:tags:suggestions", deckId ?? null],
+    queryFn: async () => {
+      const PAGE_SCAN_SIZE = 500
+      const MAX_SCAN = 10000
+      const tagSet = new Set<string>()
+      let offset = 0
+
+      while (offset < MAX_SCAN) {
+        const response = await listFlashcards({
+          deck_id: deckId ?? undefined,
+          due_status: "all",
+          limit: PAGE_SCAN_SIZE,
+          offset,
+          order_by: "created_at"
+        })
+        const items = response.items || []
+        if (items.length === 0) break
+        for (const card of items) {
+          for (const rawTag of card.tags || []) {
+            const tag = String(rawTag || "").trim()
+            if (!tag) continue
+            tagSet.add(tag)
+          }
+        }
+        if (items.length < PAGE_SCAN_SIZE) break
+        offset += PAGE_SCAN_SIZE
+      }
+
+      return Array.from(tagSet).sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: "base" })
+      )
+    },
     enabled: options?.enabled ?? flashcardsEnabled
   })
 }
@@ -131,6 +387,26 @@ export function useImportLimitsQuery(options?: UseFlashcardQueriesOptions) {
   return useQuery({
     queryKey: ["flashcards:import:limits"],
     queryFn: getFlashcardsImportLimits,
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching flashcard analytics summary
+ */
+export function useReviewAnalyticsSummaryQuery(
+  deckId?: number | null,
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+
+  return useQuery({
+    queryKey: ["flashcards:analytics:summary", deckId ?? null],
+    queryFn: ({ signal }) =>
+      getFlashcardsAnalyticsSummary({
+        deck_id: deckId ?? undefined,
+        signal
+      }),
     enabled: options?.enabled ?? flashcardsEnabled
   })
 }
@@ -211,6 +487,27 @@ export function useDeleteFlashcardMutation() {
 }
 
 /**
+ * Hook for resetting flashcard scheduling metadata back to new-card defaults
+ */
+export function useResetFlashcardSchedulingMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:reset-scheduling"],
+    mutationFn: (params: { uuid: string; expectedVersion: number }) =>
+      resetFlashcardScheduling(params.uuid, {
+        expected_version: params.expectedVersion
+      }),
+    onSuccess: () => {
+      invalidateFlashcardsQueries(qc)
+    },
+    onError: (error) => {
+      console.error("Failed to reset flashcard scheduling:", error)
+    }
+  })
+}
+
+/**
  * Hook for submitting a review
  */
 export function useReviewFlashcardMutation() {
@@ -229,6 +526,36 @@ export function useReviewFlashcardMutation() {
     },
     onError: (error) => {
       console.error("Failed to submit flashcard review:", error)
+    }
+  })
+}
+
+/**
+ * Hook for generating flashcards from free text via LLM adapter.
+ */
+export function useGenerateFlashcardsMutation() {
+  return useMutation({
+    mutationKey: ["flashcards:generate"],
+    mutationFn: (params: {
+      text: string
+      numCards?: number
+      cardType?: "basic" | "basic_reverse" | "cloze"
+      difficulty?: "easy" | "medium" | "hard" | "mixed"
+      focusTopics?: string[]
+      provider?: string
+      model?: string
+    }) =>
+      generateFlashcards({
+        text: params.text,
+        num_cards: params.numCards,
+        card_type: params.cardType,
+        difficulty: params.difficulty,
+        focus_topics: params.focusTopics,
+        provider: params.provider,
+        model: params.model
+      }),
+    onError: (error) => {
+      console.error("Failed to generate flashcards:", error)
     }
   })
 }
@@ -257,6 +584,50 @@ export function useImportFlashcardsMutation() {
 }
 
 /**
+ * Hook for importing flashcards from JSON/JSONL content via upload endpoint.
+ */
+export function useImportFlashcardsJsonMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:import-json"],
+    mutationFn: (params: { content: string; filename?: string }) =>
+      importFlashcardsJson({
+        content: params.content,
+        filename: params.filename
+      }),
+    onSuccess: () => {
+      invalidateFlashcardsQueries(qc)
+    },
+    onError: (error) => {
+      console.error("Failed to import JSON flashcards:", error)
+    }
+  })
+}
+
+/**
+ * Hook for importing flashcards from APKG upload endpoint.
+ */
+export function useImportFlashcardsApkgMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:import-apkg"],
+    mutationFn: (params: { bytes: Uint8Array; filename?: string }) =>
+      importFlashcardsApkg({
+        bytes: params.bytes,
+        filename: params.filename
+      }),
+    onSuccess: () => {
+      invalidateFlashcardsQueries(qc)
+    },
+    onError: (error) => {
+      console.error("Failed to import APKG flashcards:", error)
+    }
+  })
+}
+
+/**
  * Helper to check if flashcards feature is available
  */
 export function useFlashcardsEnabled() {
@@ -280,22 +651,25 @@ export function useDueCountsQuery(deckId?: number | null, options?: UseFlashcard
 
   return useQuery({
     queryKey: ["flashcards:due-counts", deckId],
+    queryFn: () => fetchDueCounts(deckId),
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching due counts for all decks (for selector labels and overviews)
+ */
+export function useDeckDueCountsQuery(options?: UseFlashcardQueriesOptions) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+
+  return useQuery({
+    queryKey: ["flashcards:due-counts:by-deck"],
     queryFn: async () => {
-      const [due, newCards, learning] = await Promise.all([
-        listFlashcards({ deck_id: deckId ?? undefined, due_status: "due", limit: 1, offset: 0 }),
-        listFlashcards({ deck_id: deckId ?? undefined, due_status: "new", limit: 1, offset: 0 }),
-        listFlashcards({ deck_id: deckId ?? undefined, due_status: "learning", limit: 1, offset: 0 })
-      ])
-      const getTotal = (res: { total?: number | null; count?: number }) => (res.total ?? res.count ?? 0)
-      const dueTotal = getTotal(due)
-      const newTotal = getTotal(newCards)
-      const learningTotal = getTotal(learning)
-      return {
-        due: dueTotal,
-        new: newTotal,
-        learning: learningTotal,
-        total: dueTotal + newTotal + learningTotal
-      }
+      const decks = await listDecks()
+      const entries = await Promise.all(
+        decks.map(async (deck) => [deck.id, await fetchDueCounts(deck.id)] as const)
+      )
+      return Object.fromEntries(entries) as Record<number, DueCounts>
     },
     enabled: options?.enabled ?? flashcardsEnabled
   })

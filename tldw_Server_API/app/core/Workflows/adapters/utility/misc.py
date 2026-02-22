@@ -11,6 +11,7 @@ import datetime
 import difflib
 import json
 import os
+import tempfile
 import time
 from typing import Any
 
@@ -18,6 +19,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_artifacts_dir,
     resolve_context_user_id,
@@ -488,7 +490,7 @@ async def run_sandbox_exec_adapter(config: dict[str, Any], context: dict[str, An
         stdin_val = apply_template_to_string(str(stdin_t), context) or str(stdin_t)
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         simulated_stdout = f"[TEST_MODE] Code executed successfully\nLanguage: {language}\nCode length: {len(code)} chars"
         if stdin_val:
             simulated_stdout += f"\nStdin provided: {len(stdin_val)} chars"
@@ -617,14 +619,14 @@ async def run_screenshot_capture_adapter(config: dict[str, Any], context: dict[s
         return {"__status__": "cancelled"}
 
     # TEST_MODE: return simulated result without real browser
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if is_test_mode():
         url = config.get("url") or ""
         if isinstance(url, str):
             url = apply_template_to_string(url, context) or url
         if not url:
             return {"error": "missing_url", "simulated": True}
         return {
-            "screenshot_path": "/tmp/simulated_screenshot.png",
+            "screenshot_path": os.path.join(tempfile.gettempdir(), "simulated_screenshot.png"),
             "url": url,
             "simulated": True,
         }

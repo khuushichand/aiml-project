@@ -25,7 +25,7 @@ def _client(monkeypatch):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     return app, headers
 

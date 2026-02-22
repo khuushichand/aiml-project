@@ -1,0 +1,38 @@
+# Phoneme/Lexicon override spec for TTS providers.
+#
+# Precedence in runtime (highest -> lowest):
+#   1) Request-level overrides (extra_params.phoneme_overrides / phoneme_map)
+#   2) Provider-level overrides (providers.<provider>)
+#   3) Global overrides (global)
+#
+# Entry fields:
+#   term: required word/phrase to match
+#   phonemes: required phoneme/IPA replacement payload
+#   lang: optional language hint (prefix match, e.g. "en" or "en-US")
+#   boundary: optional bool, default true; true = word-boundary matching
+#   provider: optional explicit provider scoping (usually omitted inside providers.<name>)
+#
+# Note:
+# - Keep this file present with empty lists unless you intentionally add overrides.
+# - Untrusted/special regex characters are escaped by the runtime matcher.
+
+version: 1
+
+global: []
+
+providers:
+  kokoro: []
+
+# Example (disabled):
+# global:
+#   - term: "SQL"
+#     phonemes: "ˈs iː k w ə l"
+#     lang: "en"
+#     boundary: true
+#
+# providers:
+#   kokoro:
+#     - term: "OpenAI"
+#       phonemes: "oʊ p ən aɪ"
+#       lang: "en"
+#       boundary: true

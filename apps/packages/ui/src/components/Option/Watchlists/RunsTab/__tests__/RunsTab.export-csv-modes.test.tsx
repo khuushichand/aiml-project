@@ -54,10 +54,33 @@ vi.mock("antd", () => {
     </select>
   )
 
-  const Button = ({ children, onClick, loading }: any) => (
-    <button type="button" disabled={Boolean(loading)} onClick={() => onClick?.()}>
+  const Button = ({ children, onClick, loading, ...rest }: any) => (
+    <button
+      type="button"
+      disabled={Boolean(loading)}
+      onClick={() => onClick?.()}
+      {...rest}
+    >
       {children}
     </button>
+  )
+
+  const Dropdown = ({ children, menu }: any) => (
+    <div>
+      {children}
+      <div data-testid="mock-runs-export-menu">
+        {(menu?.items || []).map((item: any) => (
+          <button
+            key={String(item.key)}
+            type="button"
+            disabled={Boolean(item.disabled)}
+            onClick={() => menu?.onClick?.({ key: item.key })}
+          >
+            {String(item.label)}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 
   const Table = () => <div data-testid="runs-table" />
@@ -68,6 +91,7 @@ vi.mock("antd", () => {
 
   return {
     Select,
+    Dropdown,
     Button,
     Table,
     Progress,
@@ -98,7 +122,7 @@ vi.mock("@/store/watchlists", () => ({
     selector(mockState.storeStateRef.current)
 }))
 
-vi.mock("@/components/Option/Watchlists/RunsTab/RunDetailDrawer", () => ({
+vi.mock("../RunDetailDrawer", () => ({
   RunDetailDrawer: () => null
 }))
 
@@ -155,10 +179,7 @@ describe("RunsTab CSV export modes", () => {
   it("requests global aggregate tallies CSV when aggregate mode is selected", async () => {
     render(<RunsTab />)
 
-    fireEvent.change(screen.getByTestId("runs-csv-tallies-mode"), {
-      target: { value: "aggregate" }
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Export CSV" }))
+    fireEvent.click(screen.getByRole("button", { name: "Global tallies summary" }))
 
     await waitFor(() => {
       expect(mockState.exportRunsCsvMock).toHaveBeenCalledWith(
@@ -179,10 +200,7 @@ describe("RunsTab CSV export modes", () => {
 
     render(<RunsTab />)
 
-    fireEvent.change(screen.getByTestId("runs-csv-tallies-mode"), {
-      target: { value: "per_run" }
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Export CSV" }))
+    fireEvent.click(screen.getByRole("button", { name: "Per-run tallies" }))
 
     await waitFor(() => {
       expect(mockState.exportRunsCsvMock).toHaveBeenCalledWith(

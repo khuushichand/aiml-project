@@ -4,10 +4,45 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import {
+  buildAlertHistoryEntry,
+  buildAlertRuleFromDraft,
+  buildAssignableUsers,
+  DEFAULT_ALERT_RULE_DRAFT,
+  ensureTriggeredHistoryEntries,
+  isAlertSnoozed,
+  normalizeMonitoringAlertsPayload,
+  readStoredAlertHistory,
+  readStoredAlertRules,
+  resolveSnoozedUntil,
+  validateAlertRuleDraft,
+  writeStoredAlertHistory,
+  writeStoredAlertRules,
+} from '@/lib/monitoring-alerts';
+import {
+  buildSyntheticMonitoringMetricsHistory,
+  extractAdditionalMetricSnapshot,
+  MONITORING_DEFAULT_SERIES_VISIBILITY,
+  normalizeMonitoringMetricsPayload,
+  resolveMonitoringRangeParams,
+  toggleMonitoringSeriesVisibility,
+  type MonitoringMetricSeriesKey,
+  type MonitoringMetricsSeriesVisibility,
+  type MonitoringTimeRangeOption,
+} from '@/lib/monitoring-metrics';
+import {
+  buildMonitoringSystemStatus,
+  measureTimedEndpoint,
+  MONITORING_SUBSYSTEMS,
+  normalizeMonitoringHealthStatus,
+} from '@/lib/monitoring-health';
+import AlertRulesPanel from './components/AlertRulesPanel';
 import AlertsPanel from './components/AlertsPanel';
 import MetricsChart from './components/MetricsChart';
 import MetricsGrid from './components/MetricsGrid';
@@ -15,37 +50,30 @@ import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
 import WatchlistsPanel from './components/WatchlistsPanel';
 import type {
+  AlertAssignableUser,
+  AlertHistoryEntry,
+  AlertRule,
+  AlertRuleDraft,
+  AlertRuleValidationErrors,
   Metric,
   MetricsHistoryPoint,
   NotificationChannel,
   NotificationSettings,
   NotificationSettingsApi,
   RecentNotification,
+  SnoozeDurationOption,
   SystemAlert,
   SystemHealthStatus,
   SystemStatusItem,
-  SystemStatusKey,
   Watchlist,
   WatchlistDraft,
 } from './types';
-
-interface ApiHealthResponse {
-  status?: string;
-  checks?: {
-    database?: { status?: string };
-  };
-}
-
-interface ServiceHealthResponse {
-  status?: string;
-}
 
 interface HealthMetricsResponse {
   cpu?: { percent?: number };
   memory?: { percent?: number };
 }
 
-const METRICS_HISTORY_MAX_POINTS = 288;
 const METRICS_HISTORY_POLL_MS = 5 * 60 * 1000;
 const METRIC_CRITICAL_THRESHOLD = 90;
 const METRIC_WARNING_THRESHOLD = 70;
@@ -56,50 +84,32 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   digest_frequency: 'daily',
 };
 const DEFAULT_SYSTEM_STATUS: SystemStatusItem[] = [
-  { key: 'api', label: 'API Server', status: 'unknown', detail: 'Checking...' },
-  { key: 'database', label: 'Database', status: 'unknown', detail: 'Checking...' },
-  { key: 'llm', label: 'LLM Services', status: 'unknown', detail: 'Checking...' },
-  { key: 'rag', label: 'RAG Service', status: 'unknown', detail: 'Checking...' },
+  ...MONITORING_SUBSYSTEMS.map((subsystem) => ({
+    key: subsystem.key,
+    label: subsystem.label,
+    status: 'unknown' as const,
+    detail: 'Checking...',
+  })),
 ];
-const SYSTEM_STATUS_DETAILS: Record<SystemStatusKey, Record<SystemHealthStatus, string>> = {
-  api: {
-    healthy: 'Operational',
-    warning: 'Degraded',
-    critical: 'Unhealthy',
-    unknown: 'Unknown',
-  },
-  database: {
-    healthy: 'Connected',
-    warning: 'Degraded',
-    critical: 'Unreachable',
-    unknown: 'Unknown',
-  },
-  llm: {
-    healthy: 'Available',
-    warning: 'Degraded',
-    critical: 'Unavailable',
-    unknown: 'Unknown',
-  },
-  rag: {
-    healthy: 'Available',
-    warning: 'Degraded',
-    critical: 'Unavailable',
-    unknown: 'Unknown',
-  },
+const MONITORING_TIME_RANGE_OPTIONS: Array<{ value: MonitoringTimeRangeOption; label: string }> = [
+  { value: '1h', label: '1h' },
+  { value: '6h', label: '6h' },
+  { value: '24h', label: '24h' },
+  { value: '7d', label: '7d' },
+  { value: '30d', label: '30d' },
+  { value: 'custom', label: 'Custom' },
+];
+const toDatetimeLocalInputValue = (value: Date): string => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  const hours = String(value.getHours()).padStart(2, '0');
+  const minutes = String(value.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 };
 
 export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
-  const value = (status || '').toLowerCase();
-  if (['ok', 'healthy', 'ready', 'alive'].includes(value)) {
-    return 'healthy';
-  }
-  if (['degraded', 'warning'].includes(value)) {
-    return 'warning';
-  }
-  if (['unhealthy', 'error', 'critical', 'not_ready'].includes(value)) {
-    return 'critical';
-  }
-  return 'unknown';
+  return normalizeMonitoringHealthStatus(status);
 };
 
 const normalizeAlertThreshold = (value?: string): NotificationSettings['alert_threshold'] => {
@@ -191,12 +201,140 @@ const buildNotificationSettingsUpdate = (settings: NotificationSettings): Notifi
   };
 };
 
+const toRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+
+const pickString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+};
+
+const normalizeRecentNotificationStatus = (value: unknown): RecentNotification['status'] => {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (['sent', 'delivered', 'success', 'ok', 'stored', 'partial'].includes(normalized)) {
+    return 'sent';
+  }
+  if (['failed', 'error'].includes(normalized)) {
+    return 'failed';
+  }
+  return 'pending';
+};
+
+const extractRecentNotificationError = (entry: Record<string, unknown>): string | undefined => {
+  const details = toRecord(entry.details);
+  const directError = pickString(entry.error, details?.error);
+  if (directError) return directError;
+
+  const deliveries = Array.isArray(details?.deliveries) ? details.deliveries : [];
+  for (const deliveryEntry of deliveries) {
+    const delivery = toRecord(deliveryEntry);
+    if (!delivery) continue;
+    const status = pickString(delivery.status)?.toLowerCase();
+    if (status === 'failed' || status === 'error') {
+      return pickString(delivery.error)
+        ?? `Delivery failed for ${pickString(delivery.recipient) ?? 'recipient'}`;
+    }
+  }
+  return undefined;
+};
+
+const normalizeRecentNotificationItem = (value: unknown, index: number): RecentNotification => {
+  const fallbackTimestamp = new Date().toISOString();
+  const entry = toRecord(value);
+  if (!entry) {
+    return {
+      id: `notification-${index}`,
+      channel: 'unknown',
+      message: typeof value === 'string' && value.trim() ? value.trim() : 'Notification event',
+      status: 'pending',
+      timestamp: fallbackTimestamp,
+    };
+  }
+
+  const details = toRecord(entry.details);
+  const timestampRaw = pickString(entry.timestamp, entry.created_at, entry.sent_at, entry.time, entry.occurred_at);
+  const parsedTimestamp = timestampRaw ? new Date(timestampRaw) : null;
+  const timestamp = parsedTimestamp && !Number.isNaN(parsedTimestamp.valueOf())
+    ? parsedTimestamp.toISOString()
+    : fallbackTimestamp;
+
+  const channel = pickString(entry.channel, entry.type, entry.provider) ?? 'unknown';
+  const message = pickString(entry.message, entry.text_snippet, entry.subject, details?.subject, entry.raw)
+    ?? 'Notification event';
+  const severity = pickString(entry.severity, entry.rule_severity);
+
+  return {
+    id: pickString(entry.id, entry.notification_id) ?? `${timestamp}-${channel}-${index}`,
+    channel,
+    message,
+    status: normalizeRecentNotificationStatus(entry.status),
+    timestamp,
+    error: extractRecentNotificationError(entry),
+    severity,
+  };
+};
+
+const normalizeRecentNotifications = (value: unknown): RecentNotification[] => {
+  const payload = toRecord(value);
+  const items = Array.isArray(value)
+    ? value
+    : Array.isArray(payload?.notifications)
+      ? payload.notifications
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : [];
+
+  return items.map((item, index) => normalizeRecentNotificationItem(item, index));
+};
+
+const normalizeWatchlistsPayload = (value: unknown): Watchlist[] => {
+  if (Array.isArray(value)) return value as Watchlist[];
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if (Array.isArray(obj.watchlists)) {
+      return obj.watchlists as Watchlist[];
+    }
+  }
+  return [];
+};
+
+const mergeAlertsWithLocalState = (
+  incoming: SystemAlert[],
+  existing: SystemAlert[]
+): SystemAlert[] => {
+  const existingById = new Map(existing.map((alert) => [alert.id, alert]));
+  return incoming.map((alert) => {
+    const prev = existingById.get(alert.id);
+    return {
+      ...alert,
+      assigned_to: prev?.assigned_to ?? alert.assigned_to,
+      snoozed_until: prev?.snoozed_until ?? alert.snoozed_until,
+      metadata: prev?.metadata ?? alert.metadata,
+    };
+  });
+};
+
 export default function MonitoringPage() {
   const confirm = useConfirm();
+  const now = new Date();
+  const defaultCustomEnd = toDatetimeLocalInputValue(now);
+  const defaultCustomStart = toDatetimeLocalInputValue(new Date(now.getTime() - (24 * 60 * 60 * 1000)));
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const [alerts, setAlerts] = useState<SystemAlert[]>([]);
   const [metricsHistory, setMetricsHistory] = useState<MetricsHistoryPoint[]>([]);
+  const [timeRange, setTimeRange] = useState<MonitoringTimeRangeOption>('24h');
+  const [customRangeStart, setCustomRangeStart] = useState<string>(defaultCustomStart);
+  const [customRangeEnd, setCustomRangeEnd] = useState<string>(defaultCustomEnd);
+  const [rangeValidationError, setRangeValidationError] = useState('');
+  const [activeRangeLabel, setActiveRangeLabel] = useState('24h');
+  const [seriesVisibility, setSeriesVisibility] = useState<MonitoringMetricsSeriesVisibility>(
+    MONITORING_DEFAULT_SERIES_VISIBILITY
+  );
   const [systemStatus, setSystemStatus] = useState<SystemStatusItem[]>(DEFAULT_SYSTEM_STATUS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -204,6 +342,7 @@ export default function MonitoringPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [deletingWatchlistId, setDeletingWatchlistId] = useState<string | null>(null);
   const successTimerRef = useRef<number | null>(null);
+  const alertStorageHydratedRef = useRef(false);
 
   // Create watchlist dialog
   const [showCreateWatchlist, setShowCreateWatchlist] = useState(false);
@@ -221,27 +360,79 @@ export default function MonitoringPage() {
   const [notificationsSaving, setNotificationsSaving] = useState(false);
   const [notificationSettingsStatus, setNotificationSettingsStatus] = useState<'pending' | 'fulfilled' | 'rejected'>('pending');
 
-  const appendMetricsHistory = useCallback((cpu: number, memory: number) => {
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    setMetricsHistory((prev) => {
-      const next = [...prev, { time, cpu, memory }];
-      if (next.length <= METRICS_HISTORY_MAX_POINTS) {
-        return next;
+  // Stage 2: Alert rules + enhanced alert management
+  const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
+  const [alertRuleDraft, setAlertRuleDraft] = useState<AlertRuleDraft>(DEFAULT_ALERT_RULE_DRAFT);
+  const [alertRuleValidationErrors, setAlertRuleValidationErrors] = useState<AlertRuleValidationErrors>({});
+  const [alertRulesSaving, setAlertRulesSaving] = useState(false);
+  const [assignableUsers, setAssignableUsers] = useState<AlertAssignableUser[]>([]);
+  const [showSnoozedAlerts, setShowSnoozedAlerts] = useState(false);
+  const [alertHistory, setAlertHistory] = useState<AlertHistoryEntry[]>([]);
+
+  const loadMetricsHistoryForRange = useCallback(async (
+    selectedRange: MonitoringTimeRangeOption,
+    customStart: string,
+    customEnd: string
+  ): Promise<boolean> => {
+    const resolvedRange = resolveMonitoringRangeParams(selectedRange, customStart, customEnd);
+    if (!resolvedRange.ok) {
+      setRangeValidationError(resolvedRange.error);
+      return false;
+    }
+
+    setRangeValidationError('');
+    const rangeParams = resolvedRange.params;
+    setActiveRangeLabel(rangeParams.rangeLabel);
+
+    try {
+      const historyPayload = await api.getMonitoringMetrics({
+        start: rangeParams.start,
+        end: rangeParams.end,
+        granularity: rangeParams.granularity,
+      });
+      const normalized = normalizeMonitoringMetricsPayload(historyPayload, rangeParams.end);
+      if (normalized.length > 0) {
+        setMetricsHistory(normalized);
+        return true;
       }
-      return next.slice(-METRICS_HISTORY_MAX_POINTS);
-    });
+      throw new Error('No monitoring metrics history returned');
+    } catch (historyErr: unknown) {
+      console.warn('Failed to load monitoring metrics history endpoint, using fallback sample.', historyErr);
+      try {
+        const [healthResult, metricsResult] = await Promise.allSettled([
+          api.getHealthMetrics(),
+          api.getMetrics(),
+        ]);
+        const healthPayload = healthResult.status === 'fulfilled'
+          ? (healthResult.value as HealthMetricsResponse)
+          : {};
+        const metricsPayload = metricsResult.status === 'fulfilled' ? metricsResult.value : {};
+        const additional = extractAdditionalMetricSnapshot(metricsPayload);
+        const cpu = Number(healthPayload?.cpu?.percent ?? 0);
+        const memory = Number(healthPayload?.memory?.percent ?? 0);
+        const fallbackHistory = buildSyntheticMonitoringMetricsHistory(
+          {
+            cpu,
+            memory,
+            diskUsage: additional.diskUsage,
+            throughput: additional.throughput,
+            activeConnections: additional.activeConnections,
+            queueDepth: additional.queueDepth,
+          },
+          rangeParams
+        );
+        setMetricsHistory(fallbackHistory);
+      } catch (fallbackErr: unknown) {
+        console.warn('Failed to load fallback metrics history:', fallbackErr);
+        setMetricsHistory([]);
+      }
+      return false;
+    }
   }, []);
 
-  const loadMetricsHistorySample = useCallback(async () => {
-    try {
-      const health = (await api.getHealthMetrics()) as HealthMetricsResponse;
-      const cpu = Number(health?.cpu?.percent ?? 0);
-      const memory = Number(health?.memory?.percent ?? 0);
-      appendMetricsHistory(cpu, memory);
-    } catch (err: unknown) {
-      console.warn('Failed to load health metrics history:', err);
-    }
-  }, [appendMetricsHistory]);
+  const handleToggleSeries = (seriesKey: MonitoringMetricSeriesKey) => {
+    setSeriesVisibility((prev) => toggleMonitoringSeriesVisibility(prev, seriesKey));
+  };
 
   const loadData = useCallback(async () => {
     try {
@@ -253,31 +444,46 @@ export default function MonitoringPage() {
         metricsData,
         watchlistsData,
         alertsData,
-        healthData,
-        llmHealthData,
-        ragHealthData,
+        healthTimedResult,
+        llmHealthTimedResult,
+        ragHealthTimedResult,
+        ttsHealthTimedResult,
+        sttHealthTimedResult,
+        embeddingsHealthTimedResult,
+        metricsTextData,
         notificationSettingsData,
         recentNotificationsData,
+        usersData,
       ] = await Promise.allSettled([
         api.getMetrics(),
         api.getWatchlists(),
         api.getAlerts(),
-        api.getHealth(),
-        api.getLlmHealth(),
-        api.getRagHealth(),
+        measureTimedEndpoint(() => api.getHealth()),
+        measureTimedEndpoint(() => api.getLlmHealth()),
+        measureTimedEndpoint(() => api.getRagHealth()),
+        measureTimedEndpoint(() => api.getTtsHealth()),
+        measureTimedEndpoint(() => api.getSttHealth()),
+        measureTimedEndpoint(() => api.getEmbeddingsHealth()),
+        api.getMetricsText(),
         api.getNotificationSettings(),
         api.getRecentNotifications(),
+        api.getUsers({ limit: '100' }),
       ]);
 
       [
         { name: 'metrics', result: metricsData },
         { name: 'watchlists', result: watchlistsData },
         { name: 'alerts', result: alertsData },
-        { name: 'health', result: healthData },
-        { name: 'llmHealth', result: llmHealthData },
-        { name: 'ragHealth', result: ragHealthData },
+        { name: 'health', result: healthTimedResult },
+        { name: 'llmHealth', result: llmHealthTimedResult },
+        { name: 'ragHealth', result: ragHealthTimedResult },
+        { name: 'ttsHealth', result: ttsHealthTimedResult },
+        { name: 'sttHealth', result: sttHealthTimedResult },
+        { name: 'embeddingsHealth', result: embeddingsHealthTimedResult },
+        { name: 'metricsText', result: metricsTextData },
         { name: 'notificationSettings', result: notificationSettingsData },
         { name: 'recentNotifications', result: recentNotificationsData },
+        { name: 'users', result: usersData },
       ].forEach(({ name, result }) => {
         if (result.status === 'rejected') {
           console.warn(`Failed to load ${name}:`, result.reason);
@@ -294,12 +500,7 @@ export default function MonitoringPage() {
 
       // Process recent notifications
       if (recentNotificationsData.status === 'fulfilled') {
-        const data = recentNotificationsData.value as { notifications?: RecentNotification[]; items?: RecentNotification[] };
-        setRecentNotifications(
-          Array.isArray(data.notifications) ? data.notifications :
-          Array.isArray(data.items) ? data.items :
-          Array.isArray(data) ? data as RecentNotification[] : []
-        );
+        setRecentNotifications(normalizeRecentNotifications(recentNotificationsData.value));
       } else {
         setRecentNotifications([]);
       }
@@ -328,70 +529,35 @@ export default function MonitoringPage() {
 
       // Process watchlists
       if (watchlistsData.status === 'fulfilled') {
-        setWatchlists(Array.isArray(watchlistsData.value) ? watchlistsData.value : []);
+        setWatchlists(normalizeWatchlistsPayload(watchlistsData.value));
       }
 
       // Process alerts
       if (alertsData.status === 'fulfilled') {
-        setAlerts(Array.isArray(alertsData.value) ? alertsData.value : []);
+        const normalizedAlerts = normalizeMonitoringAlertsPayload(alertsData.value);
+        setAlerts((prev) => mergeAlertsWithLocalState(normalizedAlerts, prev));
+        setAlertHistory((prev) => ensureTriggeredHistoryEntries(prev, normalizedAlerts));
       }
 
-      const healthAvailable = healthData.status === 'fulfilled';
-      const llmAvailable = llmHealthData.status === 'fulfilled';
-      const ragAvailable = ragHealthData.status === 'fulfilled';
-      const healthPayload = healthAvailable ? (healthData.value as ApiHealthResponse) : undefined;
-      const llmPayload = llmAvailable ? (llmHealthData.value as ServiceHealthResponse) : undefined;
-      const ragPayload = ragAvailable ? (ragHealthData.value as ServiceHealthResponse) : undefined;
-      const apiStatus = healthAvailable
-        ? normalizeHealthStatus(healthPayload?.status)
-        : 'unknown';
-      const dbStatus = healthAvailable
-        ? normalizeHealthStatus(healthPayload?.checks?.database?.status)
-        : 'unknown';
-      const llmStatus = llmAvailable
-        ? normalizeHealthStatus(llmPayload?.status)
-        : 'unknown';
-      const ragStatus = ragAvailable
-        ? normalizeHealthStatus(ragPayload?.status)
-        : 'unknown';
-      const statusDetail = (
-        key: SystemStatusKey,
-        status: SystemHealthStatus,
-        available: boolean
-      ) => {
-        if (!available) {
-          return 'Unavailable';
-        }
-        return SYSTEM_STATUS_DETAILS[key][status];
-      };
-      setSystemStatus([
-        {
-          key: 'api',
-          label: 'API Server',
-          status: apiStatus,
-          detail: statusDetail('api', apiStatus, healthAvailable),
-        },
-        {
-          key: 'database',
-          label: 'Database',
-          status: dbStatus,
-          detail: statusDetail('database', dbStatus, healthAvailable),
-        },
-        {
-          key: 'llm',
-          label: 'LLM Services',
-          status: llmStatus,
-          detail: statusDetail('llm', llmStatus, llmAvailable),
-        },
-        {
-          key: 'rag',
-          label: 'RAG Service',
-          status: ragStatus,
-          detail: statusDetail('rag', ragStatus, ragAvailable),
-        },
-      ]);
+      // Process assignable users
+      if (usersData.status === 'fulfilled') {
+        setAssignableUsers(buildAssignableUsers(usersData.value));
+      } else {
+        setAssignableUsers([]);
+      }
 
-      void loadMetricsHistorySample();
+      setSystemStatus(buildMonitoringSystemStatus({
+        healthResult: healthTimedResult,
+        llmHealthResult: llmHealthTimedResult,
+        ragHealthResult: ragHealthTimedResult,
+        ttsHealthResult: ttsHealthTimedResult,
+        sttHealthResult: sttHealthTimedResult,
+        embeddingsHealthResult: embeddingsHealthTimedResult,
+        metricsSnapshotResult: metricsData,
+        metricsTextResult: metricsTextData,
+      }));
+
+      void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
       setLastUpdated(new Date());
     } catch (err: unknown) {
       console.error('Failed to load monitoring data:', err);
@@ -401,7 +567,23 @@ export default function MonitoringPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadMetricsHistorySample]);
+  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
+
+  useEffect(() => {
+    setAlertRules(readStoredAlertRules());
+    setAlertHistory(readStoredAlertHistory());
+    alertStorageHydratedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!alertStorageHydratedRef.current) return;
+    writeStoredAlertRules(alertRules);
+  }, [alertRules]);
+
+  useEffect(() => {
+    if (!alertStorageHydratedRef.current) return;
+    writeStoredAlertHistory(alertHistory);
+  }, [alertHistory]);
 
   useEffect(() => {
     loadData();
@@ -433,10 +615,31 @@ export default function MonitoringPage() {
   }, [success]);
 
   useEffect(() => {
-    loadMetricsHistorySample();
-    const intervalId = window.setInterval(loadMetricsHistorySample, METRICS_HISTORY_POLL_MS);
+    void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
+    const intervalId = window.setInterval(() => {
+      void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
+    }, METRICS_HISTORY_POLL_MS);
     return () => window.clearInterval(intervalId);
-  }, [loadMetricsHistorySample]);
+  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
+
+  const handleSelectTimeRange = async (nextRange: MonitoringTimeRangeOption) => {
+    setTimeRange(nextRange);
+    if (nextRange === 'custom') {
+      return;
+    }
+    const loaded = await loadMetricsHistoryForRange(nextRange, customRangeStart, customRangeEnd);
+    if (loaded) {
+      setLastUpdated(new Date());
+    }
+  };
+
+  const handleApplyCustomTimeRange = async () => {
+    setTimeRange('custom');
+    const loaded = await loadMetricsHistoryForRange('custom', customRangeStart, customRangeEnd);
+    if (loaded) {
+      setLastUpdated(new Date());
+    }
+  };
 
   const handleCreateWatchlist = async () => {
     if (!newWatchlist.name || !newWatchlist.target) {
@@ -483,10 +686,56 @@ export default function MonitoringPage() {
     }
   };
 
+  const appendAlertHistory = (
+    alertId: string,
+    action: AlertHistoryEntry['action'],
+    details: string,
+    actor?: string
+  ) => {
+    setAlertHistory((prev) => [
+      buildAlertHistoryEntry(alertId, action, details, { actor }),
+      ...prev,
+    ]);
+  };
+
+  const handleCreateAlertRule = () => {
+    const validation = validateAlertRuleDraft(alertRuleDraft);
+    if (!validation.valid) {
+      setAlertRuleValidationErrors(validation.errors);
+      return;
+    }
+
+    setAlertRulesSaving(true);
+    try {
+      const newRule = buildAlertRuleFromDraft(alertRuleDraft);
+      setAlertRules((prev) => [newRule, ...prev]);
+      setAlertRuleValidationErrors({});
+      setAlertRuleDraft(DEFAULT_ALERT_RULE_DRAFT);
+      setSuccess('Alert rule added');
+    } finally {
+      setAlertRulesSaving(false);
+    }
+  };
+
+  const handleDeleteAlertRule = (rule: AlertRule) => {
+    setAlertRules((prev) => prev.filter((item) => item.id !== rule.id));
+    setSuccess('Alert rule deleted');
+  };
+
   const handleAcknowledgeAlert = async (alert: SystemAlert) => {
     try {
       setError('');
       await api.acknowledgeAlert(alert.id);
+      setAlerts((prev) => prev.map((item) => (
+        item.id === alert.id
+          ? {
+            ...item,
+            acknowledged: true,
+            acknowledged_at: new Date().toISOString(),
+          }
+          : item
+      )));
+      appendAlertHistory(alert.id, 'acknowledged', 'Alert acknowledged');
       setSuccess('Alert acknowledged');
       loadData();
     } catch (err: unknown) {
@@ -508,12 +757,51 @@ export default function MonitoringPage() {
     try {
       setError('');
       await api.dismissAlert(alert.id);
+      appendAlertHistory(alert.id, 'dismissed', 'Alert dismissed');
+      setAlerts((prev) => prev.filter((item) => item.id !== alert.id));
       setSuccess('Alert dismissed');
       loadData();
     } catch (err: unknown) {
       console.error('Failed to dismiss alert:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to dismiss alert');
     }
+  };
+
+  const handleAssignAlert = (alert: SystemAlert, userId: string) => {
+    setAlerts((prev) => prev.map((item) => (
+      item.id === alert.id
+        ? { ...item, assigned_to: userId || undefined }
+        : item
+    )));
+    const assignedLabel = userId
+      ? (assignableUsers.find((user) => user.id === userId)?.label ?? userId)
+      : 'Unassigned';
+    appendAlertHistory(alert.id, 'assigned', `Assigned to ${assignedLabel}`);
+    setSuccess(userId ? 'Alert assigned' : 'Alert unassigned');
+  };
+
+  const handleSnoozeAlert = (alert: SystemAlert, duration: SnoozeDurationOption) => {
+    const snoozedUntil = resolveSnoozedUntil(duration);
+    setAlerts((prev) => prev.map((item) => (
+      item.id === alert.id
+        ? { ...item, snoozed_until: snoozedUntil }
+        : item
+    )));
+    appendAlertHistory(alert.id, 'snoozed', `Snoozed for ${duration}`);
+    setSuccess(`Alert snoozed for ${duration}`);
+  };
+
+  const handleEscalateAlert = (alert: SystemAlert) => {
+    if (alert.severity === 'critical') {
+      return;
+    }
+    setAlerts((prev) => prev.map((item) => (
+      item.id === alert.id
+        ? { ...item, severity: 'critical' }
+        : item
+    )));
+    appendAlertHistory(alert.id, 'escalated', 'Severity escalated to critical');
+    setSuccess('Alert escalated to critical');
   };
 
   const handleSaveNotificationSettings = async (settings: NotificationSettings) => {
@@ -537,20 +825,20 @@ export default function MonitoringPage() {
     }
   };
 
-  const handleTestNotification = async () => {
+  const handleTestNotification = async (
+    payload?: {
+      message?: string;
+      severity?: string;
+    },
+  ) => {
     try {
       setError('');
-      await api.testNotification();
+      await api.testNotification(payload ?? {});
       setSuccess('Test notification sent');
       // Reload recent notifications
       try {
         const data = await api.getRecentNotifications();
-        const result = data as { notifications?: RecentNotification[]; items?: RecentNotification[] };
-        setRecentNotifications(
-          Array.isArray(result.notifications) ? result.notifications :
-          Array.isArray(result.items) ? result.items :
-          Array.isArray(result) ? result as RecentNotification[] : []
-        );
+        setRecentNotifications(normalizeRecentNotifications(data));
       } catch {
         // Ignore reload errors
       }
@@ -560,12 +848,21 @@ export default function MonitoringPage() {
     }
   };
 
-  const activeAlerts = alerts.filter((a) => !a.acknowledged);
+  const activeAlerts = alerts.filter((alert) => !alert.acknowledged && !isAlertSnoozed(alert));
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
+            <p
+              className="sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              data-testid="monitoring-alert-count-live"
+            >
+              {activeAlerts.length} active alert{activeAlerts.length !== 1 ? 's' : ''} currently require attention.
+            </p>
             <div className="mb-8 flex items-center justify-between">
               <div>
                 <h1 className="text-3xl font-bold">Monitoring</h1>
@@ -608,15 +905,101 @@ export default function MonitoringPage() {
               </Alert>
             )}
 
-            <MetricsChart metricsHistory={metricsHistory} />
+            <div className="mb-4 rounded-lg border border-border/80 bg-muted/10 p-4">
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">Time Range</span>
+                {MONITORING_TIME_RANGE_OPTIONS.map((option) => (
+                  <Button
+                    key={option.value}
+                    type="button"
+                    size="sm"
+                    variant={timeRange === option.value ? 'secondary' : 'outline'}
+                    onClick={() => { void handleSelectTimeRange(option.value); }}
+                    data-testid={`monitoring-time-range-${option.value}`}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+              {timeRange === 'custom' && (
+                <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
+                  <div className="space-y-1">
+                    <Label htmlFor="customRangeStart">Custom Start</Label>
+                    <Input
+                      id="customRangeStart"
+                      type="datetime-local"
+                      value={customRangeStart}
+                      onChange={(event) => {
+                        setCustomRangeStart(event.target.value);
+                        setRangeValidationError('');
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="customRangeEnd">Custom End</Label>
+                    <Input
+                      id="customRangeEnd"
+                      type="datetime-local"
+                      value={customRangeEnd}
+                      onChange={(event) => {
+                        setCustomRangeEnd(event.target.value);
+                        setRangeValidationError('');
+                      }}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => { void handleApplyCustomTimeRange(); }}
+                    data-testid="monitoring-time-range-apply-custom"
+                  >
+                    Apply
+                  </Button>
+                </div>
+              )}
+              {rangeValidationError && (
+                <p className="mt-2 text-sm text-destructive">{rangeValidationError}</p>
+              )}
+            </div>
+
+            <MetricsChart
+              metricsHistory={metricsHistory}
+              rangeLabel={activeRangeLabel}
+              seriesVisibility={seriesVisibility}
+              onToggleSeries={handleToggleSeries}
+            />
             <MetricsGrid metrics={metrics} loading={loading} />
+
+            <div className="mb-6">
+              <AlertRulesPanel
+                rules={alertRules}
+                draft={alertRuleDraft}
+                errors={alertRuleValidationErrors}
+                saving={alertRulesSaving}
+                onDraftChange={(draft) => {
+                  setAlertRuleDraft(draft);
+                  setAlertRuleValidationErrors({});
+                }}
+                onCreateRule={handleCreateAlertRule}
+                onDeleteRule={handleDeleteAlertRule}
+              />
+              <p className="mt-2 text-xs text-muted-foreground">
+                Alert rules are stored locally until a backend alert-rules endpoint is available.
+              </p>
+            </div>
 
             <div className="grid gap-6 lg:grid-cols-2">
               <AlertsPanel
                 alerts={alerts}
+                history={alertHistory}
+                showSnoozed={showSnoozedAlerts}
+                assignableUsers={assignableUsers}
                 loading={loading}
+                onToggleShowSnoozed={() => setShowSnoozedAlerts((prev) => !prev)}
                 onAcknowledge={handleAcknowledgeAlert}
                 onDismiss={handleDismissAlert}
+                onAssign={handleAssignAlert}
+                onSnooze={handleSnoozeAlert}
+                onEscalate={handleEscalateAlert}
               />
               <WatchlistsPanel
                 watchlists={watchlists}

@@ -1,0 +1,16 @@
+{
+  "name": "tldw-monorepo",
+  "private": true,
+  "workspaces": [
+    "extension",
+    "tldw-frontend",
+    "packages/*"
+  ],
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "playwright": "^1.57.0"
+  },
+  "dependencies": {
+    "jsdom": "^28.1.0"
+  }
+}

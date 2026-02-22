@@ -15,13 +15,18 @@ export type WorkspaceSourceType =
   | "document"
   | "text"
 
+export type WorkspaceSourceStatus = "processing" | "ready" | "error"
+
 export interface WorkspaceSource {
   id: string
   mediaId: number // Server-side media ID
   title: string
   type: WorkspaceSourceType
+  status?: WorkspaceSourceStatus
+  statusMessage?: string
   thumbnailUrl?: string
   addedAt: Date
+  sourceCreatedAt?: Date
   // Optional metadata
   url?: string
   fileSize?: number
@@ -38,6 +43,7 @@ export type ArtifactType =
   | "audio_overview"
   | "mindmap"
   | "report"
+  | "compare_sources"
   | "flashcards"
   | "quiz"
   | "timeline"
@@ -51,6 +57,11 @@ export interface GeneratedArtifact {
   type: ArtifactType
   title: string
   status: ArtifactStatus
+  previousVersionId?: string
+  estimatedTokens?: number
+  estimatedCostUsd?: number
+  totalTokens?: number
+  totalCostUsd?: number
   serverId?: number | string // ID from outputs/quizzes/data-tables/slides endpoint
   content?: string // For text-based artifacts like summary, mindmap
   audioUrl?: string // For audio_overview - object URL to audio blob
@@ -58,6 +69,7 @@ export interface GeneratedArtifact {
   presentationId?: string // For slides - ID of the generated presentation
   presentationVersion?: number // For slides - version for export
   errorMessage?: string // If status is failed
+  data?: Record<string, unknown> // Optional structured artifact payload (quiz, flashcards, tables, etc.)
   createdAt: Date
   completedAt?: Date
 }
@@ -103,6 +115,13 @@ export const OUTPUT_TYPES: OutputTypeConfig[] = [
     label: "Report",
     icon: "FileSpreadsheet",
     description: "Generate a detailed report document",
+    requiresSelectedSources: true
+  },
+  {
+    type: "compare_sources",
+    label: "Compare Sources",
+    icon: "Scale",
+    description: "Compare claims, agreements, and conflicts across sources",
     requiresSelectedSources: true
   },
   {

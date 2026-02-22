@@ -86,7 +86,7 @@ def _ensure_postgres_available(host: str, port: int, user: str, password: str, *
     try:
         subprocess.run([docker_bin, "rm", "-f", container], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
-        pass
+        _ = None
 
     envs = [
         "-e", f"POSTGRES_USER={user}",
@@ -118,7 +118,7 @@ def _connect_admin(host: str, port: int, user: str, password: str):
         raise RuntimeError("psycopg (or psycopg2) is required for Postgres‑backed tests")
 
     last_err = None
-    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "on")
+    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "y", "on")
     for _ in range(10):
         try:
             if _PG_DRIVER == "psycopg":  # pragma: no cover - env dependent
@@ -133,7 +133,7 @@ def _connect_admin(host: str, port: int, user: str, password: str):
                 try:
                     print(f"[pg-fixture] admin connect failed: host={host} port={port} user={user} err={e}")
                 except Exception:
-                    pass
+                    _ = None
             time.sleep(0.5)
     raise last_err  # type: ignore[misc]
 
@@ -165,7 +165,7 @@ def _drop_database(host: str, port: int, user: str, password: str, db_name: str)
         try:
             conn.close()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture(scope="session")
@@ -178,8 +178,8 @@ def pg_server() -> Dict[str, str | int]:
     from tldw_Server_API.tests.helpers.pg_env import get_pg_env
 
     env = get_pg_env()
-    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "on")
-    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "on")
+    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "y", "on")
+    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "y", "on")
 
     ok = _ensure_postgres_available(env.host, env.port, env.user, env.password, require_pg=require_pg)
     if not ok:
@@ -194,7 +194,7 @@ def pg_server() -> Dict[str, str | int]:
                 f"host={env.host} port={env.port} user={env.user} password={masked} database={env.database} dsn={env.dsn}"
             )
         except Exception:
-            pass
+            _ = None
 
     return {"host": env.host, "port": int(env.port), "user": env.user, "password": env.password}
 
@@ -209,8 +209,8 @@ def _temp_db_generator(pg_server) -> Generator[Dict[str, object], None, None]:
     if _PG_DRIVER is None:  # pragma: no cover - env dependent
         pytest.skip("psycopg not installed; skipping Postgres‑backed tests")
 
-    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "on")
-    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "on")
+    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "y", "on")
+    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "y", "on")
 
     try:
         _create_database(host, port, user, password, db_name)
@@ -218,7 +218,7 @@ def _temp_db_generator(pg_server) -> Generator[Dict[str, object], None, None]:
         # First try a local Docker fallback on an alternate port if we're on localhost
         alt_port_env = os.getenv("TLDW_TEST_PG_ALT_PORT", "5434")
         alt_port = int(alt_port_env) if alt_port_env.isdigit() else 5434
-        can_attempt_docker = str(host) in {"127.0.0.1", "localhost", "::1"} and os.getenv("TLDW_TEST_NO_DOCKER", "").lower() not in ("1", "true", "yes", "on")
+        can_attempt_docker = str(host) in {"127.0.0.1", "localhost", "::1"} and os.getenv("TLDW_TEST_NO_DOCKER", "").lower() not in ("1", "true", "yes", "y", "on")
         tried_docker = False
         if can_attempt_docker and alt_port != int(port):
             tried_docker = True
@@ -226,7 +226,7 @@ def _temp_db_generator(pg_server) -> Generator[Dict[str, object], None, None]:
                 try:
                     print(f"[pg-fixture] attempting Docker fallback on 127.0.0.1:{alt_port} for user={user}")
                 except Exception:
-                    pass
+                    _ = None
             ok2 = _ensure_postgres_available("127.0.0.1", alt_port, user, password, require_pg=require_pg)
             if ok2:
                 # Switch to alternate local container and retry create
@@ -249,7 +249,7 @@ def _temp_db_generator(pg_server) -> Generator[Dict[str, object], None, None]:
             try:
                 print("[pg-fixture] " + msg)
             except Exception:
-                pass
+                _ = None
         if require_pg:
             pytest.fail(msg)
         else:

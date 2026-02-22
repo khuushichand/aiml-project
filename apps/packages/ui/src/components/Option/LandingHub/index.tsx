@@ -81,7 +81,7 @@ export const LandingHub: React.FC = () => {
           <Sparkles className="h-6 w-6 text-primary" />
           {t("common:landingHub.title", "Welcome to tldw Assistant")}
         </h1>
-        <p className="text-base text-textMuted mt-2">
+        <p className="text-base text-text-muted mt-2">
           {t("common:landingHub.subtitle", "What would you like to do today?")}
         </p>
       </div>
@@ -132,7 +132,7 @@ export const LandingHub: React.FC = () => {
           checked={skipLanding}
           onChange={(e) => handleSkipChange(e.target.checked)}
         >
-          <span className="text-sm text-textMuted">
+          <span className="text-sm text-text-muted">
             {t("common:landingHub.skipCheckbox", "Don't show this again - go straight to chat")}
           </span>
         </Checkbox>

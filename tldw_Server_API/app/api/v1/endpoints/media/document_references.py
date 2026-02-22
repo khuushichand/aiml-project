@@ -32,6 +32,11 @@ router = APIRouter(tags=["Document Workspace"])
 
 # Maximum number of references to enrich (to avoid long response times)
 MAX_ENRICHMENT_REFS = 5
+# Maximum number of parsed references returned in a single response.
+MAX_PARSED_REFERENCES = 100
+DEFAULT_REFERENCES_PAGE_LIMIT = 50
+MAX_REFERENCES_PAGE_LIMIT = 200
+MAX_PARSED_REFERENCES_CAP = 5000
 # Delay between external API calls (to avoid rate limiting)
 SEMANTIC_SCHOLAR_DELAY = 0.35
 CROSSREF_DELAY = 0.1
@@ -50,27 +55,22 @@ REFERENCE_ENRICH_EXCEPTIONS = (
 )
 
 # Reference section detection patterns
-REFERENCES_PARSER_VERSION = "4"
-REFERENCE_SECTION_PATTERNS = [
-    # Common headings (optional numbering/roman numerals, optional colon)
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*references?\s*:?\s*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*bibliography\s*:?\s*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*works\s+cited\s*:?\s*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*literature\s+cited\s*:?\s*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*cited\s+references?\s*:?\s*$",
-    # Markdown-style headings
-    r"(?im)^#+\s*references?\s*$",
-    r"(?im)^#+\s*bibliography\s*$",
-]
+REFERENCES_PARSER_VERSION = "11"
 
-# Looser fallback headings (allow trailing text like "References and Notes")
-REFERENCE_SECTION_FALLBACK_PATTERNS = [
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*references?\b.*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*bibliography\b.*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*works\s+cited\b.*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*literature\s+cited\b.*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*cited\s+references?\b.*$",
-]
+REFERENCE_HEADING_CORE_PATTERN = re.compile(
+    r"(?i)^(?:\d+|[ivxlc]+)?(?:\.\d+)?\s*"
+    r"(?:references?|bibliography|works\s+cited|literature\s+cited|cited\s+references?)"
+    r"(?:\s*(?:and|&)\s*(?:notes?|citations?))?\s*:?\s*$"
+)
+
+REFERENCE_SECTION_END_CORE_PATTERN = re.compile(
+    r"(?i)^(?:[A-Z](?:\.\d+)*|\d+(?:\.\d+)*)?\s*"
+    r"(?:appendix|acknowledg(?:e)?ments?|supplement(?:ary|al)?|"
+    r"data\s+availability|code\s+availability)\b.*$"
+)
+
+REFERENCE_TAIL_NUMBERED_PATTERN = re.compile(r"^\s*(?:\[+\d{1,6}\]|\d+[\.\)])\s+")
+PARSED_REFERENCES_CACHE_TABLE = "document_parsed_references_cache"
 
 # DOI/arXiv extraction patterns
 DOI_PATTERN = r"(?:https?://(?:dx\.)?doi\.org/)?10\.\d{4,}/[^\s\]\)>\"']+"
@@ -79,7 +79,8 @@ ARXIV_OLD_PATTERN = r"(?:arXiv[:\s]*)?([a-z-]+(?:\.[A-Z]{2})?/\d{7})"
 URL_PATTERN = r"https?://[^\s\]\)>\"']+"
 
 # Year extraction pattern
-YEAR_PATTERN = r"\b(19\d{2}|20[0-2]\d)\b"
+# Include 18xx so classic works (e.g., Darwin-era citations) are not discarded.
+YEAR_PATTERN = r"\b(18\d{2}|19\d{2}|20[0-3]\d)\b"
 
 
 def _get_db_scope(db: MediaDatabase) -> str:
@@ -93,14 +94,25 @@ def _build_references_cache_key(
     enrich: bool,
     user_id: str,
     db_scope: str,
+    offset: int,
+    limit: int,
+    parse_cap: int | None,
+    search_query: str | None,
     reference_index: int | None = None,
 ) -> str:
     scope_str = f"user:{user_id}:db:{db_scope}"
     enrich_flag = "enrich" if enrich else "basic"
     index_flag = f":idx:{reference_index}" if reference_index is not None else ""
+    page_flag = f":offset:{offset}:limit:{limit}:cap:{parse_cap if parse_cap is not None else 'all'}"
+    normalized_query = re.sub(r"\s+", " ", (search_query or "").strip().lower())
+    query_flag = (
+        f":q:{hashlib.md5(normalized_query.encode('utf-8'), usedforsecurity=False).hexdigest()[:12]}"
+        if normalized_query
+        else ":q:none"
+    )
     return (
         f"cache:/api/v1/media/{media_id}/references:"
-        f"{scope_str}:{enrich_flag}{index_flag}:v{REFERENCES_PARSER_VERSION}"
+        f"{scope_str}:{enrich_flag}{index_flag}{page_flag}{query_flag}:v{REFERENCES_PARSER_VERSION}"
     )
 
 
@@ -128,7 +140,7 @@ def _is_rate_limited(err: str | None) -> bool:
 
 def _make_external_cache_key(provider: str, lookup: str) -> str:
     normalized = re.sub(r"\s+", " ", lookup).strip().lower()
-    digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()
+    digest = hashlib.md5(normalized.encode("utf-8"), usedforsecurity=False).hexdigest()
     return f"cache:/references/enrich:{provider}:{digest}"
 
 
@@ -184,143 +196,626 @@ def _set_provider_cooldown(provider: str) -> None:
         return
 
 
+def _hash_reference_content(content: str) -> str:
+    """Build a stable hash for parsed-reference cache keys."""
+    return hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _ensure_parsed_references_cache_table(db: MediaDatabase) -> None:
+    """Ensure persistent parsed-reference cache table exists."""
+    create_sql = f"""
+    CREATE TABLE IF NOT EXISTS {PARSED_REFERENCES_CACHE_TABLE} (
+        media_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        parser_version TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        references_json TEXT NOT NULL,
+        total_detected INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (media_id, user_id, parser_version, content_hash)
+    )
+    """
+    lookup_index_sql = f"""
+    CREATE INDEX IF NOT EXISTS idx_doc_refs_cache_lookup
+    ON {PARSED_REFERENCES_CACHE_TABLE}(media_id, user_id, parser_version)
+    """
+    try:
+        with db.transaction() as conn:
+            db.execute_query(create_sql, connection=conn)
+            db.execute_query(lookup_index_sql, connection=conn)
+    except Exception as exc:
+        logger.warning("Could not ensure parsed references cache table: {}", exc)
+
+
+def _normalize_cached_reference_list(raw: Any) -> list[str]:
+    """Normalize cached reference payloads to a list of non-empty strings."""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            text = str(item.get("raw_text", ""))
+        else:
+            text = str(item)
+        cleaned = text.strip()
+        if cleaned:
+            out.append(cleaned)
+    return out
+
+
+def _load_parsed_references_cache(
+    db: MediaDatabase,
+    *,
+    media_id: int,
+    user_id: str,
+    content_hash: str,
+) -> tuple[list[str], int] | None:
+    """Return cached parsed references for the current content hash, if available."""
+    query_template = """
+    SELECT references_json, total_detected
+    FROM {PARSED_REFERENCES_CACHE_TABLE}
+    WHERE media_id = ? AND user_id = ? AND parser_version = ? AND content_hash = ?
+    LIMIT 1
+    """
+    query = query_template.format_map(locals())  # nosec B608
+    try:
+        cursor = db.execute_query(
+            query,
+            (media_id, user_id, REFERENCES_PARSER_VERSION, content_hash),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        row_dict = dict(row)
+        payload = row_dict.get("references_json")
+        if not isinstance(payload, str) or not payload:
+            return None
+        parsed_payload = json.loads(payload)
+        parsed_refs = _normalize_cached_reference_list(parsed_payload)
+        total_detected = int(row_dict.get("total_detected") or len(parsed_refs))
+        if not parsed_refs and total_detected <= 0:
+            return None
+        return parsed_refs, max(total_detected, len(parsed_refs))
+    except Exception as exc:
+        logger.debug("Failed loading parsed references cache: {}", exc)
+        return None
+
+
+def _save_parsed_references_cache(
+    db: MediaDatabase,
+    *,
+    media_id: int,
+    user_id: str,
+    content_hash: str,
+    references: list[str],
+    total_detected: int,
+) -> None:
+    """Persist parsed references in DB for fast future reads."""
+    delete_sql_template = """
+    DELETE FROM {PARSED_REFERENCES_CACHE_TABLE}
+    WHERE media_id = ? AND user_id = ? AND parser_version = ?
+    """
+    delete_sql = delete_sql_template.format_map(locals())  # nosec B608
+    insert_sql_template = """
+    INSERT INTO {PARSED_REFERENCES_CACHE_TABLE}
+    (media_id, user_id, parser_version, content_hash, references_json, total_detected, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """
+    insert_sql = insert_sql_template.format_map(locals())  # nosec B608
+    references_json = json.dumps(references, ensure_ascii=False)
+    updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:
+        with db.transaction() as conn:
+            db.execute_query(
+                delete_sql,
+                (media_id, user_id, REFERENCES_PARSER_VERSION),
+                connection=conn,
+            )
+            db.execute_query(
+                insert_sql,
+                (
+                    media_id,
+                    user_id,
+                    REFERENCES_PARSER_VERSION,
+                    content_hash,
+                    references_json,
+                    int(total_detected),
+                    updated_at,
+                ),
+                connection=conn,
+            )
+    except Exception as exc:
+        logger.debug("Failed saving parsed references cache: {}", exc)
+
+
 def _find_reference_section(content: str) -> str | None:
     """Find and extract the references section from document content."""
-    matches: list[re.Match[str]] = []
-    for pattern in REFERENCE_SECTION_PATTERNS:
-        matches.extend(re.finditer(pattern, content))
-    if not matches:
-        for pattern in REFERENCE_SECTION_FALLBACK_PATTERNS:
-            matches.extend(re.finditer(pattern, content))
-    if not matches:
-        # Fallback: look for the last occurrence of the word "References"
-        fallback_matches = list(re.finditer(r"(?i)\breferences\b", content))
-        if not fallback_matches:
+    def _line_offset(line_idx: int, lines: list[str]) -> int:
+        # Keep offsets deterministic without relying on regex line iterators.
+        return sum(len(line) + 1 for line in lines[:line_idx])
+
+    def _normalize_heading_line(line: str) -> str:
+        line = line.strip()
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = line.replace("**", "").replace("__", "")
+        line = line.strip("*_`#:- ")
+        line = re.sub(r"\s+", " ", line)
+        return line.strip()
+
+    def _is_heading_candidate(line: str) -> bool:
+        normalized = _normalize_heading_line(line)
+        if not normalized:
+            return False
+        if len(normalized.split()) > 8:
+            return False
+        return bool(REFERENCE_HEADING_CORE_PATTERN.match(normalized))
+
+    lines = content.split("\n")
+    if not lines:
+        return None
+
+    candidate_line_indexes = [idx for idx, line in enumerate(lines) if _is_heading_candidate(line)]
+    if not candidate_line_indexes:
+        # Fallback: some extractions lose the "References" heading but keep a dense
+        # numbered bibliography in the tail (e.g. "[41] ...", "[42] ...").
+        if len(lines) < 8:
             return None
-        match = fallback_matches[-1]
-        start = match.end()
-        return content[start:].strip()
+        tail_start_idx = max(min(int(len(lines) * 0.65), len(lines) - 1400), 0)
+        tail_lines = lines[tail_start_idx:]
+        numbered_hits: list[tuple[int, int]] = []
+        for idx, line in enumerate(tail_lines):
+            match = re.match(r"^\s*\[+(\d{1,6})\]", line)
+            if match:
+                try:
+                    numbered_hits.append((idx, int(match.group(1))))
+                except ValueError:
+                    continue
+                continue
+            if REFERENCE_TAIL_NUMBERED_PATTERN.match(line):
+                numbered_hits.append((idx, -1))
+        if len(numbered_hits) < 6:
+            return None
 
-    # Use the last match to avoid earlier "References" mentions (e.g., TOC).
-    match = max(matches, key=lambda m: m.start())
+        unique_numbered = {num for _, num in numbered_hits if num >= 0}
+        if len(unique_numbered) >= 4:
+            min_num = min(unique_numbered)
+            max_num = max(unique_numbered)
+            span_ok = (max_num - min_num) >= 4
+        else:
+            span_ok = False
+        if not span_ok and len(numbered_hits) < 8:
+            return None
 
-    # Extract everything after the references heading
-    start = match.end()
-    # Try to find the next section heading to limit scope
-    next_section = re.search(r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*[A-Z][\w\s\-]{2,}$", content[start:])
-    if next_section:
-        end = start + next_section.start()
-        return content[start:end].strip()
-    return content[start:].strip()
+        start_line_idx = tail_start_idx + max(numbered_hits[0][0] - 2, 0)
+        refs = "\n".join(lines[start_line_idx:]).strip()
+        return refs or None
+
+    # Use the last heading to avoid TOC/front-matter mentions.
+    heading_line_idx = candidate_line_indexes[-1]
+    start_line_idx = heading_line_idx + 1
+
+    # Skip immediate blank lines after heading.
+    while start_line_idx < len(lines) and not lines[start_line_idx].strip():
+        start_line_idx += 1
+    if start_line_idx >= len(lines):
+        return None
+
+    def _is_section_end_heading(line: str) -> bool:
+        normalized = _normalize_heading_line(line)
+        if not normalized:
+            return False
+        if REFERENCE_SECTION_END_CORE_PATTERN.match(normalized):
+            return True
+        if REFERENCE_HEADING_CORE_PATTERN.match(normalized):
+            return False
+        if re.search(YEAR_PATTERN, normalized):
+            return False
+        # Do not use a generic "title-case line" fallback here. Reference lines
+        # frequently wrap into title-case continuation lines without years (for
+        # example long paper titles), and the fallback causes premature truncation.
+        return False
+
+    end_line_idx = len(lines)
+    for idx in range(start_line_idx + 1, len(lines)):
+        if _is_section_end_heading(lines[idx]):
+            end_line_idx = idx
+            break
+
+    start = _line_offset(start_line_idx, lines)
+    end = _line_offset(end_line_idx, lines)
+    refs = content[start:end].strip()
+    return refs or None
 
 
-def _split_references(refs_text: str) -> list[str]:
-    """Split references section into individual references."""
+def _split_references_with_meta(
+    refs_text: str,
+    *,
+    max_references: int | None = MAX_PARSED_REFERENCES,
+) -> tuple[list[str], int, bool]:
+    """Split references section into references and return truncation metadata."""
     references: list[str] = []
-    # Fix common PDF hyphenation across line breaks
-    refs_text = re.sub(r"(\w)-\n(\w)", r"\1\2", refs_text)
-    refs_text = refs_text.replace("\r\n", "\n").replace("\r", "\n")
-    refs_text = refs_text.strip()
 
-    # Try numbered list format: [1], 1., 1), etc.
-    numbered_pattern = r"(?m)^\s*(?:\[\d+\]|\d+[\.\)])\s+"
-    if re.search(numbered_pattern, refs_text):
-        parts = re.split(numbered_pattern, refs_text)
-        references = [p.strip() for p in parts if p.strip() and len(p.strip()) > 20]
-    else:
-        # Try double newline as separator
-        parts = re.split(r"\n\s*\n", refs_text)
-        references = [p.strip().replace("\n", " ") for p in parts if p.strip() and len(p.strip()) > 20]
+    # Fix common PDF hyphenation across line breaks and normalize newlines.
+    refs_text = re.sub(r"(\w)-\n(\w)", r"\1\2", refs_text)
+    refs_text = refs_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not refs_text:
+        return [], 0, False
+
+    # Remove known non-reference noise lines common in PDF text extraction.
+    cleaned_lines: list[str] = []
+    for raw_line in refs_text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            cleaned_lines.append("")
+            continue
+        if re.match(r"(?i)^(?:appendix|figure|table|algorithm)\b", line):
+            cleaned_lines.append("")
+            continue
+        # Standalone page numbers.
+        if re.fullmatch(r"\d{1,4}", line):
+            cleaned_lines.append("")
+            continue
+        # News/prose lines with inline links can appear near section boundaries;
+        # treat them as noise instead of candidate references.
+        if (
+            re.match(r"(?i)^(?:today|yesterday|tomorrow|according\s+to)\b", line)
+            and re.search(YEAR_PATTERN, line)
+            and re.search(URL_PATTERN, line, re.IGNORECASE)
+        ):
+            continue
+        # Footnote/link markers like: 5 [http...](http...)
+        if re.fullmatch(r"\d+\s+`?\[https?://[^\]]+\]\(https?://[^)]+\)`?", line):
+            continue
+        # Broken markdown-link fragments occasionally emitted by PDF extraction.
+        # Example: "Learn-](https://openreview.net/...)"
+        if re.fullmatch(r"[^\s\[\]]{2,120}\]\((?:https?|mailto):[^)]+\)", line, flags=re.IGNORECASE):
+            continue
+        cleaned_lines.append(raw_line)
+    refs_text = "\n".join(cleaned_lines).strip()
+    if not refs_text:
+        return [], 0, False
+
+    def _strip_leading_bracket_label(line: str) -> tuple[str, str] | None:
+        stripped = line.lstrip()
+        if not stripped.startswith("["):
+            return None
+        depth = 0
+        for idx, char in enumerate(stripped):
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    remainder = stripped[idx + 1 :]
+                    # Treat only "[label] text" as a label form; "[text](url)" is markdown-link form.
+                    if remainder[:1].isspace():
+                        return stripped[1:idx].strip(), remainder.strip()
+                    return None
+        return None
+
+    def _has_explicit_reference_label(line: str) -> bool:
+        stripped = line.lstrip()
+        if not stripped:
+            return False
+        if re.match(r"^(?:\[+\d+\]|\d+[\.\)])\s+", stripped):
+            return True
+        bracket_label = _strip_leading_bracket_label(stripped)
+        if bracket_label:
+            label = bracket_label[0]
+            if re.match(r"^\d{1,6}$", label):
+                return True
+            if re.search(r"[A-Za-z]", label):
+                return True
+        return False
+
+    def _extract_markdown_link_text(line: str) -> str | None:
+        match = re.match(r"^\s*\[([^\]]+)\]\((?:https?|mailto):[^)]+\)", line)
+        if match:
+            return match.group(1).strip()
+        # Some PDFs produce nested markdown-like forms: [[astro-ph.CO].](url)
+        match = re.match(r"^\s*\[\[([^\]]+)\]\.\]\((?:https?|mailto):[^)]+\)", line)
+        if match:
+            return match.group(1).strip()
+        match = re.match(r"^\s*\[\[([^\]]+)\]\]\((?:https?|mailto):[^)]+\)", line)
+        if match:
+            return match.group(1).strip()
+        return None
+
+    def _is_markdown_url_fragment_line(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        # Canonical markdown link line.
+        if re.match(r"^\[[^\]]+\]\((?:https?|mailto):[^)]+\)\s*$", stripped, flags=re.IGNORECASE):
+            return True
+        # Broken markdown fragment form: "Label](https://...)"
+        if re.match(r"^[^\s\[\]]{2,120}\]\((?:https?|mailto):[^)]+\)\s*$", stripped, flags=re.IGNORECASE):
+            return True
+        return False
+
+    def _looks_like_prose_sentence_start(text: str) -> bool:
+        candidate = text.strip()
+        if not candidate:
+            return False
+        return bool(
+            re.match(
+                r"(?i)^(?:today|yesterday|tomorrow|this|that|these|those|here|there|"
+                r"we|our|their|its|it|he|she|they|according\s+to|during|while|meanwhile)\b",
+                candidate,
+            )
+        )
+
+    def _is_probable_authorish_start(text: str) -> bool:
+        candidate = text.strip()
+        if not candidate:
+            return False
+        first_char = candidate[0]
+        if not first_char.isalpha() or not first_char.isupper():
+            return False
+        if _looks_like_prose_sentence_start(candidate):
+            return False
+        if re.match(r"^\d{4}\b", candidate):
+            return False
+        if re.match(
+            r"(?i)^(?:rev\.|phys\.|journal|global|ecology|proceedings|trends|communications|advances|classical|science|nature)\b",
+            candidate,
+        ):
+            return False
+        if re.match(
+            r"(?i)^(?:in|proceedings|journal|vol(?:ume)?|pages?|pp\.|chapter|section)\b",
+            candidate,
+        ):
+            return False
+        # Unicode-aware surname token (supports diacritics like Gaztanaga).
+        surname_token = r"[^\W\d_][\w'’.\-]*"
+        # Surname + initials list: "Abazajian K. N., ..." / "Smith, J. ..."
+        if re.match(rf"^{surname_token}(?:\s+[A-Z]\.){{1,3}},", candidate):
+            return True
+        if re.match(rf"^{surname_token},\s*[^\W\d_]", candidate):
+            return True
+        # "Surname et al." style
+        return bool(re.match(rf"^{surname_token}(?:\s+et\s+al\.)\b", candidate))
 
     def _looks_like_new_reference(line: str) -> bool:
-        if re.match(r"^\s*(?:\[\d+\]|\d+[\.\)])\s+", line):
+        if _is_markdown_url_fragment_line(line) and _extract_markdown_link_text(line) is None:
+            return False
+        if re.match(r"^\s*(?:\[+\d+\]|\d+[\.\)])\s+", line):
             return True
-        # Author list starting pattern: "Surname, A." or "First Last, ..."
-        if re.search(
-            r"^[A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,2},\s*[A-Z]",
-            line,
-        ):
+
+        bracket_label = _strip_leading_bracket_label(line)
+        if bracket_label:
+            label, rest = bracket_label
+            if re.match(r"^\d{4}\b", label):
+                return False
+            return _is_probable_authorish_start(rest)
+
+        markdown_label = _extract_markdown_link_text(line)
+        if markdown_label:
+            if re.match(r"^\d{4}\b", markdown_label):
+                return False
+            return _is_probable_authorish_start(markdown_label)
+
+        return _is_probable_authorish_start(line)
+
+    def _looks_like_fragment_line(line: str) -> bool:
+        if _is_markdown_url_fragment_line(line) and _extract_markdown_link_text(line) is None:
             return True
-        # "Surname et al." pattern
-        return bool(re.search(r"^[A-Z][A-Za-z'’.\-]+(?:\s+et\s+al\.)\b", line))
+        markdown_label = _extract_markdown_link_text(line)
+        if not markdown_label:
+            return False
+        if _is_probable_authorish_start(markdown_label):
+            return False
+        if re.match(r"^\d{1,4}(?:[\s,.;:/-]|$)", markdown_label):
+            return True
+        return bool(
+            re.match(
+                r"(?i)^(?:phys\.|journal|classical|mon\.|not\.|conference|proceedings|vol\.|pages?)\b",
+                markdown_label,
+            )
+        )
 
     def _looks_like_reference(text: str) -> bool:
         if not text or len(text) < 30:
             return False
-        if re.search(DOI_PATTERN, text, re.IGNORECASE):
-            return True
-        if re.search(ARXIV_PATTERN, text, re.IGNORECASE):
-            return True
-        if re.search(ARXIV_OLD_PATTERN, text, re.IGNORECASE):
-            return True
-        return bool(re.search(YEAR_PATTERN, text))
+        if _is_arxiv_category_fragment(text):
+            return False
+        lowered = text.lower().strip()
+        is_numbered = bool(re.match(r"^\s*(?:\[+\d+\]|\d+[\.\)])\s+", text))
+        is_labeled = _strip_leading_bracket_label(text) is not None
+        markdown_label = _extract_markdown_link_text(text)
 
-    # If still no good split, try single newlines with heuristics
-    if len(references) < 5:
-        lines = [ln.strip() for ln in refs_text.split("\n")]
-        potential_refs = []
-        current_ref = ""
-        for line in lines:
-            if not line:
-                if current_ref and len(current_ref) > 30:
-                    potential_refs.append(current_ref.strip())
-                current_ref = ""
-            else:
-                # Check if this looks like a new reference (starts with author pattern)
-                if current_ref and _looks_like_new_reference(line):
-                    if len(current_ref) > 30:
-                        potential_refs.append(current_ref.strip())
-                    current_ref = line
-                else:
-                    current_ref = (current_ref + " " + line).strip() if current_ref else line
-        if current_ref and len(current_ref) > 30:
-            potential_refs.append(current_ref.strip())
-        if len(potential_refs) > len(references):
-            references = potential_refs
+        if lowered.startswith(
+            (
+                "appendix",
+                "acknowledgment",
+                "acknowledgement",
+                "copyright",
+                "author contributions",
+                "supplementary material",
+            )
+        ):
+            return False
+        if re.match(r"(?i)^\s*(?:figure|table|algorithm)\b", text):
+            return False
 
-    # Additional pass: split on author-start lines when refs are still few
-    if len(references) < 5:
-        lines = [ln.strip() for ln in refs_text.split("\n") if ln.strip()]
-        potential_refs = []
-        current_ref = ""
-        for line in lines:
-            is_author_line = _looks_like_new_reference(line)
-            has_year = re.search(YEAR_PATTERN, current_ref) is not None
-            if current_ref and is_author_line and has_year:
-                potential_refs.append(current_ref.strip())
-                current_ref = line
-            else:
-                current_ref = (current_ref + " " + line).strip() if current_ref else line
-        if current_ref and len(current_ref) > 30:
-            potential_refs.append(current_ref.strip())
-        if len(potential_refs) > len(references):
-            references = potential_refs
-
-    # Final fallback: split on author-start patterns in fully normalized text
-    if len(references) < 5:
-        normalized = re.sub(r"\s+", " ", refs_text).strip()
-        author_start = re.compile(
-            r"(?:^|(?<=\.\s))([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,2},\s*[A-Z])"
+        has_doi = bool(re.search(DOI_PATTERN, text, re.IGNORECASE))
+        has_arxiv = bool(re.search(ARXIV_PATTERN, text, re.IGNORECASE)) or bool(
+            re.search(ARXIV_OLD_PATTERN, text, re.IGNORECASE)
         )
-        starts = [m.start(1) for m in author_start.finditer(normalized)]
-        if starts:
-            if starts[0] != 0:
-                starts = [0] + starts
-            segments: list[str] = []
-            for idx, start in enumerate(starts):
-                end = starts[idx + 1] if idx + 1 < len(starts) else len(normalized)
-                segment = normalized[start:end].strip(" ;,.")
-                if len(segment) > 30:
-                    segments.append(segment)
-            if len(segments) > len(references):
-                references = segments
+        has_year = bool(re.search(YEAR_PATTERN, text))
+        has_url = bool(re.search(URL_PATTERN, text, re.IGNORECASE))
+        is_markdown_fragment = _is_markdown_url_fragment_line(text)
 
-    # Filter out lines that do not look like references, but keep a minimum set
+        if (
+            is_markdown_fragment
+            and markdown_label is None
+            and not (has_doi or has_arxiv)
+        ):
+            return False
+        if (
+            not (is_numbered or is_labeled)
+            and _looks_like_prose_sentence_start(text)
+        ):
+            return False
+
+        if not (has_doi or has_arxiv or has_year):
+            return False
+        if (is_numbered or is_labeled) and has_year:
+            return True
+        if _is_probable_authorish_start(text) and has_year:
+            return True
+        if markdown_label and _is_probable_authorish_start(markdown_label) and has_year:
+            return True
+        if has_doi or has_arxiv:
+            return True
+        # Link-heavy astronomy/physics bibliographies often encode references as markdown links.
+        if has_year and has_url and len(text) > 45:
+            return True
+        return False
+
+    def _looks_like_continuation_reference(text: str) -> bool:
+        candidate = text.strip()
+        if not candidate:
+            return False
+        if _is_arxiv_category_fragment(candidate):
+            return True
+        markdown_label = _extract_markdown_link_text(candidate)
+        has_year = bool(re.search(YEAR_PATTERN, candidate))
+        has_doi = bool(re.search(DOI_PATTERN, candidate, re.IGNORECASE))
+        has_arxiv = bool(
+            re.search(ARXIV_PATTERN, candidate, re.IGNORECASE) or
+            re.search(ARXIV_OLD_PATTERN, candidate, re.IGNORECASE)
+        )
+        has_url = bool(re.search(URL_PATTERN, candidate, re.IGNORECASE))
+
+        if markdown_label:
+            label = markdown_label.strip()
+            if _is_probable_authorish_start(label):
+                return False
+            if re.match(
+                r"(?i)^(?:prints?,\s*p\.|phys\.|astropart|classical|journal|not\.\s*r|mon\.\s*not|a&a|apj|mnr|vol\.|pp\.|pages?)",
+                label,
+            ):
+                return True
+            if not has_year and (has_doi or has_arxiv or has_url):
+                return True
+            return False
+
+        # Non-markdown fragment: "prints, p. arXiv:..." or similar.
+        if re.match(r"(?i)^prints?,\s*p\.\s*arxiv:", candidate):
+            return True
+        return False
+
+    # Try explicit list formats first: [1], [TAG], 1., 1)
+    list_pattern = r"(?m)^\s*(?:\[+\d+\]|\[[^\n]{1,180}\]|\d+[\.\)])\s+"
+    if re.search(list_pattern, refs_text):
+        parts = re.split(list_pattern, refs_text)
+        references = [p.strip().replace("\n", " ") for p in parts if p.strip() and len(p.strip()) > 20]
+    else:
+        # Fallback: paragraph blocks
+        parts = re.split(r"\n\s*\n", refs_text)
+        references = [p.strip().replace("\n", " ") for p in parts if p.strip() and len(p.strip()) > 20]
+
+    # Line model pass: handles compact/link-heavy bibliographies (e.g. markdown link lines).
+    lines = [ln.rstrip() for ln in refs_text.split("\n")]
+    modeled_refs: list[str] = []
+    current_ref = ""
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if current_ref and len(current_ref) > 20:
+                modeled_refs.append(current_ref.strip())
+            current_ref = ""
+            continue
+        if _is_markdown_url_fragment_line(line) and _extract_markdown_link_text(line) is None:
+            # Broken link-label fragments are always noise; don't create standalone refs.
+            continue
+        markdown_label = _extract_markdown_link_text(line)
+        # Treat markdown-like fragment lines as continuation when the current
+        # line is likely an author prefix that has not reached a year yet.
+        # Otherwise skip them to avoid fragment-only entries becoming new refs.
+        if _looks_like_fragment_line(line) and current_ref:
+            if (
+                not re.search(YEAR_PATTERN, current_ref)
+                and current_ref.rstrip().endswith(",")
+                and _is_probable_authorish_start(current_ref)
+            ):
+                current_ref = f"{current_ref} {line}".strip()
+            continue
+        # Some PDF extractions split one author list across two lines where the
+        # second line is a markdown-link entry containing the year.
+        if (
+            current_ref
+            and markdown_label
+            and not re.search(YEAR_PATTERN, current_ref)
+            and current_ref.count(",") >= 3
+            and (
+                current_ref.rstrip().endswith(",")
+                or re.search(r"[^\W\d_][^\W\d_'\-]*\s*$", current_ref.rstrip()) is not None
+            )
+            and not current_ref.rstrip().endswith(".")
+            and _is_probable_authorish_start(current_ref)
+            and _is_probable_authorish_start(markdown_label)
+        ):
+            current_ref = f"{current_ref} {line}".strip()
+            continue
+        line_has_explicit_label = _has_explicit_reference_label(line)
+        if (
+            current_ref
+            and _has_explicit_reference_label(current_ref)
+            and not line_has_explicit_label
+        ):
+            current_ref = f"{current_ref} {line}".strip()
+            continue
+        if current_ref and _looks_like_new_reference(line):
+            if len(current_ref) > 20:
+                modeled_refs.append(current_ref.strip())
+            current_ref = line
+        else:
+            current_ref = (current_ref + " " + line).strip() if current_ref else line
+    if current_ref and len(current_ref) > 20:
+        modeled_refs.append(current_ref.strip())
+
+    if len(modeled_refs) > len(references):
+        references = modeled_refs
+    elif len(modeled_refs) >= 3 and (len(references) - len(modeled_refs)) <= 1:
+        # Prefer line model only when it is close to structured split count.
+        # This avoids collapsing multiple valid entries in compact one-line formats.
+        references = modeled_refs
+
+    # Merge fragment-only reference entries that are continuation tails.
+    merged_references: list[str] = []
+    for ref in references:
+        if merged_references and _looks_like_continuation_reference(ref):
+            merged_references[-1] = f"{merged_references[-1]} {ref}".strip()
+            continue
+        merged_references.append(ref)
+    references = merged_references
+
+    # Filter out lines that do not look like references, but keep a minimum set.
     filtered = [ref for ref in references if _looks_like_reference(ref)]
-    if len(filtered) >= 3:
+    removed = [ref for ref in references if ref not in filtered]
+    removed_all_obvious_noise = bool(removed) and all(
+        _looks_like_prose_sentence_start(ref) or _is_markdown_url_fragment_line(ref)
+        for ref in removed
+    )
+    if len(filtered) >= 3 or (filtered and removed_all_obvious_noise):
         references = filtered
 
-    return references[:100]  # Limit to 100 references
+    total_detected = len(references)
+    if max_references is None:
+        return references, total_detected, False
+    effective_cap = max(1, int(max_references))
+    truncated = total_detected > effective_cap
+    return references[:effective_cap], total_detected, truncated
+
+
+def _split_references(refs_text: str) -> list[str]:
+    """Compatibility wrapper returning only references."""
+    references, _total_detected, _truncated = _split_references_with_meta(refs_text)
+    return references
 
 
 def _extract_doi(text: str) -> str | None:
@@ -380,46 +875,124 @@ def _extract_year(text: str) -> int | None:
     return None
 
 
+def _extract_year_from_arxiv_id(arxiv_id: str | None) -> int | None:
+    """Infer a year from modern arXiv IDs in YYMM.xxxxx form."""
+    if not arxiv_id:
+        return None
+    match = re.match(r"^(\d{2})(\d{2})\.\d{4,5}$", arxiv_id)
+    if not match:
+        return None
+    year = 2000 + int(match.group(1))
+    if 2000 <= year <= 2035:
+        return year
+    return None
+
+
+def _is_arxiv_category_fragment(text: str) -> bool:
+    """Detect category-only fragments like '[[astro-ph.CO].]'."""
+    candidate = (text or "").strip()
+    if not candidate or len(candidate) > 100:
+        return False
+    candidate = re.sub(
+        r"\((?:https?|mailto):[^)]+\)\s*$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip()
+    candidate = candidate.strip("[](){} .")
+    if not candidate:
+        return False
+    return bool(
+        re.fullmatch(r"[a-z]+(?:-[a-z]+)+(?:\.[A-Z]{2})?", candidate)
+        or re.fullmatch(r"[a-z]+(?:-[a-z]+)*\.[A-Z]{2}", candidate)
+    )
+
+
+def _normalize_reference_display_text(raw_text: str) -> str:
+    """Clean markdown/link artifacts for user-facing reference text."""
+    text = (raw_text or "").strip()
+    if not text:
+        return ""
+    had_broken_link_prefix = bool(
+        re.match(
+            r"^\s*[^\s\[\]]{2,120}\]\((?:https?|mailto):[^)]+\)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+    # Standard markdown link form: "[label](url)" -> "label"
+    text = re.sub(
+        r"\[([^\]]+)\]\((?:https?|mailto):[^)]+\)",
+        lambda m: m.group(1).strip(),
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Broken markdown form occasionally produced by PDF extraction:
+    # "Learn-](https://...)" -> "Learn-"
+    text = re.sub(
+        r"\b([^\s\[\]]{2,120})\]\((?:https?|mailto):[^)]+\)",
+        r"\1",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Drop synthetic leading label tokens left after stripping broken links.
+    if had_broken_link_prefix:
+        text = re.sub(
+            r"^[A-Za-z][A-Za-z0-9\-]{1,40}-\s+(?=[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3},)",
+            "",
+            text,
+        )
+    # Drop bare "(url)" tails left after extraction artifacts.
+    text = re.sub(r"\((?:https?|mailto):[^)]+\)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
+    return text.strip("`")
+
+
 def _parse_reference_basic(raw_text: str) -> ReferenceEntry:
     """Parse a reference string into structured fields using heuristics."""
+    display_text = _normalize_reference_display_text(raw_text) or raw_text
     doi = _extract_doi(raw_text)
     arxiv_id = _extract_arxiv_id(raw_text)
     url = _extract_url(raw_text)
-    year = _extract_year(raw_text)
+    year = _extract_year(display_text)
+    if year is None:
+        year = _extract_year_from_arxiv_id(arxiv_id)
 
     # Try to extract title (often in quotes or after authors)
     title = None
     # Look for quoted title
-    title_match = re.search(r'"([^"]{10,200})"', raw_text)
+    title_match = re.search(r'"([^"]{10,200})"', display_text)
     if title_match:
         title = title_match.group(1).strip()
     elif not title_match:
         # Look for title after authors (pattern: Authors, Year. Title. ...)
-        title_match = re.search(r"^\s*[^.]+\.\s*(\d{4})[.\s]+([^.]{10,150})\.", raw_text)
+        title_match = re.search(r"^\s*[^.]+\.\s*(\d{4})[.\s]+([^.]{10,150})\.", display_text)
         if title_match:
             title = title_match.group(2).strip()
 
     # Try to extract authors (usually at the start)
     authors = None
     # Pattern: LastName, F., LastName, F., ... (Year)
-    author_match = re.match(r"^((?:[A-Z][a-z]+(?:,\s*[A-Z]\.?)?(?:,?\s+(?:and\s+|&\s*)?)?)+)[\.,]", raw_text)
+    author_match = re.match(r"^((?:[A-Z][a-z]+(?:,\s*[A-Z]\.?)?(?:,?\s+(?:and\s+|&\s*)?)?)+)[\.,]", display_text)
     if author_match:
         authors = author_match.group(1).strip().rstrip(",")
     else:
         # Pattern: F. LastName, F. LastName, ...
-        author_match = re.match(r"^((?:[A-Z]\.?\s*[A-Z][a-z]+(?:,?\s+(?:and\s+|&\s*)?)?)+)[\.,]", raw_text)
+        author_match = re.match(r"^((?:[A-Z]\.?\s*[A-Z][a-z]+(?:,?\s+(?:and\s+|&\s*)?)?)+)[\.,]", display_text)
         if author_match:
             authors = author_match.group(1).strip().rstrip(",")
 
     # Try to extract venue (journal/conference)
     venue = None
     # Look for common venue patterns: "In Proceedings of", "Journal of", etc.
-    venue_match = re.search(r"(?:In\s+)?(?:Proceedings\s+of\s+)?(?:the\s+)?([A-Z][^,\.]{5,60}(?:Conference|Journal|Symposium|Workshop|Review|Letters|Transactions))", raw_text, re.IGNORECASE)
+    venue_match = re.search(r"(?:In\s+)?(?:Proceedings\s+of\s+)?(?:the\s+)?([A-Z][^,\.]{5,60}(?:Conference|Journal|Symposium|Workshop|Review|Letters|Transactions))", display_text, re.IGNORECASE)
     if venue_match:
         venue = venue_match.group(1).strip()
 
     return ReferenceEntry(
-        raw_text=raw_text[:1000],  # Limit raw text length
+        raw_text=display_text[:1000],  # Limit raw text length
         title=title,
         authors=authors,
         year=year,
@@ -622,6 +1195,22 @@ def _needs_external_enrichment(ref: ReferenceEntry) -> bool:
     )
 
 
+def _enrichment_fingerprint(ref: ReferenceEntry) -> tuple[Any, ...]:
+    """Return comparable reference fields to detect enrichment changes."""
+    return (
+        ref.title,
+        ref.authors,
+        ref.year,
+        ref.venue,
+        ref.doi,
+        ref.arxiv_id,
+        ref.url,
+        ref.citation_count,
+        ref.semantic_scholar_id,
+        ref.open_access_pdf,
+    )
+
+
 def _apply_crossref_data(ref: ReferenceEntry, item: dict[str, Any]) -> ReferenceEntry:
     """Apply Crossref data to a reference entry."""
     if not ref.title and item.get("title"):
@@ -783,6 +1372,33 @@ async def get_document_references(
         None,
         description="When provided, only enrich the reference at this index (0-based).",
     ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="Pagination offset in the reference list after parse-cap is applied.",
+    ),
+    limit: int = Query(
+        DEFAULT_REFERENCES_PAGE_LIMIT,
+        ge=1,
+        le=MAX_REFERENCES_PAGE_LIMIT,
+        description="Maximum references to return in this page.",
+    ),
+    parse_cap: int | None = Query(
+        None,
+        ge=1,
+        le=MAX_PARSED_REFERENCES_CAP,
+        description=(
+            "Optional cap on parsed references before pagination. "
+            "Unset means no parser cap."
+        ),
+    ),
+    search: str | None = Query(
+        None,
+        description=(
+            "Optional case-insensitive substring filter applied to the full "
+            "reference list before pagination."
+        ),
+    ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> DocumentReferencesResponse:
@@ -819,7 +1435,8 @@ async def get_document_references(
     - Missing metadata (title, authors, year)
 
     Enrichment is best-effort and gracefully degrades if external APIs fail.
-    Enrichment is limited to the first 5 references to avoid long response times.
+    Enrichment is limited to the first 5 references on the returned page to avoid
+    long response times.
     """
     user_id = str(getattr(current_user, "id", "anonymous"))
     db_scope = _get_db_scope(db)
@@ -828,6 +1445,10 @@ async def get_document_references(
         enrich=enrich,
         user_id=user_id,
         db_scope=db_scope,
+        offset=offset,
+        limit=limit,
+        parse_cap=parse_cap,
+        search_query=search,
         reference_index=reference_index,
     )
     cached = get_cached_response(cache_key)
@@ -882,6 +1503,16 @@ async def get_document_references(
             has_references=False,
             references=[],
             enrichment_source=None,
+            enriched_count=0,
+            enrichment_limited=False,
+            total_detected=0,
+            truncated=False,
+            offset=offset,
+            limit=limit,
+            returned_count=0,
+            total_available=0,
+            has_more=False,
+            next_offset=None,
         )
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
@@ -895,38 +1526,135 @@ async def get_document_references(
             has_references=False,
             references=[],
             enrichment_source=None,
+            enriched_count=0,
+            enrichment_limited=False,
+            total_detected=0,
+            truncated=False,
+            offset=offset,
+            limit=limit,
+            returned_count=0,
+            total_available=0,
+            has_more=False,
+            next_offset=None,
         )
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
 
-    # 4. Parse individual references
-    raw_refs = _split_references(refs_section)
-    if not raw_refs:
+    # 4. Parse individual references (with DB-backed parsed-reference cache)
+    _ensure_parsed_references_cache_table(db)
+    refs_hash = _hash_reference_content(refs_section)
+    cached_parsed = _load_parsed_references_cache(
+        db,
+        media_id=media_id,
+        user_id=user_id,
+        content_hash=refs_hash,
+    )
+    if cached_parsed is not None:
+        raw_refs_all, total_detected = cached_parsed
+    else:
+        raw_refs_all, total_detected, _was_truncated = _split_references_with_meta(
+            refs_section,
+            max_references=None,
+        )
+        if raw_refs_all:
+            _save_parsed_references_cache(
+                db,
+                media_id=media_id,
+                user_id=user_id,
+                content_hash=refs_hash,
+                references=raw_refs_all,
+                total_detected=total_detected,
+            )
+
+    if not raw_refs_all:
         logger.debug("No individual references parsed from media_id={}", media_id)
         response = DocumentReferencesResponse(
             media_id=media_id,
             has_references=False,
             references=[],
             enrichment_source=None,
+            enriched_count=0,
+            enrichment_limited=False,
+            total_detected=0,
+            truncated=False,
+            offset=offset,
+            limit=limit,
+            returned_count=0,
+            total_available=0,
+            has_more=False,
+            next_offset=None,
         )
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
 
-    # 5. Parse each reference
-    references = [_parse_reference_basic(ref) for ref in raw_refs]
-    logger.debug("Parsed {} references from media_id={}", len(references), media_id)
+    # 5. Apply parse cap, filter, and paginate raw references
+    if parse_cap is None:
+        capped_refs = raw_refs_all
+    else:
+        capped_refs = raw_refs_all[:parse_cap]
 
-    # 6. Enrich with external APIs if requested
+    truncated = len(raw_refs_all) > len(capped_refs)
+    normalized_search = re.sub(r"\s+", " ", (search or "").strip().lower())
+    if normalized_search:
+        filtered_refs = [
+            ref
+            for ref in capped_refs
+            if normalized_search in _normalize_reference_display_text(ref).lower()
+        ]
+    else:
+        filtered_refs = capped_refs
+
+    total_available = len(filtered_refs)
+    page_start = min(offset, total_available)
+    page_end = min(page_start + limit, total_available)
+    page_raw_refs = filtered_refs[page_start:page_end]
+
+    if not page_raw_refs:
+        response = DocumentReferencesResponse(
+            media_id=media_id,
+            has_references=total_available > 0,
+            references=[],
+            enrichment_source=None,
+            enriched_count=0,
+            enrichment_limited=False,
+            total_detected=total_detected,
+            truncated=truncated,
+            offset=offset,
+            limit=limit,
+            returned_count=0,
+            total_available=total_available,
+            has_more=False,
+            next_offset=None,
+        )
+        cache_response(cache_key, response.model_dump(), media_id=media_id)
+        return response
+
+    # 6. Parse each reference in current page
+    references = [_parse_reference_basic(ref) for ref in page_raw_refs]
+    logger.debug(
+        "Parsed page references media_id={} total_detected={} total_available={} page_size={}",
+        media_id,
+        total_detected,
+        total_available,
+        len(references),
+    )
+
+    # 7. Enrich with external APIs if requested
     enrichment_sources: set[str] = set()
+    before_enrichment = [_enrichment_fingerprint(ref) for ref in references]
+    enrichment_limited = bool(
+        enrich and reference_index is None and len(references) > MAX_ENRICHMENT_REFS
+    )
     if enrich and references:
         try:
             if reference_index is not None:
-                if reference_index < 0 or reference_index >= len(references):
+                if reference_index < 0 or reference_index >= total_available:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="reference_index out of range",
                     )
-                target_ref = references[reference_index]
+                target_raw = filtered_refs[reference_index]
+                target_ref = _parse_reference_basic(target_raw)
                 enriched_refs = [target_ref]
                 if not _is_provider_cooldown("semantic_scholar"):
                     enriched_refs, enriched = await _enrich_with_semantic_scholar(enriched_refs)
@@ -940,7 +1668,8 @@ async def get_document_references(
                     enriched_refs, enriched = await _enrich_with_arxiv(enriched_refs)
                     if enriched:
                         enrichment_sources.add("arxiv")
-                references[reference_index] = enriched_refs[0]
+                if page_start <= reference_index < page_end:
+                    references[reference_index - page_start] = enriched_refs[0]
             else:
                 if not _is_provider_cooldown("semantic_scholar"):
                     references, enriched = await _enrich_with_semantic_scholar(references)
@@ -974,12 +1703,28 @@ async def get_document_references(
             )
             # Continue without enrichment
 
+    enriched_count = sum(
+        1 for idx, ref in enumerate(references)
+        if idx < len(before_enrichment) and _enrichment_fingerprint(ref) != before_enrichment[idx]
+    )
     enrichment_source = ",".join(sorted(enrichment_sources)) if enrichment_sources else None
+    returned_count = len(references)
+    has_more = page_end < total_available
     response = DocumentReferencesResponse(
         media_id=media_id,
-        has_references=len(references) > 0,
+        has_references=total_available > 0,
         references=references,
         enrichment_source=enrichment_source,
+        enriched_count=enriched_count,
+        enrichment_limited=enrichment_limited,
+        total_detected=total_detected,
+        truncated=truncated,
+        offset=offset,
+        limit=limit,
+        returned_count=returned_count,
+        total_available=total_available,
+        has_more=has_more,
+        next_offset=page_end if has_more else None,
     )
     cache_response(cache_key, response.model_dump(), media_id=media_id)
     return response

@@ -1,0 +1,204 @@
+{
+  "tooltip": {
+    "embed": "L'intégration de la page peut prendre quelques minutes. Veuillez patienter...",
+    "clear": "Effacer l'historique du chat",
+    "history": "Historique du chat",
+    "openwebui": "Ouvrir WebUI"
+  },
+  "toolbar": {
+    "ragSearch": "Recherche RAG"
+  },
+  "errors": {
+    "privateModeTitle": "tldw Assistant ne peut pas enregistrer les données",
+    "privateModeDescription": "Le mode privé de Firefox ne permet pas d’enregistrer l’historique des discussions. Le chat temporaire est activé par défaut. D’autres améliorations arrivent bientôt."
+  },
+  "connectionBanner": {
+    "connecting": "Connexion à votre serveur tldw...",
+    "authErrorTitle": "La clé API nécessite une attention",
+    "authErrorBody": "Votre serveur est accessible, mais la clé API est incorrecte ou manquante.",
+    "unreachableTitle": "Impossible de joindre votre serveur tldw",
+    "unreachableBody": "Vérifiez que votre serveur est en cours d'exécution et accessible.",
+    "noUrlBody": "Ajoutez l'URL du serveur dans les paramètres pour commencer.",
+    "disconnectedTitle": "Non connecté au serveur tldw",
+    "disconnectedBody": "Ouvrez les paramètres pour configurer votre connexion au serveur.",
+    "setupTitle": "Terminez la configuration pour commencer à discuter",
+    "setupBody": "Terminez l'assistant de configuration dans les paramètres pour vous connecter.",
+    "openSettings": "Ouvrir les paramètres"
+  },
+  "temporaryBadge": {
+    "title": "Chat temporaire",
+    "label": "Temp",
+    "description": "Ce chat ne sera pas enregistré. Les messages seront effacés lorsque vous fermez ou démarrez un nouveau chat.",
+    "clickHint": "Cliquez pour désactiver",
+    "ariaLabel": "Le mode chat temporaire est actif. Cliquez pour basculer.",
+    "indicatorTooltip": "Les messages de ce chat ne seront pas enregistrés",
+    "indicatorAria": "Chat temporaire"
+  },
+  "header": {
+    "ingest": "Ingestion",
+    "saveCurrent": "Enregistrer la page actuelle sur le serveur",
+    "processLocal": "Traiter la page actuelle localement",
+    "viewProcessed": "Voir les éléments traités",
+    "timeoutLabel": "Délai d'attente (s)",
+    "toggleSidebar": "Basculer la barre latérale / plein écran",
+    "shortcuts": "Raccourcis",
+    "showDebug": "Afficher le débogage du flux",
+    "hideDebug": "Masquer le débogage du flux",
+    "moreOptionsAria": "Plus d'options",
+    "moreOptionsTitle": "Ingestion et plus",
+    "openWebuiAria": "Ouvrir l'interface Web",
+    "newChatAria": "Nouveau chat",
+    "tempChatAria": "Basculer le chat temporaire",
+    "clearHistoryAria": "Effacer l'historique",
+    "openHistoryAria": "Ouvrir l'historique",
+    "openModelSettingsAria": "Ouvrir les paramètres du modèle",
+    "openSettingsAria": "Ouvrir les paramètres",
+    "tempPill": "Temp",
+    "modesLabel": "Ouvrir les modes dans l'interface Web",
+    "modePlayground": "Chat",
+    "modeReview": "Revue multi-éléments",
+    "modeMedia": "Médias",
+    "modeKnowledge": "Q/R connaissances",
+    "modeNotes": "Notes",
+    "modePrompts": "Prompts IA",
+    "modeFlashcards": "Cartes mémoire"
+  },
+  "controlRow": {
+    "saveMode": "Mode d'enregistrement",
+    "ephemeral": "Éphémère",
+    "searchSection": "Recherche & Vision",
+    "webSearch": "Recherche Web",
+    "vision": "Vision",
+    "uploadImage": "Téléverser une image",
+    "quickIngest": "Ingestion rapide",
+    "openInFullUI": "Ouvrir dans l'interface complète",
+    "modeChat": "Conversation",
+    "modeMedia": "Média",
+    "modeNotes": "Notes",
+    "modeFlashcards": "Fiches de révision",
+    "ragSearch": "Recherche RAG",
+    "moreTools": "Plus d'outils"
+  },
+  "composer": {
+    "connectHint": "Connectez votre serveur tldw dans les paramètres pour envoyer des messages.",
+    "connectingPlaceholder": "Connexion...",
+    "disconnectedPlaceholder": "Connectez votre serveur tldw dans les paramètres pour envoyer des messages et voir les médias."
+  },
+  "notification": {
+    "ingestSent": "Envoyé au serveur tldw",
+    "ingestSentDesc": "La page actuelle a été soumise pour ingestion.",
+    "processedLocal": "Traité localement",
+    "processedLocalDesc": "Le contenu traité est stocké localement dans Paramètres > Traités.",
+    "transcriptionTitle": "Transcription",
+    "transcriptionSummaryTitle": "Transcription + résumé",
+    "transcriptionFallback": "Transcription terminée. Ouvrez Médias dans l'interface Web pour la consulter.",
+    "sourceLabel": "Source",
+    "transcriptLabel": "Transcription",
+    "summaryLabel": "Résumé"
+  },
+  "saveStatus": {
+    "ephemeral": "Temporaire : non enregistré, effacé à la fermeture",
+    "local": "Enregistré localement dans ce navigateur",
+    "server": "Enregistré sur le serveur",
+    "saveFailed": "Impossible d'enregistrer le chat sur le serveur",
+    "saveFailedDescription": "Le chat est maintenant enregistré uniquement en local. Vérifiez votre connexion et réessayez."
+  },
+  "rag": {
+    "attachedContext": "Contexte joint",
+    "searchPlaceholder": "Rechercher dans votre base de connaissances...",
+    "search": "Rechercher",
+    "show": "Afficher la recherche RAG",
+    "hide": "Masquer la recherche RAG",
+    "addTagPlaceholder": "Ajouter un tag (Entrée)",
+    "add": "Ajouter",
+    "noResults": "Aucun résultat",
+    "initialState": "Aucun résultat pour l'instant",
+    "timeout": {
+      "message": "Délai d'attente dépassé.",
+      "increase": "Augmenter le délai d'attente",
+      "checkHealth": "Vérifier l'état du serveur"
+    },
+    "actions": {
+      "insert": "Insérer",
+      "ask": "Demander",
+      "open": "Ouvrir",
+      "copy": "Copier"
+    },
+    "hint": {
+      "message": "Recherchez dans votre base de connaissances et insérez les résultats dans votre message.",
+      "dismiss": "Fermer"
+    }
+  },
+  "tabs": {
+    "newChat": "Nouveau chat",
+    "newTabAria": "Nouvel onglet de chat",
+    "closeTabAria": "Fermer l'onglet de chat"
+  },
+  "characterSelect": {
+    "label": "Personnage",
+    "tooltip": "Sélectionner un personnage",
+    "search": "Rechercher des personnages...",
+    "noMatches": "Aucun personnage correspondant",
+    "noCharacters": "Aucun personnage disponible",
+    "none": "Aucun personnage",
+    "createNewCharacter": "Créer un nouveau personnage+",
+    "importCharacter": "Importer un personnage",
+    "favorites": "Favoris",
+    "favoriteAdd": "Ajouter aux favoris",
+    "favoriteRemove": "Retirer des favoris",
+    "sort": {
+      "favorites": "Favoris",
+      "az": "A-Z"
+    }
+  },
+  "knowledge": {
+    "tabs": {
+      "qaSearch": "Recherche Q/R",
+      "fileSearch": "Recherche de fichiers",
+      "label": "Sections du panneau de connaissances",
+      "contextBadge": "{{count}} éléments joints"
+    }
+  },
+  "qaSearch": {
+    "searching": "Recherche dans la base de connaissances...",
+    "generatedAnswer": "Réponse générée",
+    "cached": "En cache",
+    "copyAnswer": "Copier la réponse",
+    "copied": "Copié",
+    "copy": "Copier",
+    "insertAnswer": "Insérer la réponse",
+    "copyChunk": "Copier le fragment",
+    "insertChunk": "Insérer le fragment",
+    "sourceChunks": "Fragments sources ({{count}})",
+    "sourceChunksList": "Fragments sources",
+    "strategy": {
+      "standard": "Standard",
+      "agentic": "Agentique"
+    },
+    "sort": {
+      "label": "Trier les fragments sources",
+      "relevance": "Pertinence",
+      "source": "Source"
+    }
+  },
+  "fileSearch": {
+    "filterByType": "Filtrer par type",
+    "resultsList": "Résultats de recherche de fichiers",
+    "attached": "Joint",
+    "alreadyAttached": "Déjà joint",
+    "attach": "Joindre",
+    "openExternal": "Ouvrir",
+    "open": "Ouvrir",
+    "mediaType": {
+      "video": "Vidéo",
+      "audio": "Audio",
+      "pdf": "PDF",
+      "article": "Article",
+      "note": "Note",
+      "document": "Document",
+      "epub": "EPUB",
+      "html": "HTML",
+      "xml": "XML"
+    }
+  }
+}

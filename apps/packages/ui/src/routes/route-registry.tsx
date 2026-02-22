@@ -32,11 +32,11 @@ import {
   SquarePen,
   ImageIcon,
   SlidersHorizontal,
-  FileText
+  FileText,
+  Zap,
+  Sparkles
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
-import OptionLayout from "~/components/Layouts/Layout"
-import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
 import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
@@ -44,7 +44,6 @@ import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
 import OptionChat from "./option-chat"
-import OptionWorkspacePlayground from "./option-workspace-playground"
 import OptionMediaMulti from "./option-media-multi"
 import OptionMedia from "./option-media"
 
@@ -101,6 +100,7 @@ const OptionChatbooks = createSettingsRoute(
 const SidepanelChat = lazy(() => import("./sidepanel-chat"))
 const SidepanelSettings = lazy(() => import("./sidepanel-settings"))
 const SidepanelAgent = lazy(() => import("./sidepanel-agent"))
+const SidepanelPersona = lazy(() => import("./sidepanel-persona"))
 const SidepanelErrorBoundaryTest = lazy(() => import("./sidepanel-error-boundary-test"))
 const OptionRagSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/rag"),
@@ -163,6 +163,10 @@ const OptionUiCustomization = createSettingsRoute(
   () => import("~/components/Option/Settings/ui-customization"),
   "UiCustomizationSettings"
 )
+const OptionSplashSettings = createSettingsRoute(
+  () => import("~/components/Option/Settings/splash"),
+  "SplashSettings"
+)
 const OptionQuickIngestSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/QuickIngestSettings"),
   "QuickIngestSettings"
@@ -188,8 +192,11 @@ const OptionCollections = lazy(() => import("./option-collections"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
+const OptionSkills = lazy(() => import("./option-skills"))
 const OptionSetup = lazy(() => import("./option-setup"))
-// OptionWorkspacePlayground and OptionChat are eagerly imported above
+const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
+const OptionWorkspacePlayground = lazy(() => import("./option-workspace-playground"))
+// OptionChat is eagerly imported above
 
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/", element: <OptionIndex /> },
@@ -198,11 +205,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   {
     kind: "options",
     path: "/onboarding-test",
-    element: (
-      <OptionLayout hideHeader>
-        <OnboardingWizard />
-      </OptionLayout>
-    ),
+    element: <OptionOnboardingTest />,
     targets: ALL_TARGETS
   },
   {
@@ -285,6 +288,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/settings/splash",
+    element: <OptionSplashSettings />,
+    nav: {
+      group: "server",
+      labelToken: "settings:splashSettingsNav",
+      icon: Sparkles,
+      order: 3.6
+    }
+  },
+  {
+    kind: "options",
     path: "/settings/quick-ingest",
     element: <OptionQuickIngestSettings />,
     nav: {
@@ -315,6 +329,11 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       icon: ImageIcon,
       order: 7
     }
+  },
+  {
+    kind: "options",
+    path: "/settings/image-gen",
+    element: <Navigate to="/settings/image-generation" replace />
   },
   {
     kind: "options",
@@ -430,7 +449,11 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 1
     }
   },
-  { kind: "options", path: "/review", element: <OptionMediaMulti /> },
+  {
+    kind: "options",
+    path: "/review",
+    element: <Navigate to="/media-multi" replace />
+  },
   {
     kind: "options",
     path: "/flashcards",
@@ -473,7 +496,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionModelPlayground />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.workspacePlayground",
+      labelToken: "settings:modelPlaygroundNav",
       icon: FlaskConical,
       order: 5,
       beta: true
@@ -534,7 +557,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionMediaMulti />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.review",
+      labelToken: "option:header.libraryView",
       icon: Microscope,
       order: 1
     }
@@ -562,6 +585,8 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     }
   },
   { kind: "options", path: "/knowledge", element: <OptionKnowledgeWorkspace /> },
+  { kind: "options", path: "/knowledge/thread/:threadId", element: <OptionKnowledgeWorkspace /> },
+  { kind: "options", path: "/knowledge/shared/:shareToken", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/world-books", element: <OptionWorldBooksWorkspace /> },
   { kind: "options", path: "/dictionaries", element: <OptionDictionariesWorkspace /> },
   { kind: "options", path: "/characters", element: <OptionCharactersWorkspace /> },
@@ -602,9 +627,21 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionACPPlayground />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.acpPlayground",
+      labelToken: "settings:acpPlaygroundNav",
       icon: Bot,
       order: 12,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/skills",
+    element: <OptionSkills />,
+    nav: {
+      group: "workspace",
+      labelToken: "settings:skillsNav",
+      icon: Zap,
+      order: 13,
       beta: true
     }
   },
@@ -614,7 +651,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionWorkspacePlayground />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.modelPlayground",
+      labelToken: "settings:researchStudioNav",
       icon: FlaskConical,
       order: 0,
       beta: true
@@ -697,6 +734,12 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "sidepanel",
     path: "/agent",
     element: <SidepanelAgent />,
+    targets: ALL_TARGETS
+  },
+  {
+    kind: "sidepanel",
+    path: "/persona",
+    element: <SidepanelPersona />,
     targets: ALL_TARGETS
   },
   { kind: "sidepanel", path: "/settings", element: <SidepanelSettings /> },

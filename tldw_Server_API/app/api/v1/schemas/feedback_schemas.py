@@ -1,7 +1,10 @@
 """Schemas for explicit feedback collection (chat + RAG)."""
 
+from __future__ import annotations
+
 from typing import Literal, Optional
 
+from loguru import logger
 from pydantic import BaseModel
 
 try:
@@ -20,6 +23,17 @@ _ERR_QUERY_REQUIRED = "query is required when message_id is not provided"
 _ERR_HELPFUL_REQUIRED = "helpful is required when feedback_type is 'helpful'"
 _ERR_RELEVANCE_REQUIRED = "relevance_score is required when feedback_type is 'relevance'"
 
+# Canonical issue taxonomy.  Unknown values are accepted but logged.
+KNOWN_ISSUE_IDS: frozenset[str] = frozenset({
+    "incorrect_information",
+    "not_relevant",
+    "missing_details",
+    "sources_unhelpful",
+    "too_verbose",
+    "too_brief",
+    "other",
+})
+
 
 def _validate_feedback_requirements(values: object) -> object:
     if not isinstance(values, dict):
@@ -33,6 +47,12 @@ def _validate_feedback_requirements(values: object) -> object:
         raise ValueError(_ERR_HELPFUL_REQUIRED)
     if feedback_type == "relevance" and values.get("relevance_score") is None:
         raise ValueError(_ERR_RELEVANCE_REQUIRED)
+    # Warn on unrecognised issue IDs (permissive: accept but log)
+    issues = values.get("issues")
+    if issues and isinstance(issues, list):
+        unknown = [i for i in issues if isinstance(i, str) and i not in KNOWN_ISSUE_IDS]
+        if unknown:
+            logger.warning("Feedback submitted with unrecognised issue IDs: {}", unknown)
     return values
 
 
@@ -82,3 +102,41 @@ class ExplicitFeedbackRequest(BaseModel):
 class ExplicitFeedbackResponse(BaseModel):
     ok: bool = Field(default=True)
     feedback_id: Optional[str] = Field(default=None)
+
+
+class FeedbackRecord(BaseModel):
+    """A single stored feedback entry."""
+    id: str
+    conversation_id: str
+    message_id: Optional[str] = None
+    query: Optional[str] = None
+    document_ids: list[str] = Field(default_factory=list)
+    chunk_ids: list[str] = Field(default_factory=list)
+    relevance_score: Optional[int] = None
+    helpful: Optional[bool] = None
+    issues: list[str] = Field(default_factory=list)
+    user_notes: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class FeedbackListResponse(BaseModel):
+    """Response for GET /feedback."""
+    ok: bool = Field(default=True)
+    feedback: list[FeedbackRecord] = Field(default_factory=list)
+
+
+class FeedbackUpdateRequest(BaseModel):
+    """Body for PATCH /feedback/{feedback_id}."""
+    issues: Optional[list[str]] = Field(default=None, description="Replace or merge issue list")
+    user_notes: Optional[str] = Field(default=None, description="Overwrite user notes (last-write-wins)")
+
+
+class FeedbackDeleteResponse(BaseModel):
+    """Response for DELETE /feedback/{feedback_id}."""
+    ok: bool = Field(default=True)
+    deleted: bool = Field(default=False)
+
+
+class ErrorDetail(BaseModel):
+    """Standard error response body for feedback endpoints."""
+    detail: str

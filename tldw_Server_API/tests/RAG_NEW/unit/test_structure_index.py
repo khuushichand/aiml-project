@@ -41,6 +41,26 @@ def build_content_and_chunks():
     return content, chunks, (s1, e1), (s2, e2)
 
 
+def build_nested_content_and_chunk():
+    content = (
+        "# Part I\n"
+        "## Chapter 1\n"
+        "### Section A\n"
+        "Nested paragraph text.\n"
+    )
+    paragraph = "Nested paragraph text."
+    start = content.index(paragraph)
+    end = start + len(paragraph)
+    chunk = {
+        "text": content[start:end],
+        "start_char": start,
+        "end_char": end,
+        "chunk_type": "text",
+        "metadata": {"section_path": ["Part I", "Chapter 1", "Section A"]},
+    }
+    return content, [chunk], (start, end)
+
+
 def test_structure_index_write_and_lookup(monkeypatch):
 
 
@@ -84,6 +104,57 @@ def test_structure_index_write_and_lookup(monkeypatch):
     # Lookup section by offset for first paragraph
     sec = db.lookup_section_for_offset(mid, p1[0])
     assert sec and isinstance(sec, dict) and "title" in sec and sec["title"].lower().startswith("intro")
+
+
+def test_structure_index_persists_parent_section_hierarchy(monkeypatch):
+    monkeypatch.setenv("RAG_ENABLE_STRUCTURE_INDEX", "1")
+    db = MediaDatabase(db_path=":memory:", client_id="test")
+
+    content, chunks, paragraph_span = build_nested_content_and_chunk()
+    mid, _muuid, _msg = db.add_media_with_keywords(
+        url="local://test-structure-hierarchy",
+        title="Nested Struct Doc",
+        media_type="web_document",
+        content=content,
+        keywords=["hierarchy"],
+        prompt=None,
+        analysis_content=None,
+        safe_metadata=None,
+        transcription_model=None,
+        author="unit",
+        ingestion_date=None,
+        overwrite=False,
+        chunk_options=None,
+        chunks=chunks,
+    )
+    assert mid is not None
+
+    section_rows = db.execute_query(
+        "SELECT id, path, parent_id FROM DocumentStructureIndex "
+        "WHERE media_id = ? AND kind IN ('section','header')",
+        (mid,),
+    ).fetchall()
+    by_path = {row["path"]: row for row in section_rows}
+
+    assert "Part I" in by_path
+    assert "Part I / Chapter 1" in by_path
+    assert "Part I / Chapter 1 / Section A" in by_path
+
+    root = by_path["Part I"]
+    chapter = by_path["Part I / Chapter 1"]
+    section = by_path["Part I / Chapter 1 / Section A"]
+    assert root["parent_id"] is None
+    assert chapter["parent_id"] == root["id"]
+    assert section["parent_id"] == chapter["id"]
+
+    paragraph_row = db.execute_query(
+        "SELECT path, parent_id FROM DocumentStructureIndex "
+        "WHERE media_id = ? AND kind = 'paragraph' AND start_char = ? LIMIT 1",
+        (mid, paragraph_span[0]),
+    ).fetchone()
+    assert paragraph_row is not None
+    assert paragraph_row["path"] == "Part I / Chapter 1 / Section A"
+    assert paragraph_row["parent_id"] == section["id"]
 
 
 @pytest.mark.asyncio

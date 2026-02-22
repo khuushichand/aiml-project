@@ -98,7 +98,7 @@ class ConsistentHashRing:
 
     def _hash(self, key: str) -> int:
         """Generate hash for a key"""
-        return int(hashlib.md5(key.encode()).hexdigest(), 16)
+        return int(hashlib.md5(key.encode(), usedforsecurity=False).hexdigest(), 16)
 
     def get_shard_distribution(self) -> dict[int, int]:
         """Get current distribution of keys across shards"""

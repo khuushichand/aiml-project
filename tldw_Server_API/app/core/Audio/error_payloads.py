@@ -1,10 +1,11 @@
-import os
 from typing import Any, Optional
+
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 
 def _debug_error_details_enabled() -> bool:
     """Return True when DEBUG_ERROR_DETAILS enables verbose error payloads."""
-    return str(os.getenv("DEBUG_ERROR_DETAILS", "")).strip().lower() in {"1", "true", "yes", "on"}
+    return env_flag_enabled("DEBUG_ERROR_DETAILS")
 
 
 def _maybe_debug_details(exc: Optional[Exception]) -> Optional[str]:

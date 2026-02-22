@@ -702,7 +702,7 @@ class TestConcurrentCRUD:
                         created_ids.append(note_id)
                         data_tracker.add_note(note_id)
                 except:
-                    pass
+                    _ = None
 
             # Now race update and delete on same notes
             for note_id in created_ids:
@@ -927,7 +927,7 @@ class TestLoadPatterns:
                         key = f"{operation}_{status}"
                         operation_counts[key] = operation_counts.get(key, 0) + 1
                     except Exception:
-                        pass
+                        _ = None
 
             # Track created resources for cleanup
             for media_id in created_media_ids:
@@ -1088,7 +1088,7 @@ class TestStateConsistency:
                 response = authenticated_client.delete_note(note_id)
                 results['delete_success'] = True
             except:
-                pass
+                _ = None
 
         # Start multiple readers and one deleter
         with ThreadPoolExecutor(max_workers=11) as executor:
@@ -1163,7 +1163,7 @@ class TestStateConsistency:
                         version=1
                     )
                 except:
-                    pass
+                    _ = None
 
         # Concurrent reads and writes
         with ThreadPoolExecutor(max_workers=10) as executor:

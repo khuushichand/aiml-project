@@ -1,25 +1,61 @@
-import { UserCircle2, MessageCircle } from "lucide-react"
+import { MessageCircle, Star, StarOff } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useMemo, useState, useEffect } from "react"
-import { Tooltip, Badge } from "antd"
+import { Tooltip } from "antd"
 import { createImageDataUrl } from "@/utils/image-utils"
+
+export type GalleryCardDensity = "rich" | "compact"
+
+const DEFAULT_FALLBACK_NAME = "character"
+
+const getInitialCharacter = (value: string): string => {
+  const match = value.match(/[A-Za-z0-9]/)
+  return match ? match[0].toUpperCase() : "?"
+}
+
+export const hashNameToHue = (name: string): number => {
+  let hash = 0
+  for (let i = 0; i < name.length; i += 1) {
+    hash = (hash * 31 + name.charCodeAt(i)) | 0
+  }
+  return Math.abs(hash) % 360
+}
+
+export const getAvatarFallbackTokens = (name?: string) => {
+  const normalized = (name || DEFAULT_FALLBACK_NAME).trim().toLowerCase()
+  const hue = hashNameToHue(normalized || DEFAULT_FALLBACK_NAME)
+  return {
+    hue,
+    initial: getInitialCharacter(name || ""),
+    backgroundColor: `hsl(${hue} 68% 82%)`,
+    color: `hsl(${hue} 45% 20%)`
+  }
+}
 
 interface CharacterGalleryCardProps {
   character: {
     id?: string
     slug?: string
     name?: string
+    description?: string
+    tags?: string[]
     avatar_url?: string
     image_base64?: string
   }
   onClick: () => void
   conversationCount?: number
+  density?: GalleryCardDensity
+  isFavorite?: boolean
+  onToggleFavorite?: () => void
 }
 
 export function CharacterGalleryCard({
   character,
   onClick,
-  conversationCount
+  conversationCount,
+  density = "rich",
+  isFavorite = false,
+  onToggleFavorite
 }: CharacterGalleryCardProps) {
   const { t } = useTranslation(["settings"])
   const [avatarImgError, setAvatarImgError] = useState(false)
@@ -39,29 +75,101 @@ export function CharacterGalleryCard({
     t("settings:manageCharacters.preview.untitled", {
       defaultValue: "Untitled character"
     })
+  const displayDescription = (character.description || "").trim()
+  const displayTags = (character.tags || []).filter((tag) => tag.trim().length > 0).slice(0, 3)
+  const isCompact = density === "compact"
+  const fallbackTokens = useMemo(
+    () => getAvatarFallbackTokens(displayName),
+    [displayName]
+  )
 
   return (
-    <button
-      type="button"
-      className="group flex w-full flex-col items-center gap-2 rounded-lg border border-border bg-surface p-3 transition-all hover:border-primary/30 hover:bg-surface2 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-bg"
+    <div
+      role="button"
+      tabIndex={0}
+      className={`group flex w-full flex-col items-center gap-2 rounded-lg border border-border bg-surface p-3 transition-all motion-reduce:transition-none hover:border-primary/30 hover:bg-surface2 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-bg ${
+        isCompact ? "min-h-[168px]" : "min-h-[220px]"
+      }`}
       onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault()
+          onClick()
+        }
+      }}
       aria-label={t("settings:manageCharacters.gallery.clickToPreview", {
         defaultValue: "Click to preview {{name}}",
         name: displayName
       })}
     >
       {/* Avatar */}
-      <div className="relative aspect-square w-full max-w-[120px]">
+      <div
+        className={`relative aspect-square w-full ${
+          isCompact ? "max-w-[102px]" : "max-w-[120px]"
+        }`}>
+        {onToggleFavorite && (
+          <Tooltip
+            title={
+              isFavorite
+                ? t("settings:manageCharacters.actions.removeFavorite", {
+                    defaultValue: "Remove favorite"
+                  })
+                : t("settings:manageCharacters.actions.addFavorite", {
+                    defaultValue: "Add favorite"
+                  })
+            }
+          >
+            <button
+              type="button"
+              className={`absolute -right-1 -top-1 z-10 inline-flex items-center justify-center rounded-full border bg-surface p-1 shadow-sm transition ${
+                isFavorite
+                  ? "border-primary/40 text-primary"
+                  : "border-border text-text-muted hover:text-primary"
+              }`}
+              aria-label={t(
+                isFavorite
+                  ? "settings:manageCharacters.aria.removeFavorite"
+                  : "settings:manageCharacters.aria.addFavorite",
+                {
+                  defaultValue: isFavorite
+                    ? "Remove {{name}} from favorites"
+                    : "Add {{name}} to favorites",
+                  name: displayName
+                }
+              )}
+              onClick={(event) => {
+                event.stopPropagation()
+                onToggleFavorite()
+              }}
+            >
+              {isFavorite ? (
+                <Star className="h-3.5 w-3.5 fill-current" />
+              ) : (
+                <StarOff className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </Tooltip>
+        )}
         {avatarSrc && !avatarImgError ? (
           <img
             src={avatarSrc}
             alt={displayName}
+            loading="lazy"
+            decoding="async"
             className="h-full w-full rounded-lg object-cover ring-2 ring-border group-hover:ring-primary/30"
             onError={() => setAvatarImgError(true)}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center rounded-lg bg-surface2 ring-2 ring-border group-hover:ring-primary/30">
-            <UserCircle2 className="h-16 w-16 text-text-subtle" />
+          <div
+            data-testid="character-gallery-fallback-avatar"
+            className="flex h-full w-full items-center justify-center rounded-lg ring-2 ring-border/70 group-hover:ring-primary/30"
+            style={{
+              backgroundColor: fallbackTokens.backgroundColor,
+              color: fallbackTokens.color
+            }}>
+            <span className="text-3xl font-semibold leading-none">
+              {fallbackTokens.initial}
+            </span>
           </div>
         )}
         {/* Conversation count badge */}
@@ -86,6 +194,26 @@ export function CharacterGalleryCard({
           {displayName}
         </span>
       </Tooltip>
-    </button>
+
+      {!isCompact && displayDescription && (
+        <Tooltip title={displayDescription} placement="bottom">
+          <p className="w-full line-clamp-2 text-center text-xs leading-5 text-text-muted">
+            {displayDescription}
+          </p>
+        </Tooltip>
+      )}
+
+      {!isCompact && displayTags.length > 0 && (
+        <div className="mt-0.5 flex w-full flex-wrap justify-center gap-1">
+          {displayTags.map((tag) => (
+            <span
+              key={tag}
+              className="rounded-full border border-border/80 bg-surface2 px-2 py-0.5 text-[10px] font-medium text-text-muted">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

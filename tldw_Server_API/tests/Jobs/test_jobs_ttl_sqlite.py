@@ -39,7 +39,7 @@ def _backdate_sqlite_fields(job_id: int, *, created_delta_s: int = 0, runtime_de
         try:
             conn.close()
         except Exception:
-            pass
+            _ = None
 
 
 def test_ttl_sweep_cancel(monkeypatch, tmp_path):

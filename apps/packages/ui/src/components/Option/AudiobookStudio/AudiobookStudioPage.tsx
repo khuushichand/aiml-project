@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from "react"
 import { Tabs, Typography, Input, Space, Tag, Button, message, Tooltip } from "antd"
+import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import { useTranslation } from "react-i18next"
 import {
   FileText,
@@ -237,7 +238,6 @@ export const AudiobookStudioPage: React.FC = () => {
               <Title level={3} className="!mb-0">
                 {t("audiobook:title", "Audiobook Studio")}
               </Title>
-              <Tag color="blue">{t("common:beta", "Beta")}</Tag>
             </div>
             <Text type="secondary">
               {t(
@@ -250,6 +250,16 @@ export const AudiobookStudioPage: React.FC = () => {
             {t("audiobook:backToEditor", "Back to Editor")}
           </Button>
         </div>
+
+        <DismissibleBetaAlert
+          storageKey="beta-dismissed:audiobookStudio"
+          message={t("audiobook:betaNotice", "Beta Feature")}
+          description={t(
+            "audiobook:betaDescription",
+            "Audiobook Studio is currently in beta. Some features may be incomplete or change."
+          )}
+          className="mb-4"
+        />
 
         <ProjectListView
           onOpenProject={handleProjectOpened}
@@ -268,7 +278,6 @@ export const AudiobookStudioPage: React.FC = () => {
             <Title level={3} className="!mb-0">
               {t("audiobook:title", "Audiobook Studio")}
             </Title>
-            <Tag color="blue">{t("common:beta", "Beta")}</Tag>
           </div>
           <Text type="secondary">
             {t(
@@ -319,6 +328,16 @@ export const AudiobookStudioPage: React.FC = () => {
         </Space>
       </div>
 
+      <DismissibleBetaAlert
+        storageKey="beta-dismissed:audiobookStudio"
+        message={t("audiobook:betaNotice", "Beta Feature")}
+        description={t(
+          "audiobook:betaDescription",
+          "Audiobook Studio is currently in beta. Some features may be incomplete or change."
+        )}
+        className="mb-4"
+      />
+
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-1">
           <label className="block text-sm font-medium">
@@ -346,7 +365,7 @@ export const AudiobookStudioPage: React.FC = () => {
           })}
         </span>
         {completedCount > 0 && (
-          <span className="text-green-600">
+          <span className="text-success">
             {t("audiobook:stats.completed", "{{count}} completed", {
               count: completedCount
             })}

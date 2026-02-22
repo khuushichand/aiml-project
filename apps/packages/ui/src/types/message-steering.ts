@@ -14,6 +14,12 @@ export type MessageSteeringFlags = {
   forceNarrate: boolean
 }
 
+export type MessageSteeringPromptTemplates = {
+  continueAsUser: string
+  impersonateUser: string
+  forceNarrate: string
+}
+
 export type ResolvedMessageSteering = MessageSteeringFlags & {
   mode: MessageSteeringMode
   hadConflict: boolean

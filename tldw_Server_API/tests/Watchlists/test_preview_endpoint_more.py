@@ -162,3 +162,29 @@ def test_preview_invalid_regex_without_require_include_keeps_ingestable_items(cl
     data = r.json()
     assert data["total"] >= 1
     assert data["ingestable"] >= 1
+
+
+def test_preview_accepts_tldw_test_mode_y(client_with_user: TestClient, monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "y")
+    c = client_with_user
+
+    s = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "Feed TLDW", "url": "https://example.com/rss.xml", "source_type": "rss"},
+    )
+    assert s.status_code == 200, s.text
+    sid = s.json()["id"]
+
+    j = c.post(
+        "/api/v1/watchlists/jobs",
+        json={"name": "Preview TLDW", "scope": {"sources": [sid]}, "job_filters": {"filters": []}},
+    )
+    assert j.status_code == 200, j.text
+    jid = j.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{jid}/preview", params={"limit": 5, "per_source": 5})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] >= 1
+    assert data["ingestable"] >= 1

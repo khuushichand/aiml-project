@@ -31,11 +31,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import inspect
 import json
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from loguru import logger
 
@@ -54,6 +56,12 @@ from tldw_Server_API.app.core.Watchlists.fetchers import (
     fetch_site_items_with_rules,
 )
 from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters, normalize_filters
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
+
+try:
+    import bleach as _bleach  # type: ignore
+except ImportError:  # pragma: no cover
+    _bleach = None  # type: ignore[assignment]
 
 _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -82,7 +90,17 @@ def _utcnow_iso() -> str:
 
 
 def _forums_enabled() -> bool:
-    return str(os.getenv("WATCHLIST_FORUMS_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+    return env_flag_enabled("WATCHLIST_FORUMS_ENABLED")
+
+
+def _forum_default_top_n() -> int:
+    try:
+        parsed = int(os.getenv("WATCHLIST_FORUM_DEFAULT_TOP_N", "20") or 20)
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+        parsed = 20
+    if parsed <= 0:
+        return 20
+    return min(parsed, 200)
 
 
 def _forum_delay_seconds() -> float:
@@ -135,9 +153,163 @@ def _compute_next_run(cron: str | None, timezone_str: str | None) -> str | None:
         return None
 
 
+def _run_is_cancelled(db: WatchlistsDatabase, run_id: int) -> bool:
+    try:
+        run = db.get_run(run_id)
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+        return False
+    return str(getattr(run, "status", "") or "").strip().lower() == "cancelled"
+
+
 _truncate = truncate_text
 _hash_content = hash_text_sha256
 _word_count = word_count
+
+# ---------------------------------------------------------------------------
+# Feed content sanitization
+# ---------------------------------------------------------------------------
+_FEED_ALLOWED_TAGS = [
+    "a", "abbr", "b", "blockquote", "br", "code", "dd", "del", "dl", "dt",
+    "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "li",
+    "ol", "p", "pre", "strong", "sub", "sup", "table", "tbody", "td",
+    "tfoot", "th", "thead", "tr", "ul",
+]
+_FEED_ALLOWED_ATTRS: dict[str, list[str]] = {
+    "a": ["href", "title", "rel"],
+    "img": ["src", "alt", "title", "width", "height"],
+}
+_FEED_ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
+
+
+import re as _re
+
+# Pre-strip patterns: remove entire tag+content for dangerous elements
+_STRIP_CONTENT_RE = [
+    _re.compile(r"<\s*script[^>]*>.*?</\s*script\s*>", _re.IGNORECASE | _re.DOTALL),
+    _re.compile(r"<\s*script[^>]*/?\s*>", _re.IGNORECASE),
+    _re.compile(r"<\s*style[^>]*>.*?</\s*style\s*>", _re.IGNORECASE | _re.DOTALL),
+    _re.compile(r"<\s*iframe[^>]*>.*?</\s*iframe\s*>", _re.IGNORECASE | _re.DOTALL),
+    _re.compile(r"<\s*iframe[^>]*/?\s*>", _re.IGNORECASE),
+    _re.compile(r"<\s*object[^>]*>.*?</\s*object\s*>", _re.IGNORECASE | _re.DOTALL),
+    _re.compile(r"<\s*embed[^>]*/?\s*>", _re.IGNORECASE),
+]
+_EVENT_HANDLER_RE = _re.compile(r"\bon\w+\s*=\s*[\"'][^\"']*[\"']", _re.IGNORECASE)
+
+
+def _sanitize_feed_html(value: str | None) -> str | None:
+    """Sanitize HTML from feed content, stripping scripts/iframes/event handlers."""
+    if not value:
+        return value
+    # Phase 1: remove dangerous elements and their content (regex)
+    cleaned = value
+    for pattern in _STRIP_CONTENT_RE:
+        cleaned = pattern.sub("", cleaned)
+    cleaned = _EVENT_HANDLER_RE.sub("", cleaned)
+    # Phase 2: allowlist remaining tags via bleach (if available)
+    if _bleach is not None:
+        cleaned = _bleach.clean(
+            cleaned,
+            tags=_FEED_ALLOWED_TAGS,
+            attributes=_FEED_ALLOWED_ATTRS,
+            protocols=_FEED_ALLOWED_PROTOCOLS,
+            strip=True,
+            strip_comments=True,
+        )
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Feed health tracking helpers
+# ---------------------------------------------------------------------------
+_FEED_HEALTH_MAX_CONSEC_ERRORS = int(os.getenv("COLLECTIONS_FEED_MAX_CONSEC_ERRORS", "10") or "10")
+_FEED_HEALTH_BACKOFF_BASE_HOURS = 1
+_FEED_HEALTH_BACKOFF_CAP_HOURS = 24
+
+
+def _compute_feed_backoff(consec_errors: int) -> timedelta:
+    """Exponential backoff: 1h, 2h, 4h, 8h, ... capped at 24h."""
+    hours = min(_FEED_HEALTH_BACKOFF_BASE_HOURS * (2 ** (consec_errors - 1)), _FEED_HEALTH_BACKOFF_CAP_HOURS)
+    return timedelta(hours=hours)
+
+
+def _feed_health_status(consec_errors: int, active: bool) -> str:
+    """Derive health status string from error count."""
+    if not active:
+        return "disabled"
+    if consec_errors >= 5:
+        return "failing"
+    if consec_errors >= 1:
+        return "degraded"
+    return "healthy"
+
+
+# ---------------------------------------------------------------------------
+# Feed retention defaults
+# ---------------------------------------------------------------------------
+_FEED_RETENTION_MAX_ITEMS = int(os.getenv("COLLECTIONS_FEED_MAX_ITEMS", "0") or "0")  # 0 = unlimited
+_FEED_RETENTION_DAYS = int(os.getenv("COLLECTIONS_FEED_RETENTION_DAYS", "0") or "0")  # 0 = unlimited
+
+
+def _apply_feed_retention(collections_db: CollectionsDatabase, origin: str, src) -> None:
+    """Apply per-source retention policy after successful ingestion."""
+    try:
+        src_settings = json.loads(getattr(src, "settings_json", None) or "{}") if getattr(src, "settings_json", None) else {}
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+        src_settings = {}
+    retention = src_settings.get("retention") if isinstance(src_settings, dict) else None
+    max_items = (retention.get("max_items") if isinstance(retention, dict) else None) or _FEED_RETENTION_MAX_ITEMS
+    retention_days = (retention.get("retention_days") if isinstance(retention, dict) else None) or _FEED_RETENTION_DAYS
+    if not max_items and not retention_days:
+        return
+    try:
+        pruned = collections_db.prune_content_items_for_source(
+            origin=origin,
+            origin_id=int(src.id),
+            max_items=int(max_items) if max_items else None,
+            retention_days=int(retention_days) if retention_days else None,
+        )
+        if pruned:
+            logger.debug(f"watchlists.retention: pruned {pruned} items for source {src.id}")
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"watchlists.retention: failed for source {getattr(src, 'id', '?')}: {exc}")
+
+
+# Tracking query parameters to strip during URL normalization
+_TRACKING_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "utm_source_platform", "utm_creative_format",
+    "fbclid", "gclid", "gclsrc", "dclid", "msclkid",
+    "mc_cid", "mc_eid", "oly_anon_id", "oly_enc_id",
+    "vero_id", "twclid", "igshid", "s_cid",
+    "_hsenc", "_hsmi", "hsa_cam", "hsa_grp", "hsa_mt", "hsa_src",
+    "hsa_ad", "hsa_acc", "hsa_net", "hsa_ver", "hsa_la", "hsa_ol", "hsa_kw",
+    "ref", "ref_src",
+})
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize a URL for dedup: lowercase scheme/host, strip www, remove tracking params, strip trailing slash."""
+    try:
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "https").lower()
+        hostname = (parsed.hostname or "").lower()
+        if hostname.startswith("www."):
+            hostname = hostname[4:]
+        port = parsed.port
+        if port and ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+            port = None
+        netloc = f"{hostname}:{port}" if port else hostname
+        path = parsed.path.rstrip("/") or "/"
+        # Filter out tracking query params, keep the rest sorted for consistency
+        if parsed.query:
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            filtered = {k: v for k, v in params.items() if k.lower() not in _TRACKING_PARAMS}
+            query = urlencode(sorted(filtered.items()), doseq=True) if filtered else ""
+        else:
+            query = ""
+        return urlunparse((scheme, netloc, path, "", query, ""))
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+        return url
 
 
 def _resolve_collections_origin(
@@ -290,6 +462,7 @@ async def _maybe_auto_generate_output(
         _build_output_filename,
         _outputs_dir_for_user,
         _resolve_output_path_for_user,
+        build_items_context_from_content_items,
         render_output_template,
     )
 
@@ -314,18 +487,10 @@ async def _maybe_auto_generate_output(
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             logger.debug(f"auto-output: template {template_name!r} not found, using default")
 
-    # Build context (simplified version of endpoint's _build_output_context)
+    # Build context (reuses shared helper for consistent dict shape)
     job_name = getattr(job, "name", None) or f"Job-{getattr(job, 'id', '?')}"
     title = f"{job_name}-Auto-{run.id}"
-    items_payload: list[dict[str, Any]] = []
-    for itm in items_rows:
-        items_payload.append({
-            "title": getattr(itm, "title", None) or "Untitled",
-            "url": getattr(itm, "url", None) or "",
-            "summary": getattr(itm, "summary", None) or "",
-            "published_at": getattr(itm, "published_at", None) or "",
-            "tags": getattr(itm, "tags_json", None) or "[]",
-        })
+    items_payload = build_items_context_from_content_items(items_rows)
 
     if template_content:
         context = {
@@ -380,7 +545,12 @@ async def _maybe_auto_generate_output(
     return artifact.id
 
 
-async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
+async def run_watchlist_job(
+    user_id: int,
+    job_id: int,
+    *,
+    source_ids_override: list[int] | None = None,
+) -> dict[str, Any]:
     """Run the watchlist fetch→ingest pipeline for this user/job.
 
     Returns minimal stats: { run_id, items_found, items_ingested }.
@@ -427,7 +597,23 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
         scope = json.loads(job.scope_json or "{}") if job.scope_json else {}
     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         scope = {}
-    sources = _select_sources_for_scope(db, scope or {})
+    override_ids: list[int] = []
+    if source_ids_override:
+        seen_override: set[int] = set()
+        for raw_id in source_ids_override:
+            try:
+                source_id = int(raw_id)
+            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+                continue
+            if source_id <= 0 or source_id in seen_override:
+                continue
+            seen_override.add(source_id)
+            override_ids.append(source_id)
+
+    if override_ids:
+        sources = _select_sources_for_scope(db, {"sources": override_ids})
+    else:
+        sources = _select_sources_for_scope(db, scope or {})
 
     items_found = 0
     items_ingested = 0
@@ -439,7 +625,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
             return []
 
     # TEST_MODE short-circuit for offline tests: do not perform network
-    test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+    test_mode = is_test_mode()
 
     # Load job-level filters + gating toggle (bridge from SUBS Import Rules)
     job_filters: list[dict[str, Any]] = []
@@ -489,7 +675,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             pass
         try:
-            return str(os.getenv("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT", "")).strip().lower() in {"1", "true", "yes", "on"}
+            return env_flag_enabled("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT")
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             return False
 
@@ -518,6 +704,9 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
     history_used = False
 
     for src in sources:
+            if _run_is_cancelled(db, run.id):
+                logger.info(f"watchlists.run_cancelled: stopping run {run.id} before source {getattr(src, 'id', '?')}")
+                break
             try:
                 src_type = (src.source_type or "").lower()
                 if src_type == "forum":
@@ -551,6 +740,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                     summary: str | None,
                     media_id: int | None,
                     media_uuid: str | None,
+                    content: str | None = None,
                     published_at: str | None = None,
                     _src=src,
                 ) -> None:
@@ -564,6 +754,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                             url=url,
                             title=title,
                             summary=_truncate(summary),
+                            content=_sanitize_feed_html(content) if content else None,
                             published_at=published_at,
                             tags=_keywords_for_source(_src),
                             status=status,
@@ -703,15 +894,29 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 db.update_source_scrape_meta(int(src.id), status="deferred", defer_until=until)
                         continue
                     if status // 100 != 2:
-                        # error path
+                        # error path — track consecutive errors and apply backoff
                         with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                            db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status=f"error:{status}")
+                            prev_errors = int(getattr(src, "consec_errors", 0) or 0)
+                            new_errors = prev_errors + 1
+                            backoff_until = (datetime.utcnow().replace(tzinfo=timezone.utc) + _compute_feed_backoff(new_errors)).isoformat()
+                            health = _feed_health_status(new_errors, bool(getattr(src, "active", 1)))
+                            auto_disable = new_errors >= _FEED_HEALTH_MAX_CONSEC_ERRORS
+                            db.update_source_scrape_meta(
+                                int(src.id),
+                                last_scraped_at=_utcnow_iso(),
+                                status=f"error:{status}",
+                                consec_errors=new_errors,
+                                defer_until=backoff_until,
+                                active=0 if auto_disable else None,
+                            )
+                            if auto_disable:
+                                logger.warning(f"watchlists.health: auto-disabled source {src.id} after {new_errors} consecutive errors")
                         continue
 
-                    # 200 OK
+                    # 200 OK — reset error tracking
                     if res.get("etag") is not None or res.get("last_modified") is not None:
                         with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                            db.update_source_scrape_meta(int(src.id), etag=res.get("etag"), last_modified=res.get("last_modified"), consec_not_modified=0)
+                            db.update_source_scrape_meta(int(src.id), etag=res.get("etag"), last_modified=res.get("last_modified"), consec_not_modified=0, consec_errors=0)
                     # Accumulate history counters for run stats when applicable
                     try:
                         if isinstance(res.get("pages_fetched"), int):
@@ -726,11 +931,22 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                         rss_items = rss_items[:rss_limit]
                     items_found += len(rss_items)
                     for it in rss_items:
+                        if _run_is_cancelled(db, run.id):
+                            logger.info(f"watchlists.run_cancelled: stopping run {run.id} during RSS item processing")
+                            break
                         link = it.get("url") or it.get("link")
                         if not link:
                             continue
                         # Item-level dedup check
-                        item_key = (it.get("guid") or link or (it.get("title") or ""))
+                        item_key = (it.get("guid") or _normalize_url(link) or (it.get("title") or ""))
+                        if not item_key:
+                            # Fallback: hash content to avoid empty-key collisions
+                            _raw = json.dumps(
+                                {k: it.get(k) for k in ("title", "summary", "content", "url", "link", "published")},
+                                sort_keys=True, default=str,
+                            )
+                            item_key = f"sha256:{hashlib.sha256(_raw.encode()).hexdigest()[:32]}"
+                            logger.warning(f"watchlists.dedup: empty key for item in source {getattr(src, 'id', '?')}, using content hash")
                         # Skip dedup on the very first run (TEST_MODE only) to stabilize offline tests
                         skip_dedup = test_mode and is_first_run
                         if not skip_dedup:
@@ -742,6 +958,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                         url=link,
                                         title=it.get("title"),
                                         summary=it.get("summary"),
+                                        content=(it.get("content") or it.get("summary")),
                                         media_id=None,
                                         media_uuid=None,
                                         published_at=it.get("published"),
@@ -780,6 +997,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                     url=link,
                                     title=it.get("title"),
                                     summary=it.get("summary"),
+                                    content=(it.get("content") or it.get("summary")),
                                     media_id=None,
                                     media_uuid=None,
                                     published_at=it.get("published"),
@@ -792,6 +1010,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                     url=link,
                                     title=it.get("title"),
                                     summary=it.get("summary"),
+                                    content=(it.get("content") or it.get("summary")),
                                     media_id=None,
                                     media_uuid=None,
                                     published_at=it.get("published"),
@@ -852,6 +1071,9 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 logger.debug(f"Media DB ingestion failed for {link}: {e}")
 
                         content_text = article.get("content") or summary_text or ""
+                        # Sanitize feed HTML before storing
+                        summary_text = _sanitize_feed_html(summary_text) or ""
+                        content_text = _sanitize_feed_html(content_text) or ""
                         tags_for_item = _keywords_for_source(src)
                         if flagged and "flagged" not in tags_for_item:
                             tags_for_item = tags_for_item + ["flagged"]
@@ -923,6 +1145,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=article.get("url") or link,
                                 title=article.get("title") or (it.get("title") or "Untitled"),
                                 summary=summary_text,
+                                content=content_text,
                                 media_id=ingested_media_id,
                                 media_uuid=ingested_media_uuid,
                                 published_at=it.get("published"),
@@ -933,6 +1156,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=article.get("url") or link,
                                 title=article.get("title") or (it.get("title") or "Untitled"),
                                 summary=summary_text,
+                                content=content_text,
                                 media_id=ingested_media_id,
                                 media_uuid=ingested_media_uuid,
                                 published_at=it.get("published"),
@@ -941,7 +1165,10 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
 
                     # Update last_scraped_at/status for source
                         with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                            db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
+                            db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok", consec_errors=0)
+
+                    # Apply retention policy if configured
+                        _apply_feed_retention(collections_db, collections_origin, src)
 
                 elif src_type in {"site", "forum"}:
                     # Determine discovery preferences
@@ -987,13 +1214,14 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                         if not urls_to_fetch:
                             urls_to_fetch = [src.url]
                     else:
-                        top_n = 1
+                        default_top_n = _forum_default_top_n() if src_type == "forum" else 1
+                        top_n = default_top_n
                         try:
-                            top_n = int(settings.get("top_n", 1))
+                            top_n = int(settings.get("top_n", default_top_n))
                         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                            top_n = 1
+                            top_n = default_top_n
                         if top_n <= 0:
-                            top_n = 1
+                            top_n = default_top_n
                         discover_method = str(settings.get("discover_method", "auto")).lower()
                         if top_n > 1:
                             try:
@@ -1012,8 +1240,11 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
 
                     items_found += len(urls_to_fetch)
                     for page_url in urls_to_fetch:
+                        if _run_is_cancelled(db, run.id):
+                            logger.info(f"watchlists.run_cancelled: stopping run {run.id} during site item processing")
+                            break
                         prefetch = prefetched_by_url.get(page_url)
-                        item_key = (prefetch.get("guid") if prefetch and prefetch.get("guid") else page_url)
+                        item_key = (prefetch.get("guid") if prefetch and prefetch.get("guid") else _normalize_url(page_url))
                         skip_dedup = test_mode and is_first_run
                         if not skip_dedup:
                             try:
@@ -1023,6 +1254,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                         url=page_url,
                                         title=(prefetch.get("title") if prefetch and prefetch.get("title") else src.name),
                                         summary=(prefetch.get("summary") if prefetch else None),
+                                        content=(prefetch.get("content") or prefetch.get("summary")) if prefetch else None,
                                         media_id=None,
                                         media_uuid=None,
                                         published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
@@ -1057,6 +1289,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=page_url,
                                 title=prefetch.get("title") if prefetch and prefetch.get("title") else src.name,
                                 summary=prefetch.get("summary") if prefetch else None,
+                                content=(prefetch.get("content") or prefetch.get("summary")) if prefetch else None,
                                 media_id=None,
                                 media_uuid=None,
                                 published_at=prefetch.get("published") if prefetch else None,
@@ -1102,6 +1335,11 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                     url=article.get("url") or page_url,
                                     title=article.get("title") or src.name,
                                     summary=(prefetch.get("summary") if prefetch else None),
+                                    content=(
+                                        article.get("content")
+                                        or (prefetch.get("content") if prefetch else None)
+                                        or (prefetch.get("summary") if prefetch else None)
+                                    ),
                                     media_id=None,
                                     media_uuid=None,
                                     published_at=(prefetch.get("published") if prefetch else None),
@@ -1114,6 +1352,11 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                     url=article.get("url") or page_url,
                                     title=article.get("title") or src.name,
                                     summary=(prefetch.get("summary") if prefetch else None),
+                                    content=(
+                                        article.get("content")
+                                        or (prefetch.get("content") if prefetch else None)
+                                        or (prefetch.get("summary") if prefetch else None)
+                                    ),
                                     media_id=None,
                                     media_uuid=None,
                                     published_at=(prefetch.get("published") if prefetch else None),
@@ -1141,6 +1384,9 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 logger.debug(f"Media DB ingestion failed for site {page_url}: {e}")
 
                         content_text = article.get("content") or summary_text or ""
+                        # Sanitize feed HTML before storing
+                        summary_text = _sanitize_feed_html(summary_text) or ""
+                        content_text = _sanitize_feed_html(content_text) or ""
                         tags_for_item = _keywords_for_source(src)
                         if flagged and "flagged" not in tags_for_item:
                             tags_for_item = tags_for_item + ["flagged"]
@@ -1210,6 +1456,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=article.get("url") or page_url,
                                 title=article.get("title") or src.name,
                                 summary=summary_text or (prefetch.get("summary") if prefetch else None),
+                                content=content_text,
                                 media_id=ingested_media_id,
                                 media_uuid=ingested_media_uuid,
                                 published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
@@ -1220,19 +1467,35 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=article.get("url") or page_url,
                                 title=article.get("title") or src.name,
                                 summary=summary_text or (prefetch.get("summary") if prefetch else None),
+                                content=content_text,
                                 media_id=ingested_media_id,
                                 media_uuid=ingested_media_uuid,
                                 published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                             )
                     with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                        db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
+                        db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok", consec_errors=0)
+                    # Apply retention policy if configured
+                    _apply_feed_retention(collections_db, collections_origin, src)
                 else:
                     # Unknown type - skip
                     continue
             except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Source processing failed (id={getattr(src, 'id', '?')}): {e}")
                 with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                    db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="error")
+                    prev_errors = int(getattr(src, "consec_errors", 0) or 0)
+                    new_errors = prev_errors + 1
+                    backoff_until = (datetime.utcnow().replace(tzinfo=timezone.utc) + _compute_feed_backoff(new_errors)).isoformat()
+                    auto_disable = new_errors >= _FEED_HEALTH_MAX_CONSEC_ERRORS
+                    db.update_source_scrape_meta(
+                        int(src.id),
+                        last_scraped_at=_utcnow_iso(),
+                        status="error",
+                        consec_errors=new_errors,
+                        defer_until=backoff_until,
+                        active=0 if auto_disable else None,
+                    )
+                    if auto_disable:
+                        logger.warning(f"watchlists.health: auto-disabled source {src.id} after {new_errors} consecutive errors")
 
     stats = {"items_found": items_found, "items_ingested": items_ingested}
     try:
@@ -1251,6 +1514,25 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
             }
     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         pass
+
+    if _run_is_cancelled(db, run.id):
+        cancelled_error = "cancelled_by_user"
+        try:
+            cancelled_run = db.get_run(run.id)
+            if getattr(cancelled_run, "error_msg", None):
+                cancelled_error = str(cancelled_run.error_msg)
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+            pass
+        db.update_run(
+            run.id,
+            status="cancelled",
+            finished_at=_utcnow_iso(),
+            stats_json=json.dumps(stats),
+            error_msg=cancelled_error,
+        )
+        db.set_job_history(job_id=job_id, last_run_at=_utcnow_iso(), next_run_at=_compute_next_run(job.schedule_expr, job.schedule_timezone))
+        return {"run_id": run.id, "status": "cancelled", **stats}
+
     db.update_run(run.id, status="succeeded", finished_at=_utcnow_iso(), stats_json=json.dumps(stats))
 
     # Update job history
@@ -1277,5 +1559,30 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
             stats["auto_output_id"] = auto_output_id
     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"auto-output generation failed for run {run.id}: {exc}")
+
+    # Trigger audio briefing workflow if configured
+    try:
+        if isinstance(job_output_prefs, dict) and job_output_prefs.get("generate_audio"):
+            from tldw_Server_API.app.core.Watchlists.audio_briefing_workflow import (
+                trigger_audio_briefing,
+            )
+
+            audio_task_id = await trigger_audio_briefing(
+                user_id=user_id,
+                job_id=job_id,
+                run_id=run.id,
+                output_prefs=job_output_prefs,
+                db=db,
+            )
+            if audio_task_id:
+                stats["audio_briefing_task_id"] = audio_task_id
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Audio briefing trigger failed for job {job_id}: {exc}")
+
+    # Persist post-run augmentation fields (e.g., auto_output_id, audio_briefing_task_id).
+    try:
+        db.update_run(run.id, stats_json=json.dumps(stats))
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"post-run stats persistence failed for run {run.id}: {exc}")
 
     return {"run_id": run.id, **stats}

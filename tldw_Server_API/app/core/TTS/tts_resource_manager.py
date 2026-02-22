@@ -4,6 +4,7 @@
 # Imports
 import asyncio
 import gc
+import os
 import threading
 import time
 import weakref
@@ -1129,9 +1130,14 @@ async def get_resource_manager(config: Optional[dict[str, Any]] = None) -> TTSRe
 
     def _auto_model_cache_limit() -> int:
         """Best-effort default cache size for mixed hardware deployments."""
+        # In test/minimal app mode, avoid probing torch to prevent heavy/fragile imports.
+        if os.getenv("MINIMAL_TEST_APP", "").lower() in {"1", "true", "yes", "y", "on"}:
+            return 1
+        if os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}:
+            return 1
         try:
             import torch
-        except ImportError:
+        except Exception:
             return 1
         try:
             if hasattr(torch, "backends") and torch.backends.mps.is_available():

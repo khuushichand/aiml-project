@@ -26,6 +26,11 @@ SUPPORTED_WEBSEARCH_ENGINES = {
     "startpage",
     "stract",
     "serper",
+    "4chan",
+}
+
+WEBSEARCH_ENGINE_ALIASES = {
+    "searxng": "searx",
 }
 
 
@@ -33,7 +38,10 @@ class WebSearchRequest(BaseModel):
     query: str = Field(..., description="User query to search the web for")
     engine: str = Field(
         "google",
-        description="Search engine to use. Supported: google, duckduckgo, brave, kagi, tavily, searx, exa, firecrawl",
+        description=(
+            "Search engine to use. Supported: google, duckduckgo, brave, kagi, tavily, "
+            "searx (alias: searxng), serper, exa, firecrawl, 4chan"
+        ),
     )
     result_count: int = Field(10, ge=1, le=50)
     content_country: str = Field("US")
@@ -52,6 +60,26 @@ class WebSearchRequest(BaseModel):
     searx_url: Optional[str] = None
     searx_json_mode: bool = False
     google_domain: Optional[str] = None
+    boards: Optional[list[str]] = Field(
+        default=None,
+        description="Optional board filters for 4chan engine (e.g., ['g','tv','pol']).",
+    )
+    max_threads_per_board: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Optional per-board scan cap for 4chan engine.",
+    )
+    max_archived_threads_per_board: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=500,
+        description="Optional per-board scan cap for archived 4chan threads.",
+    )
+    include_archived: bool = Field(
+        default=False,
+        description="When true and engine=4chan, include archived thread search results.",
+    )
 
     subquery_generation: bool = False
     subquery_generation_llm: Optional[str] = None
@@ -65,6 +93,7 @@ class WebSearchRequest(BaseModel):
     @classmethod
     def validate_engine(cls, value: str) -> str:
         engine = value.lower()
+        engine = WEBSEARCH_ENGINE_ALIASES.get(engine, engine)
         if engine not in SUPPORTED_WEBSEARCH_ENGINES:
             allowed = ", ".join(sorted(SUPPORTED_WEBSEARCH_ENGINES))
             raise ValueError(f"Unsupported engine '{value}'. Supported engines: {allowed}")

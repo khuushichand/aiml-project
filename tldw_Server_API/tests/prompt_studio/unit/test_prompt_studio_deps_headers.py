@@ -2,6 +2,7 @@ import os
 from typing import Any, Dict
 
 import pytest
+from fastapi import HTTPException
 from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 
@@ -73,3 +74,50 @@ def test_get_prompt_studio_user_unauthenticated_401(monkeypatch):
     client = TestClient(app)
     r = client.get("/ps/me")
     assert r.status_code == 401
+
+
+def test_get_prompt_studio_user_test_mode_accepts_single_letter_y(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "y")
+
+    app = _make_app()
+    client = TestClient(app)
+    r = client.get("/ps/me")
+
+    assert r.status_code == 200, r.text
+    assert r.json().get("user_id") == "test-user-123"
+
+
+@pytest.mark.asyncio
+async def test_prompt_studio_rate_limit_bypass_accepts_single_letter_y(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "y")
+
+    allowed = await deps.check_rate_limit(
+        operation="default",
+        user_context={"user_id": "test-user"},
+        security_config=deps.get_security_config(),
+    )
+
+    assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_prompt_studio_rate_limit_shared_limiter_failure_fails_closed(monkeypatch):
+    if hasattr(deps.check_rate_limit, "_local_requests"):
+        delattr(deps.check_rate_limit, "_local_requests")
+
+    async def _raise_shared_limiter(*_args, **_kwargs):
+        raise RuntimeError("shared limiter unavailable")
+
+    monkeypatch.setattr(deps, "_authnz_check_rate_limit", _raise_shared_limiter, raising=True)
+    monkeypatch.setattr(deps, "_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED", False, raising=True)
+
+    sec = deps.get_security_config()
+    ctx = {"user_id": "u1"}
+
+    with pytest.raises(HTTPException) as exc_info_1:
+        await deps.check_rate_limit(operation="optimize", user_context=ctx, security_config=sec)
+    with pytest.raises(HTTPException) as exc_info_2:
+        await deps.check_rate_limit(operation="optimize", user_context=ctx, security_config=sec)
+    assert exc_info_1.value.status_code == 503
+    assert exc_info_2.value.status_code == 503
+    assert not hasattr(deps.check_rate_limit, "_local_requests")

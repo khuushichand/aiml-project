@@ -12,7 +12,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 For the full, frequently updated raw reference (auto-generated), see `Env_Vars.md` in the repository root.
 
 Config file support (selected):
-- Section `[Image-Generation]` in `Config_Files/config.txt` can define: `default_backend`, `enabled_backends`, `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`, `sd_cpp_binary_path`, `sd_cpp_diffusion_model_path`, `sd_cpp_model_path`, `sd_cpp_llm_path`, `sd_cpp_vae_path`, `sd_cpp_lora_paths`, `sd_cpp_allowed_extra_params`, `sd_cpp_default_steps`, `sd_cpp_default_cfg_scale`, `sd_cpp_default_sampler`, `sd_cpp_device`, `sd_cpp_timeout_seconds`.
+- Section `[Image-Generation]` in `Config_Files/config.txt` can define: `default_backend`, `enabled_backends`, `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`, `sd_cpp_binary_path`, `sd_cpp_diffusion_model_path`, `sd_cpp_model_path`, `sd_cpp_llm_path`, `sd_cpp_vae_path`, `sd_cpp_lora_paths`, `sd_cpp_allowed_extra_params`, `sd_cpp_default_steps`, `sd_cpp_default_cfg_scale`, `sd_cpp_default_sampler`, `sd_cpp_device`, `sd_cpp_timeout_seconds`, `swarmui_base_url`, `swarmui_default_model`, `swarmui_swarm_token`, `swarmui_allowed_extra_params`, `swarmui_timeout_seconds`, `openrouter_image_base_url`, `openrouter_image_api_key`, `openrouter_image_default_model`, `openrouter_image_allowed_extra_params`, `openrouter_image_timeout_seconds`, `novita_image_base_url`, `novita_image_api_key`, `novita_image_default_model`, `novita_image_allowed_extra_params`, `novita_image_timeout_seconds`, `novita_image_poll_interval_seconds`, `together_image_base_url`, `together_image_api_key`, `together_image_default_model`, `together_image_allowed_extra_params`, `together_image_timeout_seconds`.
 
 ## Core Server
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs and enforces DB/secret checks.
@@ -64,6 +64,7 @@ Setup CSP (Content Security Policy)
 - `BYOK_LAST_USED_THROTTLE_SECONDS`: Throttle runtime updates to BYOK `last_used_at` (seconds, default `300`).
 - `BYOK_SECONDARY_ENCRYPTION_KEY`: Secondary BYOK encryption key for dual-read during rotations.
 - `SHOW_API_KEY_ON_STARTUP`: Avoid in production.
+- `RG_ENABLED=0` should be treated as emergency/debug-only for AuthNZ ingress paths; dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not restore fallback 429 enforcement.
 
 Egress & Outbound Policy (global + Workflows)
 - `EGRESS_ALLOWLIST`, `EGRESS_DENYLIST`: Global DNS allow/deny lists for outbound requests.
@@ -109,6 +110,23 @@ Egress & Outbound Policy (global + Workflows)
 
 ## Chat
 - `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
+- `PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS`: Default persona exemplar budget for character chat when request override is omitted (default `600`, clamped to `1..20000`).
+- `PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED`: Auto-adjust persona exemplar budget after sustained IOO alerts (`true|false`, default `true`).
+- `PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR`: Multiplicative downshift applied when auto-adjust triggers (default `0.75`, clamped to `0.10..0.95`).
+- `PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS`: Lower bound for auto-adjusted persona exemplar budget (default `240`, clamped to `1..20000`).
+- `CHAT_COMMANDS_ENABLED`: Enable slash-command preprocessing (`true|false`, default `false`).
+- `CHAT_COMMAND_INJECTION_MODE`: Slash-command injection mode (`system|preface|replace`, default `system`).
+- `CHAT_COMMANDS_REQUIRE_PERMISSIONS`: Require per-command RBAC permission checks (`true|false`, default `false`).
+- `CHAT_COMMANDS_RATE_LIMIT_USER`: Per-user, per-command RPM limit (accepts `10` or `10/min`; default `10`).
+- `CHAT_COMMANDS_RATE_LIMIT`: Backward-compatible alias for `CHAT_COMMANDS_RATE_LIMIT_USER`.
+- `CHAT_COMMANDS_RATE_LIMIT_GLOBAL`: Global, per-command RPM limit (accepts `100` or `100/min`; default `100`).
+- `CHAT_COMMANDS_MAX_CHARS`: Max characters injected from a slash-command result (default `300`).
+- `DEFAULT_LOCATION`: Optional fallback location for `/weather` when no argument is supplied.
+- `WEATHER_PROVIDER`: Weather backend (`openweather`, `noop`, `none`, `disabled`; default `openweather`).
+- `OPENWEATHER_API_KEY`: API key for the `openweather` provider.
+- `WEATHER_UNITS`: Unit system for weather summaries (`metric|imperial`, default `metric`).
+- `WEATHER_LANG`: OpenWeather language code for descriptions (default `en`).
+- `WEATHER_TIMEOUT_MS`: OpenWeather HTTP timeout in milliseconds (default `1500`).
 
 ## Chatbooks
 - `CHATBOOKS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).
@@ -121,13 +139,16 @@ Egress & Outbound Policy (global + Workflows)
 - `CHATBOOKS_CLEANUP_INTERVAL_SEC`: Scheduled cleanup cadence in seconds (set `0` to disable scheduling).
 - `CHATBOOKS_EVAL_EXPORT_MAX_ROWS`: Max rows exported per evaluation run (default `200`).
 - `CHATBOOKS_BINARY_LIMITS_MB`: JSON map of content type to max bundled size in MB (for example, `{"media": 0, "conversations": 10, "generated_docs": 25}`).
+- `CHATBOOKS_TEMPLATE_MODE`: Default Chatbooks template mode (`pass_through|render_on_export`; default `pass_through`).
+- `CHATBOOKS_TEMPLATE_DEFAULTS_JSON`: JSON object merged into Chatbooks template defaults (optional).
+- `CHATBOOKS_TEMPLATE_TIMEZONE`: Default timezone used for Chatbooks template rendering (default `UTC`).
+- `CHATBOOKS_TEMPLATE_LOCALE`: Optional default locale used for Chatbooks template rendering.
 - `CHATBOOKS_IMPORT_DICT_STRICT`: When true, skip dictionaries with fatal validation errors instead of importing with warnings.
 
 ## Audio Quotas & Workers
 - `AUDIO_JOBS_WORKER_ENABLED`: Start the in-process Audio Jobs worker on app startup (`true|false`, default follows route policy for `audio-jobs`).
 - `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition heuristic for fair scheduling (`true|false`).
-- `AUDIO_QUOTA_USE_REDIS`: Store active streams/jobs counters in Redis for multi-instance fairness. Defaults to true when `REDIS_URL` is set.
-- `REDIS_URL`: Redis connection string (e.g., `redis://localhost:6379`).
+- `REDIS_URL`: Redis connection string for Resource Governor when `RG_BACKEND=redis` (e.g., `redis://localhost:6379`).
 
 Audio Chat (non-streaming)
 - `AUDIO_CHAT_MAX_BYTES`: Max input audio size (bytes) for `/api/v1/audio/chat` (default `20MB`). Requests exceeding this return HTTP 413 before STT runs.
@@ -136,6 +157,7 @@ Audio Chat (non-streaming)
 
 Streaming Audio / TTS
 - `AUDIO_WS_QUOTA_CLOSE_1008`: When set, close WebSocket quota/rate-limit violations with code `1008` (default `4003`) for streaming audio routes.
+- `AUDIO_WS_COMPAT_ERROR_TYPE`: When `1` (default), include legacy `error_type` alias in Audio WS error payloads alongside canonical `code`; set `0` to disable alias during client migration.
 - `TTS_PHONEME_OVERRIDES_PATH`: Optional YAML/JSON file with phoneme overrides (defaults to `Config_Files/tts_phonemes.yaml|yml|json`).
 - `KOKORO_ENABLE_PHONEME_OVERRIDES`: Toggle Kokoro phoneme override application (`true|false`, default `true`).
 - `TTS_HISTORY_ENABLED`: Enable per-user TTS history (`true|false`, default `true`).
@@ -149,6 +171,25 @@ Streaming Audio / TTS
 Queues
 - CPU stages use `queue=default`.
 - GPU transcription uses dedicated `queue=transcribe` (see GPU worker container stub).
+
+## Resource Governor (Unified Rate Limiting)
+
+The Resource Governor (RG) is the **primary enforcement path** for all rate limiting. Some deprecated module-local compatibility knobs remain during cutover and will be removed once shadow-mode exit criteria are met. AuthNZ dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not enforce fallback 429 behavior.
+
+- `RG_ENABLED`: Master toggle (`true|1|false|0`). Resolution: env var > `config.txt` `[ResourceGovernor] enabled` > default `false`.
+- `RG_BACKEND`: Backend type (`memory` | `redis`). Default `memory`. Redis requires `REDIS_URL`.
+- `RG_POLICY_PATH`: Path to YAML policy file. Default `tldw_Server_API/Config_Files/resource_governor_policies.yaml`.
+- `RG_POLICY_STORE`: Policy persistence backend (`yaml` | `db`). Default `yaml`.
+- `RG_POLICY_RELOAD_ENABLED`: Hot-reload policy changes (`true|false`). Default `true`.
+- `RG_POLICY_RELOAD_INTERVAL_SEC`: Policy reload check interval in seconds. Default `30`.
+- `RG_REDIS_FAIL_MODE`: Behavior when Redis unavailable (`fail_open` | `fail_closed` | `fallback_memory`). Default `fail_open`.
+- `RG_TRUSTED_PROXIES`: Comma-separated trusted proxy IPs for `X-Forwarded-For` resolution.
+- `RG_CLIENT_IP_HEADER`: Custom header for client IP extraction.
+- `RG_ROUTE_MAP_AUDIT`: When `true`, warn on HTTP routes not covered by the RG route map.
+
+Per-module policy overrides: `RG_CHAT_POLICY_ID`, `RG_EMBEDDINGS_POLICY_ID`, `RG_EMBEDDINGS_SERVER_POLICY_ID`, `RG_CHARACTER_CHAT_POLICY_ID`, `RG_CHARACTER_CHAT_ENFORCE_REQUESTS`, `RG_EVALUATIONS_POLICY_ID`, `RG_WEB_SCRAPING_POLICY_ID`.
+
+See `Docs/Operations/Env_Vars.md` for the full list including debug/test-only knobs and deprecated legacy rate limit variables.
 
 ## Chunking / RAG / Embeddings / MCP / TTS
 Module-specific toggles exist; see the repo `Env_Vars.md` or the respective module docs for details.

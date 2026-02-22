@@ -38,6 +38,7 @@ Use these names across domains to keep operations consistent.
 > - Always include `X-Confirm: true` for prune, TTL sweep, batch cancel/reschedule/requeue, and crypto rotate unless running `dry_run`.
 > - Scope operations with `domain` (and optionally `queue`/`job_type`) to avoid wide-impact actions.
 > - With domain-scoped RBAC enabled and forced (`JOBS_DOMAIN_SCOPED_RBAC=true`, `JOBS_RBAC_FORCE=true`), TTL without `X-Confirm` returns a safe no-op `{affected:0}` when a `domain` is provided.
+> - Canonical endpoint for quarantine requeue is `POST /api/v1/jobs/batch/requeue_quarantined`; compatibility alias `POST /api/v1/jobs/batch/requeue-quarantined` remains supported.
 
 ## Configuration
 

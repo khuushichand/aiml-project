@@ -135,3 +135,34 @@ class CharacterChatConfig(BaseAdapterConfig):
     model: str | None = Field(None, description="Model to use")
     temperature: float = Field(0.8, ge=0, le=2, description="Temperature for responses")
     max_tokens: int | None = Field(None, ge=1, description="Max response tokens")
+
+
+class PodcastRSSPublishConfig(BaseAdapterConfig):
+    """Config for podcast RSS publication adapter."""
+
+    feed_uri: str = Field(
+        ...,
+        description="Destination RSS feed file path/URI (supports file://)",
+    )
+    episode: dict[str, Any] = Field(
+        ...,
+        description="Episode payload (title, guid, audio/file URI, description, link, pub_date)",
+    )
+    channel: dict[str, Any] | None = Field(
+        None,
+        description="Optional channel metadata overrides (title, link, description, language)",
+    )
+    max_items: int = Field(200, ge=1, le=5000, description="Maximum items retained in feed")
+    expected_version: int | None = Field(
+        None,
+        ge=0,
+        description="Optimistic concurrency token; compared with current item-count version",
+    )
+    allow_remote_fetch: bool = Field(
+        False,
+        description="Allow fetching source_feed_url when destination feed does not yet exist",
+    )
+    source_feed_url: str | None = Field(
+        None,
+        description="Optional source RSS URL to seed initial feed when allow_remote_fetch=true",
+    )

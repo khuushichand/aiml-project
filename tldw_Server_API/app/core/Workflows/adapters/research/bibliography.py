@@ -15,6 +15,7 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import _extract_openai_content
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.research._config import (
@@ -71,7 +72,7 @@ async def run_doi_resolve_adapter(config: dict[str, Any], context: dict[str, Any
         doi = doi[4:]
 
     # TEST_MODE: return simulated result without network call
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if is_test_mode():
         return {
             "metadata": {
                 "doi": doi,

@@ -239,8 +239,8 @@ class OCREvaluator:
                                         extra = backend.describe() or {}
                                         if isinstance(extra, dict):
                                             details.update(extra)
-                                except Exception:
-                                    pass
+                                except Exception as backend_describe_error:
+                                    logger.debug("OCR evaluator backend describe() failed; continuing", exc_info=backend_describe_error)
                                 ocr_info.update(details)
                     except Exception as e:
                         logger.error(f"OCR eval PDF per-page processing failed for {item.id}: {e}")

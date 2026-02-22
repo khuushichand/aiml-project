@@ -413,7 +413,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
         <Alert
           type="warning"
           showIcon
-          message={t(
+          title={t(
             "option:documentWorkspace.serverRequired",
             "Connect to server to use document workspace"
           )}
@@ -424,7 +424,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
         <Alert
           type="warning"
           showIcon
-          message={uploadWarning.message}
+          title={uploadWarning.message}
           className="mb-3"
           action={
             uploadWarning.mediaId ? (
@@ -446,7 +446,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
         <Alert
           type="error"
           showIcon
-          message={error}
+          title={error}
           className="mb-3"
         />
       )}

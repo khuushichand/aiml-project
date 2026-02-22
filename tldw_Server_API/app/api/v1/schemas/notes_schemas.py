@@ -135,6 +135,18 @@ class NoteUpdate(BaseModel):
         return result or None
 
 
+class NoteKeywordSyncStatus(BaseModel):
+    failed_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of keywords that failed to attach during the save operation."
+    )
+    failed_keywords: list[str] = Field(
+        default_factory=list,
+        description="Best-effort list of keyword texts that failed to attach."
+    )
+
+
 class NoteResponse(NoteBase):
     id: str = Field(..., description="UUID of the note")
     created_at: datetime = Field(..., description="Timestamp of note creation")
@@ -143,6 +155,10 @@ class NoteResponse(NoteBase):
     client_id: str = Field(..., description="Client ID that last modified the note")
     deleted: bool = Field(..., description="Whether the note is soft-deleted")
     keywords: list[KeywordResponse] | None = Field(default=None, description="Keywords linked to this note")
+    keyword_sync: NoteKeywordSyncStatus | None = Field(
+        default=None,
+        description="Present when note save succeeded but one or more keyword attach operations failed."
+    )
 
     model_config = ConfigDict(from_attributes=True)  # Pydantic V2 (formerly orm_mode)
 
@@ -156,6 +172,30 @@ class KeywordCreate(KeywordBase):
     pass
 
 
+class KeywordUpdate(KeywordBase):
+    pass
+
+
+class KeywordMergeRequest(BaseModel):
+    target_keyword_id: int = Field(..., ge=1, description="The destination keyword ID.")
+    expected_target_version: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional optimistic-lock version for the target keyword."
+    )
+
+
+class KeywordMergeResponse(BaseModel):
+    source_keyword_id: int
+    target_keyword_id: int
+    source_deleted_version: int
+    target_version: int
+    merged_note_links: int = Field(default=0, ge=0)
+    merged_conversation_links: int = Field(default=0, ge=0)
+    merged_collection_links: int = Field(default=0, ge=0)
+    merged_flashcard_links: int = Field(default=0, ge=0)
+
+
 class KeywordResponse(KeywordBase):
     id: int = Field(..., description="Integer ID of the keyword")
     created_at: datetime = Field(..., description="Timestamp of keyword creation")
@@ -163,8 +203,156 @@ class KeywordResponse(KeywordBase):
     version: int = Field(..., description="Version number for optimistic locking")
     client_id: str = Field(..., description="Client ID that last modified the keyword")
     deleted: bool = Field(..., description="Whether the keyword is soft-deleted")
+    note_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Optional count of active notes currently linked to this keyword."
+    )
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# --- Keyword Collection Schemas ---
+class KeywordCollectionBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255, description="Collection name")
+    parent_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional parent collection ID for hierarchical organization."
+    )
+
+
+class KeywordCollectionCreate(KeywordCollectionBase):
+    keywords: str | list[str] | None = Field(
+        default=None,
+        description="Optional keywords for initial collection membership."
+    )
+
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def validate_keywords(cls, value: Any):
+        parts = _split_keywords(value)
+        if parts is None:
+            return value
+        for part in parts:
+            if not part:
+                continue
+            if len(part) > 100:
+                raise ValueError("Keyword entries must be 100 characters or fewer.")
+        return value
+
+    @property
+    def normalized_keywords(self) -> list[str] | None:
+        parts = _split_keywords(getattr(self, 'keywords', None))
+        if parts is None:
+            return None
+        seen = set()
+        result: list[str] = []
+        for p in parts:
+            if not p:
+                continue
+            key = p.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(p)
+        return result or None
+
+
+class KeywordCollectionUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255, description="Updated collection name")
+    parent_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Updated parent collection ID. Use null to clear parent."
+    )
+    keywords: str | list[str] | None = Field(
+        default=None,
+        description="Optional full keyword list to sync for this collection."
+    )
+
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def validate_keywords(cls, value: Any):
+        parts = _split_keywords(value)
+        if parts is None:
+            return value
+        for part in parts:
+            if not part:
+                continue
+            if len(part) > 100:
+                raise ValueError("Keyword entries must be 100 characters or fewer.")
+        return value
+
+    @property
+    def normalized_keywords(self) -> list[str] | None:
+        parts = _split_keywords(getattr(self, 'keywords', None))
+        if parts is None:
+            return None
+        seen = set()
+        result: list[str] = []
+        for p in parts:
+            if not p:
+                continue
+            key = p.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(p)
+        return result or None
+
+
+class KeywordCollectionResponse(BaseModel):
+    id: int = Field(..., ge=1)
+    name: str = Field(..., min_length=1, max_length=255)
+    parent_id: int | None = Field(default=None)
+    created_at: datetime
+    last_modified: datetime
+    version: int = Field(..., ge=1)
+    client_id: str
+    deleted: bool
+    keywords: list[KeywordResponse] | None = Field(
+        default=None,
+        description="Optional keywords linked to this collection."
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class KeywordCollectionsListResponse(BaseModel):
+    collections: list[KeywordCollectionResponse]
+    count: int = Field(..., ge=0)
+    limit: int = Field(..., ge=1)
+    offset: int = Field(..., ge=0)
+    total: int | None = Field(default=None, ge=0)
+
+
+class CollectionKeywordLinkResponse(BaseModel):
+    success: bool
+    message: str | None = None
+
+
+class CollectionKeywordLinkItem(BaseModel):
+    collection_id: int = Field(..., ge=1)
+    keyword_id: int = Field(..., ge=1)
+
+
+class CollectionKeywordLinksResponse(BaseModel):
+    links: list[CollectionKeywordLinkItem]
+
+
+class ConversationKeywordLinkResponse(BaseModel):
+    success: bool
+    message: str | None = None
+
+
+class ConversationKeywordLinkItem(BaseModel):
+    conversation_id: str
+    keyword_id: int = Field(..., ge=1)
+
+
+class ConversationKeywordLinksResponse(BaseModel):
+    links: list[ConversationKeywordLinkItem]
 
 
 # --- Linking Schemas ---
@@ -181,6 +369,22 @@ class KeywordsForNoteResponse(BaseModel):
 class NotesForKeywordResponse(BaseModel):
     keyword_id: int
     notes: list[NoteResponse]
+
+
+# --- Attachment Schemas ---
+class NoteAttachmentResponse(BaseModel):
+    file_name: str = Field(..., min_length=1, description="Stored attachment filename")
+    original_file_name: str = Field(..., min_length=1, description="Original filename supplied by the client")
+    content_type: str | None = Field(default=None, description="Detected or provided media type")
+    size_bytes: int = Field(..., ge=0, description="Attachment size in bytes")
+    uploaded_at: datetime = Field(..., description="Upload timestamp")
+    url: str = Field(..., min_length=1, description="Download URL for this attachment")
+
+
+class NoteAttachmentsListResponse(BaseModel):
+    note_id: str = Field(..., min_length=1)
+    attachments: list[NoteAttachmentResponse]
+    count: int = Field(..., ge=0)
 
 
 # --- General API Response Schemas ---
@@ -239,6 +443,42 @@ class NotesExportRequest(BaseModel):
     note_ids: list[str] = Field(..., description="List of note IDs to export")
     include_keywords: bool = Field(default=False)
     format: Literal['json', 'csv'] = Field(default='json', description="Use /export.csv for CSV exports.")
+
+
+class NotesImportItem(BaseModel):
+    file_name: str | None = Field(default=None, description="Optional source file name.")
+    format: Literal["json", "markdown"] = Field(..., description="Import format for this item.")
+    content: str = Field(..., min_length=1, max_length=5_000_000, description="Raw file content.")
+
+
+class NotesImportRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    items: list[NotesImportItem] = Field(..., min_length=1, max_length=50)
+    duplicate_strategy: Literal["skip", "overwrite", "create_copy"] = Field(
+        default="create_copy",
+        description="How to handle imported notes whose IDs already exist."
+    )
+
+
+class NotesImportFileResult(BaseModel):
+    file_name: str | None = None
+    source_format: Literal["json", "markdown"]
+    detected_notes: int = 0
+    created_count: int = 0
+    updated_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
+class NotesImportResponse(BaseModel):
+    files: list[NotesImportFileResult]
+    detected_notes: int = 0
+    created_count: int = 0
+    updated_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
 
 
 # --- Title Suggestion Schemas ---

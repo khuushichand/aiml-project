@@ -1,14 +1,13 @@
-import dynamic from "next/dynamic"
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
-export default dynamic(async () => {
-  const { useRouter } = await import("next/router")
-  const { useEffect } = await import("react")
-  const Page = () => {
-    const router = useRouter()
-    useEffect(() => {
-      void router.replace("/admin/server")
-    }, [router])
-    return null
-  }
-  return { default: Page }
-}, { ssr: false })
+export default function AdminDataOpsRedirectPage() {
+  return (
+    <RoutePlaceholder
+      title="Data Operations Is Coming Soon"
+      description="Bulk maintenance and data-ops tooling will be surfaced on this admin route."
+      plannedPath="/admin/data-ops"
+      primaryCtaHref="/admin/server"
+      primaryCtaLabel="Open Server Admin"
+    />
+  );
+}

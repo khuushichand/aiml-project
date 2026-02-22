@@ -460,7 +460,7 @@ class AuthNZScheduler:
             purged_duplicates = 0
 
             async with db_pool.transaction() as conn:
-                is_postgres = hasattr(conn, "fetch")
+                is_postgres = bool(getattr(db_pool, "pool", None))
 
                 # Purge anything older than the weekly retention window
                 if weekly_cutoff is not None:
@@ -552,19 +552,20 @@ class AuthNZScheduler:
 
             row_count = await db_pool.fetchval("SELECT COUNT(*) FROM privilege_snapshots") or 0
             size_bytes = None
-            try:
-                size_bytes = await db_pool.fetchval(
-                    "SELECT pg_total_relation_size('privilege_snapshots')"
-                )
-            except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
-                size_bytes = None
+            if is_postgres:
+                try:
+                    size_bytes = await db_pool.fetchval(
+                        "SELECT pg_total_relation_size('privilege_snapshots')"
+                    )
+                except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
+                    size_bytes = None
 
             if size_bytes is not None:
                 set_gauge("privilege_snapshots_table_bytes", float(size_bytes))
             set_gauge("privilege_snapshots_table_rows", float(row_count))
 
             logger.info(
-                "Privilege snapshot retention pruned %s legacy rows (> %s days) and %s weekly duplicates (> %s days); remaining=%s rows",
+                'Privilege snapshot retention pruned {} legacy rows (> {} days) and {} weekly duplicates (> {} days); remaining={} rows',
                 purged_legacy,
                 weekly_retention_days,
                 purged_duplicates,

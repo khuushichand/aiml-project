@@ -21,7 +21,6 @@ const PRESET_KEYS: Array<Exclude<IngestPreset, "custom">> = [
   "standard",
   "deep"
 ]
-const { Panel } = Collapse
 const EXCLUDED_ADVANCED_FIELDS = new Set([
   "perform_analysis",
   "perform_chunking",
@@ -304,189 +303,196 @@ export const QuickIngestSettings = () => {
               />
             </div>
 
-            <Collapse className="bg-transparent border-0">
-              <Panel
-                header={t(
-                  "quickIngestSettings.advancedHeading",
-                  "Advanced options"
-                )}
-                key="advanced"
-                className="!border-0"
-              >
-                <p className="text-xs text-text-subtle mb-4">
-                  {t(
-                    "quickIngestSettings.advancedHint",
-                    "Configure advanced ingest fields for this preset."
-                  )}
-                </p>
-                <div className="space-y-4">
-                  {advancedFields.map((field) => {
-                    const value = preset.advancedValues?.[field.name]
-                    const labelText = field.title || field.name
-                    const descriptionText = field.description
-                    const setValue = (next: unknown) =>
-                      updatePresetAdvancedValue(presetKey, field.name, next)
-                    const selectOptions = getAdvancedFieldSelectOptions({
-                      fieldName: field.name,
-                      fieldEnum: field.enum,
-                      t,
-                      chatModels,
-                      embeddingModels
-                    })
-                    const fallbackEnumOptions = Array.isArray(field.enum)
-                      ? field.enum.map((entry: unknown) => ({
-                          value: String(entry),
-                          label: String(entry)
-                        }))
-                      : null
-                    const selectValue =
-                      value === undefined || value === null || value === ""
-                        ? undefined
-                        : String(value)
-                    const resolvedSelectOptions = selectOptions
-                      ? ensureSelectOption(selectOptions, selectValue)
-                      : fallbackEnumOptions
-                        ? ensureSelectOption(fallbackEnumOptions, selectValue)
-                        : null
-                    const isContextualModel =
-                      field.name === "contextual_llm_model"
-                    const isEmbeddingModel = field.name === "embedding_model"
-                    const shouldShowSearch =
-                      isContextualModel ||
-                      isEmbeddingModel ||
-                      (resolvedSelectOptions?.length ?? 0) > 6
+            <Collapse
+              className="bg-transparent border-0"
+              items={[
+                {
+                  key: "advanced",
+                  label: t(
+                    "quickIngestSettings.advancedHeading",
+                    "Advanced options"
+                  ),
+                  className: "!border-0",
+                  children: (
+                    <>
+                      <p className="text-xs text-text-subtle mb-4">
+                        {t(
+                          "quickIngestSettings.advancedHint",
+                          "Configure advanced ingest fields for this preset."
+                        )}
+                      </p>
+                      <div className="space-y-4">
+                        {advancedFields.map((field) => {
+                          const value = preset.advancedValues?.[field.name]
+                          const labelText = field.title || field.name
+                          const descriptionText = field.description
+                          const setValue = (next: unknown) =>
+                            updatePresetAdvancedValue(presetKey, field.name, next)
+                          const selectOptions = getAdvancedFieldSelectOptions({
+                            fieldName: field.name,
+                            fieldEnum: field.enum,
+                            t,
+                            chatModels,
+                            embeddingModels
+                          })
+                          const fallbackEnumOptions = Array.isArray(field.enum)
+                            ? field.enum.map((entry: unknown) => ({
+                                value: String(entry),
+                                label: String(entry)
+                              }))
+                            : null
+                          const selectValue =
+                            value === undefined || value === null || value === ""
+                              ? undefined
+                              : String(value)
+                          const resolvedSelectOptions = selectOptions
+                            ? ensureSelectOption(selectOptions, selectValue)
+                            : fallbackEnumOptions
+                              ? ensureSelectOption(fallbackEnumOptions, selectValue)
+                              : null
+                          const isContextualModel =
+                            field.name === "contextual_llm_model"
+                          const isEmbeddingModel =
+                            field.name === "embedding_model"
+                          const shouldShowSearch =
+                            isContextualModel ||
+                            isEmbeddingModel ||
+                            (resolvedSelectOptions?.length ?? 0) > 6
 
-                    if (resolvedSelectOptions) {
-                      return (
-                        <div
-                          key={field.name}
-                          className="flex flex-wrap items-center justify-between gap-3"
-                        >
-                          <div className="min-w-[220px]">
-                            <span className="text-text">{labelText}</span>
-                            {descriptionText ? (
-                              <div className="text-xs text-text-muted mt-1">
-                                {descriptionText}
+                          if (resolvedSelectOptions) {
+                            return (
+                              <div
+                                key={field.name}
+                                className="flex flex-wrap items-center justify-between gap-3"
+                              >
+                                <div className="min-w-[220px]">
+                                  <span className="text-text">{labelText}</span>
+                                  {descriptionText ? (
+                                    <div className="text-xs text-text-muted mt-1">
+                                      {descriptionText}
+                                    </div>
+                                  ) : null}
+                                </div>
+                                <Select
+                                  className="min-w-[220px]"
+                                  allowClear
+                                  showSearch={shouldShowSearch}
+                                  loading={
+                                    (isContextualModel && chatModelsLoading) ||
+                                    (isEmbeddingModel && embeddingModelsLoading)
+                                  }
+                                  value={selectValue}
+                                  onChange={(next) => setValue(next ?? undefined)}
+                                  options={resolvedSelectOptions}
+                                  aria-label={labelText}
+                                />
                               </div>
-                            ) : null}
-                          </div>
-                          <Select
-                            className="min-w-[220px]"
-                            allowClear
-                            showSearch={shouldShowSearch}
-                            loading={
-                              (isContextualModel && chatModelsLoading) ||
-                              (isEmbeddingModel && embeddingModelsLoading)
-                            }
-                            value={selectValue}
-                            onChange={(next) => setValue(next ?? undefined)}
-                            options={resolvedSelectOptions}
-                            aria-label={labelText}
-                          />
-                        </div>
-                      )
-                    }
+                            )
+                          }
 
-                    if (field.type === "boolean") {
-                      const isSet = value !== undefined
-                      return (
-                        <div
-                          key={field.name}
-                          className="flex flex-wrap items-center justify-between gap-3"
-                        >
-                          <div className="min-w-[220px]">
-                            <span className="text-text">{labelText}</span>
-                            {descriptionText ? (
-                              <div className="text-xs text-text-muted mt-1">
-                                {descriptionText}
+                          if (field.type === "boolean") {
+                            const isSet = value !== undefined
+                            return (
+                              <div
+                                key={field.name}
+                                className="flex flex-wrap items-center justify-between gap-3"
+                              >
+                                <div className="min-w-[220px]">
+                                  <span className="text-text">{labelText}</span>
+                                  {descriptionText ? (
+                                    <div className="text-xs text-text-muted mt-1">
+                                      {descriptionText}
+                                    </div>
+                                  ) : null}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Switch
+                                    checked={Boolean(value)}
+                                    onChange={(next) => setValue(next)}
+                                    aria-label={labelText}
+                                  />
+                                  <Button
+                                    size="small"
+                                    onClick={() => setValue(undefined)}
+                                    disabled={!isSet}
+                                  >
+                                    {qi("unset", "Unset")}
+                                  </Button>
+                                </div>
                               </div>
-                            ) : null}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Switch
-                              checked={Boolean(value)}
-                              onChange={(next) => setValue(next)}
-                              aria-label={labelText}
-                            />
-                            <Button
-                              size="small"
-                              onClick={() => setValue(undefined)}
-                              disabled={!isSet}
+                            )
+                          }
+
+                          if (field.type === "integer" || field.type === "number") {
+                            const numericValue =
+                              typeof value === "number"
+                                ? value
+                                : value === null ||
+                                    value === undefined ||
+                                    value === ""
+                                  ? undefined
+                                  : Number(value)
+                            return (
+                              <div
+                                key={field.name}
+                                className="flex flex-wrap items-center justify-between gap-3"
+                              >
+                                <div className="min-w-[220px]">
+                                  <span className="text-text">{labelText}</span>
+                                  {descriptionText ? (
+                                    <div className="text-xs text-text-muted mt-1">
+                                      {descriptionText}
+                                    </div>
+                                  ) : null}
+                                </div>
+                                <InputNumber
+                                  className="min-w-[220px]"
+                                  value={
+                                    Number.isNaN(numericValue)
+                                      ? undefined
+                                      : numericValue
+                                  }
+                                  onChange={(next) => setValue(next ?? undefined)}
+                                  aria-label={labelText}
+                                  placeholder={labelText}
+                                />
+                              </div>
+                            )
+                          }
+
+                          return (
+                            <div
+                              key={field.name}
+                              className="flex flex-wrap items-center justify-between gap-3"
                             >
-                              {qi("unset", "Unset")}
-                            </Button>
-                          </div>
-                        </div>
-                      )
-                    }
-
-                    if (field.type === "integer" || field.type === "number") {
-                      const numericValue =
-                        typeof value === "number"
-                          ? value
-                          : value === null || value === undefined || value === ""
-                            ? undefined
-                            : Number(value)
-                      return (
-                        <div
-                          key={field.name}
-                          className="flex flex-wrap items-center justify-between gap-3"
-                        >
-                          <div className="min-w-[220px]">
-                            <span className="text-text">{labelText}</span>
-                            {descriptionText ? (
-                              <div className="text-xs text-text-muted mt-1">
-                                {descriptionText}
+                              <div className="min-w-[220px]">
+                                <span className="text-text">{labelText}</span>
+                                {descriptionText ? (
+                                  <div className="text-xs text-text-muted mt-1">
+                                    {descriptionText}
+                                  </div>
+                                ) : null}
                               </div>
-                            ) : null}
-                          </div>
-                          <InputNumber
-                            className="min-w-[220px]"
-                            value={
-                              Number.isNaN(numericValue)
-                                ? undefined
-                                : numericValue
-                            }
-                            onChange={(next) =>
-                              setValue(next ?? undefined)
-                            }
-                            aria-label={labelText}
-                            placeholder={labelText}
-                          />
-                        </div>
-                      )
-                    }
-
-                    return (
-                      <div
-                        key={field.name}
-                        className="flex flex-wrap items-center justify-between gap-3"
-                      >
-                        <div className="min-w-[220px]">
-                          <span className="text-text">{labelText}</span>
-                          {descriptionText ? (
-                            <div className="text-xs text-text-muted mt-1">
-                              {descriptionText}
+                              <Input
+                                className="min-w-[220px]"
+                                allowClear
+                                value={value === undefined ? "" : String(value)}
+                                onChange={(event) => {
+                                  const nextValue = event.target.value
+                                  setValue(nextValue === "" ? undefined : nextValue)
+                                }}
+                                aria-label={labelText}
+                                placeholder={labelText}
+                              />
                             </div>
-                          ) : null}
-                        </div>
-                        <Input
-                          className="min-w-[220px]"
-                          allowClear
-                          value={value === undefined ? "" : String(value)}
-                          onChange={(event) => {
-                            const nextValue = event.target.value
-                            setValue(nextValue === "" ? undefined : nextValue)
-                          }}
-                          aria-label={labelText}
-                          placeholder={labelText}
-                        />
+                          )
+                        })}
                       </div>
-                    )
-                  })}
-                </div>
-              </Panel>
-            </Collapse>
+                    </>
+                  )
+                }
+              ]}
+            />
           </div>
         )
       })}

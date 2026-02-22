@@ -152,6 +152,22 @@ def _normalize_flag_scope(scope: str) -> str:
     return value
 
 
+def _normalize_rollout_percent(value: Any, *, strict: bool) -> int:
+    if value is None:
+        return 100
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        if strict:
+            raise ValueError("invalid_rollout_percent") from None
+        return 100
+    if 0 <= parsed <= 100:
+        return parsed
+    if strict:
+        raise ValueError("invalid_rollout_percent")
+    return 100
+
+
 def _normalize_allowlist_ids(values: list[int] | None) -> list[int]:
     if not values:
         return []
@@ -173,6 +189,93 @@ def _normalize_allowlist_emails(values: list[str] | None) -> list[str]:
             continue
         cleaned.append(str(val).strip().lower())
     return sorted({val for val in cleaned if val})
+
+
+def _normalize_target_user_ids(values: list[int] | None) -> list[int]:
+    if not isinstance(values, list):
+        return []
+    cleaned = _normalize_allowlist_ids(values)
+    return [value for value in cleaned if value > 0]
+
+
+def _normalize_variant_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _build_flag_snapshot(flag: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "scope": _normalize_flag_scope(str(flag.get("scope") or "global")),
+        "enabled": bool(flag.get("enabled")),
+        "org_id": flag.get("org_id"),
+        "user_id": flag.get("user_id"),
+        "target_user_ids": _normalize_target_user_ids(flag.get("target_user_ids")),
+        "rollout_percent": _normalize_rollout_percent(flag.get("rollout_percent"), strict=False),
+        "variant_value": _normalize_variant_value(flag.get("variant_value")),
+    }
+
+
+def _normalize_flag_snapshot(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    scope = value.get("scope")
+    if scope is None:
+        return None
+    try:
+        normalized_scope = _normalize_flag_scope(str(scope))
+    except ValueError:
+        return None
+    return {
+        "scope": normalized_scope,
+        "enabled": bool(value.get("enabled")),
+        "org_id": value.get("org_id"),
+        "user_id": value.get("user_id"),
+        "target_user_ids": _normalize_target_user_ids(value.get("target_user_ids")),
+        "rollout_percent": _normalize_rollout_percent(value.get("rollout_percent"), strict=False),
+        "variant_value": _normalize_variant_value(value.get("variant_value")),
+    }
+
+
+def _normalize_feature_flag_record(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("invalid_feature_flag")
+    key = str(value.get("key") or "").strip()
+    if not key:
+        raise ValueError("invalid_feature_flag")
+    scope = _normalize_flag_scope(str(value.get("scope") or "global"))
+    normalized = {
+        "key": key,
+        "scope": scope,
+        "enabled": bool(value.get("enabled")),
+        "description": (str(value.get("description")).strip() if value.get("description") else None),
+        "org_id": value.get("org_id"),
+        "user_id": value.get("user_id"),
+        "target_user_ids": _normalize_target_user_ids(value.get("target_user_ids")),
+        "rollout_percent": _normalize_rollout_percent(value.get("rollout_percent"), strict=False),
+        "variant_value": _normalize_variant_value(value.get("variant_value")),
+        "created_at": value.get("created_at"),
+        "updated_at": value.get("updated_at"),
+        "updated_by": value.get("updated_by"),
+        "history": [],
+    }
+    history: list[dict[str, Any]] = []
+    for entry in value.get("history") or []:
+        if not isinstance(entry, dict):
+            continue
+        history.append(
+            {
+                "timestamp": entry.get("timestamp") or normalized["updated_at"] or _now_iso(),
+                "enabled": bool(entry.get("enabled", normalized["enabled"])),
+                "actor": entry.get("actor"),
+                "note": (str(entry.get("note")).strip() if entry.get("note") else None),
+                "before": _normalize_flag_snapshot(entry.get("before")),
+                "after": _normalize_flag_snapshot(entry.get("after")),
+            }
+        )
+    normalized["history"] = history
+    return normalized
 
 
 def get_maintenance_state() -> dict[str, Any]:
@@ -207,7 +310,13 @@ def list_feature_flags(
     user_id: int | None = None,
 ) -> list[dict[str, Any]]:
     with _locked_store() as store:
-        flags = list(store.get("feature_flags", []))
+        flags_raw = list(store.get("feature_flags", []))
+    flags = []
+    for flag in flags_raw:
+        try:
+            flags.append(_normalize_feature_flag_record(flag))
+        except ValueError:
+            continue
     if scope:
         scope_norm = _normalize_flag_scope(scope)
         if scope_norm == "org" and org_id is None:
@@ -231,6 +340,9 @@ def upsert_feature_flag(
     description: str | None,
     org_id: int | None,
     user_id: int | None,
+    target_user_ids: list[int] | None,
+    rollout_percent: int | None,
+    variant_value: str | None,
     actor: str | None,
     note: str | None,
 ) -> dict[str, Any]:
@@ -242,16 +354,13 @@ def upsert_feature_flag(
         raise ValueError("missing_org_id")
     if scope_norm == "user" and user_id is None:
         raise ValueError("missing_user_id")
+    normalized_target_user_ids = _normalize_target_user_ids(target_user_ids)
+    normalized_rollout_percent = _normalize_rollout_percent(rollout_percent, strict=True)
+    normalized_variant_value = _normalize_variant_value(variant_value)
 
     now = _now_iso()
     with _locked_store(write=True) as store:
         flags = store.get("feature_flags", [])
-        history_entry = {
-            "timestamp": now,
-            "enabled": bool(enabled),
-            "actor": actor,
-            "note": (note or "").strip() or None,
-        }
         for flag in flags:
             if (
                 flag.get("key") == normalized_key
@@ -259,13 +368,26 @@ def upsert_feature_flag(
                 and flag.get("org_id") == org_id
                 and flag.get("user_id") == user_id
             ):
+                before_state = _build_flag_snapshot(_normalize_feature_flag_record(flag))
                 flag["enabled"] = bool(enabled)
                 if description is not None:
                     flag["description"] = description.strip() or None
+                flag["target_user_ids"] = normalized_target_user_ids
+                flag["rollout_percent"] = normalized_rollout_percent
+                flag["variant_value"] = normalized_variant_value
                 flag["updated_at"] = now
                 flag["updated_by"] = actor
+                after_state = _build_flag_snapshot(flag)
+                history_entry = {
+                    "timestamp": now,
+                    "enabled": bool(enabled),
+                    "actor": actor,
+                    "note": (note or "").strip() or None,
+                    "before": before_state,
+                    "after": after_state,
+                }
                 flag.setdefault("history", []).append(history_entry)
-                return dict(flag)
+                return _normalize_feature_flag_record(flag)
 
         new_flag = {
             "key": normalized_key,
@@ -274,14 +396,26 @@ def upsert_feature_flag(
             "description": description.strip() if description else None,
             "org_id": org_id,
             "user_id": user_id,
+            "target_user_ids": normalized_target_user_ids,
+            "rollout_percent": normalized_rollout_percent,
+            "variant_value": normalized_variant_value,
             "created_at": now,
             "updated_at": now,
             "updated_by": actor,
-            "history": [history_entry],
+            "history": [],
         }
+        history_entry = {
+            "timestamp": now,
+            "enabled": bool(enabled),
+            "actor": actor,
+            "note": (note or "").strip() or None,
+            "before": None,
+            "after": _build_flag_snapshot(new_flag),
+        }
+        new_flag["history"].append(history_entry)
         flags.append(new_flag)
         store["feature_flags"] = flags
-        return dict(new_flag)
+        return _normalize_feature_flag_record(new_flag)
 
 
 def delete_feature_flag(

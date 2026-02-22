@@ -283,7 +283,7 @@ export const EvaluationsTab: React.FC = () => {
         ) : evalsError || evalListResp?.ok === false ? (
           <Alert
             type="error"
-            message={t("evaluations:loadErrorTitle", {
+            title={t("evaluations:loadErrorTitle", {
               defaultValue: "Unable to load evaluations"
             })}
             description={t("evaluations:loadErrorDescription", {
@@ -304,8 +304,8 @@ export const EvaluationsTab: React.FC = () => {
               <Card
                 key={ev.id}
                 size="small"
-                className={`cursor-pointer hover:border-blue-500/70 ${
-                  selectedEvalId === ev.id ? "border-blue-500" : ""
+                className={`cursor-pointer hover:border-primary/70 ${
+                  selectedEvalId === ev.id ? "border-primary" : ""
                 }`}
                 bodyStyle={{ padding: "8px 12px" }}
                 onClick={() => {
@@ -386,7 +386,7 @@ export const EvaluationsTab: React.FC = () => {
         ) : evalDetailError || evalDetailResp?.ok === false ? (
           <Alert
             type="warning"
-            message={t("evaluations:detailErrorTitle", {
+            title={t("evaluations:detailErrorTitle", {
               defaultValue: "Unable to load evaluation details"
             })}
           />

@@ -358,13 +358,13 @@ export default function HealthStatus() {
   const allHealthy = allChecked && unhealthyCount === 0
 
   return (
-    <Space direction="vertical" size="large" className="w-full">
+    <Space orientation="vertical" size="large" className="w-full">
       {/* Summary banner */}
       {allChecked && (
         <Alert
           type={allHealthy ? 'success' : 'warning'}
           showIcon
-          message={
+          title={
             allHealthy
               ? t('settings:healthPage.summaryAllHealthy', {
                   defaultValue: 'All {{count}} checks passing',
@@ -466,7 +466,7 @@ export default function HealthStatus() {
           type={showDegradedCallout ? "info" : "error"}
           showIcon
           className="mt-3"
-          message={
+          title={
             showAuthCallout
               ? t(
                   "option:connectionCard.headlineErrorAuth",
@@ -565,7 +565,7 @@ export default function HealthStatus() {
           type="info"
           showIcon
           className="mt-2"
-          message={t(
+          title={t(
             'healthPage.noServerBannerTitle',
             'Don’t have a server yet?'
           )}
@@ -584,12 +584,12 @@ export default function HealthStatus() {
         <Alert
           type="warning"
           showIcon
-          message={!serverUrl ? t('healthPage.serverNotConfigured', 'Server is not configured.') : t('healthPage.unableToReachCore', 'Unable to reach server core health endpoint.')}
+          title={!serverUrl ? t('healthPage.serverNotConfigured', 'Server is not configured.') : t('healthPage.unableToReachCore', 'Unable to reach server core health endpoint.')}
           description={serverUrl ? t('healthPage.triedGet', 'Tried GET {{url}}', { url: `${serverUrl.replace(/\/$/, '')}/api/v1/health` }) : t('healthPage.configureHint', 'Please configure a server URL under tldw settings.')}
           action={<Link to="/settings/tldw"><Button size="small">{t('healthPage.configureCta', 'Configure')}</Button></Link>}
         />
       ) : (
-        <Alert type="success" showIcon message={t('healthPage.connectedTo', 'Connected to {{host}}', { host: serverUrl })} />
+        <Alert type="success" showIcon title={t('healthPage.connectedTo', 'Connected to {{host}}', { host: serverUrl })} />
       )}
 
       {(!serverUrl || coreStatus === 'failed') && (
@@ -600,7 +600,7 @@ export default function HealthStatus() {
         <Alert
           type="warning"
           showIcon
-          message={t(
+          title={t(
             'healthPage.autoRefreshWarningTitle',
             'Auto-refresh is enabled with a short interval'
           )}
@@ -851,7 +851,7 @@ export default function HealthStatus() {
               <Alert
                 type="warning"
                 showIcon
-                message={t(
+                title={t(
                   "healthPage.queueError",
                   "Queue diagnostics unavailable"
                 )}

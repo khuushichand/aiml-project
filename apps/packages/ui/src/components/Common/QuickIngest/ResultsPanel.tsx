@@ -21,6 +21,8 @@ type ResultsPanelProps = {
       done: number
       pct: number
       elapsedLabel?: string | null
+      state?: "running" | "failed" | "complete" | "ready"
+      error?: string | null
     }
     filters: {
       value: ResultsFilter
@@ -34,6 +36,7 @@ type ResultsPanelProps = {
     reviewBatchId?: string | null
     processOnly: boolean
     mediaIdFromPayload: (payload: unknown) => string | number | null
+    titleFromPayload: (payload: unknown) => string | null
   }
   actions: {
     retryFailedUrls: () => void
@@ -64,7 +67,8 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
     firstResultWithMedia,
     reviewBatchId,
     processOnly,
-    mediaIdFromPayload
+    mediaIdFromPayload,
+    titleFromPayload
   } = context
   const {
     retryFailedUrls,
@@ -84,26 +88,33 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
         item.status === "ok" && shouldStoreRemote
           ? mediaIdFromPayload(item.data)
           : null
+      const title =
+        item.status === "ok" ? titleFromPayload(item.data) : null
 
       return {
         ...item,
-        mediaId
+        mediaId,
+        title
       }
     })
-  }, [results, shouldStoreRemote, mediaIdFromPayload])
+  }, [results, shouldStoreRemote, mediaIdFromPayload, titleFromPayload])
 
-  const mediaIdCache = React.useMemo(() => {
-    return new Map<string, ResultItemWithMediaId["mediaId"]>(
-      resultsWithMediaIds.map((item) => [item.id, item.mediaId])
+  const enrichmentCache = React.useMemo(() => {
+    return new Map<string, { mediaId: ResultItemWithMediaId["mediaId"]; title: string | null | undefined }>(
+      resultsWithMediaIds.map((item) => [item.id, { mediaId: item.mediaId, title: item.title }])
     )
   }, [resultsWithMediaIds])
 
   const visibleResultsWithMediaIds = React.useMemo<ResultItemWithMediaId[]>(() => {
-    return visibleResults.map((item) => ({
-      ...item,
-      mediaId: mediaIdCache.get(item.id) ?? null
-    }))
-  }, [mediaIdCache, visibleResults])
+    return visibleResults.map((item) => {
+      const cached = enrichmentCache.get(item.id)
+      return {
+        ...item,
+        mediaId: cached?.mediaId ?? null,
+        title: cached?.title ?? null
+      }
+    })
+  }, [enrichmentCache, visibleResults])
   const hasErrors = React.useMemo(
     () => results.some((item) => item.status === "error"),
     [results]
@@ -141,6 +152,20 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
 
   const hasResults = results.length > 0
   const hasProgress = progressMeta.total > 0
+  const progressState =
+    progressMeta.state || (running ? "running" : "ready")
+  const progressTitle =
+    progressState === "running"
+      ? qi("ingestProgressTitle", "Current ingest progress")
+      : progressState === "failed"
+        ? qi("ingestFailedTitle", "Last ingest run failed")
+        : progressState === "complete"
+          ? qi("ingestCompleteTitle", "Ingest run completed")
+          : qi("itemsReadyTitle", "Items ready to ingest")
+  const progressContainerClassName =
+    progressState === "failed"
+      ? "mb-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+      : "mb-3 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text"
 
   if (!hasResults && !hasProgress) return null
 
@@ -159,13 +184,9 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
         </div>
       ) : null}
       {hasProgress && (
-        <div className="mb-3 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text">
+        <div className={progressContainerClassName}>
           <div className="flex items-center justify-between">
-            <span className="font-medium">
-              {running
-                ? qi("ingestProgressTitle", "Current ingest progress")
-                : qi("itemsReadyTitle", "Items ready to ingest")}
-            </span>
+            <span className="font-medium">{progressTitle}</span>
             {progressMeta.elapsedLabel ? (
               <span>
                 {qi("elapsedLabel", "Elapsed {{time}}", {
@@ -174,6 +195,9 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
               </span>
             ) : null}
           </div>
+          {progressState === "failed" && progressMeta.error ? (
+            <div className="mt-1">{progressMeta.error}</div>
+          ) : null}
           <Progress percent={progressMeta.pct} showInfo={false} size="small" />
           <div className="flex justify-between text-xs text-text-muted mt-1">
             <span>

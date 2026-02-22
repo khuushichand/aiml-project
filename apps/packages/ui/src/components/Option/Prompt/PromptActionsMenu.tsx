@@ -1,5 +1,17 @@
 import { Dropdown, MenuProps, Tooltip } from "antd"
-import { MoreHorizontal, Pen, MessageCircle, CopyIcon, Trash2, CloudUpload, CloudDownload, Unlink } from "lucide-react"
+import {
+  MoreHorizontal,
+  Pen,
+  MessageCircle,
+  CopyIcon,
+  Trash2,
+  CloudUpload,
+  CloudDownload,
+  Unlink,
+  AlertTriangle,
+  Link,
+  Play
+} from "lucide-react"
 import React from "react"
 import { useTranslation } from "react-i18next"
 import type { PromptSyncStatus } from "@/db/dexie/types"
@@ -9,13 +21,17 @@ interface PromptActionsMenuProps {
   disabled?: boolean
   syncStatus?: PromptSyncStatus
   serverId?: number | null
+  inlineUseInChat?: boolean
   onEdit: () => void
   onDuplicate: () => void
   onUseInChat: () => void
+  onQuickTest?: () => void
   onDelete: () => void
+  onShareLink?: () => void
   onPushToServer?: () => void
   onPullFromServer?: () => void
   onUnlink?: () => void
+  onResolveConflict?: () => void
 }
 
 export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
@@ -23,20 +39,34 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
   disabled = false,
   syncStatus,
   serverId,
+  inlineUseInChat = true,
   onEdit,
   onDuplicate,
   onUseInChat,
+  onQuickTest,
   onDelete,
+  onShareLink,
   onPushToServer,
   onPullFromServer,
-  onUnlink
+  onUnlink,
+  onResolveConflict
 }) => {
   const { t } = useTranslation(["settings", "common", "option"])
 
   const isSynced = !!serverId || syncStatus === "synced"
+  const isConflict = syncStatus === "conflict"
   const canSync = !disabled && (onPushToServer || onPullFromServer)
 
   const syncItems: MenuProps["items"] = canSync ? [
+    ...(onResolveConflict && isConflict ? [{
+      key: "resolveConflict",
+      label: t("managePrompts.sync.resolveConflict", {
+        defaultValue: "Resolve conflict"
+      }),
+      icon: <AlertTriangle className="size-4" />,
+      onClick: onResolveConflict
+    }] : []),
+    ...(onResolveConflict && isConflict ? [{ type: "divider" as const }] : []),
     // Push to server option (for local or pending prompts)
     ...(onPushToServer && !isSynced ? [{
       key: "push",
@@ -63,6 +93,54 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
 
   const overflowItems: MenuProps["items"] = [
     ...syncItems,
+    ...(!inlineUseInChat
+      ? [
+          {
+            key: "useInChat",
+            label: t("option:promptInsert.useInChat", {
+              defaultValue: "Use in chat"
+            }),
+            icon: <MessageCircle className="size-4" />,
+            disabled,
+            onClick: onUseInChat
+          },
+          {
+            type: "divider" as const
+          }
+        ]
+      : []),
+    ...(onQuickTest
+      ? [
+          {
+            key: "quickTest",
+            label: t("managePrompts.quickTest.action", {
+              defaultValue: "Quick test"
+            }),
+            icon: <Play className="size-4" />,
+            disabled,
+            onClick: onQuickTest
+          },
+          {
+            type: "divider" as const
+          }
+        ]
+      : []),
+    ...(onShareLink && isSynced
+      ? [
+          {
+            key: "shareLink",
+            label: t("managePrompts.share.copyLinkAction", {
+              defaultValue: "Copy share link"
+            }),
+            icon: <Link className="size-4" />,
+            disabled,
+            onClick: onShareLink
+          },
+          {
+            type: "divider" as const
+          }
+        ]
+      : []),
     {
       key: "duplicate",
       label: t("managePrompts.tooltip.duplicate", { defaultValue: "Duplicate" }),
@@ -92,28 +170,32 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
           data-testid={`prompt-edit-${promptId}`}
           onClick={onEdit}
           disabled={disabled}
-          className="inline-flex items-center justify-center p-1 rounded text-text-muted hover:text-text hover:bg-surface2 disabled:opacity-50 transition-colors"
+          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface2 disabled:opacity-50 transition-colors"
         >
           <Pen className="size-4" />
         </button>
       </Tooltip>
 
-      <Tooltip
-        title={t("option:promptInsert.useInChatTooltip", {
-          defaultValue: "Open chat and insert this prompt into the composer."
-        })}
-      >
-        <button
-          type="button"
-          aria-label={t("option:promptInsert.useInChat", { defaultValue: "Use in chat" })}
-          data-testid={`prompt-use-${promptId}`}
-          onClick={onUseInChat}
-          disabled={disabled}
-          className="inline-flex items-center justify-center p-1 rounded text-text-muted hover:text-text hover:bg-surface2 disabled:opacity-50 transition-colors"
+      {inlineUseInChat && (
+        <Tooltip
+          title={t("option:promptInsert.useInChatTooltip", {
+            defaultValue: "Open chat and insert this prompt into the composer."
+          })}
         >
-          <MessageCircle className="size-4" />
-        </button>
-      </Tooltip>
+          <button
+            type="button"
+            aria-label={t("option:promptInsert.useInChat", {
+              defaultValue: "Use in chat"
+            })}
+            data-testid={`prompt-use-${promptId}`}
+            onClick={onUseInChat}
+            disabled={disabled}
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface2 disabled:opacity-50 transition-colors"
+          >
+            <MessageCircle className="size-4" />
+          </button>
+        </Tooltip>
+      )}
 
       <Dropdown
         menu={{ items: overflowItems }}
@@ -125,7 +207,7 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
           aria-label={t("common:moreActions", { defaultValue: "More actions" })}
           data-testid={`prompt-more-${promptId}`}
           disabled={disabled}
-          className="inline-flex items-center justify-center p-1 rounded text-text-muted hover:text-text hover:bg-surface2 disabled:opacity-50 transition-colors"
+          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface2 disabled:opacity-50 transition-colors"
         >
           <MoreHorizontal className="size-4" />
         </button>

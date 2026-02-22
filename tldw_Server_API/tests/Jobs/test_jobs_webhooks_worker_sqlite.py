@@ -133,7 +133,7 @@ async def test_webhooks_cursor_persist_and_resume_sqlite(monkeypatch, tmp_path):
         try:
             sent["ids"].append(int(headers.get("X-Jobs-Event-Id")))
         except Exception:
-            pass
+            _ = None
         return _Resp()
     monkeypatch.setattr(svc, "afetch", _fake_afetch)
 

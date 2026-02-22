@@ -400,7 +400,7 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
           />
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-text-muted">
             {board.lists.length} lists, {board.total_cards} cards
           </span>
           <Popconfirm
@@ -442,7 +442,7 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
           {/* Add list button/input */}
           <div className="flex-shrink-0 w-72">
             {addingList ? (
-              <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
+              <div className="bg-surface rounded-lg p-3">
                 <Input
                   placeholder="Enter list name"
                   value={newListName}
@@ -489,9 +489,9 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
             <KanbanCardPreview card={getActiveCard()!} isDragging />
           )}
           {activeType === "list" && getActiveList() && (
-            <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-3 w-72 opacity-80">
+            <div className="bg-surface rounded-lg p-3 w-72 opacity-80">
               <div className="font-medium">{getActiveList()!.name}</div>
-              <div className="text-sm text-gray-500">
+              <div className="text-sm text-text-muted">
                 {getActiveList()!.cards.length} cards
               </div>
             </div>
@@ -598,7 +598,7 @@ const SortableList = ({
     <div
       ref={ref}
       style={style}
-      className="kanban-list flex-shrink-0 w-72 bg-gray-100 dark:bg-gray-800 rounded-lg"
+      className="kanban-list flex-shrink-0 w-72 bg-surface rounded-lg"
     >
       {/* List header */}
       <div
@@ -606,9 +606,9 @@ const SortableList = ({
         ref={handleRef}
       >
         <div className="flex items-center gap-2">
-          <GripVertical className="w-4 h-4 text-gray-400" />
+          <GripVertical className="w-4 h-4 text-text-subtle" />
           <span className="font-medium">{list.name}</span>
-          <span className="text-xs text-gray-500 bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded">
+          <span className="text-xs text-text-muted bg-surface2 px-1.5 py-0.5 rounded">
             {list.cards.length}
           </span>
         </div>
@@ -664,7 +664,7 @@ const SortableList = ({
         ) : (
           <Button
             type="text"
-            className="w-full mt-2 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            className="w-full mt-2 text-text-muted hover:text-text"
             icon={<Plus className="w-4 h-4" />}
             onClick={onStartAddCard}
           >
@@ -709,7 +709,7 @@ const SortableCard = ({ card, index, group, onClick }: SortableCardProps) => {
       ref={ref}
       style={style}
       onClick={onClick}
-      className="kanban-card bg-white dark:bg-gray-900 rounded-md p-3 mb-2 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+      className="kanban-card bg-elevated rounded-md p-3 mb-2 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
     >
       <KanbanCardPreview card={card} />
     </div>
@@ -729,7 +729,7 @@ const KanbanCardPreview = ({ card, isDragging }: KanbanCardPreviewProps) => {
   const overdue = isCardOverdue(card)
 
   return (
-    <div className={isDragging ? "bg-white dark:bg-gray-900 rounded-md p-3 shadow-lg" : ""}>
+    <div className={isDragging ? "bg-elevated rounded-md p-3 shadow-lg" : ""}>
       {/* Title */}
       <div className="text-sm font-medium mb-1">{card.title}</div>
 
@@ -749,10 +749,10 @@ const KanbanCardPreview = ({ card, isDragging }: KanbanCardPreviewProps) => {
           <span
             className={`text-xs flex items-center gap-1 px-1.5 py-0.5 rounded ${
               overdue
-                ? "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
+                ? "bg-danger/10 text-danger"
                 : card.due_complete
-                  ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
-                  : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+                  ? "bg-success/10 text-success"
+                  : "bg-surface text-text-muted"
             }`}
           >
             <Calendar className="w-3 h-3" />

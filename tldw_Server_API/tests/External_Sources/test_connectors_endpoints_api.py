@@ -19,7 +19,6 @@ def connectors_client() -> Tuple[TestClient, dict]:
     os.environ["ROUTES_ENABLE"] = "connectors"
     os.environ.setdefault("AUTH_MODE", "single_user")
     os.environ.setdefault("TESTING", "true")
-    os.environ.setdefault("ORG_POLICY_SINGLE_USER_PRINCIPAL", "0")
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     from tldw_Server_API.app.main import app
@@ -34,6 +33,48 @@ def connectors_client() -> Tuple[TestClient, dict]:
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
     client = TestClient(app)
     return client, headers
+
+
+@pytest.mark.integration
+def test_list_providers_hides_gmail_when_feature_flag_disabled(connectors_client, monkeypatch):
+    client, headers = connectors_client
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    monkeypatch.setitem(ep.settings, "EMAIL_GMAIL_CONNECTOR_ENABLED", False)
+    response = client.get("/api/v1/connectors/providers", headers=headers)
+    assert response.status_code == 200, response.text
+    names = {str(item.get("name")) for item in response.json()}
+    assert "drive" in names
+    assert "notion" in names
+    assert "gmail" not in names
+
+
+@pytest.mark.integration
+def test_list_providers_includes_gmail_when_feature_flag_enabled(connectors_client, monkeypatch):
+    client, headers = connectors_client
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    monkeypatch.setitem(ep.settings, "EMAIL_GMAIL_CONNECTOR_ENABLED", True)
+    response = client.get("/api/v1/connectors/providers", headers=headers)
+    assert response.status_code == 200, response.text
+    names = {str(item.get("name")) for item in response.json()}
+    assert "gmail" in names
+
+
+@pytest.mark.integration
+def test_add_source_blocks_gmail_when_feature_flag_disabled(connectors_client, monkeypatch):
+    client, headers = connectors_client
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    monkeypatch.setitem(ep.settings, "EMAIL_GMAIL_CONNECTOR_ENABLED", False)
+    payload = {
+        "account_id": 1,
+        "provider": "gmail",
+        "remote_id": "INBOX",
+        "type": "folder",
+    }
+    response = client.post("/api/v1/connectors/sources", json=payload, headers=headers)
+    assert response.status_code == 404
 
 
 @pytest.mark.integration

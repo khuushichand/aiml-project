@@ -247,8 +247,8 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                     s = ce.metadata.get('start') if isinstance(ce.metadata, dict) else None
                     if isinstance(s, int):
                         chunk_start = s if chunk_start is None else min(chunk_start, s)
-                except Exception:
-                    pass
+                except Exception as metadata_error:
+                    logger.debug("Structure-aware chunker failed to read element start metadata", exc_info=metadata_error)
             chunk_text = self._elements_to_text(
                 chunk_elements,
                 _global_headers=global_headers,

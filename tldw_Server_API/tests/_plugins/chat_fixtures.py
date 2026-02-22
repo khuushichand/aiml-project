@@ -100,7 +100,7 @@ def _stop_request_queue():
         try:
             await queue.stop()
         except Exception:
-            pass
+            _ = None
 
     _run_coro_safely(_stop())
 
@@ -108,7 +108,7 @@ def _stop_request_queue():
     try:
         rq_mod._request_queue = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
 
 def _reset_rate_limiter():
@@ -118,7 +118,7 @@ def _reset_rate_limiter():
 
         initialize_rate_limiter()
     except Exception:
-        pass
+        _ = None
 
 
 def cleanup_mock_server():
@@ -130,11 +130,11 @@ def cleanup_mock_server():
         try:
             server.shutdown()
         except Exception:
-            pass
+            _ = None
         try:
             server.server_close()
         except Exception:
-            pass
+            _ = None
 
     if thread and thread.is_alive():
         thread.join(timeout=5)
@@ -389,7 +389,7 @@ def mock_chacha_db(tmp_path):
     try:
         os.unlink(str(db_path))
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.fixture
@@ -494,7 +494,7 @@ def authenticated_client(client, auth_token, setup_dependencies, mock_chacha_db)
             _app = _get_app()
             _app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chacha_db
         except Exception:
-            pass
+            _ = None
         return headers
 
     def authenticated_post(url, **kwargs):

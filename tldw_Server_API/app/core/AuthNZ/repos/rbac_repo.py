@@ -54,7 +54,7 @@ class AuthnzRbacRepo:
             return db.get_user_permissions(user_id)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
-                "AuthnzRbacRepo.get_effective_permissions failed for user_id=%s: %s",
+                'AuthnzRbacRepo.get_effective_permissions failed for user_id={}: {}',
                 user_id,
                 exc,
             )
@@ -67,7 +67,7 @@ class AuthnzRbacRepo:
             return db.has_permission(user_id, permission)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
-                "AuthnzRbacRepo.has_permission failed for user_id=%s perm=%s: %s",
+                'AuthnzRbacRepo.has_permission failed for user_id={} perm={}: {}',
                 user_id,
                 permission,
                 exc,
@@ -102,7 +102,7 @@ class AuthnzRbacRepo:
             return [dict(row) for row in result.rows]
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
-                "AuthnzRbacRepo.get_user_roles failed for user_id=%s: %s",
+                'AuthnzRbacRepo.get_user_roles failed for user_id={}: {}',
                 user_id,
                 exc,
             )
@@ -137,7 +137,7 @@ class AuthnzRbacRepo:
             return [dict(row) for row in result.rows]
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
-                "AuthnzRbacRepo.get_user_overrides failed for user_id=%s: %s",
+                'AuthnzRbacRepo.get_user_overrides failed for user_id={}: {}',
                 user_id,
                 exc,
             )
@@ -193,7 +193,7 @@ class AuthnzRbacRepo:
             raise
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
-                "AuthnzRbacRepo.get_role_effective_permissions failed for role_id=%s: %s",
+                'AuthnzRbacRepo.get_role_effective_permissions failed for role_id={}: {}',
                 role_id,
                 exc,
             )
@@ -217,7 +217,7 @@ class AuthnzRbacRepo:
             return int(result.rows[0]["id"])
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
-                "AuthnzRbacRepo.get_role_id_by_name failed for role_name=%s: %s",
+                'AuthnzRbacRepo.get_role_id_by_name failed for role_name={}: {}',
                 role_name,
                 exc,
             )

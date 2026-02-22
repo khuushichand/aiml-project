@@ -5,25 +5,78 @@ import { message } from "antd"
 type UseBulkChatOperationsParams = {
   selectedConversationIds: string[]
   folderApiAvailable: boolean | null
-  ensureKeyword: (keyword: string) => Promise<{ id: number } | null>
-  addKeywordToConversation: (
-    conversationId: string,
-    keywordId: number
-  ) => Promise<boolean>
+  deleteConversation: (conversationId: string) => Promise<void>
   t: TFunction
   setBulkFolderPickerOpen: (open: boolean) => void
   setBulkTagPickerOpen: (open: boolean) => void
 }
 
-type BulkTrashResult = {
+export type BulkDeleteResult = {
+  deletedConversationIds: Set<string>
   failedConversationIds: Set<string>
+}
+
+type RunBulkDeleteParams = {
+  selectedConversationIds: string[]
+  deleteConversation: (conversationId: string) => Promise<void>
+  t: TFunction
+}
+
+export const runBulkDelete = async ({
+  selectedConversationIds,
+  deleteConversation,
+  t
+}: RunBulkDeleteParams): Promise<BulkDeleteResult | null> => {
+  if (selectedConversationIds.length === 0) return null
+
+  const results = await Promise.allSettled(
+    selectedConversationIds.map((conversationId) =>
+      deleteConversation(conversationId)
+    )
+  )
+  const deletedConversationIds = new Set<string>()
+  const failedConversationIds = new Set<string>()
+  let failures = 0
+  results.forEach((result, index) => {
+    const conversationId = selectedConversationIds[index]
+    if (result.status === "rejected") {
+      failures += 1
+      failedConversationIds.add(conversationId)
+    } else {
+      deletedConversationIds.add(conversationId)
+    }
+  })
+
+  if (failures === 0) {
+    message.success(
+      t(
+        "sidepanel:multiSelect.deleteSuccess",
+        "Chats moved to trash."
+      )
+    )
+  } else if (failures === selectedConversationIds.length) {
+    message.error(
+      t(
+        "sidepanel:multiSelect.deleteFailed",
+        "Unable to move selected chats to trash."
+      )
+    )
+  } else {
+    message.error(
+      t(
+        "sidepanel:multiSelect.deletePartial",
+        "Some chats could not be moved to trash."
+      )
+    )
+  }
+
+  return { deletedConversationIds, failedConversationIds }
 }
 
 export const useBulkChatOperations = ({
   selectedConversationIds,
   folderApiAvailable,
-  ensureKeyword,
-  addKeywordToConversation,
+  deleteConversation,
   t,
   setBulkFolderPickerOpen,
   setBulkTagPickerOpen
@@ -72,56 +125,17 @@ export const useBulkChatOperations = ({
     setBulkTagPickerOpen(true)
   }, [folderApiAvailable, selectedConversationIds, setBulkTagPickerOpen, t])
 
-  const applyBulkTrash = React.useCallback(async (): Promise<BulkTrashResult | null> => {
-    if (selectedConversationIds.length === 0) return null
-
-    const trashKeyword = await ensureKeyword("Trash")
-    if (!trashKeyword) {
-      message.error(
-        t(
-          "sidepanel:multiSelect.deleteFailed",
-          "Unable to move chats to trash."
-        )
-      )
-      return null
-    }
-
-    const results = await Promise.allSettled(
-      selectedConversationIds.map((conversationId) =>
-        addKeywordToConversation(conversationId, trashKeyword.id)
-      )
-    )
-    const failedConversationIds = new Set<string>()
-    let failures = 0
-    results.forEach((result, index) => {
-      if (result.status === "rejected" || !result.value) {
-        failures += 1
-        failedConversationIds.add(selectedConversationIds[index])
-      }
+  const applyBulkDelete = React.useCallback(async (): Promise<BulkDeleteResult | null> => {
+    return runBulkDelete({
+      selectedConversationIds,
+      deleteConversation,
+      t
     })
-
-    if (failures > 0) {
-      message.error(
-        t(
-          "sidepanel:multiSelect.deletePartial",
-          "Some chats could not be moved to trash."
-        )
-      )
-    } else {
-      message.success(
-        t(
-          "sidepanel:multiSelect.deleteSuccess",
-          "Chats moved to trash."
-        )
-      )
-    }
-
-    return { failedConversationIds }
-  }, [addKeywordToConversation, ensureKeyword, selectedConversationIds, t])
+  }, [deleteConversation, selectedConversationIds, t])
 
   return {
     openBulkFolderPicker,
     openBulkTagPicker,
-    applyBulkTrash
+    applyBulkDelete
   }
 }

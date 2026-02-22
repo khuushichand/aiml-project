@@ -82,8 +82,9 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 # Circuit Breaker
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker, CircuitBreakerError
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import registry as circuit_breaker_registry
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import CircuitBreaker
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import CircuitBreakerOpenError as CircuitBreakerError
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import registry as circuit_breaker_registry
 from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
 from tldw_Server_API.app.core.Embeddings.messages import validate_schema
 from tldw_Server_API.app.core.Embeddings.request_batching import (
@@ -111,6 +112,7 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode, is_truthy
 from tldw_Server_API.app.core.Usage.usage_tracker import (
     backfill_legacy_tokens_to_ledger,
     log_llm_usage,
@@ -143,6 +145,7 @@ _EMBEDDINGS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     json.JSONDecodeError,
     *_REDIS_ERRORS,
 )
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 # ============================================================================
 # Embeddings Implementation Import (Safe/Lazy)
@@ -605,6 +608,8 @@ async def _resolve_embeddings_byok(
     provider: str,
     current_user: User | None,
     request: Request | None,
+    *,
+    force_oauth_refresh: bool = False,
 ) -> ResolvedByokCredentials:
     user_id_int = getattr(current_user, "id_int", None) if current_user else None
     if user_id_int is None and current_user is not None:
@@ -616,6 +621,7 @@ async def _resolve_embeddings_byok(
         provider,
         user_id=user_id_int,
         request=request,
+        force_oauth_refresh=force_oauth_refresh,
     )
 
 
@@ -630,15 +636,32 @@ def _raise_missing_embeddings_key(provider: str) -> None:
     )
 
 
+def _is_http_401_error(exc: BaseException) -> bool:
+    try:
+        return int(getattr(exc, "status_code", 0) or 0) == status.HTTP_401_UNAUTHORIZED
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        return False
+
+
+def _raise_oauth_reconnect_required(provider: str) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={
+            "error_code": "oauth_reconnect_required",
+            "provider": provider,
+            "reconnect_required": True,
+            "message": f"{provider} OAuth access is no longer valid. Reconnect and retry.",
+        },
+    )
+
+
 def _is_test_context() -> bool:
     try:
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
-    return str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"} or str(
-        os.getenv("TEST_MODE", "")
-    ).lower() in {"1", "true", "yes", "on"}
+    return env_flag_enabled("TESTING") or is_test_mode()
 
 
 def _should_skip_missing_key(
@@ -770,7 +793,7 @@ def _build_user_metadata(user: User | None) -> dict[str, Any] | None:
     """
     try:
         # Bypass rate limiting propagation in tests
-        if str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
+        if env_flag_enabled("TESTING"):
             return None
         if user is None:
             return None
@@ -798,7 +821,7 @@ class TTLCache:
         self._cleanup_thread: threading.Thread | None = None
         self._cleanup_stop: threading.Event | None = None
         try:
-            self._use_thread = str(os.getenv("EMBEDDINGS_TTLCACHE_DAEMON", "true")).lower() in ("1", "true", "yes", "on")
+            self._use_thread = is_truthy(os.getenv("EMBEDDINGS_TTLCACHE_DAEMON", "true"))
         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             self._use_thread = True
         self.hits = 0
@@ -1410,7 +1433,7 @@ def decide_and_apply_l2(
     normalize_requested: bool | None = None
     try:
         env_val = os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")
-        normalize_requested = str(env_val).lower() in {"1", "true", "yes", "on"}
+        normalize_requested = is_truthy(env_val)
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         # Preserve default behavior on error; log with context
         logger.warning(
@@ -1444,13 +1467,50 @@ def decide_and_apply_l2(
             arr = np.array(embedding)
         return arr, False
 
-def _should_enforce_policy(user: User | None = None) -> bool:
+def _resolve_auth_principal_from_request(request: Request | None) -> AuthPrincipal | None:
+    """Best-effort extraction of AuthPrincipal from request state."""
+    if request is None:
+        return None
+    try:
+        ctx = getattr(request.state, "auth", None)
+        if isinstance(ctx, AuthContext):
+            return ctx.principal
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        return None
+    return None
+
+
+def _is_policy_bypass_admin(principal: AuthPrincipal | None, user: User | None) -> bool:
+    """
+    Determine whether policy checks should allow admin bypass.
+
+    Claim-first behavior:
+    - Trust only principal role/permission claims (`admin`, `*`, `system.configure`).
+    - Absence of a principal means no bypass.
+    """
+    _ = user
+    if principal is None:
+        return False
+    try:
+        roles = {str(role).strip().lower() for role in (principal.roles or [])}
+        permissions = {
+            str(permission).strip().lower()
+            for permission in (principal.permissions or [])
+            if str(permission).strip()
+        }
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        roles = set()
+        permissions = set()
+    return bool(("admin" in roles) or (permissions & _ADMIN_CLAIM_PERMISSIONS))
+
+
+def _should_enforce_policy(user: User | None = None, principal: AuthPrincipal | None = None) -> bool:
     # 1) Explicit env override takes highest precedence
     env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
     if env_val is not None:
-        return env_val.lower() in ("true", "1", "yes")
+        return is_truthy(env_val)
     # 2) In TESTING, always enforce (even for admin) for deterministic behavior
-    if os.getenv("TESTING", "").lower() in ("true", "1", "yes"):
+    if env_flag_enabled("TESTING"):
         return True
     # 3) Settings-level boolean if provided
     try:
@@ -1461,12 +1521,32 @@ def _should_enforce_policy(user: User | None = None) -> bool:
         pass
     # 4) Admin bypass unless strict enforcement requested
     try:
-        if user and getattr(user, 'is_admin', False) and os.getenv("EMBEDDINGS_ENFORCE_POLICY_STRICT", "false").lower() not in ("true", "1", "yes"):
+        if (
+            _is_policy_bypass_admin(principal=principal, user=user)
+            and not is_truthy(os.getenv("EMBEDDINGS_ENFORCE_POLICY_STRICT", "false"))
+        ):
             return False
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     # Default: do not enforce
     return False
+
+
+def _should_enforce_policy_for_request(
+    request: Request | None,
+    user: User | None = None,
+) -> bool:
+    """
+    Request-aware policy enforcement with claim-first principal handling.
+
+    Includes a compatibility fallback for tests that monkeypatch
+    `_should_enforce_policy` with a single-argument callable.
+    """
+    principal = _resolve_auth_principal_from_request(request)
+    try:
+        return _should_enforce_policy(user, principal)
+    except TypeError:
+        return _should_enforce_policy(user)
 
 def resolve_fallback_chain(primary_provider: str) -> list[str]:
     # Configurable chain; else default
@@ -1964,7 +2044,11 @@ async def create_embeddings_batch_async(
 
         # Process in batches with circuit breaker (or synthesize in test mode for OpenAI)
         all_new_embeddings = []
-        if provider == "openai" and os.getenv("TESTING", "").lower() == "true" and os.getenv("USE_REAL_OPENAI_IN_TESTS", "").lower() != "true":
+        if (
+            provider == "openai"
+            and env_flag_enabled("TESTING")
+            and not env_flag_enabled("USE_REAL_OPENAI_IN_TESTS")
+        ):
             import numpy as _np
             mdl = (model_id or "text-embedding-3-small").lower()
             dim = 1536
@@ -2212,7 +2296,7 @@ async def create_embedding_endpoint(
 
         # Provider/model allowlist enforcement (after input validation)
         # Enforce allowlists based on config/env; admin may bypass unless STRICT is set
-        enforce_policy = _should_enforce_policy(current_user)
+        enforce_policy = _should_enforce_policy_for_request(request, current_user)
         allowed_providers = _get_allowed_providers()
         if enforce_policy and allowed_providers is not None and provider.lower() not in allowed_providers:
             embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="provider").inc()
@@ -2243,12 +2327,21 @@ async def create_embedding_endpoint(
 
         byok_cache: dict[str, ResolvedByokCredentials] = {}
 
-        async def _resolve_provider_credentials(name: str) -> ResolvedByokCredentials:
+        async def _resolve_provider_credentials(
+            name: str,
+            *,
+            force_oauth_refresh: bool = False,
+        ) -> ResolvedByokCredentials:
             key = (name or "").strip().lower()
             cached = byok_cache.get(key)
-            if cached:
+            if cached and not force_oauth_refresh:
                 return cached
-            resolved = await _resolve_embeddings_byok(key, current_user, request)
+            resolved = await _resolve_embeddings_byok(
+                key,
+                current_user,
+                request,
+                force_oauth_refresh=force_oauth_refresh,
+            )
             byok_cache[key] = resolved
             return resolved
 
@@ -2344,8 +2437,8 @@ async def create_embedding_endpoint(
         # Special-case for OpenAI in test mode: synthesize vectors deterministically
         use_synthetic_openai = (
             provider == "openai"
-            and os.getenv("TESTING", "").lower() == "true"
-            and os.getenv("USE_REAL_OPENAI_IN_TESTS", "").lower() != "true"
+            and env_flag_enabled("TESTING")
+            and not env_flag_enabled("USE_REAL_OPENAI_IN_TESTS")
         )
 
         embeddings: list[list[float]] = []
@@ -2360,7 +2453,7 @@ async def create_embedding_endpoint(
         # precedence over synthetic OpenAI vectors when enabled to honor explicit
         # configuration in tests and production.
         try:
-            adapters_enabled = str(os.getenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+            adapters_enabled = is_truthy(os.getenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", ""))
         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             adapters_enabled = False
         if adapters_enabled:
@@ -2442,7 +2535,7 @@ async def create_embedding_endpoint(
             # Strict by default: do NOT fallback when `x-provider` header is set.
             # To allow fallback even with header, set EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER=true
             try:
-                allow_hdr = os.getenv("EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER", "").lower() in ("1", "true", "yes", "on")
+                allow_hdr = is_truthy(os.getenv("EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER"))
             except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 allow_hdr = False
             fallback_disabled = (x_provider is not None and not allow_hdr)
@@ -2465,14 +2558,44 @@ async def create_embedding_endpoint(
                             _raise_missing_embeddings_key(p)
                         else:
                             continue
-                    embeddings = await create_embeddings_batch_async(
-                        texts=texts_to_embed,
-                        provider=p,
-                        model_id=target_model_id,
-                        dimensions=embedding_request.dimensions,
-                        api_key=credentials.api_key,
-                        metadata=user_metadata,
-                    )
+                    try:
+                        embeddings = await create_embeddings_batch_async(
+                            texts=texts_to_embed,
+                            provider=p,
+                            model_id=target_model_id,
+                            dimensions=embedding_request.dimensions,
+                            api_key=credentials.api_key,
+                            metadata=user_metadata,
+                        )
+                    except HTTPException as auth_exc:
+                        if not (
+                            p == "openai"
+                            and getattr(credentials, "auth_source", None) == "oauth"
+                            and _is_http_401_error(auth_exc)
+                        ):
+                            raise
+                        try:
+                            refreshed_credentials = await _resolve_provider_credentials(
+                                p,
+                                force_oauth_refresh=True,
+                            )
+                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+                            _raise_oauth_reconnect_required(p)
+                        if not refreshed_credentials.api_key:
+                            _raise_oauth_reconnect_required(p)
+                        try:
+                            embeddings = await create_embeddings_batch_async(
+                                texts=texts_to_embed,
+                                provider=p,
+                                model_id=target_model_id,
+                                dimensions=embedding_request.dimensions,
+                                api_key=refreshed_credentials.api_key,
+                                metadata=user_metadata,
+                            )
+                        except HTTPException as retry_exc:
+                            if _is_http_401_error(retry_exc):
+                                _raise_oauth_reconnect_required(p)
+                            raise
                     provider = p
                     if target_model_id:
                         model = target_model_id
@@ -2490,6 +2613,12 @@ async def create_embedding_endpoint(
                         he.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
                         and isinstance(getattr(he, "detail", None), dict)
                         and he.detail.get("error_code") == "missing_provider_credentials"
+                    ):
+                        raise
+                    if (
+                        he.status_code == status.HTTP_401_UNAUTHORIZED
+                        and isinstance(getattr(he, "detail", None), dict)
+                        and he.detail.get("error_code") == "oauth_reconnect_required"
                     ):
                         raise
                     if he.status_code and 400 <= he.status_code < 500 and he.status_code != 429:
@@ -2698,7 +2827,7 @@ async def create_embeddings_batch_endpoint(
 
     _validate_dimensions_request(provider, model, payload.dimensions)
 
-    enforce_policy = _should_enforce_policy(current_user)
+    enforce_policy = _should_enforce_policy_for_request(request, current_user)
     allowed_providers = _get_allowed_providers()
     if enforce_policy and allowed_providers is not None and provider.lower() not in allowed_providers:
         embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="provider").inc()
@@ -2742,16 +2871,48 @@ async def create_embeddings_batch_endpoint(
     if provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not credentials.api_key:
         if not _should_skip_missing_key(provider, credentials):
             _raise_missing_embeddings_key(provider)
-
-    embeddings = await create_embeddings_batch_async(
-        texts=texts,
-        provider=provider,
-        model_id=model,
-        dimensions=payload.dimensions,
-        api_key=credentials.api_key,
-        metadata=user_metadata,
-    )
-    await credentials.touch_last_used()
+    active_credentials = credentials
+    try:
+        embeddings = await create_embeddings_batch_async(
+            texts=texts,
+            provider=provider,
+            model_id=model,
+            dimensions=payload.dimensions,
+            api_key=active_credentials.api_key,
+            metadata=user_metadata,
+        )
+    except HTTPException as auth_exc:
+        if not (
+            provider == "openai"
+            and getattr(active_credentials, "auth_source", None) == "oauth"
+            and _is_http_401_error(auth_exc)
+        ):
+            raise
+        try:
+            active_credentials = await _resolve_embeddings_byok(
+                provider,
+                current_user,
+                request,
+                force_oauth_refresh=True,
+            )
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+            _raise_oauth_reconnect_required(provider)
+        if not active_credentials.api_key:
+            _raise_oauth_reconnect_required(provider)
+        try:
+            embeddings = await create_embeddings_batch_async(
+                texts=texts,
+                provider=provider,
+                model_id=model,
+                dimensions=payload.dimensions,
+                api_key=active_credentials.api_key,
+                metadata=user_metadata,
+            )
+        except HTTPException as retry_exc:
+            if _is_http_401_error(retry_exc):
+                _raise_oauth_reconnect_required(provider)
+            raise
+    await active_credentials.touch_last_used()
 
     if payload.dimensions is not None:
         embeddings = adjust_dimensions(embeddings, payload.dimensions, provider, model)
@@ -2833,14 +2994,46 @@ async def get_embedding_model_info(
         credentials = await _resolve_embeddings_byok(resolved_provider, current_user, request)
         if resolved_provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not credentials.api_key:
             _raise_missing_embeddings_key(resolved_provider)
-        vectors = await create_embeddings_batch_async(
-            texts=["model probe"],
-            provider=resolved_provider,
-            model_id=model,
-            api_key=credentials.api_key,
-            metadata=user_metadata,
-        )
-        await credentials.touch_last_used()
+        active_credentials = credentials
+        try:
+            vectors = await create_embeddings_batch_async(
+                texts=["model probe"],
+                provider=resolved_provider,
+                model_id=model,
+                api_key=active_credentials.api_key,
+                metadata=user_metadata,
+            )
+        except HTTPException as auth_exc:
+            if not (
+                resolved_provider == "openai"
+                and getattr(active_credentials, "auth_source", None) == "oauth"
+                and _is_http_401_error(auth_exc)
+            ):
+                raise
+            try:
+                active_credentials = await _resolve_embeddings_byok(
+                    resolved_provider,
+                    current_user,
+                    request,
+                    force_oauth_refresh=True,
+                )
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+                _raise_oauth_reconnect_required(resolved_provider)
+            if not active_credentials.api_key:
+                _raise_oauth_reconnect_required(resolved_provider)
+            try:
+                vectors = await create_embeddings_batch_async(
+                    texts=["model probe"],
+                    provider=resolved_provider,
+                    model_id=model,
+                    api_key=active_credentials.api_key,
+                    metadata=user_metadata,
+                )
+            except HTTPException as retry_exc:
+                if _is_http_401_error(retry_exc):
+                    _raise_oauth_reconnect_required(resolved_provider)
+                raise
+        await active_credentials.touch_last_used()
     except HTTPException:
         raise
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
@@ -3337,6 +3530,7 @@ async def reset_circuit_breaker(
     dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_metrics(
+    request: Request,
     current_user: User = Depends(get_request_user),
 ):
     """Get detailed service metrics - requires admin privileges"""
@@ -3394,7 +3588,7 @@ async def get_metrics(
             "token_inputs": _details(embedding_token_inputs_total),
         },
         "config": {
-            "enforce_policy": _should_enforce_policy(current_user),
+            "enforce_policy": _should_enforce_policy_for_request(request, current_user),
             "dimension_policy": _dimension_policy(),
             "cache": {
                 "ttl_seconds": CACHE_TTL_SECONDS,

@@ -36,6 +36,8 @@ type ProgressMeta = {
   done: number
   pct: number
   elapsedLabel?: string | null
+  state?: "running" | "failed" | "complete" | "ready"
+  error?: string | null
 }
 
 type IngestOptionsPanelProps = {
@@ -72,6 +74,7 @@ type IngestOptionsPanelProps = {
   totalCount: number
   plannedCount: number
   progressMeta: ProgressMeta
+  lastRunError?: string | null
   run: () => void
   hasMissingFiles: boolean
   missingFileCount: number
@@ -119,6 +122,7 @@ export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
   totalCount,
   plannedCount,
   progressMeta,
+  lastRunError,
   run,
   hasMissingFiles,
   missingFileCount,
@@ -132,6 +136,9 @@ export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
 }) => {
   const done = doneCount || 0
   const total = totalCount || 0
+  const progressState =
+    progressMeta?.state ||
+    (running ? "running" : lastRunError ? "failed" : "ready")
   const getIngestBlockedLabel = () => {
     if (ingestConnectionStatus === "unconfigured") {
       return t(
@@ -648,7 +655,7 @@ export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
       <div className="rounded-md border border-border bg-surface2 p-3">
         <div className="flex flex-col gap-2">
           <div className="sr-only" aria-live="polite" role="status">
-            {running && total > 0
+            {progressState === "running" && total > 0
               ? t(
                   "quickIngest.progress",
                   "Processing {{done}} / {{total}} items\u2026",
@@ -657,6 +664,15 @@ export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
                     total
                   }
                 )
+              : progressState === "failed" && total > 0
+                ? qi(
+                    "progressFailed",
+                    "Last run failed after {{done}} / {{total}} items.",
+                    {
+                      done,
+                      total
+                    }
+                  )
               : qi("itemsReadySr", "{{count}} item(s) ready", {
                   count: plannedCount || 0
                 })}
@@ -795,12 +811,14 @@ export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
             <span
               className="mt-2 text-xs text-text-subtle sm:mt-0"
               title={
-                running && total > 0
+                progressState === "running" && total > 0
                   ? qi("ingestProgressTitle", "Current ingest progress")
+                  : progressState === "failed" && total > 0
+                    ? qi("ingestFailedTitle", "Last ingest run failed")
                   : qi("itemsReadyTitle", "Items ready to ingest")
               }
             >
-              {running && total > 0
+              {progressState === "running" && total > 0
                 ? t(
                     "quickIngest.progress",
                     "Processing {{done}} / {{total}} items\u2026",
@@ -809,11 +827,23 @@ export const IngestOptionsPanel: React.FC<IngestOptionsPanelProps> = ({
                       total
                     }
                   )
+                : progressState === "failed" && total > 0
+                  ? qi(
+                      "progressFailed",
+                      "Last run failed after {{done}} / {{total}} items.",
+                      {
+                        done,
+                        total
+                      }
+                    )
                 : qi("itemsReady", "{{count}} item(s) ready", {
                     count: plannedCount || 0
                   })}
             </span>
           </div>
+          {progressState === "failed" && lastRunError ? (
+            <div className="text-xs text-danger">{lastRunError}</div>
+          ) : null}
         </div>
         <div className="flex justify-end gap-2 mt-2">
           <Button

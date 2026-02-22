@@ -98,7 +98,7 @@ def _detect_auth_mode() -> str:
             if response.status_code == 200:
                 return response.json().get("auth_mode", "multi_user")
     except:
-        pass
+        _ = None
     return "multi_user"  # Default
 
 
@@ -133,7 +133,7 @@ def pytest_addoption(parser):
 
 
 def _env_truthy(name: str) -> bool:
-    return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
+    return os.getenv(name, "").lower() in {"1", "true", "yes", "y", "on"}
 
 # Attach the shared test results dict to config so sessionfinish can print a summary
 @pytest.fixture(scope="session", autouse=True)
@@ -261,4 +261,4 @@ def _cleanup_open_httpx_clients():
         from tldw_Server_API.tests.e2e.fixtures import APIClient
         APIClient.close_open_clients()
     except Exception:
-        pass
+        _ = None

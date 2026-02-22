@@ -29,8 +29,7 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventType as UEvent,
 )
-
-_TRUTHY = {"1", "true", "yes", "y", "on"}
+from tldw_Server_API.app.core.testing import is_test_mode
 
 
 def _parse_cache_size(env_key: str, default: int) -> int:
@@ -53,18 +52,8 @@ _SYNC_LOOP_READY = threading.Event()
 _MANDATORY_TIMEOUT_S = 5.0
 
 
-def _env_truthy(key: str) -> bool:
-    raw = os.getenv(key)
-    if raw is None:
-        return False
-    val = str(raw).strip().lower()
-    return val in _TRUTHY
-
-
 def _in_test_mode() -> bool:
-    if os.getenv("PYTEST_CURRENT_TEST"):
-        return True
-    return _env_truthy("TEST_MODE") or _env_truthy("TLDW_TEST_MODE")
+    return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
 
 
 def _ensure_sync_loop() -> asyncio.AbstractEventLoop | None:
@@ -134,8 +123,8 @@ def _schedule(coro) -> None:
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            except Exception as close_error:
+                logger.debug("Failed to close coroutine while handling missing event loop", exc_info=close_error)
         raise RuntimeError("Evaluations audit adapter unavailable: no event loop")
 
     try:
@@ -145,8 +134,8 @@ def _schedule(coro) -> None:
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            except Exception as close_error:
+                logger.debug("Failed to close coroutine while handling scheduling failure", exc_info=close_error)
         raise RuntimeError("Evaluations audit adapter failed to schedule") from exc
 
     try:

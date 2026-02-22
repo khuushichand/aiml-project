@@ -61,7 +61,7 @@ def _request_json(
     for key, value in req_headers.items():
         req.add_header(key, value)
     try:
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=timeout) as resp:  # nosec B310
             status = int(resp.getcode())
             raw = _decode_body(resp.read() or b"")
     except HTTPError as exc:

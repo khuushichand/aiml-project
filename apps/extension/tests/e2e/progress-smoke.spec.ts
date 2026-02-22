@@ -1,7 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test"
-import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 import {
   waitForConnectionStore,
   setSelectedModel,
@@ -317,7 +316,7 @@ test.describe("UX progress smoke", () => {
     let context: BrowserContext | null = null
     try {
       logStep("launch extension")
-      const launchResult = await launchWithExtension("", {
+      const launchResult = await launchWithExtensionOrSkip(test, "", {
         seedConfig: {
           __tldw_first_run_complete: true,
           __tldw_allow_offline: true,
@@ -462,7 +461,7 @@ test.describe("UX progress smoke", () => {
 
     let context: BrowserContext | null = null
     try {
-      const launchResult = await launchWithExtension("", {
+      const launchResult = await launchWithExtensionOrSkip(test, "", {
         seedConfig: {
           __tldw_first_run_complete: true,
           __tldw_allow_offline: true,

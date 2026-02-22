@@ -35,7 +35,7 @@ def _setup_env(monkeypatch, tmp_path):
 @pytest.mark.integration
 def test_jobs_events_sse_initial_data_within_500ms(monkeypatch, tmp_path):
      # Guard against sandbox/CI hangs: opt-out via env or auto-skip on CI
-    if os.getenv("CI") or str(os.getenv("TLDW_TEST_NO_SSE", "")).strip().lower() in {"1","true","yes","on"}:
+    if os.getenv("CI") or str(os.getenv("TLDW_TEST_NO_SSE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
         pytest.skip("Skipping SSE smoke test in CI/sandbox environment")
     _setup_env(monkeypatch, tmp_path)
 

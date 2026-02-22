@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 pytestmark = [
     pytest.mark.pg_jobs,
     pytest.mark.pg_jobs_stress,
-    pytest.mark.skipif(os.getenv("RUN_PG_JOBS_STRESS", "").lower() not in {"1", "true", "yes", "on"},
+    pytest.mark.skipif(os.getenv("RUN_PG_JOBS_STRESS", "").lower() not in {"1", "true", "yes", "y", "on"},
                        reason="Set RUN_PG_JOBS_STRESS=1 to enable PG stress tests")
 ]
 
@@ -72,7 +72,7 @@ def test_pg_concurrency_skip_locked_stress(jobs_pg_dsn, monkeypatch):
         assert len(ids) == len(set(ids))
 
     # Strict coverage mode (opt-in): expect full coverage of a new seeded batch
-    if os.getenv("RUN_PG_JOBS_STRESS_STRICT", "").lower() in {"1", "true", "yes", "on"}:
+    if os.getenv("RUN_PG_JOBS_STRESS_STRICT", "").lower() in {"1", "true", "yes", "y", "on"}:
         # Seed a separate batch
         batch_ids = []
         for i in range(seed_count):

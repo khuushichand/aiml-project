@@ -205,15 +205,30 @@ export const setTTSProvider = async (ttsProvider: string) => {
 }
 
 export const getBrowserTTSVoices = async () => {
-  if (isChromiumTarget) {
-    const tts = await chrome.tts.getVoices()
-    return tts
-  } else {
-    const tts = await speechSynthesis.getVoices()
+  try {
+    if (isChromiumTarget) {
+      const api = (globalThis as any)?.chrome?.tts
+      if (!api || typeof api.getVoices !== "function") {
+        return []
+      }
+      const tts = await api.getVoices()
+      return Array.isArray(tts) ? tts : []
+    }
+
+    const synth = (globalThis as any)?.speechSynthesis
+    if (!synth || typeof synth.getVoices !== "function") {
+      return []
+    }
+    const tts = await synth.getVoices()
+    if (!Array.isArray(tts)) {
+      return []
+    }
     return tts.map((voice) => ({
       voiceName: voice.name,
       lang: voice.lang
     }))
+  } catch {
+    return []
   }
 }
 

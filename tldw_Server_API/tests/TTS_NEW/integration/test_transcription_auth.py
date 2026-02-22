@@ -15,8 +15,13 @@ from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 pytestmark = [pytest.mark.integration]
+
+
+def _api_key_headers() -> dict[str, str]:
+    return {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
 
 
 def _make_wav_bytes(duration_sec: float = 0.1, sr: int = 16000, freq: float = 440.0) -> bytes:
@@ -93,7 +98,12 @@ def test_transcriptions_ok_with_override(monkeypatch, bypass_api_limits):
             wav_bytes = _make_wav_bytes()
             files = {"file": ("test.wav", wav_bytes, "audio/wav")}
             data = {"model": "whisper-1", "response_format": "json"}
-            resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
+            resp = client.post(
+                "/api/v1/audio/transcriptions",
+                files=files,
+                data=data,
+                headers=_api_key_headers(),
+            )
             assert resp.status_code == 200
             assert resp.json().get("text") == "stubbed transcript"
         finally:
@@ -157,7 +167,12 @@ def test_translations_ok_with_override(monkeypatch, bypass_api_limits):
             wav_bytes = _make_wav_bytes()
             files = {"file": ("test.wav", wav_bytes, "audio/wav")}
             data = {"model": "whisper-1", "response_format": "json"}
-            resp = client.post("/api/v1/audio/translations", files=files, data=data)
+            resp = client.post(
+                "/api/v1/audio/translations",
+                files=files,
+                data=data,
+                headers=_api_key_headers(),
+            )
             assert resp.status_code == 200
             assert resp.json().get("text") == "translated transcript"
         finally:
@@ -238,7 +253,12 @@ def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_
             wav_bytes = _make_wav_bytes()
             files = {"file": ("test.wav", wav_bytes, "audio/wav")}
             data = {"model": "parakeet-mlx", "response_format": "json"}
-            resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
+            resp = client.post(
+                "/api/v1/audio/transcriptions",
+                files=files,
+                data=data,
+                headers=_api_key_headers(),
+            )
             assert resp.status_code == 200
             assert resp.json().get("text") == "parakeet transcript"
         finally:
@@ -301,7 +321,12 @@ def test_transcriptions_default_model_uses_config(monkeypatch, bypass_api_limits
             wav_bytes = _make_wav_bytes()
             files = {"file": ("test.wav", wav_bytes, "audio/wav")}
             data = {"response_format": "json"}
-            resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
+            resp = client.post(
+                "/api/v1/audio/transcriptions",
+                files=files,
+                data=data,
+                headers=_api_key_headers(),
+            )
             assert resp.status_code == 200
             assert resp.json().get("text") == "config default transcript"
             assert captured.get("model") == "parakeet-mlx"
@@ -366,7 +391,12 @@ def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, byp
             wav_bytes = _make_wav_bytes()
             files = {"file": ("test.wav", wav_bytes, "audio/wav")}
             data = {"model": "qwen2audio-test", "response_format": "json"}
-            resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
+            resp = client.post(
+                "/api/v1/audio/transcriptions",
+                files=files,
+                data=data,
+                headers=_api_key_headers(),
+            )
             assert resp.status_code == 200
             assert resp.json().get("text") == "qwen2audio transcript"
         finally:
@@ -416,7 +446,12 @@ def test_transcriptions_whisper_model_unavailable_returns_503(monkeypatch, bypas
             wav_bytes = _make_wav_bytes()
             files = {"file": ("test.wav", wav_bytes, "audio/wav")}
             data = {"model": "whisper-1", "response_format": "json"}
-            resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
+            resp = client.post(
+                "/api/v1/audio/transcriptions",
+                files=files,
+                data=data,
+                headers=_api_key_headers(),
+            )
             assert resp.status_code == 503
             body = resp.json()
             assert isinstance(body, dict)

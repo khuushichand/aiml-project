@@ -91,33 +91,26 @@ export function usePlaygroundSessionPersistence() {
 
   const { setSystemPrompt } = useStoreChatModelSettings()
 
-  // Debounced save
-  const saveCurrentSession = useCallback(() => {
+  const buildPersistableSessionSnapshot = useCallback(() => {
     // Don't save if restoring or if temporary chat
-    if (isRestoringRef.current || temporaryChat) return
+    if (isRestoringRef.current || temporaryChat) return null
 
     // Don't save if no conversation started
-    if (!historyId && !serverChatId) return
+    if (!historyId && !serverChatId) return null
 
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current)
+    return {
+      historyId,
+      serverChatId,
+      chatMode,
+      webSearch,
+      compareMode,
+      compareSelectedModels,
+      ragMediaIds,
+      ragSearchMode,
+      ragTopK,
+      ragEnableGeneration,
+      ragEnableCitations
     }
-
-    saveTimerRef.current = setTimeout(() => {
-      saveSession({
-        historyId,
-        serverChatId,
-        chatMode,
-        webSearch,
-        compareMode,
-        compareSelectedModels,
-        ragMediaIds,
-        ragSearchMode,
-        ragTopK,
-        ragEnableGeneration,
-        ragEnableCitations
-      })
-    }, DEBOUNCE_MS)
   }, [
     historyId,
     serverChatId,
@@ -130,9 +123,48 @@ export function usePlaygroundSessionPersistence() {
     ragTopK,
     ragEnableGeneration,
     ragEnableCitations,
-    temporaryChat,
-    saveSession
+    temporaryChat
   ])
+
+  const latestSessionSnapshotRef = useRef<ReturnType<
+    typeof buildPersistableSessionSnapshot
+  >>(null)
+
+  useEffect(() => {
+    latestSessionSnapshotRef.current = buildPersistableSessionSnapshot()
+  }, [buildPersistableSessionSnapshot])
+
+  // Debounced save
+  const saveCurrentSession = useCallback(() => {
+    const snapshot = buildPersistableSessionSnapshot()
+    if (!snapshot) return
+
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null
+      saveSession(snapshot)
+    }, DEBOUNCE_MS)
+  }, [buildPersistableSessionSnapshot, saveSession])
+
+  const flushPendingSessionSave = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    const snapshot = latestSessionSnapshotRef.current
+    if (!snapshot) return
+    saveSession(snapshot)
+  }, [saveSession])
+
+  const flushPendingSessionSaveRef = useRef(flushPendingSessionSave)
+
+  useEffect(() => {
+    flushPendingSessionSaveRef.current = flushPendingSessionSave
+  }, [flushPendingSessionSave])
 
   // Auto-save when state changes
   useEffect(() => {
@@ -140,9 +172,17 @@ export function usePlaygroundSessionPersistence() {
     return () => {
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
       }
     }
   }, [saveCurrentSession])
+
+  // Flush the latest session state when leaving the chat page.
+  useEffect(() => {
+    return () => {
+      flushPendingSessionSaveRef.current()
+    }
+  }, [])
 
   // Restore session from persisted state
   const restoreSession = useCallback(async (): Promise<boolean> => {
@@ -237,6 +277,7 @@ export function usePlaygroundSessionPersistence() {
   const clearPersistedSession = useCallback(() => {
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
     }
     clearSession()
   }, [clearSession])
@@ -244,6 +285,8 @@ export function usePlaygroundSessionPersistence() {
   return {
     restoreSession,
     clearPersistedSession,
-    hasPersistedSession: isSessionValid()
+    hasPersistedSession: isSessionValid(),
+    persistedHistoryId: sessionStore.historyId ?? null,
+    persistedServerChatId: sessionStore.serverChatId ?? null
   }
 }

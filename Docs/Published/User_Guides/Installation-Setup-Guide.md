@@ -1,5 +1,13 @@
 # Installation & Setup Guide
 
+> **Note:** This guide is being replaced by the new Getting Started guides:
+> - [Tire Kicker Guide](../Getting_Started/Tire_Kicker.md) - 5-minute setup
+> - [Local Development Guide](../Getting_Started/Local_Development.md) - building against the API
+> - [Docker Self-Host Guide](../Getting_Started/Docker_Self_Host.md) - running on your server
+> - [Production Guide](../Getting_Started/Production.md) - team deployment
+>
+> The content below remains valid but may not be actively maintained.
+
 This guide helps you install and run tldw_server locally with the Next.js WebUI and API.
 
 ## Prerequisites
@@ -71,6 +79,34 @@ Environment variables of interest (from `.env`):
 - `DATABASE_URL` (auth DB; defaults to SQLite; use PostgreSQL for multi-user prod)
 - `tldw_production` / `SHOW_API_KEY_ON_STARTUP` (production guards and API key logging)
 - `REDIS_URL` (optional; background services)
+
+### Docker Compose (optional)
+
+If you prefer containers, use the base Compose stack (app + postgres + redis). Run from repo root:
+
+```bash
+# Single-user
+export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+docker compose -f Dockerfiles/docker-compose.yml up -d --build
+
+# Multi-user (Postgres)
+export AUTH_MODE=multi_user
+export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
+docker compose -f Dockerfiles/docker-compose.yml up -d --build
+
+# Optional: production hardening overlay
+docker compose -f Dockerfiles/docker-compose.yml \
+             -f Dockerfiles/docker-compose.override.yml up -d --build
+```
+
+Initialize AuthNZ inside the container on first run:
+
+```bash
+docker compose -f Dockerfiles/docker-compose.yml exec app \
+  python -m tldw_Server_API.app.core.AuthNZ.initialize
+```
+
+See `Dockerfiles/README.md` for overlays and deployment variants.
 
 ## 4) Provider keys (LLMs, embeddings, TTS)
 
@@ -196,7 +232,7 @@ More detail on local backends and llama.cpp flags: [Setting up a local LLM](Sett
 
 ## 6) Optional: Text-to-Speech (TTS)
 
-TTS providers and priority live in `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`. You can also override some settings in `Config_Files/config.txt` under `[TTS-Settings]`.
+TTS providers and priority live in `tldw_Server_API/Config_Files/tts_providers_config.yaml`. You can also override some settings in `Config_Files/config.txt` under `[TTS-Settings]` using canonical keys (`default_provider`, `default_voice`, `default_speed`, `local_device`).
 
 Quick paths:
 - Hosted OpenAI TTS: set `OPENAI_API_KEY` and keep the `openai` provider enabled.

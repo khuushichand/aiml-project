@@ -1,14 +1,24 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Drawer, Form, Input, Select, Skeleton, notification, Alert, Spin } from "antd"
-import { Play, Clock, Zap, AlertCircle } from "lucide-react"
-import React, { useEffect, useState } from "react"
+import { Play, Clock, Zap } from "lucide-react"
+import React, { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   getPrompt,
   executePrompt,
+  getLlmProviders,
   type ExecutePromptPayload
 } from "@/services/prompt-studio"
 import { Button } from "@/components/Common/Button"
+import {
+  getExecuteDefaultModel,
+  getExecuteDefaultProvider,
+  getExecuteModelOptions,
+  getExecuteProviderOptions,
+  isValidExecuteModel,
+  isValidExecuteProvider,
+  normalizeExecuteProvidersCatalog
+} from "./execute-playground-provider-utils"
 
 type ExecutePlaygroundProps = {
   open: boolean
@@ -42,7 +52,34 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
     enabled: open && promptId !== null
   })
 
+  const {
+    data: providersResponse,
+    isLoading: isLoadingProviders
+  } = useQuery({
+    queryKey: ["prompt-studio", "llm-providers"],
+    queryFn: () => getLlmProviders(),
+    enabled: open
+  })
+
   const prompt = (promptResponse as any)?.data?.data
+  const providersPayload = (providersResponse as any)?.data ?? providersResponse
+  const providersCatalog = useMemo(
+    () => normalizeExecuteProvidersCatalog(providersPayload),
+    [providersPayload]
+  )
+  const providerOptions = useMemo(
+    () => getExecuteProviderOptions(providersCatalog),
+    [providersCatalog]
+  )
+  const selectedProvider = Form.useWatch("provider", form)
+  const selectedModel = Form.useWatch("model", form)
+  const fallbackProvider = getExecuteDefaultProvider(providersCatalog)
+  const effectiveProvider = selectedProvider || fallbackProvider
+  const modelOptions = useMemo(
+    () => getExecuteModelOptions(providersCatalog, effectiveProvider),
+    [providersCatalog, effectiveProvider]
+  )
+  const fallbackModel = getExecuteDefaultModel(providersCatalog, effectiveProvider)
 
   // Reset output when prompt changes
   useEffect(() => {
@@ -56,6 +93,13 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
       })
     }
   }, [open, promptId, form])
+
+  useEffect(() => {
+    if (!selectedModel) return
+    if (!isValidExecuteModel(providersCatalog, effectiveProvider, selectedModel)) {
+      form.setFieldValue("model", undefined)
+    }
+  }, [selectedModel, providersCatalog, effectiveProvider, form])
 
   // Extract variables from user_prompt template
   const extractVariables = (template?: string | null): string[] => {
@@ -89,6 +133,30 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
 
   const handleExecute = (values: FormValues) => {
     if (!promptId) return
+
+    if (!isValidExecuteProvider(providersCatalog, values.provider)) {
+      notification.error({
+        message: t("managePrompts.studio.prompts.invalidProvider", {
+          defaultValue: "Provider is not available on this server"
+        })
+      })
+      return
+    }
+
+    if (
+      !isValidExecuteModel(
+        providersCatalog,
+        values.provider || fallbackProvider,
+        values.model
+      )
+    ) {
+      notification.error({
+        message: t("managePrompts.studio.prompts.invalidModel", {
+          defaultValue: "Model is not available for the selected provider"
+        })
+      })
+      return
+    }
 
     let inputs: Record<string, any> = {}
     try {
@@ -132,7 +200,7 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
           })}
         </span>
       }
-      width={600}
+      size={600}
       destroyOnHidden
     >
       {isLoadingPrompt && <Skeleton paragraph={{ rows: 8 }} />}
@@ -152,7 +220,7 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
             <Alert
               type="info"
               showIcon
-              message={t("managePrompts.studio.prompts.variablesDetected", {
+              title={t("managePrompts.studio.prompts.variablesDetected", {
                 defaultValue: "Variables detected in prompt"
               })}
               description={
@@ -212,21 +280,36 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
                 label={t("managePrompts.studio.prompts.form.provider", {
                   defaultValue: "Provider (optional)"
                 })}
+                rules={[
+                  {
+                    validator: (_, value) =>
+                      isValidExecuteProvider(providersCatalog, value)
+                        ? Promise.resolve()
+                        : Promise.reject(
+                            new Error(
+                              t("managePrompts.studio.prompts.invalidProvider", {
+                                defaultValue:
+                                  "Provider is not available on this server"
+                              })
+                            )
+                          )
+                  }
+                ]}
               >
                 <Select
                   placeholder={t(
                     "managePrompts.studio.prompts.form.providerPlaceholder",
                     {
-                      defaultValue: "Use default"
+                      defaultValue: fallbackProvider
+                        ? `Default: ${fallbackProvider}`
+                        : "Use server default"
                     }
                   )}
                   allowClear
-                  options={[
-                    { label: "OpenAI", value: "openai" },
-                    { label: "Anthropic", value: "anthropic" },
-                    { label: "Ollama", value: "ollama" },
-                    { label: "OpenRouter", value: "openrouter" }
-                  ]}
+                  showSearch
+                  optionFilterProp="label"
+                  loading={isLoadingProviders}
+                  options={providerOptions}
                 />
               </Form.Item>
 
@@ -235,17 +318,52 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
                 label={t("managePrompts.studio.prompts.form.model", {
                   defaultValue: "Model (optional)"
                 })}
+                dependencies={["provider"]}
+                rules={[
+                  ({ getFieldValue }) => ({
+                    validator: (_, value) =>
+                      isValidExecuteModel(
+                        providersCatalog,
+                        getFieldValue("provider") || fallbackProvider,
+                        value
+                      )
+                        ? Promise.resolve()
+                        : Promise.reject(
+                            new Error(
+                              t("managePrompts.studio.prompts.invalidModel", {
+                                defaultValue:
+                                  "Model is not available for the selected provider"
+                              })
+                            )
+                          )
+                  })
+                ]}
               >
-                <Input
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  options={modelOptions}
+                  loading={isLoadingProviders}
                   placeholder={t(
                     "managePrompts.studio.prompts.form.modelPlaceholder",
                     {
-                      defaultValue: "e.g., gpt-4o"
+                      defaultValue: fallbackModel
+                        ? `Default: ${fallbackModel}`
+                        : "Use server default"
                     }
                   )}
+                  disabled={modelOptions.length === 0 && !fallbackModel}
                 />
               </Form.Item>
             </div>
+
+            <p className="text-xs text-text-muted">
+              {t("managePrompts.studio.prompts.defaultsHint", {
+                defaultValue:
+                  "Leave provider/model empty to run with server defaults."
+              })}
+            </p>
 
             <Button
               type="primary"

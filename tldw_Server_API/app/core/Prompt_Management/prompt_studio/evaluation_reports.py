@@ -598,8 +598,8 @@ class ReportManager:
             logger.bind(ps_component="ps_reports", evaluation_id=evaluation_id, project_id=project_id).info(
                 "PS report.start format={}", format
             )
-        except Exception:
-            pass
+        except Exception as report_log_error:
+            logger.debug("Prompt Studio report start logging failed", exc_info=report_log_error)
 
         # Generate report based on format
         if format == "text":
@@ -646,10 +646,14 @@ class ReportManager:
         # Get test runs
         test_runs = []
         if test_run_ids:
-            cursor.execute(f"""
+            placeholders = ",".join("?" * len(test_run_ids))
+            test_run_ids_clause = f"({placeholders})"
+            fetch_test_runs_sql_template = """
                 SELECT * FROM prompt_studio_test_runs
-                WHERE id IN ({','.join('?' * len(test_run_ids))})
-            """, test_run_ids)
+                WHERE id IN {test_run_ids_clause}
+            """
+            fetch_test_runs_sql = fetch_test_runs_sql_template.format_map(locals())  # nosec B608
+            cursor.execute(fetch_test_runs_sql, test_run_ids)
 
             for row in cursor.fetchall():
                 run = self.db._row_to_dict(cursor, row)

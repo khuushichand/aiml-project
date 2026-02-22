@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 

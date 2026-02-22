@@ -1,0 +1,886 @@
+# Implementation Plan: Chat Dictionaries - Information Gaps and Missing Functionality
+
+## Scope
+
+Components: dictionaries domain model, option workspace UX architecture, keyboard shortcut layer, reusable templates, long-horizon sharing/composition capabilities
+Finding IDs: `11.1` through `11.8`
+
+## Finding Coverage
+
+- Version history and reversibility: `11.1`
+- Starter enablement and authoring assistance: `11.2`, `11.3`
+- Organization and discoverability improvements: `11.4`
+- Efficiency accelerators: `11.5`
+- Collaboration and composition roadmap: `11.6`, `11.7`
+- Maintainability and component decomposition: `11.8`
+
+## Stage 1: Modularize Dictionaries Workspace Architecture
+**Goal**: Split monolithic manager into maintainable units without behavior regressions.
+**Success Criteria**:
+- `Manager.tsx` responsibilities are decomposed into focused components.
+- Proposed split includes `DictionaryList`, `DictionaryForm`, `EntryManager`, `EntryForm`, `ValidationPanel`, `PreviewPanel`, `ImportExport`, `StatsModal`.
+- Data hooks and mutation logic are centralized in reusable domain hooks.
+- Lazy-loading boundaries are introduced for rarely-used panels/modals.
+**Tests**:
+- Component-level regression tests for each extracted module.
+- Integration tests for end-to-end dictionary CRUD flow parity.
+- Bundle analysis check confirming lazy-loaded chunks for optional features.
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Extracted create/edit dictionary modal form markup into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryFormModal.tsx`
+- Added targeted component coverage for reusable dictionary form behavior:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/DictionaryFormModal.test.tsx`
+- Extracted import + conflict-resolution modal markup into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryImportModal.tsx`
+- Added targeted component coverage for import modal interaction wiring:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/DictionaryImportModal.test.tsx`
+- Extracted dictionary list/search/empty-error state surface into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryListSection.tsx`
+- Added targeted component coverage for dictionary list section interactions:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/DictionaryListSection.test.tsx`
+- Extracted quick-assign modal UI into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryQuickAssignModal.tsx`
+- Replaced inline quick-assign modal markup in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Extracted dictionary statistics rendering from `Manager.tsx` into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/DictionaryStatsModal.tsx`
+- Added a lazy-load boundary for statistics UI in manager:
+  - `React.lazy` + `Suspense` wrapper in `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Removed statistics-only helper functions from `Manager.tsx` to reduce monolith scope.
+- Regression validation completed for stats, accessibility focus, and responsive dictionary actions:
+  - `Manager.statsStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+  - `Manager.responsiveStage1.test.tsx`
+- Additional regression validation completed for create/edit modal parity:
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.stage1.test.tsx`
+- Additional quick-assign parity validation completed with:
+  - `Manager.chatIntegrationStage1.test.tsx`
+- Additional import workflow parity validation completed with:
+  - `Manager.importStage1.test.tsx`
+- Extracted row action cell renderer into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryActionsCell.tsx`
+- Extracted validation status cell renderer into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryValidationStatusCell.tsx`
+- Additional action/status parity validation completed with:
+  - `Manager.validationStage1.test.tsx`
+- Reliability hardening applied for lazy-loaded stats modal test timing:
+  - `Manager.statsStage1.test.tsx`
+- Extracted dictionary list table column construction into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryTableColumns.tsx`
+- Moved shared dictionary chat-reference formatting/parsing helpers from manager to:
+  - `apps/packages/ui/src/components/Option/Dictionaries/listUtils.ts`
+- Added utility coverage for moved chat-reference helpers:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/listUtils.test.ts`
+- Regression validation completed across list/import/stats/chat/accessibility flows after column extraction:
+  - `listUtils.test.ts`
+  - `DictionaryListSection.test.tsx`
+  - `DictionaryImportModal.test.tsx`
+  - `DictionaryFormModal.test.tsx`
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.statsStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage2.test.tsx`
+  - `Manager.responsiveStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted inline entry workspace from `Manager.tsx` into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Trimmed `Manager.tsx` entry-specific helper/rendering logic after extraction to keep manager focused on list-level orchestration.
+- Regression validation completed for entry/import/validation flows after entry manager extraction:
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.stage1.test.tsx`
+  - `Manager.statsStage1.test.tsx`
+  - `Manager.responsiveStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted full entry-management surface from manager into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Extracted entry table column/renderer logic from `DictionaryEntryManager` into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryTableColumns.tsx`
+- Extracted entry delete-with-undo workflow from inline row action handler into:
+  - `handleDeleteEntryWithUndo` callback in `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Replaced large inline entry table column literal with hook-backed columns in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Entry-flow and accessibility/responsive regression validation completed after entry-table extraction:
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+  - `Manager.responsiveStage3.test.tsx`
+  - `Manager.accessibilityStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Reliability hardening applied for lazy stats-modal content assertions in chat integration coverage:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.chatIntegrationStage3.test.tsx`
+- Full dictionary domain regression suite revalidated after extraction/hardening:
+  - `22` test files / `62` tests passed via `bunx vitest run src/components/Option/Dictionaries/__tests__/*.test.tsx`
+- Extracted entry tools header + accordion orchestration into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryToolsPanel.tsx`
+- Extracted validation panel rendering into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryValidationPanel.tsx`
+- Extracted preview panel rendering into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryPreviewPanel.tsx`
+- Replaced large inline validation/preview accordion section in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Extracted edit-entry modal/drawer form into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryEditForm.tsx`
+- Replaced inline edit-entry form JSX in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Regression validation completed after tools/validation/preview extraction:
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+  - `Manager.stage1.test.tsx`
+- Additional regression validation completed after edit-form extraction:
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Extracted shared entry helper logic from manager into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/dictionaryEntryUtils.ts`
+- Added focused utility tests for extracted helper behavior:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/dictionaryEntryUtils.test.ts`
+- CI stability hardening for long-running entry/accessibility specs:
+  - Increased timeout for timed-effects integration path in `Manager.entryStage2.test.tsx`
+  - Increased timeout/windowed modal waits for stats + nested edit focus specs in `Manager.accessibilityStage2.test.tsx`
+- Regression validation completed after helper extraction and test hardening:
+  - `dictionaryEntryUtils.test.ts`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Additional high-latency test reliability hardening applied for heavy entry workflows:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.entryStage1.test.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.entryStage3.test.tsx`
+- Post-hardening parity revalidated for entry/tools/accessibility/responsive suites:
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.accessibilityStage1.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+  - `Manager.responsiveStage3.test.tsx`
+- Full dictionary regression was re-run in batches after extraction and timeout hardening:
+  - `src/components/Option/Dictionaries/__tests__/*.test.tsx` (primary run) plus follow-up completion batch for long-running files.
+- Extracted add-entry authoring surface from `DictionaryEntryManager` into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryCreateForm.tsx`
+- Replaced inline add-entry form markup with callback-driven component wiring in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Post-extraction regression validation completed for add/edit/validation-heavy paths:
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.responsiveStage3.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted selected-entry bulk action toolbar into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryBulkActions.tsx`
+- Replaced inline bulk selection/action controls in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Revalidated entry-selection/bulk behavior after toolbar extraction:
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+- Extracted entry search/filter/list/empty-error rendering into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryListSection.tsx`
+- Replaced inline entry list table + bulk surface in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Extracted edit-entry shell (mobile drawer + desktop modal) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryEditPanel.tsx`
+- Replaced inline edit-entry panel switch in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Revalidated list, bulk, reorder, responsive, validation, and accessibility parity after list/edit-panel extraction:
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+  - `Manager.responsiveStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted preview draft + saved preview-case localStorage lifecycle into hook:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryPreviewDrafts.ts`
+- Removed preview draft persistence effects and save/load/delete callback bodies from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Extracted entry data loading/derivation (entries/all entries, group options, filtered IDs, reorder metadata) into hook:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryData.ts`
+- Removed entry list query/derivation boilerplate from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Reliability hardening applied for heavy accessibility/validation test latency:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.accessibilityStage3.test.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.validationStage1.test.tsx`
+- Revalidated preview persistence + accessibility labeling after hook extraction and timeout hardening:
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted entry query/filter/group/reorder derivation logic into hook:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryData.ts`
+- Removed inline entry-list data query and derived-state blocks from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Additional reliability hardening applied for long-running bulk + preview persistence tests:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.entryStage3.test.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.validationStage1.test.tsx`
+- Post-extraction regression validation completed across entry/validation/responsive/accessibility suites:
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+  - `Manager.responsiveStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted validation finding row highlight/scroll behavior into hook:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useValidationRowHighlight.ts`
+- Removed inline validation highlight timer + jump callback from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Revalidated validation-jump highlighting and a11y semantics after highlight-hook extraction:
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted focus capture/restore helpers used by nested edit flows into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/focusUtils.ts`
+- Replaced inline focus helper function bodies in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Revalidated focus-return behavior and nested edit panel workflow:
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+- Additional regression revalidation completed after entry-data hook + utility extraction updates:
+  - `dictionaryEntryUtils.test.ts`
+  - `Manager.stage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Extracted validation/preview tool-state mutations and preview diff derivation into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryTools.ts`
+- Removed validation/preview mutation boilerplate and derived preview calculations from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Regression revalidation completed after tools-hook extraction:
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.stage1.test.tsx`
+- Extracted add-entry mutation/state/handlers (advanced mode + regex client/server guards) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryCreate.ts`
+- Removed add-entry mutation/handler boilerplate from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Additional CI timeout hardening for long serial runs:
+  - Increased entry loading error-state timeout in `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.stage1.test.tsx`
+- Regression revalidation completed after create-hook extraction:
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.stage1.test.tsx`
+- Extracted inline entry edit state + save/cancel/regex safety flow into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryInlineEdit.ts`
+- Removed inline edit-state handlers and persistence callback bodies from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Extracted entry row operations (selection lifecycle, bulk actions, reorder persistence, delete-with-undo) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryRowOperations.ts`
+- Removed bulk/reorder/delete mutation orchestration blocks from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Additional timeout hardening for high-latency bulk-selection integration path:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.entryStage3.test.tsx`
+- Post-extraction regression validation completed for entry, validation, responsive, and accessibility flows:
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted shared regex safety validation callback into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryRegexSafetyValidation.ts`
+- Extracted edit-entry modal workflow (focus return, submit validation, update mutation, panel open/close handlers) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryEdit.ts`
+- Removed edit-entry orchestration and regex safety callback wiring boilerplate from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Regression revalidation completed after edit/regex hook extraction:
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Additional test reliability hardening for timed-effects edit payload assertions:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.entryStage2.test.tsx`
+- Restored missing import-dialog state declaration in list manager:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Final post-fix regression sweep completed for entry/validation/accessibility slices:
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted import modal state + preview parsing + conflict-resolution mutation flow into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryImportFlow.ts`
+- Removed import workflow state/callback/mutation boilerplate from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after import-flow hook extraction:
+  - `Manager.importStage1.test.tsx`
+  - `Manager.stage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Extracted quick-assign orchestration (chat query, selection/filter state, patch write flow) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryQuickAssign.ts`
+- Removed quick-assign state/query/assignment callback boilerplate and settings helper utilities from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after quick-assign hook extraction:
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.stage1.test.tsx`
+- Replaced manager-local focus helpers with shared utilities from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/focusUtils.ts`
+- Extracted dictionary row export/stats/delete action orchestration into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryRowActions.ts`
+- Removed export/stats/delete callback blocks and advanced-export helper from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after row-action hook extraction:
+  - `Manager.importStage1.test.tsx`
+  - `Manager.statsStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.stage1.test.tsx`
+- Extracted validation-status + active-toggle mutation/orchestration into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryValidationAndActivation.ts`
+- Removed manager-local validation status state, on-demand validation callback, and active-toggle mutation wiring from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after validation/activation hook extraction:
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.stage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.responsiveStage1.test.tsx`
+- Extracted entry table wiring (inline-test popover state + column hook orchestration) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryListTable.ts`
+- Removed manager-local inline test state and direct table-column hook wiring from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Extracted dictionary metadata query into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryMetadata.ts`
+- Moved preview-case name/error reset callback into preview drafts hook:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryPreviewDrafts.ts`
+- Removed dictionary-meta query boilerplate and inline preview-case name reset callback from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Regression revalidation completed after entry-table and metadata/preview hook extraction:
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+- Extracted create/edit dictionary modal state, form normalization, and optimistic-lock conflict reload flow into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryFormManagement.ts`
+- Removed manager-local create/update mutations, form payload normalization helpers, and edit-submit callback boilerplate from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after form-management hook extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+- Extracted dictionary list/query state + duplicate flow + filtered/active derivations into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryListData.ts`
+- Removed manager-local dictionaries query callback, duplicate callback, and derivation wiring boilerplate from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after list-data hook extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Extracted entries-drawer open/close + focus capture orchestration into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntriesPanel.ts`
+- Extracted dictionary deactivation confirmation callback into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryDeactivationConfirmation.ts`
+- Removed manager-local deactivation warning callback and entries panel open/close callback boilerplate from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after entries/deactivation hook extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+- Extracted manager modal/drawer render surface (quick-assign, create/edit forms, entries drawer, import, stats lazy modal) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryManagerOverlays.tsx`
+- Removed large inline overlay JSX block from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after overlay extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Extracted manager-level dictionary table action/handler mapping into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerColumns.ts`
+- Removed inline action-to-column callback wiring from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after manager-column hook extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Extracted cross-hook orchestration/state composition from manager into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Reduced manager to a thin shell that renders list and overlays with composed props in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after manager-state composer extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+- Extracted list-section prop composition from manager-state composer into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerListSectionProps.ts`
+- Extracted overlay prop composition from manager-state composer into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerOverlayProps.ts`
+- Replaced inline prop object construction in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Regression revalidation completed after sub-composer split:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+- Extracted repeated modal/drawer focus-return behavior into reusable hook:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useRestoreFocusOnClose.ts`
+- Replaced manager-local focus restore `useEffect` blocks for create/edit/import/quick-assign/stats/entries with:
+  - `useRestoreFocusOnClose(...)` usage in `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Extracted chat-context navigation (store wiring + hash navigation + reference normalization) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryChatContextNavigation.ts`
+- Removed manager-local chat-context callback/store-selection boilerplate and consolidated list derivation flow in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after focus/chat-navigation extraction:
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.stage1.test.tsx`
+- Additional entry-flow safety regression completed after manager refactor consolidation:
+  - `Manager.entryStage2.test.tsx`
+- Extracted unsupported-capability messaging/navigation derivation into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesAvailability.ts`
+- Removed manager-local unsupported-state copy and health-navigation callback boilerplate from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after availability-hook extraction:
+  - `Manager.stage1.test.tsx`
+- Moved dictionary delete mutation + list invalidation ownership from manager into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryRowActions.ts`
+- Removed manager-local delete mutation block and simplified row-action hook wiring in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after row-action mutation consolidation:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Extracted manager modal trigger wrappers (focus capture + create/edit/import/quick-assign open/close callbacks) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerDialogs.ts`
+- Removed manager-local modal trigger callback boilerplate and centralized dialog wiring in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Regression revalidation completed after dialog-trigger hook extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+- Extracted quick-assign/import composition (including focus-return side effects) from manager-state composer into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerWorkflows.ts`
+- Removed manager-state inline quick-assign/import orchestration block and replaced it with composed workflow hook usage in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Regression revalidation completed after manager-workflow extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+- Extracted manager focus reference ownership into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerFocusRefs.ts`
+- Extracted consolidated focus restoration side-effects into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerFocusRestoration.ts`
+- Removed dispersed focus-ref declarations and close-restoration hook calls from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Regression revalidation completed after focus-ref/restoration extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+- Extracted manager-state validation/activation + column composition into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerValidationColumns.ts`
+- Removed duplicated validation-state and table-column orchestration blocks from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Regression revalidation completed after validation/columns composition extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+- Extracted shared manager environment wiring (translation/server status/query client/notifications/form-local state/focus refs/capabilities/navigation/mobile-mode) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerEnvironment.ts`
+- Removed duplicated manager-state setup boilerplate from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Regression revalidation completed after environment-hook extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+- Added additional optional-feature lazy-load boundaries in overlay composition for:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryQuickAssignModal.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryImportModal.tsx`
+  - via `React.lazy` orchestration in `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryManagerOverlays.tsx`
+- Preserved eager entry-drawer content rendering in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryManagerOverlays.tsx`
+  - to keep entry authoring/editing integration flows deterministic while still reducing optional overlay bundle footprint.
+- Regression revalidation completed after overlay lazy-load adjustments:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Reliability hardening for combined long-running dictionary regression batches:
+  - Converted eager entry-drawer assertions to awaited queries in:
+    - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.stage1.test.tsx`
+    - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.entryStage2.test.tsx`
+    - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.accessibilityStage2.test.tsx`
+- Revalidated cross-suite stability after assertion hardening:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+- Hardened lazy-modal import test helpers to await label/render availability before select interaction:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.importStage1.test.tsx`
+- Revalidated combined list/import/chat/accessibility/entry suites after import-helper hardening:
+  - `DictionaryFormModal.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+- Extracted dictionary workspace controls orchestration (deactivation guard, row actions, create/edit form management, dialog wrappers, availability derivation, validation columns) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerWorkspaceControls.ts`
+- Removed duplicated workspace-controls composition blocks from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Regression revalidation completed after workspace-controls extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted manager data-flow composition (entries-panel open/close + list query/derivation + quick-assign/import workflow composition) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerDataFlows.ts`
+- Removed duplicated data-flow orchestration blocks from:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Regression revalidation completed after data-flow extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted manager view prop composition (focus restoration + list-section prop assembly + overlay prop assembly) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerRenderProps.ts`
+- Reduced `useDictionariesManagerState` to high-level environment/data/workspace orchestration plus shortcut wiring in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Regression revalidation completed after render-props extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted list-surface render prop composition from manager render-props hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerListRenderProps.ts`
+- Extracted overlay-surface render prop composition from manager render-props hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerOverlayRenderProps.ts`
+- Simplified manager render-props orchestration in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerRenderProps.ts`
+- Regression revalidation completed after list/overlay render-prop split:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted availability + validation-column composition from workspace-controls hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerAvailabilityColumns.ts`
+- Simplified workspace-controls orchestration in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerWorkspaceControls.ts`
+- Regression revalidation completed after workspace availability/columns split:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted entry-manager orchestration/state composition from component body into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerState.ts`
+- Reduced `DictionaryEntryManager` to a render-focused shell that consumes composed state in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Reverted entry-drawer content to eager render (while retaining lazy boundaries for optional overlays) to eliminate test race conditions in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryManagerOverlays.tsx`
+- Regression revalidation completed after entry-manager state extraction and drawer reliability hardening:
+  - `Manager.stage1.test.tsx`
+  - `Manager.entryStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.entryStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted entry-manager environment/query/drafts/local-ui-state composition into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerContext.ts`
+- Simplified entry-manager orchestration hook to consume shared entry context in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerState.ts`
+- Regression revalidation completed after entry-manager context extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted entry authoring/edit/bulk/reorder/table action orchestration into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerActions.ts`
+- Simplified `useDictionaryEntryManagerState` to compose context + tools + actions in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerState.ts`
+- Regression revalidation completed after entry-manager actions extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted entry-manager keyboard shortcut binding side-effects into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerShortcutBindings.ts`
+- Extracted entry-manager public state shaping into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerPublicState.ts`
+- Simplified `useDictionaryEntryManagerState` to compose context + tools + actions + shortcut bindings in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerState.ts`
+- Regression revalidation completed after entry-manager shortcut/public-state extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted entry-manager row-selection/reorder + entry-table column orchestration into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerRowTableActions.ts`
+- Simplified entry-manager actions orchestration in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryEntryManagerActions.ts`
+- Regression revalidation completed after row/table-actions extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted dictionary create/edit form + dialog wrapper orchestration (including deactivation guard wiring) into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerFormDialogs.ts`
+- Simplified workspace-controls orchestration in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerWorkspaceControls.ts`
+- Regression revalidation completed after form/dialog extraction:
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.validationStage1.test.tsx`
+  - `Manager.entryStage2.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+- Extracted manager row-action orchestration composition from workspace-controls hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerRowActionControls.ts`
+- Simplified workspace-controls orchestration to consume dedicated row-action controls in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerWorkspaceControls.ts`
+- Additional Stage 3 integration timeout hardening for CI stability in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.chatIntegrationStage3.test.tsx`
+- Added dictionaries-only serial CI lane and script to eliminate file-parallel timeout contention:
+  - `.github/workflows/ui-dictionaries-tests.yml`
+  - `apps/packages/ui/package.json` (`test:dictionaries`)
+- Extracted dictionary export orchestration (JSON + Markdown guardrails) from row-actions hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryExportActions.ts`
+- Simplified row-action orchestration to consume dedicated export actions in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryRowActions.ts`
+- Extracted dictionary form payload normalization helpers from form-management hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/dictionaryFormPayloadUtils.ts`
+- Simplified create/edit form management orchestration to consume shared payload utils in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryFormManagement.ts`
+- Added focused utility coverage for payload normalization and starter-template payload stripping in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/dictionaryFormPayloadUtils.test.ts`
+- Extracted import preview parsing/summarization and conflict-rename preview shaping from import-flow hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/dictionaryImportPreviewUtils.ts`
+- Simplified import-flow orchestration to consume shared preview utilities in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryImportFlow.ts`
+- Added focused utility coverage for import preview building and rename payload transformations in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/dictionaryImportPreviewUtils.test.ts`
+- Extracted import execution and conflict-resolution orchestration (mutation/onSuccess/onError, confirm import, rename/replace resolution) from import-flow hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryImportExecution.ts`
+- Simplified import-flow orchestration to delegate execution/conflict state while retaining import UI state management in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryImportFlow.ts`
+- Extracted import form state + handlers (format/mode/source/file parsing/preview/reset) from import-flow hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryImportState.ts`
+- Reduced import-flow hook to modal-level composition of import-state + import-execution hooks in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryImportFlow.ts`
+- Extracted dictionary import mutation and preview-to-request payload execution from execution hook into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryImportMutation.ts`
+- Simplified import-execution hook to focus on conflict-resolution state/handlers and replacement orchestration in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryImportExecution.ts`
+## Stage 2: Power-User Baseline Features
+**Goal**: Improve first-run value and authoring speed for non-expert users.
+**Success Criteria**:
+- Starter templates are available from create flow (at least three curated templates).
+- Regex helper guidance is integrated near regex entry controls.
+- Dictionary metadata supports tags/categories with list filtering support.
+- Keyboard shortcuts are implemented for create, submit, and validate actions.
+**Tests**:
+- Component tests for template selection and prefill behavior.
+- Integration tests for tag create/filter and persistence.
+- Keyboard interaction tests for shortcut registration and scope safety.
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added starter-template definitions for first-run dictionary bootstrapping in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/dictionaryStarterTemplates.ts`
+- Exposed a new create-flow template selector ("Starter Template") in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryFormModal.tsx`
+- Wired create-submit flow to seed template entries after dictionary creation (when selected) in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryFormManagement.ts`
+- Added inline regex-helper guidance near add/edit regex controls in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryCreateForm.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryEditForm.tsx`
+- Added/updated regression coverage for template selection and seeding behavior:
+  - `DictionaryFormModal.test.tsx`
+  - `Manager.chatIntegrationStage3.test.tsx`
+- Added regression assertion coverage for regex-helper visibility in add-entry regex flow:
+  - `Manager.entryStage2.test.tsx`
+- Added dictionary metadata schema + persistence support for category/tags in:
+  - `tldw_Server_API/app/api/v1/schemas/chat_dictionary_schemas.py`
+  - `tldw_Server_API/app/core/Character_Chat/chat_dictionary.py`
+  - `tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py`
+- Added list toolbar metadata filtering (category + tags) and search expansion in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryListSection.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryListData.ts`
+  - `apps/packages/ui/src/components/Option/Dictionaries/listUtils.ts`
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerEnvironment.ts`
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerListSectionProps.ts`
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Added dictionary create/edit metadata fields (category/tags) and payload normalization in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryFormModal.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryFormManagement.ts`
+- Added keyboard shortcut handling for create/submit flows in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryManagerShortcuts.ts`
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionariesManagerState.ts`
+- Added keyboard shortcut handling for entry validation and entry form submit in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryEntryManager.tsx`
+- Added metadata-focused backend/frontend regression coverage:
+  - `tldw_Server_API/tests/Chat/unit/test_chat_dictionary_endpoints.py`
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/listUtils.test.ts`
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/DictionaryFormModal.test.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/DictionaryListSection.test.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.chatIntegrationStage3.test.tsx`
+- Added keyboard shortcut regression coverage:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.chatIntegrationStage3.test.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.validationStage1.test.tsx`
+
+## Stage 3: Versioning, Composition, and Sharing Roadmap
+**Goal**: Establish a durable foundation for advanced lifecycle and collaboration.
+**Success Criteria**:
+- Dictionary version history is stored and viewable with revert capability.
+- Composition model supports dictionary includes/inheritance semantics.
+- Share/community capability is documented as staged roadmap (or implemented MVP).
+- Access controls and trust boundaries are defined for shared artifacts.
+**Tests**:
+- Backend tests for version snapshot creation and revert correctness.
+- Integration tests for include-resolution order and cycle detection.
+- Contract tests for export/import behavior with version/composition metadata.
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added version-history schemas for listing/detail/revert workflows in:
+  - `tldw_Server_API/app/api/v1/schemas/chat_dictionary_schemas.py`
+- Added backend version-history persistence table + migration-safe ensure path in:
+  - `tldw_Server_API/app/core/Character_Chat/chat_dictionary.py`
+- Added dictionary snapshot capture helpers and wired snapshots across CRUD/import/clone/reorder/revert flows in:
+  - `tldw_Server_API/app/core/Character_Chat/chat_dictionary.py`
+- Added dictionary version-history endpoints (list, detail, revert) in:
+  - `tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py`
+- Added backward-compatible endpoint re-exports for dictionary version routes in:
+  - `tldw_Server_API/app/api/v1/endpoints/chat.py`
+- Added include/composition metadata support (`included_dictionary_ids`) across dictionary create/update/import/export/clone and snapshot normalization in:
+  - `tldw_Server_API/app/core/Character_Chat/chat_dictionary.py`
+  - `tldw_Server_API/app/api/v1/schemas/chat_dictionary_schemas.py`
+  - `tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py`
+- Added include graph validation and cycle detection with deterministic DFS processing order for composed dictionaries in:
+  - `tldw_Server_API/app/core/Character_Chat/chat_dictionary.py`
+- Added regression coverage for version history, include cycles, include-aware processing order, export/import include round-trip, and revert include restoration in:
+  - `tldw_Server_API/tests/Chat/unit/test_chat_dictionary_endpoints.py`
+- Added frontend API bindings for dictionary version history list/detail/revert in:
+  - `apps/packages/ui/src/services/tldw/TldwApiClient.ts`
+- Added dictionary row-action launch path and modal UI for browsing revisions + reverting selected revision in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryActionsCell.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/DictionaryVersionHistoryModal.tsx`
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryManagerOverlays.tsx`
+- Added regression coverage for version-history modal open/load/revert flow in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.chatIntegrationStage3.test.tsx`
+- Added sharing/community roadmap + trust-boundary and RBAC model definition in:
+  - `Docs/Design/CHAT_DICTIONARY_SHARING_COMPOSITION_ROADMAP_2026_02_18.md`
+- Verification completed with:
+  - `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Chat/unit/test_chat_dictionary_endpoints.py` (`28 passed`)
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Dictionaries/__tests__/Manager.chatIntegrationStage3.test.tsx --reporter=verbose` (`7 passed`)
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Dictionaries/__tests__ --reporter=dot` (`26 files / 97 tests passed`)
+
+## Stage 4: Documentation and Adoption Readiness
+**Goal**: Ensure advanced capabilities are understandable and operable.
+**Success Criteria**:
+- User docs explain template usage, tags, shortcuts, and regex helper examples.
+- Technical docs specify composition precedence and versioning retention policy.
+- Rollout checklist defines feature flags/migration guards for incremental release.
+- Success metrics are defined (template adoption, shortcut usage, revert events).
+**Tests**:
+- Documentation completeness checklist against implemented capabilities.
+- Release readiness checklist validation in staging environment.
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added end-user documentation for templates, category/tags organization, keyboard shortcuts, and regex helper examples in:
+  - `Docs/User_Guides/Chat_Dictionaries_Guide.md`
+- Documented composition precedence contract and version-history retention policy in:
+  - `Docs/Design/CHAT_DICTIONARY_SHARING_COMPOSITION_ROADMAP_2026_02_18.md`
+- Added rollout checklist with feature flags and migration guards in:
+  - `Docs/Design/CHAT_DICTIONARY_SHARING_COMPOSITION_ROADMAP_2026_02_18.md`
+- Defined adoption/reliability success metrics including template adoption, shortcut usage, and revert events in:
+  - `Docs/Design/CHAT_DICTIONARY_SHARING_COMPOSITION_ROADMAP_2026_02_18.md`
+
+## Dependencies
+
+- Versioning and composition may require schema migrations and compatibility adapters.
+- Shared/community features should follow existing AuthNZ and RBAC patterns.

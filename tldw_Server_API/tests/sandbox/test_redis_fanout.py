@@ -160,7 +160,7 @@ def test_health_includes_redis_ping(monkeypatch):
         from tldw_Server_API.app.core.Sandbox import streams as sb_streams
         sb_streams._HUB = sb_streams.RunStreamHub()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     import importlib
     if "tldw_Server_API.app.main" in importlib.sys.modules:

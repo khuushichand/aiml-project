@@ -11,6 +11,10 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { apiKeySchema, ApiKeyFormData, loginSchema, LoginFormData } from '@/lib/validations';
+import {
+  DEFAULT_POST_LOGIN_REDIRECT,
+  getRedirectTargetFromSearch,
+} from '@/lib/auth-navigation';
 
 type AuthMode = 'password' | 'apikey';
 
@@ -23,6 +27,7 @@ export default function LoginPage() {
   const [authMode, setAuthMode] = useState<AuthMode>(DEFAULT_AUTH_MODE);
   const [isLoading, setIsLoading] = useState(false);
   const [serverError, setServerError] = useState('');
+  const [redirectTarget, setRedirectTarget] = useState(DEFAULT_POST_LOGIN_REDIRECT);
 
   // Password login form
   const passwordForm = useForm<LoginFormData>({
@@ -48,7 +53,7 @@ export default function LoginPage() {
     try {
       const result = await loginWithPassword(data.username, data.password);
       if (result) {
-        router.push('/');
+        router.push(redirectTarget);
       } else {
         setServerError('Invalid username or password.');
       }
@@ -67,7 +72,7 @@ export default function LoginPage() {
     try {
       const result = await loginWithApiKey(data.apiKey);
       if (result) {
-        router.push('/');
+        router.push(redirectTarget);
       } else {
         setServerError('Invalid API key.');
       }
@@ -98,6 +103,7 @@ export default function LoginPage() {
     if (modeParam && APIKEY_MODE_VALUES.has(modeParam.toLowerCase())) {
       setAuthMode('apikey');
     }
+    setRedirectTarget(getRedirectTargetFromSearch(window.location.search));
   }, []);
 
   return (
@@ -199,8 +205,8 @@ export default function LoginPage() {
                   </Alert>
                 )}
 
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? 'Signing in...' : 'Sign In'}
+                <Button type="submit" className="w-full" disabled={isLoading} loading={isLoading} loadingText="Signing in...">
+                  Sign In
                 </Button>
               </form>
             </FormProvider>
@@ -245,8 +251,8 @@ export default function LoginPage() {
                   </Alert>
                 )}
 
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? 'Validating...' : 'Connect with API Key'}
+                <Button type="submit" className="w-full" disabled={isLoading} loading={isLoading} loadingText="Validating...">
+                  Connect with API Key
                 </Button>
               </form>
             </FormProvider>

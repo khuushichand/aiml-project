@@ -35,7 +35,7 @@ export function ReattachSourceModal({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
         <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-6 shadow-xl"
+          className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg bg-surface p-6 shadow-xl"
         >
           <div className="flex items-center justify-between">
             <Dialog.Title className="text-lg font-semibold">
@@ -47,7 +47,7 @@ export function ReattachSourceModal({
               </Button>
             </Dialog.Close>
           </div>
-          <Dialog.Description className="mt-2 text-sm text-gray-600">
+          <Dialog.Description className="mt-2 text-sm text-text-muted">
             Attach the original file or URL to enable commit actions.
           </Dialog.Description>
           <div className="mt-4 flex gap-2">
@@ -73,7 +73,7 @@ export function ReattachSourceModal({
                 label="Select file"
                 onChange={(e) => onFileChange(e.target.files?.[0] || null)}
               />
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-text-muted">
                 Files upload during commit. Large files (over {largeFileMb} MB) may take longer.
               </p>
             </div>
@@ -86,14 +86,14 @@ export function ReattachSourceModal({
                 value={url ?? ''}
                 onChange={(e) => onUrlChange(e.target.value)}
               />
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-text-muted">
                 Some sources may require cookies or authentication.
               </p>
             </div>
           )}
 
           {error && (
-            <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <div className="mt-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
               {error}
             </div>
           )}

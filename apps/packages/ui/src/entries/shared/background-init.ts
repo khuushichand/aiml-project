@@ -27,6 +27,13 @@ export type BackgroundInitResult = {
 
 export const MODEL_WARM_ALARM_NAME = "tldw:model-warm"
 const MODEL_WARM_INTERVAL_MINUTES = 60
+const OPENAPI_DRIFT_LAST_CHECK_KEY = "__tldwOpenApiDriftLastCheckV1"
+const OPENAPI_DRIFT_MIN_INTERVAL_MS = 15 * 60 * 1000
+
+type OpenApiDriftLastCheck = {
+  base: string
+  checkedAt: number
+}
 
 const getServerUrl = (cfg: any): string => {
   if (!cfg || typeof cfg !== "object") return ""
@@ -52,14 +59,50 @@ const scheduleModelWarmAlarm = async (enabled: boolean) => {
   }
 }
 
+const shouldSkipOpenApiDriftCheck = async (
+  storage: Storage,
+  base: string
+): Promise<boolean> => {
+  try {
+    const raw = await storage.get<OpenApiDriftLastCheck | null>(
+      OPENAPI_DRIFT_LAST_CHECK_KEY
+    )
+    if (!raw || typeof raw !== "object") return false
+
+    const previousBase = String((raw as any).base || "")
+    const checkedAt = Number((raw as any).checkedAt || 0)
+    if (!previousBase || previousBase !== base) return false
+    if (!Number.isFinite(checkedAt) || checkedAt <= 0) return false
+    return Date.now() - checkedAt < OPENAPI_DRIFT_MIN_INTERVAL_MS
+  } catch {
+    return false
+  }
+}
+
+const markOpenApiDriftCheck = async (
+  storage: Storage,
+  base: string
+): Promise<void> => {
+  try {
+    await storage.set(OPENAPI_DRIFT_LAST_CHECK_KEY, {
+      base,
+      checkedAt: Date.now()
+    } satisfies OpenApiDriftLastCheck)
+  } catch {
+    // best-effort cache write only
+  }
+}
+
 const checkOpenApiDrift = async (storage: Storage) => {
+  let timeout: ReturnType<typeof setTimeout> | null = null
   try {
     const cfg = await storage.get<any>("tldwConfig")
     const base = String(cfg?.serverUrl || "").replace(/\/$/, "")
     if (!base) return
+    if (await shouldSkipOpenApiDriftCheck(storage, base)) return
 
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 10000)
+    timeout = setTimeout(() => controller.abort(), 10000)
     const headers: Record<string, string> = {}
 
     if (cfg?.authMode === "single-user") {
@@ -74,7 +117,7 @@ const checkOpenApiDrift = async (storage: Storage) => {
       headers,
       signal: controller.signal
     })
-    clearTimeout(timeout)
+    await markOpenApiDriftCheck(storage, base)
 
     if (!res.ok) return
 
@@ -121,6 +164,10 @@ const checkOpenApiDrift = async (storage: Storage) => {
       "[tldw] OpenAPI check skipped:",
       (error as any)?.message || error
     )
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout)
+    }
   }
 }
 

@@ -15,13 +15,13 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         await reset_db_pool()
         reset_settings()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
 
         await ensure_authnz_schema_ready_once()
     except Exception:
-        pass
+        _ = None
 
 
 async def _create_admin_user_and_key(*, username: str, email: str) -> str:
@@ -69,7 +69,7 @@ async def test_rg_capabilities_endpoint_admin(monkeypatch, tmp_path):
         if getattr(app.state, "rg_governor", None) is None:
             app.state.rg_governor = MemoryResourceGovernor()
     except Exception:
-        pass
+        _ = None
 
     with TestClient(app) as c:
         headers = {"X-API-KEY": api_key}

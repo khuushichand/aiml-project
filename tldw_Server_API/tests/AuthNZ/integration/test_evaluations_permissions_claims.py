@@ -159,19 +159,32 @@ async def test_evaluations_list_allows_with_evals_read(monkeypatch):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_evaluations_admin_cleanup_respects_require_admin(monkeypatch):
+async def test_evaluations_admin_cleanup_respects_claim_first_admin_gate(monkeypatch):
     """
-    Sanity check that require_admin rejects a non-admin user when the EVALS_HEAVY_ADMIN_ONLY
-    guard is enabled. This exercises the gating helper directly rather than the full
-    HTTP stack, which also depends on AUTH_MODE and bootstrap state.
+    Sanity check that claim-first heavy-evals gating rejects non-admin principals
+    when EVALS_HEAVY_ADMIN_ONLY is enabled.
     """
     from fastapi import HTTPException
-    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import require_admin
+    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import (
+        enforce_heavy_evaluations_admin,
+    )
 
-    user = SimpleNamespace(is_admin=False)
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=["user"],
+        permissions=[],
+        is_admin=False,
+        org_ids=[],
+        team_ids=[],
+    )
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
     with pytest.raises(HTTPException) as excinfo:
-        require_admin(user)
+        enforce_heavy_evaluations_admin(principal)
     assert excinfo.value.status_code == 403
 
 

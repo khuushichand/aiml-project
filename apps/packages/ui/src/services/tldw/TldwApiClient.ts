@@ -4,7 +4,14 @@ import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
 import { isPlaceholderApiKey } from "@/utils/api-key"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import type { AllowedPath, PathOrUrl } from "@/services/tldw/openapi-guard"
+import { tldwRequest } from "@/services/tldw/request-core"
 import { appendPathQuery } from "@/services/tldw/path-utils"
+import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
+import { captureChatRequestDebugSnapshot } from "@/services/tldw/chat-request-debug"
+import {
+  DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
+  normalizeDefaultCharacterPreferenceId
+} from "@/utils/default-character-preference"
 import {
   buildContentPayload,
   mapApiDetailToUi,
@@ -14,10 +21,49 @@ import {
   type ApiDataTableJobStatus
 } from "@/services/tldw/data-tables"
 import type { DataTableColumn } from "@/types/data-tables"
+import type {
+  CreateReadingDigestScheduleRequest,
+  ImportSource,
+  ReadingDigestSchedule,
+  ReadingImportJobResponse,
+  ReadingImportJobStatus,
+  ReadingImportJobsListResponse,
+  UpdateReadingDigestScheduleRequest
+} from "@/types/collections"
 
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
 const CHAT_MESSAGES_CACHE_TTL_MS = 60 * 1000
+const RAG_QUERY_MAX_LENGTH = 20000
+
+const normalizeReadingDigestSchedule = (schedule: any): ReadingDigestSchedule => ({
+  ...schedule,
+  id: String(schedule?.id ?? ""),
+  name: schedule?.name ?? null,
+  cron: String(schedule?.cron ?? ""),
+  timezone: schedule?.timezone ?? null,
+  enabled: Boolean(schedule?.enabled),
+  require_online: Boolean(schedule?.require_online),
+  format: schedule?.format === "html" ? "html" : "md",
+  template_id:
+    typeof schedule?.template_id === "number" && Number.isFinite(schedule.template_id)
+      ? schedule.template_id
+      : null,
+  template_name: schedule?.template_name ?? null,
+  retention_days:
+    typeof schedule?.retention_days === "number" && Number.isFinite(schedule.retention_days)
+      ? schedule.retention_days
+      : null,
+  filters:
+    schedule?.filters && typeof schedule.filters === "object" && !Array.isArray(schedule.filters)
+      ? schedule.filters
+      : null,
+  last_run_at: schedule?.last_run_at ?? null,
+  next_run_at: schedule?.next_run_at ?? null,
+  last_status: schedule?.last_status ?? null,
+  created_at: schedule?.created_at ?? null,
+  updated_at: schedule?.updated_at ?? null
+})
 
 export interface TldwConfig {
   serverUrl: string
@@ -26,6 +72,17 @@ export interface TldwConfig {
   refreshToken?: string
   orgId?: number
   authMode: 'single-user' | 'multi-user'
+}
+
+export type UserProfileUpdateEntry = {
+  key: string
+  value: unknown | null
+}
+
+export type UserProfileUpdateResponse = {
+  profile_version?: string
+  applied: string[]
+  skipped: Array<{ key: string; message: string }>
 }
 
 export interface TldwModel {
@@ -135,6 +192,8 @@ export interface ServerChatSummary {
   title: string
   created_at: string
   updated_at?: string | null
+  last_active?: string | null
+  message_count?: number | null
   source?: string | null
   state?: ConversationState | string | null
   topic_label?: string | null
@@ -144,7 +203,44 @@ export interface ServerChatSummary {
   character_id?: string | number | null
   parent_conversation_id?: string | null
   root_id?: string | null
+  forked_from_message_id?: string | null
   version?: number | null
+}
+
+export type ConversationSharePermission = "view"
+
+export interface ConversationShareLinkSummary {
+  id: string
+  permission: ConversationSharePermission
+  created_at: string
+  expires_at: string
+  revoked_at?: string | null
+  share_path?: string | null
+  token?: string | null
+}
+
+export interface ConversationShareLinkCreateResponse {
+  share_id: string
+  permission: ConversationSharePermission
+  created_at: string
+  expires_at: string
+  token: string
+  share_path: string
+}
+
+export interface ConversationShareLinksListResponse {
+  conversation_id: string
+  links: ConversationShareLinkSummary[]
+}
+
+export interface ConversationShareLinkResolveResponse {
+  conversation_id: string
+  title?: string | null
+  source?: string | null
+  permission: ConversationSharePermission
+  shared_by_user_id: string
+  expires_at: string
+  messages: any[]
 }
 
 export type ConversationState =
@@ -295,6 +391,72 @@ export interface TldwEmbeddingProvidersConfig {
   }[]
 }
 
+export type CharacterListSortBy =
+  | "name"
+  | "creator"
+  | "created_at"
+  | "updated_at"
+  | "last_used_at"
+  | "conversation_count"
+
+export type CharacterListSortOrder = "asc" | "desc"
+
+export interface CharacterListQueryParams {
+  page?: number
+  page_size?: number
+  query?: string
+  tags?: string[]
+  match_all_tags?: boolean
+  creator?: string
+  has_conversations?: boolean
+  favorite_only?: boolean
+  created_from?: string
+  created_to?: string
+  updated_from?: string
+  updated_to?: string
+  sort_by?: CharacterListSortBy
+  sort_order?: CharacterListSortOrder
+  include_image_base64?: boolean
+  include_deleted?: boolean
+  deleted_only?: boolean
+}
+
+export interface CharacterListQueryResponse {
+  items: any[]
+  total: number
+  page: number
+  page_size: number
+  has_more: boolean
+}
+
+export interface CharacterVersionEntry {
+  change_id: number
+  version: number
+  operation: string
+  timestamp?: string | null
+  client_id?: string | null
+  payload: Record<string, unknown>
+}
+
+export interface CharacterVersionListResponse {
+  items: CharacterVersionEntry[]
+  total: number
+}
+
+export interface CharacterVersionDiffField {
+  field: string
+  old_value: unknown
+  new_value: unknown
+}
+
+export interface CharacterVersionDiffResponse {
+  character_id: number
+  from_entry: CharacterVersionEntry
+  to_entry: CharacterVersionEntry
+  changed_fields: CharacterVersionDiffField[]
+  changed_count: number
+}
+
 // Admin / RBAC types
 export interface AdminUserSummary {
   id: number
@@ -377,6 +539,25 @@ export interface MlxUnloadRequest {
   reason?: string
 }
 
+export interface MediaIngestionBudgetDiagnostics {
+  status: string
+  entity?: string | null
+  policy_id?: string | null
+  limits?: {
+    jobs_max_concurrent?: number | null
+    ingestion_bytes_daily_cap?: number | null
+  } | null
+  usage?: {
+    jobs_active?: number | null
+    jobs_remaining?: number | null
+    ingestion_bytes_daily_used?: number | null
+    ingestion_bytes_daily_remaining?: number | null
+  } | null
+  retry_after?: number | null
+  reason?: string | null
+  error?: string | null
+}
+
 export class TldwApiClient {
   private storage: Storage
   private config: TldwConfig | null = null
@@ -423,6 +604,22 @@ export class TldwApiClient {
 
   private getMissingApiKeyMessage(): string {
     return "tldw server API key is missing. Open Settings → tldw server and configure an API key before continuing."
+  }
+
+  private normalizeRagQuery(rawQuery: string): string {
+    const normalized =
+      typeof rawQuery === "string" ? rawQuery : String(rawQuery ?? "")
+    if (normalized.length <= RAG_QUERY_MAX_LENGTH) {
+      return normalized
+    }
+
+    // Keep client behavior resilient to backend schema limits.
+    const truncated = normalized.slice(0, RAG_QUERY_MAX_LENGTH).trimEnd()
+    console.warn(
+      `[tldw:rag] query exceeded ${RAG_QUERY_MAX_LENGTH} characters; truncating before request`,
+      { originalLength: normalized.length, truncatedLength: truncated.length }
+    )
+    return truncated
   }
 
   private getChatMessagesCacheKey(chatId: string, query: string): string {
@@ -634,6 +831,9 @@ export class TldwApiClient {
     await this.storage.set('tldwConfig', newConfig)
     this.config = newConfig
     await this.initialize().catch(() => null)
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("tldw:config-updated"))
+    }
   }
 
   async healthCheck(): Promise<boolean> {
@@ -651,6 +851,72 @@ export class TldwApiClient {
 
   async getServerInfo(): Promise<any> {
     return await bgRequest<any>({ path: '/', method: 'GET' })
+  }
+
+  async getCurrentUserProfile(params?: {
+    sections?: string | string[]
+    includeSources?: boolean
+    includeRaw?: boolean
+    maskSecrets?: boolean
+  }): Promise<any> {
+    const sections = Array.isArray(params?.sections)
+      ? params?.sections.join(",")
+      : params?.sections
+    const query = this.buildQuery({
+      sections,
+      include_sources: params?.includeSources,
+      include_raw: params?.includeRaw,
+      mask_secrets: params?.maskSecrets
+    })
+    return await this.request<any>({
+      path: `/api/v1/users/me/profile${query}`,
+      method: "GET"
+    })
+  }
+
+  async updateCurrentUserProfile(payload: {
+    updates: UserProfileUpdateEntry[]
+    profile_version?: string
+    dry_run?: boolean
+  }): Promise<UserProfileUpdateResponse> {
+    return await this.request<UserProfileUpdateResponse>({
+      path: "/api/v1/users/me/profile",
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getDefaultCharacterPreference(): Promise<string | null> {
+    const profile = await this.getCurrentUserProfile({
+      sections: "preferences"
+    })
+    const raw = profile?.preferences?.[DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY]
+    if (
+      raw &&
+      typeof raw === "object" &&
+      !Array.isArray(raw) &&
+      "value" in raw
+    ) {
+      return normalizeDefaultCharacterPreferenceId(
+        (raw as { value?: unknown }).value
+      )
+    }
+    return normalizeDefaultCharacterPreferenceId(raw)
+  }
+
+  async setDefaultCharacterPreference(
+    characterId: string | null
+  ): Promise<UserProfileUpdateResponse> {
+    const normalizedCharacterId = normalizeDefaultCharacterPreferenceId(characterId)
+    return await this.updateCurrentUserProfile({
+      updates: [
+        {
+          key: DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
+          value: normalizedCharacterId
+        }
+      ]
+    })
   }
 
   private buildQuery(params?: Record<string, any>): string {
@@ -762,8 +1028,10 @@ export class TldwApiClient {
     })
   }
 
-  async getModels(): Promise<TldwModel[]> {
-    const meta = await this.getModelsMetadata()
+  async getModels(options?: {
+    refreshOpenRouter?: boolean
+  }): Promise<TldwModel[]> {
+    const meta = await this.getModelsMetadata(options)
     const list =
       Array.isArray(meta) && meta.length > 0
         ? meta
@@ -771,75 +1039,106 @@ export class TldwApiClient {
           ? (meta as any).models
           : []
 
-    return list.map((m: any) => ({
-      id: String(m.id || m.model || m.name),
-      name: String(m.name || m.id || m.model),
-      provider: String(m.provider || "default"),
-      description: m.description,
-      capabilities: Array.isArray(m.capabilities)
-        ? m.capabilities
-        : Array.isArray(m.features)
-          ? m.features
-          : typeof m.capabilities === "object"
-            ? m.capabilities
-            : undefined,
-      context_length:
-        typeof m.context_length === "number"
-          ? m.context_length
-          : typeof m.context_window === "number"
-            ? m.context_window
-            : typeof m.contextLength === "number"
-              ? m.contextLength
+    const toNonEmptyString = (value: unknown): string | null => {
+      if (typeof value !== "string") return null
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : null
+    }
+    const isLikelyModelId = (value: string): boolean => {
+      if (/\s/.test(value)) return false
+      return /[/:._-]/.test(value)
+    }
+
+    return list.map((m: any) => {
+      const rawModel =
+        toNonEmptyString(m.model) || toNonEmptyString(m.model_id)
+      const rawName = toNonEmptyString(m.name)
+      const rawId = toNonEmptyString(m.id)
+      const canonicalModelId =
+        rawModel ||
+        (rawName && isLikelyModelId(rawName) ? rawName : null) ||
+        rawId ||
+        rawName ||
+        "unknown-model"
+      const displayName =
+        rawName && !isLikelyModelId(rawName) && rawName !== canonicalModelId
+          ? `${rawName} (${canonicalModelId})`
+          : canonicalModelId
+
+      return {
+        id: canonicalModelId,
+        name: displayName,
+        provider: String(m.provider || "default"),
+        description: m.description,
+        capabilities: Array.isArray(m.capabilities)
+          ? m.capabilities
+          : Array.isArray(m.features)
+            ? m.features
+            : typeof m.capabilities === "object"
+              ? m.capabilities
               : undefined,
-      vision: Boolean(
-        (m.capabilities && m.capabilities.vision) ?? m.vision
-      ),
-      function_calling: Boolean(
-        (m.capabilities &&
-          (m.capabilities.function_calling || m.capabilities.tool_use)) ??
-          m.function_calling
-      ),
-      json_output: Boolean(
-        (m.capabilities && m.capabilities.json_mode) ?? m.json_output
-      ),
-      type: typeof m.type === "string" ? m.type : undefined,
-      modalities:
-        m.modalities && typeof m.modalities === "object"
-          ? {
-              input: Array.isArray(m.modalities.input)
-                ? m.modalities.input.map((v: any) => String(v))
+        context_length:
+          typeof m.context_length === "number"
+            ? m.context_length
+            : typeof m.context_window === "number"
+              ? m.context_window
+              : typeof m.contextLength === "number"
+                ? m.contextLength
                 : undefined,
-              output: Array.isArray(m.modalities.output)
-                ? m.modalities.output.map((v: any) => String(v))
-                : undefined
-            }
-          : {
-              input: Array.isArray(m.input_modality)
-                ? m.input_modality.map((v: any) => String(v))
-                : Array.isArray(m.input_modalities)
-                  ? m.input_modalities.map((v: any) => String(v))
-                  : typeof m.input_modality === "string"
-                    ? [String(m.input_modality)]
-                    : undefined,
-              output: Array.isArray(m.output_modality)
-                ? m.output_modality.map((v: any) => String(v))
-                : Array.isArray(m.output_modalities)
-                  ? m.output_modalities.map((v: any) => String(v))
-                  : typeof m.output_modality === "string"
-                    ? [String(m.output_modality)]
-                    : undefined
-            }
-    }))
+        vision: Boolean(
+          (m.capabilities && m.capabilities.vision) ?? m.vision
+        ),
+        function_calling: Boolean(
+          (m.capabilities &&
+            (m.capabilities.function_calling || m.capabilities.tool_use)) ??
+            m.function_calling
+        ),
+        json_output: Boolean(
+          (m.capabilities && m.capabilities.json_mode) ?? m.json_output
+        ),
+        type: typeof m.type === "string" ? m.type : undefined,
+        modalities:
+          m.modalities && typeof m.modalities === "object"
+            ? {
+                input: Array.isArray(m.modalities.input)
+                  ? m.modalities.input.map((v: any) => String(v))
+                  : undefined,
+                output: Array.isArray(m.modalities.output)
+                  ? m.modalities.output.map((v: any) => String(v))
+                  : undefined
+              }
+            : {
+                input: Array.isArray(m.input_modality)
+                  ? m.input_modality.map((v: any) => String(v))
+                  : Array.isArray(m.input_modalities)
+                    ? m.input_modalities.map((v: any) => String(v))
+                    : typeof m.input_modality === "string"
+                      ? [String(m.input_modality)]
+                      : undefined,
+                output: Array.isArray(m.output_modality)
+                  ? m.output_modality.map((v: any) => String(v))
+                  : Array.isArray(m.output_modalities)
+                    ? m.output_modalities.map((v: any) => String(v))
+                    : typeof m.output_modality === "string"
+                      ? [String(m.output_modality)]
+                      : undefined
+              }
+      }
+    })
   }
 
   async getProviders(): Promise<any> {
     return await bgRequest<any>({ path: '/api/v1/llm/providers', method: 'GET' })
   }
 
-  async getModelsMetadata(): Promise<any> {
+  async getModelsMetadata(options?: {
+    refreshOpenRouter?: boolean
+  }): Promise<any> {
     // tldw_server returns either an array or an object
     // of the form { models: [...], total: N }.
-    return await bgRequest<any>({ path: '/api/v1/llm/models/metadata', method: 'GET' })
+    const query = options?.refreshOpenRouter ? "?refresh_openrouter=true" : ""
+    const path = appendPathQuery("/api/v1/llm/models/metadata", query)
+    return await bgRequest<any>({ path, method: 'GET' })
   }
 
   async getImageBackends(): Promise<ImageBackend[]> {
@@ -956,9 +1255,24 @@ export class TldwApiClient {
   }
 
   // Admin / diagnostics helpers
-  async getSystemStats(): Promise<any> {
+  async getSystemStats(options?: { timeoutMs?: number }): Promise<any> {
     return await bgRequest<any>({
       path: "/api/v1/admin/stats",
+      method: "GET",
+      timeoutMs: options?.timeoutMs
+    })
+  }
+
+  async getMediaIngestionBudgetDiagnostics(params: {
+    userId: number
+    policyId?: string
+  }): Promise<MediaIngestionBudgetDiagnostics> {
+    const query = this.buildQuery({
+      user_id: params.userId,
+      policy_id: params.policyId || "media.default"
+    })
+    return await bgRequest<MediaIngestionBudgetDiagnostics>({
+      path: `/api/v1/resource-governor/diag/media-budget${query}`,
       method: "GET"
     })
   }
@@ -1091,6 +1405,12 @@ export class TldwApiClient {
 
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
+    captureChatRequestDebugSnapshot({
+      endpoint: "/api/v1/chat/completions",
+      method: "POST",
+      mode: "non-stream",
+      body: request
+    })
     const res = await bgRequest<Response>({ path: '/api/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request })
     // bgRequest returns parsed data; for non-streaming chat we expect a JSON structure or text. To keep existing consumers happy, wrap as Response-like
     // For simplicity, return a minimal object with json() and text()
@@ -1100,6 +1420,12 @@ export class TldwApiClient {
 
   async *streamChatCompletion(request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {
     request.stream = true
+    captureChatRequestDebugSnapshot({
+      endpoint: "/api/v1/chat/completions",
+      method: "POST",
+      mode: "stream",
+      body: request
+    })
     for await (const line of bgStream({ path: '/api/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request, abortSignal: options?.signal, streamIdleTimeoutMs: options?.streamIdleTimeoutMs })) {
       try {
         const parsed = JSON.parse(line)
@@ -1116,18 +1442,26 @@ export class TldwApiClient {
   }
 
   async ragSearch(query: string, options?: any): Promise<any> {
-    const { timeoutMs, ...rest } = options || {}
+    const { timeoutMs, signal, ...rest } = options || {}
+    const normalizedQuery = this.normalizeRagQuery(query)
     try {
       return await bgRequest<any>({
         path: '/api/v1/rag/search',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: { query, ...rest },
-        timeoutMs
+        body: { query: normalizedQuery, ...rest },
+        timeoutMs,
+        abortSignal: signal
       })
     } catch (error) {
       const status = (error as { status?: number } | null)?.status
       const message = error instanceof Error ? error.message : String(error ?? '')
+      const aborted =
+        (error as { name?: string } | null)?.name === 'AbortError' ||
+        /abort|cancel/i.test(message)
+      if (aborted) {
+        throw error
+      }
       const shouldRetryWithoutRerank =
         status === 500 &&
         rest?.enable_reranking !== false &&
@@ -1148,19 +1482,43 @@ export class TldwApiClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: {
-          query,
+          query: normalizedQuery,
           ...rest,
           enable_reranking: false,
           reranking_strategy: 'none'
         },
-        timeoutMs
+        timeoutMs,
+        abortSignal: signal
       })
+    }
+  }
+
+  async *ragSearchStream(
+    query: string,
+    options?: any
+  ): AsyncGenerator<any, void, unknown> {
+    const { timeoutMs, signal, ...rest } = options || {}
+    const normalizedQuery = this.normalizeRagQuery(query)
+    for await (const line of bgStream({
+      path: '/api/v1/rag/search/stream',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { query: normalizedQuery, ...rest },
+      abortSignal: signal,
+      streamIdleTimeoutMs: timeoutMs
+    })) {
+      try {
+        yield JSON.parse(line)
+      } catch {
+        // Ignore malformed stream chunks
+      }
     }
   }
 
   async ragSimple(query: string, options?: any): Promise<any> {
     const { timeoutMs, ...rest } = options || {}
-    return await bgRequest<any>({ path: '/api/v1/rag/simple', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query, ...rest }, timeoutMs })
+    const normalizedQuery = this.normalizeRagQuery(query)
+    return await bgRequest<any>({ path: '/api/v1/rag/simple', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query: normalizedQuery, ...rest }, timeoutMs })
   }
 
   // Research / Web search
@@ -1178,8 +1536,81 @@ export class TldwApiClient {
 
   // Media Methods
   async addMedia(url: string, metadata?: any): Promise<any> {
-    const { timeoutMs, ...rest } = metadata || {}
-    return await bgRequest<any>({ path: '/api/v1/media/add', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { url, ...rest }, timeoutMs })
+    const sourceUrl = String(url || "").trim()
+    const {
+      timeoutMs,
+      media_type,
+      urls: rawUrls,
+      ...rest
+    } = metadata || {}
+    const urls = Array.isArray(rawUrls)
+      ? rawUrls
+          .map((item: unknown) => String(item || "").trim())
+          .filter((item: string) => item.length > 0)
+      : typeof rawUrls === "string" && rawUrls.trim()
+        ? [rawUrls.trim()]
+        : sourceUrl
+          ? [sourceUrl]
+          : []
+    if (urls.length === 0) {
+      throw new Error("addMedia requires a URL")
+    }
+    const resolvedMediaType =
+      typeof media_type === "string" && media_type.trim()
+        ? media_type.trim()
+        : inferUploadMediaTypeFromUrl(urls[0])
+
+    return await bgUpload<any>({
+      path: "/api/v1/media/add",
+      method: "POST",
+      fields: {
+        ...rest,
+        media_type: resolvedMediaType,
+        urls
+      },
+      timeoutMs
+    })
+  }
+
+  async submitMediaIngestJobs(fields?: Record<string, any>): Promise<any> {
+    const { timeoutMs, ...rest } = fields || {}
+    const normalized: Record<string, any> = {}
+    for (const [k, v] of Object.entries(rest || {})) {
+      if (typeof v === "undefined" || v === null) continue
+      normalized[k] = v
+    }
+    return await bgUpload<any>({
+      path: "/api/v1/media/ingest/jobs",
+      method: "POST",
+      fields: normalized,
+      timeoutMs
+    })
+  }
+
+  async getMediaIngestJob(
+    jobId: number | string,
+    options?: { timeoutMs?: number }
+  ): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/media/ingest/jobs/${encodeURIComponent(String(jobId))}`,
+      method: "GET",
+      timeoutMs: options?.timeoutMs
+    })
+  }
+
+  async listMediaIngestJobs(
+    params: {
+      batch_id: string
+      limit?: number
+    },
+    options?: { timeoutMs?: number }
+  ): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({
+      path: `/api/v1/media/ingest/jobs${query}`,
+      method: "GET",
+      timeoutMs: options?.timeoutMs
+    })
   }
 
   async addMediaForm(fields: Record<string, any>): Promise<any> {
@@ -1414,6 +1845,10 @@ export class TldwApiClient {
     options?: {
       enrich?: boolean
       referenceIndex?: number
+      offset?: number
+      limit?: number
+      parseCap?: number
+      search?: string
       signal?: AbortSignal
     }
   ): Promise<{
@@ -1433,12 +1868,32 @@ export class TldwApiClient {
       open_access_pdf?: string
     }>
     enrichment_source?: string
+    enriched_count?: number
+    enrichment_limited?: boolean
+    total_detected?: number
+    truncated?: boolean
+    offset?: number
+    limit?: number
+    returned_count?: number
+    total_available?: number
+    has_more?: boolean
+    next_offset?: number | null
   }> {
     const id = encodeURIComponent(String(mediaId))
     const enrich = options?.enrich !== false
     const referenceIndex =
       typeof options?.referenceIndex === "number"
         ? `&reference_index=${options.referenceIndex}`
+        : ""
+    const offset =
+      typeof options?.offset === "number" ? `&offset=${Math.max(0, options.offset)}` : ""
+    const limit =
+      typeof options?.limit === "number" ? `&limit=${Math.max(1, options.limit)}` : ""
+    const parseCap =
+      typeof options?.parseCap === "number" ? `&parse_cap=${Math.max(1, options.parseCap)}` : ""
+    const search =
+      typeof options?.search === "string" && options.search.trim().length > 0
+        ? `&search=${encodeURIComponent(options.search.trim())}`
         : ""
     return await bgRequest<{
       media_id: number
@@ -1457,8 +1912,18 @@ export class TldwApiClient {
         open_access_pdf?: string
       }>
       enrichment_source?: string
+      enriched_count?: number
+      enrichment_limited?: boolean
+      total_detected?: number
+      truncated?: boolean
+      offset?: number
+      limit?: number
+      returned_count?: number
+      total_available?: number
+      has_more?: boolean
+      next_offset?: number | null
     }>({
-      path: `/api/v1/media/${id}/references?enrich=${enrich}${referenceIndex}`,
+      path: `/api/v1/media/${id}/references?enrich=${enrich}${referenceIndex}${offset}${limit}${parseCap}${search}`,
       method: "GET",
       abortSignal: options?.signal,
       timeoutMs: 45000
@@ -1776,6 +2241,22 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: '/api/v1/notes/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { content, ...metadata } })
   }
 
+  async listNotes(
+    params?: {
+      page?: number
+      results_per_page?: number
+      include_keywords?: boolean
+    },
+    options?: { signal?: AbortSignal }
+  ): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({
+      path: `/api/v1/notes/${query}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+  }
+
   async searchNotes(query: string): Promise<any> {
     // OpenAPI uses trailing slash for this path
     return await bgRequest<any>({ path: '/api/v1/notes/search/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query } })
@@ -1851,14 +2332,340 @@ export class TldwApiClient {
   // Characters API
   async listCharacters(params?: Record<string, any>): Promise<any[]> {
     const query = this.buildQuery(params)
-    const base = await this.resolveApiPath("characters.list", [
-      "/api/v1/characters",
-      "/api/v1/characters/"
+    const listPathCandidates = ["/api/v1/characters", "/api/v1/characters/"] as const
+    const base = await this.resolveApiPath("characters.list", [...listPathCandidates])
+    const requestList = async (path: string) =>
+      await bgRequest<any[]>({
+        path: appendPathQuery(path as AllowedPath, query),
+        method: "GET"
+      })
+
+    try {
+      return await requestList(base)
+    } catch (error) {
+      const candidate = error as
+        | {
+            status?: unknown
+            response?: { status?: unknown }
+            message?: unknown
+            details?: unknown
+          }
+        | null
+        | undefined
+      const rawStatus = candidate?.status ?? candidate?.response?.status
+      const statusCodeFromNumberLike =
+        typeof rawStatus === "number"
+          ? rawStatus
+          : typeof rawStatus === "string"
+            ? Number(rawStatus)
+            : Number.NaN
+      const statusCodeFromMessage = String(candidate?.message || "").match(
+        /\b(301|302|307|308|404|405|422)\b/
+      )
+      const statusCode = Number.isFinite(statusCodeFromNumberLike)
+        ? statusCodeFromNumberLike
+        : statusCodeFromMessage
+          ? Number(statusCodeFromMessage[1])
+          : Number.NaN
+      const normalizedMessage = String(candidate?.message || "").toLowerCase()
+      const normalizedDetails = (() => {
+        const details = candidate?.details
+        if (typeof details === "string") return details.toLowerCase()
+        if (details == null) return ""
+        try {
+          return JSON.stringify(details).toLowerCase()
+        } catch {
+          return String(details).toLowerCase()
+        }
+      })()
+      const shouldTryAlternatePath =
+        statusCode === 301 ||
+        statusCode === 302 ||
+        statusCode === 307 ||
+        statusCode === 308 ||
+        statusCode === 404 ||
+        statusCode === 405 ||
+        statusCode === 422 ||
+        normalizedMessage.includes("path.character_id") ||
+        normalizedMessage.includes("unable to parse string as an integer") ||
+        normalizedMessage.includes('input":"query"') ||
+        normalizedMessage.includes("/api/v1/characters/query") ||
+        normalizedDetails.includes("path.character_id") ||
+        normalizedDetails.includes("unable to parse string as an integer") ||
+        normalizedDetails.includes('input":"query"') ||
+        normalizedDetails.includes("/api/v1/characters/query")
+
+      if (!shouldTryAlternatePath) {
+        throw error
+      }
+
+      const alternatePath = listPathCandidates.find((path) => path !== base)
+      if (!alternatePath) {
+        throw error
+      }
+
+      try {
+        return await requestList(alternatePath)
+      } catch {
+        throw error
+      }
+    }
+  }
+
+  async listCharactersPage(
+    params?: CharacterListQueryParams
+  ): Promise<CharacterListQueryResponse> {
+    const query = this.buildQuery(params as Record<string, any> | undefined)
+    const base = await this.resolveApiPath("characters.query", [
+      "/api/v1/characters/query",
+      "/api/v1/characters/query/"
     ])
-    return await bgRequest<any[]>({
-      path: appendPathQuery(base, query),
-      method: 'GET'
-    })
+    const requestedPage =
+      typeof params?.page === "number" && Number.isFinite(params.page)
+        ? Math.max(1, Math.floor(params.page))
+        : 1
+    const requestedPageSize =
+      typeof params?.page_size === "number" && Number.isFinite(params.page_size)
+        ? Math.max(1, Math.floor(params.page_size))
+        : 25
+
+    const buildLegacyListFallback = async (): Promise<CharacterListQueryResponse> => {
+      const offset = (requestedPage - 1) * requestedPageSize
+      const legacyResponse = await this.listCharacters({
+        limit: requestedPageSize,
+        offset,
+        query: params?.query,
+        tags: params?.tags,
+        match_all_tags: params?.match_all_tags,
+        creator: params?.creator,
+        has_conversations: params?.has_conversations,
+        favorite_only: params?.favorite_only,
+        include_deleted: params?.include_deleted,
+        deleted_only: params?.deleted_only,
+        sort_by: params?.sort_by,
+        sort_order: params?.sort_order,
+        include_image_base64: params?.include_image_base64
+      })
+      const legacyCandidate = legacyResponse as
+        | {
+            items?: unknown
+            total?: unknown
+            has_more?: unknown
+          }
+        | null
+        | undefined
+      const legacyItems = Array.isArray(legacyCandidate?.items)
+        ? legacyCandidate.items
+        : Array.isArray(legacyResponse)
+          ? legacyResponse
+          : []
+      const legacyHasMore =
+        typeof legacyCandidate?.has_more === "boolean"
+          ? legacyCandidate.has_more
+          : legacyItems.length >= requestedPageSize
+      const legacyTotal =
+        typeof legacyCandidate?.total === "number" &&
+        Number.isFinite(legacyCandidate.total)
+          ? legacyCandidate.total
+          : legacyHasMore
+            ? offset + legacyItems.length + 1
+            : offset + legacyItems.length
+
+      return {
+        items: legacyItems,
+        total: legacyTotal,
+        page: requestedPage,
+        page_size: requestedPageSize,
+        has_more: legacyHasMore
+      }
+    }
+
+    const isQueryRouteConflict = (error: unknown): boolean => {
+      const candidate = error as
+        | {
+            status?: unknown
+            response?: { status?: unknown }
+            message?: unknown
+            details?: unknown
+          }
+        | null
+        | undefined
+      const rawStatus = candidate?.status ?? candidate?.response?.status
+      const statusCodeFromNumberLike =
+        typeof rawStatus === "number"
+          ? rawStatus
+          : typeof rawStatus === "string"
+            ? Number(rawStatus)
+            : Number.NaN
+      const statusCodeFromMessage = String(candidate?.message || "").match(
+        /\b(404|405|422)\b/
+      )
+      const statusCode = Number.isFinite(statusCodeFromNumberLike)
+        ? statusCodeFromNumberLike
+        : statusCodeFromMessage
+          ? Number(statusCodeFromMessage[1])
+          : Number.NaN
+      const normalizedMessage = String(candidate?.message || "").toLowerCase()
+      const normalizedDetails = (() => {
+        const details = candidate?.details
+        if (typeof details === "string") return details.toLowerCase()
+        if (details == null) return ""
+        try {
+          return JSON.stringify(details).toLowerCase()
+        } catch {
+          return String(details).toLowerCase()
+        }
+      })()
+      return (
+        statusCode === 404 ||
+        statusCode === 405 ||
+        statusCode === 422 ||
+        normalizedMessage.includes("path.character_id") ||
+        normalizedMessage.includes("unable to parse string as an integer") ||
+        normalizedMessage.includes('input":"query"') ||
+        normalizedMessage.includes("/api/v1/characters/query") ||
+        normalizedDetails.includes("path.character_id") ||
+        normalizedDetails.includes("unable to parse string as an integer") ||
+        normalizedDetails.includes('input":"query"') ||
+        normalizedDetails.includes("/api/v1/characters/query")
+      )
+    }
+
+    let response: any
+    try {
+      response = await bgRequest<any>({
+        path: appendPathQuery(base, query),
+        method: "GET"
+      })
+    } catch (error) {
+      if (!isQueryRouteConflict(error)) {
+        throw error
+      }
+      return await buildLegacyListFallback()
+    }
+
+    if (Array.isArray(response)) {
+      return {
+        items: response,
+        total: response.length,
+        page: Number(params?.page || 1),
+        page_size: Number(params?.page_size || response.length || 25),
+        has_more: false
+      }
+    }
+
+    const responseLooksLikeRouteConflict =
+      response &&
+      typeof response === "object" &&
+      !Array.isArray(response) &&
+      !Array.isArray((response as any).items) &&
+      (() => {
+        try {
+          const payload = JSON.stringify(response).toLowerCase()
+          return (
+            payload.includes("path.character_id") ||
+            payload.includes("unable to parse string as an integer") ||
+            payload.includes('input":"query"') ||
+            payload.includes("/api/v1/characters/query")
+          )
+        } catch {
+          return false
+        }
+      })()
+
+    if (responseLooksLikeRouteConflict) {
+      return await buildLegacyListFallback()
+    }
+
+    const items = Array.isArray(response?.items) ? response.items : []
+    const total =
+      typeof response?.total === "number" && Number.isFinite(response.total)
+        ? response.total
+        : items.length
+    const page =
+      typeof response?.page === "number" && Number.isFinite(response.page)
+        ? response.page
+        : Number(params?.page || 1)
+    const pageSize =
+      typeof response?.page_size === "number" &&
+      Number.isFinite(response.page_size)
+        ? response.page_size
+        : Number(params?.page_size || 25)
+
+    return {
+      items,
+      total,
+      page,
+      page_size: pageSize,
+      has_more: Boolean(response?.has_more)
+    }
+  }
+
+  private getCharacterListIdentity(character: any, fallbackIndex: number): string {
+    const id = character?.id ?? character?.character_id ?? character?.characterId
+    if (id !== undefined && id !== null && String(id).trim().length > 0) {
+      return `id:${String(id)}`
+    }
+
+    const slug = character?.slug
+    if (typeof slug === "string" && slug.trim().length > 0) {
+      return `slug:${slug}`
+    }
+
+    const name = character?.name ?? character?.title
+    if (typeof name === "string" && name.trim().length > 0) {
+      return `name:${name}`
+    }
+
+    return `idx:${fallbackIndex}`
+  }
+
+  async listAllCharacters(options?: {
+    pageSize?: number
+    maxPages?: number
+  }): Promise<any[]> {
+    const requestedPageSize =
+      typeof options?.pageSize === "number" && Number.isFinite(options.pageSize)
+        ? Math.floor(options.pageSize)
+        : 1000
+    const requestedMaxPages =
+      typeof options?.maxPages === "number" && Number.isFinite(options.maxPages)
+        ? Math.floor(options.maxPages)
+        : 20
+    const pageSize = Math.min(1000, Math.max(1, requestedPageSize))
+    const maxPages = Math.min(200, Math.max(1, requestedMaxPages))
+
+    const characters: any[] = []
+    const seen = new Set<string>()
+
+    for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+      const offset = pageIndex * pageSize
+      const page = await this.listCharacters({ limit: pageSize, offset })
+      const pageList = Array.isArray(page) ? page : []
+      if (pageList.length === 0) {
+        break
+      }
+
+      let addedFromPage = 0
+      for (const character of pageList) {
+        const identity = this.getCharacterListIdentity(
+          character,
+          characters.length + addedFromPage
+        )
+        if (seen.has(identity)) continue
+        seen.add(identity)
+        characters.push(character)
+        addedFromPage += 1
+      }
+
+      // Stop if we reached the final partial page, or the backend ignored offset
+      // and returned only already-seen entries.
+      if (pageList.length < pageSize || addedFromPage === 0) {
+        break
+      }
+    }
+
+    return characters
   }
 
    async searchCharacters(query: string, params?: Record<string, any>): Promise<any[]> {
@@ -1891,11 +2698,14 @@ export class TldwApiClient {
     })
   }
 
-  async getCharacter(id: string | number): Promise<any> {
+  async getCharacter(id: string | number, options?: { forceRefresh?: boolean }): Promise<any> {
     const cid = String(id)
-    const cached = this.characterCache.get(cid)
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.value
+    const forceRefresh = options?.forceRefresh === true
+    if (!forceRefresh) {
+      const cached = this.characterCache.get(cid)
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.value
+      }
     }
     const inFlight = this.characterInFlight.get(cid)
     if (inFlight) return inFlight
@@ -1925,25 +2735,309 @@ export class TldwApiClient {
     return request
   }
 
-  async createCharacter(payload: Record<string, any>): Promise<any> {
-    const path = await this.resolveApiPath("characters.create", [
-      "/api/v1/characters",
-      "/api/v1/characters/"
-    ])
-    return await bgRequest<any>({
-      path,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: payload
+  async listCharacterVersions(
+    id: string | number,
+    options?: { limit?: number }
+  ): Promise<CharacterVersionListResponse> {
+    const cid = String(id)
+    const query = this.buildQuery({
+      limit: options?.limit ?? 50
     })
+    const template = await this.resolveApiPath("characters.versions", [
+      "/api/v1/characters/{id}/versions",
+      "/api/v1/characters/{id}/versions/"
+    ])
+    const path = appendPathQuery(this.fillPathParams(template, cid), query)
+    const response = await bgRequest<any>({
+      path,
+      method: "GET"
+    })
+
+    const items = Array.isArray(response?.items)
+      ? response.items
+      : Array.isArray(response)
+        ? response
+        : []
+    return {
+      items: items.map((item: any) => ({
+        change_id:
+          typeof item?.change_id === "number" && Number.isFinite(item.change_id)
+            ? item.change_id
+            : Number(item?.change_id || 0),
+        version:
+          typeof item?.version === "number" && Number.isFinite(item.version)
+            ? item.version
+            : Number(item?.version || 0),
+        operation: String(item?.operation || "update"),
+        timestamp: item?.timestamp ?? null,
+        client_id: item?.client_id ?? null,
+        payload:
+          item?.payload && typeof item.payload === "object" && !Array.isArray(item.payload)
+            ? item.payload
+            : {}
+      })),
+      total:
+        typeof response?.total === "number" && Number.isFinite(response.total)
+          ? response.total
+          : items.length
+    }
+  }
+
+  async diffCharacterVersions(
+    id: string | number,
+    fromVersion: number,
+    toVersion: number
+  ): Promise<CharacterVersionDiffResponse> {
+    const cid = String(id)
+    const query = this.buildQuery({
+      from_version: fromVersion,
+      to_version: toVersion
+    })
+    const template = await this.resolveApiPath("characters.versionDiff", [
+      "/api/v1/characters/{id}/versions/diff",
+      "/api/v1/characters/{id}/versions/diff/"
+    ])
+    const path = appendPathQuery(this.fillPathParams(template, cid), query)
+    const response = await bgRequest<any>({
+      path,
+      method: "GET"
+    })
+
+    const normalizeVersionEntry = (entry: any): CharacterVersionEntry => ({
+      change_id:
+        typeof entry?.change_id === "number" && Number.isFinite(entry.change_id)
+          ? entry.change_id
+          : Number(entry?.change_id || 0),
+      version:
+        typeof entry?.version === "number" && Number.isFinite(entry.version)
+          ? entry.version
+          : Number(entry?.version || 0),
+      operation: String(entry?.operation || "update"),
+      timestamp: entry?.timestamp ?? null,
+      client_id: entry?.client_id ?? null,
+      payload:
+        entry?.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload)
+          ? entry.payload
+          : {}
+    })
+
+    const changedFields = Array.isArray(response?.changed_fields)
+      ? response.changed_fields
+      : []
+
+    return {
+      character_id:
+        typeof response?.character_id === "number" && Number.isFinite(response.character_id)
+          ? response.character_id
+          : Number(response?.character_id || 0),
+      from_entry: normalizeVersionEntry(response?.from_entry),
+      to_entry: normalizeVersionEntry(response?.to_entry),
+      changed_fields: changedFields.map((field: any) => ({
+        field: String(field?.field || ""),
+        old_value: field?.old_value,
+        new_value: field?.new_value
+      })),
+      changed_count:
+        typeof response?.changed_count === "number" && Number.isFinite(response.changed_count)
+          ? response.changed_count
+          : changedFields.length
+    }
+  }
+
+  async revertCharacter(
+    id: string | number,
+    targetVersion: number
+  ): Promise<any> {
+    const cid = String(id)
+    const template = await this.resolveApiPath("characters.revert", [
+      "/api/v1/characters/{id}/revert",
+      "/api/v1/characters/{id}/revert/"
+    ])
+    const path = this.fillPathParams(template, cid)
+    const response = await bgRequest<any>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        target_version: targetVersion
+      }
+    })
+    this.characterCache.delete(cid)
+    return response
+  }
+
+  async createCharacter(payload: Record<string, any>): Promise<any> {
+    const pathCandidates = [
+      "/api/v1/characters/",
+      "/api/v1/characters"
+    ] as const
+    const path = await this.resolveApiPath("characters.create", [...pathCandidates])
+    await this.ensureConfigForRequest(true)
+
+    const requestCreate = async (requestPath: string) =>
+      await bgRequest<any>({
+        path: requestPath as AllowedPath,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload
+      })
+
+    const requestCreateDirect = async (
+      requestPath: string
+    ): Promise<any> => {
+      const storage = createSafeStorage()
+      const response = await tldwRequest(
+        {
+          path: requestPath as AllowedPath,
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload
+        },
+        {
+          getConfig: () =>
+            storage.get<TldwConfig>("tldwConfig").catch(() => null)
+        }
+      )
+      if (response?.ok) {
+        return response.data
+      }
+
+      const error = new Error(
+        typeof response?.error === "string" && response.error.trim().length > 0
+          ? response.error
+          : `Request failed: ${response?.status ?? 0}`
+      ) as Error & {
+        status?: number
+        details?: unknown
+      }
+      error.status = response?.status
+      if (typeof response?.data !== "undefined") {
+        error.details = response.data
+      }
+      throw error
+    }
+
+    const readErrorText = (error: unknown): string => {
+      const candidate = error as
+        | {
+            message?: unknown
+            details?: unknown
+          }
+        | null
+        | undefined
+      const message = String(candidate?.message || "")
+      const details = (() => {
+        const value = candidate?.details
+        if (typeof value === "string") return value
+        if (value == null) return ""
+        try {
+          return JSON.stringify(value)
+        } catch {
+          return String(value)
+        }
+      })()
+      return `${message} ${details}`.toLowerCase()
+    }
+
+    const getErrorStatusCode = (error: unknown): number | null => {
+      const candidate = error as
+        | {
+            status?: unknown
+            response?: { status?: unknown }
+            message?: unknown
+            details?: unknown
+          }
+        | null
+        | undefined
+      const rawStatus = candidate?.status ?? candidate?.response?.status
+      const statusCodeFromNumberLike =
+        typeof rawStatus === "number"
+          ? rawStatus
+          : typeof rawStatus === "string"
+            ? Number(rawStatus)
+            : Number.NaN
+      if (Number.isFinite(statusCodeFromNumberLike)) {
+        return statusCodeFromNumberLike
+      }
+      const statusFromText = readErrorText(error).match(
+        /\b(301|302|307|308|404|405|422)\b/
+      )
+      if (!statusFromText) return null
+      const parsedStatus = Number(statusFromText[1])
+      return Number.isFinite(parsedStatus) ? parsedStatus : null
+    }
+
+    const isExtensionTimeoutError = (error: unknown): boolean => {
+      return Boolean(
+        (error as { __tldwExtensionTimeout?: boolean } | null)
+          ?.__tldwExtensionTimeout
+      ) || readErrorText(error).includes("extension messaging timeout")
+    }
+
+    const shouldTryAlternatePath = (error: unknown): boolean => {
+      const statusCode = getErrorStatusCode(error)
+      if (
+        statusCode === 301 ||
+        statusCode === 302 ||
+        statusCode === 307 ||
+        statusCode === 308 ||
+        statusCode === 404 ||
+        statusCode === 405 ||
+        statusCode === 422
+      ) {
+        return true
+      }
+      const normalizedText = readErrorText(error)
+      return (
+        normalizedText.includes("path.character_id") ||
+        normalizedText.includes("unable to parse string as an integer") ||
+        normalizedText.includes("/api/v1/characters/query")
+      )
+    }
+
+    const runCreateWithTimeoutRetry = async (
+      requestPath: string
+    ): Promise<any> => {
+      try {
+        return await requestCreate(requestPath)
+      } catch (error) {
+        if (!isExtensionTimeoutError(error)) {
+          throw error
+        }
+        try {
+          return await requestCreate(requestPath)
+        } catch (retryError) {
+          if (!isExtensionTimeoutError(retryError)) {
+            throw retryError
+          }
+          return await requestCreateDirect(requestPath)
+        }
+      }
+    }
+
+    try {
+      return await runCreateWithTimeoutRetry(path)
+    } catch (error) {
+      if (!shouldTryAlternatePath(error)) {
+        throw error
+      }
+
+      const alternatePath = pathCandidates.find(
+        (candidate) => candidate !== path
+      )
+      if (!alternatePath) {
+        throw error
+      }
+
+      return await runCreateWithTimeoutRetry(alternatePath)
+    }
   }
 
   async importCharacterFile(
     file: File,
     options?: { allowImageOnly?: boolean }
   ): Promise<any> {
-    const buffer = await file.arrayBuffer()
-    const data = Array.from(new Uint8Array(buffer))
+    const data = await file.arrayBuffer()
     const name = file.name || "character-card"
     const type = file.type || "application/octet-stream"
     const path = await this.resolveApiPath("characters.import", [
@@ -2004,13 +3098,25 @@ export class TldwApiClient {
     return res
   }
 
-  async deleteCharacter(id: string | number): Promise<void> {
+  async deleteCharacter(id: string | number, expectedVersion?: number): Promise<void> {
     const cid = String(id)
+    let resolvedVersion = Number(expectedVersion)
+    if (!Number.isInteger(resolvedVersion) || resolvedVersion < 0) {
+      const character = await this.getCharacter(cid, { forceRefresh: true })
+      const fetchedVersion = Number(character?.version)
+      if (!Number.isInteger(fetchedVersion) || fetchedVersion < 0) {
+        throw new Error("Character delete failed: missing expected version")
+      }
+      resolvedVersion = fetchedVersion
+    }
     const template = await this.resolveApiPath("characters.delete", [
       "/api/v1/characters/{id}",
       "/api/v1/characters/{id}/"
     ])
-    const path = this.fillPathParams(template, cid)
+    const path = appendPathQuery(
+      this.fillPathParams(template, cid),
+      `?expected_version=${encodeURIComponent(String(resolvedVersion))}`
+    )
     await bgRequest<void>({ path, method: 'DELETE' })
     this.characterCache.delete(cid)
   }
@@ -2123,11 +3229,28 @@ export class TldwApiClient {
       input?.lastModified ??
       null
     const state = input?.state ?? input?.conversation_state ?? null
+    const last_active =
+      input?.last_active ??
+      input?.lastActive ??
+      updated_at ??
+      created_at ??
+      null
+    const messageCountRaw = input?.message_count ?? input?.messageCount
+    const message_count =
+      typeof messageCountRaw === "number"
+        ? messageCountRaw
+        : typeof messageCountRaw === "string" && messageCountRaw.trim().length > 0
+          ? Number.parseFloat(messageCountRaw)
+          : null
     return {
       id: String(input?.id ?? ""),
       title: String(input?.title || ""),
       created_at,
       updated_at: updated_at ? String(updated_at) : null,
+      last_active: last_active ? String(last_active) : null,
+      message_count: Number.isFinite(message_count as number)
+        ? (message_count as number)
+        : null,
       source: input?.source ?? null,
       state: state ? String(state) : null,
       topic_label: input?.topic_label ?? input?.topicLabel ?? null,
@@ -2143,6 +3266,8 @@ export class TldwApiClient {
       parent_conversation_id:
         input?.parent_conversation_id ?? input?.parentConversationId ?? null,
       root_id: input?.root_id ?? input?.rootId ?? null,
+      forked_from_message_id:
+        input?.forked_from_message_id ?? input?.forkedFromMessageId ?? null,
       version:
         typeof input?.version === "number"
           ? input.version
@@ -2242,6 +3367,19 @@ export class TldwApiClient {
     return this.normalizeChatSummary(res)
   }
 
+  async completeCharacterChatTurn(
+    chat_id: string | number,
+    payload: Record<string, any>
+  ): Promise<any> {
+    const cid = String(chat_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/complete-v2`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
   async getChat(chat_id: string | number): Promise<ServerChatSummary> {
     const cid = String(chat_id)
     const res = await bgRequest<any>({
@@ -2314,9 +3452,91 @@ export class TldwApiClient {
     return this.normalizeChatSummary(res)
   }
 
-  async deleteChat(chat_id: string | number): Promise<void> {
+  async deleteChat(
+    chat_id: string | number,
+    options?: {
+      expectedVersion?: number
+      hardDelete?: boolean
+    }
+  ): Promise<void> {
     const cid = String(chat_id)
-    await bgRequest<void>({ path: `/api/v1/chats/${cid}`, method: 'DELETE' })
+    const query = this.buildQuery({
+      ...(typeof options?.expectedVersion === "number"
+        ? { expected_version: options.expectedVersion }
+        : {}),
+      ...(options?.hardDelete ? { hard_delete: true } : {})
+    })
+    await bgRequest<void>({
+      path: `/api/v1/chats/${cid}${query}`,
+      method: "DELETE"
+    })
+  }
+
+  async restoreChat(
+    chat_id: string | number,
+    options?: { expectedVersion?: number }
+  ): Promise<ServerChatSummary> {
+    const cid = String(chat_id)
+    const query = this.buildQuery(
+      typeof options?.expectedVersion === "number"
+        ? { expected_version: options.expectedVersion }
+        : {}
+    )
+    const res = await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/restore${query}`,
+      method: "POST"
+    })
+    return this.normalizeChatSummary(res)
+  }
+
+  async createConversationShareLink(
+    chat_id: string | number,
+    payload?: {
+      permission?: ConversationSharePermission
+      ttl_seconds?: number
+      label?: string
+    }
+  ): Promise<ConversationShareLinkCreateResponse> {
+    const cid = String(chat_id)
+    return await bgRequest<ConversationShareLinkCreateResponse>({
+      path: `/api/v1/chat/conversations/${encodeURIComponent(cid)}/share-links`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload || {},
+    })
+  }
+
+  async listConversationShareLinks(
+    chat_id: string | number
+  ): Promise<ConversationShareLinksListResponse> {
+    const cid = String(chat_id)
+    return await bgRequest<ConversationShareLinksListResponse>({
+      path: `/api/v1/chat/conversations/${encodeURIComponent(cid)}/share-links`,
+      method: "GET",
+    })
+  }
+
+  async revokeConversationShareLink(
+    chat_id: string | number,
+    shareId: string
+  ): Promise<{ success: boolean; share_id: string }> {
+    const cid = encodeURIComponent(String(chat_id))
+    const sid = encodeURIComponent(String(shareId))
+    return await bgRequest<{ success: boolean; share_id: string }>({
+      path: `/api/v1/chat/conversations/${cid}/share-links/${sid}`,
+      method: "DELETE",
+    })
+  }
+
+  async resolveConversationShareLink(
+    token: string
+  ): Promise<ConversationShareLinkResolveResponse> {
+    const encodedToken = encodeURIComponent(token)
+    return await bgRequest<ConversationShareLinkResolveResponse>({
+      path: `/api/v1/chat/shared/conversations/${encodedToken}`,
+      method: "GET",
+      noAuth: true,
+    })
   }
 
   async listChatMessages(
@@ -2484,11 +3704,18 @@ export class TldwApiClient {
     payload?: Record<string, any>
   ): Promise<any> {
     const cid = String(chat_id)
+    const body = payload || {}
+    captureChatRequestDebugSnapshot({
+      endpoint: `/api/v1/chats/${cid}/completions`,
+      method: "POST",
+      mode: "non-stream",
+      body
+    })
     return await bgRequest<any>({
       path: `/api/v1/chats/${cid}/completions`,
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: payload || {}
+      body
     })
   }
 
@@ -2527,6 +3754,12 @@ export class TldwApiClient {
   ): AsyncGenerator<any> {
     const cid = String(chat_id)
     const body = { ...(payload || {}), stream: true }
+    captureChatRequestDebugSnapshot({
+      endpoint: `/api/v1/chats/${cid}/complete-v2`,
+      method: "POST",
+      mode: "stream",
+      body
+    })
     for await (const line of bgStream({
       path: `/api/v1/chats/${cid}/complete-v2`,
       method: "POST",
@@ -2553,12 +3786,26 @@ export class TldwApiClient {
 
   async completeChat(chat_id: string | number, payload?: Record<string, any>): Promise<any> {
     const cid = String(chat_id)
-    return await bgRequest<any>({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload || {} })
+    const body = payload || {}
+    captureChatRequestDebugSnapshot({
+      endpoint: `/api/v1/chats/${cid}/complete`,
+      method: "POST",
+      mode: "non-stream",
+      body
+    })
+    return await bgRequest<any>({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
   }
 
   async * streamCompleteChat(chat_id: string | number, payload?: Record<string, any>): AsyncGenerator<any> {
     const cid = String(chat_id)
-    for await (const line of bgStream({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload || {} })) {
+    const body = payload || {}
+    captureChatRequestDebugSnapshot({
+      endpoint: `/api/v1/chats/${cid}/complete`,
+      method: "POST",
+      mode: "stream",
+      body
+    })
+    for await (const line of bgStream({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body })) {
       try { yield JSON.parse(line) } catch {}
     }
   }
@@ -2636,13 +3883,34 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: `/api/v1/characters/world-books${qp}`, method: 'GET' })
   }
 
+  async getWorldBookRuntimeConfig(): Promise<{ max_recursive_depth: number }> {
+    return await bgRequest<{ max_recursive_depth: number }>({
+      path: "/api/v1/characters/world-books/config",
+      method: "GET"
+    })
+  }
+
   async createWorldBook(payload: Record<string, any>): Promise<any> {
     return await bgRequest<any>({ path: '/api/v1/characters/world-books', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async updateWorldBook(world_book_id: number | string, payload: Record<string, any>): Promise<any> {
+  async updateWorldBook(
+    world_book_id: number | string,
+    payload: Record<string, any>,
+    options?: { expectedVersion?: number }
+  ): Promise<any> {
     const wid = String(world_book_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+    const query = this.buildQuery(
+      typeof options?.expectedVersion === "number"
+        ? { expected_version: options.expectedVersion }
+        : {}
+    )
+    return await bgRequest<any>({
+      path: `/api/v1/characters/world-books/${wid}${query}`,
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    })
   }
 
   async deleteWorldBook(world_book_id: number | string): Promise<any> {
@@ -2680,9 +3948,25 @@ export class TldwApiClient {
     })
   }
 
-  async attachWorldBookToCharacter(character_id: number | string, world_book_id: number | string): Promise<any> {
+  async attachWorldBookToCharacter(
+    character_id: number | string,
+    world_book_id: number | string,
+    options?: { enabled?: boolean; priority?: number }
+  ): Promise<any> {
     const cid = String(character_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { world_book_id: Number(world_book_id) } })
+    const body: Record<string, any> = { world_book_id: Number(world_book_id) }
+    if (typeof options?.enabled === "boolean") {
+      body.enabled = options.enabled
+    }
+    if (typeof options?.priority === "number" && Number.isFinite(options.priority)) {
+      body.priority = options.priority
+    }
+    return await bgRequest<any>({
+      path: `/api/v1/characters/${cid}/world-books`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    })
   }
 
   async detachWorldBookFromCharacter(character_id: number | string, world_book_id: number | string): Promise<any> {
@@ -2731,9 +4015,12 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: '/api/v1/chat/dictionaries', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async listDictionaries(include_inactive?: boolean): Promise<any> {
-    const qp = include_inactive ? `?include_inactive=true` : ''
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries${qp}`, method: 'GET' })
+  async listDictionaries(include_inactive?: boolean, include_usage?: boolean): Promise<any> {
+    const params = new URLSearchParams()
+    if (include_inactive) params.set('include_inactive', 'true')
+    if (include_usage) params.set('include_usage', 'true')
+    const qp = params.toString()
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries${qp ? `?${qp}` : ''}`, method: 'GET' })
   }
 
   async getDictionary(dictionary_id: number | string): Promise<any> {
@@ -2773,9 +4060,37 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/entries/${eid}`, method: 'DELETE' })
   }
 
+  async bulkDictionaryEntries(payload: {
+    entry_ids: number[]
+    operation: "delete" | "activate" | "deactivate" | "group"
+    group_name?: string
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/dictionaries/entries/bulk",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async reorderDictionaryEntries(
+    dictionary_id: number | string,
+    payload: {
+      entry_ids: number[]
+    }
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/entries/reorder`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
   async exportDictionaryMarkdown(dictionary_id: number | string): Promise<any> {
     const id = String(dictionary_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/export/markdown`, method: 'GET' })
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/export`, method: 'GET' })
   }
 
   async exportDictionaryJSON(dictionary_id: number | string): Promise<any> {
@@ -2785,6 +4100,23 @@ export class TldwApiClient {
 
   async importDictionaryJSON(data: any, activate?: boolean): Promise<any> {
     return await bgRequest<any>({ path: '/api/v1/chat/dictionaries/import/json', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { data, activate: !!activate } })
+  }
+
+  async importDictionaryMarkdown(
+    name: string,
+    content: string,
+    activate?: boolean
+  ): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/dictionaries/import",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        name,
+        content,
+        activate: !!activate
+      }
+    })
   }
 
   async validateDictionary(payload: {
@@ -2805,6 +4137,7 @@ export class TldwApiClient {
     token_budget?: number
     dictionary_id?: number | string
     max_iterations?: number
+    chat_id?: string
   }): Promise<any> {
     return await bgRequest<any>({
       path: "/api/v1/chat/dictionaries/process",
@@ -2814,9 +4147,77 @@ export class TldwApiClient {
     })
   }
 
+  async dictionaryActivity(
+    dictionary_id: number | string,
+    params?: {
+      limit?: number
+      offset?: number
+    }
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    const query = new URLSearchParams()
+    if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+      query.set("limit", String(Math.max(1, Math.floor(params.limit))))
+    }
+    if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+      query.set("offset", String(Math.max(0, Math.floor(params.offset))))
+    }
+    const qp = query.toString()
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/activity${qp ? `?${qp}` : ""}`,
+      method: "GET"
+    })
+  }
+
   async dictionaryStatistics(dictionary_id: number | string): Promise<any> {
     const id = String(dictionary_id)
     return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/statistics`, method: 'GET' })
+  }
+
+  async dictionaryVersions(
+    dictionary_id: number | string,
+    params?: {
+      limit?: number
+      offset?: number
+    }
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    const query = new URLSearchParams()
+    if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+      query.set("limit", String(Math.max(1, Math.floor(params.limit))))
+    }
+    if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+      query.set("offset", String(Math.max(0, Math.floor(params.offset))))
+    }
+    const qp = query.toString()
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/versions${qp ? `?${qp}` : ""}`,
+      method: "GET"
+    })
+  }
+
+  async dictionaryVersionSnapshot(
+    dictionary_id: number | string,
+    revision: number | string
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    const rev = String(revision)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/versions/${rev}`,
+      method: "GET"
+    })
+  }
+
+  async revertDictionaryVersion(
+    dictionary_id: number | string,
+    revision: number | string
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    const rev = String(revision)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/versions/${rev}/revert`,
+      method: "POST"
+    })
   }
 
   // Chat Documents
@@ -3113,11 +4514,12 @@ export class TldwApiClient {
   }
 
   // STT Methods
-  async getTranscriptionModels(): Promise<any> {
+  async getTranscriptionModels(options?: { timeoutMs?: number }): Promise<any> {
     await this.ensureConfigForRequest(true)
     return await bgRequest<any>({
       path: "/api/v1/media/transcription-models",
-      method: "GET"
+      method: "GET",
+      timeoutMs: options?.timeoutMs
     })
   }
 
@@ -3178,6 +4580,7 @@ export class TldwApiClient {
       normalizationOptions?: Record<string, any>
       extraParams?: Record<string, any>
       stream?: boolean
+      signal?: AbortSignal
     }
   ): Promise<ArrayBuffer> {
     await this.ensureConfigForRequest(true)
@@ -3220,7 +4623,8 @@ export class TldwApiClient {
       method: "POST",
       headers: { Accept: accept },
       body,
-      responseType: "arrayBuffer"
+      responseType: "arrayBuffer",
+      abortSignal: options?.signal
     })
 
     const normalizeArrayBuffer = async (value: unknown): Promise<ArrayBuffer | null> => {
@@ -3771,6 +5175,117 @@ export class TldwApiClient {
   // Collections / Reading List API
   // ─────────────────────────────────────────────────────────────────────────────
 
+  async getItems(params?: {
+    page?: number
+    size?: number
+    q?: string
+    status_filter?: string | string[]
+    tags?: string[]
+    favorite?: boolean
+    domain?: string
+    date_from?: string
+    date_to?: string
+    origin?: string
+    job_id?: number
+    run_id?: number
+  }): Promise<any> {
+    const query = new URLSearchParams()
+    if (params?.page) query.set("page", String(params.page))
+    if (params?.size) query.set("size", String(params.size))
+    if (params?.q) query.set("q", params.q)
+    if (params?.status_filter) {
+      const statuses = Array.isArray(params.status_filter)
+        ? params.status_filter
+        : [params.status_filter]
+      statuses.filter(Boolean).forEach((status) => query.append("status_filter", status))
+    }
+    if (params?.tags?.length) params.tags.forEach((tag) => query.append("tags", tag))
+    if (params?.favorite !== undefined) query.set("favorite", String(params.favorite))
+    if (params?.domain) query.set("domain", params.domain)
+    if (params?.date_from) query.set("date_from", params.date_from)
+    if (params?.date_to) query.set("date_to", params.date_to)
+    if (params?.origin) query.set("origin", params.origin)
+    if (params?.job_id !== undefined) query.set("job_id", String(params.job_id))
+    if (params?.run_id !== undefined) query.set("run_id", String(params.run_id))
+    const qs = query.toString()
+    const path = `/api/v1/items${qs ? `?${qs}` : ""}` as const
+    const data = await bgRequest<any>({ path, method: "GET" })
+    const items = Array.isArray(data?.items)
+      ? data.items.map((item: any) => ({
+          ...item,
+          id: String(item?.id),
+          content_item_id:
+            item?.content_item_id === null || typeof item?.content_item_id === "undefined"
+              ? undefined
+              : String(item.content_item_id),
+          media_id:
+            item?.media_id === null || typeof item?.media_id === "undefined"
+              ? undefined
+              : String(item.media_id),
+          title: item?.title || item?.url || "Untitled",
+          tags: Array.isArray(item?.tags) ? item.tags : []
+        }))
+      : []
+    return {
+      ...data,
+      items,
+      total: data?.total ?? items.length,
+      page: data?.page ?? params?.page ?? 1,
+      size: data?.size ?? params?.size ?? items.length
+    }
+  }
+
+  async bulkUpdateItems(data: {
+    item_ids: string[]
+    action: "set_status" | "set_favorite" | "add_tags" | "remove_tags" | "replace_tags" | "delete"
+    status?: string
+    favorite?: boolean
+    tags?: string[]
+    hard?: boolean
+  }): Promise<{
+    total: number
+    succeeded: number
+    failed: number
+    results: Array<{ item_id: string; success: boolean; error?: string | null }>
+  }> {
+    const itemIds = (data.item_ids || [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .map((id) => Math.floor(id))
+    if (itemIds.length === 0) {
+      throw new Error("item_ids_required")
+    }
+
+    const response = await bgRequest<any>({
+      path: "/api/v1/items/bulk",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        item_ids: itemIds,
+        action: data.action,
+        status: data.status,
+        favorite: data.favorite,
+        tags: data.tags,
+        hard: data.hard
+      }
+    })
+
+    const results = Array.isArray(response?.results)
+      ? response.results.map((entry: any) => ({
+          item_id: String(entry?.item_id),
+          success: Boolean(entry?.success),
+          error: entry?.error ?? null
+        }))
+      : []
+
+    return {
+      total: response?.total ?? itemIds.length,
+      succeeded: response?.succeeded ?? results.filter((entry) => entry.success).length,
+      failed: response?.failed ?? results.filter((entry) => !entry.success).length,
+      results
+    }
+  }
+
   async getReadingList(params?: {
     page?: number
     size?: number
@@ -3876,6 +5391,57 @@ export class TldwApiClient {
     })
   }
 
+  async bulkUpdateReadingItems(data: {
+    item_ids: string[]
+    action: "set_status" | "set_favorite" | "add_tags" | "remove_tags" | "replace_tags" | "delete"
+    status?: string
+    favorite?: boolean
+    tags?: string[]
+    hard?: boolean
+  }): Promise<{
+    total: number
+    succeeded: number
+    failed: number
+    results: Array<{ item_id: string; success: boolean; error?: string | null }>
+  }> {
+    const itemIds = (data.item_ids || [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .map((id) => Math.floor(id))
+    if (itemIds.length === 0) {
+      throw new Error("item_ids_required")
+    }
+
+    const response = await bgRequest<any>({
+      path: "/api/v1/reading/items/bulk",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        item_ids: itemIds,
+        action: data.action,
+        status: data.status,
+        favorite: data.favorite,
+        tags: data.tags,
+        hard: data.hard
+      }
+    })
+
+    const results = Array.isArray(response?.results)
+      ? response.results.map((entry: any) => ({
+          item_id: String(entry?.item_id),
+          success: Boolean(entry?.success),
+          error: entry?.error ?? null
+        }))
+      : []
+
+    return {
+      total: response?.total ?? itemIds.length,
+      succeeded: response?.succeeded ?? results.filter((entry) => entry.success).length,
+      failed: response?.failed ?? results.filter((entry) => !entry.success).length,
+      results
+    }
+  }
+
   async deleteReadingItem(itemId: string, options?: { hard?: boolean }): Promise<void> {
     const query = new URLSearchParams()
     if (options?.hard !== undefined) query.set("hard", String(options.hard))
@@ -3935,6 +5501,7 @@ export class TldwApiClient {
           id: String(highlight.id),
           item_id: String(highlight.item_id),
           color: highlight.color || "yellow",
+          state: highlight.state || "active",
           anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
         }))
       : []
@@ -3970,6 +5537,7 @@ export class TldwApiClient {
       id: String(highlight.id),
       item_id: String(highlight.item_id),
       color: highlight.color || "yellow",
+      state: highlight.state || "active",
       anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
     }
   }
@@ -3990,6 +5558,7 @@ export class TldwApiClient {
       id: String(highlight.id),
       item_id: String(highlight.item_id),
       color: highlight.color || "yellow",
+      state: highlight.state || "active",
       anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
     }
   }
@@ -4165,13 +5734,13 @@ export class TldwApiClient {
 
   // Import/Export
   async importReadingList(data: {
-    source: string
+    source: ImportSource
     file: File
     merge_tags?: boolean
-  }): Promise<any> {
+  }): Promise<ReadingImportJobResponse> {
     const buffer = await data.file.arrayBuffer()
     const fileData = Array.from(new Uint8Array(buffer))
-    return await this.upload<any>({
+    return await this.upload<ReadingImportJobResponse>({
       path: "/api/v1/reading/import",
       method: "POST",
       fileFieldName: "file",
@@ -4187,6 +5756,26 @@ export class TldwApiClient {
     })
   }
 
+  async listReadingImportJobs(params?: {
+    status?: string
+    limit?: number
+    offset?: number
+  }): Promise<ReadingImportJobsListResponse> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<ReadingImportJobsListResponse>({
+      path: `/api/v1/reading/import/jobs${query}`,
+      method: "GET"
+    })
+  }
+
+  async getReadingImportJob(job_id: number | string): Promise<ReadingImportJobStatus> {
+    const id = String(job_id)
+    return await bgRequest<ReadingImportJobStatus>({
+      path: `/api/v1/reading/import/jobs/${id}`,
+      method: "GET"
+    })
+  }
+
   async exportReadingList(params: {
     format: string
     status?: string[]
@@ -4196,6 +5785,8 @@ export class TldwApiClient {
     domain?: string
     page?: number
     size?: number
+    include_highlights?: boolean
+    include_notes?: boolean
   }): Promise<{ blob: Blob; filename: string }> {
     const query = new URLSearchParams()
     query.set("format", params.format)
@@ -4206,6 +5797,12 @@ export class TldwApiClient {
     if (params?.domain) query.set("domain", params.domain)
     if (params?.page) query.set("page", String(params.page))
     if (params?.size) query.set("size", String(params.size))
+    if (params?.include_highlights !== undefined) {
+      query.set("include_highlights", String(params.include_highlights))
+    }
+    if (params?.include_notes !== undefined) {
+      query.set("include_notes", String(params.include_notes))
+    }
     const qs = query.toString()
     const path = `/api/v1/reading/export${qs ? `?${qs}` : ""}` as const
     const response = await bgRequest<any>({
@@ -4229,6 +5826,68 @@ export class TldwApiClient {
     return { blob, filename }
   }
 
+  async createReadingDigestSchedule(
+    data: CreateReadingDigestScheduleRequest
+  ): Promise<{ id: string }> {
+    const payload: Record<string, unknown> = { ...data }
+    if (!payload.format) payload.format = "md"
+    if (typeof payload.enabled !== "boolean") payload.enabled = true
+    if (typeof payload.require_online !== "boolean") payload.require_online = false
+    const response = await bgRequest<{ id: string }>({
+      path: "/api/v1/reading/digests/schedules",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+    return { id: String(response?.id ?? "") }
+  }
+
+  async listReadingDigestSchedules(params?: {
+    limit?: number
+    offset?: number
+  }): Promise<ReadingDigestSchedule[]> {
+    const query = new URLSearchParams()
+    if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+      query.set("limit", String(Math.max(1, Math.floor(params.limit))))
+    }
+    if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+      query.set("offset", String(Math.max(0, Math.floor(params.offset))))
+    }
+    const qs = query.toString()
+    const path = `/api/v1/reading/digests/schedules${qs ? `?${qs}` : ""}` as const
+    const rows = await bgRequest<any>({ path, method: "GET" })
+    if (!Array.isArray(rows)) {
+      return []
+    }
+    return rows.map((row) => normalizeReadingDigestSchedule(row))
+  }
+
+  async getReadingDigestSchedule(scheduleId: string): Promise<ReadingDigestSchedule> {
+    const path = `/api/v1/reading/digests/schedules/${encodeURIComponent(scheduleId)}` as const
+    const schedule = await bgRequest<any>({ path, method: "GET" })
+    return normalizeReadingDigestSchedule(schedule)
+  }
+
+  async updateReadingDigestSchedule(
+    scheduleId: string,
+    data: UpdateReadingDigestScheduleRequest
+  ): Promise<ReadingDigestSchedule> {
+    const path = `/api/v1/reading/digests/schedules/${encodeURIComponent(scheduleId)}` as const
+    const schedule = await bgRequest<any>({
+      path,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+    return normalizeReadingDigestSchedule(schedule)
+  }
+
+  async deleteReadingDigestSchedule(scheduleId: string): Promise<{ ok: boolean }> {
+    const path = `/api/v1/reading/digests/schedules/${encodeURIComponent(scheduleId)}` as const
+    const response = await bgRequest<{ ok?: boolean }>({ path, method: "DELETE" })
+    return { ok: Boolean(response?.ok) }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Slides / Presentations API
   // ─────────────────────────────────────────────────────────────────────────────
@@ -4241,6 +5900,7 @@ export class TldwApiClient {
       provider?: string
       model?: string
       temperature?: number
+      signal?: AbortSignal
     }
   ): Promise<{
     id: string
@@ -4266,7 +5926,8 @@ export class TldwApiClient {
     return await this.request<any>({
       path: "/api/v1/slides/generate/from-media",
       method: "POST",
-      body
+      body,
+      abortSignal: options?.signal
     })
   }
 
@@ -4349,6 +6010,144 @@ export class TldwApiClient {
     }
 
     return new Blob([data], { type: mimeType })
+  }
+
+  // Skills API
+  async listSkills(params?: {
+    limit?: number
+    offset?: number
+  }): Promise<any> {
+    const query = this.buildQuery(params)
+    const base = await this.resolveApiPath("skills.list", [
+      "/api/v1/skills",
+      "/api/v1/skills/"
+    ])
+    return await bgRequest<any>({
+      path: appendPathQuery(base, query),
+      method: "GET"
+    })
+  }
+
+  async getSkill(name: string): Promise<any> {
+    const base = await this.resolveApiPath("skills.get", [
+      "/api/v1/skills/{name}",
+      "/api/v1/skills/{name}/"
+    ])
+    const path = this.fillPathParams(base, name)
+    return await bgRequest<any>({ path, method: "GET" })
+  }
+
+  async createSkill(payload: {
+    name: string
+    content: string
+    supporting_files?: Record<string, string> | null
+  }): Promise<any> {
+    const base = await this.resolveApiPath("skills.create", [
+      "/api/v1/skills",
+      "/api/v1/skills/"
+    ])
+    return await bgRequest<any>({
+      path: base,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async updateSkill(
+    name: string,
+    payload: {
+      content?: string
+      supporting_files?: Record<string, string | null> | null
+    },
+    version?: number
+  ): Promise<any> {
+    const base = await this.resolveApiPath("skills.update", [
+      "/api/v1/skills/{name}",
+      "/api/v1/skills/{name}/"
+    ])
+    const path = this.fillPathParams(base, name)
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (version != null) {
+      headers["If-Match"] = String(version)
+    }
+    return await bgRequest<any>({ path, method: "PUT", headers, body: payload })
+  }
+
+  async deleteSkill(name: string): Promise<void> {
+    const base = await this.resolveApiPath("skills.delete", [
+      "/api/v1/skills/{name}",
+      "/api/v1/skills/{name}/"
+    ])
+    const path = this.fillPathParams(base, name)
+    await bgRequest<any>({ path, method: "DELETE" })
+  }
+
+  async importSkill(payload: {
+    name?: string
+    content: string
+    supporting_files?: Record<string, string> | null
+    overwrite?: boolean
+  }): Promise<any> {
+    const base = await this.resolveApiPath("skills.import", [
+      "/api/v1/skills/import",
+      "/api/v1/skills/import/"
+    ])
+    return await bgRequest<any>({
+      path: base,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async importSkillFile(file: File): Promise<any> {
+    const data = await file.arrayBuffer()
+    return await this.upload<any>({
+      path: "/api/v1/skills/import/file" as AllowedPath,
+      method: "POST",
+      fileFieldName: "file",
+      file: {
+        name: file.name || "skill-import",
+        type: file.type || "application/octet-stream",
+        data
+      }
+    })
+  }
+
+  async exportSkill(name: string): Promise<Blob> {
+    await this.ensureConfigForRequest(true)
+    const res = await bgRequest<ArrayBuffer, AllowedPath>({
+      path: `/api/v1/skills/${encodeURIComponent(name)}/export` as AllowedPath,
+      method: "GET",
+      responseType: "arrayBuffer"
+    })
+    return new Blob([res], { type: "application/zip" })
+  }
+
+  async executeSkill(
+    name: string,
+    args?: string
+  ): Promise<any> {
+    const base = await this.resolveApiPath("skills.execute", [
+      "/api/v1/skills/{name}/execute",
+      "/api/v1/skills/{name}/execute/"
+    ])
+    const path = this.fillPathParams(base, name)
+    return await bgRequest<any>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { args: args || "" }
+    })
+  }
+
+  async getSkillsContext(): Promise<any> {
+    const base = await this.resolveApiPath("skills.context", [
+      "/api/v1/skills/context",
+      "/api/v1/skills/context/"
+    ])
+    return await bgRequest<any>({ path: base, method: "GET" })
   }
 }
 

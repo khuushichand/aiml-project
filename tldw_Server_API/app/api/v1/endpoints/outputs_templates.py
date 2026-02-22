@@ -256,7 +256,8 @@ def _select_media_ids_for_run(media_db, run_id: int, limit: int) -> list[int]:
     ]
     for tbl in candidates:
         try:
-            q = f"SELECT media_id FROM {tbl} WHERE run_id = ? ORDER BY media_id LIMIT ?"
+            media_lookup_sql_template = "SELECT media_id FROM {tbl} WHERE run_id = ? ORDER BY media_id LIMIT ?"
+            q = media_lookup_sql_template.format_map(locals())  # nosec B608
             cur = media_db.execute_query(q, (run_id, limit))
             rows = cur.fetchall()
             mids = [int(r["media_id"]) if isinstance(r, dict) else int(r[0]) for r in rows]

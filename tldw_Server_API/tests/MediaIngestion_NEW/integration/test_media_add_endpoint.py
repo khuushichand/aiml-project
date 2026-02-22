@@ -7,6 +7,7 @@ Only external services like YouTube downloads are mocked.
 
 import json
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -97,6 +98,101 @@ class TestAddMediaEndpoint:
             media = populated_media_db.get_media_by_title("Test Document")
             assert media is not None
 
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.unit
+    def test_add_document_html_url_ingestion_success(
+        self,
+        test_client,
+        auth_headers,
+        media_database,
+        test_media_dir,
+        monkeypatch,
+    ):
+        """
+        Regression: /media/add should accept document URLs that resolve to HTML.
+
+        The URL in this test has no document suffix, so we enforce a downloader
+        guard that requires `.html` to be present in `allowed_extensions`.
+        """
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+        from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+        from tldw_Server_API.app.main import app
+
+        app.dependency_overrides[get_media_db_for_user] = lambda: media_database
+
+        fixture_html_path = Path(test_media_dir) / "mock_thread.html"
+        fixture_html_path.write_text(
+            "<html><head><title>Mock Thread</title></head><body><p>Test content.</p></body></html>",
+            encoding="utf-8",
+        )
+        captured: dict[str, object] = {}
+
+        async def _fake_download_url_async(**kwargs):
+            allowed_extensions = set(kwargs.get("allowed_extensions") or [])
+            captured["allowed_extensions"] = allowed_extensions
+            captured["check_extension"] = kwargs.get("check_extension")
+            if ".html" not in allowed_extensions:
+                raise ValueError("test guard: .html missing from document URL allowlist")
+            target_dir = Path(kwargs["target_dir"])
+            downloaded_path = target_dir / "mock_thread.html"
+            downloaded_path.write_text(
+                fixture_html_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            return downloaded_path
+
+        monkeypatch.setattr(
+            media_mod,
+            "_download_url_async",
+            _fake_download_url_async,
+            raising=True,
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Security.url_validation.assert_url_safe",
+            lambda _url: None,
+        )
+
+        try:
+            response = test_client.post(
+                "/api/v1/media/add",
+                data={
+                    "media_type": "document",
+                    "title": "HTML URL Regression",
+                    "urls": ["https://example.com/thread/108159576"],
+                    "perform_analysis": "false",
+                    "perform_chunking": "false",
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code in (
+                status.HTTP_200_OK,
+                status.HTTP_207_MULTI_STATUS,
+            ), response.text
+            payload = response.json()
+            results = payload.get("results") or []
+            assert results, payload
+
+            row = results[0]
+            assert row.get("status") in ("Success", "Warning"), {
+                "payload": payload,
+                "captured": captured,
+            }
+
+            allowlist = captured.get("allowed_extensions")
+            assert isinstance(allowlist, set)
+            assert {".html", ".htm", ".xml"}.issubset(allowlist)
+            assert captured.get("check_extension") is True
+
+            media_id = row.get("db_id")
+            assert media_id is not None, payload
+            persisted = media_database.get_media_by_id(int(media_id))
+            assert persisted is not None
+            assert persisted.get("title") == "HTML URL Regression"
+            assert isinstance(persisted.get("content"), str)
+            assert len(persisted["content"]) > 0
         finally:
             app.dependency_overrides.clear()
 
@@ -564,6 +660,22 @@ class TestFileUpload:
 class TestMediaAddGoldenEnvelopes:
     """Golden-sample envelope tests for /media/add."""
 
+    @staticmethod
+    def _normalize_golden_envelope(payload: dict) -> dict:
+        """
+        Normalize dynamic, additive response fields before strict golden compares.
+
+        `/media/add` now enriches successful rows with collections linkage
+        metadata. Golden envelope assertions in this file intentionally validate
+        the stable base contract, so we strip those additive fields.
+        """
+        normalized = deepcopy(payload)
+        for row in normalized.get("results", []):
+            if isinstance(row, dict):
+                row.pop("collections_item_id", None)
+                row.pop("collections_origin", None)
+        return normalized
+
     @pytest.mark.unit
     def test_add_video_golden_envelope(
         self,
@@ -593,7 +705,7 @@ class TestMediaAddGoldenEnvelopes:
                 )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json() == VIDEO_ADD_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == VIDEO_ADD_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_video_mixed_url_and_file_golden_envelope(
@@ -632,7 +744,7 @@ class TestMediaAddGoldenEnvelopes:
                 )
 
         assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.json() == VIDEO_MIXED_URL_FILE_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == VIDEO_MIXED_URL_FILE_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_document_golden_envelope(
@@ -664,7 +776,7 @@ class TestMediaAddGoldenEnvelopes:
                 )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json() == DOCUMENT_ADD_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == DOCUMENT_ADD_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_document_mixed_url_and_file_golden_envelope(
@@ -708,7 +820,7 @@ class TestMediaAddGoldenEnvelopes:
                 )
 
         assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.json() == DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_email_golden_envelope(
@@ -754,7 +866,7 @@ class TestMediaAddGoldenEnvelopes:
             )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json() == EMAIL_ADD_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == EMAIL_ADD_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_email_mixed_url_and_file_golden_envelope(
@@ -807,4 +919,4 @@ class TestMediaAddGoldenEnvelopes:
             )
 
         assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.json() == EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE

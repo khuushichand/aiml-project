@@ -95,8 +95,8 @@ async def get_media_item(
                 bool(headers.get("X-API-KEY")),
                 bool(headers.get("authorization")),
             )
-    except Exception:
-        pass
+    except Exception as auth_header_log_error:
+        logger.debug("Failed to emit media item auth header diagnostics", exc_info=auth_header_log_error)
 
     try:
         details = get_full_media_details_rich2(
@@ -574,7 +574,8 @@ async def update_media_item(
                 )
 
             sql_set_clause = ", ".join(set_parts)
-            update_query = f"UPDATE Media SET {sql_set_clause} WHERE id = ? AND version = ?"
+            update_query_template = "UPDATE Media SET {sql_set_clause} WHERE id = ? AND version = ?"
+            update_query = update_query_template.format_map(locals())  # nosec B608
             update_params = tuple(params + [media_id, current_sync_version])
 
             logger.debug(

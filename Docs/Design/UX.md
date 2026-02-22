@@ -117,6 +117,32 @@ https://medium.com/@alphadesignglobal/full-screen-headers-are-obsolete-these-lay
 https://uxdesign.cc/perplexity-and-notebooklm-dont-use-better-ai-they-use-better-intelligence-flow-architecture-ace59eeda531
 https://thefwa.com/awards/page/1/?filterDate=&filterAwards=1.0-2.0-3.0-7.0-top100.1&filterCaseTypes=1.1-5.1-6.1-11.1&filterEditorials=1.0-2.0-3.0-4.0-5.0-6.0-7.0-8.0-9.0-10.0
 https://sakofchit.github.io/system.css/
+https://medium.com/@ryan.almeida86/10-ux-secrets-behind-great-design-7487ac7dd5d2
+https://uxmastery.com/10-secrets-behind-a-stunning-user-experience/
+https://medium.com/design-bootcamp/10-ui-ux-mistakes-developers-make-without-realizing-it-c7e521beab3a
+https://medium.com/@punitweb/ux-ui-design-trends-for-2026-from-ai-to-xr-to-vibe-creation-7c5f8e35dc1d
+https://darasoba.com/ai-design/
+https://uxdesign.cc/error-messages-a-guide-for-people-who-never-write-28206fcbdf4d
+https://uxdesign.cc/brands-that-are-totally-killing-it-with-voice-tone-style-and-how-you-can-too-47792613b267
+https://designerup.co/blog/i-stopped-using-figma-for-70-of-my-product-design-work-and-my-output-doubled/
+https://luisladino.github.io/adversarial-design-thinking/
+https://github.com/mitsuhiko/agent-stuff/blob/main/skills/frontend-design/SKILL.md
+
+Dashboards
+    https://medium.com/@Santhanalakshmip/how-to-structure-your-dashboard-so-users-find-what-they-need-without-thinking-b971e9dc6c45
+    https://www.pencilandpaper.io/articles/ux-pattern-analysis-data-dashboards
+    https://www.linkedin.com/posts/vitalyfriedman_how-to-design-effective-dashboard-ux-activity-7292816975980875778-KETT
+    https://www.reddit.com/r/PowerBI/comments/w5liwk/how_to_plan_a_dashboard_for_a_company_who_doesnt/
+    https://www.datacamp.com/tutorial/dashboard-design-tutorial
+    https://observablehq.com/blog/seven-ways-design-better-dashboards
+    https://www.qualtrics.com/articles/customer-experience/action-centric-dashboard-design/
+    https://bricxlabs.com/blogs/tips-for-dashboard-design
+    https://www.uxpin.com/studio/blog/dashboard-design-principles/
+    https://julius.ai/articles/business-intelligence-dashboard-design-best-practices
+    https://liora.io/en/all-about-building-dashboard
+    https://www.uxstudioteam.com/ux-blog/dashboard-design
+    https://www.gooddata.com/blog/six-principles-of-dashboard-information-architecture/
+
 
 www.aiuxplayground.com/pattern/chat-artifact
 https://www.8bitcn.com/?ref=sidebar

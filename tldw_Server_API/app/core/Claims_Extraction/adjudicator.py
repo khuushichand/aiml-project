@@ -11,12 +11,29 @@ Inspired by FVA-RAG paper (arXiv:2512.07015).
 from __future__ import annotations
 
 import asyncio
-import json
-from dataclasses import dataclass, field
+import inspect
+from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+from tldw_Server_API.app.core.Claims_Extraction.analyze_types import (
+    AdjudicatorAnalyzeCallable,
+)
+from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+    Document,
+    VerificationStatus,
+)
+from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
+    ClaimsOutputParseError,
+    coerce_llm_response_text,
+    parse_claims_llm_output,
+    resolve_claims_response_format,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
+    resolve_claims_json_parse_mode,
+    resolve_claims_llm_config,
+)
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Claims_Extraction.claims_engine import (
@@ -24,28 +41,23 @@ if TYPE_CHECKING:
         ClaimVerification,
     )
 
-# Import types - matches existing pattern
-try:
-    from tldw_Server_API.app.core.RAG.rag_service.types import (
-        Document,
-        VerificationStatus,
-    )
-except ImportError:
-    from dataclasses import dataclass as _dc
-    from enum import Enum as _Enum
 
-    class VerificationStatus(_Enum):  # type: ignore
-        VERIFIED = "verified"
-        REFUTED = "refuted"
-        CONTESTED = "contested"
-        UNVERIFIED = "unverified"
-
-    @_dc
-    class Document:  # type: ignore
-        id: str
-        content: str
-        metadata: dict[str, Any] = field(default_factory=dict)
-        score: float = 0.0
+_ADJUDICATOR_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "stance": {
+            "type": "string",
+            "enum": ["SUPPORTS", "CONTRADICTS", "NEUTRAL"],
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+        },
+    },
+    "required": ["stance", "confidence"],
+    "additionalProperties": True,
+}
 
 
 class EvidenceStance(str, Enum):
@@ -108,7 +120,7 @@ class ClaimAdjudicator:
     def __init__(
         self,
         nli_pipeline: Any | None = None,
-        llm_analyze_fn: Callable | None = None,
+        llm_analyze_fn: AdjudicatorAnalyzeCallable | None = None,
         contested_threshold: float = 0.4,
         min_contradict_score: float = 0.1,
         strong_contradict_threshold: float = 0.7,
@@ -267,6 +279,60 @@ class ClaimAdjudicator:
             return EvidenceStance.CONTRADICTS, contradiction
         return EvidenceStance.NEUTRAL, neutral
 
+    async def _invoke_llm_assess_call(
+        self,
+        *,
+        prompt: str,
+        provider: str,
+        model_override: str | None,
+        temperature: float,
+        response_format: dict[str, Any] | None,
+    ) -> str:
+        fn = self.llm_analyze_fn
+        if fn is None:
+            return ""
+
+        system = (
+            "You classify whether evidence supports, contradicts, or is neutral toward a claim. "
+            "Return strict JSON only."
+        )
+        extended_error: Exception | None = None
+
+        try:
+            response = fn(
+                provider,
+                prompt,
+                prompt,
+                None,
+                system,
+                temperature,
+                streaming=False,
+                recursive_summarization=False,
+                chunked_summarization=False,
+                chunk_options=None,
+                model_override=model_override,
+                response_format=response_format,
+                max_tokens=300,
+            )
+            if inspect.isawaitable(response):
+                response = await response
+            text = coerce_llm_response_text(response)
+            if text.strip():
+                return text
+        except TypeError as exc:
+            # Most likely callback expects the simple prompt-only signature.
+            extended_error = exc
+
+        try:
+            fallback = fn(prompt)
+            if inspect.isawaitable(fallback):
+                fallback = await fallback
+            return coerce_llm_response_text(fallback)
+        except Exception as fallback_exc:
+            if extended_error is not None:
+                raise fallback_exc from extended_error
+            raise
+
     async def _llm_assess(
         self, claim: str, evidence: str
     ) -> tuple[EvidenceStance, float]:
@@ -281,19 +347,37 @@ Respond with a JSON object:
 {{"stance": "SUPPORTS" | "CONTRADICTS" | "NEUTRAL", "confidence": 0.0-1.0}}"""
 
         try:
-            response = await self.llm_analyze_fn(prompt)
+            provider, model_override, temperature = resolve_claims_llm_config(default_temperature=0.1)
+            parse_mode = resolve_claims_json_parse_mode(default_mode="lenient")
+            response_format = resolve_claims_response_format(
+                provider,
+                schema_name="claims_adjudication",
+                json_schema=_ADJUDICATOR_RESPONSE_SCHEMA,
+            )
+            response_text = await self._invoke_llm_assess_call(
+                prompt=prompt,
+                provider=provider,
+                model_override=model_override,
+                temperature=temperature,
+                response_format=response_format,
+            )
+            parsed = parse_claims_llm_output(
+                response_text,
+                parse_mode=parse_mode,
+                strip_think_tags=True,
+            )
+            if not isinstance(parsed, dict):
+                raise ClaimsOutputParseError(
+                    f"Expected object payload from adjudicator LLM output, got {type(parsed).__name__}."
+                )
 
-            # Try to parse JSON from response
-            # Handle cases where response is wrapped in markdown code blocks
-            response_text = response
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0]
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0]
-
-            result = json.loads(response_text.strip())
-            stance_str = result.get("stance", "NEUTRAL").upper()
-            confidence = float(result.get("confidence", 0.5))
+            stance_str = str(parsed.get("stance", "NEUTRAL")).strip().upper()
+            confidence_raw = parsed.get("confidence", 0.5)
+            try:
+                confidence = float(confidence_raw)
+            except (TypeError, ValueError):
+                confidence = 0.5
+            confidence = max(0.0, min(1.0, confidence))
 
             stance_map = {
                 "SUPPORTS": EvidenceStance.SUPPORTS,
@@ -396,7 +480,7 @@ Respond with a JSON object:
 
 def create_adjudicator(
     nli_pipeline: Any | None = None,
-    llm_analyze_fn: Callable | None = None,
+    llm_analyze_fn: AdjudicatorAnalyzeCallable | None = None,
     contested_threshold: float = 0.4,
 ) -> ClaimAdjudicator:
     """

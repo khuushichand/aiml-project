@@ -1,5 +1,6 @@
 import os
 import pytest
+import uuid
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.config import settings
@@ -36,7 +37,8 @@ def test_upsert_content_token_limit_and_allowlist():
 
         with _client() as client:
             # Create a vector store
-            vs = client.post("/api/v1/vector_stores", json={"name": "PolStore", "dimensions": 8}).json()
+            store_name = f"PolStore_{uuid.uuid4().hex[:8]}"
+            vs = client.post("/api/v1/vector_stores", json={"name": store_name, "dimensions": 8}).json()
             store_id = vs["id"]
 
             # Upsert with content that exceeds 2 tokens
@@ -67,7 +69,8 @@ def test_query_token_limit_and_allowlist():
         settings["EMBEDDING_MODEL_MAX_TOKENS"] = {"openai:text-embedding-3-small": 1}
 
         with _client() as client:
-            vs = client.post("/api/v1/vector_stores", json={"name": "PolStore2", "dimensions": 8}).json()
+            store_name = f"PolStore2_{uuid.uuid4().hex[:8]}"
+            vs = client.post("/api/v1/vector_stores", json={"name": store_name, "dimensions": 8}).json()
             store_id = vs["id"]
 
             # Query with long text should be rejected by token limit

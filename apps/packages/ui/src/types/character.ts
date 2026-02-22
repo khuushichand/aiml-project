@@ -3,11 +3,14 @@ export interface Character {
   name: string
   avatar_url?: string | null
   image_base64?: string | null
+  image_mime?: string | null
   system_prompt?: string | null
   greeting?: string | null
   slug?: string | null
   title?: string | null
   tags?: string[]
+  extensions?: Record<string, unknown> | null
+  version?: number
 }
 
 export type CharacterApiResponse = Omit<Character, "id"> & {

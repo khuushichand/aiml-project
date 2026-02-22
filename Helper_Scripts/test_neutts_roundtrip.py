@@ -110,8 +110,8 @@ def main():
     finally:
         try:
             asyncio.run(http_client.shutdown_http_client())
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"HTTP client shutdown warning: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

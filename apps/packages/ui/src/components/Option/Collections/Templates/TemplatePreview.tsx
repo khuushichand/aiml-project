@@ -348,14 +348,14 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
     >
       {step === "select" ? (
         <div className="space-y-4">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="text-sm text-text-muted">
             {t(
               "collections:templates.selectItemsHint",
               "Select articles to include in the preview:"
             )}
           </p>
 
-          <div className="flex items-center justify-between border-b border-zinc-200 pb-2 dark:border-zinc-700">
+          <div className="flex items-center justify-between border-b border-border pb-2">
             <Checkbox
               checked={
                 selectedItemsForGeneration.length === previewItems.length &&
@@ -370,7 +370,7 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
               {t("collections:templates.selectAll", "Select All")}
             </Checkbox>
             <div className="flex items-center gap-2">
-              <span className="text-sm text-zinc-600 dark:text-zinc-400" aria-live="polite" aria-atomic="true">
+              <span className="text-sm text-text-muted" aria-live="polite" aria-atomic="true">
                 {t("collections:templates.selectedCount", "{{count}} selected", {
                   count: selectedItemsForGeneration.length
                 })}
@@ -405,7 +405,7 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
               ref={listRef as React.RefObject<HTMLDivElement>}
               tabIndex={0}
               onKeyDownCapture={handleKeyDown}
-              className="max-h-80 overflow-auto focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset rounded-md"
+              className="max-h-80 overflow-auto focus:outline-none focus:ring-2 focus:ring-primary focus:ring-inset rounded-md"
               role="listbox"
               aria-label={t("collections:templates.itemList", "Reading list items")}
             >
@@ -417,8 +417,8 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
                   return (
                     <List.Item
                       data-selection-item
-                      className={`cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
-                        isFocused ? "ring-2 ring-inset ring-blue-400" : ""
+                      className={`cursor-pointer hover:bg-surface ${
+                        isFocused ? "ring-2 ring-inset ring-primary" : ""
                       }`}
                       onClick={(e) => handleItemClick(index, e)}
                       role="option"
@@ -443,7 +443,7 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
                         <div className="ml-2">
                           <div className="font-medium">{item.title}</div>
                           {item.domain && (
-                            <div className="text-xs text-zinc-500">{item.domain}</div>
+                            <div className="text-xs text-text-muted">{item.domain}</div>
                           )}
                         </div>
                       </Checkbox>
@@ -472,7 +472,7 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
               dangerouslySetInnerHTML={{ __html: previewContent }}
             />
           ) : (
-            <pre className="whitespace-pre-wrap rounded-lg bg-zinc-50 p-4 text-sm dark:bg-zinc-900">
+            <pre className="whitespace-pre-wrap rounded-lg bg-bg p-4 text-sm">
               {previewContent}
             </pre>
           )}
@@ -480,18 +480,18 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
       ) : step === "output" ? (
         <div className="space-y-4">
           {generatedFormat === "mp3" ? (
-            <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
+            <div className="rounded-lg border border-border p-4">
               {generatedDownloadUrl ? (
                 <audio controls src={generatedDownloadUrl} className="w-full" />
               ) : (
-                <p className="text-sm text-zinc-500">
+                <p className="text-sm text-text-muted">
                   {t("collections:templates.audioUnavailable", "Audio output unavailable")}
                 </p>
               )}
             </div>
           ) : generatedContent ? (
             <div className="max-h-[60vh] overflow-auto">
-              <pre className="whitespace-pre-wrap rounded-lg bg-zinc-50 p-4 text-sm dark:bg-zinc-900">
+              <pre className="whitespace-pre-wrap rounded-lg bg-bg p-4 text-sm">
                 {generatedContent}
               </pre>
             </div>

@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "データテーブル・スタジオ"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "ベータ機能"
+  },
+  "betaDescription": {
+    "message": "データテーブルは現在ベータ版です。テーブル生成にはバックエンドのサポートが必要です。"
+  },
+  "offline": {
+    "message": "サーバーがオフラインです。データテーブルを利用するには接続してください。"
+  },
+  "tabs_tables": {
+    "message": "マイテーブル"
+  },
+  "tabs_create": {
+    "message": "テーブルを作成"
+  },
+  "wizard_sources": {
+    "message": "ソースを選択"
+  },
+  "wizard_sourcesDesc": {
+    "message": "データソースを選択"
+  },
+  "wizard_prompt": {
+    "message": "テーブルを説明"
+  },
+  "wizard_promptDesc": {
+    "message": "プロンプトを入力"
+  },
+  "wizard_preview": {
+    "message": "プレビュー"
+  },
+  "wizard_previewDesc": {
+    "message": "生成されたテーブルを確認"
+  },
+  "wizard_save": {
+    "message": "保存"
+  },
+  "wizard_saveDesc": {
+    "message": "ライブラリに保存"
+  },
+  "wizard_tip": {
+    "message": "ヒント"
+  },
+  "wizard_tipText": {
+    "message": "チャットやドキュメントを選択するか、ナレッジベースを検索して構造化データを抽出します。ソースが具体的であるほど結果が良くなります。"
+  },
+  "wizard_reset": {
+    "message": "やり直す"
+  },
+  "sourceTypes_chat": {
+    "message": "チャット"
+  },
+  "sourceTypes_document": {
+    "message": "ドキュメント"
+  },
+  "sourceTypes_rag": {
+    "message": "RAG 検索"
+  },
+  "selectedSources": {
+    "message": "選択したソース"
+  },
+  "sourcesSelected": {
+    "message": "選択済みソース"
+  },
+  "searchPlaceholder": {
+    "message": "検索…"
+  },
+  "ragPlaceholder": {
+    "message": "ナレッジベースの検索クエリを入力…"
+  },
+  "ragQuerySnippet": {
+    "message": "ナレッジベース検索クエリ"
+  },
+  "ragAdded": {
+    "message": "RAG クエリをソースとして追加しました"
+  },
+  "ragTip": {
+    "message": "ナレッジベースで関連コンテンツを見つけるための検索クエリを入力してください。各クエリは個別のソースとして追加されます。"
+  },
+  "fetchError": {
+    "message": "項目の読み込みに失敗しました"
+  },
+  "promptLabel": {
+    "message": "作成したいテーブルを説明してください"
+  },
+  "promptPlaceholder": {
+    "message": "例: 議論された主要トピックを比較するテーブルを作成し、トピック、要点、関連度スコアの列を含めてください…"
+  },
+  "examplePrompts": {
+    "message": "プロンプト例:"
+  },
+  "advancedOptions": {
+    "message": "詳細オプション"
+  },
+  "columnHints": {
+    "message": "列のヒント（任意）"
+  },
+  "columnHintsDesc": {
+    "message": "列名と型の候補を示して LLM をガイドします。指定しない場合は、プロンプトから列が推定されます。"
+  },
+  "newColumnName": {
+    "message": "列名"
+  },
+  "modelSelection": {
+    "message": "モデル"
+  },
+  "selectModel": {
+    "message": "既定のモデルを使用"
+  },
+  "maxRows": {
+    "message": "最大行数"
+  },
+  "maxRowsHint": {
+    "message": "（1〜1000）"
+  },
+  "generating": {
+    "message": "ソースからテーブルを生成しています…"
+  },
+  "generatingNote": {
+    "message": "データ量によっては時間がかかる場合があります。"
+  },
+  "generateSuccess": {
+    "message": "テーブルを生成しました！"
+  },
+  "generationFailed": {
+    "message": "生成に失敗しました"
+  },
+  "tryAgain": {
+    "message": "再試行"
+  },
+  "warnings": {
+    "message": "警告"
+  },
+  "noPreview": {
+    "message": "プレビューがありません"
+  },
+  "promptUsed": {
+    "message": "使用したプロンプト:"
+  },
+  "previewModified": {
+    "message": "プレビューを変更しました。変更内容はテーブルに保存されます。"
+  },
+  "addRow": {
+    "message": "行を追加"
+  },
+  "addColumn": {
+    "message": "列を追加"
+  },
+  "deleteRow": {
+    "message": "行を削除しますか？"
+  },
+  "deleteRowConfirm": {
+    "message": "この操作は取り消せません。"
+  },
+  "deleteColumn": {
+    "message": "列を削除しますか？"
+  },
+  "deleteColumnConfirm": {
+    "message": "この操作は取り消せません。"
+  },
+  "discard": {
+    "message": "破棄"
+  },
+  "changesDiscarded": {
+    "message": "変更を破棄しました"
+  },
+  "save": {
+    "message": "保存"
+  },
+  "saveSuccess": {
+    "message": "変更を保存しました！"
+  },
+  "unsavedChanges": {
+    "message": "未保存の変更があります"
+  },
+  "columnAdded": {
+    "message": "列「{{name}}」を追加しました"
+  },
+  "rows": {
+    "message": "行"
+  },
+  "columnsLabel": {
+    "message": "列"
+  },
+  "showingRows": {
+    "message": "{{total}} 行を表示"
+  },
+  "tableSummary": {
+    "message": "テーブル概要"
+  },
+  "tableName": {
+    "message": "テーブル名"
+  },
+  "tableNamePlaceholder": {
+    "message": "テーブル名を入力"
+  },
+  "tableDescription": {
+    "message": "説明（任意）"
+  },
+  "tableDescPlaceholder": {
+    "message": "このテーブルの内容を覚えておくための説明を追加してください"
+  },
+  "saveToLibrary": {
+    "message": "ライブラリに保存"
+  },
+  "tableSaved": {
+    "message": "テーブルを保存しました！"
+  },
+  "tableSavedDesc": {
+    "message": "テーブルをライブラリに保存しました。いつでも閲覧・エクスポートできます。"
+  },
+  "viewTables": {
+    "message": "マイテーブルを表示"
+  },
+  "createAnother": {
+    "message": "別のテーブルを作成"
+  },
+  "orExport": {
+    "message": "または直接エクスポート:"
+  },
+  "export": {
+    "message": "エクスポート"
+  },
+  "exportCSV": {
+    "message": "CSVとしてエクスポート"
+  },
+  "exportExcel": {
+    "message": "Excelとしてエクスポート"
+  },
+  "exportJSON": {
+    "message": "JSONとしてエクスポート"
+  },
+  "exportSuccess": {
+    "message": "テーブルを{{format}}としてエクスポートしました"
+  },
+  "noTableToSave": {
+    "message": "保存するテーブルがありません"
+  },
+  "goBackToGenerate": {
+    "message": "前のステップに戻って、まずテーブルを生成してください。"
+  },
+  "tableDetails": {
+    "message": "テーブル詳細"
+  },
+  "tableNotFound": {
+    "message": "テーブルが見つかりません"
+  },
+  "noData": {
+    "message": "データがありません"
+  },
+  "data": {
+    "message": "データ"
+  },
+  "editMode": {
+    "message": "編集モード"
+  },
+  "editModeActive": {
+    "message": "セルをクリックして編集"
+  },
+  "regenerate": {
+    "message": "再生成"
+  },
+  "regenerateSuccess": {
+    "message": "テーブルを再生成しました！"
+  },
+  "model": {
+    "message": "モデル"
+  },
+  "prompt": {
+    "message": "生成プロンプト"
+  },
+  "sources": {
+    "message": "ソース"
+  },
+  "created": {
+    "message": "作成日"
+  },
+  "updated": {
+    "message": "更新日"
+  },
+  "noTables": {
+    "message": "まだテーブルがありません。最初のテーブルを作成しましょう！"
+  },
+  "noSearchResults": {
+    "message": "検索条件に一致するテーブルはありません"
+  },
+  "totalTables": {
+    "message": "{{total}} 件のテーブル"
+  },
+  "view": {
+    "message": "表示"
+  },
+  "delete": {
+    "message": "削除"
+  },
+  "deleteConfirmTitle": {
+    "message": "テーブルを削除"
+  },
+  "deleteConfirmMessage": {
+    "message": "このテーブルを削除しますか？この操作は取り消せません。"
+  },
+  "noTable": {
+    "message": "テーブルデータがありません"
+  },
+  "add": {
+    "message": "追加"
+  },
+  "columnName": {
+    "message": "列名"
+  },
+  "columnNamePlaceholder": {
+    "message": "例: 価格、ステータス、日付"
+  },
+  "columnNameRequired": {
+    "message": "列名を入力してください"
+  },
+  "columnNameTooLong": {
+    "message": "列名は50文字以内にしてください"
+  },
+  "columnNameExists": {
+    "message": "同じ名前の列がすでに存在します"
+  },
+  "columnType": {
+    "message": "列の種類"
+  },
+  "columnTypeRequired": {
+    "message": "列の種類を選択してください"
+  },
+  "columnDescription": {
+    "message": "説明（任意）"
+  },
+  "columnDescriptionHint": {
+    "message": "この列に含まれる内容の簡単な説明"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "例: 商品の価格（USD）"
+  },
+  "discardUnsavedChanges": {
+    "message": "未保存の変更があります。閉じてもよろしいですか？"
+  },
+  "createFromChat": {
+    "message": "チャットからテーブルを作成"
+  },
+  "saveFromArtifact": {
+    "message": "データテーブルに保存"
+  },
+  "importedPrompt": {
+    "message": "テーブル成果物からインポート"
+  },
+  "columns_name": {
+    "message": "名前"
+  },
+  "columns_rows": {
+    "message": "行数"
+  },
+  "columns_columns": {
+    "message": "列数"
+  },
+  "columns_sources": {
+    "message": "ソース"
+  },
+  "columns_created": {
+    "message": "作成日"
+  },
+  "columns_actions": {
+    "message": "操作"
+  },
+  "dataTablesDescription": {
+    "message": "自然言語のプロンプトで、チャット、ドキュメント、ナレッジベースから構造化テーブルを生成します。"
+  },
+  "descriptionLabel": {
+    "message": "説明"
+  }
+}

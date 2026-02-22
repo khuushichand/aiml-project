@@ -10,12 +10,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/components/ui/toast';
 import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput } from '@/components/ui/form';
-import { Plus, Users, Building2, Search } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { Plus, Users, Building2, Search, Pencil, Trash2 } from 'lucide-react';
 import { Team, Organization } from '@/types';
 import { api } from '@/lib/api-client';
 import Link from 'next/link';
@@ -42,7 +45,15 @@ function TeamsPageContent() {
   } = useUrlPagination();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [loading, setLoading] = useState(true);
-  const { warning, error: showError } = useToast();
+  const [creatingTeam, setCreatingTeam] = useState(false);
+  const [editingTeam, setEditingTeam] = useState<Team | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editError, setEditError] = useState('');
+  const [updatingTeam, setUpdatingTeam] = useState(false);
+  const [deletingTeamId, setDeletingTeamId] = useState<number | null>(null);
+  const confirm = useConfirm();
+  const { warning, success, error: showError } = useToast();
   const teamForm = useForm<TeamFormData>({
     resolver: zodResolver(teamSchema),
     defaultValues: {
@@ -105,17 +116,21 @@ function TeamsPageContent() {
       return;
     }
     try {
+      setCreatingTeam(true);
       await api.createTeam(selectedOrgId, {
         name: data.name,
         description: data.description?.trim() || undefined,
       });
       setShowCreateForm(false);
       teamForm.reset();
-      loadTeams(selectedOrgId);
+      success('Team created', `${data.name} has been created.`);
+      await loadTeams(selectedOrgId);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again.';
       console.error('Failed to create team:', error);
       showError('Failed to create team', message);
+    } finally {
+      setCreatingTeam(false);
     }
   });
 
@@ -127,6 +142,82 @@ function TeamsPageContent() {
   const handleOrgChange = (value: string) => {
     setSelectedOrgId(value || undefined);
     resetPagination();
+  };
+
+  const openEditTeamDialog = (team: Team) => {
+    setEditingTeam(team);
+    setEditName(team.name || '');
+    setEditDescription(team.description || '');
+    setEditError('');
+  };
+
+  const closeEditTeamDialog = () => {
+    setEditingTeam(null);
+    setEditName('');
+    setEditDescription('');
+    setEditError('');
+  };
+
+  const handleUpdateTeam = async () => {
+    if (!editingTeam || !selectedOrgId) return;
+    const trimmedName = editName.trim();
+    if (!trimmedName) {
+      setEditError('Team name is required.');
+      return;
+    }
+
+    try {
+      setUpdatingTeam(true);
+      setEditError('');
+      await api.updateTeam(selectedOrgId, String(editingTeam.id), {
+        name: trimmedName,
+        description: editDescription.trim() || undefined,
+      });
+      success('Team updated', `${trimmedName} has been updated.`);
+      closeEditTeamDialog();
+      await loadTeams(selectedOrgId);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to update team.';
+      setEditError(message);
+      showError('Update team failed', message);
+    } finally {
+      setUpdatingTeam(false);
+    }
+  };
+
+  const handleDeleteTeam = async (team: Team) => {
+    if (!selectedOrgId) return;
+    try {
+      const membersResponse = await api.getTeamMembers(String(team.id));
+      const memberCount = Array.isArray(membersResponse)
+        ? membersResponse.length
+        : (
+          membersResponse &&
+          typeof membersResponse === 'object' &&
+          'items' in (membersResponse as Record<string, unknown>) &&
+          Array.isArray((membersResponse as { items?: unknown[] }).items)
+        )
+          ? ((membersResponse as { items: unknown[] }).items).length
+          : 0;
+      const confirmed = await confirm({
+        title: 'Delete team',
+        message: `Delete "${team.name}"? This team has ${memberCount} member${memberCount === 1 ? '' : 's'}.`,
+        confirmText: 'Delete',
+        variant: 'danger',
+        icon: 'delete',
+      });
+      if (!confirmed) return;
+
+      setDeletingTeamId(team.id);
+      await api.deleteTeam(selectedOrgId, String(team.id));
+      success('Team deleted', `${team.name} has been deleted.`);
+      await loadTeams(selectedOrgId);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to delete team.';
+      showError('Delete team failed', message);
+    } finally {
+      setDeletingTeamId((current) => (current === team.id ? null : current));
+    }
   };
 
   const filteredTeams = teams.filter((team) => {
@@ -171,12 +262,20 @@ function TeamsPageContent() {
               </CardHeader>
               <CardContent>
                 {organizations.length === 0 ? (
-                  <p className="text-muted-foreground">
-                    No organizations found.{' '}
-                    <Link href="/organizations" className="text-primary underline">
-                      Create one first
-                    </Link>
-                  </p>
+                  <EmptyState
+                    icon={Building2}
+                    title="No organizations found"
+                    description="Create an organization before creating teams."
+                    actions={[
+                      {
+                        label: 'Go to organizations',
+                        onClick: () => {
+                          window.location.href = '/organizations';
+                        },
+                      },
+                    ]}
+                    className="py-6"
+                  />
                 ) : (
                   <Select
                     value={selectedOrgId || ''}
@@ -217,7 +316,9 @@ function TeamsPageContent() {
                       </div>
 
                       <div className="flex gap-2">
-                        <Button type="submit">Create Team</Button>
+                        <Button type="submit" loading={creatingTeam} loadingText="Creating..." disabled={creatingTeam}>
+                          Create Team
+                        </Button>
                         <Button type="button" variant="outline" onClick={() => setShowCreateForm(false)}>
                           Cancel
                         </Button>
@@ -255,17 +356,46 @@ function TeamsPageContent() {
               </CardHeader>
               <CardContent>
                 {!selectedOrgId ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    Select an organization above to view its teams.
-                  </div>
+                  <EmptyState
+                    icon={Users}
+                    title="Select an organization"
+                    description="Choose an organization above to view or manage teams."
+                    actions={[
+                      {
+                        label: 'Use first organization',
+                        onClick: () => {
+                          if (organizations.length > 0) {
+                            handleOrgChange(String(organizations[0].id));
+                          }
+                        },
+                      },
+                    ]}
+                  />
                 ) : loading ? (
                   <div className="py-4">
                     <TableSkeleton rows={4} columns={5} />
                   </div>
                 ) : filteredTeams.length === 0 ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    {searchQuery ? 'No teams match your search.' : 'No teams found in this organization. Create one to get started.'}
-                  </div>
+                  <EmptyState
+                    icon={Users}
+                    title={searchQuery ? 'No teams match your search.' : 'No teams found in this organization'}
+                    description={
+                      searchQuery
+                        ? 'Adjust the query or clear search to see all teams.'
+                        : 'Create a team to start organizing members.'
+                    }
+                    actions={[
+                      searchQuery
+                        ? {
+                            label: 'Clear search',
+                            onClick: () => handleSearchChange(''),
+                          }
+                        : {
+                            label: 'Create team',
+                            onClick: () => setShowCreateForm(true),
+                          },
+                    ]}
+                  />
                 ) : (
                   <>
                     <Table>
@@ -288,12 +418,33 @@ function TeamsPageContent() {
                             </TableCell>
                             <TableCell>{new Date(team.created_at).toLocaleDateString()}</TableCell>
                             <TableCell className="text-right">
-                              <Link href={`/teams/${team.id}`}>
-                                <Button variant="outline" size="sm">
-                                  <Users className="mr-2 h-4 w-4" />
-                                  Manage
+                              <div className="flex justify-end gap-2">
+                                <Link href={`/teams/${team.id}`}>
+                                  <Button variant="outline" size="sm">
+                                    <Users className="mr-2 h-4 w-4" />
+                                    Manage
+                                  </Button>
+                                </Link>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => openEditTeamDialog(team)}
+                                >
+                                  <Pencil className="mr-2 h-4 w-4" />
+                                  Edit
                                 </Button>
-                              </Link>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleDeleteTeam(team)}
+                                  disabled={deletingTeamId === team.id}
+                                  loading={deletingTeamId === team.id}
+                                  loadingText="Deleting..."
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                  Delete
+                                </Button>
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -315,6 +466,58 @@ function TeamsPageContent() {
                 )}
               </CardContent>
             </Card>
+
+            <Dialog
+              open={Boolean(editingTeam)}
+              onOpenChange={(open) => {
+                if (!open) closeEditTeamDialog();
+              }}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit Team</DialogTitle>
+                  <DialogDescription>
+                    Update team name and description.
+                  </DialogDescription>
+                </DialogHeader>
+                {editError && (
+                  <p className="text-sm text-red-600">{editError}</p>
+                )}
+                <div className="space-y-4 py-2">
+                  <div className="space-y-2">
+                    <label htmlFor="edit-team-name" className="text-sm font-medium">Team Name</label>
+                    <Input
+                      id="edit-team-name"
+                      value={editName}
+                      onChange={(event) => setEditName(event.target.value)}
+                      placeholder="Team name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label htmlFor="edit-team-description" className="text-sm font-medium">Description</label>
+                    <Input
+                      id="edit-team-description"
+                      value={editDescription}
+                      onChange={(event) => setEditDescription(event.target.value)}
+                      placeholder="Team description"
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={closeEditTeamDialog}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleUpdateTeam}
+                    disabled={updatingTeam}
+                    loading={updatingTeam}
+                    loadingText="Saving..."
+                  >
+                    Save Changes
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
       </ResponsiveLayout>
     </PermissionGuard>

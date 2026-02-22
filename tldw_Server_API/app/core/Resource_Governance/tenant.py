@@ -9,6 +9,7 @@ from hashlib import sha256
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,7 @@ def hash_entity(value: str, secret: str | None = None) -> str:
     """
     global _LOG_HASH_SECRET_WARNED
     env_secret = os.getenv("TLDW_LOG_HASH_SECRET")
-    enforce = str(os.getenv("TLDW_ENFORCE_LOG_HASH_SECRET") or "").strip().lower() in ("1", "true", "yes", "on")
+    enforce = is_truthy(os.getenv("TLDW_ENFORCE_LOG_HASH_SECRET"))
     if enforce and not env_secret and not secret:
         # In enforced mode, require the dedicated log-hash secret explicitly.
         raise RuntimeError("TLDW_LOG_HASH_SECRET is required but not set (TLDW_ENFORCE_LOG_HASH_SECRET=1)")

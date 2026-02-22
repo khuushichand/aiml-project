@@ -384,8 +384,8 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             data = json.loads(output)
             if isinstance(data, list):
                 return [str(x).strip() for x in data if isinstance(x, (str, int, float)) and str(x).strip()]
-        except Exception:
-            pass
+        except Exception as json_parse_error:
+            logger.debug("Proposition chunking JSON parse failed; falling back to line parsing", exc_info=json_parse_error)
         # Fallback: parse lines starting with hyphen/number
         lines = [l.strip("- ") for l in output.splitlines() if l.strip()]
         return [l for l in lines if len(l) > 0]

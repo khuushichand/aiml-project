@@ -92,6 +92,7 @@ Endpoints
 - Metrics (text): `GET /metrics` or `GET /api/v1/metrics/text`.
 - JSON metrics: `GET /api/v1/metrics/json`.
 - Chat/LLM cost and tokens: `GET /api/v1/metrics/chat`.
+- Unified circuit breaker status (admin): `GET /api/v1/admin/circuit-breakers` (requires admin role + `system.logs` permission).
 
 Grafana + Prometheus
 - Use the sample dashboards and alerts referenced in `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`.
@@ -102,6 +103,15 @@ Logs
 - Bare-metal via journal: `journalctl -u tldw -f`.
 - Adjust verbosity with `LOG_LEVEL`.
  - Kubernetes: `kubectl logs -n tldw deploy/tldw-app -f`.
+
+Circuit breaker observability and tuning
+- Use `GET /api/v1/admin/circuit-breakers` for consolidated breaker state across in-memory and persisted rows. Filters: `state`, `category`, `service`, `name_prefix`.
+- In persistent mode, active in-process breakers typically report `source="mixed"` (present in memory and persisted storage). Treat this as normal.
+- Monitor persistence contention:
+  - `circuit_breaker_persist_conflicts_total` should usually stay near zero.
+  - Sustained growth indicates write contention on shared breaker rows; tune `CIRCUIT_BREAKER_PERSIST_MAX_RETRIES` and investigate high-churn breaker patterns.
+- For multi-worker deployments, run with `CIRCUIT_BREAKER_REGISTRY_MODE=persistent` so HALF_OPEN probe limits are coordinated across workers.
+- Tune `CIRCUIT_BREAKER_HALF_OPEN_LEASE_TTL_SECONDS` to exceed normal probe runtime while still recovering abandoned slots promptly.
 
 ## 5) Capacity, Performance & Cost
 
@@ -170,6 +180,12 @@ Common issues and fixes
   - Verify `AUTH_MODE` and secrets; confirm `.env` is loaded. In single-user, ensure header `X-API-KEY` is set.
 - “Database is locked” (SQLite)
   - Switch to Postgres for multi-user; enable WAL mode if staying on SQLite.
+- Circuit breaker status differs across workers
+  - Ensure `CIRCUIT_BREAKER_REGISTRY_MODE=persistent`. `memory` mode is process-local and does not coordinate state or HALF_OPEN probes across workers.
+- Repeated HALF_OPEN probe starvation after worker crashes
+  - Reduce `CIRCUIT_BREAKER_HALF_OPEN_LEASE_TTL_SECONDS` if recovery is too slow, or increase it if long-running probes routinely outlive the lease.
+- Frequent persistence conflict retries
+  - Check `circuit_breaker_persist_conflicts_total` and increase `CIRCUIT_BREAKER_PERSIST_MAX_RETRIES` when contention is expected.
 - Postgres connection saturation
   - Increase pool size (`TLDW_DB_POOL_SIZE`, `TLDW_DB_MAX_OVERFLOW`) and Postgres `max_connections`. Inspect `pg_stat_activity`.
 - High cost/usage spikes

@@ -24,6 +24,7 @@ export type WebSearch = {
 }
 
 export type ToolChoice = "auto" | "none" | "required"
+export type CompareContinuationMode = "winner" | "compare"
 
 export type ReplyTarget = {
   id: string
@@ -75,6 +76,14 @@ export type Message = {
   discoSkillComment?: DiscoSkillComment
   // Character message pin state (server metadata-backed)
   pinned?: boolean
+  // Full metadata payload (if provided by server)
+  metadataExtra?: Record<string, unknown>
+  // Character turn metadata (multi-character + mood scaffolding)
+  speakerCharacterId?: number | null
+  speakerCharacterName?: string
+  moodLabel?: string
+  moodConfidence?: number | null
+  moodTopic?: string | null
 }
 
 export type ChatHistory = {
@@ -111,9 +120,9 @@ export type State = {
   isProcessing: boolean
   setIsProcessing: (isProcessing: boolean) => void
   selectedModel: string | null
-  setSelectedModel: (selectedModel: string) => void
-  chatMode: "normal" | "rag"
-  setChatMode: (chatMode: "normal" | "rag") => void
+  setSelectedModel: (selectedModel: string | null) => void
+  chatMode: "normal" | "rag" | "vision"
+  setChatMode: (chatMode: "normal" | "rag" | "vision") => void
   isEmbedding: boolean
   setIsEmbedding: (isEmbedding: boolean) => void
   webSearch: boolean
@@ -217,6 +226,11 @@ export type State = {
   ) => void
   compareCanonicalByCluster: Record<string, string | null>
   setCompareCanonicalForCluster: (clusterId: string, messageId: string | null) => void
+  compareContinuationModeByCluster: Record<string, CompareContinuationMode>
+  setCompareContinuationModeForCluster: (
+    clusterId: string,
+    mode: CompareContinuationMode
+  ) => void
   // Split-off chats per compare cluster/model
   compareSplitChats: Record<string, Record<string, string>>
   setCompareSplitChat: (clusterId: string, modelKey: string, historyId: string) => void

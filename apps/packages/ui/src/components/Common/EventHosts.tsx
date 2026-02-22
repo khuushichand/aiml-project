@@ -7,9 +7,9 @@ const CommandPalette = lazy(() =>
   }))
 )
 
-const KeyboardShortcutsModal = lazy(() =>
-  import("@/components/Common/KeyboardShortcutsModal").then((m) => ({
-    default: m.KeyboardShortcutsModal
+const PageHelpModal = lazy(() =>
+  import("@/components/Common/PageHelpModal").then((m) => ({
+    default: m.PageHelpModal
   }))
 )
 
@@ -25,7 +25,7 @@ export const EventOnlyHosts = ({
       <CommandPalette {...commandPaletteProps} />
     </Suspense>
     <Suspense fallback={null}>
-      <KeyboardShortcutsModal />
+      <PageHelpModal />
     </Suspense>
   </>
 )

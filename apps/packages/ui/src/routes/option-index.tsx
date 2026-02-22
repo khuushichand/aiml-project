@@ -53,7 +53,13 @@ const OptionIndex = () => {
   // the onboarding wizard (“Welcome — Let’s get you connected”).
   if (!hasCompletedFirstRun) {
     return (
-      <OptionLayout hideHeader>
+      <OptionLayout hideHeader hideSidebar>
+        <div className="mx-auto mb-4 w-full max-w-3xl rounded-lg border border-border bg-surface px-4 py-3">
+          <h1 className="text-base font-semibold text-text">Home Onboarding</h1>
+          <p className="mt-1 text-xs text-text-muted">
+            Start here to connect your server or try local demo mode.
+          </p>
+        </div>
         <OnboardingWizard
           onFinish={async () => {
             try {

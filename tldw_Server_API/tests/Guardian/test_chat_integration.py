@@ -6,6 +6,7 @@ Tests for guardian + self-monitoring integration with the chat pipeline
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -26,7 +27,10 @@ from tldw_Server_API.app.core.Moderation.supervised_policy import (
 from tldw_Server_API.app.core.Monitoring.self_monitoring_service import (
     SelfMonitoringService,
 )
-from tldw_Server_API.app.core.Chat.chat_service import moderate_input_messages
+from tldw_Server_API.app.core.Chat.chat_service import (
+    moderate_input_messages,
+    execute_non_stream_call,
+)
 
 
 # ── Fixtures ──────────────────────────────────────────────────
@@ -493,3 +497,360 @@ class TestCombinedGuardianAndSelfMonitoring:
                 dependent_user_id="child1",
             )
         assert exc_info.value.status_code == 400
+
+
+# ── 10. Output self-monitoring E2E through execute_non_stream_call ──
+
+
+async def _noop_async(*_args, **_kwargs):
+    return None
+
+
+class _DummyMetrics:
+    """Minimal metrics stub for execute_non_stream_call."""
+
+    def track_llm_call(self, *_a, **_kw):
+        return None
+
+    def track_provider_fallback_success(self, *_a, **_kw):
+        return None
+
+    def track_tokens(self, *_a, **_kw):
+        return None
+
+    def track_moderation_output(self, *_a, **_kw):
+        return None
+
+
+def _llm_response_with_content(content: str):
+    """Build a minimal OpenAI-style dict response."""
+    return {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+
+class TestOutputSelfMonitoringE2E:
+    """End-to-end tests for output self-monitoring through execute_non_stream_call."""
+
+    @pytest.mark.asyncio
+    async def test_non_stream_output_block(self, db, selfmon, monkeypatch):
+        """Output containing trigger text should be blocked (HTTPException 400)."""
+        from tldw_Server_API.app.core.Chat import chat_service
+
+        monkeypatch.setattr(chat_service, "log_llm_usage", _noop_async)
+        monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+
+        db.create_self_monitoring_rule(
+            user_id="user1",
+            name="harmful_output_block",
+            category="safety",
+            patterns=["harmful content"],
+            action="block",
+            phase="output",
+            block_message="Output blocked by self-monitoring.",
+        )
+
+        request = SimpleNamespace(
+            method="POST",
+            url=SimpleNamespace(path="/api/v1/chat/completions"),
+            headers={},
+            state=SimpleNamespace(user_id="user1", api_key_id=None),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await execute_non_stream_call(
+                current_loop=asyncio.get_running_loop(),
+                cleaned_args={"api_endpoint": "openai", "api_key": "k", "messages_payload": [], "model": "m", "streaming": False},
+                selected_provider="openai",
+                provider="openai",
+                model="test-model",
+                request_json="{}",
+                request=request,
+                metrics=_DummyMetrics(),
+                provider_manager=None,
+                templated_llm_payload=[{"role": "user", "content": "hi"}],
+                should_persist=False,
+                final_conversation_id="conv-1",
+                character_card_for_context=None,
+                chat_db=None,
+                save_message_fn=_noop_async,
+                audit_service=None,
+                audit_context=None,
+                client_id="user1",
+                queue_execution_enabled=False,
+                enable_provider_fallback=False,
+                llm_call_func=lambda: _llm_response_with_content("This has harmful content in it"),
+                refresh_provider_params=lambda *_a, **_kw: None,
+                moderation_getter=lambda: _FakeModerationService(ModerationPolicy(enabled=False)),
+                self_monitoring_service=selfmon,
+            )
+        assert exc_info.value.status_code == 400
+        assert "self-monitoring" in (exc_info.value.detail or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_non_stream_output_redact(self, db, selfmon, monkeypatch):
+        """Output containing trigger text should be redacted in the returned payload."""
+        from tldw_Server_API.app.core.Chat import chat_service
+
+        monkeypatch.setattr(chat_service, "log_llm_usage", _noop_async)
+        monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+
+        db.create_self_monitoring_rule(
+            user_id="user1",
+            name="secret_output_redact",
+            category="privacy",
+            patterns=["secret password"],
+            action="redact",
+            phase="output",
+        )
+
+        request = SimpleNamespace(
+            method="POST",
+            url=SimpleNamespace(path="/api/v1/chat/completions"),
+            headers={},
+            state=SimpleNamespace(user_id="user1", api_key_id=None),
+        )
+
+        response = await execute_non_stream_call(
+            current_loop=asyncio.get_running_loop(),
+            cleaned_args={"api_endpoint": "openai", "api_key": "k", "messages_payload": [], "model": "m", "streaming": False},
+            selected_provider="openai",
+            provider="openai",
+            model="test-model",
+            request_json="{}",
+            request=request,
+            metrics=_DummyMetrics(),
+            provider_manager=None,
+            templated_llm_payload=[{"role": "user", "content": "hi"}],
+            should_persist=False,
+            final_conversation_id="conv-2",
+            character_card_for_context=None,
+            chat_db=None,
+            save_message_fn=_noop_async,
+            audit_service=None,
+            audit_context=None,
+            client_id="user1",
+            queue_execution_enabled=False,
+            enable_provider_fallback=False,
+            llm_call_func=lambda: _llm_response_with_content("The secret password is 12345"),
+            refresh_provider_params=lambda *_a, **_kw: None,
+            moderation_getter=lambda: _FakeModerationService(ModerationPolicy(enabled=False)),
+            self_monitoring_service=selfmon,
+        )
+
+        content = response["choices"][0]["message"]["content"]
+        assert "secret password" not in content
+        assert "[SELF-REDACTED]" in content
+
+    @pytest.mark.asyncio
+    async def test_non_stream_output_no_trigger(self, db, selfmon, monkeypatch):
+        """Clean output should pass through unchanged."""
+        from tldw_Server_API.app.core.Chat import chat_service
+
+        monkeypatch.setattr(chat_service, "log_llm_usage", _noop_async)
+        monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+
+        db.create_self_monitoring_rule(
+            user_id="user1",
+            name="block_badword",
+            category="safety",
+            patterns=["dangerous stuff"],
+            action="block",
+            phase="output",
+            block_message="Blocked.",
+        )
+
+        request = SimpleNamespace(
+            method="POST",
+            url=SimpleNamespace(path="/api/v1/chat/completions"),
+            headers={},
+            state=SimpleNamespace(user_id="user1", api_key_id=None),
+        )
+
+        response = await execute_non_stream_call(
+            current_loop=asyncio.get_running_loop(),
+            cleaned_args={"api_endpoint": "openai", "api_key": "k", "messages_payload": [], "model": "m", "streaming": False},
+            selected_provider="openai",
+            provider="openai",
+            model="test-model",
+            request_json="{}",
+            request=request,
+            metrics=_DummyMetrics(),
+            provider_manager=None,
+            templated_llm_payload=[{"role": "user", "content": "hi"}],
+            should_persist=False,
+            final_conversation_id="conv-3",
+            character_card_for_context=None,
+            chat_db=None,
+            save_message_fn=_noop_async,
+            audit_service=None,
+            audit_context=None,
+            client_id="user1",
+            queue_execution_enabled=False,
+            enable_provider_fallback=False,
+            llm_call_func=lambda: _llm_response_with_content("This is perfectly safe output"),
+            refresh_provider_params=lambda *_a, **_kw: None,
+            moderation_getter=lambda: _FakeModerationService(ModerationPolicy(enabled=False)),
+            self_monitoring_service=selfmon,
+        )
+
+        content = response["choices"][0]["message"]["content"]
+        assert content == "This is perfectly safe output"
+
+
+# ── 11. Chat-type passthrough to self-monitoring ──────────────
+
+
+class TestChatTypePassthrough:
+    @pytest.mark.asyncio
+    async def test_chat_type_reaches_self_monitoring(self, db, selfmon):
+        """chat_type param should be passed through to self_monitoring_service.check_text."""
+        gp = db.create_governance_policy(
+            owner_user_id="user1",
+            name="Character Only",
+            policy_mode="self",
+            scope_chat_types="character",
+        )
+        db.create_self_monitoring_rule(
+            user_id="user1",
+            name="char_block",
+            category="test",
+            patterns=["trigger"],
+            action="block",
+            block_message="Blocked in character chat",
+            governance_policy_id=gp.id,
+        )
+
+        moderation_svc = _make_moderation_service(ModerationPolicy(enabled=False))
+        request_data = _make_request_data("trigger word here")
+        request = _make_request(user_id="user1")
+
+        # With chat_type="regular", rule scoped to "character" should NOT fire
+        await moderate_input_messages(
+            request_data=request_data,
+            request=request,
+            moderation_service=moderation_svc,
+            topic_monitoring_service=None,
+            metrics=_make_metrics(),
+            audit_service=None,
+            audit_context=None,
+            client_id="user1",
+            self_monitoring_service=selfmon,
+            chat_type="regular",
+        )
+        assert request_data.messages[0].content == "trigger word here"
+
+        # With chat_type="character", rule SHOULD fire and block
+        selfmon.invalidate_cache()
+        request_data2 = _make_request_data("trigger word here")
+        with pytest.raises(HTTPException) as exc_info:
+            await moderate_input_messages(
+                request_data=request_data2,
+                request=request,
+                moderation_service=moderation_svc,
+                topic_monitoring_service=None,
+                metrics=_make_metrics(),
+                audit_service=None,
+                audit_context=None,
+                client_id="user1",
+                self_monitoring_service=selfmon,
+                chat_type="character",
+            )
+        assert exc_info.value.status_code == 400
+
+
+# ── 12. Guardian notification dispatched in pipeline ──────────
+
+
+class TestGuardianNotificationInPipeline:
+    @pytest.mark.asyncio
+    async def test_notification_dispatched_on_match(self, db, engine):
+        """When supervised policy matches with notify_guardian=True, dispatch is called."""
+        rel = _setup_active_relationship(db)
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="bad content",
+            action="block",
+            severity="critical",
+            notify_guardian=True,
+        )
+
+        moderation_svc = _make_moderation_service(ModerationPolicy(enabled=False))
+        request_data = _make_request_data("this has bad content in it")
+        request = _make_request(user_id="child1")
+
+        mock_notification_svc = MagicMock()
+        mock_notification_svc.notify_or_batch.return_value = "logged"
+        mock_notification_svc.enabled = True
+        mock_notification_svc.min_severity = "info"
+        mock_notification_svc._meets_threshold = lambda s: True
+
+        with patch(
+            "tldw_Server_API.app.core.Monitoring.notification_service.get_notification_service",
+            return_value=mock_notification_svc,
+        ):
+            with pytest.raises(HTTPException):
+                await moderate_input_messages(
+                    request_data=request_data,
+                    request=request,
+                    moderation_service=moderation_svc,
+                    topic_monitoring_service=None,
+                    metrics=_make_metrics(),
+                    audit_service=None,
+                    audit_context=None,
+                    client_id="child1",
+                    supervised_policy_engine=engine,
+                    dependent_user_id="child1",
+                )
+        mock_notification_svc.notify_or_batch.assert_called_once()
+        payload = mock_notification_svc.notify_or_batch.call_args[0][0]
+        assert payload["type"] == "guardian_alert"
+        assert payload["dependent_user_id"] == "child1"
+
+
+# ── 13. Transparent block message ──────────────────────────────
+
+
+class TestTransparentBlockMessage:
+    @pytest.mark.asyncio
+    async def test_block_includes_rule_name_when_transparent(self, db, engine):
+        """When governance policy is transparent, block error should include rule name."""
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="School Policy",
+            policy_mode="guardian",
+            transparent=True,
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="forbidden",
+            action="block",
+            severity="critical",
+            governance_policy_id=gp.id,
+        )
+
+        moderation_svc = _make_moderation_service(ModerationPolicy(enabled=False))
+        request_data = _make_request_data("this is forbidden content")
+        request = _make_request(user_id="child1")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await moderate_input_messages(
+                request_data=request_data,
+                request=request,
+                moderation_service=moderation_svc,
+                topic_monitoring_service=None,
+                metrics=_make_metrics(),
+                audit_service=None,
+                audit_context=None,
+                client_id="child1",
+                supervised_policy_engine=engine,
+                dependent_user_id="child1",
+            )
+        assert exc_info.value.status_code == 400
+        assert "School Policy" in exc_info.value.detail

@@ -325,13 +325,16 @@ class LlamaCppHandler(BaseLLMHandler):
             "tb": lambda v: ["--threads-batch", str(int(v))],
             "ctx_size": lambda v: ["-c", str(int(v))],
             "c": lambda v: ["-c", str(int(v))],
+            "n_ctx": lambda v: ["-c", str(int(v))],
             "n_gpu_layers": lambda v: ["-ngl", str(int(v))],
             "ngl": lambda v: ["-ngl", str(int(v))],
             "gpu_layers": lambda v: ["-ngl", str(int(v))],
             "batch_size": lambda v: ["-b", str(int(v))],
             "b": lambda v: ["-b", str(int(v))],
+            "n_batch": lambda v: ["-b", str(int(v))],
             "ubatch_size": lambda v: ["--ubatch-size", str(int(v))],
             "ub": lambda v: ["--ubatch-size", str(int(v))],
+            "n_ubatch": lambda v: ["--ubatch-size", str(int(v))],
             "verbose": lambda v: (["--verbose"] if v else []),
             "log_disable": lambda v: (["--log-disable"] if v else []),
             # Extended safe flags
@@ -341,11 +344,14 @@ class LlamaCppHandler(BaseLLMHandler):
             "mg": lambda v: ["--main-gpu", str(int(v))],
             "split_mode": lambda v: ["--split-mode", str(v)],
             "sm": lambda v: ["--split-mode", str(v)],
+            "row_split": lambda v: (["--split-mode", "row"] if v else []),
             # Additional extended flags
             # Note: Some of these may be build-dependent in llama.cpp;
             # keeping them in allowlist enables safe, explicit usage when supported.
             "main_kv": lambda v: ["--main-kv", str(int(v))],
             "no_kv_offload": lambda v: (["--no-kv-offload"] if v else []),
+            "cpu_moe": lambda v: (["--cpu-moe"] if v else []),
+            "n_cpu_moe": lambda v: ["--n-cpu-moe", str(int(v))],
             # Rope scaling type (e.g., "linear", "yarn", etc.)
             "rope_scaling_type": lambda v: ["--rope-scaling", str(v)],
             "rope_scaling": lambda v: ["--rope-scaling", str(v)],
@@ -354,8 +360,11 @@ class LlamaCppHandler(BaseLLMHandler):
             "rope_freq_scale": lambda v: ["--rope-freq-scale", str(float(v))],
             # Aliases and additional safe toggles
             "rope_scale": lambda v: ["--rope-freq-scale", str(float(v))],
-            "flash_attn": lambda v: (["--flash-attn"] if v else []),
-            "cont_batching": lambda v: (["--cont-batching"] if v else []),
+            "flash_attn": lambda v: (["--flash-attn", str(v)] if isinstance(v, str) else (["--flash-attn"] if v else [])),
+            "cont_batching": lambda v: (["--cont-batching"] if v else ["--no-cont-batching"]),
+            "no_cont_batching": lambda v: (["--no-cont-batching"] if v else []),
+            "context_shift": lambda v: (["--context-shift"] if v else ["--no-context-shift"]),
+            "streaming_llm": lambda v: (["--context-shift"] if v else []),
             # LoRA support (repeatable)
             "lora": lambda v: sum((["--lora", str(x)] for x in (v if isinstance(v, (list, tuple)) else [v])), []),
             "lora_scaled": lambda v: (["--lora-scaled", str(v[0]), str(v[1])]
@@ -366,6 +375,7 @@ class LlamaCppHandler(BaseLLMHandler):
             # KV cache type hints
             "cache_type_k": lambda v: ["--cache-type-k", str(v)],
             "cache_type_v": lambda v: ["--cache-type-v", str(v)],
+            "cache_type": lambda v: ["--cache-type-k", str(v), "--cache-type-v", str(v)],
             # Model download / HF
             # Note: hf_token is intentionally NOT in allowlist (use HF_TOKEN env var instead)
             "hf_repo": lambda v: ["--hf-repo", str(v)],
@@ -435,6 +445,30 @@ class LlamaCppHandler(BaseLLMHandler):
             "prompt_cache": lambda v: ["--prompt-cache", str(v)],
             "prompt_cache_all": lambda v: (["--prompt-cache-all"] if v else []),
             "prompt_cache_ro": lambda v: (["--prompt-cache-ro"] if v else []),
+            "cache_prompt": lambda v: (["--cache-prompt"] if v else ["--no-cache-prompt"]),
+            "cache_reuse": lambda v: ["--cache-reuse", str(int(v))],
+            # Server runtime
+            "parallel": lambda v: ["--parallel", str(int(v))],
+            "threads_http": lambda v: ["--threads-http", str(int(v))],
+            "timeout": lambda v: ["--timeout", str(int(v))],
+            # Multimodal
+            "mmproj": lambda v: ["--mmproj", str(v)],
+            "mmproj_url": lambda v: ["--mmproj-url", str(v)],
+            "mmproj_auto": lambda v: (["--mmproj-auto"] if v else ["--no-mmproj"]),
+            "no_mmproj": lambda v: (["--no-mmproj"] if v else []),
+            "mmproj_offload": lambda v: (["--mmproj-offload"] if v else ["--no-mmproj-offload"]),
+            "no_mmproj_offload": lambda v: (["--no-mmproj-offload"] if v else []),
+            "image_min_tokens": lambda v: ["--image-min-tokens", str(int(v))],
+            "image_max_tokens": lambda v: ["--image-max-tokens", str(int(v))],
+            # Speculative decoding
+            "model_draft": lambda v: ["--model-draft", str(v)],
+            "draft_max": lambda v: ["--draft-max", str(int(v))],
+            "draft_min": lambda v: ["--draft-min", str(int(v))],
+            "draft_p_min": lambda v: ["--draft-p-min", str(float(v))],
+            "ctx_size_draft": lambda v: ["--ctx-size-draft", str(int(v))],
+            "gpu_layers_draft": lambda v: ["--gpu-layers-draft", str(int(v))],
+            "cpu_moe_draft": lambda v: (["--cpu-moe-draft"] if v else []),
+            "n_cpu_moe_draft": lambda v: ["--n-cpu-moe-draft", str(int(v))],
             # Logging
             "log_file": lambda v: ["--log-file", str(v)],
             "log_colors": lambda v: (["--log-colors"] if v else []),
@@ -467,7 +501,7 @@ class LlamaCppHandler(BaseLLMHandler):
         n_gpu_layers = int(
             args.get("n_gpu_layers", args.get("ngl", args.get("gpu_layers", self.config.default_n_gpu_layers)))
         )
-        ctx_size = int(args.get("ctx_size", args.get("c", self.config.default_ctx_size)))
+        ctx_size = int(args.get("ctx_size", args.get("c", args.get("n_ctx", self.config.default_ctx_size))))
         threads = args.get("threads", args.get("t", self.config.default_threads))
 
         command = [str(self.config.executable_path), "-m", str(model_path)]
@@ -476,19 +510,31 @@ class LlamaCppHandler(BaseLLMHandler):
         if threads is not None:
             command += ["-t", str(int(threads))]
 
+        core_keys = {
+            "port",
+            "host",
+            "threads",
+            "t",
+            "ctx_size",
+            "c",
+            "n_ctx",
+            "n_gpu_layers",
+            "ngl",
+            "gpu_layers",
+        }
         # Validate all provided keys are allowed
-        invalid = [k for k in args if k not in allowed_formatters and k not in {"port", "host", "threads", "t", "ctx_size", "c", "n_gpu_layers", "ngl", "gpu_layers"}]
+        invalid = [k for k in args if k not in allowed_formatters and k not in core_keys]
         if invalid and not getattr(self.config, "allow_unvalidated_args", False):
             raise ServerError(f"Unsupported llama.cpp server args: {sorted(invalid)}")
 
         # Apply boolean/kv flags from allowlist (exclude ones already encoded above)
         for k, v in args.items():
-            if k in ("port", "host", "threads", "t", "ctx_size", "c", "n_gpu_layers", "ngl", "gpu_layers"):
+            if k in core_keys:
                 continue
             fmt = allowed_formatters.get(k)
             if fmt:
                 # Path safety for file arguments
-                if k in {"grammar_file", "json_schema_file", "chat_template_file", "prompt_cache", "log_file", "lora_base", "control_vector"}:
+                if k in {"grammar_file", "json_schema_file", "chat_template_file", "prompt_cache", "log_file", "lora_base", "control_vector", "mmproj"}:
                     p = Path(v)
                     if not self._is_path_allowed(p):
                         raise ServerError(f"File path for '{k}' must be under allowed directories.")

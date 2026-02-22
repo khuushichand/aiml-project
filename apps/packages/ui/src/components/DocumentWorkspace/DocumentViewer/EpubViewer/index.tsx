@@ -575,7 +575,7 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
       <div className="flex h-full items-center justify-center p-4">
         <Alert
           type="warning"
-          message={t("option:documentWorkspace.noUrl", "No document URL")}
+          title={t("option:documentWorkspace.noUrl", "No document URL")}
           description={t(
             "option:documentWorkspace.selectDocument",
             "Please select a document to view"
@@ -591,7 +591,7 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
       <div className="flex h-full items-center justify-center p-4">
         <Alert
           type="error"
-          message={t("option:documentWorkspace.loadError", "Failed to load EPUB")}
+          title={t("option:documentWorkspace.loadError", "Failed to load EPUB")}
           description={error}
           showIcon
         />

@@ -9,7 +9,7 @@ def _close_scheduler_backend(db: WorkflowsSchedulerDB) -> None:
         pool = db.backend.get_pool()
         pool.close_all()
     except Exception:
-        pass
+        _ = None
 
 
 def test_scheduler_uses_dedicated_default_sqlite_path_when_global_database_url_is_set(

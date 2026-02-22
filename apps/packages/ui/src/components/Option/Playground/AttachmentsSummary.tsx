@@ -67,7 +67,13 @@ export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
   const imageCount = image ? 1 : 0
   const docCount = documents.length
   const fileCount = files.length
+  const totalFileBytes = files.reduce((total, file) => total + file.size, 0)
   const totalCount = imageCount + docCount + fileCount
+  const largeAttachmentThresholdBytes = 20 * 1024 * 1024
+  const singleLargeFileThresholdBytes = 10 * 1024 * 1024
+  const hasLargeAttachments =
+    totalFileBytes >= largeAttachmentThresholdBytes ||
+    files.some((file) => file.size >= singleLargeFileThresholdBytes)
 
   if (totalCount === 0) {
     return null
@@ -90,63 +96,60 @@ export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
   return (
     <div className="border-b border-border/70">
       {/* Collapsed summary bar */}
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center justify-between px-3 py-2 text-left transition-colors hover:bg-surface2/50"
-        aria-expanded={expanded}
-        aria-controls="attachments-panel"
-        title={`${t("playground:attachments.title", "Attachments")} (${totalCount})`}
-      >
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-text-subtle">
-            {t("playground:attachments.title", "Attachments")} ({totalCount})
-          </span>
-          <div className="flex items-center gap-2 text-[11px] text-text-muted">
-            {imageCount > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <ImageIcon className="h-3 w-3" aria-hidden="true" />
-                {imageCount}
-              </span>
-            )}
-            {fileCount > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <FileText className="h-3 w-3" aria-hidden="true" />
-                {fileCount}
-              </span>
-            )}
-            {docCount > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <Globe className="h-3 w-3" aria-hidden="true" />
-                {docCount}
-              </span>
-            )}
+      <div className="flex w-full items-center px-3 py-2 transition-colors hover:bg-surface2/50">
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
+          aria-expanded={expanded}
+          aria-controls="attachments-panel"
+          title={`${t("playground:attachments.title", "Attachments")} (${totalCount})`}
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-text-subtle">
+              {t("playground:attachments.title", "Attachments")} ({totalCount})
+            </span>
+            <div className="flex items-center gap-2 text-[11px] text-text-muted">
+              {imageCount > 0 && (
+                <span className="inline-flex items-center gap-1">
+                  <ImageIcon className="h-3 w-3" aria-hidden="true" />
+                  {imageCount}
+                </span>
+              )}
+              {fileCount > 0 && (
+                <span className="inline-flex items-center gap-1">
+                  <FileText className="h-3 w-3" aria-hidden="true" />
+                  {fileCount}
+                </span>
+              )}
+              {docCount > 0 && (
+                <span className="inline-flex items-center gap-1">
+                  <Globe className="h-3 w-3" aria-hidden="true" />
+                  {docCount}
+                </span>
+              )}
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {!readOnly && (
-            <Tooltip title={t("playground:attachments.clearAll", "Clear all")}>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleClearAll()
-                }}
-                className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
-                aria-label={t("playground:attachments.clearAll", "Clear all") as string}
-                title={t("playground:attachments.clearAll", "Clear all") as string}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </Tooltip>
-          )}
           {expanded ? (
             <ChevronUp className="h-4 w-4 text-text-subtle" />
           ) : (
             <ChevronDown className="h-4 w-4 text-text-subtle" />
           )}
-        </div>
-      </button>
+        </button>
+        {!readOnly && (
+          <Tooltip title={t("playground:attachments.clearAll", "Clear all")}>
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="ml-2 rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text"
+              aria-label={t("playground:attachments.clearAll", "Clear all") as string}
+              title={t("playground:attachments.clearAll", "Clear all") as string}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+        )}
+      </div>
 
       {/* Expanded panel */}
       {expanded && (
@@ -273,6 +276,52 @@ export const AttachmentsSummary: React.FC<AttachmentsSummaryProps> = ({
                     )}
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {hasLargeAttachments && (
+            <div
+              className="rounded-md border border-warn/40 bg-warn/10 px-2 py-2 text-xs text-warn"
+              data-testid="attachments-large-warning"
+            >
+              <p className="font-medium">
+                {t(
+                  "playground:attachments.largeFileWarning",
+                  "Large file attachments can increase latency and context usage."
+                )}
+              </p>
+              <p className="mt-1 text-[11px] text-warn">
+                {t(
+                  "playground:attachments.largeFileHint",
+                  "Consider pinning focused excerpts or using tab context for long sources."
+                )}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {onOpenKnowledgePanel && (
+                  <button
+                    type="button"
+                    onClick={onOpenKnowledgePanel}
+                    className="rounded border border-warn/40 bg-surface px-2 py-0.5 text-[11px] font-medium text-warn hover:bg-warn/10"
+                  >
+                    {t(
+                      "playground:attachments.reviewInKnowledge",
+                      "Review in context panel"
+                    )}
+                  </button>
+                )}
+                {!readOnly && fileCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={onClearFiles}
+                    className="rounded border border-warn/40 bg-surface px-2 py-0.5 text-[11px] font-medium text-warn hover:bg-warn/10"
+                  >
+                    {t(
+                      "playground:attachments.clearLargeFiles",
+                      "Clear files"
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           )}

@@ -16,6 +16,11 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
 from tldw_Server_API.app.core.exceptions import AdapterError
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled,
+    is_explicit_pytest_runtime,
+    is_test_mode,
+)
 
 _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -134,7 +139,7 @@ def artifacts_base_dir() -> Path:
     if env_override:
         return Path(env_override).expanduser().resolve()
     try:
-        if os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+        if is_explicit_pytest_runtime() or is_test_mode():
             return (Path.cwd() / "Databases" / "artifacts").resolve()
     except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS:
         logger.exception("Error checking TEST_MODE/PYTEST_CURRENT_TEST for artifacts base dir")
@@ -211,7 +216,7 @@ def unsafe_file_access_allowed(config: dict[str, Any] | None) -> bool:  # noqa: 
         Only honors the `WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS` environment
         variable so workflow configs cannot bypass path restrictions.
     """
-    return str(os.getenv("WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS", "")).lower() in {"1", "true", "yes", "on"}
+    return env_flag_enabled("WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS")
 
 
 def parse_workflows_file_allowlist(raw: str | None) -> list[str]:

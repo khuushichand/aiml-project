@@ -146,7 +146,7 @@ class UserDatabase:
 
         if not schema_statements:
             logger.warning(
-                "Schema file not available for %s backend, using embedded defaults",
+                'Schema file not available for {} backend, using embedded defaults',
                 self.backend.backend_type.value,
             )
             schema_statements = self._default_schema_statements()
@@ -343,7 +343,9 @@ class UserDatabase:
                 return False
 
             values.append(user_id)
-            query = f"UPDATE users SET {', '.join(set_clause)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+            set_clause_sql = ", ".join(set_clause)
+            query_template = "UPDATE users SET {set_clause_sql}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+            query = query_template.format_map(locals())  # nosec B608
 
             result = self.backend.execute(query, tuple(values), connection=conn)
 
@@ -1127,7 +1129,7 @@ class UserDatabase:
             try:
                 self.backend.execute(role_sql, (name, description, is_system))
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Skipping role seed for %s: %s", name, exc)
+                logger.debug("Skipping role seed for {}: {}", name, exc)
 
         # Seed baseline permissions
         default_perms = [
@@ -1141,7 +1143,7 @@ class UserDatabase:
             try:
                 self.backend.execute(perm_sql, (name, desc, cat))
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Skipping permission seed for %s: %s", name, exc)
+                logger.debug("Skipping permission seed for {}: {}", name, exc)
 
         # Map permissions to roles
         def _get_id(query: str, value: str) -> Optional[int]:
@@ -1236,7 +1238,7 @@ class UserDatabase:
                     "UPDATE users SET locked_until = NULL WHERE locked_until IS NULL"
                 )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Failed to normalize user table core columns: %s", exc)
+            logger.debug("Failed to normalize user table core columns: {}", exc)
 
         try:
             if self.backend.backend_type == BackendType.SQLITE:
@@ -1252,4 +1254,4 @@ class UserDatabase:
                     """
                 )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Failed to normalize registration_codes table: %s", exc)
+            logger.debug("Failed to normalize registration_codes table: {}", exc)

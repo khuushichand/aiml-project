@@ -40,6 +40,7 @@ def test_abtest_audit_hooks_emitted(monkeypatch, tmp_path):
     app.dependency_overrides[get_auth_principal] = lambda: AuthPrincipal(
         kind="user",
         user_id=1,
+        roles=["admin"],
         is_admin=True,
     )
 

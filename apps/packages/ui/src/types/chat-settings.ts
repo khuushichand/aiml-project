@@ -1,4 +1,20 @@
 export type ChatMenuDensity = "comfortable" | "compact"
+export type ChatRichTextMode = "safe_markdown" | "st_compat"
+export type ChatRichTextStylePreset =
+  | "default"
+  | "muted"
+  | "high_contrast"
+  | "custom"
+export type ChatRichTextColorOption =
+  | "default"
+  | "text"
+  | "muted"
+  | "primary"
+  | "accent"
+  | "success"
+  | "warn"
+  | "danger"
+export type ChatRichTextFontOption = "default" | "sans" | "serif" | "mono"
 
 export interface ChatSettingsConfig {
   copilotResumeLastChat: boolean
@@ -13,6 +29,16 @@ export interface ChatSettingsConfig {
   userChatBubble: boolean
   autoCopyResponseToClipboard: boolean
   useMarkdownForUserMessage: boolean
+  chatRichTextMode: ChatRichTextMode
+  chatRichTextStylePreset: ChatRichTextStylePreset
+  chatRichItalicColor: ChatRichTextColorOption
+  chatRichItalicFont: ChatRichTextFontOption
+  chatRichBoldColor: ChatRichTextColorOption
+  chatRichBoldFont: ChatRichTextFontOption
+  chatRichQuoteTextColor: ChatRichTextColorOption
+  chatRichQuoteFont: ChatRichTextFontOption
+  chatRichQuoteBorderColor: ChatRichTextColorOption
+  chatRichQuoteBackgroundColor: ChatRichTextColorOption
   copyAsFormattedText: boolean
   tabMentionsEnabled: boolean
   pasteLargeTextAsFile: boolean
@@ -43,6 +69,16 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettingsConfig = {
   userChatBubble: true,
   autoCopyResponseToClipboard: false,
   useMarkdownForUserMessage: false,
+  chatRichTextMode: "safe_markdown",
+  chatRichTextStylePreset: "default",
+  chatRichItalicColor: "default",
+  chatRichItalicFont: "default",
+  chatRichBoldColor: "default",
+  chatRichBoldFont: "default",
+  chatRichQuoteTextColor: "default",
+  chatRichQuoteFont: "default",
+  chatRichQuoteBorderColor: "default",
+  chatRichQuoteBackgroundColor: "default",
   copyAsFormattedText: false,
   tabMentionsEnabled: false,
   pasteLargeTextAsFile: false,

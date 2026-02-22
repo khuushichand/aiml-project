@@ -5,7 +5,7 @@ This guide orients project developers to the Character_Chat module: what’s in 
 See also: `tldw_Server_API/app/core/Character_Chat/README.md` for a focused module readme, and the API routers listed below for concrete usage.
 
 ## Scope & Goals
-- Persona/character cards: import/export across common formats (PNG/WEBP with embedded JSON, JSON/Markdown, V1/V2/V3)
+- Persona/character cards: import/export across common formats (PNG/WEBP/JPEG with embedded JSON, JSON/YAML/Markdown/TXT, V1/V2/V3)
 - Conversations and messages: session lifecycle, message CRUD, pagination, search, ranking
 - World Books (lorebooks): keyword-driven context injection with budgets/priorities
 - Chat Dictionary: pattern-based replacements, probabilities, token budgets, grouped rules
@@ -18,7 +18,7 @@ See also: `tldw_Server_API/app/core/Character_Chat/README.md` for a focused modu
   - `tldw_Server_API/app/core/Character_Chat/modules/` (split implementation)
 - Split modules (primary):
   - `.../modules/character_utils.py` — placeholders, UI helpers, sender→role mapping
-  - `.../modules/character_io.py` — card import/export (PNG/WEBP/JSON/MD), format validation
+  - `.../modules/character_io.py` — card import/export (PNG/WEBP/JPEG/JSON/YAML/MD/TXT), format validation
   - `.../modules/character_validation.py` — parsers for V1/V2/Pygmalion/TextGen/Alpaca
   - `.../modules/character_db.py` — CRUD wrappers over `ChaChaNotes_DB`
   - `.../modules/character_chat.py` — chat sessions + messages + history shaping
@@ -52,6 +52,14 @@ Each router resolves the per-user DB via `get_chacha_db_for_user` and the authen
 
 Notes on images and attachments:
 - API message listings include `has_image` flags but do not return raw attachment bytes. Use library helpers like `retrieve_conversation_messages_for_ui(..., rich_output=true)` for in-process rich UI shaping when needed.
+
+## Delete and Recovery Policy
+
+- Character deletes are soft deletes. `DELETE /api/v1/characters/{id}` sets `deleted=1` and increments `version`.
+- Restore uses optimistic locking: `POST /api/v1/characters/{id}/restore?expected_version=<deleted_version>`.
+- If `expected_version` is stale, restore returns `409 Conflict` with a version-mismatch detail.
+- UI policy: single and bulk delete expose a 10-second undo action, and the Characters workspace includes a `Recently deleted` scope for out-of-toast recovery.
+- Recovery telemetry is emitted by the UI as `tldw:characters-recovery` with actions: `delete`, `undo`, `restore`, `restore_failed`, `bulk_delete`, `bulk_undo`, `bulk_restore`, `bulk_restore_failed`.
 
 ## Key Helpers (What to Call)
 - Characters

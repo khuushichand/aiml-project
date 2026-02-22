@@ -79,7 +79,10 @@ async def test_admin_endpoints_basic_sqlite(tmp_path):
         # List orgs
         r = client.get("/api/v1/admin/orgs")
         assert r.status_code == 200
-        assert any(o['name'] == 'Zeta Org' for o in r.json())
+        data = r.json()
+        items = data.get("items", [])
+        assert isinstance(items, list)
+        assert any(o["name"] == "Zeta Org" for o in items)
 
         # Create a team
         r = client.post(f"/api/v1/admin/orgs/{org['id']}/teams", json={"name": "Infra"})

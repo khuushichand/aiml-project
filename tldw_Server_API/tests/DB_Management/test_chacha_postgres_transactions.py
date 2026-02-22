@@ -71,7 +71,7 @@ def test_chacha_transaction_context_commits_if_available(tmp_path, pg_database_c
             if db.backend_type == BackendType.POSTGRESQL:
                 db.backend.get_pool().close_all()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.integration
@@ -99,7 +99,7 @@ def test_chacha_postgres_pool_returns_connections(pg_database_config: DatabaseCo
         try:
             db.close_connection()
         except Exception:
-            pass
+            _ = None
 
         pool.get_connection = tracked_get_connection  # type: ignore[assignment]
         pool.return_connection = tracked_return_connection  # type: ignore[assignment]
@@ -115,10 +115,10 @@ def test_chacha_postgres_pool_returns_connections(pg_database_config: DatabaseCo
             pool.get_connection = orig_get  # type: ignore[assignment]
             pool.return_connection = orig_return  # type: ignore[assignment]
         except Exception:
-            pass
+            _ = None
         try:
             db.close_connection()
             if db.backend_type == BackendType.POSTGRESQL:
                 db.backend.get_pool().close_all()
         except Exception:
-            pass
+            _ = None

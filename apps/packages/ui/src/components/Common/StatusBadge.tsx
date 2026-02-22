@@ -7,11 +7,11 @@ export interface StatusBadgeProps {
 
 const VARIANT_CLASSES: Record<StatusBadgeProps["variant"], string> = {
   demo:
-    "bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200",
+    "bg-primary/10 text-primary",
   warning:
-    "bg-yellow-50 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-200",
+    "bg-warn/10 text-warn",
   error:
-    "bg-red-50 text-red-700 dark:bg-red-900/40 dark:text-red-200"
+    "bg-danger/10 text-danger"
 }
 
 export const StatusBadge: React.FC<StatusBadgeProps> = ({

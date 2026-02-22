@@ -16,23 +16,23 @@ try:
 except Exception:
     # Never break collection if plugin import fails; tests that need these
     # fixtures will naturally error with a clear missing-fixture message.
-    pass
+    _ = None
 
 try:
     from tldw_Server_API.tests._plugins.authnz_fixtures import *  # noqa: F401,F403
 except Exception:
-    pass
+    _ = None
 
 try:
     from tldw_Server_API.tests._plugins.postgres import *  # noqa: F401,F403
 except Exception:
-    pass
+    _ = None
 
 # Also expose the isolated Chat fixtures used by several test modules
 try:
     from tldw_Server_API.tests.Chat.integration.conftest_isolated import *  # noqa: F401,F403
 except Exception:
-    pass
+    _ = None
 
 # Ensure OpenAI-backed tests use the local mock server to keep
 # Chat integration deterministic and avoid external dependencies.
@@ -42,7 +42,7 @@ try:
 
     @pytest.fixture(scope="session", autouse=True)
     def _auto_configure_openai_mock(request):  # noqa: F811
-        use_mock = os.getenv("USE_OPENAI_MOCK_SERVER", "").lower() in {"1", "true", "yes", "on"}
+        use_mock = os.getenv("USE_OPENAI_MOCK_SERVER", "").lower() in {"1", "true", "yes", "y", "on"}
         has_real_key = bool(os.getenv("OPENAI_API_KEY"))
         if not use_mock and has_real_key:
             yield
@@ -70,9 +70,9 @@ try:
                 from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
                 setattr(chat_endpoint, "API_KEYS", chat_schemas.API_KEYS)
             except Exception:
-                pass
+                _ = None
         except Exception:
-            pass
+            _ = None
 
         # Optionally patch config to surface base URL for adapters that read it
         try:
@@ -88,8 +88,8 @@ try:
             import tldw_Server_API.app.core.LLM_Calls.chat_calls as _llm_calls_mod
             _llm_calls_mod.load_and_log_configs = _config_mod.load_and_log_configs
         except Exception:
-            pass
+            _ = None
 
         yield
 except Exception:
-    pass
+    _ = None

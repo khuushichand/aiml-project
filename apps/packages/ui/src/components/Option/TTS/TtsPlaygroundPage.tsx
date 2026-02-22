@@ -29,13 +29,15 @@ import {
 } from "@/hooks/useTtsProviderData"
 import { PageShell } from "@/components/Common/PageShell"
 import { TtsProviderPanel } from "@/components/Option/TTS/TtsProviderPanel"
+import { isTimeoutLikeError } from "@/utils/request-timeout"
+import { withTemplateFallback } from "@/utils/template-guards"
 
 const { Text, Title, Paragraph } = Typography
 const SAMPLE_TEXT =
   "Sample: Hi there, this is the TTS playground reading a short passage so you can preview voice and speed."
 
 const TtsPlaygroundPage: React.FC = () => {
-  const { t } = useTranslation(["playground", "settings"])
+  const { t } = useTranslation(["playground", "settings", "common"])
   const [text, setText] = React.useState("")
   const { data: ttsSettings } = useQuery({
     queryKey: ["fetchTTSSettings"],
@@ -72,7 +74,9 @@ const TtsPlaygroundPage: React.FC = () => {
     tldwTtsModels,
     tldwVoiceCatalog,
     elevenLabsData,
-    elevenLabsLoading
+    elevenLabsLoading,
+    elevenLabsError,
+    refetchElevenLabs
   } = useTtsProviderData({
     provider,
     elevenLabsApiKey: ttsSettings?.elevenLabsApiKey,
@@ -428,6 +432,8 @@ const TtsPlaygroundPage: React.FC = () => {
     ttsSettings?.ttsProvider === "elevenlabs" &&
     !elevenLabsData &&
     !elevenLabsLoading
+  const hasElevenLabsLoadError =
+    hasElevenLabsKey && Boolean(elevenLabsError)
   const elevenLabsHintTitle = hasElevenLabsKey
     ? t(
         "playground:tts.elevenLabsUnavailableTitle",
@@ -446,6 +452,10 @@ const TtsPlaygroundPage: React.FC = () => {
         "playground:tts.elevenLabsMissingBody",
         "Add your ElevenLabs API key in Settings to load voices and models."
       )
+  const elevenLabsTimeoutBody = t(
+    "playground:tts.elevenLabsTimeoutBody",
+    "Loading voices/models took longer than 10 seconds. Retry or verify network access."
+  )
 
   const handleElevenLabsApiKeyFocus = () => {
     const el = document.getElementById("elevenlabs-api-key")
@@ -481,7 +491,7 @@ const TtsPlaygroundPage: React.FC = () => {
         />
 
         <Card>
-          <Space direction="vertical" className="w-full" size="middle">
+          <Space orientation="vertical" className="w-full" size="middle">
             <div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Paragraph className="!mb-2 !mr-2">
@@ -521,10 +531,25 @@ const TtsPlaygroundPage: React.FC = () => {
               <Alert
                 type={hasElevenLabsKey ? "warning" : "info"}
                 showIcon
-                message={elevenLabsHintTitle}
+                title={elevenLabsHintTitle}
                 description={
                   <div className="flex flex-wrap items-center gap-2">
-                    <span>{elevenLabsHintBody}</span>
+                    <span>
+                      {hasElevenLabsLoadError && isTimeoutLikeError(elevenLabsError)
+                        ? elevenLabsTimeoutBody
+                        : elevenLabsHintBody}
+                    </span>
+                    {hasElevenLabsKey && (
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => {
+                          void refetchElevenLabs()
+                        }}
+                      >
+                        {t("common:retry", "Retry")}
+                      </Button>
+                    )}
                     <Button
                       size="small"
                       type="link"
@@ -798,13 +823,16 @@ const TtsPlaygroundPage: React.FC = () => {
                               "Paused"
                             )} · `
                           : ""}
-                        {t(
-                          "playground:tts.browserStatusSpeaking",
-                          "Speaking segment {{current}}/{{total}}",
-                          {
-                            current: browserActiveIndex + 1,
-                            total: segments.length
-                          }
+                        {withTemplateFallback(
+                          t(
+                            "playground:tts.browserStatusSpeaking",
+                            "Speaking segment {{current}}/{{total}}",
+                            {
+                              current: browserActiveIndex + 1,
+                              total: segments.length
+                            }
+                          ),
+                          `Speaking segment ${browserActiveIndex + 1}/${segments.length}`
                         )}
                       </Text>
                     )}
@@ -945,7 +973,7 @@ const TtsPlaygroundPage: React.FC = () => {
           <Alert
             type="warning"
             showIcon
-            message={t(
+            title={t(
               "playground:tts.tldwWarningTitle",
               "tldw audio/speech API not detected"
             )}

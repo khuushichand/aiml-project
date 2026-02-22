@@ -30,7 +30,7 @@ async def real_audit_service(tmp_path):
         try:
             await _shutdown_all()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest_asyncio.fixture
@@ -49,7 +49,7 @@ async def authnz_schema_ready():
         _reset_settings()
     except Exception:
         # Proceed best-effort even if reset hooks are unavailable
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once as _ensure_once
         await _ensure_once()
@@ -69,7 +69,7 @@ def _run_async(coro):
             # In a running loop context (rare for sync tests), schedule and wait
             return _asyncio.get_event_loop().run_until_complete(coro)  # type: ignore[misc]
     except RuntimeError:
-        pass
+        _ = None
     return _asyncio.run(coro)
 
 
@@ -87,10 +87,10 @@ def authnz_schema_ready_sync():
         _run_async(_reset_db_pool())
         _reset_settings()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once as _ensure_once
         _run_async(_ensure_once())
     except Exception:
-        pass
+        _ = None
     return None

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{{ title }}</title></head>
+<body style="font-family: sans-serif; max-width: 700px; margin: 0 auto; padding: 20px;">
+<h1>{{ title }}</h1>
+<p><em>Generated at {{ generated_at }}</em></p>
+<hr>
+{% for item in items %}
+<div style="margin-bottom: 20px;">
+<h3>{{ loop.index }}. {% if item.url %}<a href="{{ item.url }}">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}</h3>
+{% if item.summary %}<p>{{ item.summary }}</p>{% endif %}
+{% if item.published_at %}<p style="color: #666; font-size: 0.9em;">Published: {{ item.published_at }}</p>{% endif %}
+</div>
+{% endfor %}
+<hr>
+<p><em>{{ item_count }} items total</em></p>
+</body>
+</html>

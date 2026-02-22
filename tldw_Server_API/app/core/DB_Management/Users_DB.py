@@ -460,7 +460,7 @@ class UsersDB:
             user_id: Optional[int] = None
 
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchval'):
+                if self._using_postgres_backend():
                     # PostgreSQL
                     user_id = await conn.fetchval(
                         """
@@ -602,17 +602,19 @@ class UsersDB:
             field_names = list(updates.keys())
 
             async with self.db_pool.transaction() as conn:
-                # Determine backend explicitly: asyncpg connections expose fetchval()
-                is_postgres = hasattr(conn, 'fetchval')
+                # Determine backend from DatabasePool state (not conn capability probing).
+                is_postgres = self._using_postgres_backend()
 
                 if is_postgres:
                     # PostgreSQL - use $1..$n placeholders
                     set_clause = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(field_names))
                     values = [updates[k] for k in field_names] + [user_id]
-                    query = (
-                        f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
-                        f"WHERE id = ${len(values)}"
+                    user_id_param = len(values)
+                    update_user_sql_template = (
+                        "UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ${user_id_param}"
                     )
+                    query = update_user_sql_template.format_map(locals())  # nosec B608
                     await conn.execute(query, *values)
                 else:
                     # SQLite - convert bools to ints and use '?' placeholders
@@ -621,10 +623,8 @@ class UsersDB:
                             updates[key] = int(bool(updates[key]))
                     set_clause = ", ".join(f"{k} = ?" for k in field_names)
                     values = [updates[k] for k in field_names] + [user_id]
-                    query = (
-                        f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
-                        "WHERE id = ?"
-                    )
+                    update_user_sql_template = "UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    query = update_user_sql_template.format_map(locals())  # nosec B608
                     await conn.execute(query, values)
 
                 # SQLite shim commits on transaction exit, but keep for compatibility

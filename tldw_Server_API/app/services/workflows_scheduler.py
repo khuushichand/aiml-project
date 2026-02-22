@@ -27,6 +27,9 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.config import settings as core_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import (
     WorkflowSchedule,
     WorkflowsSchedulerDB,
@@ -38,6 +41,7 @@ from tldw_Server_API.app.core.Scheduler.handlers import (
 from tldw_Server_API.app.core.Scheduler.handlers import (
     workflows as _ensure_handlers,  # noqa: F401  # register workflow_run
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -58,6 +62,7 @@ _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
     UnicodeDecodeError,
+    BackendDatabaseError,
 )
 
 
@@ -76,6 +81,8 @@ class _WFRecurringScheduler:
         async with self._lock:
             if self._started:
                 return
+            # Rebuild DB handles on each cold start to pick up env/path changes.
+            self._db_cache.clear()
             # Start or reuse the global core job scheduler (workers)
             self._core_scheduler = await get_global_scheduler()
             # Start APScheduler for cron
@@ -124,6 +131,9 @@ class _WFRecurringScheduler:
             except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: rescan task cancel failed: {e}")
             self._rescan_task = None
+            # Ensure per-user DB handles are rebuilt on next start so tests/env
+            # changes (e.g. USER_DB_BASE_DIR) do not leak stale scheduler paths.
+            self._db_cache.clear()
             self._started = False
             logger.info("Workflows recurring scheduler stopped")
 
@@ -352,7 +362,7 @@ class _WFRecurringScheduler:
             logger.debug(f"Presence gating check failed for schedule {schedule_id}: {_e}")
         # Optionally mint a short-lived, scoped bearer token and inject into run secrets
         try:
-            use_vk = os.getenv("WORKFLOWS_MINT_VIRTUAL_KEYS", "").strip().lower() in {"1", "true", "yes", "on"}
+            use_vk = env_flag_enabled("WORKFLOWS_MINT_VIRTUAL_KEYS")
             if use_vk:
                 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
                 from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
@@ -457,7 +467,13 @@ class _WFRecurringScheduler:
 
     def get(self, schedule_id: str) -> WorkflowSchedule | None:
         # Check default DB first
-        found = self._db.get_schedule(schedule_id)
+        try:
+            found = self._db.get_schedule(schedule_id)
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(
+                f"Workflows scheduler: default DB lookup failed for schedule {schedule_id}: {e}"
+            )
+            found = None
         if found:
             return found
         # Scan per-user DBs
@@ -470,12 +486,18 @@ class _WFRecurringScheduler:
                     uid = int(p.name)
                 except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
                     continue
-                db = self._get_db(uid)
-                s = db.get_schedule(schedule_id)
+                try:
+                    db = self._get_db(uid)
+                    s = db.get_schedule(schedule_id)
+                except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
+                    logger.debug(
+                        f"Workflows scheduler: user DB lookup failed for schedule {schedule_id} in user {uid}: {e}"
+                    )
+                    continue
                 if s:
                     return s
-        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
-            logger.debug(f"Workflows scheduler: failed to locate schedule {schedule_id}")
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"Workflows scheduler: failed to locate schedule {schedule_id}: {e}")
         return None
 
     def list(self, *, tenant_id: str, user_id: str | None = None, limit: int = 50, offset: int = 0) -> builtins.list[WorkflowSchedule]:
@@ -501,7 +523,7 @@ def get_workflows_scheduler() -> _WFRecurringScheduler:
 
 
 async def start_workflows_scheduler() -> asyncio.Task | None:
-    enabled = os.getenv("WORKFLOWS_SCHEDULER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    enabled = env_flag_enabled("WORKFLOWS_SCHEDULER_ENABLED")
     if not enabled:
         return None
     svc = get_workflows_scheduler()

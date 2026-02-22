@@ -62,7 +62,7 @@ class SimpleSearchRequest(BaseModel):
         ...,
         description="The search query string",
         min_length=1,
-        max_length=1000,
+        max_length=20000,
         examples=["machine learning basics", "how to use RAG"]
     )
 
@@ -223,7 +223,7 @@ class SearchConfig(BaseModel):
 
 class AdvancedSearchRequest(BaseModel):
     """Advanced search request with full control"""
-    query: str = Field(..., min_length=1, max_length=1000)
+    query: str = Field(..., min_length=1, max_length=20000)
     search_config: SearchConfig = Field(default_factory=SearchConfig)
     hybrid_config: Optional[HybridSearchConfig] = None
     semantic_config: Optional[SemanticSearchConfig] = None

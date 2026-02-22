@@ -117,13 +117,13 @@ async def test_file_artifacts_async_export_job(monkeypatch, tmp_path):
             await reset_db_pool()
             await reset_users_db()
         except Exception:
-            pass
+            _ = None
         if prev_base_dir is not None:
             settings.USER_DB_BASE_DIR = prev_base_dir
         else:
             try:
                 del settings.USER_DB_BASE_DIR
             except AttributeError:
-                pass
+                _ = None
         if app is not None:
             app.dependency_overrides.clear()

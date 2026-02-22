@@ -37,7 +37,7 @@ class TestDatabaseBackends:
         try:
             os.unlink(temp_path)
         except:
-            pass
+            _ = None
 
     @pytest.fixture
     def sqlite_config(self, temp_db_path):
@@ -186,7 +186,7 @@ class TestDatabaseBackends:
                 # Force an error
                 cursor.execute("INVALID SQL")
         except:
-            pass  # Expected to fail
+            _ = None  # Expected to fail
 
         # Verify table was NOT created (rolled back)
         conn = backend.connect()

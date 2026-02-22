@@ -274,7 +274,7 @@ const initialSettingsState: SettingsState = {
 }
 
 const initialUIState: UIState = {
-  activeTab: "sources",
+  activeTab: "overview",
   sourceFormOpen: false,
   sourceFormEditId: null,
   jobFormOpen: false,

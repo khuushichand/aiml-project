@@ -228,7 +228,7 @@ export const SourceSelector: React.FC = () => {
       {/* Selected sources */}
       {selectedSources.length > 0 && (
         <div>
-          <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+          <h4 className="text-sm font-medium text-text mb-2">
             {t("dataTables:selectedSources", "Selected Sources")} ({selectedSources.length})
           </h4>
           <div className="flex flex-wrap gap-2">
@@ -265,7 +265,7 @@ export const SourceSelector: React.FC = () => {
             value={ragQuery}
             onChange={(e) => setRagQuery(e.target.value)}
             onPressEnter={handleRagSearch}
-            prefix={<Search className="h-4 w-4 text-zinc-400" />}
+            prefix={<Search className="h-4 w-4 text-text-subtle" />}
           />
           <Button
             type="primary"
@@ -281,7 +281,7 @@ export const SourceSelector: React.FC = () => {
           placeholder={t("dataTables:searchPlaceholder", "Search...")}
           value={sourceSearchQuery}
           onChange={(e) => setSourceSearchQuery(e.target.value)}
-          prefix={<Search className="h-4 w-4 text-zinc-400" />}
+          prefix={<Search className="h-4 w-4 text-text-subtle" />}
           allowClear
         />
       )}
@@ -305,9 +305,9 @@ export const SourceSelector: React.FC = () => {
               dataSource={availableItems}
               renderItem={(item) => (
                 <List.Item
-                  className={`cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800 rounded-lg transition-colors ${
+                  className={`cursor-pointer hover:bg-surface rounded-lg transition-colors ${
                     isSelected(item.id)
-                      ? "bg-blue-50 dark:bg-blue-900/20 border-l-2 border-blue-500"
+                      ? "bg-primary/10 border-l-2 border-primary"
                       : ""
                   }`}
                   onClick={() => {
@@ -321,19 +321,19 @@ export const SourceSelector: React.FC = () => {
                   <List.Item.Meta
                     avatar={
                       item.type === "chat" ? (
-                        <MessageSquare className="h-5 w-5 text-zinc-400" />
+                        <MessageSquare className="h-5 w-5 text-text-subtle" />
                       ) : (
-                        <FileText className="h-5 w-5 text-zinc-400" />
+                        <FileText className="h-5 w-5 text-text-subtle" />
                       )
                     }
                     title={
-                      <span className="text-zinc-900 dark:text-zinc-100">
+                      <span className="text-text">
                         {item.title}
                       </span>
                     }
                     description={
                       item.snippet && (
-                        <span className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-1">
+                        <span className="text-xs text-text-muted line-clamp-1">
                           {item.snippet}
                         </span>
                       )
@@ -355,7 +355,7 @@ export const SourceSelector: React.FC = () => {
 
       {/* Tip for RAG */}
       {activeSourceType === "rag_query" && (
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="text-sm text-text-muted">
           {t(
             "dataTables:ragTip",
             "Enter search queries to find relevant content in your knowledge base. Each query will be added as a separate source."

@@ -4,6 +4,7 @@ from starlette.requests import Request
 
 import tldw_Server_API.app.api.v1.API_Deps.setup_deps as setup_deps
 from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
 @pytest.fixture(autouse=True)
@@ -77,10 +78,24 @@ async def test_setup_guard_allows_local_proxy(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_setup_guard_config_allows_remote(monkeypatch):
-    """Config flag can relax locality restriction."""
+    """Config flag can relax locality restriction for authenticated admin callers."""
     monkeypatch.delenv("TLDW_SETUP_ALLOW_REMOTE", raising=False)
     monkeypatch.delenv("TLDW_SETUP_TRUST_PROXY", raising=False)
     setup_deps.reset_remote_access_cache(True)
+
+    async def fake_get_auth_principal(_request):
+        return AuthPrincipal(
+            kind="user",
+            user_id=1,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=False,
+        )
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_auth_principal",
+        fake_get_auth_principal,
+    )
 
     scope = {
         "type": "http",

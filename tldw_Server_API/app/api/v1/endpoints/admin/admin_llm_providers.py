@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 from fastapi import APIRouter, Depends, Query, Response, status
+from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_rate_limit,
@@ -146,3 +149,72 @@ async def admin_test_llm_provider(
     """Test an LLM provider configuration (admin scope)."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
     return await admin_llm_providers_service.test_provider(payload)
+
+
+@router.get(
+    "/llm/providers/health",
+    dependencies=[Depends(get_auth_principal), Depends(check_rate_limit)],
+)
+async def admin_llm_providers_health(
+    admin_llm_providers_service: AdminLLMProvidersService = Depends(
+        get_admin_llm_providers_service,
+    ),
+) -> dict[str, Any]:
+    """Batch health check for all configured LLM providers.
+
+    Pings each provider with a minimal test request and returns
+    per-provider health status, latency, and error details.
+    """
+    await _get_ensure_sqlite_authnz_ready_if_test_mode()()
+
+    # Get configured providers
+    try:
+        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import get_available_providers
+        providers = get_available_providers()
+    except Exception:
+        providers = []
+
+    if not providers:
+        # Fallback: list from overrides
+        try:
+            overrides = await admin_llm_providers_service.list_overrides(None)
+            providers = [o.provider for o in (overrides.overrides or [])]
+        except Exception:
+            providers = []
+
+    results: list[dict[str, Any]] = []
+
+    async def _check_provider(provider_name: str) -> dict[str, Any]:
+        start = time.monotonic()
+        try:
+            test_result = await admin_llm_providers_service.test_provider(
+                LLMProviderTestRequest(provider=provider_name)
+            )
+            latency_ms = round((time.monotonic() - start) * 1000)
+            return {
+                "provider": provider_name,
+                "status": "healthy" if test_result.success else "unhealthy",
+                "latency_ms": latency_ms,
+                "message": test_result.message if hasattr(test_result, "message") else None,
+                "error": test_result.error if hasattr(test_result, "error") and not test_result.success else None,
+            }
+        except Exception as exc:
+            latency_ms = round((time.monotonic() - start) * 1000)
+            return {
+                "provider": provider_name,
+                "status": "error",
+                "latency_ms": latency_ms,
+                "error": str(exc),
+            }
+
+    if providers:
+        check_tasks = [_check_provider(p) for p in providers[:20]]  # Cap at 20 providers
+        results = await asyncio.gather(*check_tasks)
+
+    healthy_count = sum(1 for r in results if r["status"] == "healthy")
+    return {
+        "providers": results,
+        "total": len(results),
+        "healthy": healthy_count,
+        "unhealthy": len(results) - healthy_count,
+    }
