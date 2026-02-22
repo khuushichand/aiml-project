@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from threading import RLock
 from typing import Any
 
 _VALID_PERSONA_PLAN_STEP_TYPES = frozenset({"mcp_tool", "skill", "rag_query", "final_answer"})
@@ -60,34 +61,96 @@ class Session:
 
 
 class SessionManager:
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        max_turns_per_session: int = 200,
+        max_pending_plans_per_session: int = 20,
+        session_ttl_seconds: int = 86_400,
+        max_sessions_per_user: int = 200,
+    ):
         self._sessions: dict[str, Session] = {}
+        self._lock = RLock()
+        self._max_turns_per_session = max(1, int(max_turns_per_session))
+        self._max_pending_plans_per_session = max(1, int(max_pending_plans_per_session))
+        self._session_ttl_seconds = max(1, int(session_ttl_seconds))
+        self._max_sessions_per_user = max(1, int(max_sessions_per_user))
 
     @staticmethod
     def _touch_session(session: Session) -> None:
         session.updated_at = datetime.now(timezone.utc)
 
-    def create(self, user_id: str, persona_id: str, resume_session_id: str | None = None) -> Session:
-        if resume_session_id and resume_session_id in self._sessions:
-            existing = self._sessions[resume_session_id]
-            if existing.user_id != user_id:
-                raise ValueError("session ownership mismatch")
-            if existing.persona_id != persona_id:
-                raise ValueError("session persona mismatch")
-            self._touch_session(existing)
-            return existing
-        sid = resume_session_id or str(uuid.uuid4())
-        sess = Session(
-            session_id=sid,
-            user_id=user_id,
-            persona_id=persona_id,
-            preferences={"use_memory_context": True},
+    def _prune_expired_sessions_locked(self) -> None:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=self._session_ttl_seconds)
+        expired = [
+            session_id
+            for session_id, session in self._sessions.items()
+            if session.updated_at < cutoff
+        ]
+        for session_id in expired:
+            self._sessions.pop(session_id, None)
+
+    def _trim_turns_locked(self, session: Session) -> None:
+        if len(session.turns) > self._max_turns_per_session:
+            session.turns = session.turns[-self._max_turns_per_session :]
+
+    def _trim_pending_plans_locked(self, session: Session) -> None:
+        if len(session.pending_plans) <= self._max_pending_plans_per_session:
+            return
+        ordered_plan_ids = sorted(
+            session.pending_plans,
+            key=lambda pid: session.pending_plans[pid].created_at,
+            reverse=True,
         )
-        self._sessions[sid] = sess
-        return sess
+        keep_ids = set(ordered_plan_ids[: self._max_pending_plans_per_session])
+        drop_ids = [plan_id for plan_id in session.pending_plans if plan_id not in keep_ids]
+        for plan_id in drop_ids:
+            session.pending_plans.pop(plan_id, None)
+
+    def _enforce_user_session_cap_locked(self, user_id: str) -> None:
+        user_sessions = [
+            session
+            for session in self._sessions.values()
+            if session.user_id == user_id
+        ]
+        if len(user_sessions) <= self._max_sessions_per_user:
+            return
+        user_sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        keep_ids = {session.session_id for session in user_sessions[: self._max_sessions_per_user]}
+        drop_ids = [
+            session.session_id
+            for session in user_sessions[self._max_sessions_per_user :]
+            if session.session_id not in keep_ids
+        ]
+        for session_id in drop_ids:
+            self._sessions.pop(session_id, None)
+
+    def create(self, user_id: str, persona_id: str, resume_session_id: str | None = None) -> Session:
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            if resume_session_id and resume_session_id in self._sessions:
+                existing = self._sessions[resume_session_id]
+                if existing.user_id != user_id:
+                    raise ValueError("session ownership mismatch")
+                if existing.persona_id != persona_id:
+                    raise ValueError("session persona mismatch")
+                self._touch_session(existing)
+                return existing
+            sid = resume_session_id or str(uuid.uuid4())
+            sess = Session(
+                session_id=sid,
+                user_id=user_id,
+                persona_id=persona_id,
+                preferences={"use_memory_context": True},
+            )
+            self._sessions[sid] = sess
+            self._enforce_user_session_cap_locked(user_id)
+            return self._sessions[sid]
 
     def get(self, session_id: str) -> Session | None:
-        return self._sessions.get(session_id)
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            return self._sessions.get(session_id)
 
     def put_plan(
         self,
@@ -102,50 +165,53 @@ class SessionManager:
             raise ValueError("session_id is required")
         if not plan_id:
             raise ValueError("plan_id is required")
-        session = self.create(user_id=user_id, persona_id=persona_id, resume_session_id=session_id)
-        normalized_steps: list[PlanStep] = []
-        for raw in steps:
-            if not isinstance(raw, dict):
-                continue
-            try:
-                idx = int(raw.get("idx"))
-            except (TypeError, ValueError):
-                continue
-            tool = str(raw.get("tool") or "").strip()
-            if not tool:
-                continue
-            step_type = _normalize_step_type(raw.get("step_type"), tool_name=tool)
-            args = raw.get("args")
-            if not isinstance(args, dict):
-                args = {}
-            description = raw.get("description")
-            if description is not None:
-                description = str(description)
-            why = raw.get("why")
-            if why is not None:
-                why = str(why)
-            normalized_steps.append(
-                PlanStep(
-                    idx=idx,
-                    tool=tool,
-                    step_type=step_type,
-                    args=args,
-                    description=description,
-                    why=why,
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            session = self.create(user_id=user_id, persona_id=persona_id, resume_session_id=session_id)
+            normalized_steps: list[PlanStep] = []
+            for raw in steps:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    idx = int(raw.get("idx"))
+                except (TypeError, ValueError):
+                    continue
+                tool = str(raw.get("tool") or "").strip()
+                if not tool:
+                    continue
+                step_type = _normalize_step_type(raw.get("step_type"), tool_name=tool)
+                args = raw.get("args")
+                if not isinstance(args, dict):
+                    args = {}
+                description = raw.get("description")
+                if description is not None:
+                    description = str(description)
+                why = raw.get("why")
+                if why is not None:
+                    why = str(why)
+                normalized_steps.append(
+                    PlanStep(
+                        idx=idx,
+                        tool=tool,
+                        step_type=step_type,
+                        args=args,
+                        description=description,
+                        why=why,
+                    )
                 )
+            if not normalized_steps:
+                raise ValueError("no valid plan steps")
+            normalized_steps.sort(key=lambda step: step.idx)
+            pending = PendingPlan(
+                plan_id=plan_id,
+                session_id=session_id,
+                created_at=datetime.now(timezone.utc),
+                steps=normalized_steps,
             )
-        if not normalized_steps:
-            raise ValueError("no valid plan steps")
-        normalized_steps.sort(key=lambda step: step.idx)
-        pending = PendingPlan(
-            plan_id=plan_id,
-            session_id=session_id,
-            created_at=datetime.now(timezone.utc),
-            steps=normalized_steps,
-        )
-        session.pending_plans[plan_id] = pending
-        self._touch_session(session)
-        return pending
+            session.pending_plans[plan_id] = pending
+            self._trim_pending_plans_locked(session)
+            self._touch_session(session)
+            return session.pending_plans[plan_id]
 
     def get_plan(
         self,
@@ -155,18 +221,20 @@ class SessionManager:
         user_id: str | None = None,
         consume: bool = False,
     ) -> PendingPlan | None:
-        session = self._sessions.get(session_id)
-        if session is None:
-            return None
-        if user_id is not None and session.user_id != user_id:
-            return None
-        pending = session.pending_plans.get(plan_id)
-        if pending is None:
-            return None
-        if consume:
-            session.pending_plans.pop(plan_id, None)
-            self._touch_session(session)
-        return pending
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+            if user_id is not None and session.user_id != user_id:
+                return None
+            pending = session.pending_plans.get(plan_id)
+            if pending is None:
+                return None
+            if consume:
+                session.pending_plans.pop(plan_id, None)
+                self._touch_session(session)
+            return pending
 
     def clear_plans(
         self,
@@ -174,16 +242,18 @@ class SessionManager:
         session_id: str,
         user_id: str | None = None,
     ) -> int:
-        session = self._sessions.get(session_id)
-        if session is None:
-            return 0
-        if user_id is not None and session.user_id != user_id:
-            return 0
-        cleared = len(session.pending_plans)
-        session.pending_plans.clear()
-        if cleared:
-            self._touch_session(session)
-        return cleared
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            session = self._sessions.get(session_id)
+            if session is None:
+                return 0
+            if user_id is not None and session.user_id != user_id:
+                return 0
+            cleared = len(session.pending_plans)
+            session.pending_plans.clear()
+            if cleared:
+                self._touch_session(session)
+            return cleared
 
     def append_turn(
         self,
@@ -196,18 +266,21 @@ class SessionManager:
         turn_type: str = "text",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        session = self.create(user_id=user_id, persona_id=persona_id, resume_session_id=session_id)
-        turn: dict[str, Any] = {
-            "turn_id": uuid.uuid4().hex,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "role": str(role or "unknown"),
-            "type": str(turn_type or "text"),
-            "content": str(content or ""),
-            "metadata": dict(metadata or {}),
-        }
-        session.turns.append(turn)
-        self._touch_session(session)
-        return turn
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            session = self.create(user_id=user_id, persona_id=persona_id, resume_session_id=session_id)
+            turn: dict[str, Any] = {
+                "turn_id": uuid.uuid4().hex,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "role": str(role or "unknown"),
+                "type": str(turn_type or "text"),
+                "content": str(content or ""),
+                "metadata": dict(metadata or {}),
+            }
+            session.turns.append(turn)
+            self._trim_turns_locked(session)
+            self._touch_session(session)
+            return turn
 
     def list_turns(
         self,
@@ -216,22 +289,24 @@ class SessionManager:
         user_id: str | None = None,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        session = self._sessions.get(session_id)
-        if session is None:
-            return []
-        if user_id is not None and session.user_id != user_id:
-            return []
-        turns = list(session.turns)
-        if limit is not None:
-            try:
-                safe_limit = max(0, int(limit))
-            except (TypeError, ValueError):
-                safe_limit = 0
-            if safe_limit:
-                turns = turns[-safe_limit:]
-            else:
-                turns = []
-        return turns
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            session = self._sessions.get(session_id)
+            if session is None:
+                return []
+            if user_id is not None and session.user_id != user_id:
+                return []
+            turns = list(session.turns)
+            if limit is not None:
+                try:
+                    safe_limit = max(0, int(limit))
+                except (TypeError, ValueError):
+                    safe_limit = 0
+                if safe_limit:
+                    turns = turns[-safe_limit:]
+                else:
+                    turns = []
+            return turns
 
     def update_preferences(
         self,
@@ -240,18 +315,20 @@ class SessionManager:
         user_id: str,
         preferences: dict[str, Any],
     ) -> dict[str, Any]:
-        session = self._sessions.get(session_id)
-        if session is None or session.user_id != user_id:
-            raise ValueError("session not found or ownership mismatch")
-        for key, value in (preferences or {}).items():
-            if not isinstance(key, str) or not key.strip():
-                continue
-            if value is None:
-                session.preferences.pop(key, None)
-            else:
-                session.preferences[key] = value
-        self._touch_session(session)
-        return dict(session.preferences)
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            session = self._sessions.get(session_id)
+            if session is None or session.user_id != user_id:
+                raise ValueError("session not found or ownership mismatch")
+            for key, value in (preferences or {}).items():
+                if not isinstance(key, str) or not key.strip():
+                    continue
+                if value is None:
+                    session.preferences.pop(key, None)
+                else:
+                    session.preferences[key] = value
+            self._touch_session(session)
+            return dict(session.preferences)
 
     def get_preferences(
         self,
@@ -259,12 +336,14 @@ class SessionManager:
         session_id: str,
         user_id: str | None = None,
     ) -> dict[str, Any]:
-        session = self._sessions.get(session_id)
-        if session is None:
-            return {}
-        if user_id is not None and session.user_id != user_id:
-            return {}
-        return dict(session.preferences)
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            session = self._sessions.get(session_id)
+            if session is None:
+                return {}
+            if user_id is not None and session.user_id != user_id:
+                return {}
+            return dict(session.preferences)
 
     def list_sessions(
         self,
@@ -273,30 +352,32 @@ class SessionManager:
         persona_id: str | None = None,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        sessions = [
-            session
-            for session in self._sessions.values()
-            if session.user_id == user_id and (persona_id is None or session.persona_id == persona_id)
-        ]
-        sessions.sort(key=lambda s: s.updated_at, reverse=True)
-        if limit is not None:
-            try:
-                safe_limit = max(0, int(limit))
-            except (TypeError, ValueError):
-                safe_limit = 0
-            sessions = sessions[:safe_limit] if safe_limit else []
-        return [
-            {
-                "session_id": session.session_id,
-                "persona_id": session.persona_id,
-                "created_at": session.created_at.isoformat(),
-                "updated_at": session.updated_at.isoformat(),
-                "turn_count": len(session.turns),
-                "pending_plan_count": len(session.pending_plans),
-                "preferences": dict(session.preferences),
-            }
-            for session in sessions
-        ]
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            sessions = [
+                session
+                for session in self._sessions.values()
+                if session.user_id == user_id and (persona_id is None or session.persona_id == persona_id)
+            ]
+            sessions.sort(key=lambda s: s.updated_at, reverse=True)
+            if limit is not None:
+                try:
+                    safe_limit = max(0, int(limit))
+                except (TypeError, ValueError):
+                    safe_limit = 0
+                sessions = sessions[:safe_limit] if safe_limit else []
+            return [
+                {
+                    "session_id": session.session_id,
+                    "persona_id": session.persona_id,
+                    "created_at": session.created_at.isoformat(),
+                    "updated_at": session.updated_at.isoformat(),
+                    "turn_count": len(session.turns),
+                    "pending_plan_count": len(session.pending_plans),
+                    "preferences": dict(session.preferences),
+                }
+                for session in sessions
+            ]
 
     def get_session_snapshot(
         self,
@@ -305,20 +386,22 @@ class SessionManager:
         user_id: str,
         limit_turns: int | None = None,
     ) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
-        if session is None or session.user_id != user_id:
-            return None
-        turns = self.list_turns(session_id=session_id, user_id=user_id, limit=limit_turns)
-        return {
-            "session_id": session.session_id,
-            "persona_id": session.persona_id,
-            "created_at": session.created_at.isoformat(),
-            "updated_at": session.updated_at.isoformat(),
-            "turn_count": len(session.turns),
-            "pending_plan_count": len(session.pending_plans),
-            "preferences": dict(session.preferences),
-            "turns": turns,
-        }
+        with self._lock:
+            self._prune_expired_sessions_locked()
+            session = self._sessions.get(session_id)
+            if session is None or session.user_id != user_id:
+                return None
+            turns = self.list_turns(session_id=session_id, user_id=user_id, limit=limit_turns)
+            return {
+                "session_id": session.session_id,
+                "persona_id": session.persona_id,
+                "created_at": session.created_at.isoformat(),
+                "updated_at": session.updated_at.isoformat(),
+                "turn_count": len(session.turns),
+                "pending_plan_count": len(session.pending_plans),
+                "preferences": dict(session.preferences),
+                "turns": turns,
+            }
 
 
 _singleton: SessionManager | None = None

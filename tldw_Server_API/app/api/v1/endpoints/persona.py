@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 from collections import defaultdict, deque
@@ -36,7 +37,11 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
+    get_api_key_manager,
+    has_scope,
+    normalize_scope,
+)
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
@@ -223,6 +228,23 @@ def _get_persona_tts_max_in_flight_chunks() -> int:
     return max(1, min(value, 32))
 
 
+def _get_persona_ws_auth_revalidate_interval_s() -> float:
+    """
+    Periodic auth revalidation interval for long-lived persona WS sessions.
+
+    A value <= 0 disables the background watchdog.
+    """
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = float(_app_settings.get("PERSONA_WS_AUTH_REVALIDATE_INTERVAL_S", 15.0))
+    except Exception:
+        value = 15.0
+    if value <= 0:
+        return 0.0
+    return max(0.5, min(value, 300.0))
+
+
 def _get_persona_rbac_flags() -> tuple[bool, bool]:
     """Return (allow_export, allow_delete) from runtime settings."""
     try:
@@ -386,14 +408,51 @@ def _build_tool_result(
     return payload
 
 
-def _decode_audio_chunk(bytes_base64: str) -> bytes:
+def _max_base64_length_for_decoded_bytes(max_decoded_bytes: int) -> int:
+    safe_limit = max(0, int(max_decoded_bytes))
+    return ((safe_limit + 2) // 3) * 4
+
+
+def _project_base64_decoded_size(encoded_payload: str) -> int:
+    payload = str(encoded_payload or "")
+    payload_len = len(payload)
+    if payload_len <= 0:
+        return 0
+    if payload_len % 4 != 0:
+        return ((payload_len + 3) // 4) * 3
+
+    padding = 0
+    if payload.endswith("=="):
+        padding = 2
+    elif payload.endswith("="):
+        padding = 1
+    return (payload_len // 4) * 3 - padding
+
+
+def _decode_audio_chunk(bytes_base64: str, *, max_decoded_bytes: int) -> bytes:
     encoded = str(bytes_base64 or "").strip()
     if not encoded:
         raise ValueError("bytes_base64 is required")
+    max_encoded_bytes = _max_base64_length_for_decoded_bytes(max_decoded_bytes)
+    if len(encoded) > max_encoded_bytes:
+        raise ValueError(
+            f"Audio chunk encoded payload exceeds max bytes ({len(encoded)} > {max_encoded_bytes})"
+        )
+    projected_decoded = _project_base64_decoded_size(encoded)
+    if projected_decoded > max_decoded_bytes:
+        raise ValueError(
+            "Audio chunk projected decoded size exceeds max bytes "
+            f"({projected_decoded} > {max_decoded_bytes})"
+        )
     try:
-        return base64.b64decode(encoded, validate=True)
+        decoded = base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ValueError("Invalid base64 payload for audio chunk") from exc
+    if len(decoded) > max_decoded_bytes:
+        raise ValueError(
+            f"Audio chunk exceeds max bytes ({len(decoded)} > {max_decoded_bytes})"
+        )
+    return decoded
 
 
 def _coerce_bool(value: Any, *, default: bool) -> bool:
@@ -914,6 +973,8 @@ async def _resolve_authenticated_user_id(
     ws: WebSocket,
     token: str | None,
     api_key: str | None,
+    *,
+    required_api_key_scope: str | None = "read",
 ) -> tuple[str | None, bool, bool]:
     """
     Resolve authenticated user id from WS credentials.
@@ -925,8 +986,24 @@ async def _resolve_authenticated_user_id(
         resolved_api_key = auth_token
         auth_token = None
 
+    def _set_auth_context(*, method: str | None, api_key_scopes: set[str] | None = None) -> None:
+        try:
+            setattr(ws.state, "persona_auth_method", str(method or "").strip().lower())
+            setattr(
+                ws.state,
+                "persona_api_key_scopes",
+                sorted(str(scope).strip().lower() for scope in (api_key_scopes or set()) if str(scope).strip()),
+            )
+        except Exception:
+            return
+
+    def _clear_auth_context() -> None:
+        _set_auth_context(method=None, api_key_scopes=set())
+
     credentials_supplied = bool(auth_token or resolved_api_key)
     user_id: str | None = None
+    auth_method: str | None = None
+    api_key_scopes: set[str] = set()
 
     if auth_token:
         auth_ok = False
@@ -938,12 +1015,14 @@ async def _resolve_authenticated_user_id(
             if uid:
                 user_id = uid
                 auth_ok = True
+                auth_method = "jwt_authnz"
                 logger.debug("persona stream: authenticated via AuthNZ JWT")
         except Exception as exc:
             logger.debug(f"persona stream: AuthNZ JWT auth failed: {exc}")
             if _is_authnz_access_token(auth_token):
                 authnz_token_failed = True
                 if not resolved_api_key:
+                    _clear_auth_context()
                     return None, True, False
         if not auth_ok and not authnz_token_failed:
             try:
@@ -952,33 +1031,52 @@ async def _resolve_authenticated_user_id(
                 if uid:
                     user_id = uid
                     auth_ok = True
+                    auth_method = "jwt_mcp"
                     logger.debug("persona stream: authenticated via MCP JWT")
             except Exception as exc:
                 logger.debug(f"persona stream: MCP JWT auth failed: {exc}")
         if auth_token and not auth_ok and not resolved_api_key:
+            _clear_auth_context()
             return None, True, False
 
     if resolved_api_key and not user_id:
         try:
             api_mgr = await get_api_key_manager()
             client_ip = resolve_client_ip(ws, None)
-            info = await api_mgr.validate_api_key(resolved_api_key, ip_address=client_ip)
+            required_scope = (
+                str(required_api_key_scope or "").strip().lower()
+                if required_api_key_scope is not None
+                else None
+            )
+            info = await api_mgr.validate_api_key(
+                resolved_api_key,
+                required_scope=required_scope,
+                ip_address=client_ip,
+            )
             if info and info.get("user_id") is not None:
                 user_id = str(info["user_id"])
+                auth_method = "api_key"
+                api_key_scopes = normalize_scope(info.get("scope"))
                 logger.debug("persona stream: authenticated via API key")
             else:
+                _clear_auth_context()
                 return None, True, False
         except (DatabaseError, InvalidTokenError) as exc:
             logger.debug(f"persona stream: API key authentication failed: {exc}")
+            _clear_auth_context()
             return None, True, False
         except Exception:
             logger.exception("persona stream: unexpected API key authentication error")
+            _clear_auth_context()
             return None, True, False
 
     if not credentials_supplied:
+        _clear_auth_context()
         return None, False, False
     if not user_id:
+        _clear_auth_context()
         return None, True, False
+    _set_auth_context(method=auth_method, api_key_scopes=api_key_scopes)
     return user_id, True, True
 
 
@@ -1476,6 +1574,9 @@ async def persona_stream(
 
     stream: WebSocketStream | None = None
     persona_scope_db: CharactersRAGDB | None = None
+    auth_watchdog_task: asyncio.Task | None = None
+    auth_watchdog_stop: asyncio.Event | None = None
+    auth_revoked_event: asyncio.Event | None = None
     try:
         user_id, credentials_supplied, auth_ok = await _resolve_authenticated_user_id(ws, token=token, api_key=api_key)
         if not auth_ok:
@@ -1499,12 +1600,82 @@ async def persona_stream(
             with contextlib.suppress(RuntimeError, OSError):
                 await stream.ws.close(code=1008)
             return
+        auth_watchdog_stop = asyncio.Event()
+        auth_revoked_event = asyncio.Event()
+
+        async def _is_stream_auth_valid() -> bool:
+            try:
+                revalidated_user_id, _credentials_supplied, revalidated_ok = await _resolve_authenticated_user_id(
+                    ws,
+                    token=token,
+                    api_key=api_key,
+                )
+            except Exception as exc:
+                logger.debug("persona stream auth revalidation failed with exception: {}", exc)
+                return False
+            if not revalidated_ok:
+                return False
+            return str(revalidated_user_id or "").strip() == authenticated_user_id
+
+        async def _close_for_auth_revocation() -> None:
+            if auth_revoked_event is not None and auth_revoked_event.is_set():
+                return
+            if auth_revoked_event is not None:
+                auth_revoked_event.set()
+            _increment_persona_metric(
+                "persona_ws_auth_revalidation_total",
+                {"result": "revoked"},
+            )
+            with contextlib.suppress(RuntimeError, OSError):
+                await stream.ws.close(code=1008)
+
+        auth_revalidate_interval_s = _get_persona_ws_auth_revalidate_interval_s()
+        if auth_revalidate_interval_s > 0:
+
+            async def _auth_revalidation_watchdog() -> None:
+                if auth_watchdog_stop is None:
+                    return
+                while not auth_watchdog_stop.is_set():
+                    try:
+                        await asyncio.wait_for(
+                            auth_watchdog_stop.wait(),
+                            timeout=auth_revalidate_interval_s,
+                        )
+                        return
+                    except asyncio.TimeoutError:
+                        pass
+                    if not await _is_stream_auth_valid():
+                        await _close_for_auth_revocation()
+                        return
+                    _increment_persona_metric(
+                        "persona_ws_auth_revalidation_total",
+                        {"result": "ok"},
+                    )
+
+            auth_watchdog_task = asyncio.create_task(_auth_revalidation_watchdog())
+
         persona_scope_db = _open_persona_ws_db(authenticated_user_id)
         connection_user_id = authenticated_user_id
         session_manager = get_session_manager()
         default_session_id = uuid.uuid4().hex
         persona_id = "research_assistant"
         ws_event_seq_by_session: dict[str, int] = defaultdict(int)
+
+        def _api_key_scope_allows(required_scope: Any) -> bool:
+            try:
+                auth_method = str(getattr(ws.state, "persona_auth_method", "") or "").strip().lower()
+            except Exception:
+                auth_method = ""
+            if auth_method != "api_key":
+                return True
+            required = str(required_scope or "").strip().lower()
+            if not required:
+                return True
+            try:
+                key_scopes = normalize_scope(getattr(ws.state, "persona_api_key_scopes", None))
+            except Exception:
+                key_scopes = set()
+            return has_scope(key_scopes, required)
 
         def _next_ws_event_meta(session_id: str) -> dict[str, Any]:
             sid = _normalize_ws_identifier(session_id, fallback=default_session_id)
@@ -1638,7 +1809,7 @@ async def persona_stream(
         tts_seq_by_session: dict[str, int] = defaultdict(int)
         tts_in_flight_by_session: dict[str, int] = defaultdict(int)
 
-        def _record_turn(
+        async def _record_turn(
             *,
             session_id: str,
             role: str,
@@ -1673,7 +1844,8 @@ async def persona_stream(
             except Exception as exc:
                 logger.debug(f"persona turn append skipped: {exc}")
             if persist_personalization:
-                _ = persist_persona_turn(
+                _ = await asyncio.to_thread(
+                    persist_persona_turn,
                     user_id=authenticated_user_id,
                     session_id=session_id,
                     persona_id=effective_persona_id,
@@ -1721,6 +1893,19 @@ async def persona_stream(
                     output=None,
                     error=deny_reason,
                     reason_code=str(policy.get("reason_code") or "POLICY_DENIED"),
+                    policy=policy,
+                )
+            required_scope = str(policy.get("required_scope") or "").strip().lower()
+            if not _api_key_scope_allows(required_scope):
+                _increment_persona_metric(
+                    "persona_ws_tool_calls_total",
+                    {"kind": "mcp", "status": "api_key_scope_denied"},
+                )
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error=f"API key missing required scope '{required_scope}'",
+                    reason_code="API_KEY_SCOPE_MISSING",
                     policy=policy,
                 )
             resolved_name, resolved_arguments = _translate_persona_tool_request(name, arguments or {})
@@ -1809,6 +1994,19 @@ async def persona_stream(
                     output=None,
                     error=deny_reason,
                     reason_code=str(policy.get("reason_code") or "POLICY_DENIED"),
+                    policy=policy,
+                )
+            required_scope = str(policy.get("required_scope") or "").strip().lower()
+            if not _api_key_scope_allows(required_scope):
+                _increment_persona_metric(
+                    "persona_ws_tool_calls_total",
+                    {"kind": "skill", "status": "api_key_scope_denied"},
+                )
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error=f"API key missing required scope '{required_scope}'",
+                    reason_code="API_KEY_SCOPE_MISSING",
                     policy=policy,
                 )
             try:
@@ -2026,7 +2224,7 @@ async def persona_stream(
                         user_id=connection_user_id,
                         preferences=preferences_patch,
                     )
-                _record_turn(
+                await _record_turn(
                     session_id=session_id,
                     role="user",
                     content=text,
@@ -2176,13 +2374,23 @@ async def persona_stream(
                     continue
 
                 try:
-                    audio_bytes = _decode_audio_chunk(str(msg.get("bytes_base64") or ""))
+                    audio_bytes = _decode_audio_chunk(
+                        str(msg.get("bytes_base64") or ""),
+                        max_decoded_bytes=audio_chunk_max_bytes,
+                    )
                 except ValueError as exc:
+                    error_message = str(exc)
+                    reason_code = "AUDIO_CHUNK_INVALID"
+                    if (
+                        "exceeds max bytes" in error_message
+                        or "projected decoded size exceeds" in error_message
+                    ):
+                        reason_code = "AUDIO_CHUNK_TOO_LARGE"
                     await _emit_notice(
                         session_id=session_id,
                         level="error",
-                        message=str(exc),
-                        reason_code="AUDIO_CHUNK_INVALID",
+                        message=error_message,
+                        reason_code=reason_code,
                     )
                     continue
 
@@ -2214,7 +2422,7 @@ async def persona_stream(
                 if transcript_delta:
                     transcript_seq = transcript_seq_by_session[session_id]
                     transcript_seq_by_session[session_id] += 1
-                    _record_turn(
+                    await _record_turn(
                         session_id=session_id,
                         role="user",
                         content=transcript_delta,
@@ -2297,7 +2505,7 @@ async def persona_stream(
                     tts_in_flight_by_session[session_id] = max(
                         0, tts_in_flight_by_session[session_id] - 1
                     )
-                _record_turn(
+                await _record_turn(
                     session_id=session_id,
                     role="assistant",
                     content=tts_text,
@@ -2309,6 +2517,9 @@ async def persona_stream(
                     scope_snapshot_id_override=runtime_scope_snapshot_id,
                 )
             elif mtype == "confirm_plan":
+                if not await _is_stream_auth_valid():
+                    await _close_for_auth_revocation()
+                    break
                 session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
                 plan_id = _normalize_ws_identifier(msg.get("plan_id"), fallback="")
                 if not plan_id:
@@ -2438,7 +2649,7 @@ async def persona_stream(
                             tool=step.tool,
                             result=result,
                         )
-                        _record_turn(
+                        await _record_turn(
                             session_id=session_id,
                             role="tool",
                             content=json.dumps(result, ensure_ascii=True),
@@ -2450,7 +2661,8 @@ async def persona_stream(
                             runtime_mode_override=runtime_mode,
                             scope_snapshot_id_override=runtime_scope_snapshot_id,
                         )
-                        _ = persist_tool_outcome(
+                        _ = await asyncio.to_thread(
+                            persist_tool_outcome,
                             user_id=authenticated_user_id,
                             session_id=session_id,
                             persona_id=runtime_persona_id,
@@ -2476,7 +2688,7 @@ async def persona_stream(
                             step_idx=step.idx,
                             text_delta=assistant_text,
                         )
-                        _record_turn(
+                        await _record_turn(
                             session_id=session_id,
                             role="assistant",
                             content=assistant_text,
@@ -2529,7 +2741,7 @@ async def persona_stream(
                         tool=step.tool,
                         result=result,
                     )
-                    _record_turn(
+                    await _record_turn(
                         session_id=session_id,
                         role="tool",
                         content=json.dumps(result, ensure_ascii=True),
@@ -2541,7 +2753,8 @@ async def persona_stream(
                         runtime_mode_override=runtime_mode,
                         scope_snapshot_id_override=runtime_scope_snapshot_id,
                     )
-                    _ = persist_tool_outcome(
+                    _ = await asyncio.to_thread(
+                        persist_tool_outcome,
                         user_id=authenticated_user_id,
                         session_id=session_id,
                         persona_id=runtime_persona_id,
@@ -2594,7 +2807,7 @@ async def persona_stream(
                     reason_code="ECHO_EVENT",
                     message=f"echo: {mtype}",
                 )
-                _record_turn(
+                await _record_turn(
                     session_id=session_id,
                     role="assistant",
                     content=assistant_text,
@@ -2606,7 +2819,10 @@ async def persona_stream(
                     scope_snapshot_id_override=runtime_scope_snapshot_id,
                 )
     except WebSocketDisconnect:
-        logger.info("Persona stream disconnected")
+        if auth_revoked_event is not None and auth_revoked_event.is_set():
+            logger.info("Persona stream disconnected after auth revalidation failure")
+        else:
+            logger.info("Persona stream disconnected")
     except Exception as e:
         logger.warning(f"Persona stream error: {e}")
         if stream is not None:
@@ -2616,6 +2832,17 @@ async def persona_stream(
             with contextlib.suppress(Exception):
                 await ws.close(code=1011)
     finally:
+        if auth_watchdog_stop is not None:
+            auth_watchdog_stop.set()
+        if auth_watchdog_task is not None:
+            auth_watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await auth_watchdog_task
+        if stream is not None:
+            with contextlib.suppress(Exception):
+                await stream.stop()
+            with contextlib.suppress(Exception):
+                await stream.ws.close()
         if persona_scope_db is not None:
             with contextlib.suppress(Exception):
                 persona_scope_db.close_all_connections()

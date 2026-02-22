@@ -17,6 +17,7 @@ pytestmark = pytest.mark.unit
 
 fastapi_app = FastAPI()
 fastapi_app.include_router(persona_ep.router, prefix="/api/v1/persona")
+_ORIGINAL_RESOLVE_AUTHENTICATED_USER_ID = persona_ep._resolve_authenticated_user_id
 
 
 def _recv_until(client, predicate, timeout=2.0):
@@ -165,6 +166,62 @@ def test_persona_websocket_plan_and_confirm(monkeypatch):
             assert evt_res["output"] == evt_res["result"]
 
 
+def test_persona_ws_persistence_offloads_to_thread(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(error=None, result={"ok": True, "tool": request.params.get("name")})
+
+    offloaded_calls: list[str] = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        offloaded_calls.append(getattr(func, "__name__", str(func)))
+        return func(*args, **kwargs)
+
+    def _fake_persist_persona_turn(**kwargs):
+        return True
+
+    def _fake_persist_tool_outcome(**kwargs):
+        return True
+
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+    monkeypatch.setattr(persona_ep, "persist_persona_turn", _fake_persist_persona_turn)
+    monkeypatch.setattr(persona_ep, "persist_tool_outcome", _fake_persist_tool_outcome)
+    monkeypatch.setattr(persona_ep, "retrieve_top_memories", lambda **kwargs: [])
+    monkeypatch.setattr(persona_ep.asyncio, "to_thread", _fake_to_thread)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            session_id = "sess_offloaded_persistence"
+            ws.send_text(json.dumps({"type": "user_message", "session_id": session_id, "text": "hello"}))
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            plan_id = str(plan.get("plan_id") or "")
+            assert plan_id
+            first_step_idx = int(plan["steps"][0]["idx"])
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": session_id,
+                        "plan_id": plan_id,
+                        "approved_steps": [first_step_idx],
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+
+    assert any("persist_persona_turn" in name for name in offloaded_calls)
+    assert any("persist_tool_outcome" in name for name in offloaded_calls)
+
+
 def test_persona_confirm_plan_ignores_client_supplied_steps():
 
     with TestClient(fastapi_app) as c:
@@ -247,6 +304,200 @@ def test_persona_stream_rejects_missing_credentials(monkeypatch):
             # Depending on server/client handshake timing, disconnect can happen
             # during connect instead of first receive.
             pass
+
+
+@pytest.mark.asyncio
+async def test_persona_resolve_api_key_enforces_read_scope_and_sets_context(monkeypatch):
+    class _FakeWS:
+        headers = {}
+        query_params = {}
+        client = ("127.0.0.1", 9000)
+
+        def __init__(self):
+            self.state = SimpleNamespace()
+
+    calls: dict[str, str] = {}
+
+    class _FakeApiKeyManager:
+        async def validate_api_key(self, api_key, required_scope=None, ip_address=None):
+            calls["required_scope"] = str(required_scope or "")
+            calls["ip_address"] = str(ip_address or "")
+            assert api_key == "test-key"
+            return {"user_id": 7, "scope": ["read", "write:preview"]}
+
+    async def _fake_get_api_key_manager():
+        return _FakeApiKeyManager()
+
+    monkeypatch.setattr(persona_ep, "get_api_key_manager", _fake_get_api_key_manager)
+    monkeypatch.setattr(persona_ep, "resolve_client_ip", lambda ws, settings=None: "127.0.0.1")
+
+    ws = _FakeWS()
+    user_id, supplied, ok = await _ORIGINAL_RESOLVE_AUTHENTICATED_USER_ID(
+        ws,
+        token=None,
+        api_key="test-key",
+    )
+    assert user_id == "7"
+    assert supplied is True
+    assert ok is True
+    assert calls.get("required_scope") == "read"
+    assert calls.get("ip_address") == "127.0.0.1"
+    assert getattr(ws.state, "persona_auth_method", "") == "api_key"
+    assert set(getattr(ws.state, "persona_api_key_scopes", [])) == {"read", "write:preview"}
+
+
+def test_persona_tool_execution_denied_when_api_key_scope_missing(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+            self.calls = []
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            self.calls.append({"request": request, "user_id": user_id, "metadata": metadata})
+            return SimpleNamespace(error=None, result={"ok": True})
+
+    async def _fake_resolve(ws, *args, **kwargs):
+        setattr(ws.state, "persona_auth_method", "api_key")
+        setattr(ws.state, "persona_api_key_scopes", ["read"])
+        return "1", True, True
+
+    fake_server = _FakeServer()
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: fake_server)
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            session_id = "sess_api_key_scope_denied"
+            ws.send_text(
+                json.dumps(
+                    {"type": "user_message", "session_id": session_id, "text": "https://example.com"}
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            first_idx = int(plan["steps"][0]["idx"])
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": session_id,
+                        "plan_id": plan["plan_id"],
+                        "approved_steps": [first_idx],
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            deny_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            assert deny_result.get("ok") is False
+            assert deny_result.get("reason_code") == "API_KEY_SCOPE_MISSING"
+            assert "write:preview" in str(deny_result.get("error"))
+
+    assert fake_server.calls == []
+
+
+def test_persona_stream_closes_on_auth_revocation_before_confirm_plan(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+            self.calls = []
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            self.calls.append({"request": request, "user_id": user_id, "metadata": metadata})
+            return SimpleNamespace(error=None, result={"ok": True})
+
+    auth_checks = {"count": 0}
+
+    async def _stateful_resolve(*args, **kwargs):
+        auth_checks["count"] += 1
+        if auth_checks["count"] == 1:
+            return "1", True, True
+        return None, True, False
+
+    fake_server = _FakeServer()
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: fake_server)
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _stateful_resolve)
+    monkeypatch.setattr(persona_ep, "_get_persona_ws_auth_revalidate_interval_s", lambda: 0.0)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            session_id = "sess_auth_revoked"
+            ws.send_text(
+                json.dumps(
+                    {"type": "user_message", "session_id": session_id, "text": "https://example.com"}
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            first_idx = int(plan["steps"][0]["idx"])
+
+            disconnected = False
+            try:
+                ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "confirm_plan",
+                            "session_id": session_id,
+                            "plan_id": plan["plan_id"],
+                            "approved_steps": [first_idx],
+                        }
+                    )
+                )
+                _ = ws.receive_text()
+            except WebSocketDisconnect:
+                disconnected = True
+
+            assert disconnected is True
+
+    assert auth_checks["count"] >= 2
+    assert fake_server.calls == []
+
+
+@pytest.mark.asyncio
+async def test_persona_stream_start_failure_executes_stream_stop(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    lifecycle = {"stop_calls": 0}
+
+    class _FailingStream:
+        def __init__(self, websocket, *args, **kwargs):
+            self.ws = websocket
+
+        async def start(self):
+            raise RuntimeError("stream_start_failure")
+
+        async def stop(self):
+            lifecycle["stop_calls"] += 1
+
+        async def error(self, *args, **kwargs):
+            return None
+
+    class _FakeWebSocket:
+        headers = {}
+        query_params = {}
+        client = None
+
+        async def close(self, code: int = 1000):
+            return None
+
+    async def _fake_resolve(*args, **kwargs):
+        return "1", True, True
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+    monkeypatch.setattr(persona_ep, "WebSocketStream", _FailingStream)
+
+    await persona_ep.persona_stream(_FakeWebSocket(), token=None, api_key=None)
+
+    assert lifecycle["stop_calls"] == 1
 
 
 def test_persona_cancel_clears_pending_plan():
@@ -858,6 +1109,56 @@ def test_persona_audio_chunk_rejects_oversized_payload(monkeypatch):
                 and d.get("reason_code") == "AUDIO_CHUNK_TOO_LARGE",
             )
             assert "exceeds max bytes" in str(notice.get("message"))
+
+
+def test_persona_audio_chunk_predecode_rejects_large_invalid_base64(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    monkeypatch.setattr(persona_ep, "_get_persona_audio_chunk_max_bytes", lambda: 4)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_large_invalid_b64",
+                        "audio_format": "pcm16",
+                        "bytes_base64": "!" * 64,
+                    }
+                )
+            )
+
+            notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "AUDIO_CHUNK_TOO_LARGE",
+            )
+            assert "encoded payload exceeds max bytes" in str(notice.get("message"))
+
+
+def test_persona_audio_chunk_rejects_invalid_base64_payload():
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_invalid_b64",
+                        "audio_format": "pcm16",
+                        "bytes_base64": "!!!!",
+                    }
+                )
+            )
+
+            notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "AUDIO_CHUNK_INVALID",
+            )
+            assert "Invalid base64 payload for audio chunk" in str(notice.get("message"))
 
 
 def test_persona_audio_chunk_rate_limited(monkeypatch):

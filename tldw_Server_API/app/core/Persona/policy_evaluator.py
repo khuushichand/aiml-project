@@ -11,6 +11,18 @@ from typing import Any
 
 _VALID_RULE_KINDS = {"mcp_tool", "skill"}
 _VALID_STEP_TYPES = {"mcp_tool", "skill", "rag_query", "final_answer"}
+_EXPORT_TOOL_ALLOWLIST = {
+    "chatbooks.export",
+    "export_report",
+    "media.export",
+    "notes.export",
+}
+_DELETE_TOOL_ALLOWLIST = {
+    "chats.delete",
+    "delete_session",
+    "media.delete",
+    "notes.delete",
+}
 
 
 def normalize_policy_rules(
@@ -93,9 +105,9 @@ def _required_scope_for_step(step_type: str, action_name: str) -> tuple[str, str
     normalized_action_name = str(action_name or "").strip().lower()
     if normalized_step_type == "mcp_tool" and normalized_action_name == "ingest_url":
         return "write", "write:preview", True
-    if normalized_action_name.startswith("export") or "export" in normalized_action_name:
+    if normalized_action_name in _EXPORT_TOOL_ALLOWLIST:
         return "export", "write:export", True
-    if normalized_action_name.startswith("delete") or "delete" in normalized_action_name:
+    if normalized_action_name in _DELETE_TOOL_ALLOWLIST:
         return "delete", "write:delete", True
     return "read", "read", False
 
@@ -334,4 +346,3 @@ def evaluate_canonical_policy(
         "rule_kind": rule_kind,
         "effective_allowed_tools": [normalized_action_name] if normalized_step_type == "mcp_tool" else [],
     }
-

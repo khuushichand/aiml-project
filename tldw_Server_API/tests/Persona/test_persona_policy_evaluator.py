@@ -107,3 +107,39 @@ def test_canonical_policy_allows_internal_rag_query_step():
     assert decision["allow"] is True
     assert decision["step_type"] == "rag_query"
     assert decision["effective_allowed_tools"] == ["knowledge.search"]
+
+
+def test_canonical_policy_unknown_exportish_tool_does_not_escalate_scope():
+    decision = evaluate_canonical_policy(
+        step_type="mcp_tool",
+        action_name="notes.export_preview_like",
+        persona_policy_rules=[{"rule_kind": "mcp_tool", "rule_name": "notes.export_preview_like", "allowed": True}],
+        session_policy_rules=default_allow_rules("mcp_tool"),
+        skill_policy_rules=default_allow_rules("mcp_tool"),
+        session_scopes={"read"},
+        allow_export=False,
+        allow_delete=False,
+    )
+
+    assert decision["allow"] is True
+    assert decision["required_scope"] == "read"
+    assert decision["action"] == "read"
+    assert decision["reason_code"] is None
+
+
+def test_canonical_policy_unknown_deleteish_tool_does_not_escalate_scope():
+    decision = evaluate_canonical_policy(
+        step_type="mcp_tool",
+        action_name="reports.delete_preview_like",
+        persona_policy_rules=[{"rule_kind": "mcp_tool", "rule_name": "reports.delete_preview_like", "allowed": True}],
+        session_policy_rules=default_allow_rules("mcp_tool"),
+        skill_policy_rules=default_allow_rules("mcp_tool"),
+        session_scopes={"read"},
+        allow_export=False,
+        allow_delete=False,
+    )
+
+    assert decision["allow"] is True
+    assert decision["required_scope"] == "read"
+    assert decision["action"] == "read"
+    assert decision["reason_code"] is None
