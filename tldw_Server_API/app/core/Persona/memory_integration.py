@@ -151,6 +151,7 @@ def persist_tool_outcome(
     tool_name: str,
     step_idx: int,
     outcome: dict[str, Any],
+    store_as_memory: bool = True,
 ) -> bool:
     try:
         serialized = json.dumps(outcome, ensure_ascii=True, sort_keys=True)
@@ -165,5 +166,5 @@ def persist_tool_outcome(
         content=tool_summary,
         turn_type="tool_result",
         metadata={"tool_name": str(tool_name or ""), "step_idx": int(step_idx)},
-        store_as_memory=True,
+        store_as_memory=bool(store_as_memory),
     )

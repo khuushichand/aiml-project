@@ -8,6 +8,19 @@ from tldw_Server_API.app.core.RAG.rag_service.research_agent import create_defau
 pytestmark = pytest.mark.unit
 
 
+def test_parse_research_action_parses_fenced_json_with_think_tags():
+    raw = (
+        "<think>deliberation</think>\n"
+        "```json\n"
+        '{"reasoning":"search first","action":"web_search","params":{"query":"rag evals"}}\n'
+        "```"
+    )
+
+    parsed = ra._parse_research_action(raw)
+    assert parsed["action"] == "web_search"
+    assert parsed["params"]["query"] == "rag evals"
+
+
 @pytest.mark.asyncio
 async def test_registry_disables_url_scrape_action_when_requested():
     registry = create_default_registry(enable_url_scraping=False)

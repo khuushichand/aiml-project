@@ -16,15 +16,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal
 
 from loguru import logger
 
-from .query_classifier import QueryClassification
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
 
+from .query_classifier import QueryClassification
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -353,7 +357,10 @@ def _create_academic_search_action() -> ResearchAction:
 
     async def _execute(params: dict[str, Any]) -> ActionOutput:
         try:
-            from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import perform_websearch, process_web_search_results
+            from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import (
+                perform_websearch,
+                process_web_search_results,
+            )
 
             query = params.get("query", "")
             # Use web search with academic site filters as a universal fallback
@@ -950,25 +957,19 @@ def _build_research_prompt(
 def _parse_research_action(raw: str) -> dict[str, Any]:
     """Parse LLM response into action dict."""
     text = raw.strip()
-
-    # Strip markdown code fences
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        text = "\n".join(lines).strip()
-
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
+        payload = parse_structured_output(
+            text,
+            options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+        )
+        if isinstance(payload, dict):
+            return dict(payload)
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    return dict(item)
+    except StructuredOutputParseError:
         pass
-
-    # Try to find JSON object
-    match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
 
     raise ValueError(f"Could not parse research action JSON: {text[:200]}")
 

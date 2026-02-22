@@ -14,6 +14,12 @@ from typing import Any, Callable, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
+
 
 @dataclass
 class GradingConfig:
@@ -244,20 +250,22 @@ class DocumentGrader:
         fallback_score: float,
     ) -> GradingResult:
         """Parse LLM response into a GradingResult."""
-        import json
-        import re
-
         try:
-            # Try to extract JSON from response
             response_text = str(raw_response).strip()
-
-            # Look for JSON object in response
-            json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group())
-            else:
-                # Try parsing entire response as JSON
-                parsed = json.loads(response_text)
+            payload = parse_structured_output(
+                response_text,
+                options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+            )
+            parsed: dict[str, Any] | None = None
+            if isinstance(payload, dict):
+                parsed = payload
+            elif isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        parsed = item
+                        break
+            if parsed is None:
+                raise ValueError("grading response must be a JSON object")
 
             is_relevant = bool(parsed.get("is_relevant", False))
             relevance_score = float(parsed.get("relevance_score", 0.0))
@@ -275,7 +283,7 @@ class DocumentGrader:
                 method="llm",
             )
 
-        except (json.JSONDecodeError, ValueError, KeyError) as e:
+        except (StructuredOutputParseError, ValueError, KeyError) as e:
             logger.warning(f"Failed to parse grading response for doc {doc_id}: {e}")
             # Fall back to heuristic parsing
             return self._heuristic_parse(doc_id, raw_response, latency_ms, fallback_score)

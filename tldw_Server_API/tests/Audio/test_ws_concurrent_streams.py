@@ -2,6 +2,8 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from tldw_Server_API.tests.Audio.ws_test_helpers import ws_session_or_skip
+
 
 @pytest.mark.asyncio
 async def test_ws_concurrent_streams_denied(monkeypatch):
@@ -52,7 +54,7 @@ async def test_ws_concurrent_streams_denied(monkeypatch):
         except (WebSocketDisconnect, RuntimeError):
             pytest.skip("audio WebSocket endpoint not available in this build")
         # The server will send an error then close.
-        with ws as ws:
+        with ws_session_or_skip(ws) as ws:
             # The connection may close very early; try receiving once
             try:
                 data = ws.receive_json()

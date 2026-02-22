@@ -46,6 +46,10 @@ import {
 import { getVariable } from "@/utils/select-variable"
 import { useTranslation } from "react-i18next"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
+import type { DictationModePreference } from "@/hooks/useDictationStrategy"
+import { useDictationStrategy } from "@/hooks/useDictationStrategy"
+import { useServerDictation } from "@/hooks/useServerDictation"
+import type { SttSettings } from "@/hooks/useSttSettings"
 import { isFirefoxTarget } from "@/config/platform"
 import { handleChatInputKeyDown } from "@/utils/key-down"
 import { getIsSimpleInternetSearch } from "@/services/search"
@@ -519,6 +523,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     messageId?: string | null
   }>({})
   const [autoStopTimeout] = useStorage("autoStopTimeout", 2000)
+  const [dictationAutoFallbackEnabled] = useStorage(
+    "dictation_auto_fallback",
+    false
+  )
+  const [dictationModeOverride] = useStorage<DictationModePreference | null>(
+    "dictationModeOverride",
+    null
+  )
   const [sttModel] = useStorage("sttModel", "whisper-1")
   const [sttUseSegmentation] = useStorage("sttUseSegmentation", false)
   const [sttTimestampGranularities] = useStorage(
@@ -2663,16 +2675,88 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       }
     }
   })
+  const serverDictationErrorBridgeRef = React.useRef<(error: unknown) => void>(
+    () => {}
+  )
+  const serverDictationSuccessBridgeRef = React.useRef<() => void>(() => {})
+  const handleServerDictationError = React.useCallback((error: unknown) => {
+    serverDictationErrorBridgeRef.current(error)
+  }, [])
+  const handleServerDictationSuccess = React.useCallback(() => {
+    serverDictationSuccessBridgeRef.current()
+  }, [])
+  const sttSettings = React.useMemo<SttSettings>(
+    () => ({
+      model: sttModel,
+      temperature: sttTemperature,
+      task: sttTask,
+      responseFormat: sttResponseFormat,
+      timestampGranularities: sttTimestampGranularities,
+      prompt: sttPrompt,
+      useSegmentation: sttUseSegmentation,
+      segK: sttSegK,
+      segMinSegmentSize: sttSegMinSegmentSize,
+      segLambdaBalance: sttSegLambdaBalance,
+      segUtteranceExpansionWidth: sttSegUtteranceExpansionWidth,
+      segEmbeddingsProvider: sttSegEmbeddingsProvider,
+      segEmbeddingsModel: sttSegEmbeddingsModel
+    }),
+    [
+      sttModel,
+      sttPrompt,
+      sttResponseFormat,
+      sttSegEmbeddingsModel,
+      sttSegEmbeddingsProvider,
+      sttSegK,
+      sttSegLambdaBalance,
+      sttSegMinSegmentSize,
+      sttSegUtteranceExpansionWidth,
+      sttTask,
+      sttTemperature,
+      sttTimestampGranularities,
+      sttUseSegmentation
+    ]
+  )
+  const {
+    isServerDictating,
+    startServerDictation,
+    stopServerDictation
+  } = useServerDictation({
+    canUseServerStt,
+    speechToTextLanguage,
+    sttSettings,
+    onTranscript: (text) => {
+      setMessageValue(text, { collapseLarge: true, forceCollapse: true })
+    },
+    onError: handleServerDictationError,
+    onSuccess: handleServerDictationSuccess
+  })
   const { sendWhenEnter, setSendWhenEnter } = useWebUI()
-  const speechAvailable =
-    browserSupportsSpeechRecognition || canUseServerStt
-  const speechUsesServer = canUseServerStt
+  const dictationStrategy = useDictationStrategy({
+    canUseServerStt,
+    browserSupportsSpeechRecognition,
+    isServerDictating,
+    isBrowserDictating: isListening,
+    modeOverride: dictationModeOverride,
+    autoFallbackEnabled: Boolean(dictationAutoFallbackEnabled)
+  })
+  const speechAvailable = dictationStrategy.speechAvailable
+  const speechUsesServer = dictationStrategy.speechUsesServer
+  const dictationToggleIntent = dictationStrategy.toggleIntent
+  serverDictationErrorBridgeRef.current = dictationStrategy.recordServerError
+  serverDictationSuccessBridgeRef.current = dictationStrategy.recordServerSuccess
 
   const speechTooltipText = React.useMemo(() => {
     if (!speechAvailable) {
       return t(
         "playground:actions.speechUnavailableBody",
         "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
+      ) as string
+    }
+    if (dictationStrategy.autoFallbackActive) {
+      return t(
+        "playground:tooltip.speechToTextBrowser",
+        "Dictation via browser speech recognition"
       ) as string
     }
     if (speechUsesServer) {
@@ -2694,7 +2778,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       )
     }
     return t("playground:tooltip.speechToTextBrowser", "Dictation via browser speech recognition") as string
-  }, [speechAvailable, speechUsesServer, sttModel, sttTask, sttResponseFormat, t])
+  }, [
+    dictationStrategy.autoFallbackActive,
+    speechAvailable,
+    speechUsesServer,
+    sttModel,
+    sttTask,
+    sttResponseFormat,
+    t
+  ])
 
   const handleTemplateSelect = React.useCallback(
     (template: { content: string }) => {
@@ -3645,30 +3737,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     [slashHandleSelect, form, textareaRef]
   )
 
-  const serverRecorderRef = React.useRef<MediaRecorder | null>(null)
-  const serverChunksRef = React.useRef<BlobPart[]>([])
-  const [isServerDictating, setIsServerDictating] = React.useState(false)
-
-  const stopServerDictation = React.useCallback(() => {
-    const rec = serverRecorderRef.current
-    if (rec && rec.state !== "inactive") {
-      try {
-        rec.stop()
-      } catch {}
-    }
-  }, [])
-
-  const handleSpeechToggle = React.useCallback(() => {
-    if (isListening) {
-      stopSpeechRecognition()
-    } else {
-      resetTranscript()
-      startListening({
-        continuous: true,
-        lang: speechToTextLanguage
-      })
-    }
-  }, [isListening, resetTranscript, speechToTextLanguage, startListening, stopSpeechRecognition])
+  const startBrowserDictation = React.useCallback(() => {
+    resetTranscript()
+    startListening({
+      continuous: true,
+      lang: speechToTextLanguage
+    })
+  }, [resetTranscript, speechToTextLanguage, startListening])
 
   const voiceChatStatusLabel = React.useMemo(() => {
     switch (voiceChat.state) {
@@ -3774,161 +3849,29 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ]
   )
 
-  const handleServerDictationToggle = React.useCallback(async () => {
-    if (isServerDictating) {
-      stopServerDictation()
-      return
-    }
-    if (!canUseServerStt) {
-      notificationApi.error({
-        message: t(
-          "playground:actions.speechUnavailableTitle",
-          "Dictation unavailable"
-        ),
-        description: t(
-          "playground:actions.speechUnavailableBody",
-          "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-        )
-      })
-      return
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const recorder = new MediaRecorder(stream)
-      serverChunksRef.current = []
-      recorder.ondataavailable = (ev: BlobEvent) => {
-        if (ev.data && ev.data.size > 0) {
-          serverChunksRef.current.push(ev.data)
-        }
-      }
-      recorder.onerror = (event: Event) => {
-        console.error("MediaRecorder error", event)
-        notificationApi.error({
-          message: t("playground:actions.speechErrorTitle", "Dictation failed"),
-          description: t(
-            "playground:actions.speechErrorBody",
-            "Microphone recording error. Check your permissions and try again."
-          )
-        })
-      }
-      recorder.onstop = async () => {
-        try {
-          const blob = new Blob(serverChunksRef.current, {
-            type: recorder.mimeType || "audio/webm"
-          })
-          if (blob.size === 0) {
-            return
-          }
-          const sttOptions: Record<string, any> = {
-            language: speechToTextLanguage
-          }
-          if (sttModel && sttModel.trim().length > 0) {
-            sttOptions.model = sttModel.trim()
-          }
-          if (sttTimestampGranularities) {
-            sttOptions.timestamp_granularities = sttTimestampGranularities
-          }
-          if (sttPrompt && sttPrompt.trim().length > 0) {
-            sttOptions.prompt = sttPrompt.trim()
-          }
-          if (sttTask) {
-            sttOptions.task = sttTask
-          }
-          if (sttResponseFormat) {
-            sttOptions.response_format = sttResponseFormat
-          }
-          if (typeof sttTemperature === "number") {
-            sttOptions.temperature = sttTemperature
-          }
-          if (sttUseSegmentation) {
-            sttOptions.segment = true
-            if (typeof sttSegK === "number") {
-              sttOptions.seg_K = sttSegK
-            }
-            if (typeof sttSegMinSegmentSize === "number") {
-              sttOptions.seg_min_segment_size = sttSegMinSegmentSize
-            }
-            if (typeof sttSegLambdaBalance === "number") {
-              sttOptions.seg_lambda_balance = sttSegLambdaBalance
-            }
-            if (typeof sttSegUtteranceExpansionWidth === "number") {
-              sttOptions.seg_utterance_expansion_width =
-                sttSegUtteranceExpansionWidth
-            }
-            if (sttSegEmbeddingsProvider?.trim()) {
-              sttOptions.seg_embeddings_provider =
-                sttSegEmbeddingsProvider.trim()
-            }
-            if (sttSegEmbeddingsModel?.trim()) {
-              sttOptions.seg_embeddings_model = sttSegEmbeddingsModel.trim()
-            }
-          }
-          const res = await tldwClient.transcribeAudio(blob, sttOptions)
-          let text = ""
-          if (res) {
-            if (typeof res === "string") {
-              text = res
-            } else if (typeof (res as any).text === "string") {
-              text = (res as any).text
-            } else if (typeof (res as any).transcript === "string") {
-              text = (res as any).transcript
-            } else if (Array.isArray((res as any).segments)) {
-              text = (res as any).segments
-                .map((s: any) => s?.text || "")
-                .join(" ")
-                .trim()
-            }
-          }
-          if (text) {
-            setMessageValue(text, { collapseLarge: true, forceCollapse: true })
-          } else {
-            notificationApi.error({
-              message: t("playground:actions.speechErrorTitle", "Dictation failed"),
-              description: t(
-                "playground:actions.speechNoText",
-                "The transcription did not return any text."
-              )
-            })
-          }
-        } catch (e: any) {
-          notificationApi.error({
-            message: t("playground:actions.speechErrorTitle", "Dictation failed"),
-            description: e?.message || t(
-              "playground:actions.speechErrorBody",
-              "Transcription request failed. Check tldw server health."
-            )
-          })
-        } finally {
-          try {
-            stream.getTracks().forEach((trk) => trk.stop())
-          } catch {}
-          serverRecorderRef.current = null
-          setIsServerDictating(false)
-        }
-      }
-      serverRecorderRef.current = recorder
-      recorder.start()
-      setIsServerDictating(true)
-    } catch (e: any) {
-      notificationApi.error({
-        message: t("playground:actions.speechErrorTitle", "Dictation failed"),
-        description: t(
-          "playground:actions.speechMicError",
-          "Unable to access your microphone. Check browser permissions and try again."
-        )
-      })
+  const handleDictationToggle = React.useCallback(() => {
+    switch (dictationToggleIntent) {
+      case "start_server":
+        void startServerDictation()
+        break
+      case "stop_server":
+        stopServerDictation()
+        break
+      case "start_browser":
+        startBrowserDictation()
+        break
+      case "stop_browser":
+        stopSpeechRecognition()
+        break
+      default:
+        break
     }
   }, [
-    canUseServerStt,
-    isServerDictating,
-    notificationApi,
-    speechToTextLanguage,
-    sttModel,
-    sttTimestampGranularities,
-    sttUseSegmentation,
-    setMessageValue,
+    dictationToggleIntent,
+    startBrowserDictation,
+    startServerDictation,
     stopServerDictation,
-    t
+    stopSpeechRecognition
   ])
 
   const voiceChatSettingsFields = (
@@ -7760,7 +7703,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         isServerDictating={isServerDictating}
                         voiceChatEnabled={voiceChatEnabled}
                         speechTooltip={speechTooltipText}
-                        onDictationToggle={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
+                        onDictationToggle={handleDictationToggle}
                         onTemplateSelect={handleTemplateSelect}
                         selectedModel={selectedModel}
                         resolvedProviderKey={resolvedProviderKey}
@@ -8954,13 +8897,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       <VoiceModeSelector
         open={voiceModeSelectorOpen}
         onClose={() => setVoiceModeSelectorOpen(false)}
-        onSelectDictation={() => {
-          if (speechUsesServer) {
-            handleServerDictationToggle()
-          } else {
-            handleSpeechToggle()
-          }
-        }}
+        onSelectDictation={handleDictationToggle}
         onSelectConversation={handleVoiceChatToggle}
         dictationAvailable={speechAvailable}
         conversationAvailable={voiceChatAvailable}

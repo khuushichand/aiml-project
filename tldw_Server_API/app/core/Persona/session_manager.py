@@ -10,11 +10,30 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+_VALID_PERSONA_PLAN_STEP_TYPES = frozenset({"mcp_tool", "skill", "rag_query", "final_answer"})
+
+
+def _infer_step_type_from_tool(tool_name: str) -> str:
+    normalized = str(tool_name or "").strip().lower()
+    if normalized == "rag_search":
+        return "rag_query"
+    if normalized == "summarize":
+        return "final_answer"
+    return "mcp_tool"
+
+
+def _normalize_step_type(step_type: Any, *, tool_name: str) -> str:
+    candidate = str(step_type or "").strip().lower()
+    if candidate in _VALID_PERSONA_PLAN_STEP_TYPES:
+        return candidate
+    return _infer_step_type_from_tool(tool_name)
+
 
 @dataclass
 class PlanStep:
     idx: int
     tool: str
+    step_type: str = "mcp_tool"
     args: dict[str, Any] = field(default_factory=dict)
     description: str | None = None
     why: str | None = None
@@ -93,6 +112,7 @@ class SessionManager:
             tool = str(raw.get("tool") or "").strip()
             if not tool:
                 continue
+            step_type = _normalize_step_type(raw.get("step_type"), tool_name=tool)
             args = raw.get("args")
             if not isinstance(args, dict):
                 args = {}
@@ -102,7 +122,16 @@ class SessionManager:
             why = raw.get("why")
             if why is not None:
                 why = str(why)
-            normalized_steps.append(PlanStep(idx=idx, tool=tool, args=args, description=description, why=why))
+            normalized_steps.append(
+                PlanStep(
+                    idx=idx,
+                    tool=tool,
+                    step_type=step_type,
+                    args=args,
+                    description=description,
+                    why=why,
+                )
+            )
         if not normalized_steps:
             raise ValueError("no valid plan steps")
         normalized_steps.sort(key=lambda step: step.idx)

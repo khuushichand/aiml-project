@@ -177,12 +177,18 @@ vi.mock("@/components/Common/Playground/Message", () => ({
 }))
 
 vi.mock("@/components/Common/FeatureEmptyState", () => ({
-  default: ({ title, examples }: { title: string; examples: string[] }) => (
+  default: ({
+    title,
+    examples
+  }: {
+    title: string
+    examples?: unknown[]
+  }) => (
     <div>
       <div>{title}</div>
       <ul>
-        {examples.map((example) => (
-          <li key={example}>{example}</li>
+        {(examples ?? []).map((example, index) => (
+          <li key={index}>{example}</li>
         ))}
       </ul>
     </div>
@@ -310,6 +316,65 @@ describe("ChatPane Stage 3 adaptive mode controls and settings", () => {
     expect(
       screen.getByText("What was discussed around minute 12?")
     ).toBeInTheDocument()
+  })
+
+  it("clicking an empty-state prompt seeds the composer and keeps send enabled", async () => {
+    workspaceStoreState.selectedSourceIds = ["source-video-1"]
+    workspaceStoreState.getSelectedSources = () => [
+      {
+        id: "source-video-1",
+        mediaId: 10,
+        title: "Interview Recording",
+        type: "video"
+      }
+    ]
+    workspaceStoreState.getSelectedMediaIds = () => [10]
+
+    render(<ChatPane />)
+
+    const prompt = "What was discussed around minute 12?"
+    fireEvent.click(screen.getByRole("button", { name: prompt }))
+
+    const textarea = screen.getByPlaceholderText(
+      "Ask about your sources..."
+    ) as HTMLTextAreaElement
+    expect(textarea.value).toBe(prompt)
+
+    const sendButton = screen.getByRole("button", { name: "Send" })
+    expect(sendButton).not.toBeDisabled()
+
+    fireEvent.click(sendButton)
+
+    await waitFor(() => {
+      expect(mockOnSubmit).toHaveBeenCalledWith({
+        message: prompt,
+        image: ""
+      })
+    })
+  })
+
+  it("groups mode and RAG controls inside one toolbar region", () => {
+    workspaceStoreState.selectedSourceIds = ["source-doc-1"]
+    workspaceStoreState.getSelectedSources = () => [
+      {
+        id: "source-doc-1",
+        mediaId: 101,
+        title: "Policy Document",
+        type: "pdf"
+      }
+    ]
+    workspaceStoreState.getSelectedMediaIds = () => [101]
+
+    render(<ChatPane />)
+
+    const toolbar = screen.getByTestId("workspace-chat-controls-toolbar")
+    expect(toolbar).toBeInTheDocument()
+    expect(toolbar).toContainElement(
+      screen.getByRole("button", { name: "General chat" })
+    )
+    expect(toolbar).toContainElement(
+      screen.getByRole("button", { name: "Advanced RAG settings" })
+    )
   })
 
   it("allows explicit general mode override even when sources are selected", async () => {

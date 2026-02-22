@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+from tldw_Server_API.tests.Audio.ws_test_helpers import ws_session_or_skip
 
 
 @pytest.mark.asyncio
@@ -23,7 +24,7 @@ async def test_audio_ws_emits_ws_latency_metrics_on_commit():
         except Exception:
             pytest.skip("audio WebSocket endpoint not available in this build")
 
-        with ws as ws:
+        with ws_session_or_skip(ws) as ws:
             # Minimal config message to satisfy handler; avoid model loading side effects
             ws.send_text(json.dumps({"type": "config", "sample_rate": 16000}))
             # Immediately commit (no audio) to trigger full_transcript frame via stream.send_json

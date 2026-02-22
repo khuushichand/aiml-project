@@ -1,23 +1,24 @@
 import json
 import os
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 
 
 @pytest.mark.asyncio
 async def test_persona_ws_emits_ws_latency_metrics(monkeypatch):
     """Ensure Persona WS sends frames via WebSocketStream and increments ws_send_latency_ms with labels."""
-    # Ensure the route is enabled for this test run
-    monkeypatch.setenv("ROUTES_ENABLE", "persona")
-    monkeypatch.setenv("TEST_MODE", "1")
+    async def _fake_resolve(*args, **kwargs):
+        return "1", True, True
 
-    from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+    monkeypatch.setattr(persona_ep, "is_persona_enabled", lambda: True)
 
-    settings = get_settings()
-    api_key = settings.SINGLE_USER_API_KEY
+    app = FastAPI()
+    app.include_router(persona_ep.router, prefix="/api/v1/persona")
 
     reg = get_metrics_registry()
     before = reg.get_metric_stats(
@@ -27,7 +28,7 @@ async def test_persona_ws_emits_ws_latency_metrics(monkeypatch):
 
     with TestClient(app) as client:
         try:
-            ws = client.websocket_connect(f"/api/v1/persona/stream?api_key={api_key}")
+            ws = client.websocket_connect("/api/v1/persona/stream")
         except Exception:
             pytest.skip("persona WebSocket endpoint not available")
 

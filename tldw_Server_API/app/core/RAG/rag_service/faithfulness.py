@@ -16,12 +16,16 @@ Ported from RAGnarok-AI's faithfulness evaluator, adapted for tldw_server2.
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
+
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
 
 from .rag_protocols import LLMProtocol
 
@@ -260,64 +264,39 @@ class FaithfulnessEvaluator:
         )
 
 
-# ---------------------------------------------------------------------------
-# JSON parsing helpers
-# ---------------------------------------------------------------------------
-
-_JSON_DECODER = json.JSONDecoder()
-
-
 def _parse_json_array(text: str) -> list[str]:
-    """Parse a JSON array from LLM response, with fallback extraction.
-
-    Uses ``json.JSONDecoder.raw_decode`` so that trailing text after the
-    JSON structure (common in LLM output) is tolerated.
-    """
-    text = text.strip()
-
-    # Try direct parse
+    """Parse a JSON array from LLM response, with fallback extraction."""
     try:
-        result = json.loads(text)
-        if isinstance(result, list):
-            return result
-    except json.JSONDecodeError:
+        payload = parse_structured_output(
+            text,
+            options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+        )
+        if isinstance(payload, list):
+            return [str(item) for item in payload]
+        if isinstance(payload, dict):
+            claims = payload.get("claims")
+            if isinstance(claims, list):
+                return [str(item) for item in claims]
+    except StructuredOutputParseError:
         pass
-
-    # Try to extract the first valid JSON array by scanning for '['
-    for match in re.finditer(r"\[", text):
-        try:
-            result, _ = _JSON_DECODER.raw_decode(text, match.start())
-            if isinstance(result, list):
-                return result
-        except (json.JSONDecodeError, ValueError):
-            continue
 
     return []
 
 
 def _parse_json_object(text: str) -> dict[str, object]:
-    """Parse a JSON object from LLM response, with fallback extraction.
-
-    Uses ``json.JSONDecoder.raw_decode`` so that trailing text after the
-    JSON structure (common in LLM output) is tolerated.
-    """
-    text = text.strip()
-
-    # Try direct parse
+    """Parse a JSON object from LLM response, with fallback extraction."""
     try:
-        result = json.loads(text)
-        if isinstance(result, dict):
-            return result
-    except json.JSONDecodeError:
+        payload = parse_structured_output(
+            text,
+            options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+        )
+        if isinstance(payload, dict):
+            return {str(k): v for k, v in payload.items()}
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    return {str(k): v for k, v in item.items()}
+    except StructuredOutputParseError:
         pass
-
-    # Try to extract the first valid JSON object by scanning for '{'
-    for match in re.finditer(r"\{", text):
-        try:
-            result, _ = _JSON_DECODER.raw_decode(text, match.start())
-            if isinstance(result, dict):
-                return result
-        except (json.JSONDecodeError, ValueError):
-            continue
 
     return {}

@@ -1084,11 +1084,13 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   return (
     <header
       data-testid="workspace-header"
-      className="flex items-center justify-between border-b border-border bg-surface px-4 py-3"
+      className="flex items-center justify-between border-b border-border/70 bg-[linear-gradient(90deg,var(--surface)_0%,var(--surface-2)_100%)] px-4 py-3.5"
     >
       {messageContextHolder}
       <div className="flex items-center gap-3">
-        <FlaskConical className="h-5 w-5 text-primary" />
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-primary/30 bg-primary/10">
+          <FlaskConical className="h-4 w-4 text-primary" />
+        </span>
         <div className="flex items-center gap-2">
           {isEditing ? (
             <div className="flex items-center gap-1">
@@ -1141,35 +1143,43 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div
+        data-testid="workspace-header-actions"
+        className="flex items-center gap-2"
+      >
         {statusGuardrailsEnabled && (
-          <Tooltip
-            title={
-              connectionIndicator.description
-                ? `${connectionIndicator.detail}: ${connectionIndicator.description}`
-                : connectionIndicator.detail
-            }
+          <div
+            data-testid="workspace-header-status-group"
+            className="flex items-center gap-1 rounded-lg border border-border/60 bg-surface2/30 px-1.5 py-1"
           >
-            <span
-              data-testid="workspace-connection-status-indicator"
-              className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${connectionIndicator.toneClass}`}
-              aria-live="polite"
+            <Tooltip
+              title={
+                connectionIndicator.description
+                  ? `${connectionIndicator.detail}: ${connectionIndicator.description}`
+                  : connectionIndicator.detail
+              }
             >
-              <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" />
-              {connectionIndicator.label}
-            </span>
-          </Tooltip>
-        )}
-        {statusGuardrailsEnabled && formattedStorageUsage && (
-          <Tooltip title={formattedStorageUsage.longLabel}>
-            <span
-              data-testid="workspace-storage-usage-indicator"
-              className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${formattedStorageUsage.toneClass}`}
-            >
-              {t("playground:workspace.storage", "Storage")}{" "}
-              {formattedStorageUsage.shortLabel}
-            </span>
-          </Tooltip>
+              <span
+                data-testid="workspace-connection-status-indicator"
+                className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${connectionIndicator.toneClass}`}
+                aria-live="polite"
+              >
+                <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" />
+                {connectionIndicator.label}
+              </span>
+            </Tooltip>
+            {formattedStorageUsage && (
+              <Tooltip title={formattedStorageUsage.longLabel}>
+                <span
+                  data-testid="workspace-storage-usage-indicator"
+                  className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${formattedStorageUsage.toneClass}`}
+                >
+                  {t("playground:workspace.storage", "Storage")}{" "}
+                  {formattedStorageUsage.shortLabel}
+                </span>
+              </Tooltip>
+            )}
+          </div>
         )}
         {/* Left pane expand button (only shown when collapsed) */}
         {!hideToggles && !leftPaneOpen && (
@@ -1224,7 +1234,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           <button
             type="button"
             data-testid="workspace-workspaces-button"
-            className="ml-2 flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text transition hover:bg-surface2"
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text transition hover:bg-surface2"
           >
             <span>{t("playground:workspace.workspaces", "Workspaces")}</span>
             <ChevronDown className="h-4 w-4 text-text-muted" />

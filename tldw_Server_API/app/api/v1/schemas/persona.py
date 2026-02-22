@@ -5,7 +5,15 @@ Scaffold only - minimal models to enable endpoint stubs.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+PersonaMode = Literal["session_scoped", "persistent_scoped"]
+PersonaScopeRuleType = Literal["conversation_id", "character_id", "media_id", "media_tag", "note_id"]
+PersonaPolicyRuleKind = Literal["mcp_tool", "skill"]
+PersonaSessionStatus = Literal["active", "paused", "closed", "archived"]
 
 
 class PersonaInfo(BaseModel):
@@ -28,6 +36,9 @@ class PersonaSessionResponse(BaseModel):
     session_id: str
     persona: PersonaInfo
     scopes: list[str] = Field(default_factory=list)
+    runtime_mode: PersonaMode | None = None
+    scope_snapshot_id: str | None = None
+    scope_audit: dict[str, object] = Field(default_factory=dict)
 
 
 class PersonaSessionSummary(BaseModel):
@@ -38,7 +49,80 @@ class PersonaSessionSummary(BaseModel):
     turn_count: int = 0
     pending_plan_count: int = 0
     preferences: dict[str, object] = Field(default_factory=dict)
+    runtime_mode: PersonaMode | None = None
+    status: PersonaSessionStatus | None = None
+    reuse_allowed: bool | None = None
+    scope_snapshot_id: str | None = None
+    scope_audit: dict[str, object] = Field(default_factory=dict)
 
 
 class PersonaSessionDetail(PersonaSessionSummary):
     turns: list[dict[str, object]] = Field(default_factory=list)
+
+
+class PersonaProfileCreate(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=200)
+    name: str = Field(..., min_length=1, max_length=200)
+    character_card_id: int | None = None
+    mode: PersonaMode = "session_scoped"
+    system_prompt: str | None = None
+    is_active: bool = True
+
+
+class PersonaProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    character_card_id: int | None = None
+    mode: PersonaMode | None = None
+    system_prompt: str | None = None
+    is_active: bool | None = None
+
+
+class PersonaProfileResponse(BaseModel):
+    id: str
+    name: str
+    character_card_id: int | None = None
+    mode: PersonaMode
+    system_prompt: str | None = None
+    is_active: bool = True
+    created_at: str
+    last_modified: str
+    version: int = 1
+
+
+class PersonaScopeRule(BaseModel):
+    rule_type: PersonaScopeRuleType
+    rule_value: str = Field(..., min_length=1, max_length=2048)
+    include: bool = True
+
+
+class PersonaScopeRulesReplaceRequest(BaseModel):
+    rules: list[PersonaScopeRule] = Field(default_factory=list)
+
+
+class PersonaScopeRulesResponse(BaseModel):
+    persona_id: str
+    replaced_count: int | None = None
+    rules: list[PersonaScopeRule] = Field(default_factory=list)
+
+
+class PersonaPolicyRule(BaseModel):
+    rule_kind: PersonaPolicyRuleKind
+    rule_name: str = Field(..., min_length=1, max_length=512)
+    allowed: bool = True
+    require_confirmation: bool = False
+    max_calls_per_turn: int | None = Field(default=None, ge=1)
+
+
+class PersonaPolicyRulesReplaceRequest(BaseModel):
+    rules: list[PersonaPolicyRule] = Field(default_factory=list)
+
+
+class PersonaPolicyRulesResponse(BaseModel):
+    persona_id: str
+    replaced_count: int | None = None
+    rules: list[PersonaPolicyRule] = Field(default_factory=list)
+
+
+class PersonaDeleteResponse(BaseModel):
+    status: str
+    persona_id: str

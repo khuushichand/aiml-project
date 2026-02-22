@@ -7,6 +7,8 @@ import base64
 import binascii
 from collections import defaultdict, deque
 import contextlib
+from datetime import datetime, timezone
+import hashlib
 import json
 import time
 import uuid
@@ -16,12 +18,21 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, W
 from loguru import logger
 from starlette.requests import Request as StarletteRequest
 
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.persona import (
+    PersonaDeleteResponse,
     PersonaInfo,
+    PersonaPolicyRulesReplaceRequest,
+    PersonaPolicyRulesResponse,
+    PersonaProfileCreate,
+    PersonaProfileResponse,
+    PersonaProfileUpdate,
     PersonaSessionDetail,
     PersonaSessionRequest,
     PersonaSessionResponse,
     PersonaSessionSummary,
+    PersonaScopeRulesReplaceRequest,
+    PersonaScopeRulesResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -31,14 +42,29 @@ from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.feature_flags import is_persona_enabled
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.MCP_unified import MCPRequest, get_mcp_server
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
+from tldw_Server_API.app.core.MCP_unified.persona_scope import normalize_persona_scope_payload
+from tldw_Server_API.app.core.Metrics import increment_counter
 from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_persona_turn,
     persist_tool_outcome,
     retrieve_top_memories,
 )
+from tldw_Server_API.app.core.Persona.policy_evaluator import (
+    default_allow_rules,
+    evaluate_canonical_policy,
+    normalize_policy_rules,
+)
 from tldw_Server_API.app.core.Persona.session_manager import get_session_manager
+from tldw_Server_API.app.core.Skills.context_integration import handle_skill_tool_call
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 router = APIRouter()
@@ -48,6 +74,62 @@ _PERSONA_KNOWN_TOOLS = {
     "rag_search",
     "summarize",
 }
+_DEFAULT_PERSONA_ID = "research_assistant"
+_DEFAULT_PERSONA_NAME = "Research Assistant"
+_DEFAULT_PERSONA_DESCRIPTION = "Helps ingest, search, and summarize content"
+_DEFAULT_PERSONA_DEFAULT_TOOLS = ["ingest_url", "rag_search", "summarize"]
+_DEFAULT_PERSONA_POLICY_RULES: list[dict[str, Any]] = [
+    {"rule_kind": "mcp_tool", "rule_name": "media.search", "allowed": True, "require_confirmation": False},
+    {"rule_kind": "mcp_tool", "rule_name": "chats.search", "allowed": True, "require_confirmation": False},
+]
+_EXPLICIT_SCOPE_RULE_TYPES = {"conversation_id", "character_id", "media_id", "note_id"}
+_PERSONA_RUNTIME_MODES = {"session_scoped", "persistent_scoped"}
+_PERSONA_WS_REQUIRED_NOTICE_LEVELS = {"info", "warning", "error"}
+_PERSONA_WS_ALLOWED_STEP_TYPES = {"mcp_tool", "skill", "rag_query", "final_answer"}
+
+
+def _bounded_label(value: Any, *, allowed: set[str], fallback: str) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in allowed:
+        return candidate
+    return fallback
+
+
+def _redacted_id_for_logs(raw_id: Any) -> str:
+    text = str(raw_id or "").strip()
+    if not text:
+        return "na"
+    digest = hashlib.sha1(text.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return digest[:12]
+
+
+def _metric_reason_bucket(reason_code: Any) -> str:
+    candidate = str(reason_code or "").strip().upper()
+    allowed = {
+        "POLICY_DENIED",
+        "POLICY_SCOPE_MISSING",
+        "POLICY_EXPORT_DISABLED",
+        "POLICY_DELETE_DISABLED",
+        "POLICY_PERSONA_NO_RULES",
+        "POLICY_PERSONA_NO_MATCH",
+        "POLICY_PERSONA_EXPLICIT_DENY",
+        "POLICY_SESSION_NO_RULES",
+        "POLICY_SESSION_NO_MATCH",
+        "POLICY_SESSION_EXPLICIT_DENY",
+        "POLICY_SKILL_NO_RULES",
+        "POLICY_SKILL_NO_MATCH",
+        "POLICY_SKILL_EXPLICIT_DENY",
+        "POLICY_INVALID_ACTION",
+    }
+    if candidate in allowed:
+        return candidate.lower()
+    return "other"
+
+
+def _increment_persona_metric(metric_name: str, labels: dict[str, str]) -> None:
+    safe_labels = {str(k): str(v) for k, v in labels.items()}
+    with contextlib.suppress(Exception):
+        increment_counter(metric_name, 1, labels=safe_labels)
 
 
 def _get_persona_max_tool_steps() -> int:
@@ -163,130 +245,119 @@ def _get_persona_session_scopes(*, allow_export: bool, allow_delete: bool) -> se
     return scopes
 
 
-def _evaluate_tool_policy(
-    tool_name: str,
+def _normalize_persona_step_type(value: Any, *, tool_name: str) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in {"mcp_tool", "skill", "rag_query", "final_answer"}:
+        return candidate
+    normalized_tool = str(tool_name or "").strip().lower()
+    if normalized_tool == "rag_search":
+        return "rag_query"
+    if normalized_tool == "summarize":
+        return "final_answer"
+    return "mcp_tool"
+
+
+def _default_session_policy_rules() -> list[dict[str, Any]]:
+    # Explicit session rules keep the intersection model deterministic.
+    return [
+        *default_allow_rules("mcp_tool"),
+        *default_allow_rules("skill"),
+    ]
+
+
+def _session_policy_rules_from_preferences(preferences: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if isinstance(preferences, dict) and "session_policy_rules" in preferences:
+        return normalize_policy_rules(preferences.get("session_policy_rules"))
+    return _default_session_policy_rules()
+
+
+def _resolve_step_action_name(
     *,
+    step_type: str,
+    tool_name: str,
+    args: dict[str, Any] | None,
+) -> str:
+    normalized_step_type = _normalize_persona_step_type(step_type, tool_name=tool_name)
+    if normalized_step_type in {"mcp_tool", "rag_query"}:
+        resolved_name, _ = _translate_persona_tool_request(tool_name, args or {})
+        return str(resolved_name or tool_name or "").strip().lower()
+    return str(tool_name or "").strip().lower()
+
+
+def _load_persona_policy_rules_for_session(
+    db: CharactersRAGDB | None,
+    *,
+    session_id: str,
+    user_id: str,
+) -> dict[str, Any]:
+    default_payload = {
+        "persona_id": _DEFAULT_PERSONA_ID,
+        "runtime_mode": "session_scoped",
+        "policy_rules": normalize_policy_rules(_DEFAULT_PERSONA_POLICY_RULES),
+        "session_exists": False,
+    }
+    sid = str(session_id or "").strip()
+    uid = str(user_id or "").strip()
+    if db is None or not sid or not uid:
+        return dict(default_payload)
+    try:
+        session_row = db.get_persona_session(sid, user_id=uid, include_deleted=False)
+        if not session_row:
+            return dict(default_payload)
+        persona_id = str(session_row.get("persona_id") or _DEFAULT_PERSONA_ID).strip() or _DEFAULT_PERSONA_ID
+        runtime_mode = str(session_row.get("mode") or "session_scoped").strip().lower()
+        if runtime_mode not in _PERSONA_RUNTIME_MODES:
+            runtime_mode = "session_scoped"
+        policy_rules = db.list_persona_policy_rules(persona_id=persona_id, user_id=uid, include_deleted=False)
+        return {
+            "persona_id": persona_id,
+            "runtime_mode": runtime_mode,
+            "policy_rules": normalize_policy_rules(policy_rules),
+            "session_exists": True,
+        }
+    except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
+        logger.debug(
+            "persona ws policy lookup skipped for session_hash {}: {}",
+            _redacted_id_for_logs(sid),
+            exc,
+        )
+        return dict(default_payload)
+
+
+def _skill_policy_rules_for_step(
+    *,
+    step_type: str,
+) -> list[dict[str, Any]]:
+    normalized_step_type = _normalize_persona_step_type(step_type, tool_name="")
+    if normalized_step_type == "skill":
+        return default_allow_rules("skill")
+    return default_allow_rules("mcp_tool")
+
+
+def _evaluate_step_policy(
+    *,
+    step_type: str,
+    tool_name: str,
+    args: dict[str, Any] | None,
+    persona_policy_rules: list[dict[str, Any]],
+    session_policy_rules: list[dict[str, Any]],
     session_scopes: set[str],
     allow_export: bool,
     allow_delete: bool,
 ) -> dict[str, Any]:
-    """
-    Evaluate policy for a requested tool.
-
-    Returns a policy object suitable for wire payloads and execution checks:
-    { allow, requires_confirmation, required_scope, reason_code?, reason?, action }.
-    """
-    normalized = str(tool_name or "").strip().lower()
-    policy: dict[str, Any] = {
-        "allow": True,
-        "requires_confirmation": False,
-        "required_scope": "read",
-        "reason_code": None,
-        "reason": None,
-        "action": "read",
-    }
-
-    if not normalized:
-        policy.update(
-            {
-                "allow": False,
-                "requires_confirmation": True,
-                "required_scope": "read",
-                "reason_code": "POLICY_INVALID_TOOL",
-                "reason": "Tool name is required.",
-                "action": "unknown",
-            }
-        )
-        return policy
-
-    if normalized in {"rag_search", "summarize"}:
-        policy.update(
-            {
-                "requires_confirmation": False,
-                "required_scope": "read",
-                "action": "read",
-            }
-        )
-    elif normalized == "ingest_url":
-        policy.update(
-            {
-                "requires_confirmation": True,
-                "required_scope": "write:preview",
-                "action": "write",
-            }
-        )
-    elif "export" in normalized:
-        policy.update(
-            {
-                "requires_confirmation": True,
-                "required_scope": "write:export",
-                "action": "export",
-            }
-        )
-    elif "delete" in normalized:
-        policy.update(
-            {
-                "requires_confirmation": True,
-                "required_scope": "write:delete",
-                "action": "delete",
-            }
-        )
-    else:
-        policy.update(
-            {
-                "allow": False,
-                "requires_confirmation": True,
-                "required_scope": "read",
-                "reason_code": "POLICY_TOOL_NOT_ALLOWED",
-                "reason": f"Tool '{tool_name}' is not in the persona allowlist.",
-                "action": "unknown",
-            }
-        )
-        return policy
-
-    if normalized not in _PERSONA_KNOWN_TOOLS and policy["action"] == "read":
-        policy.update(
-            {
-                "allow": False,
-                "reason_code": "POLICY_TOOL_NOT_ALLOWED",
-                "reason": f"Tool '{tool_name}' is not in the persona allowlist.",
-                "action": "unknown",
-            }
-        )
-        return policy
-
-    if policy["action"] == "export" and not allow_export:
-        policy.update(
-            {
-                "allow": False,
-                "reason_code": "POLICY_EXPORT_DISABLED",
-                "reason": "Export tools are disabled by persona policy.",
-            }
-        )
-        return policy
-
-    if policy["action"] == "delete" and not allow_delete:
-        policy.update(
-            {
-                "allow": False,
-                "reason_code": "POLICY_DELETE_DISABLED",
-                "reason": "Delete tools are disabled by persona policy.",
-            }
-        )
-        return policy
-
-    required_scope = str(policy.get("required_scope") or "").strip()
-    if required_scope and required_scope not in session_scopes:
-        policy.update(
-            {
-                "allow": False,
-                "reason_code": "POLICY_SCOPE_MISSING",
-                "reason": f"Missing required scope '{required_scope}'.",
-            }
-        )
-        return policy
-
-    return policy
+    normalized_step_type = _normalize_persona_step_type(step_type, tool_name=tool_name)
+    action_name = _resolve_step_action_name(step_type=normalized_step_type, tool_name=tool_name, args=args)
+    skill_policy_rules = _skill_policy_rules_for_step(step_type=normalized_step_type)
+    return evaluate_canonical_policy(
+        step_type=normalized_step_type,
+        action_name=action_name,
+        persona_policy_rules=persona_policy_rules,
+        session_policy_rules=session_policy_rules,
+        skill_policy_rules=skill_policy_rules,
+        session_scopes=session_scopes,
+        allow_export=allow_export,
+        allow_delete=allow_delete,
+    )
 
 
 def _build_tool_result(
@@ -338,6 +409,26 @@ def _coerce_bool(value: Any, *, default: bool) -> bool:
     return default
 
 
+def _normalize_ws_identifier(raw_value: Any, *, fallback: str, max_len: int = 128) -> str:
+    candidate = str(raw_value or "").strip()
+    if not candidate:
+        return fallback
+    safe = "".join(ch for ch in candidate if ch.isalnum() or ch in {"-", "_", ":", "."})
+    if not safe:
+        return fallback
+    return safe[:max_len]
+
+
+def _memory_mode_allows_personalization_retrieval(runtime_mode: str, *, session_exists: bool) -> bool:
+    normalized = str(runtime_mode or "").strip().lower()
+    if normalized == "persistent_scoped":
+        return True
+    if normalized == "session_scoped" and session_exists:
+        return False
+    # Backward compatibility for pre-session-scaffold clients that don't create persisted sessions first.
+    return True
+
+
 def _require_current_user_id(current_user: User) -> str:
     user_id = str(getattr(current_user, "id", "") or "").strip()
     if not user_id:
@@ -345,18 +436,331 @@ def _require_current_user_id(current_user: User) -> str:
     return user_id
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _to_http_exception(exc: Exception, *, action: str) -> HTTPException:
+    if isinstance(exc, InputError):
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if isinstance(exc, ConflictError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, CharactersRAGDBError):
+        logger.error("Persona DB error during {}: {}", action, exc)
+        return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to {action}")
+    logger.error("Unexpected persona error during {}: {}", action, exc)
+    return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to {action}")
+
+
+def _scope_audit_from_snapshot(scope_snapshot: Any) -> dict[str, object]:
+    if not isinstance(scope_snapshot, dict):
+        return {}
+    audit = scope_snapshot.get("audit")
+    if isinstance(audit, dict):
+        return {str(k): v for k, v in audit.items()}
+    return {}
+
+
+def _scope_snapshot_id_from_snapshot(scope_snapshot: Any) -> str | None:
+    if not isinstance(scope_snapshot, dict):
+        return None
+    candidate = str(scope_snapshot.get("scope_snapshot_id") or "").strip()
+    if candidate:
+        return candidate
+    audit = _scope_audit_from_snapshot(scope_snapshot)
+    fallback = str(audit.get("scope_snapshot_id") or "").strip()
+    return fallback or None
+
+
+def _open_persona_ws_db(user_id: str) -> CharactersRAGDB | None:
+    try:
+        uid = int(str(user_id).strip())
+    except (TypeError, ValueError):
+        return None
+    try:
+        db_path = DatabasePaths.get_chacha_db_path(uid)
+        return CharactersRAGDB(db_path=str(db_path), client_id=f"persona_ws_{uid}")
+    except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
+        logger.debug("persona ws scope DB init skipped: {}", exc)
+        return None
+
+
+def _load_persona_scope_metadata_for_session(
+    db: CharactersRAGDB | None,
+    *,
+    session_id: str,
+    user_id: str,
+) -> dict[str, Any] | None:
+    if db is None:
+        return None
+    sid = str(session_id or "").strip()
+    uid = str(user_id or "").strip()
+    if not sid or not uid:
+        return None
+    try:
+        row = db.get_persona_session(sid, user_id=uid, include_deleted=False)
+    except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
+        logger.debug(
+            "persona ws scope lookup skipped for session_hash {}: {}",
+            _redacted_id_for_logs(sid),
+            exc,
+        )
+        return None
+    if not row:
+        return None
+    payload = normalize_persona_scope_payload(row.get("scope_snapshot") or {})
+    if not payload:
+        return None
+    payload["persona_id"] = str(row.get("persona_id") or "")
+    return payload
+
+
+def _translate_persona_tool_request(name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    normalized = str(name or "").strip().lower()
+    if normalized == "rag_search":
+        query = str(arguments.get("query") or "").strip()
+        try:
+            limit = int(arguments.get("limit") or 20)
+        except (TypeError, ValueError):
+            limit = 20
+        try:
+            offset = int(arguments.get("offset") or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        translated: dict[str, Any] = {
+            "query": query,
+            "limit": max(1, min(limit, 100)),
+            "offset": max(0, offset),
+            "sources": ["media", "chats", "notes"],
+        }
+        if isinstance(arguments.get("sources"), list):
+            candidate_sources = [str(s).strip() for s in arguments["sources"] if str(s).strip()]
+            if candidate_sources:
+                translated["sources"] = candidate_sources
+        if isinstance(arguments.get("filters"), dict):
+            translated["filters"] = dict(arguments["filters"])
+        return "knowledge.search", translated
+    return name, arguments
+
+
+def _build_scope_snapshot(rules: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, object]]:
+    scope_snapshot_id = uuid.uuid4().hex
+    materialized_at = _utc_now_iso()
+    include_counts: dict[str, int] = {}
+    explicit_ids: dict[str, list[str]] = {}
+    selector_values: dict[str, list[str]] = {}
+    include_rule_count = 0
+    exclude_rule_count = 0
+    explicit_id_rule_count = 0
+    selector_rule_count = 0
+
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        rule_type = str(rule.get("rule_type") or "").strip().lower()
+        rule_value = str(rule.get("rule_value") or "").strip()
+        include = bool(rule.get("include", True))
+        if not rule_type:
+            continue
+        include_counts[rule_type] = include_counts.get(rule_type, 0) + 1
+        if not include:
+            exclude_rule_count += 1
+            continue
+        include_rule_count += 1
+        if rule_type in _EXPLICIT_SCOPE_RULE_TYPES:
+            if rule_value:
+                explicit_ids.setdefault(rule_type, []).append(rule_value)
+                explicit_id_rule_count += 1
+        elif rule_value:
+            selector_values.setdefault(rule_type, []).append(rule_value)
+            selector_rule_count += 1
+
+    for values in explicit_ids.values():
+        values[:] = sorted(set(values))
+    for values in selector_values.values():
+        values[:] = sorted(set(values))
+
+    audit: dict[str, object] = {
+        "scope_snapshot_id": scope_snapshot_id,
+        "materialized_at": materialized_at,
+        "source_rule_count": len(rules),
+        "include_rule_count": include_rule_count,
+        "exclude_rule_count": exclude_rule_count,
+        "source_rule_type_counts": include_counts,
+        "explicit_id_rule_count": explicit_id_rule_count,
+        "selector_rule_count": selector_rule_count,
+        "selector_rule_types": sorted(selector_values.keys()),
+    }
+    snapshot = {
+        "scope_snapshot_id": scope_snapshot_id,
+        "materialized_at": materialized_at,
+        "materialized_scope": {
+            "explicit_ids": explicit_ids,
+            "selectors": selector_values,
+        },
+        "audit": audit,
+    }
+    return snapshot, audit
+
+
+def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileResponse:
+    return PersonaProfileResponse(
+        id=str(profile.get("id") or ""),
+        name=str(profile.get("name") or ""),
+        character_card_id=profile.get("character_card_id"),
+        mode=str(profile.get("mode") or "session_scoped"),
+        system_prompt=profile.get("system_prompt"),
+        is_active=bool(profile.get("is_active", True)),
+        created_at=str(profile.get("created_at") or _utc_now_iso()),
+        last_modified=str(profile.get("last_modified") or _utc_now_iso()),
+        version=int(profile.get("version") or 1),
+    )
+
+
+def _persona_info_from_profile(
+    profile: dict[str, Any],
+    *,
+    policy_rules: list[dict[str, Any]] | None = None,
+) -> PersonaInfo:
+    mcp_tools = sorted(
+        {
+            str(rule.get("rule_name") or "").strip()
+            for rule in (policy_rules or [])
+            if str(rule.get("rule_kind") or "").strip() == "mcp_tool"
+            and bool(rule.get("allowed", False))
+            and str(rule.get("rule_name") or "").strip()
+        }
+    )
+    skill_tools = sorted(
+        {
+            str(rule.get("rule_name") or "").strip()
+            for rule in (policy_rules or [])
+            if str(rule.get("rule_kind") or "").strip() == "skill"
+            and bool(rule.get("allowed", False))
+            and str(rule.get("rule_name") or "").strip()
+        }
+    )
+    default_tools = mcp_tools or list(_DEFAULT_PERSONA_DEFAULT_TOOLS)
+    capabilities = ["agentic", "mcp", "skills"]
+    if mcp_tools:
+        capabilities.append("mcp_tools_configured")
+    if skill_tools:
+        capabilities.append("skills_configured")
+    description = str(profile.get("system_prompt") or "").strip()
+    if not description:
+        description = _DEFAULT_PERSONA_DESCRIPTION
+    return PersonaInfo(
+        id=str(profile.get("id") or _DEFAULT_PERSONA_ID),
+        name=str(profile.get("name") or _DEFAULT_PERSONA_NAME),
+        description=description[:300] if description else None,
+        voice="default",
+        avatar_url=None,
+        capabilities=capabilities,
+        default_tools=default_tools,
+    )
+
+
+def _ensure_default_persona_profile(db: CharactersRAGDB, *, user_id: str) -> dict[str, Any]:
+    profile = db.get_persona_profile(_DEFAULT_PERSONA_ID, user_id=user_id, include_deleted=False)
+    if profile is None:
+        try:
+            _ = db.create_persona_profile(
+                {
+                    "id": _DEFAULT_PERSONA_ID,
+                    "user_id": user_id,
+                    "name": _DEFAULT_PERSONA_NAME,
+                    "mode": "session_scoped",
+                    "system_prompt": _DEFAULT_PERSONA_DESCRIPTION,
+                    "is_active": True,
+                }
+            )
+        except ConflictError:
+            # A raced creator likely inserted it first; re-fetch below.
+            pass
+        profile = db.get_persona_profile(_DEFAULT_PERSONA_ID, user_id=user_id, include_deleted=False)
+    if profile is None:
+        profiles = db.list_persona_profiles(user_id=user_id, active_only=True, limit=1)
+        if not profiles:
+            raise ConflictError(
+                "Unable to resolve a default persona profile for user.",
+                entity="persona_profiles",
+                entity_id=_DEFAULT_PERSONA_ID,
+            )
+        profile = profiles[0]
+
+    if str(profile.get("id") or "") == _DEFAULT_PERSONA_ID:
+        try:
+            existing = db.list_persona_policy_rules(persona_id=_DEFAULT_PERSONA_ID, user_id=user_id)
+            if not existing:
+                _ = db.replace_persona_policy_rules(
+                    persona_id=_DEFAULT_PERSONA_ID,
+                    user_id=user_id,
+                    rules=_DEFAULT_PERSONA_POLICY_RULES,
+                )
+        except CharactersRAGDBError as exc:
+            logger.warning("Failed to ensure default persona policy rules: {}", exc)
+    return profile
+
+
 def _persona_catalog_items() -> list[PersonaInfo]:
     return [
         PersonaInfo(
-            id="research_assistant",
-            name="Research Assistant",
-            description="Helps ingest, search, and summarize content",
+            id=_DEFAULT_PERSONA_ID,
+            name=_DEFAULT_PERSONA_NAME,
+            description=_DEFAULT_PERSONA_DESCRIPTION,
             voice="default",
             avatar_url=None,
             capabilities=["ingest", "rag_search", "summarize"],
-            default_tools=["ingest_url", "rag_search", "summarize"],
+            default_tools=list(_DEFAULT_PERSONA_DEFAULT_TOOLS),
         )
     ]
+
+
+def _persona_session_summary_from_db(
+    row: dict[str, Any],
+    *,
+    manager_row: dict[str, Any] | None = None,
+) -> PersonaSessionSummary:
+    scope_snapshot = row.get("scope_snapshot") or {}
+    return PersonaSessionSummary(
+        session_id=str(row.get("id") or ""),
+        persona_id=str(row.get("persona_id") or ""),
+        created_at=str(row.get("created_at") or _utc_now_iso()),
+        updated_at=str(row.get("last_modified") or row.get("created_at") or _utc_now_iso()),
+        turn_count=int((manager_row or {}).get("turn_count") or 0),
+        pending_plan_count=int((manager_row or {}).get("pending_plan_count") or 0),
+        preferences=dict((manager_row or {}).get("preferences") or {}),
+        runtime_mode=str(row.get("mode") or "session_scoped"),
+        status=str(row.get("status") or "active"),
+        reuse_allowed=bool(row.get("reuse_allowed", False)),
+        scope_snapshot_id=_scope_snapshot_id_from_snapshot(scope_snapshot),
+        scope_audit=_scope_audit_from_snapshot(scope_snapshot),
+    )
+
+
+def _persona_session_detail_from_db(
+    row: dict[str, Any],
+    *,
+    manager_snapshot: dict[str, Any] | None = None,
+) -> PersonaSessionDetail:
+    scope_snapshot = row.get("scope_snapshot") or {}
+    turns = list((manager_snapshot or {}).get("turns") or [])
+    turn_count = int((manager_snapshot or {}).get("turn_count") or len(turns))
+    return PersonaSessionDetail(
+        session_id=str(row.get("id") or ""),
+        persona_id=str(row.get("persona_id") or ""),
+        created_at=str(row.get("created_at") or _utc_now_iso()),
+        updated_at=str(row.get("last_modified") or row.get("created_at") or _utc_now_iso()),
+        turn_count=turn_count,
+        pending_plan_count=int((manager_snapshot or {}).get("pending_plan_count") or 0),
+        preferences=dict((manager_snapshot or {}).get("preferences") or {}),
+        runtime_mode=str(row.get("mode") or "session_scoped"),
+        status=str(row.get("status") or "active"),
+        reuse_allowed=bool(row.get("reuse_allowed", False)),
+        scope_snapshot_id=_scope_snapshot_id_from_snapshot(scope_snapshot),
+        scope_audit=_scope_audit_from_snapshot(scope_snapshot),
+        turns=turns,
+    )
 
 
 async def _transcribe_audio_chunk(audio_bytes: bytes, audio_format: str) -> str:
@@ -575,39 +979,386 @@ async def _resolve_authenticated_user_id(
     return user_id, True, True
 
 
-@router.get("/catalog", response_model=list[PersonaInfo], tags=["persona"], status_code=status.HTTP_200_OK)
-async def persona_catalog(_current_user: User = Depends(get_request_user)) -> list[PersonaInfo]:
-    """Return a placeholder persona catalog (scaffold)."""
+@router.get("/profiles", response_model=list[PersonaProfileResponse], tags=["persona"], status_code=status.HTTP_200_OK)
+async def list_persona_profiles(
+    active_only: bool = Query(default=False),
+    include_deleted: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> list[PersonaProfileResponse]:
     if not is_persona_enabled():
         raise HTTPException(status_code=404, detail="Persona disabled")
-    return _persona_catalog_items()
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profiles = db.list_persona_profiles(
+            user_id=user_id,
+            include_deleted=include_deleted,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+        if not profiles and not include_deleted:
+            profiles = [_ensure_default_persona_profile(db, user_id=user_id)]
+        return [_persona_profile_to_response(profile) for profile in profiles]
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="list persona profiles") from exc
+
+
+@router.post("/profiles", response_model=PersonaProfileResponse, tags=["persona"], status_code=status.HTTP_201_CREATED)
+async def create_persona_profile(
+    payload: PersonaProfileCreate = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaProfileResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        create_data = payload.model_dump(exclude_none=True)
+        create_data["user_id"] = user_id
+        persona_id = db.create_persona_profile(create_data)
+        if not db.list_persona_policy_rules(persona_id=persona_id, user_id=user_id):
+            _ = db.replace_persona_policy_rules(
+                persona_id=persona_id,
+                user_id=user_id,
+                rules=_DEFAULT_PERSONA_POLICY_RULES,
+            )
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=500, detail="Failed to load created persona profile")
+        return _persona_profile_to_response(profile)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="create persona profile") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}",
+    response_model=PersonaProfileResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def get_persona_profile(
+    persona_id: str,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaProfileResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        return _persona_profile_to_response(profile)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="get persona profile") from exc
+
+
+@router.patch(
+    "/profiles/{persona_id}",
+    response_model=PersonaProfileResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def update_persona_profile(
+    persona_id: str,
+    payload: PersonaProfileUpdate = Body(...),
+    expected_version: int | None = Query(default=None, ge=1),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaProfileResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No profile fields provided for update")
+    try:
+        ok = db.update_persona_profile(
+            persona_id=persona_id,
+            user_id=user_id,
+            update_data=update_data,
+            expected_version=expected_version,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        return _persona_profile_to_response(profile)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="update persona profile") from exc
+
+
+@router.delete(
+    "/profiles/{persona_id}",
+    response_model=PersonaDeleteResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def delete_persona_profile(
+    persona_id: str,
+    expected_version: int | None = Query(default=None, ge=1),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaDeleteResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        ok = db.soft_delete_persona_profile(
+            persona_id=persona_id,
+            user_id=user_id,
+            expected_version=expected_version,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        return PersonaDeleteResponse(status="deleted", persona_id=persona_id)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="delete persona profile") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/scope-rules",
+    response_model=PersonaScopeRulesResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def list_persona_scope_rules(
+    persona_id: str,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaScopeRulesResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        rules = db.list_persona_scope_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
+        return PersonaScopeRulesResponse(persona_id=persona_id, rules=rules)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="list persona scope rules") from exc
+
+
+@router.put(
+    "/profiles/{persona_id}/scope-rules",
+    response_model=PersonaScopeRulesResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def replace_persona_scope_rules(
+    persona_id: str,
+    payload: PersonaScopeRulesReplaceRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaScopeRulesResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        replaced_count = db.replace_persona_scope_rules(
+            persona_id=persona_id,
+            user_id=user_id,
+            rules=[rule.model_dump() for rule in payload.rules],
+        )
+        rules = db.list_persona_scope_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
+        return PersonaScopeRulesResponse(persona_id=persona_id, replaced_count=replaced_count, rules=rules)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="replace persona scope rules") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/policy-rules",
+    response_model=PersonaPolicyRulesResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def list_persona_policy_rules(
+    persona_id: str,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaPolicyRulesResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        rules = db.list_persona_policy_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
+        return PersonaPolicyRulesResponse(persona_id=persona_id, rules=rules)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="list persona policy rules") from exc
+
+
+@router.put(
+    "/profiles/{persona_id}/policy-rules",
+    response_model=PersonaPolicyRulesResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def replace_persona_policy_rules(
+    persona_id: str,
+    payload: PersonaPolicyRulesReplaceRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaPolicyRulesResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        replaced_count = db.replace_persona_policy_rules(
+            persona_id=persona_id,
+            user_id=user_id,
+            rules=[rule.model_dump() for rule in payload.rules],
+        )
+        rules = db.list_persona_policy_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
+        return PersonaPolicyRulesResponse(persona_id=persona_id, replaced_count=replaced_count, rules=rules)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="replace persona policy rules") from exc
+
+
+@router.get("/catalog", response_model=list[PersonaInfo], tags=["persona"], status_code=status.HTTP_200_OK)
+async def persona_catalog(
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> list[PersonaInfo]:
+    """Return persona catalog backed by ChaCha profile records."""
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        profiles = db.list_persona_profiles(user_id=user_id, active_only=True, limit=200)
+        if not profiles:
+            profiles = [_ensure_default_persona_profile(db, user_id=user_id)]
+        catalog: list[PersonaInfo] = []
+        for profile in profiles:
+            policy_rules = db.list_persona_policy_rules(
+                persona_id=str(profile.get("id") or ""),
+                user_id=user_id,
+                include_deleted=False,
+            )
+            catalog.append(_persona_info_from_profile(profile, policy_rules=policy_rules))
+        return catalog
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="list persona catalog") from exc
 
 
 @router.post("/session", response_model=PersonaSessionResponse, tags=["persona"], status_code=status.HTTP_200_OK)
 async def persona_session(
     req: PersonaSessionRequest = Body(...),
     _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> PersonaSessionResponse:
-    """Create or resume a persona session (scaffold)."""
+    """Create or resume a persona session with a materialized scope snapshot."""
     if not is_persona_enabled():
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
-    persona = _persona_catalog_items()[0]
-    if req.persona_id and req.persona_id != persona.id:
-        logger.info(f"Unknown persona_id requested in scaffold: {req.persona_id}; defaulting to {persona.id}")
+    requested_persona_id = str(req.persona_id or "").strip() or _DEFAULT_PERSONA_ID
     session_manager = get_session_manager()
+
+    # Preserve scaffold ownership semantics for resume IDs in process-local session manager.
+    if req.resume_session_id:
+        try:
+            _ = session_manager.create(
+                user_id=user_id,
+                persona_id=requested_persona_id,
+                resume_session_id=req.resume_session_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     try:
-        session = session_manager.create(
-            user_id=user_id,
-            persona_id=persona.id,
-            resume_session_id=req.resume_session_id,
+        profile = db.get_persona_profile(requested_persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            logger.info(
+                "Unknown persona_id requested in API: {}; defaulting to {}",
+                requested_persona_id,
+                _DEFAULT_PERSONA_ID,
+            )
+            profile = _ensure_default_persona_profile(db, user_id=user_id)
+        persona_id = str(profile.get("id") or _DEFAULT_PERSONA_ID)
+        policy_rules = db.list_persona_policy_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
+        persona = _persona_info_from_profile(profile, policy_rules=policy_rules)
+
+        session_row: dict[str, Any] | None = None
+        if req.resume_session_id:
+            session_row = db.get_persona_session(req.resume_session_id, user_id=user_id, include_deleted=False)
+
+        if session_row is None:
+            scope_rules = db.list_persona_scope_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
+            scope_snapshot, scope_audit = _build_scope_snapshot(scope_rules)
+            create_data: dict[str, Any] = {
+                "persona_id": persona_id,
+                "user_id": user_id,
+                "conversation_id": req.project_id,
+                "mode": str(profile.get("mode") or "session_scoped"),
+                "scope_snapshot_json": scope_snapshot,
+            }
+            if req.resume_session_id:
+                create_data["id"] = str(req.resume_session_id)
+            session_id = db.create_persona_session(create_data)
+            session_row = db.get_persona_session(session_id, user_id=user_id, include_deleted=False)
+            if session_row is None:
+                raise HTTPException(status_code=500, detail="Failed to load created persona session")
+        else:
+            scope_audit = _scope_audit_from_snapshot(session_row.get("scope_snapshot") or {})
+
+        session_id = str(session_row.get("id") or req.resume_session_id or "").strip()
+        if not session_id:
+            raise HTTPException(status_code=500, detail="Persona session missing session_id")
+
+        # Keep in-memory state synchronized for existing WS/tool-plan behavior.
+        try:
+            _ = session_manager.create(
+                user_id=user_id,
+                persona_id=persona_id,
+                resume_session_id=session_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+        allow_export, allow_delete = _get_persona_rbac_flags()
+        scopes = sorted(_get_persona_session_scopes(allow_export=allow_export, allow_delete=allow_delete))
+        scope_snapshot = session_row.get("scope_snapshot") or {}
+        return PersonaSessionResponse(
+            session_id=session_id,
+            persona=persona,
+            scopes=scopes,
+            runtime_mode=str(session_row.get("mode") or profile.get("mode") or "session_scoped"),
+            scope_snapshot_id=_scope_snapshot_id_from_snapshot(scope_snapshot),
+            scope_audit=scope_audit,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    session_id = session.session_id
-    allow_export, allow_delete = _get_persona_rbac_flags()
-    scopes = sorted(_get_persona_session_scopes(allow_export=allow_export, allow_delete=allow_delete))
-    return PersonaSessionResponse(session_id=session_id, persona=persona, scopes=scopes)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="create or resume persona session") from exc
 
 
 @router.get("/sessions", response_model=list[PersonaSessionSummary], tags=["persona"], status_code=status.HTTP_200_OK)
@@ -615,14 +1366,34 @@ async def persona_sessions(
     persona_id: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> list[PersonaSessionSummary]:
-    """List sessions for the authenticated user."""
+    """List persisted persona sessions for the authenticated user."""
     if not is_persona_enabled():
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     manager = get_session_manager()
-    rows = manager.list_sessions(user_id=user_id, persona_id=persona_id, limit=limit)
-    return [PersonaSessionSummary(**row) for row in rows]
+    try:
+        rows = db.list_persona_sessions(
+            user_id=user_id,
+            persona_id=persona_id,
+            include_deleted=False,
+            limit=limit,
+            offset=0,
+        )
+        manager_rows = {
+            str(item.get("session_id") or ""): item
+            for item in manager.list_sessions(user_id=user_id, persona_id=persona_id, limit=max(limit, 200))
+        }
+        return [
+            _persona_session_summary_from_db(
+                row,
+                manager_row=manager_rows.get(str(row.get("id") or "")),
+            )
+            for row in rows
+        ]
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="list persona sessions") from exc
 
 
 @router.get(
@@ -635,20 +1406,27 @@ async def persona_session_detail(
     session_id: str,
     limit_turns: int = Query(default=100, ge=0, le=1000),
     _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> PersonaSessionDetail:
-    """Get a single session snapshot for the authenticated user."""
+    """Get a single persisted persona session with local runtime turn snapshot (if present)."""
     if not is_persona_enabled():
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     manager = get_session_manager()
-    snapshot = manager.get_session_snapshot(
-        session_id=session_id,
-        user_id=user_id,
-        limit_turns=None if limit_turns <= 0 else limit_turns,
-    )
-    if snapshot is None:
-        raise HTTPException(status_code=404, detail="Persona session not found")
-    return PersonaSessionDetail(**snapshot)
+    try:
+        row = db.get_persona_session(session_id, user_id=user_id, include_deleted=False)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Persona session not found")
+        snapshot = manager.get_session_snapshot(
+            session_id=session_id,
+            user_id=user_id,
+            limit_turns=None if limit_turns <= 0 else limit_turns,
+        )
+        return _persona_session_detail_from_db(row, manager_snapshot=snapshot)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="get persona session detail") from exc
 
 
 @router.websocket("/stream")
@@ -672,11 +1450,22 @@ async def persona_stream(
     if not is_persona_enabled():
         with contextlib.suppress(RuntimeError, OSError):
             await ws.accept()
-            await ws.send_json({"event": "notice", "level": "error", "message": "Persona disabled"})
+            await ws.send_json(
+                {
+                    "event": "notice",
+                    "session_id": "system",
+                    "timestamp_ms": int(time.time() * 1000),
+                    "event_seq": 0,
+                    "level": "error",
+                    "reason_code": "PERSONA_DISABLED",
+                    "message": "Persona disabled",
+                }
+            )
             await ws.close(code=1000)
         return
 
     stream: WebSocketStream | None = None
+    persona_scope_db: CharactersRAGDB | None = None
     try:
         user_id, credentials_supplied, auth_ok = await _resolve_authenticated_user_id(ws, token=token, api_key=api_key)
         if not auth_ok:
@@ -695,16 +1484,132 @@ async def persona_stream(
             labels={"component": "persona", "endpoint": "persona_ws"},
         )
         await stream.start()
-        await stream.send_json({"event": "notice", "message": "persona stream connected (scaffold)"})
         authenticated_user_id = str(user_id or "").strip()
         if not authenticated_user_id:
             with contextlib.suppress(RuntimeError, OSError):
                 await stream.ws.close(code=1008)
             return
+        persona_scope_db = _open_persona_ws_db(authenticated_user_id)
         connection_user_id = authenticated_user_id
         session_manager = get_session_manager()
         default_session_id = uuid.uuid4().hex
         persona_id = "research_assistant"
+        ws_event_seq_by_session: dict[str, int] = defaultdict(int)
+
+        def _next_ws_event_meta(session_id: str) -> dict[str, Any]:
+            sid = _normalize_ws_identifier(session_id, fallback=default_session_id)
+            seq = ws_event_seq_by_session[sid]
+            ws_event_seq_by_session[sid] += 1
+            return {
+                "session_id": sid,
+                "timestamp_ms": int(time.time() * 1000),
+                "event_seq": int(seq),
+            }
+
+        async def _emit_notice(
+            *,
+            session_id: str,
+            level: str = "info",
+            message: str,
+            reason_code: str | None = None,
+            **extra: Any,
+        ) -> None:
+            payload: dict[str, Any] = {
+                "event": "notice",
+                **_next_ws_event_meta(session_id),
+                "level": _bounded_label(level, allowed=_PERSONA_WS_REQUIRED_NOTICE_LEVELS, fallback="info"),
+                "message": str(message or ""),
+                "reason_code": str(reason_code) if reason_code else None,
+            }
+            payload.update(extra)
+            await stream.send_json(payload)
+
+        async def _emit_assistant_delta(
+            *,
+            session_id: str,
+            text_delta: str,
+            **extra: Any,
+        ) -> None:
+            payload: dict[str, Any] = {
+                "event": "assistant_delta",
+                **_next_ws_event_meta(session_id),
+                "text_delta": str(text_delta or ""),
+            }
+            payload.update(extra)
+            await stream.send_json(payload)
+
+        async def _emit_tool_plan(
+            *,
+            session_id: str,
+            plan_id: str,
+            steps: list[dict[str, Any]],
+            memory: dict[str, Any],
+            persona_id_value: str,
+        ) -> None:
+            payload: dict[str, Any] = {
+                "event": "tool_plan",
+                **_next_ws_event_meta(session_id),
+                "plan_id": str(plan_id or ""),
+                "steps": list(steps),
+                "memory": dict(memory or {}),
+                "persona_id": str(persona_id_value or ""),
+            }
+            await stream.send_json(payload)
+
+        async def _emit_tool_call(
+            *,
+            session_id: str,
+            plan_id: str,
+            step_idx: int,
+            step_type: str,
+            tool: str,
+            args: dict[str, Any],
+            policy: dict[str, Any],
+            why: str | None = None,
+        ) -> None:
+            payload: dict[str, Any] = {
+                "event": "tool_call",
+                **_next_ws_event_meta(session_id),
+                "plan_id": str(plan_id or ""),
+                "step_idx": int(step_idx),
+                "step_type": _bounded_label(step_type, allowed=_PERSONA_WS_ALLOWED_STEP_TYPES, fallback="mcp_tool"),
+                "tool": str(tool or ""),
+                "args": dict(args or {}),
+                "policy": dict(policy or {}),
+                "why": str(why or ""),
+            }
+            await stream.send_json(payload)
+
+        async def _emit_tool_result(
+            *,
+            session_id: str,
+            plan_id: str,
+            step_idx: int,
+            step_type: str,
+            tool: str,
+            result: dict[str, Any],
+        ) -> None:
+            payload: dict[str, Any] = {
+                "event": "tool_result",
+                **_next_ws_event_meta(session_id),
+                "plan_id": str(plan_id or ""),
+                "step_idx": int(step_idx),
+                "step_type": _bounded_label(step_type, allowed=_PERSONA_WS_ALLOWED_STEP_TYPES, fallback="mcp_tool"),
+                "tool": str(tool or ""),
+                **dict(result or {}),
+            }
+            payload.setdefault("ok", False)
+            payload.setdefault("output", None)
+            payload.setdefault("result", payload.get("output"))
+            payload.setdefault("reason_code", None)
+            await stream.send_json(payload)
+
+        await _emit_notice(
+            session_id=default_session_id,
+            level="info",
+            message="persona stream connected (scaffold)",
+            reason_code="WS_CONNECTED",
+        )
 
         allow_export, allow_delete = _get_persona_rbac_flags()
         session_scopes = _get_persona_session_scopes(
@@ -732,12 +1637,22 @@ async def persona_stream(
             metadata: dict[str, Any] | None = None,
             persist_as_memory: bool = False,
             persist_personalization: bool = True,
+            persona_id_override: str | None = None,
+            runtime_mode_override: str | None = None,
+            memory_kind: str | None = None,
         ) -> None:
+            effective_persona_id = str(persona_id_override or persona_id or "").strip() or persona_id
+            effective_runtime_mode = str(runtime_mode_override or "session_scoped").strip().lower()
+            should_store_memory = bool(
+                persist_as_memory
+                and effective_runtime_mode == "persistent_scoped"
+                and str(memory_kind or "").strip().lower() == "summary"
+            )
             try:
                 session_manager.append_turn(
                     session_id=session_id,
                     user_id=connection_user_id,
-                    persona_id=persona_id,
+                    persona_id=effective_persona_id,
                     role=role,
                     content=content,
                     turn_type=turn_type,
@@ -749,15 +1664,15 @@ async def persona_stream(
                 _ = persist_persona_turn(
                     user_id=authenticated_user_id,
                     session_id=session_id,
-                    persona_id=persona_id,
+                    persona_id=effective_persona_id,
                     role=role,
                     content=content,
                     turn_type=turn_type,
                     metadata=metadata,
-                    store_as_memory=persist_as_memory,
+                    store_as_memory=should_store_memory,
                 )
 
-        async def _call_tool(
+        async def _call_mcp_tool(
             name: str,
             arguments: dict,
             *,
@@ -767,8 +1682,13 @@ async def persona_stream(
             policy: dict[str, Any],
             why: str | None = None,
             description: str | None = None,
+            allowed_tools: list[str] | None = None,
         ) -> dict:
             if not authenticated_user_id:
+                _increment_persona_metric(
+                    "persona_ws_tool_calls_total",
+                    {"kind": "mcp", "status": "auth_required"},
+                )
                 return _build_tool_result(
                     ok=False,
                     output=None,
@@ -778,6 +1698,10 @@ async def persona_stream(
                 )
             if not bool(policy.get("allow", False)):
                 deny_reason = str(policy.get("reason") or f"Tool '{name}' not permitted by policy")
+                _increment_persona_metric(
+                    "persona_ws_tool_calls_total",
+                    {"kind": "mcp", "status": "denied"},
+                )
                 return _build_tool_result(
                     ok=False,
                     output=None,
@@ -785,7 +1709,8 @@ async def persona_stream(
                     reason_code=str(policy.get("reason_code") or "POLICY_DENIED"),
                     policy=policy,
                 )
-            req = MCPRequest(method="tools/call", params={"name": name, "arguments": arguments})
+            resolved_name, resolved_arguments = _translate_persona_tool_request(name, arguments or {})
+            req = MCPRequest(method="tools/call", params={"name": resolved_name, "arguments": resolved_arguments})
             server = get_mcp_server()
             if not server.initialized:
                 await server.initialize()
@@ -796,12 +1721,38 @@ async def persona_stream(
                     "plan_id": plan_id,
                     "step_idx": step_idx,
                     "tool": name,
+                    "mapped_tool": resolved_name,
                     "why": str(why or ""),
                     "description": str(description or ""),
                 },
             }
+            allowed_tools_effective = [str(t).strip() for t in (allowed_tools or []) if str(t).strip()]
+            if resolved_name and resolved_name not in allowed_tools_effective:
+                allowed_tools_effective.append(str(resolved_name))
+            if allowed_tools_effective:
+                audit_metadata["allowed_tools"] = allowed_tools_effective
+            scope_metadata = _load_persona_scope_metadata_for_session(
+                persona_scope_db,
+                session_id=session_id,
+                user_id=authenticated_user_id,
+            )
+            if scope_metadata:
+                audit_metadata["persona_scope"] = scope_metadata
+                _increment_persona_metric(
+                    "persona_ws_scope_resolution_total",
+                    {"source": "mcp_tool", "result": "hit"},
+                )
+            else:
+                _increment_persona_metric(
+                    "persona_ws_scope_resolution_total",
+                    {"source": "mcp_tool", "result": "miss"},
+                )
             resp = await server.handle_http_request(req, user_id=authenticated_user_id, metadata=audit_metadata)
             if resp.error:
+                _increment_persona_metric(
+                    "persona_ws_tool_calls_total",
+                    {"kind": "mcp", "status": "error"},
+                )
                 return _build_tool_result(
                     ok=False,
                     output=None,
@@ -809,15 +1760,117 @@ async def persona_stream(
                     reason_code="TOOL_EXECUTION_ERROR",
                     policy=policy,
                 )
+            _increment_persona_metric(
+                "persona_ws_tool_calls_total",
+                {"kind": "mcp", "status": "success"},
+            )
             return _build_tool_result(ok=True, output=resp.result, policy=policy)
+
+        async def _call_skill(
+            skill_name: str,
+            skill_args: str,
+            *,
+            policy: dict[str, Any],
+        ) -> dict[str, Any]:
+            if not authenticated_user_id:
+                _increment_persona_metric(
+                    "persona_ws_tool_calls_total",
+                    {"kind": "skill", "status": "auth_required"},
+                )
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error="Authentication required for skill execution",
+                    reason_code="AUTH_REQUIRED",
+                    policy=policy,
+                )
+            if not bool(policy.get("allow", False)):
+                deny_reason = str(policy.get("reason") or f"Skill '{skill_name}' not permitted by policy")
+                _increment_persona_metric(
+                    "persona_ws_tool_calls_total",
+                    {"kind": "skill", "status": "denied"},
+                )
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error=deny_reason,
+                    reason_code=str(policy.get("reason_code") or "POLICY_DENIED"),
+                    policy=policy,
+                )
+            try:
+                uid_int = int(str(authenticated_user_id))
+            except (TypeError, ValueError):
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error="Authenticated persona user must be numeric for skills execution",
+                    reason_code="SKILL_USER_ID_INVALID",
+                    policy=policy,
+                )
+            try:
+                skill_result = await handle_skill_tool_call(
+                    skill_name=skill_name,
+                    args=skill_args,
+                    user_id=uid_int,
+                    base_path=DatabasePaths.get_user_base_directory(uid_int),
+                    db=persona_scope_db,
+                    request_context=None,
+                )
+            except Exception as exc:
+                logger.debug("persona skill execution error for {}: {}", skill_name, exc)
+                _increment_persona_metric(
+                    "persona_ws_tool_calls_total",
+                    {"kind": "skill", "status": "error"},
+                )
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error=f"Skill execution failed: {exc}",
+                    reason_code="SKILL_EXECUTION_ERROR",
+                    policy=policy,
+                )
+            if not bool(skill_result.get("success")):
+                _increment_persona_metric(
+                    "persona_ws_tool_calls_total",
+                    {"kind": "skill", "status": "error"},
+                )
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error=str(skill_result.get("error") or f"Skill '{skill_name}' failed"),
+                    reason_code="SKILL_EXECUTION_ERROR",
+                    policy=policy,
+                )
+            _increment_persona_metric(
+                "persona_ws_tool_calls_total",
+                {"kind": "skill", "status": "success"},
+            )
+            return _build_tool_result(ok=True, output=skill_result, policy=policy)
 
         async def _propose_plan(text: str, memory_context: list[str] | None = None) -> dict:
             steps = []
-            t = (text or "").lower()
+            text_clean = str(text or "").strip()
+            t = text_clean.lower()
+            if t.startswith("skill:"):
+                payload = text_clean.split(":", 1)[1].strip()
+                if payload:
+                    skill_name, _, skill_args = payload.partition(" ")
+                    steps.append(
+                        {
+                            "idx": 0,
+                            "step_type": "skill",
+                            "tool": skill_name.strip().lower(),
+                            "args": {"args": skill_args.strip()},
+                            "description": f"Execute skill '{skill_name.strip()}'",
+                            "why": "Input explicitly requested skill execution.",
+                        }
+                    )
+                    return {"steps": steps}
             if "http" in t or "ingest" in t or "url" in t:
                 steps.append(
                     {
                         "idx": 0,
+                        "step_type": "mcp_tool",
                         "tool": "ingest_url",
                         "args": {"url": text},
                         "description": "Ingest the provided URL",
@@ -827,6 +1880,7 @@ async def persona_stream(
                 steps.append(
                     {
                         "idx": 1,
+                        "step_type": "final_answer",
                         "tool": "summarize",
                         "args": {},
                         "description": "Summarize the ingested content",
@@ -842,6 +1896,7 @@ async def persona_stream(
                 steps.append(
                     {
                         "idx": 0,
+                        "step_type": "rag_query",
                         "tool": "rag_search",
                         "args": {"query": query_text},
                         "description": "Search your knowledge base",
@@ -864,10 +1919,49 @@ async def persona_stream(
             mtype = msg.get("type") or msg.get("event") or "unknown"
             if mtype == "user_message":
                 text = (msg.get("text") or msg.get("message") or "").strip()
-                session_id = str(msg.get("session_id") or default_session_id)
+                original_session_id = msg.get("session_id")
+                session_id = _normalize_ws_identifier(original_session_id, fallback=default_session_id)
+                if str(original_session_id or "").strip() and str(original_session_id).strip() != session_id:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="warning",
+                        message="Invalid session_id normalized to a safe identifier.",
+                        reason_code="SESSION_ID_NORMALIZED",
+                    )
+                forbidden_client_fields = [
+                    field_name
+                    for field_name in ("persona_scope", "allowed_tools", "persona_audit", "metadata")
+                    if field_name in msg
+                ]
+                if forbidden_client_fields:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="warning",
+                        message="Ignored unsupported client-controlled security fields.",
+                        reason_code="SECURITY_FIELDS_IGNORED",
+                        ignored_fields=forbidden_client_fields,
+                    )
+
+                runtime_context = _load_persona_policy_rules_for_session(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                )
+                runtime_persona_id = str(runtime_context.get("persona_id") or _DEFAULT_PERSONA_ID).strip() or _DEFAULT_PERSONA_ID
+                runtime_mode = _bounded_label(
+                    runtime_context.get("runtime_mode"),
+                    allowed=_PERSONA_RUNTIME_MODES,
+                    fallback="session_scoped",
+                )
+                persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
+                session_exists = bool(runtime_context.get("session_exists", False))
+                _increment_persona_metric(
+                    "persona_ws_runtime_mode_total",
+                    {"mode": runtime_mode, "session_exists": "true" if session_exists else "false"},
+                )
                 _ = session_manager.create(
                     user_id=connection_user_id,
-                    persona_id=persona_id,
+                    persona_id=runtime_persona_id,
                     resume_session_id=session_id,
                 )
                 existing_preferences = session_manager.get_preferences(
@@ -879,10 +1973,17 @@ async def persona_stream(
                     existing_preferences.get("use_memory_context"),
                     default=True,
                 )
-                use_memory_context = _coerce_bool(
+                requested_use_memory_context = _coerce_bool(
                     msg.get("use_memory_context"),
                     default=default_use_memory,
                 )
+                use_memory_context = requested_use_memory_context
+                memory_allowed_by_mode = _memory_mode_allows_personalization_retrieval(
+                    runtime_mode,
+                    session_exists=session_exists,
+                )
+                if not memory_allowed_by_mode:
+                    use_memory_context = False
                 pref_top_k_raw = existing_preferences.get("memory_top_k", configured_top_k)
                 try:
                     pref_top_k = int(pref_top_k_raw)
@@ -894,14 +1995,21 @@ async def persona_stream(
                 except (TypeError, ValueError):
                     memory_top_k = pref_top_k
                 memory_top_k = max(1, min(memory_top_k, configured_top_k))
+                if "session_policy_rules" in msg:
+                    session_policy_rules = normalize_policy_rules(msg.get("session_policy_rules"))
+                else:
+                    session_policy_rules = _session_policy_rules_from_preferences(existing_preferences)
+                preferences_patch: dict[str, Any] = {
+                    "use_memory_context": use_memory_context,
+                    "memory_top_k": memory_top_k,
+                }
+                if "session_policy_rules" in msg:
+                    preferences_patch["session_policy_rules"] = session_policy_rules
                 with contextlib.suppress(Exception):
                     session_manager.update_preferences(
                         session_id=session_id,
                         user_id=connection_user_id,
-                        preferences={
-                            "use_memory_context": use_memory_context,
-                            "memory_top_k": memory_top_k,
-                        },
+                        preferences=preferences_patch,
                     )
                 _record_turn(
                     session_id=session_id,
@@ -912,11 +2020,16 @@ async def persona_stream(
                         "source": "ws",
                         "use_memory_context": use_memory_context,
                         "memory_top_k": memory_top_k,
+                        "session_policy_rule_count": len(session_policy_rules),
+                        "runtime_mode": runtime_mode,
+                        "session_exists": session_exists,
                     },
                     persist_as_memory=False,
+                    persona_id_override=runtime_persona_id,
+                    runtime_mode_override=runtime_mode,
                 )
                 memory_context: list[str] = []
-                if use_memory_context:
+                if use_memory_context and memory_allowed_by_mode:
                     memories = retrieve_top_memories(
                         user_id=authenticated_user_id,
                         query_text=text,
@@ -925,28 +2038,31 @@ async def persona_stream(
                     memory_context = [m.content for m in memories]
                 memory_usage = {
                     "enabled": use_memory_context,
+                    "requested_enabled": requested_use_memory_context,
                     "requested_top_k": memory_top_k,
                     "applied_count": len(memory_context),
+                    "runtime_mode": runtime_mode,
                 }
                 if use_memory_context and memory_context:
-                    await stream.send_json(
-                        {
-                            "event": "notice",
-                            "session_id": session_id,
-                            "level": "info",
-                            "reason_code": "MEMORY_CONTEXT_APPLIED",
-                            "message": f"Applied {len(memory_context)} personalization memories",
-                        }
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="MEMORY_CONTEXT_APPLIED",
+                        message=f"Applied {len(memory_context)} personalization memories",
+                    )
+                elif requested_use_memory_context and not memory_allowed_by_mode:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="MEMORY_CONTEXT_MODE_DISABLED",
+                        message="Memory context is disabled for session_scoped personas.",
                     )
                 elif not use_memory_context:
-                    await stream.send_json(
-                        {
-                            "event": "notice",
-                            "session_id": session_id,
-                            "level": "info",
-                            "reason_code": "MEMORY_CONTEXT_DISABLED",
-                            "message": "Memory context disabled for this message",
-                        }
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="MEMORY_CONTEXT_DISABLED",
+                        message="Memory context disabled for this message",
                     )
                 plan = await _propose_plan(text, memory_context=memory_context)
                 plan_id = uuid.uuid4().hex
@@ -954,89 +2070,107 @@ async def persona_stream(
                 proposed_steps = list(plan.get("steps", []))
                 if len(proposed_steps) > max_tool_steps:
                     proposed_steps = proposed_steps[:max_tool_steps]
-                    await stream.send_json(
-                        {
-                            "event": "notice",
-                            "session_id": session_id,
-                            "level": "warning",
-                            "message": f"Plan truncated to max_tool_steps={max_tool_steps}",
-                        }
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="warning",
+                        message=f"Plan truncated to max_tool_steps={max_tool_steps}",
+                        reason_code="PLAN_TRUNCATED",
                     )
                 try:
                     pending_plan = session_manager.put_plan(
                         session_id=session_id,
                         user_id=connection_user_id,
-                        persona_id=persona_id,
+                        persona_id=runtime_persona_id,
                         plan_id=plan_id,
                         steps=proposed_steps,
                     )
                 except ValueError as exc:
-                    await stream.send_json({"event": "notice", "session_id": session_id, "level": "error", "message": str(exc)})
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        message=str(exc),
+                        reason_code="PLAN_INVALID",
+                    )
                     continue
-                stored_steps = [
-                    {
-                        "idx": step.idx,
-                        "tool": step.tool,
-                        "args": step.args,
-                        "description": step.description,
-                        "why": step.why,
-                        "policy": _evaluate_tool_policy(
-                            step.tool,
-                            session_scopes=session_scopes,
-                            allow_export=allow_export,
-                            allow_delete=allow_delete,
-                        ),
-                    }
-                    for step in pending_plan.steps
-                ]
-                await stream.send_json(
-                    {
-                        "event": "tool_plan",
-                        "session_id": session_id,
-                        "plan_id": plan_id,
-                        "steps": stored_steps,
-                        "memory": memory_usage,
-                    }
+                stored_steps: list[dict[str, Any]] = []
+                for step in pending_plan.steps:
+                    step_type = _normalize_persona_step_type(step.step_type, tool_name=step.tool)
+                    policy = _evaluate_step_policy(
+                        step_type=step_type,
+                        tool_name=step.tool,
+                        args=step.args,
+                        persona_policy_rules=persona_policy_rules,
+                        session_policy_rules=session_policy_rules,
+                        session_scopes=session_scopes,
+                        allow_export=allow_export,
+                        allow_delete=allow_delete,
+                    )
+                    if not bool(policy.get("allow", False)):
+                        _increment_persona_metric(
+                            "persona_ws_policy_denials_total",
+                            {
+                                "step_type": _bounded_label(step_type, allowed=_PERSONA_WS_ALLOWED_STEP_TYPES, fallback="mcp_tool"),
+                                "reason": _metric_reason_bucket(policy.get("reason_code")),
+                            },
+                        )
+                    stored_steps.append(
+                        {
+                            "idx": step.idx,
+                            "step_type": step_type,
+                            "tool": step.tool,
+                            "args": step.args,
+                            "description": step.description,
+                            "why": step.why,
+                            "policy": policy,
+                        }
+                    )
+                await _emit_tool_plan(
+                    session_id=session_id,
+                    plan_id=plan_id,
+                    steps=stored_steps,
+                    memory=memory_usage,
+                    persona_id_value=runtime_persona_id,
                 )
             elif mtype == "audio_chunk":
-                session_id = str(msg.get("session_id") or default_session_id)
+                session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
+                runtime_context = _load_persona_policy_rules_for_session(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                )
+                runtime_persona_id = str(runtime_context.get("persona_id") or _DEFAULT_PERSONA_ID).strip() or _DEFAULT_PERSONA_ID
+                runtime_mode = _bounded_label(
+                    runtime_context.get("runtime_mode"),
+                    allowed=_PERSONA_RUNTIME_MODES,
+                    fallback="session_scoped",
+                )
                 audio_format = str(msg.get("audio_format") or "pcm16").strip().lower()
                 if audio_format not in allowed_audio_formats:
-                    await stream.send_json(
-                        {
-                            "event": "notice",
-                            "session_id": session_id,
-                            "level": "error",
-                            "reason_code": "AUDIO_FORMAT_UNSUPPORTED",
-                            "message": f"Unsupported audio_format '{audio_format}'",
-                        }
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        reason_code="AUDIO_FORMAT_UNSUPPORTED",
+                        message=f"Unsupported audio_format '{audio_format}'",
                     )
                     continue
 
                 try:
                     audio_bytes = _decode_audio_chunk(str(msg.get("bytes_base64") or ""))
                 except ValueError as exc:
-                    await stream.send_json(
-                        {
-                            "event": "notice",
-                            "session_id": session_id,
-                            "level": "error",
-                            "message": str(exc),
-                        }
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        message=str(exc),
+                        reason_code="AUDIO_CHUNK_INVALID",
                     )
                     continue
 
                 if len(audio_bytes) > audio_chunk_max_bytes:
-                    await stream.send_json(
-                        {
-                            "event": "notice",
-                            "session_id": session_id,
-                            "level": "error",
-                            "reason_code": "AUDIO_CHUNK_TOO_LARGE",
-                            "message": (
-                                f"Audio chunk exceeds max bytes ({len(audio_bytes)} > {audio_chunk_max_bytes})"
-                            ),
-                        }
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        reason_code="AUDIO_CHUNK_TOO_LARGE",
+                        message=f"Audio chunk exceeds max bytes ({len(audio_bytes)} > {audio_chunk_max_bytes})",
                     )
                     continue
 
@@ -1045,16 +2179,11 @@ async def persona_stream(
                 while session_window and (now_mono - session_window[0]) >= 60.0:
                     session_window.popleft()
                 if len(session_window) >= audio_chunks_per_minute:
-                    await stream.send_json(
-                        {
-                            "event": "notice",
-                            "session_id": session_id,
-                            "level": "warning",
-                            "reason_code": "AUDIO_RATE_LIMITED",
-                            "message": (
-                                f"Audio chunk rate limit exceeded ({audio_chunks_per_minute}/minute)"
-                            ),
-                        }
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="warning",
+                        reason_code="AUDIO_RATE_LIMITED",
+                        message=f"Audio chunk rate limit exceeded ({audio_chunks_per_minute}/minute)",
                     )
                     continue
                 session_window.append(now_mono)
@@ -1071,6 +2200,8 @@ async def persona_stream(
                         turn_type="audio_transcript",
                         metadata={"audio_format": audio_format, "bytes": len(audio_bytes)},
                         persist_as_memory=False,
+                        persona_id_override=runtime_persona_id,
+                        runtime_mode_override=runtime_mode,
                     )
                     await stream.send_json(
                         {
@@ -1094,31 +2225,21 @@ async def persona_stream(
                 )
                 emitted_tts_bytes = sum(len(chunk) for chunk in tts_chunks)
                 if tts_chunks and emitted_tts_bytes < tts_source_len:
-                    await stream.send_json(
-                        {
-                            "event": "notice",
-                            "session_id": session_id,
-                            "level": "warning",
-                            "reason_code": "TTS_OUTPUT_TRUNCATED",
-                            "message": (
-                                f"TTS output truncated ({emitted_tts_bytes} of {tts_source_len} bytes)"
-                            ),
-                        }
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="warning",
+                        reason_code="TTS_OUTPUT_TRUNCATED",
+                        message=f"TTS output truncated ({emitted_tts_bytes} of {tts_source_len} bytes)",
                     )
 
                 total_chunks = len(tts_chunks)
                 for idx, chunk in enumerate(tts_chunks):
                     if tts_in_flight_by_session[session_id] >= tts_max_in_flight_chunks:
-                        await stream.send_json(
-                            {
-                                "event": "notice",
-                                "session_id": session_id,
-                                "level": "warning",
-                                "reason_code": "TTS_BACKPRESSURE_DROP",
-                                "message": (
-                                    f"Dropping TTS chunk due to in-flight limit ({tts_max_in_flight_chunks})"
-                                ),
-                            }
+                        await _emit_notice(
+                            session_id=session_id,
+                            level="warning",
+                            reason_code="TTS_BACKPRESSURE_DROP",
+                            message=f"Dropping TTS chunk due to in-flight limit ({tts_max_in_flight_chunks})",
                         )
                         break
 
@@ -1141,13 +2262,11 @@ async def persona_stream(
                     try:
                         await stream.ws.send_bytes(chunk)
                     except Exception as exc:
-                        await stream.send_json(
-                            {
-                                "event": "notice",
-                                "session_id": session_id,
-                                "level": "warning",
-                                "message": f"Failed to send tts audio binary chunk: {exc}",
-                            }
+                        await _emit_notice(
+                            session_id=session_id,
+                            level="warning",
+                            message=f"Failed to send tts audio binary chunk: {exc}",
+                            reason_code="TTS_SEND_FAILED",
                         )
                         tts_in_flight_by_session[session_id] = max(
                             0, tts_in_flight_by_session[session_id] - 1
@@ -1162,18 +2281,30 @@ async def persona_stream(
                     content=tts_text,
                     turn_type="tts_audio",
                     metadata={"audio_format": audio_format, "chunks": len(tts_chunks)},
-                    persist_as_memory=True,
+                    persist_as_memory=False,
+                    persona_id_override=runtime_persona_id,
+                    runtime_mode_override=runtime_mode,
                 )
             elif mtype == "confirm_plan":
-                session_id = str(msg.get("session_id") or default_session_id)
-                plan_id = str(msg.get("plan_id") or "").strip()
+                session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
+                plan_id = _normalize_ws_identifier(msg.get("plan_id"), fallback="")
                 if not plan_id:
-                    await stream.send_json({"event": "notice", "session_id": session_id, "level": "error", "message": "plan_id is required"})
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        message="plan_id is required",
+                        reason_code="PLAN_ID_REQUIRED",
+                    )
                     continue
 
                 approved_steps_raw = msg.get("approved_steps", [])
                 if not isinstance(approved_steps_raw, list):
-                    await stream.send_json({"event": "notice", "session_id": session_id, "level": "error", "message": "approved_steps must be a list"})
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        message="approved_steps must be a list",
+                        reason_code="APPROVED_STEPS_INVALID",
+                    )
                     continue
                 approved_step_indices: list[int] = []
                 for raw_idx in approved_steps_raw:
@@ -1182,7 +2313,12 @@ async def persona_stream(
                     except (TypeError, ValueError):
                         continue
                 if not approved_step_indices:
-                    await stream.send_json({"event": "notice", "session_id": session_id, "level": "warning", "message": "No valid approved steps"})
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="warning",
+                        message="No valid approved steps",
+                        reason_code="APPROVED_STEPS_EMPTY",
+                    )
                     continue
                 max_tool_steps = _get_persona_max_tool_steps()
                 approved_step_indices = sorted(set(approved_step_indices))[:max_tool_steps]
@@ -1194,15 +2330,52 @@ async def persona_stream(
                     consume=True,
                 )
                 if pending_plan is None:
-                    await stream.send_json({"event": "notice", "session_id": session_id, "level": "error", "message": "Invalid plan_id/session_id"})
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        message="Invalid plan_id/session_id",
+                        reason_code="PLAN_NOT_FOUND",
+                    )
                     continue
+
+                runtime_context = _load_persona_policy_rules_for_session(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                )
+                runtime_persona_id = str(runtime_context.get("persona_id") or _DEFAULT_PERSONA_ID).strip() or _DEFAULT_PERSONA_ID
+                runtime_mode = _bounded_label(
+                    runtime_context.get("runtime_mode"),
+                    allowed=_PERSONA_RUNTIME_MODES,
+                    fallback="session_scoped",
+                )
+                persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
+                current_preferences = session_manager.get_preferences(
+                    session_id=session_id,
+                    user_id=connection_user_id,
+                )
+                if "session_policy_rules" in msg:
+                    session_policy_rules = normalize_policy_rules(msg.get("session_policy_rules"))
+                    with contextlib.suppress(Exception):
+                        session_manager.update_preferences(
+                            session_id=session_id,
+                            user_id=connection_user_id,
+                            preferences={"session_policy_rules": session_policy_rules},
+                        )
+                else:
+                    session_policy_rules = _session_policy_rules_from_preferences(current_preferences)
 
                 executed_steps = 0
                 for step in pending_plan.steps:
                     if step.idx not in approved_step_indices:
                         continue
-                    step_policy = _evaluate_tool_policy(
-                        step.tool,
+                    step_type = _normalize_persona_step_type(step.step_type, tool_name=step.tool)
+                    step_policy = _evaluate_step_policy(
+                        step_type=step_type,
+                        tool_name=step.tool,
+                        args=step.args,
+                        persona_policy_rules=persona_policy_rules,
+                        session_policy_rules=session_policy_rules,
                         session_scopes=session_scopes,
                         allow_export=allow_export,
                         allow_delete=allow_delete,
@@ -1210,16 +2383,21 @@ async def persona_stream(
                     if not bool(step_policy.get("allow", False)):
                         deny_reason = str(step_policy.get("reason") or f"Tool '{step.tool}' not permitted by policy")
                         reason_code = str(step_policy.get("reason_code") or "POLICY_DENIED")
-                        await stream.send_json(
+                        _increment_persona_metric(
+                            "persona_ws_policy_denials_total",
                             {
-                                "event": "notice",
-                                "session_id": session_id,
-                                "step_idx": step.idx,
-                                "tool": step.tool,
-                                "level": "warning",
-                                "reason_code": reason_code,
-                                "message": deny_reason,
-                            }
+                                "step_type": _bounded_label(step_type, allowed=_PERSONA_WS_ALLOWED_STEP_TYPES, fallback="mcp_tool"),
+                                "reason": _metric_reason_bucket(reason_code),
+                            },
+                        )
+                        await _emit_notice(
+                            session_id=session_id,
+                            step_idx=step.idx,
+                            tool=step.tool,
+                            step_type=step_type,
+                            level="warning",
+                            reason_code=reason_code,
+                            message=deny_reason,
                         )
                         result = _build_tool_result(
                             ok=False,
@@ -1228,92 +2406,162 @@ async def persona_stream(
                             reason_code=reason_code,
                             policy=step_policy,
                         )
-                        await stream.send_json(
-                            {
-                                "event": "tool_result",
-                                "session_id": session_id,
-                                "step_idx": step.idx,
-                                **result,
-                            }
+                        await _emit_tool_result(
+                            session_id=session_id,
+                            plan_id=plan_id,
+                            step_idx=step.idx,
+                            step_type=step_type,
+                            tool=step.tool,
+                            result=result,
                         )
                         _record_turn(
                             session_id=session_id,
                             role="tool",
                             content=json.dumps(result, ensure_ascii=True),
                             turn_type="tool_result",
-                            metadata={"tool": step.tool, "step_idx": step.idx},
+                            metadata={"tool": step.tool, "step_idx": step.idx, "step_type": step_type},
                             persist_as_memory=False,
                             persist_personalization=False,
+                            persona_id_override=runtime_persona_id,
+                            runtime_mode_override=runtime_mode,
                         )
                         _ = persist_tool_outcome(
                             user_id=authenticated_user_id,
                             session_id=session_id,
-                            persona_id=persona_id,
+                            persona_id=runtime_persona_id,
                             tool_name=step.tool,
                             step_idx=step.idx,
                             outcome=result,
+                            store_as_memory=False,
                         )
                         executed_steps += 1
                         continue
+
+                    if step_type == "final_answer":
+                        executed_steps += 1
+                        assistant_text = str(
+                            (step.args or {}).get("text")
+                            or step.description
+                            or "Final answer step executed."
+                        )
+                        await _emit_assistant_delta(
+                            session_id=session_id,
+                            step_idx=step.idx,
+                            text_delta=assistant_text,
+                        )
+                        _record_turn(
+                            session_id=session_id,
+                            role="assistant",
+                            content=assistant_text,
+                            turn_type="assistant_delta",
+                            metadata={"source": "plan", "step_idx": step.idx, "step_type": step_type},
+                            persist_as_memory=True,
+                            persona_id_override=runtime_persona_id,
+                            runtime_mode_override=runtime_mode,
+                            memory_kind="summary",
+                        )
+                        continue
+
                     executed_steps += 1
-                    await stream.send_json(
-                        {
-                            "event": "tool_call",
-                            "session_id": session_id,
-                            "step_idx": step.idx,
-                            "tool": step.tool,
-                            "args": step.args,
-                            "why": step.why,
-                            "policy": step_policy,
-                        }
-                    )
-                    result = await _call_tool(
-                        step.tool,
-                        step.args or {},
+                    await _emit_tool_call(
                         session_id=session_id,
                         plan_id=plan_id,
                         step_idx=step.idx,
-                        policy=step_policy,
+                        step_type=step_type,
+                        tool=step.tool,
+                        args=step.args or {},
                         why=step.why,
-                        description=step.description,
+                        policy=step_policy,
                     )
-                    await stream.send_json({"event": "tool_result", "session_id": session_id, "step_idx": step.idx, **result})
+                    if step_type == "skill":
+                        result = await _call_skill(
+                            step.tool,
+                            str((step.args or {}).get("args") or ""),
+                            policy=step_policy,
+                        )
+                    else:
+                        result = await _call_mcp_tool(
+                            step.tool,
+                            step.args or {},
+                            session_id=session_id,
+                            plan_id=plan_id,
+                            step_idx=step.idx,
+                            policy=step_policy,
+                            why=step.why,
+                            description=step.description,
+                            allowed_tools=step_policy.get("effective_allowed_tools")
+                            if isinstance(step_policy.get("effective_allowed_tools"), list)
+                            else None,
+                        )
+                    await _emit_tool_result(
+                        session_id=session_id,
+                        plan_id=plan_id,
+                        step_idx=step.idx,
+                        step_type=step_type,
+                        tool=step.tool,
+                        result=result,
+                    )
                     _record_turn(
                         session_id=session_id,
                         role="tool",
                         content=json.dumps(result, ensure_ascii=True),
                         turn_type="tool_result",
-                        metadata={"tool": step.tool, "step_idx": step.idx},
+                        metadata={"tool": step.tool, "step_idx": step.idx, "step_type": step_type},
                         persist_as_memory=False,
                         persist_personalization=False,
+                        persona_id_override=runtime_persona_id,
+                        runtime_mode_override=runtime_mode,
                     )
                     _ = persist_tool_outcome(
                         user_id=authenticated_user_id,
                         session_id=session_id,
-                        persona_id=persona_id,
+                        persona_id=runtime_persona_id,
                         tool_name=step.tool,
                         step_idx=step.idx,
                         outcome=result,
+                        store_as_memory=False,
                     )
                 if executed_steps == 0:
-                    await stream.send_json({"event": "notice", "session_id": session_id, "level": "warning", "message": "No approved steps matched plan"})
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="warning",
+                        message="No approved steps matched plan",
+                        reason_code="APPROVED_STEPS_NO_MATCH",
+                    )
             elif mtype == "cancel":
-                session_id = str(msg.get("session_id") or default_session_id)
+                session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
                 reason = str(msg.get("reason") or "user_cancelled")
                 cleared = session_manager.clear_plans(session_id=session_id, user_id=connection_user_id)
-                await stream.send_json(
-                    {
-                        "event": "notice",
-                        "session_id": session_id,
-                        "level": "info",
-                        "message": f"Cancelled pending work ({cleared} plan(s) cleared): {reason}",
-                    }
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="PLAN_CANCELLED",
+                    message=f"Cancelled pending work ({cleared} plan(s) cleared): {reason}",
                 )
             else:
-                session_id = str(msg.get("session_id") or default_session_id)
+                session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
+                runtime_context = _load_persona_policy_rules_for_session(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                )
+                runtime_persona_id = str(runtime_context.get("persona_id") or _DEFAULT_PERSONA_ID).strip() or _DEFAULT_PERSONA_ID
+                runtime_mode = _bounded_label(
+                    runtime_context.get("runtime_mode"),
+                    allowed=_PERSONA_RUNTIME_MODES,
+                    fallback="session_scoped",
+                )
                 assistant_text = "(scaffold)"
-                await stream.send_json({"event": "assistant_delta", "session_id": session_id, "text_delta": assistant_text})
-                await stream.send_json({"event": "notice", "session_id": session_id, "message": f"echo: {mtype}"})
+                await _emit_assistant_delta(
+                    session_id=session_id,
+                    text_delta=assistant_text,
+                )
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="ECHO_EVENT",
+                    message=f"echo: {mtype}",
+                )
                 _record_turn(
                     session_id=session_id,
                     role="assistant",
@@ -1321,6 +2569,8 @@ async def persona_stream(
                     turn_type="assistant_delta",
                     metadata={"echo_type": str(mtype)},
                     persist_as_memory=False,
+                    persona_id_override=runtime_persona_id,
+                    runtime_mode_override=runtime_mode,
                 )
     except WebSocketDisconnect:
         logger.info("Persona stream disconnected")
@@ -1332,3 +2582,9 @@ async def persona_stream(
         else:
             with contextlib.suppress(Exception):
                 await ws.close(code=1011)
+    finally:
+        if persona_scope_db is not None:
+            with contextlib.suppress(Exception):
+                persona_scope_db.close_all_connections()
+            with contextlib.suppress(Exception):
+                persona_scope_db.close_connection()

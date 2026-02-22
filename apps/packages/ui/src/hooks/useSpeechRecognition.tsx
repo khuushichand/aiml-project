@@ -58,6 +58,20 @@ type SpeechRecognitionHook = {
   resetTranscript: () => void
 }
 
+const createSyntheticErrorEvent = (
+  error: string,
+  cause?: unknown
+): SpeechRecognitionErrorEventLike => {
+  const event = new Event("error") as SpeechRecognitionErrorEventLike & {
+    cause?: unknown
+  }
+  ;(event as any).error = error
+  if (typeof cause !== "undefined") {
+    ;(event as any).cause = cause
+  }
+  return event
+}
+
 const useEventCallback = <T extends (...args: any[]) => any>(
   fn: T,
   dependencies: any[]
@@ -90,31 +104,57 @@ export const useSpeechRecognition = (
   } = props
 
   const recognition = useRef<SpeechRecognition | null>(null)
+  const isMounted = useRef<boolean>(true)
   const [listening, setListening] = useState<boolean>(false)
   const [supported, setSupported] = useState<boolean>(false)
   const [liveTranscript, setLiveTranscript] = useState<string>("")
   const silenceTimer = useRef<NodeJS.Timeout | null>(null)
   const lastTranscriptRef = useRef<string>("")
 
+  const clearSilenceTimer = useCallback(() => {
+    if (silenceTimer.current) {
+      clearTimeout(silenceTimer.current)
+      silenceTimer.current = null
+    }
+  }, [])
+
+  const setListeningSafe = useCallback((value: boolean) => {
+    if (!isMounted.current) return
+    setListening(value)
+  }, [])
+
+  const setLiveTranscriptSafe = useCallback((value: string) => {
+    if (!isMounted.current) return
+    setLiveTranscript(value)
+  }, [])
+
   useEffect(() => {
+    isMounted.current = true
     if (typeof window === "undefined") return
     window.SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition
     if (window.SpeechRecognition) {
       setSupported(true)
       recognition.current = new window.SpeechRecognition()
+    } else {
+      setSupported(false)
+      recognition.current = null
+    }
+    return () => {
+      isMounted.current = false
     }
   }, [])
 
   const resetTranscript = () => {
-    setLiveTranscript("")
+    setLiveTranscriptSafe("")
     lastTranscriptRef.current = ""
   }
 
   const processResult = (
     event: SpeechRecognitionEvent,
     shouldAutoStop: boolean,
-    shouldAutoSubmit: boolean
+    shouldAutoSubmit: boolean,
+    stopTimeout: number
   ) => {
     const transcript = Array.from(event.results)
       .map((result) => result[0])
@@ -127,9 +167,7 @@ export const useSpeechRecognition = (
     if (shouldAutoStop && transcript !== lastTranscriptRef.current) {
       lastTranscriptRef.current = transcript
 
-      if (silenceTimer.current) {
-        clearTimeout(silenceTimer.current)
-      }
+      clearSilenceTimer()
 
       silenceTimer.current = setTimeout(() => {
         stop()
@@ -137,16 +175,19 @@ export const useSpeechRecognition = (
           // Submit the final transcript
           onResult(transcript)
         }
-      }, autoStopTimeout)
+      }, stopTimeout)
     }
   }
 
   const handleError = (event: Event) => {
-    if ((event as SpeechRecognitionErrorEventLike).error === "not-allowed") {
+    const errorCode = (event as SpeechRecognitionErrorEventLike).error
+    if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
       if (recognition.current) {
         recognition.current.onend = null
       }
-      setListening(false)
+      clearSilenceTimer()
+      setListeningSafe(false)
+      onEnd()
     }
     onError(event)
   }
@@ -165,20 +206,21 @@ export const useSpeechRecognition = (
         autoSubmit: argAutoSubmit = autoSubmit
       } = args
 
-      setListening(true)
-      setLiveTranscript("")
+      setListeningSafe(true)
+      setLiveTranscriptSafe("")
       lastTranscriptRef.current = ""
+      clearSilenceTimer()
 
       if (recognition.current) {
         recognition.current.lang = lang
         recognition.current.interimResults = interimResults
         recognition.current.onresult = (event) => {
-          processResult(event, argAutoStop, argAutoSubmit)
+          processResult(event, argAutoStop, argAutoSubmit, argAutoStopTimeout)
           const transcript = Array.from(event.results)
             .map((result) => result[0])
             .map((result) => result.transcript)
             .join("")
-          setLiveTranscript(transcript)
+          setLiveTranscriptSafe(transcript)
         }
         recognition.current.onerror = handleError
         recognition.current.continuous = continuous
@@ -189,45 +231,77 @@ export const useSpeechRecognition = (
         }
         recognition.current.onend = () => {
           if (recognition.current && !argAutoStop) {
-            recognition.current.start()
+            try {
+              recognition.current.start()
+            } catch (error) {
+              setListeningSafe(false)
+              onError(createSyntheticErrorEvent("start-failed", error))
+              onEnd()
+            }
           } else {
+            setListeningSafe(false)
             onEnd()
           }
         }
         if (recognition.current) {
-          recognition.current.start()
+          try {
+            recognition.current.start()
+          } catch (error) {
+            setListeningSafe(false)
+            onError(createSyntheticErrorEvent("start-failed", error))
+          }
         }
       }
     },
-    [listening, supported, recognition, autoStop, autoStopTimeout, autoSubmit]
+    [
+      listening,
+      supported,
+      recognition,
+      autoStop,
+      autoStopTimeout,
+      autoSubmit,
+      clearSilenceTimer,
+      setListeningSafe,
+      setLiveTranscriptSafe,
+      onError,
+      onEnd
+    ]
   )
 
   const stop = useEventCallback(() => {
     if (!listening || !supported) return
 
-    if (silenceTimer.current) {
-      clearTimeout(silenceTimer.current)
-      silenceTimer.current = null
-    }
+    clearSilenceTimer()
 
     if (recognition.current) {
       recognition.current.onresult = null
       recognition.current.onend = null
       recognition.current.onerror = null
-      setListening(false)
-      recognition.current.stop()
+      setListeningSafe(false)
+      try {
+        recognition.current.stop()
+      } catch (error) {
+        onError(createSyntheticErrorEvent("stop-failed", error))
+      }
     }
     onEnd()
-  }, [listening, supported, recognition, onEnd])
+  }, [listening, supported, recognition, clearSilenceTimer, setListeningSafe, onEnd, onError])
 
   // Clean up timer on unmount
   useEffect(() => {
     return () => {
-      if (silenceTimer.current) {
-        clearTimeout(silenceTimer.current)
+      clearSilenceTimer()
+      if (recognition.current) {
+        recognition.current.onresult = null
+        recognition.current.onend = null
+        recognition.current.onerror = null
+        try {
+          recognition.current.stop()
+        } catch {}
+        recognition.current = null
       }
     }
-  }, [])
+  }, [clearSilenceTimer])
 
   return {
     start: listen,

@@ -30,6 +30,11 @@ from typing import Any, Literal
 import numpy as np
 from loguru import logger
 
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    parse_structured_output,
+)
+
 from .advanced_cache import AGENTIC_CACHE
 from .agentic_tools import make_default_registry
 from .database_retrievers import MultiDatabaseRetriever, RetrievalConfig
@@ -573,10 +578,19 @@ async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tu
             gen = await planner.generate(query=query, context="", prompt_template="default", max_tokens=200)
             # Handle sync result returned by adapter
             text = gen.get("answer", "") if isinstance(gen, dict) else str(gen)
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            if m:
-                import json as _json
-                obj = _json.loads(m.group(0))
+            payload = parse_structured_output(
+                text,
+                options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+            )
+            obj: dict[str, Any] | None = None
+            if isinstance(payload, dict):
+                obj = payload
+            elif isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        obj = item
+                        break
+            if obj is not None:
                 if isinstance(obj.get("headings"), list):
                     planned_headings = [str(x)[:80] for x in obj["headings"]][:5]
                 if isinstance(obj.get("keywords"), list):

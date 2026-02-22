@@ -3,16 +3,20 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB, SemanticMemory
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Persona.session_manager import SessionManager
-from tldw_Server_API.app.main import app as fastapi_app
 
 
 pytestmark = pytest.mark.unit
+
+fastapi_app = FastAPI()
+fastapi_app.include_router(persona_ep.router, prefix="/api/v1/persona")
 
 
 def _recv_until(client, predicate, timeout=2.0):
@@ -48,6 +52,53 @@ def _seed_personalization_db(tmp_path, monkeypatch, *, user_id: str, enabled: bo
     db = PersonalizationDB(str(path))
     db.update_profile(user_id, enabled=1 if enabled else 0)
     return db
+
+
+def _seed_persona_session(
+    tmp_path,
+    monkeypatch,
+    *,
+    user_id: str,
+    session_id: str,
+    mode: str,
+    scope_snapshot_json: dict | None = None,
+) -> None:
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(int(user_id))
+    db = CharactersRAGDB(str(db_path), client_id=f"persona-ws-seed-{user_id}-{session_id}")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": str(user_id),
+                "name": "Research Assistant",
+                "mode": mode,
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.create_persona_session(
+            {
+                "id": session_id,
+                "persona_id": persona_id,
+                "user_id": str(user_id),
+                "mode": mode,
+                "reuse_allowed": mode == "persistent_scoped",
+                "status": "active",
+                "scope_snapshot_json": dict(scope_snapshot_json or {}),
+            }
+        )
+    finally:
+        db.close_connection()
+
+
+def _assert_event_meta_fields(event: dict, *, session_id: str) -> None:
+    assert event.get("session_id") == session_id
+    assert isinstance(event.get("timestamp_ms"), int)
+    assert isinstance(event.get("event_seq"), int)
 
 
 def test_persona_websocket_plan_and_confirm(monkeypatch):
@@ -312,6 +363,262 @@ def test_persona_policy_denial_emits_reason_code_and_result(monkeypatch):
             assert deny_result["policy"]["required_scope"] == "write:export"
 
 
+def test_persona_policy_allows_mcp_tool_when_rules_intersect(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db_mcp_allow"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-ws-mcp-policy-allow-test")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": "1",
+                "name": "Research Assistant",
+                "mode": "session_scoped",
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.replace_persona_policy_rules(
+            persona_id=persona_id,
+            user_id="1",
+            rules=[{"rule_kind": "mcp_tool", "rule_name": "knowledge.search", "allowed": True}],
+        )
+        _ = db.create_persona_session(
+            {
+                "id": "sess_policy_allow_mcp",
+                "persona_id": persona_id,
+                "user_id": "1",
+                "mode": "session_scoped",
+                "reuse_allowed": False,
+                "status": "active",
+                "scope_snapshot_json": {},
+            }
+        )
+    finally:
+        db.close_connection()
+
+    manager = SessionManager()
+    manager.put_plan(
+        session_id="sess_policy_allow_mcp",
+        user_id="1",
+        persona_id="research_assistant",
+        plan_id="plan_policy_allow_mcp",
+        steps=[
+            {
+                "idx": 0,
+                "step_type": "mcp_tool",
+                "tool": "knowledge.search",
+                "args": {"query": "hello"},
+            }
+        ],
+    )
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+            self.calls = []
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            self.calls.append({"request": request, "user_id": user_id, "metadata": metadata})
+            return SimpleNamespace(error=None, result={"ok": True})
+
+    fake_server = _FakeServer()
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: fake_server)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": "sess_policy_allow_mcp",
+                        "plan_id": "plan_policy_allow_mcp",
+                        "approved_steps": [0],
+                    }
+                )
+            )
+
+            evt_call = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            assert evt_call.get("step_type") == "mcp_tool"
+            assert evt_call.get("tool") == "knowledge.search"
+
+            evt_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            assert evt_result.get("ok") is True
+            assert evt_result.get("step_type") == "mcp_tool"
+
+    assert fake_server.calls
+    first_call = fake_server.calls[0]
+    metadata = first_call.get("metadata") or {}
+    assert metadata.get("allowed_tools") == ["knowledge.search"]
+
+
+def test_persona_policy_blocks_skill_without_persona_allow(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db_skill_block"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-ws-skill-policy-block-test")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": "1",
+                "name": "Research Assistant",
+                "mode": "session_scoped",
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.replace_persona_policy_rules(
+            persona_id=persona_id,
+            user_id="1",
+            rules=[{"rule_kind": "mcp_tool", "rule_name": "knowledge.search", "allowed": True}],
+        )
+        _ = db.create_persona_session(
+            {
+                "id": "sess_skill_block",
+                "persona_id": persona_id,
+                "user_id": "1",
+                "mode": "session_scoped",
+                "reuse_allowed": False,
+                "status": "active",
+                "scope_snapshot_json": {},
+            }
+        )
+    finally:
+        db.close_connection()
+
+    manager = SessionManager()
+    manager.put_plan(
+        session_id="sess_skill_block",
+        user_id="1",
+        persona_id="research_assistant",
+        plan_id="plan_skill_block",
+        steps=[{"idx": 0, "step_type": "skill", "tool": "daily-brief", "args": {"args": "headlines"}}],
+    )
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": "sess_skill_block",
+                        "plan_id": "plan_skill_block",
+                        "approved_steps": [0],
+                    }
+                )
+            )
+
+            deny_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice" and d.get("reason_code") == "POLICY_PERSONA_NO_RULES",
+            )
+            assert deny_notice.get("tool") == "daily-brief"
+            assert deny_notice.get("step_type") == "skill"
+
+            deny_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            assert deny_result.get("ok") is False
+            assert deny_result.get("reason_code") == "POLICY_PERSONA_NO_RULES"
+            assert deny_result.get("step_type") == "skill"
+
+
+def test_persona_policy_allows_skill_when_rule_present(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db_skill_allow"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-ws-skill-policy-allow-test")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": "1",
+                "name": "Research Assistant",
+                "mode": "session_scoped",
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.replace_persona_policy_rules(
+            persona_id=persona_id,
+            user_id="1",
+            rules=[{"rule_kind": "skill", "rule_name": "daily-brief", "allowed": True}],
+        )
+        _ = db.create_persona_session(
+            {
+                "id": "sess_skill_allow",
+                "persona_id": persona_id,
+                "user_id": "1",
+                "mode": "session_scoped",
+                "reuse_allowed": False,
+                "status": "active",
+                "scope_snapshot_json": {},
+            }
+        )
+    finally:
+        db.close_connection()
+
+    async def _fake_handle_skill(*args, **kwargs):
+        return {
+            "success": True,
+            "skill_name": "daily-brief",
+            "rendered_prompt": "briefing",
+            "allowed_tools": [],
+            "execution_mode": "inline",
+            "fork_output": None,
+        }
+
+    manager = SessionManager()
+    manager.put_plan(
+        session_id="sess_skill_allow",
+        user_id="1",
+        persona_id="research_assistant",
+        plan_id="plan_skill_allow",
+        steps=[{"idx": 0, "step_type": "skill", "tool": "daily-brief", "args": {"args": "headlines"}}],
+    )
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "handle_skill_tool_call", _fake_handle_skill)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": "sess_skill_allow",
+                        "plan_id": "plan_skill_allow",
+                        "approved_steps": [0],
+                    }
+                )
+            )
+
+            evt_call = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            assert evt_call.get("tool") == "daily-brief"
+            assert evt_call.get("step_type") == "skill"
+
+            evt_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            assert evt_result.get("ok") is True
+            assert evt_result.get("step_type") == "skill"
+            assert evt_result.get("output", {}).get("success") is True
+
+
 def test_persona_tool_call_attaches_audit_metadata(monkeypatch):
     from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 
@@ -370,6 +677,94 @@ def test_persona_tool_call_attaches_audit_metadata(monkeypatch):
     assert persona_audit.get("plan_id")
     assert persona_audit.get("tool") == step["tool"]
     assert persona_audit.get("why")
+
+
+def test_persona_tool_call_attaches_scope_metadata_from_persisted_session(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db_scope"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-ws-scope-metadata-test")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": "1",
+                "name": "Research Assistant",
+                "mode": "session_scoped",
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.create_persona_session(
+            {
+                "id": "sess_scope_forward",
+                "persona_id": persona_id,
+                "user_id": "1",
+                "mode": "session_scoped",
+                "reuse_allowed": False,
+                "status": "active",
+                "scope_snapshot_json": {
+                    "scope_snapshot_id": "scope_forward_1",
+                    "materialized_scope": {
+                        "explicit_ids": {
+                            "conversation_id": ["conv-a"],
+                            "media_id": ["2"],
+                        }
+                    },
+                    "audit": {"scope_snapshot_id": "scope_forward_1"},
+                },
+            }
+        )
+    finally:
+        db.close_connection()
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+            self.calls = []
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            self.calls.append({"request": request, "user_id": user_id, "metadata": metadata})
+            return SimpleNamespace(error=None, result={"ok": True})
+
+    fake_server = _FakeServer()
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: fake_server)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {"type": "user_message", "session_id": "sess_scope_forward", "text": "hello"}
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            step = plan["steps"][0]
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": "sess_scope_forward",
+                        "plan_id": plan["plan_id"],
+                        "approved_steps": [step["idx"]],
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+
+    assert fake_server.calls
+    metadata = fake_server.calls[0].get("metadata") or {}
+    scope_payload = metadata.get("persona_scope") or {}
+    assert scope_payload.get("scope_snapshot_id") == "scope_forward_1"
+    assert scope_payload.get("explicit_ids", {}).get("conversation_id") == ["conv-a"]
+    assert scope_payload.get("explicit_ids", {}).get("media_id") == ["2"]
 
 
 def test_persona_audio_chunk_emits_partial_transcript_and_tts_audio():
@@ -739,3 +1134,372 @@ def test_persona_memory_top_k_override_used(monkeypatch):
     memory_payload = plan.get("memory") or {}
     assert memory_payload.get("requested_top_k") == 1
     assert memory_payload.get("applied_count") == 2
+
+
+def test_persona_ws_required_fields_and_event_ordering(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(error=None, result={"ok": True, "tool": request.params.get("name")})
+
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+
+    session_id = "sess_contract_order"
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": session_id,
+                        "text": "https://example.com",
+                        "use_memory_context": False,
+                    }
+                )
+            )
+
+            notice_evt = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice" and d.get("reason_code") == "MEMORY_CONTEXT_DISABLED",
+            )
+            _assert_event_meta_fields(notice_evt, session_id=session_id)
+            assert notice_evt.get("level") in {"info", "warning", "error"}
+            assert isinstance(notice_evt.get("message"), str)
+            assert "reason_code" in notice_evt
+
+            plan_evt = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            _assert_event_meta_fields(plan_evt, session_id=session_id)
+            assert isinstance(plan_evt.get("plan_id"), str) and plan_evt.get("plan_id")
+            assert isinstance(plan_evt.get("steps"), list)
+            assert isinstance(plan_evt.get("memory"), dict)
+            assert isinstance(plan_evt.get("persona_id"), str) and plan_evt.get("persona_id")
+            assert int(plan_evt["event_seq"]) > int(notice_evt["event_seq"])
+
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": session_id,
+                        "plan_id": plan_evt["plan_id"],
+                        "approved_steps": [0, 1],
+                    }
+                )
+            )
+
+            call_evt = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            _assert_event_meta_fields(call_evt, session_id=session_id)
+            assert call_evt.get("plan_id") == plan_evt["plan_id"]
+            assert isinstance(call_evt.get("step_idx"), int)
+            assert call_evt.get("step_type") in {"mcp_tool", "skill", "rag_query", "final_answer"}
+            assert isinstance(call_evt.get("tool"), str) and call_evt.get("tool")
+            assert isinstance(call_evt.get("args"), dict)
+            assert isinstance(call_evt.get("policy"), dict)
+            assert isinstance(call_evt.get("why"), str)
+
+            result_evt = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            _assert_event_meta_fields(result_evt, session_id=session_id)
+            assert result_evt.get("plan_id") == plan_evt["plan_id"]
+            assert isinstance(result_evt.get("step_idx"), int)
+            assert result_evt.get("step_type") in {"mcp_tool", "skill", "rag_query", "final_answer"}
+            assert isinstance(result_evt.get("tool"), str) and result_evt.get("tool")
+            assert "ok" in result_evt
+            assert "output" in result_evt
+            assert "result" in result_evt
+            assert "reason_code" in result_evt
+
+            assistant_evt = _recv_until(ws, lambda d: d.get("event") == "assistant_delta")
+            _assert_event_meta_fields(assistant_evt, session_id=session_id)
+            assert isinstance(assistant_evt.get("text_delta"), str)
+
+            assert int(call_evt["event_seq"]) > int(plan_evt["event_seq"])
+            assert int(result_evt["event_seq"]) > int(call_evt["event_seq"])
+            assert int(assistant_evt["event_seq"]) > int(result_evt["event_seq"])
+
+
+def test_persona_ws_ignores_forged_security_fields(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+            self.calls = []
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            self.calls.append({"request": request, "user_id": user_id, "metadata": metadata})
+            return SimpleNamespace(error=None, result={"ok": True})
+
+    fake_server = _FakeServer()
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: fake_server)
+
+    session_id = "sess_forged_fields"
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": session_id,
+                        "text": "https://example.com",
+                        "persona_scope": {"scope_snapshot_id": "forged_scope"},
+                        "allowed_tools": ["evil.tool"],
+                        "persona_audit": {"source": "forged_client"},
+                        "metadata": {"unsafe": "value"},
+                    }
+                )
+            )
+            notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice" and d.get("reason_code") == "SECURITY_FIELDS_IGNORED",
+            )
+            ignored_fields = set(notice.get("ignored_fields") or [])
+            assert ignored_fields == {"persona_scope", "allowed_tools", "persona_audit", "metadata"}
+
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": session_id,
+                        "plan_id": plan["plan_id"],
+                        "approved_steps": [0],
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+
+    assert fake_server.calls
+    metadata = fake_server.calls[0].get("metadata") or {}
+    assert metadata.get("session_id") == session_id
+    assert metadata.get("persona_audit", {}).get("source") == "persona_ws"
+    assert "evil.tool" not in list(metadata.get("allowed_tools") or [])
+    assert metadata.get("persona_scope") is None
+    assert metadata.get("metadata") is None
+
+
+def test_persona_ws_rejects_cross_user_scope_injection(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    injected_session_id = "sess_cross_user_scope"
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="2",
+        session_id=injected_session_id,
+        mode="session_scoped",
+        scope_snapshot_json={
+            "scope_snapshot_id": "scope_user_2_only",
+            "materialized_scope": {"explicit_ids": {"conversation_id": ["conv-secret"]}},
+            "audit": {"scope_snapshot_id": "scope_user_2_only"},
+        },
+    )
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+            self.calls = []
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            self.calls.append({"request": request, "user_id": user_id, "metadata": metadata})
+            return SimpleNamespace(error=None, result={"ok": True})
+
+    fake_server = _FakeServer()
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: fake_server)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": injected_session_id,
+                        "text": "https://example.com",
+                    }
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": injected_session_id,
+                        "plan_id": plan["plan_id"],
+                        "approved_steps": [0],
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+
+    assert fake_server.calls
+    metadata = fake_server.calls[0].get("metadata") or {}
+    assert metadata.get("session_id") == injected_session_id
+    assert metadata.get("persona_scope") is None
+
+
+def test_persona_session_scoped_persisted_session_disables_memory_context(tmp_path, monkeypatch):
+    memory_text = "Never inject this in session_scoped mode."
+    db = _seed_personalization_db(tmp_path, monkeypatch, user_id="1", enabled=True)
+    _ = db.add_semantic_memory(SemanticMemory(user_id="1", content=memory_text, tags=["prefs"]))
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_mode_session_scoped",
+        mode="session_scoped",
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_mode_session_scoped",
+                        "text": "find notes about pytest",
+                    }
+                )
+            )
+            mode_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "MEMORY_CONTEXT_MODE_DISABLED",
+            )
+            assert "disabled" in str(mode_notice.get("message")).lower()
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    memory_payload = plan.get("memory") or {}
+    assert memory_payload.get("enabled") is False
+    assert memory_payload.get("requested_enabled") is True
+    query_value = str(plan["steps"][0]["args"]["query"])
+    assert memory_text not in query_value
+
+
+def test_persona_persistent_scoped_persisted_session_applies_memory_context(tmp_path, monkeypatch):
+    memory_text = "Apply this memory in persistent mode."
+    db = _seed_personalization_db(tmp_path, monkeypatch, user_id="1", enabled=True)
+    _ = db.add_semantic_memory(SemanticMemory(user_id="1", content=memory_text, tags=["prefs"]))
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_mode_persistent_scoped",
+        mode="persistent_scoped",
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_mode_persistent_scoped",
+                        "text": "find notes about pytest",
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "MEMORY_CONTEXT_APPLIED",
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    memory_payload = plan.get("memory") or {}
+    assert memory_payload.get("enabled") is True
+    assert memory_payload.get("applied_count") >= 1
+    query_value = str(plan["steps"][0]["args"]["query"])
+    assert memory_text in query_value
+
+
+@pytest.mark.parametrize(
+    ("mode", "session_id", "expected_summary_memory"),
+    [
+        ("session_scoped", "sess_summary_mode_session", False),
+        ("persistent_scoped", "sess_summary_mode_persistent", True),
+    ],
+)
+def test_persona_summary_memory_write_only_for_persistent_mode(
+    tmp_path,
+    monkeypatch,
+    mode: str,
+    session_id: str,
+    expected_summary_memory: bool,
+):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(error=None, result={"ok": True, "tool": request.params.get("name")})
+
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+
+    db = _seed_personalization_db(tmp_path, monkeypatch, user_id="1", enabled=True)
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id=session_id,
+        mode=mode,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": session_id,
+                        "text": "https://example.com",
+                        "use_memory_context": False,
+                    }
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            approved_steps = [int(step["idx"]) for step in plan.get("steps", [])]
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": session_id,
+                        "plan_id": plan["plan_id"],
+                        "approved_steps": approved_steps,
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            _ = _recv_until(ws, lambda d: d.get("event") == "assistant_delta")
+
+    memories, _ = db.list_semantic_memories(user_id="1", limit=50, offset=0)
+    memory_contents = [str(item.get("content") or "") for item in memories]
+    has_summary_memory = any("Summarize the ingested content" in content for content in memory_contents)
+    has_tool_outcome_memory = any("Tool=" in content for content in memory_contents)
+
+    assert has_summary_memory is expected_summary_memory
+    assert has_tool_outcome_memory is False

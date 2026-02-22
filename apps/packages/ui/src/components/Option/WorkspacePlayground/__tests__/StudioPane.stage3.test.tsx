@@ -522,7 +522,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     const outputTypesToggle = screen.getByRole("button", {
       name: /Output Types/
     })
-    expect(outputTypesToggle).toHaveAttribute("aria-expanded", "false")
+    expect(outputTypesToggle).toHaveAttribute("aria-expanded", "true")
     expect(outputTypesToggle).toHaveAttribute(
       "aria-controls",
       "studio-output-types-section"
@@ -531,23 +531,23 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     const outputsToggle = screen.getByRole("button", {
       name: /Generated Outputs/
     })
-    expect(outputsToggle).toHaveAttribute("aria-expanded", "false")
+    expect(outputsToggle).toHaveAttribute("aria-expanded", "true")
     expect(outputsToggle).toHaveAttribute(
       "aria-controls",
       "studio-generated-outputs-section"
     )
 
     fireEvent.click(outputsToggle)
-    expect(outputsToggle).toHaveAttribute("aria-expanded", "true")
-    expect(
-      container.querySelector("#studio-generated-outputs-section")
-    ).not.toHaveAttribute("hidden")
-
-    fireEvent.click(outputsToggle)
     expect(outputsToggle).toHaveAttribute("aria-expanded", "false")
     expect(
       container.querySelector("#studio-generated-outputs-section")
     ).toHaveAttribute("hidden")
+
+    fireEvent.click(outputsToggle)
+    expect(outputsToggle).toHaveAttribute("aria-expanded", "true")
+    expect(
+      container.querySelector("#studio-generated-outputs-section")
+    ).not.toHaveAttribute("hidden")
 
     fireEvent.click(studioOptionsToggle)
     expect(studioOptionsToggle).toHaveAttribute("aria-expanded", "true")
@@ -558,6 +558,9 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     fireEvent.click(studioOptionsToggle)
     expect(studioOptionsToggle).toHaveAttribute("aria-expanded", "false")
     expect(container.querySelector("#studio-options-section")).toHaveAttribute("hidden")
+
+    fireEvent.click(outputTypesToggle)
+    expect(outputTypesToggle).toHaveAttribute("aria-expanded", "false")
 
     fireEvent.click(outputTypesToggle)
     expect(outputTypesToggle).toHaveAttribute("aria-expanded", "true")
@@ -666,5 +669,47 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
       expect(button).toHaveAttribute("aria-label")
       expect(button.getAttribute("aria-label")?.trim().length).toBeGreaterThan(0)
     })
+  })
+
+  it("keeps grouped artifact actions discoverable and keyboard-operable", async () => {
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-grouped-actions",
+        type: "summary",
+        title: "Grouped Actions Summary",
+        status: "completed",
+        content: "Content for grouped action checks.",
+        createdAt: new Date("2026-02-18T08:00:00.000Z")
+      }
+    ]
+
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent")
+
+    renderExpandedStudioPane()
+
+    expect(
+      screen.getByTestId("studio-artifact-primary-actions-artifact-grouped-actions")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId("studio-artifact-secondary-actions-artifact-grouped-actions")
+    ).toBeInTheDocument()
+
+    expect(screen.getByRole("button", { name: "View" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Regenerate options" })
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Save to notes" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument()
+
+    const discussButton = screen.getByRole("button", { name: "Discuss in chat" })
+    discussButton.focus()
+    expect(discussButton).toHaveFocus()
+
+    fireEvent.keyDown(discussButton, { key: "Enter" })
+    expect(dispatchSpy).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate options" }))
+    expect(await screen.findByText("Replace existing")).toBeInTheDocument()
   })
 })

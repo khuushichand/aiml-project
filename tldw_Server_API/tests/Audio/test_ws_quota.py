@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.tests.Audio.ws_test_helpers import ws_session_or_skip
+
 
 def _receive_ws_message(ws, *, timeout_s: float = 5.0):
     deadline = time.monotonic() + timeout_s
@@ -51,7 +53,7 @@ async def test_ws_quota_exceeded_structured_error(monkeypatch):
             ws = client.websocket_connect(f"/api/v1/audio/stream/transcribe?token={token}")
         except Exception:
             pytest.skip("audio WebSocket endpoint not available in this build")
-        with ws as ws:
+        with ws_session_or_skip(ws) as ws:
             # Send minimal config message
             ws.send_text(json.dumps({"type": "config", "sample_rate": 16000}))
             # Send one tiny audio chunk (float32 mono 160 samples = 0.01s)

@@ -294,11 +294,12 @@ def _resolve_shimmed_batch_processor(
     shim_core_attr: str,
 ) -> Callable[..., Any]:
     """
-    Resolve shimmed processor callable while avoiding stale endpoint aliases.
+    Resolve shimmed processor callable while avoiding stale endpoint wrappers.
 
-    Endpoint module aliases (`process_* = _process_*_core`) can become stale when
-    tests monkeypatch the core module directly after endpoint import. In that case,
-    prefer the currently patched core callable.
+    Endpoint shims expose `process_*` wrappers that delegate through cached
+    `_process_*_core` references. When tests monkeypatch the core module directly
+    after the shim cache is populated, those wrappers can keep calling stale
+    callables. In that case, prefer the currently imported core callable.
     """
     shimmed_callable = getattr(media_module, shim_attr, None)
     if not callable(shimmed_callable):
@@ -306,6 +307,16 @@ def _resolve_shimmed_batch_processor(
 
     shim_core_callable = getattr(media_module, shim_core_attr, None)
     if shimmed_callable is shim_core_callable and core_callable is not shim_core_callable:
+        return core_callable
+
+    shimmed_module = getattr(shimmed_callable, "__module__", "")
+    shimmed_name = getattr(shimmed_callable, "__name__", "")
+    if (
+        shimmed_module == "tldw_Server_API.app.api.v1.endpoints.media"
+        and shimmed_name == shim_attr
+    ):
+        if callable(shim_core_callable) and shim_core_callable is core_callable:
+            return shimmed_callable
         return core_callable
 
     return shimmed_callable

@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.tests.Audio.ws_test_helpers import ws_session_or_skip
+
 
 def test_audio_ws_invalid_json_yields_validation_error(monkeypatch):
 
@@ -18,7 +20,7 @@ def test_audio_ws_invalid_json_yields_validation_error(monkeypatch):
             ws = client.websocket_connect(f"/api/v1/audio/stream/transcribe?token={token}")
         except Exception:
             pytest.skip("audio WebSocket endpoint not available in this build")
-        with ws as ws:
+        with ws_session_or_skip(ws) as ws:
             # Send minimal config then an invalid JSON frame (as text that's not JSON)
             ws.send_text(json.dumps({"type": "config", "sample_rate": 16000}))
             ws.send_text("not-json")

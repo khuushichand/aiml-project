@@ -716,12 +716,20 @@ const WorkspaceChatEmpty: React.FC<{
   sourceCount: number
   selectedSourceTypes: WorkspaceSourceType[]
   isMobile: boolean
-}> = ({ hasSelectedSources, sourceCount, selectedSourceTypes, isMobile }) => {
+  onExamplePromptSelect?: (prompt: string) => void
+}> = ({
+  hasSelectedSources,
+  sourceCount,
+  selectedSourceTypes,
+  isMobile,
+  onExamplePromptSelect
+}) => {
   const { t } = useTranslation(["playground"])
   const sourceTypeSet = React.useMemo(
     () => new Set(selectedSourceTypes),
     [selectedSourceTypes]
   )
+  const hasPromptActions = typeof onExamplePromptSelect === "function"
 
   const examples = React.useMemo(() => {
     if (!hasSelectedSources) {
@@ -805,7 +813,21 @@ const WorkspaceChatEmpty: React.FC<{
                 getWorkspaceChatNoSourcesHint(isMobile)
               )
         }
-        examples={examples}
+        examples={examples.map((example, index) => (
+          <button
+            key={example}
+            type="button"
+            data-testid={`workspace-chat-empty-prompt-chip-${index}`}
+            onClick={() => {
+              if (typeof onExamplePromptSelect !== "function") return
+              onExamplePromptSelect(example)
+            }}
+            disabled={!hasPromptActions}
+            className="w-full rounded-md border border-border/70 bg-surface2/70 px-2 py-1 text-left text-xs text-text-muted transition hover:border-primary/40 hover:bg-primary/5 hover:text-text disabled:cursor-default disabled:opacity-80"
+          >
+            {example}
+          </button>
+        ))}
       />
     </div>
   )
@@ -2515,6 +2537,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 sourceCount={selectedSources.length}
                 selectedSourceTypes={selectedSources.map((source) => source.type)}
                 isMobile={isMobile}
+                onExamplePromptSelect={(prompt) => setSeededPrompt(prompt)}
               />
             )}
           </div>
@@ -2584,7 +2607,12 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
               </button>
             </div>
           )}
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div
+            data-testid="workspace-chat-controls-toolbar"
+            role="toolbar"
+            aria-label={t("playground:chat.controlsToolbarAria", "Chat controls")}
+            className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface2/40 px-2 py-1.5"
+          >
             <div className="inline-flex rounded-md border border-border bg-surface2 p-0.5">
               <button
                 type="button"

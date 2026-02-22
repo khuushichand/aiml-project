@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path as PathLib
 from types import ModuleType
@@ -22,6 +23,9 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     TranscriptSegmentationRequest,
     TranscriptSegmentationResponse,
+)
+from tldw_Server_API.app.core.Audio.dictation_error_taxonomy import (
+    build_dictation_error_payload,
 )
 from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.quota_helpers import EXPECTED_DB_EXC
@@ -170,6 +174,72 @@ def _stt_provider_availability(
         except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
             pass
     return "unknown"
+
+
+_PROVIDER_LANGUAGE_HINT_POLICY: dict[str, str] = {
+    "faster-whisper": "iso639_base",
+    "parakeet": "iso639_base",
+    "canary": "iso639_base",
+    "qwen2audio": "iso639_base",
+    "qwen3-asr": "preserve_locale",
+    "vibevoice": "preserve_locale",
+    "external": "preserve_locale",
+}
+
+
+def _normalize_language_tag(language: Optional[str]) -> Optional[str]:
+    if language is None:
+        return None
+    normalized = str(language).strip().replace("_", "-")
+    if not normalized:
+        return None
+    return normalized
+
+
+def _extract_base_language_code(language_tag: str) -> Optional[str]:
+    primary = str(language_tag or "").strip().split("-", 1)[0].lower()
+    if not primary:
+        return None
+    if re.fullmatch(r"[a-z]{2,3}", primary):
+        return primary
+    return None
+
+
+def _normalize_language_for_provider(provider_name: str, language: Optional[str]) -> Optional[str]:
+    """
+    Normalize user language hints based on provider expectations.
+
+    - Providers with ISO-639 style expectations receive base language codes.
+    - Providers that can consume locale-style hints keep the normalized locale.
+    """
+    normalized = _normalize_language_tag(language)
+    if not normalized:
+        return None
+
+    provider = str(provider_name or "").strip().lower()
+    policy = _PROVIDER_LANGUAGE_HINT_POLICY.get(provider, "preserve_locale")
+    if policy == "iso639_base":
+        return _extract_base_language_code(normalized) or normalized.lower()
+    return normalized
+
+
+def _dictation_error_detail(
+    *,
+    http_status: int,
+    detail_status: Optional[str] = None,
+    message: Optional[str] = None,
+    detail: Any = None,
+    exc: Optional[Exception] = None,
+    extra: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    return build_dictation_error_payload(
+        status_code=http_status,
+        status=detail_status,
+        message=message,
+        detail=detail,
+        exc=exc,
+        extra=extra,
+    )
 
 
 @router.post(
@@ -476,20 +546,24 @@ async def create_transcription(
             provider,
             envelope=provider_envelope,
         )
+        language_for_provider = _normalize_language_for_provider(provider, language)
         requested_model = (model or provider_model_name or "").strip()
         if provider_availability in {"disabled", "failed"}:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "status": "provider_unavailable",
-                    "provider": provider,
-                    "availability": provider_availability,
-                    "model": requested_model,
-                    "message": (
+                detail=_dictation_error_detail(
+                    http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail_status="provider_unavailable",
+                    message=(
                         f"STT provider '{provider}' is currently {provider_availability}. "
                         "Check provider configuration/health and retry."
                     ),
-                },
+                    extra={
+                        "provider": provider,
+                        "availability": provider_availability,
+                        "model": requested_model,
+                    },
+                ),
             )
 
         def _raise_on_transcription_error(text: Any) -> None:
@@ -497,7 +571,11 @@ async def create_transcription(
                 logger.error(f"Transcription failed: {text}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Transcription failed. Please try again or use a different model.",
+                    detail=_dictation_error_detail(
+                        http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail_status="transient_failure",
+                        message="Transcription failed. Please try again or use a different model.",
+                    ),
                 )
 
         minutes_est = duration_seconds / 60.0
@@ -527,7 +605,12 @@ async def create_transcription(
                 with contextlib.suppress(asyncio.CancelledError):
                     await job_heartbeat_task
             raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="Transcription quota exceeded (daily minutes)"
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=_dictation_error_detail(
+                    http_status=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail_status="quota_exceeded",
+                    message="Transcription quota exceeded (daily minutes)",
+                ),
             )
         detected_language: Optional[str] = None
         segments_for_timing: Optional[list[dict[str, Any]]] = None
@@ -545,12 +628,13 @@ async def create_transcription(
                 try:
                     model_status = audio_files.check_transcription_model_status(whisper_model_name)
                     if not model_status.get("available", False):
-                        detail_payload: dict[str, Any] = {
-                            "status": "model_downloading",
-                            "message": model_status.get("message")
+                        detail_payload: dict[str, Any] = _dictation_error_detail(
+                            http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail_status="model_downloading",
+                            message=model_status.get("message")
                             or "Requested transcription model is not available locally yet.",
-                            "model": model_status.get("model", whisper_model_name),
-                        }
+                            extra={"model": model_status.get("model", whisper_model_name)},
+                        )
                         estimated_size = model_status.get("estimated_size")
                         if estimated_size:
                             detail_payload["estimated_size"] = estimated_size
@@ -566,19 +650,22 @@ async def create_transcription(
                     if task_normalized == "translate":
                         selected_lang_for_stt: Optional[str] = None
                     else:
-                        selected_lang_for_stt = language if language else None
+                        selected_lang_for_stt = language_for_provider
 
                     adapter = stt_registry.get_adapter(provider)
                     if adapter is None:
                         raise HTTPException(
                             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail={
-                                "status": "provider_unavailable",
-                                "provider": provider,
-                                "availability": provider_availability,
-                                "model": whisper_model_name,
-                                "message": f"STT provider '{provider}' is unavailable.",
-                            },
+                            detail=_dictation_error_detail(
+                                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail_status="provider_unavailable",
+                                message=f"STT provider '{provider}' is unavailable.",
+                                extra={
+                                    "provider": provider,
+                                    "availability": provider_availability,
+                                    "model": whisper_model_name,
+                                },
+                            ),
                         )
                     artifact = adapter.transcribe_batch(
                         canonical_path,
@@ -597,7 +684,16 @@ async def create_transcription(
                     logger.error(f"Whisper transcription failed: {e}")
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Whisper transcription failed",
+                        detail=_dictation_error_detail(
+                            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail_status="transient_failure",
+                            message="Whisper transcription failed",
+                            exc=e,
+                            extra={
+                                "provider": provider,
+                                "model": whisper_model_name,
+                            },
+                        ),
                     ) from e
             else:
                 model_for_provider = model or provider_model_name
@@ -606,34 +702,40 @@ async def create_transcription(
                     if adapter is None:
                         raise HTTPException(
                             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail={
-                                "status": "provider_unavailable",
-                                "provider": provider,
-                                "availability": provider_availability,
-                                "model": model_for_provider,
-                                "message": f"STT provider '{provider}' is unavailable.",
-                            },
+                            detail=_dictation_error_detail(
+                                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail_status="provider_unavailable",
+                                message=f"STT provider '{provider}' is unavailable.",
+                                extra={
+                                    "provider": provider,
+                                    "availability": provider_availability,
+                                    "model": model_for_provider,
+                                },
+                            ),
                         )
                     adapter_provider = str(getattr(getattr(adapter, "name", None), "value", "")).strip()
                     if adapter_provider and adapter_provider != provider:
                         raise HTTPException(
                             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail={
-                                "status": "provider_unavailable",
-                                "provider": provider,
-                                "availability": provider_availability,
-                                "resolved_provider": adapter_provider,
-                                "model": model_for_provider,
-                                "message": (
+                            detail=_dictation_error_detail(
+                                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail_status="provider_unavailable",
+                                message=(
                                     f"STT provider '{provider}' is unavailable; "
                                     f"fallback to '{adapter_provider}' was prevented for endpoint parity."
                                 ),
-                            },
+                                extra={
+                                    "provider": provider,
+                                    "availability": provider_availability,
+                                    "resolved_provider": adapter_provider,
+                                    "model": model_for_provider,
+                                },
+                            ),
                         )
                     artifact = adapter.transcribe_batch(
                         canonical_path,
                         model=model_for_provider,
-                        language=language,
+                        language=language_for_provider,
                         task=task_normalized,
                         word_timestamps=("word" in granularity_tokens),
                         prompt=prompt,
@@ -652,9 +754,18 @@ async def create_transcription(
                     )
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=(
-                            f"Transcription failed for provider '{provider}' "
-                            f"and model '{model_for_provider}'"
+                        detail=_dictation_error_detail(
+                            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail_status="transient_failure",
+                            message=(
+                                f"Transcription failed for provider '{provider}' "
+                                f"and model '{model_for_provider}'"
+                            ),
+                            exc=e,
+                            extra={
+                                "provider": provider,
+                                "model": model_for_provider,
+                            },
                         ),
                     ) from e
         finally:
@@ -861,7 +972,13 @@ async def create_transcription(
         logger.error(f"Error during transcription: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_http_error_detail("Transcription failed", rid, exc=e),
+            detail=_dictation_error_detail(
+                http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail_status="transient_failure",
+                message="Transcription failed",
+                detail=_http_error_detail("Transcription failed", rid, exc=e),
+                exc=e,
+            ),
         ) from e
     finally:
         if canonical_path and canonical_path != temp_audio_path and os.path.exists(canonical_path):

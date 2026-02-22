@@ -33,7 +33,8 @@ and this project adheres to Some kind of Versioning
 - 
 
 ### Fixed
--
+- Media ingestion batch-processor shim resolution: `process_batch_media` now detects stale endpoint wrapper caches and prefers the live core audio/video processor callable when wrappers are out of sync.
+- Restored order-independent behavior for MediaIngestion_NEW regression tests that monkeypatch core processors (claims toggle integration and metadata/pre-check contract paths) by preventing fallback to real network/file audio processing during those tests.
 
 
 ## [0.1.21] 2026-02-21

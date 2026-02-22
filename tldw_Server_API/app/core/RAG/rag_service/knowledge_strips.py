@@ -16,6 +16,11 @@ from typing import Any, Callable, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    parse_structured_output,
+)
+
 from .types import DataSource, Document
 
 
@@ -315,8 +320,6 @@ class KnowledgeStripsProcessor:
 
         Uses batch processing for efficiency.
         """
-        import json
-
         analyze_fn = self._analyze
         if analyze_fn is None:
             return self._score_strips_heuristic(query, strips)
@@ -359,15 +362,24 @@ JSON:"""
                 )
 
                 # Parse response
-                import re
-                json_match = re.search(r'\[.*\]', str(raw_response), re.DOTALL)
-                if json_match:
-                    scores = json.loads(json_match.group())
-                    for score_obj in scores:
-                        strip_num = score_obj.get("strip_num", 0) - 1
-                        relevance = float(score_obj.get("relevance", 0.0))
-                        if 0 <= strip_num < len(batch):
-                            batch[strip_num].relevance_score = min(1.0, max(0.0, relevance))
+                scores_payload = parse_structured_output(
+                    str(raw_response),
+                    options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+                )
+                score_items: list[Any] = []
+                if isinstance(scores_payload, list):
+                    score_items = scores_payload
+                elif isinstance(scores_payload, dict):
+                    wrapped_scores = scores_payload.get("scores")
+                    if isinstance(wrapped_scores, list):
+                        score_items = wrapped_scores
+                for score_obj in score_items:
+                    if not isinstance(score_obj, dict):
+                        continue
+                    strip_num = score_obj.get("strip_num", 0) - 1
+                    relevance = float(score_obj.get("relevance", 0.0))
+                    if 0 <= strip_num < len(batch):
+                        batch[strip_num].relevance_score = min(1.0, max(0.0, relevance))
 
             except Exception as e:
                 logger.warning(f"LLM strip scoring failed, falling back to heuristic: {e}")

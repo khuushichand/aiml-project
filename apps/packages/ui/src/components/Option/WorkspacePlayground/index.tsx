@@ -1523,12 +1523,25 @@ const WorkspacePlaygroundBody: React.FC = () => {
     }
   ]
 
+  const sessionSummaryItems = [
+    {
+      key: "sources",
+      label: t("playground:sources.title", "Sources"),
+      count: selectedSourceIds.length
+    },
+    {
+      key: "outputs",
+      label: t("playground:studio.generatedOutputs", "Generated Outputs"),
+      count: generatedArtifacts.length
+    }
+  ]
+
   if (!isStoreHydrated) {
     return <WorkspacePlaygroundSkeleton isMobile={isMobile} />
   }
 
   return (
-    <div className="relative flex h-full flex-col bg-bg text-text">
+    <div className="relative flex h-full flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,var(--surface-2),var(--bg)_45%)] text-text">
       {messageContextHolder}
       <a
         href="#workspace-main-content"
@@ -1632,18 +1645,6 @@ const WorkspacePlaygroundBody: React.FC = () => {
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {statusGuardrailsEnabled && activeWorkspaceOperations.length > 0 && (
-        <div
-          data-testid="workspace-activity-rail"
-          role="status"
-          aria-live="polite"
-          className="flex items-center gap-2 border-b border-border bg-surface2/60 px-3 py-2 text-xs text-text-muted"
-        >
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-          <span>{activeWorkspaceOperations.join(" • ")}</span>
         </div>
       )}
 
@@ -1782,6 +1783,39 @@ const WorkspacePlaygroundBody: React.FC = () => {
             statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
 
+          <div
+            data-testid="workspace-session-status-strip"
+            className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-[linear-gradient(120deg,var(--surface)_0%,var(--surface-2)_100%)] px-3 py-2 shadow-card"
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              {sessionSummaryItems.map((item) => (
+                <span
+                  key={item.key}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs text-text-muted"
+                >
+                  <span>{item.label}</span>
+                  <span className="font-semibold text-text">{item.count}</span>
+                </span>
+              ))}
+              {currentNote.isDirty && (
+                <span className="inline-flex items-center rounded border border-warning/40 bg-warning/10 px-2 py-1 text-xs font-medium text-warning">
+                  {t("playground:studio.unsaved", "Unsaved")}
+                </span>
+              )}
+            </div>
+            {statusGuardrailsEnabled && activeWorkspaceOperations.length > 0 && (
+              <div
+                data-testid="workspace-activity-rail"
+                role="status"
+                aria-live="polite"
+                className="flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-text-muted"
+              >
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                <span>{activeWorkspaceOperations.join(" • ")}</span>
+              </div>
+            )}
+          </div>
+
           <Tabs
             activeKey={activeTab}
             onChange={(key) => setActiveTab(key as WorkspaceTabKey)}
@@ -1804,13 +1838,46 @@ const WorkspacePlaygroundBody: React.FC = () => {
             statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
 
-          <div className="flex min-h-0 flex-1">
+          <div
+            data-testid="workspace-session-status-strip"
+            className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-[linear-gradient(120deg,var(--surface)_0%,var(--surface-2)_100%)] px-3 py-2 shadow-card"
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              {sessionSummaryItems.map((item) => (
+                <span
+                  key={item.key}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs text-text-muted"
+                >
+                  <span>{item.label}</span>
+                  <span className="font-semibold text-text">{item.count}</span>
+                </span>
+              ))}
+              {currentNote.isDirty && (
+                <span className="inline-flex items-center rounded border border-warning/40 bg-warning/10 px-2 py-1 text-xs font-medium text-warning">
+                  {t("playground:studio.unsaved", "Unsaved")}
+                </span>
+              )}
+            </div>
+            {statusGuardrailsEnabled && activeWorkspaceOperations.length > 0 && (
+              <div
+                data-testid="workspace-activity-rail"
+                role="status"
+                aria-live="polite"
+                className="flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-text-muted"
+              >
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                <span>{activeWorkspaceOperations.join(" • ")}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex min-h-0 flex-1 gap-2 px-2 py-2">
             {leftPaneOpen && (
               <aside
                 id="workspace-sources-panel"
                 role="complementary"
                 aria-label={t("playground:workspace.sourcesPanel", "Sources panel")}
-                className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col"
+                className="hidden w-72 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
               >
                 <SourcesPane
                   onHide={() => setLeftPaneCollapsed(true)}
@@ -1838,7 +1905,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
             <main
               id="workspace-main-content"
-              className="flex min-w-0 flex-1 flex-col"
+              className="flex min-w-0 flex-1 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card"
             >
               <ChatPane
                 provenanceEnabled={provenanceEnabled}
@@ -1851,7 +1918,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
                 id="workspace-studio-panel"
                 role="complementary"
                 aria-label={t("playground:workspace.studioPanel", "Studio panel")}
-                className="hidden min-h-0 w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col"
+                className="hidden min-h-0 w-80 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
               >
                 <StudioPane onHide={() => setRightPaneCollapsed(true)} />
               </aside>

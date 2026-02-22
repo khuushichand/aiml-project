@@ -9,6 +9,8 @@ export interface UseServerDictationOptions {
   speechToTextLanguage: string
   sttSettings: SttSettings
   onTranscript: (text: string) => void
+  onError?: (error: unknown) => void
+  onSuccess?: () => void
 }
 
 export interface UseServerDictationResult {
@@ -22,12 +24,27 @@ export const useServerDictation = (
 ): UseServerDictationResult => {
   const { t } = useTranslation(["playground"])
   const notification = useAntdNotification()
-  const { canUseServerStt, speechToTextLanguage, sttSettings, onTranscript } =
-    options
+  const {
+    canUseServerStt,
+    speechToTextLanguage,
+    sttSettings,
+    onTranscript,
+    onError,
+    onSuccess
+  } = options
 
   const serverRecorderRef = React.useRef<MediaRecorder | null>(null)
   const serverChunksRef = React.useRef<BlobPart[]>([])
   const [isServerDictating, setIsServerDictating] = React.useState(false)
+
+  const reportError = React.useCallback(
+    (error: unknown) => {
+      try {
+        onError?.(error)
+      } catch {}
+    },
+    [onError]
+  )
 
   const stopServerDictation = React.useCallback(() => {
     const rec = serverRecorderRef.current
@@ -155,7 +172,17 @@ export const useServerDictation = (
 
           if (text) {
             onTranscript(text)
+            onSuccess?.()
           } else {
+            reportError({
+              details: {
+                detail: {
+                  dictation_error_class: "empty_transcript",
+                  status: "empty_transcript",
+                  message: "The transcription did not return any text."
+                }
+              }
+            })
             notification.error({
               message: t(
                 "playground:actions.speechErrorTitle",
@@ -168,6 +195,7 @@ export const useServerDictation = (
             })
           }
         } catch (e: any) {
+          reportError(e)
           notification.error({
             message: t(
               "playground:actions.speechErrorTitle",
@@ -221,6 +249,8 @@ export const useServerDictation = (
   }, [
     canUseServerStt,
     isServerDictating,
+    onSuccess,
+    reportError,
     speechToTextLanguage,
     sttSettings,
     stopServerDictation,

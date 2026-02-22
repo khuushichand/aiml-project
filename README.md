@@ -32,8 +32,10 @@
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
 - [Quickstart](#quickstart)
+  - [Preflight Check (Recommended)](#preflight-check-recommended)
   - [At-a-Glance Commands](#at-a-glance-commands)
   - [No-Docker Path (Makefile)](#no-docker-path-makefile)
+  - [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly)
   - [Manual Setup](#manual-setup)
   - [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui)
   - [Run the Web UI (WIP)](#run-the-web-ui-wip)
@@ -172,50 +174,104 @@ See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.m
 ## Quickstart
 
 `pip install tldw_server` is not generally available yet (PyPI publishing is in progress).
-For now, use this repository checkout with the Makefile targets below.
+For now, use this repository checkout and the setup paths below (`make` and no-`make`).
+
+### Preflight Check (Recommended)
+
+If you plan to use Makefile quickstart targets:
+```bash
+make quickstart-prereqs
+```
+
+If `make` is unavailable (common on Windows), run the equivalent checks manually:
+```powershell
+py -3.12 --version  # or py -3.13 / -3.11 / -3.10
+ffmpeg -version
+docker --version    # only if using Docker paths
+```
 
 ### At-a-Glance Commands
 
+Choose one install path:
+
+| Goal | Command |
+|------|---------|
+| API only (local Python, no Docker) | `make quickstart-install` |
+| API only (Docker) | `make quickstart-docker` |
+| API + WebUI (Docker) | `make quickstart-docker-webui` |
+| No `make` available (common on Windows) | See [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly) |
+
 ```bash
-# No Docker: installs deps, initializes auth, starts API
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
+
+# API only (local Python): installs deps, initializes auth, starts API
 make quickstart-install
 # If `python3` is older than 3.10 on your machine:
 # make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 
-# Docker: API only
-make quickstart-docker
-
-# Docker: API + WebUI
-make quickstart-docker-webui
-# Optional (non-localhost deployments):
-# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
+# Docker paths:
+# make quickstart-docker
+# make quickstart-docker-webui
 ```
+
+If `make` is unavailable, use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
 
 ### No-Docker Path (Makefile)
 
 ```bash
-git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
+# from repo root
 make quickstart-install
 # If `python3` is older than 3.10 on your machine:
 # make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 ```
 
-This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
+This target:
+- Creates `.venv` if missing and installs dependencies.
+- Creates `tldw_Server_API/Config_Files/.env` from `.env.quickstart` if missing.
+- Initializes AuthNZ (non-interactive).
+- Starts the API server at `http://127.0.0.1:8000`.
+
+Verify with:
 ```bash
 curl http://localhost:8000/health  # No auth needed!
 ```
 
 Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
+### No-Make Path (Windows-Friendly)
+
+Use these paths when `make` is not available.
+
+API only (local Python, no Docker):
+- Follow [Manual Setup](#manual-setup) below (includes PowerShell commands).
+
+API only (Docker):
+```powershell
+# from repo root
+if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.quickstart" "tldw_Server_API/Config_Files/.env" }
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
+curl http://localhost:8000/health
+```
+
+API + WebUI (Docker):
+```powershell
+# from repo root
+if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.quickstart" "tldw_Server_API/Config_Files/.env" }
+# Optional for non-localhost deployments:
+# $env:NEXT_PUBLIC_API_URL="http://YOUR_HOST_OR_DOMAIN:8000"
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d --build
+```
+
 ### Manual Setup
 
-Supported Python versions for quickstart/manual setup:
+Supported Python versions:
 - Minimum: Python 3.10+
 - CI-tested: Python 3.11, 3.12, and 3.13
 - Recommended for local development: Python 3.12
 
-Prerequisites: Python, ffmpeg, and (for audio capture paths) PyAudio/PortAudio.
+Prerequisites:
+- Required: Python + ffmpeg
+- Optional (for audio capture paths): PyAudio/PortAudio
 
 Platform setup examples:
 ```bash
@@ -230,11 +286,11 @@ sudo apt install -y ffmpeg portaudio19-dev python3-pyaudio
 sudo dnf install -y ffmpeg portaudio-devel python3-pyaudio
 ```
 
-Windows prerequisites:
+Windows notes:
 - Install ffmpeg (for example with `winget` or Chocolatey).
-- Install PyAudio inside the activated venv with `pip install pyaudio`; if wheel/build fails, install Microsoft C++ Build Tools and retry.
+- For PyAudio, run `pip install pyaudio` in the activated venv. If wheel/build fails, install Microsoft C++ Build Tools and retry.
 
-1) **Install**
+1) **Create and activate a virtual environment**
 ```bash
 # macOS/Linux: choose a supported interpreter explicitly (3.12 recommended)
 python3.12 -m venv .venv  # or python3.13 / python3.11 / python3.10
@@ -247,21 +303,20 @@ py -3.12 -m venv .venv  # or -3.13 / -3.11 / -3.10
 # Confirm venv interpreter version
 python --version
 
+# Install project dependencies
 pip install -e .
 ```
 
-PyAudio/PortAudio install notes by platform:
-- Linux: install distro packages (`portaudio19-dev` + `python3-pyaudio` on Debian/Ubuntu, `portaudio-devel` + `python3-pyaudio` on Fedora/RHEL).
-- macOS: `brew install portaudio` then `pip install pyaudio`.
-- Windows: `pip install pyaudio` inside the venv; if wheel build fails, install Microsoft C++ Build Tools and retry.
-
-2) **Configure** (minimal `tldw_Server_API/Config_Files/.env`)
+2) **Configure environment**
 ```bash
-cat > tldw_Server_API/Config_Files/.env << 'EOF'
-AUTH_MODE=single_user
-SINGLE_USER_API_KEY=my-secure-key-at-least-16-chars
-DATABASE_URL=sqlite:///./Databases/users.db
-EOF
+# macOS/Linux
+cp tldw_Server_API/Config_Files/.env.quickstart tldw_Server_API/Config_Files/.env
+
+# Windows (PowerShell)
+# Copy-Item tldw_Server_API/Config_Files/.env.quickstart tldw_Server_API/Config_Files/.env
+
+# Edit tldw_Server_API/Config_Files/.env and set:
+# SINGLE_USER_API_KEY=<at least 16 chars>
 ```
 
 3) **Initialize auth** (use `--non-interactive` to skip prompts)
@@ -274,7 +329,7 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
 
-5) **Verify it works**
+5) **Verify**
 ```bash
 curl http://localhost:8000/health
 # Expected: {"status":"ok",...}
@@ -327,33 +382,13 @@ See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details
 
 ### Tire Kicker: Add the WebUI
 
-If you already completed the [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) and your API is running at `http://127.0.0.1:8000`, use this add-on path.
-
-Install Bun (if needed):
-
-```bash
-# macOS/Linux
-curl -fsSL https://bun.sh/install | bash
-
-# Windows (PowerShell)
-powershell -c "irm bun.sh/install.ps1 | iex"
-
-# Open a new terminal, then verify:
-bun --version
-```
-
-Set up the WebUI project and install dependencies:
+If you already completed the [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) and your API is running at `http://127.0.0.1:8000`, this is the shortest add-on path:
 
 ```bash
 # from the repo root
 cd apps/tldw-frontend
 cp .env.local.example .env.local
 bun install
-```
-
-Run the WebUI:
-
-```bash
 bun run dev -- -p 8080
 ```
 
@@ -367,27 +402,10 @@ NEXT_PUBLIC_API_VERSION=v1
 
 Open `http://localhost:8080`.
 
-Access from another device on your network (for example, phone/tablet):
+Need Bun installation steps, npm fallback, or LAN/mobile access setup? See [Run the Web UI (WIP)](#run-the-web-ui-wip).
 
-```bash
-# 1) Run API on all interfaces
-python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
-
-# 2) In tldw_Server_API/Config_Files/.env, allow the WebUI origin:
-# ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
-
-# 3) In apps/tldw-frontend/.env.local, point WebUI to the server IP:
-# NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:8000
-
-# 4) Run WebUI on all interfaces
-bun run dev -- -H 0.0.0.0 -p 8080
-```
-
-Then open `http://YOUR_SERVER_IP:8080` from your mobile device (same LAN), and ensure ports `8000` and `8080` are reachable on your server/firewall.
-
-Security note: avoid exposing this quickstart setup directly to the public internet. For internet-facing access, use HTTPS with a reverse proxy and follow `Docs/Getting_Started/Production.md`.
-
-### Sidecar workers (optional)
+<details>
+<summary>Sidecar workers (optional)</summary>
 
 Run the API and Jobs workers as separate processes (recommended for heavier workloads or when using multiple Uvicorn workers):
 ```bash
@@ -401,6 +419,7 @@ Notes:
 - Compose overlay: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build`.
 - systemd and launchd examples: `Docs/Deployment/Sidecar_Workers.md`.
 In-process workers are fine for light dev use, but SQLite + multiple Uvicorn workers can increase lock contention; use sidecars or Postgres for heavier workloads.
+</details>
 
 ### Run the Web UI (WIP)
 
@@ -415,6 +434,7 @@ make quickstart-docker-webui
 # Optional (non-localhost deployments):
 # make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
 ```
+No-`make` equivalent: use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
 
 Local WebUI development (API should already be running, for example via `make quickstart`):
 
@@ -454,6 +474,9 @@ bun run dev -- -p 8080
 ```
 Open http://localhost:8080
 
+<details>
+<summary>LAN/mobile access setup (optional)</summary>
+
 Access from another device on your network (for example, phone/tablet):
 ```bash
 # API (from repo root)
@@ -469,25 +492,16 @@ python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
 bun run dev -- -H 0.0.0.0 -p 8080
 ```
 Then open `http://YOUR_SERVER_IP:8080` from your mobile device on the same network.
+</details>
 
 Tip: http://127.0.0.1:8000/api/v1/config/quickstart redirects to your configured quickstart target.
 
+Security note: avoid exposing this quickstart setup directly to the public internet. For internet-facing access, use HTTPS with a reverse proxy and follow `Docs/Getting_Started/Production.md`.
+
 ### Docker Compose
 
-Quick start with Docker:
-```bash
-make quickstart-docker
-curl http://localhost:8000/health  # Verify
-```
-
-Quick start with Docker + containerized WebUI:
-```bash
-make quickstart-docker-webui
-# API:   http://localhost:8000
-# WebUI: http://localhost:8080
-# Optional (non-localhost deployments):
-# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
-```
+For the fastest Docker path, use the quickstart targets in [At-a-Glance Commands](#at-a-glance-commands).
+This section is the canonical manual/no-`make` compose reference.
 
 Or manually:
 ```bash

@@ -126,7 +126,7 @@ Transcribe audio into text.
 |-----------|------|----------|-------------|
 | file | file | Yes | The audio file to transcribe (default max 25MB; actual limit may vary by quota tier) |
 | model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*`; Qwen3-ASR via `qwen3-asr-1.7b`, `qwen3-asr-0.6b`, or `qwen3-asr`; VibeVoice via `vibevoice-asr` (default: `whisper-1`). |
-| language | string | No | Language code in ISO-639-1 format (e.g., 'en', 'es'). When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
+| language | string | No | Language hint. ISO-639-1 codes are always accepted (for example `en`, `es`). BCP-47 locale hints (for example `en-US`, `pt-BR`) are accepted and normalized per provider: providers that require ISO-style hints receive base codes, providers with locale-capable routing keep locale hints. When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
@@ -174,6 +174,27 @@ Notes:
 - For `response_format: text|srt|vtt` responses, outputs are simple best-effort formats; precise per-segment timings require JSON.
 - For `response_format: verbose_json`, the response includes `task` and `duration` fields.
 - For Whisper-based models, the underlying `speech_to_text(...)` helper prepends a metadata header (model + detected language) to the first segment. The HTTP API always calls `strip_whisper_metadata_header(...)` before returning JSON/text so clients see only user content. If you use `speech_to_text` directly (e.g., in workflows or custom tools), call `strip_whisper_metadata_header` on segment lists, or `_strip_whisper_metadata_header_from_text` (speech chat) before presenting text to end users.
+
+### Dictation Error Taxonomy
+
+Structured error payloads include:
+- `dictation_error_class`: canonical failure class.
+- `dictation_fallback_allowed`: whether automatic fallback (`auto` strategy) is allowed for that class.
+
+Classes:
+- `permission_denied`
+- `unsupported_api`
+- `auth_error`
+- `quota_error`
+- `provider_unavailable`
+- `model_unavailable` (includes `status: model_downloading`)
+- `transient_failure`
+- `empty_transcript`
+- `unknown_error`
+
+Fallback policy:
+- Auto-fallback allowed: `unsupported_api`, `provider_unavailable`, `model_unavailable`, `transient_failure`.
+- Auto-fallback disallowed: `permission_denied`, `auth_error`, `quota_error`, `empty_transcript`, `unknown_error`.
 
 Internal STT helpers:
 - `speech_to_text(...)` (file or NumPy input) is the canonical segment-based helper used by media ingestion and offline workers; it returns a list of segments (or `(segments, language)` when requested).

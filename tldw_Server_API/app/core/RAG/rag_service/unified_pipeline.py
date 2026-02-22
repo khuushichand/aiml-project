@@ -26,8 +26,15 @@ from typing import Any, Callable, Literal, Optional, cast
 
 from loguru import logger
 
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
 from tldw_Server_API.app.core.testing import (
     is_test_mode as _shared_is_test_mode,
+)
+from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
 )
 
@@ -216,10 +223,14 @@ _create_default_registry: Any = None
 try:
     from .query_classifier import (
         QueryClassification as _QueryClassification,
+    )
+    from .query_classifier import (
         classify_and_reformulate as _classify_and_reformulate,
     )
     from .research_agent import (
         create_default_registry as _create_default_registry,
+    )
+    from .research_agent import (
         research_loop as _research_loop,
     )
 except ImportError:
@@ -249,8 +260,14 @@ _get_writer_depth_policy: Any = None
 try:
     from .response_writer import (
         build_writer_system_prompt as _build_writer_system_prompt,
+    )
+    from .response_writer import (
         build_writer_user_prompt as _build_writer_user_prompt,
+    )
+    from .response_writer import (
         format_context_xml as _format_context_xml,
+    )
+    from .response_writer import (
         get_writer_depth_policy as _get_writer_depth_policy,
     )
 except ImportError:
@@ -1748,7 +1765,8 @@ async def unified_rag_pipeline(
                 )
 
                 # Convert research results to Document objects
-                from .types import Document as _Doc, DataSource as _DS
+                from .types import DataSource as _DS
+                from .types import Document as _Doc
                 _research_docs = []
                 for r_item in _research_output.all_results:
                     _research_docs.append(_Doc(
@@ -3079,11 +3097,19 @@ async def unified_rag_pipeline(
                         prompt += f"- {snippet}\n"
                     prompt += "\nJSON:"
                     llm_out = llm_analyze(api_name=_prov, input_data="", custom_prompt_arg=prompt, model_override=_model)
-                    import json as _json
                     if isinstance(llm_out, str):
                         try:
-                            followups = _json.loads(llm_out)
-                        except (TypeError, ValueError):
+                            parsed = parse_structured_output(
+                                llm_out,
+                                options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+                            )
+                            if isinstance(parsed, list):
+                                followups = [q for q in parsed if isinstance(q, str) and q.strip()]
+                            elif isinstance(parsed, dict):
+                                wrapped_followups = parsed.get("followups") or parsed.get("suggestions")
+                                if isinstance(wrapped_followups, list):
+                                    followups = [q for q in wrapped_followups if isinstance(q, str) and q.strip()]
+                        except (StructuredOutputParseError, TypeError, ValueError):
                             followups = [s.strip("- ") for s in llm_out.splitlines() if s.strip()]
                 except (
                     AttributeError,
