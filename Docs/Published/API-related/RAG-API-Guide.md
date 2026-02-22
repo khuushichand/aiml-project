@@ -4,13 +4,13 @@
 1. [Quick Start](#quick-start)
 2. [Authentication](#authentication)
 3. [Endpoint Reference](#endpoint-reference)
-4. [Request & Response Schemas](#request-response-schemas)
+4. [Request & Response Schemas](#request--response-schemas)
 5. [Search Types & Strategies](#search-types-strategies)
-6. [Agent Modes & Tools](#capabilities-features)
+6. [Agent Modes & Tools](#capabilities--features)
 7. [Code Examples](#code-examples)
 8. [Best Practices](#best-practices)
 9. [Error Handling](#error-handling)
-10. [Rate Limiting & Performance](#rate-limiting-performance)
+10. [Rate Limiting & Performance](#rate-limiting--performance)
 
 ## Quick Start
 

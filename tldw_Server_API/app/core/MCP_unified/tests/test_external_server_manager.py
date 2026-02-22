@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -107,7 +108,10 @@ def test_parse_virtual_tool_name_routing_contract() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discovery_filters_tools_and_unknown_virtual_tool_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_discovery_filters_tools_and_unknown_virtual_tool_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     adapter = _FakeAdapter(
         server_id="docs",
         tools=[
@@ -128,7 +132,9 @@ async def test_discovery_filters_tools_and_unknown_virtual_tool_is_rejected(monk
         adapter=adapter,
     )
 
-    manager = ExternalServerManager(config_path="/tmp/unused.yaml")  # nosec B108
+    unused_config = tmp_path / "unused.yaml"
+    unused_config.write_text("servers: []\n", encoding="utf-8")
+    manager = ExternalServerManager(config_path=str(unused_config))
     try:
         await manager.initialize()
         virtual_names = [tool.virtual_name for tool in manager.list_virtual_tools()]

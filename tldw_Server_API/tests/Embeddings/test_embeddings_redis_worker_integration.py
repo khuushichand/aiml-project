@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Embeddings.services import redis_worker
 pytestmark = pytest.mark.integration
 
 
-def test_redis_worker_chunking_roundtrip_real_redis(redis_client, monkeypatch):
+def test_redis_worker_chunking_roundtrip_real_redis(redis_client, monkeypatch, tmp_path):
     streams = redis_pipeline.load_queues()
     redis_client.flush()
 
@@ -31,7 +31,7 @@ def test_redis_worker_chunking_roundtrip_real_redis(redis_client, monkeypatch):
 
     async def _fake_chunking(*_args, **_kwargs):
         return {
-            "chunks_path": "/tmp/embeddings_chunks.json",  # nosec B108
+            "chunks_path": str(tmp_path / "embeddings_chunks.json"),
             "chunks_processed": 1,
             "total_chunks": 1,
         }, False

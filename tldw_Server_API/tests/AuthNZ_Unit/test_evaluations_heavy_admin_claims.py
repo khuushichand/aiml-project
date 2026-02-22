@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
@@ -31,7 +31,7 @@ def _make_principal(
     )
 
 
-def _build_app_with_admin_cleanup(principal: AuthPrincipal) -> FastAPI:
+def _build_app_with_admin_cleanup(principal: AuthPrincipal, tmp_path: Path) -> FastAPI:
     from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_unified as eval_unified
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh
     from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth
@@ -69,12 +69,11 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal) -> FastAPI:
     app.dependency_overrides[udh.get_request_user] = _fake_get_request_user
     app.dependency_overrides[eval_auth.get_eval_request_user] = _fake_get_request_user
 
-    # Use a small in-memory DB path for the cleanup helper
-    from pathlib import Path
+    # Use a pytest-managed temp DB path for the cleanup helper.
     from tldw_Server_API.app.core.DB_Management import db_path_utils as dp_mod
     from tldw_Server_API.app.core.DB_Management import Evaluations_DB as eval_db_mod
 
-    tmp = Path(os.getenv("PYTEST_TMPDIR", "/tmp")) / "evals_admin_cleanup.db"  # nosec B108
+    tmp = tmp_path / "evals_admin_cleanup.db"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.touch(exist_ok=True)
 
@@ -132,9 +131,9 @@ def test_enforce_heavy_evaluations_admin_rejects_boolean_admin_without_claims(mo
 
 
 @pytest.mark.unit
-def test_admin_cleanup_idempotency_forbidden_without_admin_role(monkeypatch):
+def test_admin_cleanup_idempotency_forbidden_without_admin_role(monkeypatch, tmp_path):
     principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
-    app = _build_app_with_admin_cleanup(principal)
+    app = _build_app_with_admin_cleanup(principal, tmp_path)
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
 
     with TestClient(app) as client:
@@ -146,9 +145,9 @@ def test_admin_cleanup_idempotency_forbidden_without_admin_role(monkeypatch):
 
 
 @pytest.mark.unit
-def test_admin_cleanup_idempotency_allowed_for_admin(monkeypatch):
+def test_admin_cleanup_idempotency_allowed_for_admin(monkeypatch, tmp_path):
     principal = _make_principal(roles=["admin"], permissions=[], is_admin=True)
-    app = _build_app_with_admin_cleanup(principal)
+    app = _build_app_with_admin_cleanup(principal, tmp_path)
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
 
     with TestClient(app) as client:
@@ -165,13 +164,13 @@ def test_admin_cleanup_idempotency_allowed_for_admin(monkeypatch):
 
 
 @pytest.mark.unit
-def test_admin_cleanup_idempotency_allows_roles_admin_without_is_admin(monkeypatch):
+def test_admin_cleanup_idempotency_allows_roles_admin_without_is_admin(monkeypatch, tmp_path):
     """
     Ensure that a principal with roles=['admin'] but is_admin=False is still
     treated as admin by the heavy-evals gate.
     """
     principal = _make_principal(roles=["admin"], permissions=[], is_admin=False)
-    app = _build_app_with_admin_cleanup(principal)
+    app = _build_app_with_admin_cleanup(principal, tmp_path)
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
 
     with TestClient(app) as client:

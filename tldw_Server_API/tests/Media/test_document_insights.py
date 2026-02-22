@@ -2,6 +2,7 @@
 #
 from __future__ import annotations
 
+from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,20 +24,24 @@ def mock_user():
 
 
 @pytest.fixture
-def mock_db():
+def mock_db(tmp_path):
     db = MagicMock()
     db.get_media_by_id = MagicMock(
         return_value={"id": 1, "type": "pdf", "content": "Sample document content."}
     )
-    db.db_path_str = "/tmp/test_media.db"  # nosec B108
+    db.db_path_str = str(tmp_path / "test_media.db")
     return db
 
 
 class _StubAdapter:
-    def __init__(self, payload=None):
-        self._payload = payload if payload is not None else {"ok": True}
+    """Stub adapter that always returns a preset payload for chat calls."""
 
-    def chat(self, _payload):
+    def __init__(self, payload: Optional[Dict[str, Any]] = None) -> None:
+        """Initialize with a preset payload, defaulting to `{\"ok\": True}` when omitted."""
+        self._payload: Dict[str, Any] = payload if payload is not None else {"ok": True}
+
+    def chat(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Accept a chat payload and return the preset payload configured on this stub."""
         return self._payload
 
 
@@ -124,6 +129,7 @@ def test_build_insights_cache_key_includes_scope_and_length(mock_db):
     assert "maxlen:1234" in key
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_document_insights_parses_fenced_json_with_think(mock_user, mock_db):
     app.dependency_overrides[get_request_user] = lambda: mock_user
@@ -156,6 +162,7 @@ async def test_generate_document_insights_parses_fenced_json_with_think(mock_use
     app.dependency_overrides.clear()
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_document_insights_invalid_json_returns_500(mock_user, mock_db):
     app.dependency_overrides[get_request_user] = lambda: mock_user

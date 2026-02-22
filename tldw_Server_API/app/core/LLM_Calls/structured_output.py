@@ -1,9 +1,14 @@
-"""Utilities for parsing structured JSON output returned by LLMs.
+"""Parse and normalize structured JSON output returned by LLM calls.
 
-The parser supports two modes:
-- `strict`: parse only direct JSON candidates and enforce wrapper/list shape rules.
-- `lenient`: apply recovery heuristics (think-tag stripping, fenced block extraction,
-  balanced-fragment probing, fallback wrapper keys, optional string-item coercion).
+The module accepts raw model payloads (for example plain text, fenced JSON, or
+already-parsed dict/list objects), extracts candidate JSON, and returns
+JSON-compatible Python values. In lenient mode it may strip ``<think>`` tags,
+inspect fenced blocks, and probe balanced JSON fragments; strict mode limits
+recovery and enforces tighter schema expectations.
+
+Behavior is controlled by :class:`StructuredOutputOptions`, and parsing/schema
+failures are reported through the centralized structured-output exceptions
+imported from ``app.core.exceptions``.
 """
 
 from __future__ import annotations
@@ -14,29 +19,35 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from tldw_Server_API.app.core.exceptions import (
+    StructuredOutputNoPayloadError,
+    StructuredOutputParseError,
+    StructuredOutputSchemaError,
+)
+
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
 _FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
 
-class StructuredOutputParseError(ValueError):
-    """Base parse error for structured model output."""
-
-
-class StructuredOutputNoPayloadError(StructuredOutputParseError):
-    """Raised when no JSON payload can be extracted from model output."""
-
-
-class StructuredOutputSchemaError(StructuredOutputParseError):
-    """Raised when parsed JSON shape does not match expected structure."""
-
-
 @dataclass(frozen=True)
 class StructuredOutputOptions:
-    """Configuration for `parse_structured_output`.
+    """Configuration for structured-output parsing and item extraction.
 
-    `parse_mode` accepts `strict` or `lenient` (default). Strict mode minimizes
-    recovery heuristics, while lenient mode attempts multiple candidate extraction
-    strategies before failing.
+    Attributes:
+        parse_mode: Parsing mode. ``"lenient"`` (default) enables recovery
+            heuristics; ``"strict"`` minimizes candidate rewriting/probing.
+        strip_think_tags: Whether lenient candidate building strips
+            ``<think>...</think>`` segments before JSON parsing attempts.
+        wrapper_key: Preferred container key expected to hold extracted item
+            lists when normalizing object payloads.
+        allow_top_level_list: Whether a top-level list is accepted without
+            requiring ``wrapper_key`` wrapping.
+        max_fragments: Maximum number of balanced JSON fragments to probe from
+            free-form text in lenient mode.
+
+    Notes:
+        ``strict`` behavior is derived from ``parse_mode`` via the ``strict``
+        property.
     """
 
     parse_mode: str = "lenient"
@@ -47,7 +58,12 @@ class StructuredOutputOptions:
 
     @property
     def strict(self) -> bool:
-        """Return `True` when parser behavior should be strict."""
+        """Return whether strict parsing behavior should be applied.
+
+        Returns:
+            bool: ``True`` when ``parse_mode`` resolves to ``"strict"``,
+            otherwise ``False`` for lenient behavior.
+        """
         return str(self.parse_mode or "lenient").strip().lower() == "strict"
 
 
@@ -285,9 +301,9 @@ def extract_items(
 
 
 __all__ = [
+    "StructuredOutputNoPayloadError",
     "StructuredOutputOptions",
     "StructuredOutputParseError",
-    "StructuredOutputNoPayloadError",
     "StructuredOutputSchemaError",
     "extract_items",
     "parse_structured_output",

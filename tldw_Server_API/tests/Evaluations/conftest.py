@@ -146,9 +146,14 @@ def mock_openai_server():
 
     # Wait for server to start
     max_retries = 30
+    # Configurable for slower CI/test hosts; defaults to a short local timeout.
+    try:
+        health_timeout_s = float(os.getenv("MOCK_OPENAI_HEALTH_TIMEOUT_SECONDS", "5"))
+    except ValueError:
+        health_timeout_s = 5.0
     for _ in range(max_retries):
         try:
-            response = requests.get("http://localhost:8080/health")  # nosec B113
+            response = requests.get("http://localhost:8080/health", timeout=health_timeout_s)
             if response.status_code == 200:
                 break
         except requests.ConnectionError:

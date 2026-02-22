@@ -97,12 +97,12 @@ class FakeFlashcardsDB:
 
 
 @pytest.mark.asyncio
-async def test_flashcards_crud_and_export(monkeypatch):
+async def test_flashcards_crud_and_export(monkeypatch, tmp_path):
     mod = FlashcardsModule(ModuleConfig(name="flashcards"))
     fake_db = FakeFlashcardsDB()
     mod._open_db = lambda ctx: fake_db  # type: ignore[attr-defined]
 
-    ctx = SimpleNamespace(db_paths={"chacha": "/tmp/chacha.db"})  # nosec B108
+    ctx = SimpleNamespace(db_paths={"chacha": str(tmp_path / "chacha.db")})
 
     created_deck = await mod.execute_tool("flashcards.decks.create", {"name": "Deck"}, context=ctx)
     deck_id = created_deck["deck_id"]

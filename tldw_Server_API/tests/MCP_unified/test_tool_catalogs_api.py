@@ -1,18 +1,48 @@
 import os
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 
-def _ensure_single_user_row():
+_ALLOWED_USERS_INSERT_COLUMNS: frozenset[str] = frozenset(
+    {
+        "id",
+        "uuid",
+        "username",
+        "email",
+        "password_hash",
+        "metadata",
+        "is_active",
+        "is_superuser",
+        "is_verified",
+        "role",
+        "created_at",
+        "updated_at",
+        "last_login",
+        "email_verified",
+        "storage_quota_mb",
+        "storage_used_mb",
+        "failed_login_attempts",
+        "locked_until",
+    }
+)
 
 
-    db_path = Path("Databases/users.db")
+def _ensure_single_user_row() -> None:
+    """Ensure the fixed single-user admin row exists in the local test users DB.
+
+    Side effects:
+    - Creates `Databases/users.db` (and parent directory) if missing.
+    - Ensures a minimal `users` table exists.
+    - Inserts the configured single-user row when absent.
+    """
+    db_path: Path = Path("Databases/users.db")
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
-        uid = int(os.getenv("SINGLE_USER_FIXED_ID", "1"))
+        uid: int = int(os.getenv("SINGLE_USER_FIXED_ID", "1"))
         # Ensure users table exists minimally
         conn.execute(
             """
@@ -34,16 +64,18 @@ def _ensure_single_user_row():
             )
             """
         )
-        columns = {
+        columns: dict[str, dict[str, Any]] = {
             row[1]: {"type": row[2], "notnull": row[3], "default": row[4]}
             for row in conn.execute("PRAGMA table_info(users)")
         }
-        cur = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
-        row = cur.fetchone()
-        if not row:
-            insert_cols = []
-            insert_vals = []
-            def _add(col, val):
+        cur: sqlite3.Cursor = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
+        row: tuple[Any, ...] | None = cur.fetchone()
+        if row is None:
+            insert_cols: list[str] = []
+            insert_vals: list[Any] = []
+
+            def _add(col: str, val: Any) -> None:
+                """Append column/value only when the column exists in current schema."""
                 if col in columns:
                     insert_cols.append(col)
                     insert_vals.append(val)
@@ -58,7 +90,8 @@ def _ensure_single_user_row():
             _add("is_verified", 1)
             _add("email_verified", 1)
 
-            def _default_for_type(col_type: str):
+            def _default_for_type(col_type: str) -> Any:
+                """Map SQLite type names to deterministic placeholder defaults."""
                 t = (col_type or "").upper()
                 if "INT" in t:
                     return 0
@@ -71,7 +104,16 @@ def _ensure_single_user_row():
                     insert_cols.append(name)
                     insert_vals.append(_default_for_type(meta["type"]))
 
-            placeholders = ", ".join("?" for _ in insert_cols)
+            unexpected_insert_cols: list[str] = [
+                name for name in insert_cols if name not in _ALLOWED_USERS_INSERT_COLUMNS
+            ]
+            if unexpected_insert_cols:
+                raise ValueError(
+                    f"Unexpected users insert columns in test bootstrap: {unexpected_insert_cols!r}"
+                )
+            placeholders: str = ", ".join("?" for _ in insert_cols)
+            # Dynamic identifiers are safe here because insert_cols are validated
+            # against _ALLOWED_USERS_INSERT_COLUMNS immediately above.
             conn.execute(
                 f"INSERT INTO users ({', '.join(insert_cols)}) VALUES ({placeholders})",  # nosec B608
                 insert_vals,

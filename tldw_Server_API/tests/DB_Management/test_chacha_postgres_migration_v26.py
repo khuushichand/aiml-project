@@ -1,20 +1,35 @@
+"""Unit tests for ChaChaNotes schema conversion around v26 migrations."""
+
 import re
+from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
-
 pytestmark = pytest.mark.unit
 
 
-def test_postgres_statement_conversion_includes_persona_persistence_tables(tmp_path):
+@pytest.fixture
+def char_rag_db(tmp_path: Path) -> Generator[CharactersRAGDB, None, None]:
+    """Provide a temporary CharactersRAGDB instance and close all connections on teardown."""
     db = CharactersRAGDB(db_path=str(tmp_path / "dummy.db"), client_id="test")
+    try:
+        yield db
+    finally:
+        db.close_all_connections()
 
-    sql = db._MIGRATION_SQL_V25_TO_V26
+
+def test_postgres_statement_conversion_includes_persona_persistence_tables(
+    char_rag_db: CharactersRAGDB,
+) -> None:
+    """Verify v26 conversion output includes persona persistence tables and indexes."""
+
+    sql = char_rag_db._MIGRATION_SQL_V25_TO_V26
     assert isinstance(sql, str) and "persona_profiles" in sql
 
-    stmts = db._convert_sqlite_schema_to_postgres_statements(sql)
+    stmts = char_rag_db._convert_sqlite_schema_to_postgres_statements(sql)
     assert isinstance(stmts, list) and len(stmts) > 0
 
     full = "\n".join(stmts)

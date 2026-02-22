@@ -7,7 +7,6 @@ import os
 
 import pytest
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
-import pytest
 pytestmark = pytest.mark.unit
 import json
 import io

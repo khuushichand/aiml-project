@@ -3,6 +3,7 @@ Basic usage example for the Scheduler module.
 """
 
 import asyncio
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -44,138 +45,140 @@ async def analyze_metrics(metrics_data):
 async def main():
     """Main example function."""
 
-    # Configure scheduler
-    config = SchedulerConfig(
-        database_url="sqlite:///scheduler_example.db",
-        base_path=Path("/tmp/scheduler_example"),  # nosec B108
-        min_workers=2,
-        max_workers=10,
-        write_buffer_size=100,
-        write_buffer_flush_interval=1.0
-    )
-
-    # Create and start scheduler
-    async with Scheduler(config) as scheduler:
-        print("Scheduler started!")
-
-        # Submit a simple task
-        email_task = await scheduler.submit(
-            handler="__main__.send_email",
-            payload={
-                "to": "user@example.com",
-                "subject": "Welcome!",
-                "body": "Thanks for signing up"
-            },
-            priority=TaskPriority.HIGH.value,
-            metadata={"user_id": "demo-user"}
-        )
-        print(f"Submitted email task: {email_task}")
-
-        # Submit a task with dependencies
-        video_task = await scheduler.submit(
-            handler="__main__.process_video",
-            payload={
-                "url": "https://example.com/video.mp4",
-                "duration": 120
-            },
-            queue_name="heavy",
-            metadata={"user_id": "demo-user"}
+    with tempfile.TemporaryDirectory(prefix="scheduler_example_") as temp_dir:
+        # Configure scheduler with an isolated temporary base path
+        config = SchedulerConfig(
+            database_url="sqlite:///scheduler_example.db",
+            base_path=Path(temp_dir),
+            min_workers=2,
+            max_workers=10,
+            write_buffer_size=100,
+            write_buffer_flush_interval=1.0
         )
 
-        # Task that depends on video processing
-        await scheduler.submit(
-            handler="__main__.analyze_metrics",
-            payload={
-                "period": "daily",
-                "values": [10, 20, 30, 40, 50]
-            },
-            queue_name="analytics",
-            depends_on=[video_task],  # Will only run after video_task completes
-            metadata={"user_id": "demo-user"}
-        )
+        # Create and start scheduler
+        async with Scheduler(config) as scheduler:
+            print("Scheduler started!")
 
-        # Submit with idempotency key (prevents duplicates)
-        dedup_task = await scheduler.submit(
-            handler="__main__.send_email",
-            payload={"to": "admin@example.com", "subject": "Report"},
-            idempotency_key="daily-report-2024-01-01",
-            metadata={"user_id": "demo-user"}
-        )
+            # Submit a simple task
+            email_task = await scheduler.submit(
+                handler="__main__.send_email",
+                payload={
+                    "to": "user@example.com",
+                    "subject": "Welcome!",
+                    "body": "Thanks for signing up"
+                },
+                priority=TaskPriority.HIGH.value,
+                metadata={"user_id": "demo-user"}
+            )
+            print(f"Submitted email task: {email_task}")
 
-        # Try to submit duplicate (will return same task ID)
-        duplicate = await scheduler.submit(
-            handler="__main__.send_email",
-            payload={"to": "different@example.com", "subject": "Different"},
-            idempotency_key="daily-report-2024-01-01",  # Same key!
-            metadata={"user_id": "demo-user"}
-        )
+            # Submit a task with dependencies
+            video_task = await scheduler.submit(
+                handler="__main__.process_video",
+                payload={
+                    "url": "https://example.com/video.mp4",
+                    "duration": 120
+                },
+                queue_name="heavy",
+                metadata={"user_id": "demo-user"}
+            )
 
-        assert dedup_task == duplicate
-        print(f"Idempotency works: {dedup_task} == {duplicate}")
+            # Task that depends on video processing
+            await scheduler.submit(
+                handler="__main__.analyze_metrics",
+                payload={
+                    "period": "daily",
+                    "values": [10, 20, 30, 40, 50]
+                },
+                queue_name="analytics",
+                depends_on=[video_task],  # Will only run after video_task completes
+                metadata={"user_id": "demo-user"}
+            )
 
-        # Schedule a task for the future
-        future_time = datetime.utcnow() + timedelta(seconds=5)
-        await scheduler.submit(
-            handler="__main__.send_email",
-            payload={"to": "future@example.com", "subject": "Scheduled"},
-            metadata={"user_id": "demo-user", "scheduled_at": future_time.isoformat()}
-        )
+            # Submit with idempotency key (prevents duplicates)
+            dedup_task = await scheduler.submit(
+                handler="__main__.send_email",
+                payload={"to": "admin@example.com", "subject": "Report"},
+                idempotency_key="daily-report-2024-01-01",
+                metadata={"user_id": "demo-user"}
+            )
 
-        # Wait for a task to complete
-        print(f"Waiting for email task {email_task} to complete...")
-        result = await scheduler.wait_for_task(email_task, timeout=10)
-        if result:
-            print(f"Email task completed with status: {result.status}")
-            print(f"Result: {result.result}")
+            # Try to submit duplicate (will return same task ID)
+            duplicate = await scheduler.submit(
+                handler="__main__.send_email",
+                payload={"to": "different@example.com", "subject": "Different"},
+                idempotency_key="daily-report-2024-01-01",  # Same key!
+                metadata={"user_id": "demo-user"}
+            )
 
-        # Get queue status
-        status = await scheduler.get_queue_status()
-        print(f"Queue status: {status}")
+            assert dedup_task == duplicate
+            print(f"Idempotency works: {dedup_task} == {duplicate}")
 
-        # Get scheduler status
-        scheduler_status = scheduler.get_status()
-        print(f"Scheduler status: {scheduler_status}")
+            # Schedule a task for the future
+            future_time = datetime.utcnow() + timedelta(seconds=5)
+            await scheduler.submit(
+                handler="__main__.send_email",
+                payload={"to": "future@example.com", "subject": "Scheduled"},
+                metadata={"user_id": "demo-user", "scheduled_at": future_time.isoformat()}
+            )
 
-        # Scale workers for heavy queue
-        if scheduler.worker_pool:
-            new_count = await scheduler.scale_workers(5, "heavy")
-            print(f"Scaled heavy queue to {new_count} workers")
+            # Wait for a task to complete
+            print(f"Waiting for email task {email_task} to complete...")
+            result = await scheduler.wait_for_task(email_task, timeout=10)
+            if result:
+                print(f"Email task completed with status: {result.status}")
+                print(f"Result: {result.result}")
+
+            # Get queue status
+            status = await scheduler.get_queue_status()
+            print(f"Queue status: {status}")
+
+            # Get scheduler status
+            scheduler_status = scheduler.get_status()
+            print(f"Scheduler status: {scheduler_status}")
+
+            # Scale workers for heavy queue
+            if scheduler.worker_pool:
+                new_count = await scheduler.scale_workers(5, "heavy")
+                print(f"Scaled heavy queue to {new_count} workers")
 
 
 async def example_with_batch_processing():
     """Example of batch task processing."""
 
-    config = SchedulerConfig(
-        database_url="sqlite:///batch_example.db",
-        base_path=Path("/tmp/batch_example")  # nosec B108
-    )
+    with tempfile.TemporaryDirectory(prefix="scheduler_batch_example_") as temp_dir:
+        config = SchedulerConfig(
+            database_url="sqlite:///batch_example.db",
+            base_path=Path(temp_dir)
+        )
 
-    async with Scheduler(config) as scheduler:
-        # Submit a batch of tasks
-        tasks = [
-            {
-                "handler": "__main__.send_email",
-                "payload": {
-                    "to": f"user{i}@example.com",
-                    "subject": f"Message {i}"
-                },
-                "priority": TaskPriority.NORMAL.value if i % 2 == 0 else TaskPriority.LOW.value,
-                "metadata": {"user_id": f"demo-user-{i}"}
-            }
-            for i in range(10)
-        ]
+        async with Scheduler(config) as scheduler:
+            # Submit a batch of tasks
+            tasks = [
+                {
+                    "handler": "__main__.send_email",
+                    "payload": {
+                        "to": f"user{i}@example.com",
+                        "subject": f"Message {i}"
+                    },
+                    "priority": TaskPriority.NORMAL.value if i % 2 == 0 else TaskPriority.LOW.value,
+                    "metadata": {"user_id": f"demo-user-{i}"}
+                }
+                for i in range(10)
+            ]
 
-        task_ids = await scheduler.submit_batch(tasks)
-        print(f"Submitted {len(task_ids)} tasks in batch")
+            task_ids = await scheduler.submit_batch(tasks)
+            print(f"Submitted {len(task_ids)} tasks in batch")
 
-        # Wait for all to complete
-        results = []
-        for task_id in task_ids:
-            result = await scheduler.wait_for_task(task_id, timeout=30)
-            if result:
-                results.append(result)
+            # Wait for all to complete
+            results = []
+            for task_id in task_ids:
+                result = await scheduler.wait_for_task(task_id, timeout=30)
+                if result:
+                    results.append(result)
 
-        print(f"Completed {len(results)} out of {len(task_ids)} tasks")
+            print(f"Completed {len(results)} out of {len(task_ids)} tasks")
 
 
 async def example_with_error_handling():
@@ -190,28 +193,29 @@ async def example_with_error_handling():
             raise Exception("Random failure!")
         return {"success": True, "data": data}
 
-    config = SchedulerConfig(
-        database_url="sqlite:///error_example.db",
-        base_path=Path("/tmp/error_example")  # nosec B108
-    )
-
-    async with Scheduler(config) as scheduler:
-        # Submit task that might fail
-        task_id = await scheduler.submit(
-            handler="__main__.unreliable_task",
-            payload={"important": "data"},
-            metadata={"user_id": "demo-user"}
+    with tempfile.TemporaryDirectory(prefix="scheduler_error_example_") as temp_dir:
+        config = SchedulerConfig(
+            database_url="sqlite:///error_example.db",
+            base_path=Path(temp_dir)
         )
 
-        # Wait and check result
-        result = await scheduler.wait_for_task(task_id, timeout=60)
-        if result:
-            if result.status.value == "completed":
-                print(f"Task succeeded: {result.result}")
-            elif result.status.value == "failed":
-                print(f"Task failed after retries: {result.error}")
-        else:
-            print("Task timed out")
+        async with Scheduler(config) as scheduler:
+            # Submit task that might fail
+            task_id = await scheduler.submit(
+                handler="__main__.unreliable_task",
+                payload={"important": "data"},
+                metadata={"user_id": "demo-user"}
+            )
+
+            # Wait and check result
+            result = await scheduler.wait_for_task(task_id, timeout=60)
+            if result:
+                if result.status.value == "completed":
+                    print(f"Task succeeded: {result.result}")
+                elif result.status.value == "failed":
+                    print(f"Task failed after retries: {result.error}")
+            else:
+                print("Task timed out")
 
 
 if __name__ == "__main__":

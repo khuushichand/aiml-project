@@ -475,11 +475,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const hasServerVoiceChat =
     isConnectionReady &&
     !capsLoading &&
-    Boolean(capabilities?.hasVoiceChat ?? capabilities?.hasAudio)
+    Boolean(
+      capabilities?.hasVoiceChat ??
+        (capabilities?.hasStt && capabilities?.hasTts)
+    )
   const hasServerStt =
     isConnectionReady &&
     !capsLoading &&
-    Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
+    Boolean(capabilities?.hasStt)
   const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus()
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"

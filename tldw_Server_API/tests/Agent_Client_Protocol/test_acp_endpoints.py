@@ -118,10 +118,10 @@ def stub_runner_client(monkeypatch):
     return stub
 
 
-def test_acp_session_new_success(client_user_only, stub_runner_client):
+def test_acp_session_new_success(client_user_only, stub_runner_client, tmp_path):
     resp = client_user_only.post(
         "/api/v1/acp/sessions/new",
-        json={"cwd": "/tmp"},  # nosec B108
+        json={"cwd": str(tmp_path)},
     )
     assert resp.status_code == 200
     payload = resp.json()
@@ -131,11 +131,11 @@ def test_acp_session_new_success(client_user_only, stub_runner_client):
     assert isinstance(stub_runner_client.create_session_calls[0]["user_id"], int)
 
 
-def test_acp_session_new_forwards_tenancy_fields(client_user_only, stub_runner_client):
+def test_acp_session_new_forwards_tenancy_fields(client_user_only, stub_runner_client, tmp_path):
     resp = client_user_only.post(
         "/api/v1/acp/sessions/new",
         json={
-            "cwd": "/tmp",  # nosec B108
+            "cwd": str(tmp_path),
             "agent_type": "codex",
             "persona_id": "persona-abc",
             "workspace_id": "ws-1",
@@ -195,7 +195,7 @@ def test_acp_session_updates(client_user_only, stub_runner_client):
     ]
 
 
-def test_acp_session_new_error(client_user_only, monkeypatch):
+def test_acp_session_new_error(client_user_only, monkeypatch, tmp_path):
     import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
 
     class ErrorRunnerClient(StubRunnerClient):
@@ -219,7 +219,7 @@ def test_acp_session_new_error(client_user_only, monkeypatch):
 
     resp = client_user_only.post(
         "/api/v1/acp/sessions/new",
-        json={"cwd": "/tmp"},  # nosec B108
+        json={"cwd": str(tmp_path)},
     )
     assert resp.status_code == 502
     assert resp.json()["detail"] == "boom"

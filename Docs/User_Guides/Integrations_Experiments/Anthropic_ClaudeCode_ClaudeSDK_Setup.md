@@ -31,10 +31,13 @@ BYOK_ALLOWED_PROVIDERS=anthropic,openai
 
 ### User First-Time Setup (API)
 
+In multi-user mode, include a valid JWT in `Authorization: Bearer <JWT>` for these endpoints or requests will return `401 Unauthorized`.
+
 Store key:
 
 ```http
 POST /api/v1/users/keys
+Authorization: Bearer <JWT>
 Content-Type: application/json
 
 {
@@ -47,12 +50,14 @@ Verify status:
 
 ```http
 GET /api/v1/users/keys
+Authorization: Bearer <JWT>
 ```
 
 Optional credential test:
 
 ```http
 POST /api/v1/users/keys/test
+Authorization: Bearer <JWT>
 Content-Type: application/json
 
 {

@@ -1396,7 +1396,7 @@ async def lifespan(app: FastAPI):
         from tldw_Server_API.app.core.config import settings as _claims_settings
 
         _claims_prompt_report = validate_claims_prompt_preflight(_claims_settings)
-        if _claims_prompt_report.has_issues and _claims_prompt_report.mode != "off":
+        if _claims_prompt_report.has_issues() and _claims_prompt_report.mode != "off":
             logger.warning(
                 "App Startup: Claims prompt validation found {} issue(s) (mode={}, strict={})",
                 len(_claims_prompt_report.issues),
@@ -1410,10 +1410,10 @@ async def lifespan(app: FastAPI):
                 _claims_prompt_report.strict,
             )
     except ClaimsPromptValidationError as _claims_prompt_err:
-        logger.exception(f"Startup aborted due to claims prompt validation error: {_claims_prompt_err}")
+        logger.exception("Startup aborted due to claims prompt validation error")
         raise
     except _STARTUP_GUARD_EXCEPTIONS as _claims_prompt_exc:
-        logger.debug(f"App Startup: Claims prompt validation skipped/failed: {_claims_prompt_exc}")
+        logger.debug("App Startup: Claims prompt validation skipped/failed: {}", _claims_prompt_exc)
 
     # Startup: preserve fail-fast semantics for critical lazy subsystems in non-test runtime.
     # Warm lazy managers early so configuration errors surface at startup.

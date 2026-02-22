@@ -10,7 +10,7 @@ conflict resolution, job management, and multi-user scenarios.
 """
 
 import pytest
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.integration
 import asyncio
 import json
 import zipfile
@@ -416,7 +416,7 @@ class TestMultiUserScenarios:
     """Test multi-user import/export scenarios."""
 
     @pytest.mark.asyncio
-    async def test_user_isolation_during_export(self):
+    async def test_user_isolation_during_export(self, tmp_path):
         """Test that users only export their own content."""
         # Create services for different users
         db1 = CharactersRAGDB(":memory:", "user1")
@@ -434,13 +434,21 @@ class TestMultiUserScenarios:
         dict2 = dict_service2.create_dictionary("User2 Dict", "Also private")
 
         # Export for each user
-        with patch.object(service1, '_create_chatbook_archive', return_value="/tmp/user1.chatbook"):  # nosec B108
+        with patch.object(
+            service1,
+            '_create_chatbook_archive',
+            return_value=str(tmp_path / "user1.chatbook"),
+        ):
             result1 = await service1.export_chatbook(
                 name="User1 Export",
                 content_types=["dictionaries"]
             )
 
-        with patch.object(service2, '_create_chatbook_archive', return_value="/tmp/user2.chatbook"):  # nosec B108
+        with patch.object(
+            service2,
+            '_create_chatbook_archive',
+            return_value=str(tmp_path / "user2.chatbook"),
+        ):
             result2 = await service2.export_chatbook(
                 name="User2 Export",
                 content_types=["dictionaries"]

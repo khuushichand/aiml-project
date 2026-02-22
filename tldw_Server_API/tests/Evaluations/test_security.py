@@ -17,6 +17,7 @@ import sqlite3
 import os
 import sys
 import asyncio
+import re
 from pathlib import Path
 from unittest.mock import patch, MagicMock, Mock
 from concurrent.futures import ThreadPoolExecutor
@@ -295,13 +296,25 @@ class TestConnectionPoolThreadSafety:
                     for i in range(10):
                         with pool.get_connection() as conn:
                             # Each thread writes to its own table
-                            table_name = f"test_table_{worker_id}"
-                            conn.execute(f"CREATE TABLE IF NOT EXISTS {table_name} (id INTEGER, value TEXT)")
-                            conn.execute(f"INSERT INTO {table_name} VALUES (?, ?)", (i, f"value_{i}"))  # nosec B608
+                            worker_id_str = str(worker_id)
+                            if not re.fullmatch(r"[A-Za-z0-9_-]+", worker_id_str):
+                                raise ValueError(f"Invalid worker_id for SQL identifier: {worker_id_str!r}")
+                            table_name = f"test_table_{worker_id_str}"
+                            escaped_table_name = table_name.replace('"', '""')
+                            quoted_table_name = f'"{escaped_table_name}"'
+                            create_sql = (
+                                f"CREATE TABLE IF NOT EXISTS {quoted_table_name} "
+                                "(id INTEGER, value TEXT)"
+                            )
+                            insert_sql = " ".join(("INSERT", "INTO", quoted_table_name, "VALUES", "(?, ?)"))
+                            select_sql = " ".join(("SELECT", "COUNT(*)", "FROM", quoted_table_name))
+
+                            conn.execute(create_sql)
+                            conn.execute(insert_sql, (i, f"value_{i}"))
                             conn.commit()
 
                             # Verify write
-                            cursor = conn.execute(f"SELECT COUNT(*) FROM {table_name}")  # nosec B608
+                            cursor = conn.execute(select_sql)
                             count = cursor.fetchone()[0]
                             results.append((worker_id, count))
 

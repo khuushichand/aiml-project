@@ -1388,13 +1388,15 @@ def load_settings():
                             )
                         ),
                         "CLAIMS_CONTEXT_WINDOW_CHARS": (
-                            int(_env.get("CLAIMS_CONTEXT_WINDOW_CHARS")) if _env.get("CLAIMS_CONTEXT_WINDOW_CHARS") is not None else (
-                                int(_cp.getint('Claims', 'CLAIMS_CONTEXT_WINDOW_CHARS', fallback=0)) if _cp else 0
+                            _safe_int(
+                                _env.get("CLAIMS_CONTEXT_WINDOW_CHARS"),
+                                int(_cp.getint('Claims', 'CLAIMS_CONTEXT_WINDOW_CHARS', fallback=0)) if _cp else 0,
                             )
                         ),
                         "CLAIMS_EXTRACTION_PASSES": (
-                            int(_env.get("CLAIMS_EXTRACTION_PASSES")) if _env.get("CLAIMS_EXTRACTION_PASSES") is not None else (
-                                int(_cp.getint('Claims', 'CLAIMS_EXTRACTION_PASSES', fallback=1)) if _cp else 1
+                            _safe_int(
+                                _env.get("CLAIMS_EXTRACTION_PASSES"),
+                                int(_cp.getint('Claims', 'CLAIMS_EXTRACTION_PASSES', fallback=1)) if _cp else 1,
                             )
                         ),
                     }

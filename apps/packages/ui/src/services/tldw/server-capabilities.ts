@@ -122,6 +122,7 @@ const fallbackSpec = {
       "/api/v1/audio/transcriptions",
       "/api/v1/audio/transcriptions/health",
       "/api/v1/audio/speech",
+      "/api/v1/audio/voices/catalog",
       "/api/v1/audio/health",
       "/api/v1/audio/stream/transcribe",
       "/api/v1/audio/chat/stream",

@@ -156,7 +156,10 @@ class LLMResponseCache:
         # Generate a deterministic response based on prompt content
         if prompt_content:
             # Use hash to generate consistent scores
-            hash_val = int(hashlib.md5(prompt_content.encode()).hexdigest()[:8], 16)  # nosec B324
+            hash_val = int(
+                hashlib.sha256(prompt_content.encode()).hexdigest()[:8],
+                16,
+            )
             score = 3.0 + (hash_val % 20) / 10  # Score between 3.0 and 5.0
 
             return {

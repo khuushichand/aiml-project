@@ -222,6 +222,21 @@ class SandboxService:
         with self._maintenance_lock:
             self._maintenance_thread = None
 
+    def shutdown(self) -> None:
+        """Best-effort shutdown for background maintenance and executor threads."""
+        self.stop_background_tasks()
+        with self._bg_executor_lock:
+            executor = self._bg_executor
+            self._bg_executor = None
+            self._bg_executor_workers = 0
+        if executor is not None:
+            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                executor.shutdown(wait=False, cancel_futures=True)
+
+    def __del__(self) -> None:  # pragma: no cover - best-effort process teardown
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            self.shutdown()
+
     def run_artifact_maintenance_once(self, *, trigger: str = "manual") -> dict[str, int]:
         start = time.monotonic()
         janitor_summary = self._orch.prune_expired_artifacts(force=True)
@@ -666,7 +681,11 @@ class SandboxService:
 
     def destroy_session(self, session_id: str) -> bool:
         try:
-            return bool(self._orch.destroy_session(session_id))
+            destroyed = bool(self._orch.destroy_session(session_id))
+            if destroyed:
+                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                    self._snapshots.cleanup_session_snapshots(session_id)
+            return destroyed
         except SessionActiveRunsConflict:
             timeout_sec = 10.0
             try:
@@ -719,7 +738,11 @@ class SandboxService:
                     )
                 time.sleep(0.05)
 
-            return bool(self._orch.destroy_session(session_id))
+            destroyed = bool(self._orch.destroy_session(session_id))
+            if destroyed:
+                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                    self._snapshots.cleanup_session_snapshots(session_id)
+            return destroyed
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"destroy_session failed: {e}")
             return False

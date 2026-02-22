@@ -21,7 +21,7 @@ python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"
 
 For the first-time OpenAI account-linking flow (operator prerequisites + user walkthrough), see:
 
-- `Docs/User_Guides/Server/OpenAI_OAuth_First_Time_Setup.md`
+- [OpenAI OAuth First Time Setup](./OpenAI_OAuth_First_Time_Setup.md)
 
 ## Anthropic + Claude Code/SDK Setup
 

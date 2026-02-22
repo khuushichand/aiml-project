@@ -4120,7 +4120,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V24->V25: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V25 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
-    def _migrate_from_v25_to_v26(self, conn: sqlite3.Connection):
+    def _migrate_from_v25_to_v26(self, conn: sqlite3.Connection) -> None:
         """Migrates schema from V25 to V26 (Persona profile/scoping persistence tables)."""
         logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V25 to V26 for DB: {self.db_path_str}...")
         try:
@@ -5892,6 +5892,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     # ----------------------
     @staticmethod
     def _as_bool(value: Any) -> bool:
+        """Coerce `value: Any` into a boolean for persona persistence fields.
+
+        Returns bool; handles bool/numeric/string inputs explicitly and falls back to `bool(value)` for other types.
+        """
         if isinstance(value, bool):
             return value
         if isinstance(value, (int, float)):
@@ -5900,7 +5904,33 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
 
+    @staticmethod
+    def _normalize_deleted_input(value: Any) -> bool:
+        """Normalize soft-delete input for persona profile/session writes."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() not in {"false", "0"}
+        return bool(value)
+
+    @staticmethod
+    def _parse_version_input(value: Any) -> int:
+        """Parse and validate optimistic-lock version values (must be >= 1)."""
+        try:
+            version = int(value)
+        except (TypeError, ValueError) as exc:
+            raise InputError("version must be an integer >= 1.") from exc  # noqa: TRY003
+        if version < 1:
+            raise InputError("version must be >= 1.")  # noqa: TRY003
+        return version
+
     def _normalize_persona_mode(self, value: Any) -> str:
+        """Normalize persona mode from `value: Any` to a validated lowercase string.
+
+        Returns a mode in `_ALLOWED_PERSONA_MODES`; raises `InputError` when the value is invalid.
+        """
         mode = str(value or self._DEFAULT_PERSONA_MODE).strip().lower()
         if mode not in self._ALLOWED_PERSONA_MODES:
             allowed = ", ".join(self._ALLOWED_PERSONA_MODES)
@@ -5908,6 +5938,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return mode
 
     def _normalize_persona_scope_rule_type(self, value: Any) -> str:
+        """Normalize scope rule type from `value: Any` to a validated lowercase string.
+
+        Returns a rule type in `_ALLOWED_PERSONA_SCOPE_RULE_TYPES`; raises `InputError` for unsupported values.
+        """
         rule_type = str(value or "").strip().lower()
         if rule_type not in self._ALLOWED_PERSONA_SCOPE_RULE_TYPES:
             allowed = ", ".join(self._ALLOWED_PERSONA_SCOPE_RULE_TYPES)
@@ -5915,6 +5949,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return rule_type
 
     def _normalize_persona_policy_rule_kind(self, value: Any) -> str:
+        """Normalize policy rule kind from `value: Any` to a validated lowercase string.
+
+        Returns a rule kind in `_ALLOWED_PERSONA_POLICY_RULE_KINDS`; raises `InputError` for invalid input.
+        """
         rule_kind = str(value or "").strip().lower()
         if rule_kind not in self._ALLOWED_PERSONA_POLICY_RULE_KINDS:
             allowed = ", ".join(self._ALLOWED_PERSONA_POLICY_RULE_KINDS)
@@ -5922,6 +5960,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return rule_kind
 
     def _normalize_persona_session_status(self, value: Any) -> str:
+        """Normalize session status from `value: Any` to a validated lowercase string.
+
+        Returns a status in `_ALLOWED_PERSONA_SESSION_STATUSES`; raises `InputError` when value is unsupported.
+        """
         status = str(value or "active").strip().lower()
         if status not in self._ALLOWED_PERSONA_SESSION_STATUSES:
             allowed = ", ".join(self._ALLOWED_PERSONA_SESSION_STATUSES)
@@ -5929,6 +5971,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return status
 
     def _persona_profile_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a persona profile DB `row: Any` to an API-safe dict.
+
+        Returns `dict[str, Any]` with boolean normalization, or `None` when `row` is empty/invalid.
+        """
         if not row:
             return None
         item = dict(row)
@@ -5937,6 +5983,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a scope rule DB `row: Any` to an API-safe dict.
+
+        Returns `dict[str, Any]` with boolean normalization, or `None` when `row` is empty/invalid.
+        """
         if not row:
             return None
         item = dict(row)
@@ -5945,6 +5995,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     def _persona_policy_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a policy rule DB `row: Any` to an API-safe dict.
+
+        Returns `dict[str, Any]` or `None`; invalid `max_calls_per_turn` values are coerced to `None`.
+        """
         if not row:
             return None
         item = dict(row)
@@ -5960,6 +6014,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     def _persona_session_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a persona session DB `row: Any` to an API-safe dict.
+
+        Returns `dict[str, Any]` or `None`; invalid/non-dict snapshot payloads yield an empty `scope_snapshot`.
+        """
         if not row:
             return None
         item = dict(row)
@@ -5978,6 +6036,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     def _persona_memory_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a persona memory DB `row: Any` to an API-safe dict.
+
+        Returns `dict[str, Any]` or `None`; invalid `salience` values are coerced to `0.0`.
+        """
         if not row:
             return None
         item = dict(row)
@@ -5992,6 +6054,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     def _require_active_persona_profile_owner(self, conn: Any, *, persona_id: str, user_id: str) -> dict[str, Any]:
+        """Require an active persona profile owned by `user_id` using DB `conn`.
+
+        Returns the profile row dict for (`persona_id`, `user_id`); raises `ConflictError` if missing or soft-deleted.
+        """
         row = conn.execute(
             "SELECT id, user_id, mode, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
             (persona_id, user_id),
@@ -6033,10 +6099,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             except (TypeError, ValueError) as exc:
                 raise InputError("character_card_id must be an integer when provided.") from exc  # noqa: TRY003
 
-        deleted_value = bool(profile_data.get("deleted", False))
-        version = int(profile_data.get("version", 1))
-        if version < 1:
-            raise InputError("version must be >= 1.")  # noqa: TRY003
+        deleted_value = self._normalize_deleted_input(profile_data.get("deleted", False))
+        version = self._parse_version_input(profile_data.get("version", 1))
 
         if self.backend_type == BackendType.POSTGRESQL:
             is_active_db = bool(is_active)
@@ -6437,6 +6501,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             reuse_allowed = self._as_bool(session_data.get("reuse_allowed", reuse_allowed_default))
             status = self._normalize_persona_session_status(session_data.get("status") or "active")
             conversation_id = session_data.get("conversation_id")
+            deleted_value = self._normalize_deleted_input(session_data.get("deleted", False))
+            version = self._parse_version_input(session_data.get("version", 1))
 
             query = (
                 "INSERT INTO persona_sessions("
@@ -6455,8 +6521,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 scope_snapshot_json,
                 session_data.get("created_at") or now,
                 session_data.get("last_modified") or now,
-                bool_cast(session_data.get("deleted", False)),
-                int(session_data.get("version", 1)),
+                bool_cast(deleted_value),
+                version,
             )
             prepared_query, prepared_params = self._prepare_backend_statement(query, params)
             conn.execute(prepared_query, prepared_params or ())

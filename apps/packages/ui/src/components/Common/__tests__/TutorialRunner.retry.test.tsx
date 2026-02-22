@@ -89,6 +89,7 @@ describe("TutorialRunner retry behavior", () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 

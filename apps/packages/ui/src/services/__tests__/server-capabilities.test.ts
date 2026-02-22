@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 
 const cacheState = vi.hoisted(() => ({
   value: undefined as unknown
@@ -314,5 +316,18 @@ describe("server capabilities docs-info merge", () => {
     expect(diagnostics.calls).toBe(2)
     expect(diagnostics.networkFetches).toBe(1)
     expect(diagnostics.inFlightHits).toBe(1)
+  })
+
+  it("keeps fallback spec aligned with TTS voice-catalog route checks", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "src/services/tldw/server-capabilities.ts"),
+      "utf8"
+    )
+
+    const fallbackPathsBlock = source.match(
+      /const fallbackSpec = \{[\s\S]*?paths:\s*Object\.fromEntries\(\s*\[([\s\S]*?)\]\.map/
+    )?.[1]
+
+    expect(fallbackPathsBlock).toContain('"/api/v1/audio/voices/catalog"')
   })
 })

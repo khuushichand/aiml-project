@@ -1,7 +1,7 @@
 import React from "react"
 import { act, render } from "@testing-library/react"
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { TutorialPrompt } from "../TutorialPrompt"
 
 const infoMock = vi.fn()
@@ -91,6 +91,10 @@ describe("TutorialPrompt behavior", () => {
     tutorialStoreState.isHelpModalOpen = false
     tutorialStoreState.activeTutorialId = null
     capturedNavigate = null
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it("shows a prompt with a single global notification key", () => {

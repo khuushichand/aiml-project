@@ -42,6 +42,30 @@ class ValidationError(BadRequestError):
     """Raised when validation of input parameters fails."""
 
 
+class StructuredOutputParseError(ValueError):
+    """Base error for structured-output parsing/normalization failures.
+
+    Raised as the common parent for JSON extraction and schema-shape errors in
+    structured-output handling paths.
+    """
+
+
+class StructuredOutputNoPayloadError(StructuredOutputParseError):
+    """Raised when no parseable JSON payload can be produced from model output.
+
+    Typical triggers include empty/whitespace payloads or candidate parsing
+    attempts that all fail JSON decoding.
+    """
+
+
+class StructuredOutputSchemaError(StructuredOutputParseError):
+    """Raised when parsed JSON exists but fails expected structural constraints.
+
+    Typical triggers include missing/invalid wrapper keys, non-list containers,
+    or list items that are not valid object entries for the target schema.
+    """
+
+
 class APIValidationError(HTTPException):
     """Raised when API input validation fails and should return HTTP 422."""
 

@@ -472,10 +472,10 @@ def mock_metrics():
 # =====================================================================
 
 @pytest.fixture
-def test_config():
+def test_config(tmp_path):
     """Test configuration for ChromaDB module."""
     return {
-        "chroma_base_path": "/tmp/chroma_test",  # nosec B108
+        "chroma_base_path": str(tmp_path / "chroma_test"),
         "embedding_providers": {
             "openai": {
                 "api_key": "test_key",
@@ -573,7 +573,7 @@ def test_session_cleanup():
     """Session-level cleanup for all ChromaDB tests."""
     yield
     # Final cleanup
-    temp_dirs = Path("/tmp").glob("chroma_test_*")  # nosec B108
+    temp_dirs = Path(tempfile.gettempdir()).glob("chroma_test_*")
     for temp_dir in temp_dirs:
         try:
             shutil.rmtree(temp_dir)

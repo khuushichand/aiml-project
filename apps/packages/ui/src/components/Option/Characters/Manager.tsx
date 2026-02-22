@@ -7793,6 +7793,21 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   const hasMore = all.length > MAX_TABLE_TAGS_DISPLAYED
                   const hiddenCount = all.length - MAX_TABLE_TAGS_DISPLAYED
                   const hiddenTags = all.slice(MAX_TABLE_TAGS_DISPLAYED)
+                  const applyTagFilterSelection = (tagsToAdd: string[]) => {
+                    if (tagsToAdd.length === 0) return
+                    setFilterTags((prev) => {
+                      const next = [...prev]
+                      let changed = false
+                      for (const candidateTag of tagsToAdd) {
+                        if (!next.includes(candidateTag)) {
+                          next.push(candidateTag)
+                          changed = true
+                        }
+                      }
+                      return changed ? next : prev
+                    })
+                    setCurrentPage(1)
+                  }
                   return (
                     <div className="flex min-w-0 flex-wrap items-center gap-1">
                       {visible.map((tag: string, index: number) => (
@@ -7802,10 +7817,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           className="rounded-sm"
                           onClick={(event) => {
                             event.stopPropagation()
-                            setFilterTags((prev) =>
-                              prev.includes(tag) ? prev : [...prev, tag]
-                            )
-                            setCurrentPage(1)
+                            applyTagFilterSelection([tag])
                           }}
                         >
                           <Tag>{truncateText(tag, MAX_TAG_LENGTH)}</Tag>
@@ -7813,6 +7825,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       ))}
                       {hasMore && (
                         <Tooltip
+                          trigger={["hover", "focus"]}
                           title={
                             <div>
                               <div className="mb-1 font-medium">
@@ -7825,9 +7838,26 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             </div>
                           }
                         >
-                          <span className="cursor-help text-xs text-text-subtle">
+                          <button
+                            type="button"
+                            className="cursor-help rounded-sm text-xs text-text-subtle underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                            aria-label={t("settings:manageCharacters.tags.hiddenTagsAriaLabel", {
+                              defaultValue: "Show and filter +{{count}} hidden tags",
+                              count: hiddenCount
+                            })}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              applyTagFilterSelection(hiddenTags)
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter" && event.key !== " ") return
+                              event.preventDefault()
+                              event.stopPropagation()
+                              applyTagFilterSelection(hiddenTags)
+                            }}
+                          >
                             +{hiddenCount}
-                          </span>
+                          </button>
                         </Tooltip>
                       )}
                     </div>

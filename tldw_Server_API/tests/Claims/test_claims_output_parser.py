@@ -2,12 +2,21 @@ import pytest
 
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputNoJsonError,
+    ClaimsOutputParseError,
     ClaimsOutputSchemaError,
     coerce_llm_response_text,
     extract_claim_texts,
     parse_claims_llm_output,
     resolve_claims_response_format,
 )
+from tldw_Server_API.app.core.exceptions import BadRequestError
+
+
+@pytest.mark.unit
+def test_claims_output_exceptions_inherit_core_base():
+    assert issubclass(ClaimsOutputParseError, BadRequestError)
+    assert issubclass(ClaimsOutputNoJsonError, BadRequestError)
+    assert issubclass(ClaimsOutputSchemaError, BadRequestError)
 
 
 @pytest.mark.unit

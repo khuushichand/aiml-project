@@ -254,6 +254,8 @@ async def test_llamafile_start_server_not_ready_terminates_process(monkeypatch, 
     assert proc.terminated or proc.killed
 
 
+@pytest.mark.unit
+@pytest.mark.local_llm_service
 @pytest.mark.asyncio
 async def test_llamafile_start_server_wildcard_host_uses_loopback(monkeypatch, tmp_path: Path):
     llama_dir = tmp_path / "llamafile"
@@ -285,6 +287,7 @@ async def test_llamafile_start_server_wildcard_host_uses_loopback(monkeypatch, t
 
     monkeypatch.setattr(http_utils, "wait_for_http_ready", _fake_ready)
 
+    # Wildcard host is normalized to loopback in this test; no external exposure.
     res = await handler.start_server("toy.gguf", server_args={"host": "0.0.0.0", "port": 8077})  # nosec B104
     assert res["status"] == "started"
     assert seen["base_url"] == "http://127.0.0.1:8077"
@@ -363,11 +366,17 @@ async def test_llamafile_start_server_starts_stream_drainers(monkeypatch, tmp_pa
     assert handler._stream_tasks.get(8077)
 
 
+@pytest.mark.unit
+@pytest.mark.local_llm_service
 @pytest.mark.asyncio
 async def test_llamafile_inference_wildcard_host_uses_loopback(monkeypatch, tmp_path: Path):
     llama_dir = tmp_path / "llamafile"
     llama_dir.mkdir()
-    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path, default_host="0.0.0.0")  # nosec B104
+    cfg = LlamafileConfig(  # Intentionally tests wildcard bind handling; inference requests are normalized to loopback.
+        llamafile_dir=llama_dir,
+        models_dir=tmp_path,
+        default_host="0.0.0.0",  # nosec B104
+    )
     handler = LlamafileHandler(cfg, global_app_config={})
 
     class RP:

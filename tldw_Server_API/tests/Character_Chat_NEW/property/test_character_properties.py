@@ -542,8 +542,10 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
     def initialize_manager(self):
         """Initialize the manager if not already done."""
         if self.manager is None:
+            import os
             import tempfile
-            self.db_path = tempfile.mktemp(suffix='.db')  # nosec B306
+            db_fd, self.db_path = tempfile.mkstemp(suffix='.db')
+            os.close(db_fd)
             self.manager = CharacterChatManager(db_path=self.db_path)
 
     @rule(

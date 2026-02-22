@@ -106,7 +106,7 @@ def test_models_list():
         "Authorization": "Bearer sk-mock-key-12345"
     }
 
-    response = requests.get("http://localhost:8080/v1/models", headers=headers)  # nosec B113
+    response = requests.get("http://localhost:8080/v1/models", headers=headers, timeout=10)
 
     if response.status_code == 200:
         models = response.json()
@@ -136,10 +136,11 @@ def test_error_handling():
         "messages": [{"role": "user", "content": "Hello"}]
     }
 
-    response = requests.post(  # nosec B113
+    response = requests.post(
         "http://localhost:8080/v1/chat/completions",
         headers=headers,
-        json=payload
+        json=payload,
+        timeout=10,
     )
 
     print(f"Status Code: {response.status_code}")

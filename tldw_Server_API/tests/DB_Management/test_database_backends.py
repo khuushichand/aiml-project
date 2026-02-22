@@ -293,7 +293,7 @@ class TestPostgreSQLBackend:
                 )
                 SELECT id FROM inserted
                 """
-            cte_insert_sql = cte_insert_sql_template.format_map(locals())  # nosec B608
+            cte_insert_sql = cte_insert_sql_template.format(table_ident=table_ident)  # nosec B608
             backend.execute(
                 cte_insert_sql,
                 ("hello",),

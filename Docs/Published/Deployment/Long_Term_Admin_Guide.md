@@ -6,12 +6,12 @@ Audience: Operators and administrators running tldw_server in production
 This guide covers day-2 operations: upgrades, backups, monitoring, capacity and cost management, security operations, and troubleshooting. Pair this with the Production Hardening checklist and Metrics Cheatsheet.
 
 Related documents
-- First-time production setup: `Docs/Deployment/First_Time_Production_Setup.md`
+- First-time production setup: `Docs/Published/Deployment/First_Time_Production_Setup.md`
 - Production hardening checklist: `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`
-- Reverse proxy examples: `Docs/Deployment/Reverse_Proxy_Examples.md`
-- Postgres migration: `Docs/Deployment/Postgres_Migration_Guide.md`
-- Metrics & Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
-- Environment reference: `Env_Vars.md`
+- Reverse proxy examples: `Docs/Published/Deployment/Reverse_Proxy_Examples.md`
+- Postgres migration: `Docs/Published/Deployment/Postgres_Migration_Guide.md`
+- Metrics & Grafana: `Docs/Published/Monitoring/Metrics_Cheatsheet.md`
+- Environment reference: `Docs/Published/Env_Vars.md`
 
 ## 1) Service Management
 
@@ -20,7 +20,7 @@ Docker Compose
 - Stop: `docker compose down`
 - Logs: `docker compose logs -f app`
 - Rebuild: `docker compose build app && docker compose up -d`
-- Sidecar workers: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build` (see `Docs/Deployment/Sidecar_Workers.md`).
+- Sidecar workers: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build` (see `Docs/Published/Deployment/Sidecar_Workers.md`).
 - Scale workers (CPU bound): set `UVICORN_WORKERS` env and rebuild or override at runtime.
  - Overrides: `docker-compose.override.yml` ships with production defaults.
 
@@ -28,10 +28,10 @@ systemd (bare-metal)
 - Status: `sudo systemctl status tldw`
 - Logs: `sudo journalctl -u tldw -f`
 - Restart: `sudo systemctl restart tldw`
-- Sidecar worker units/timers: `Docs/Deployment/systemd/` (see `Docs/Deployment/Sidecar_Workers.md`).
+- Sidecar worker units/timers: `Docs/Published/Deployment/systemd/` (see `Docs/Published/Deployment/Sidecar_Workers.md`).
 
 launchd (macOS)
-- LaunchAgents/LaunchDaemons examples: `Docs/Deployment/launchd/` (see `Docs/Deployment/Sidecar_Workers.md`).
+- LaunchAgents/LaunchDaemons examples: `Docs/Published/Deployment/launchd/` (see `Docs/Published/Deployment/Sidecar_Workers.md`).
 
 ## 2) Upgrades & Rollbacks
 
@@ -94,7 +94,7 @@ Endpoints
 - Chat/LLM cost and tokens: `GET /api/v1/metrics/chat`.
 
 Grafana + Prometheus
-- Use the sample dashboards and alerts referenced in `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`.
+- Use the sample dashboards and alerts referenced in `Docs/Published/Monitoring/Metrics_Cheatsheet.md`.
 - Suggested alerts: HTTP 5xx error rate, p95 latency, Postgres connection saturation, token/cost spikes, user storage near quota.
 
 Logs
@@ -199,8 +199,8 @@ Recommended practice
 ## 10) References
 
 - README admin endpoints and usage reporting: `README.md`
-- Registration & AuthNZ configuration: `Docs/User_Guides/Server/Authentication_Setup.md`
-- Multi-User deployment patterns: `Docs/User_Guides/Server/Multi-User_Deployment_Guide.md`
-- Reverse proxy and TLS: `Docs/Deployment/Reverse_Proxy_Examples.md`
-- Postgres/SQLite backends: `Docs/Database-Backends.md`
-- Metrics and dashboards: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
+- Registration & AuthNZ configuration: `Docs/Published/User_Guides/Server/Authentication_Setup.md`
+- Multi-User deployment patterns: `Docs/Published/User_Guides/Server/Multi-User_Deployment_Guide.md`
+- Reverse proxy and TLS: `Docs/Published/Deployment/Reverse_Proxy_Examples.md`
+- Postgres/SQLite backends: `Docs/Published/Code_Documentation/Database-Backends.md`
+- Metrics and dashboards: `Docs/Published/Monitoring/Metrics_Cheatsheet.md`

@@ -186,7 +186,7 @@ class _FakeDB:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_fallback_persist_smoke_includes_rollout_metadata(monkeypatch):
+async def test_fallback_persist_smoke_includes_rollout_metadata(monkeypatch, tmp_path):
     _force_fallback(monkeypatch)
     fake_db = _FakeDB()
 
@@ -217,7 +217,7 @@ async def test_fallback_persist_smoke_includes_rollout_metadata(monkeypatch):
     monkeypatch.setattr(
         ws_service,
         "get_user_media_db_path",
-        lambda user_id: "/tmp/fallback-media.db",  # nosec B108
+        lambda _user_id: str(tmp_path / "fallback-media.db"),
         raising=True,
     )
 

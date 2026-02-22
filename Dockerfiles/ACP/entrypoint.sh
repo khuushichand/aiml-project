@@ -12,9 +12,9 @@ if ! id -u "${USER_NAME}" >/dev/null 2>&1; then
 fi
 
 if [ -n "${AGENT_COMMAND}" ] && [ "$(basename "${AGENT_COMMAND}")" = "tldw-agent-acp" ]; then
-  echo "Invalid ACP_AGENT_COMMAND='${AGENT_COMMAND}'." >&2
-  echo "ACP_SANDBOX_AGENT_COMMAND must point to a downstream ACP-compatible coding agent (for example: claude, codex, opencode)." >&2
-  echo "Do not set it to tldw-agent-acp; that recursively launches the runner and exhausts process limits." >&2
+  echo "Invalid AGENT_COMMAND='${AGENT_COMMAND}'." >&2
+  echo "AGENT_COMMAND must point to a downstream ACP-compatible coding agent (for example: claude, codex, opencode)." >&2
+  echo "Do not set AGENT_COMMAND to tldw-agent-acp; that recursively launches the runner and exhausts process limits." >&2
   exit 64
 fi
 
@@ -94,7 +94,46 @@ StrictModes no
 Subsystem sftp internal-sftp
 SSHD
 
+if ! /usr/sbin/sshd -t -f "${SSHD_CONFIG}"; then
+  echo "sshd config validation failed for '${SSHD_CONFIG}'." >&2
+  exit 1
+fi
+
 /usr/sbin/sshd -D -e -f "${SSHD_CONFIG}" &
+SSHD_PID=$!
+sleep 1
+
+if ! ps -p "${SSHD_PID}" >/dev/null 2>&1; then
+  echo "sshd failed to stay running (config: '${SSHD_CONFIG}', pid: '${SSHD_PID}')." >&2
+  exit 1
+fi
+
+PORT_CHECK_PERFORMED=false
+PORT_BOUND=false
+if command -v ss >/dev/null 2>&1; then
+  PORT_CHECK_PERFORMED=true
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${SSH_PORT}$"; then
+    PORT_BOUND=true
+  fi
+elif command -v netstat >/dev/null 2>&1; then
+  PORT_CHECK_PERFORMED=true
+  if netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${SSH_PORT}$"; then
+    PORT_BOUND=true
+  fi
+elif command -v lsof >/dev/null 2>&1; then
+  PORT_CHECK_PERFORMED=true
+  if lsof -nP -iTCP:"${SSH_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+    PORT_BOUND=true
+  fi
+fi
+
+if [ "${PORT_CHECK_PERFORMED}" = true ] && [ "${PORT_BOUND}" != true ]; then
+  if ps -p "${SSHD_PID}" >/dev/null 2>&1; then
+    kill "${SSHD_PID}" >/dev/null 2>&1 || true
+  fi
+  echo "sshd started but did not bind port '${SSH_PORT}' (config: '${SSHD_CONFIG}')." >&2
+  exit 1
+fi
 
 tmp_cfg="$(mktemp)"
 cleanup_tmp_cfg() {

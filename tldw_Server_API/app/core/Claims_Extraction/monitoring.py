@@ -618,6 +618,36 @@ def record_claims_alignment_event(
     mode: str,
     result: object | None,
 ) -> None:
+    """Record claims-alignment metrics for the provided context, mode, and result.
+
+    This helper records claims alignment events and scores for monitoring. It
+    returns early when `_claims_monitoring_enabled()` is false. When monitoring
+    is enabled, it calls `_register_claims_metrics()`, imports
+    `increment_counter` / `observe_histogram`, and emits
+    `claims_alignment_events_total`. If a result is present, it also observes
+    `claims_alignment_score`.
+
+    Args:
+        context: Claims-alignment context label.
+        mode: Claims extraction mode label.
+        result: Alignment result object or `None`; method/score are read from it.
+
+    Behavior:
+        - Labels are normalized via `_normalize_claims_metric_label`.
+        - `increment_counter` emits labels: `context`, `mode`, `method`,
+          `outcome`.
+        - `outcome` is `matched` when `result` exists, otherwise `missing`.
+        - `observe_histogram` records score only when `result` is present.
+
+    Error handling:
+        - Catches `_CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS` while importing
+          metrics helpers.
+        - Catches `_CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS` when converting
+          the result score to float.
+
+    Returns:
+        None.
+    """
     if not _claims_monitoring_enabled():
         return
     _register_claims_metrics()

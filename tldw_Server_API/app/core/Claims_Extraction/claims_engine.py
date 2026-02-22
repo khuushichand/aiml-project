@@ -558,21 +558,62 @@ def _resolve_claims_alignment_config() -> tuple[str, float]:
 
 
 def _resolve_claims_context_window_chars() -> int:
+    """Resolve the context window size used around extracted claim spans.
+
+    Args:
+        None.
+
+    Returns:
+        int: Context window size in characters.
+
+    Notes:
+        Delegates to `resolve_runtime_context_window_chars(default=0)`. When no
+        valid runtime override is available, the resolver falls back to `0`.
+    """
     return resolve_runtime_context_window_chars(default=0)
 
 
 def _resolve_claims_extraction_passes() -> int:
+    """Resolve how many claim-extraction passes should be executed.
+
+    Args:
+        None.
+
+    Returns:
+        int: Number of extraction passes to run.
+
+    Notes:
+        Delegates to `resolve_runtime_extraction_passes(default=1)`. When no
+        valid runtime override is available, the resolver falls back to `1`.
+    """
     return resolve_runtime_extraction_passes(default=1)
 
 
-def _normalize_claim_text(value: Any) -> str:
-    return " ".join(str(value or "").strip().lower().split())
+def _normalize_claim_text(value: str) -> str:
+    """Trim, lowercase, and collapse whitespace; return empty string for None/empty input."""
+    if not value:
+        return ""
+    return " ".join(str(value).strip().lower().split())
 
 
 def _spans_overlap(
     first: tuple[int, int] | None,
     second: tuple[int, int] | None,
 ) -> bool:
+    """Check whether two character spans overlap under claims-engine semantics.
+
+    Args:
+        first: Optional `(start, end)` span for the first claim.
+        second: Optional `(start, end)` span for the second claim.
+
+    Returns:
+        bool: `True` if spans overlap, or if either span is `None`; otherwise
+        `False`.
+
+    Notes:
+        Concrete spans use half-open interval overlap rules:
+        `first[0] < second[1] and second[0] < first[1]`.
+    """
     if first is None or second is None:
         return True
     return first[0] < second[1] and second[0] < first[1]
@@ -1331,16 +1372,37 @@ class ClaimsEngine:
         *,
         max_claims: int,
     ) -> list[Claim]:
+        """Deduplicate claims by normalized text and overlapping span.
+
+        Args:
+            claims: Ordered claims to deduplicate.
+            max_claims: Maximum number of claims to keep in the output list.
+
+        Returns:
+            list[Claim]: Deduplicated claims with sequential ``cN`` IDs.
+
+        Notes:
+            If an existing duplicate has ``span=None`` and an incoming duplicate
+            has a non-``None`` span, the incoming claim replaces the existing
+            entry in place to preserve ordering while keeping richer span data.
+        """
         deduped: list[Claim] = []
         for claim in claims:
             normalized = _normalize_claim_text(claim.text)
+            replacement_index: int | None = None
             is_duplicate = False
-            for existing in deduped:
+            for idx, existing in enumerate(deduped):
                 if _normalize_claim_text(existing.text) != normalized:
                     continue
                 if _spans_overlap(existing.span, claim.span):
-                    is_duplicate = True
+                    if existing.span is None and claim.span is not None:
+                        replacement_index = idx
+                    else:
+                        is_duplicate = True
                     break
+            if replacement_index is not None:
+                deduped[replacement_index] = claim
+                continue
             if is_duplicate:
                 continue
             deduped.append(claim)

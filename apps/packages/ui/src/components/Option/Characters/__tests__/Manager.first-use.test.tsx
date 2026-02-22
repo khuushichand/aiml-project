@@ -2295,6 +2295,68 @@ describe("CharactersManager first-use onboarding", () => {
     expect(tldwClientMock.updateCharacter).not.toHaveBeenCalled()
   }, 30000)
 
+  it("supports Space key variants for inline name and description editing", async () => {
+    const records = [
+      {
+        id: "inline-space",
+        name: "Inline Space Name",
+        description: "Inline Space Description",
+        system_prompt: "Prompt text",
+        version: 3
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    const nameInlineButton = await screen.findByRole("button", {
+      name: /Edit name inline/i
+    })
+    const nameSpaceEvent = new KeyboardEvent("keydown", {
+      key: " ",
+      bubbles: true,
+      cancelable: true
+    })
+    nameInlineButton.dispatchEvent(nameSpaceEvent)
+    expect(nameSpaceEvent.defaultPrevented).toBe(true)
+
+    const nameInlineInput = await screen.findByDisplayValue("Inline Space Name")
+    fireEvent.keyDown(nameInlineInput, { key: "Escape" })
+
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue("Inline Space Name")).not.toBeInTheDocument()
+    })
+
+    const descriptionInlineButton = await screen.findByRole("button", {
+      name: /Edit description inline/i
+    })
+    const descriptionSpacebarEvent = new KeyboardEvent("keydown", {
+      key: "Spacebar",
+      bubbles: true,
+      cancelable: true
+    })
+    descriptionInlineButton.dispatchEvent(descriptionSpacebarEvent)
+    expect(descriptionSpacebarEvent.defaultPrevented).toBe(true)
+
+    await screen.findByDisplayValue("Inline Space Description")
+  }, 30000)
+
   it("renames tags across affected characters from the manage tags modal", async () => {
     const user = userEvent.setup()
     const records = [

@@ -4,6 +4,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
+from tldw_Server_API.app.core.exceptions import BadRequestError
 from tldw_Server_API.app.core.LLM_Calls.structured_output import (
     StructuredOutputNoPayloadError,
     StructuredOutputOptions,
@@ -14,7 +15,7 @@ from tldw_Server_API.app.core.LLM_Calls.structured_output import (
 )
 
 
-class ClaimsOutputParseError(StructuredOutputParseError):
+class ClaimsOutputParseError(StructuredOutputParseError, BadRequestError):
     """Base parse error for claims-oriented model outputs."""
 
 

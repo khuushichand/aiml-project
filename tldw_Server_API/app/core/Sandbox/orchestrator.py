@@ -740,6 +740,17 @@ class SandboxOrchestrator:
         )
         if active_runs > 0:
             raise SessionActiveRunsConflict(session_id=sid, active_runs=active_runs)
+        run_rows: list[dict] = []
+        offset = 0
+        page_size = 500
+        while True:
+            rows = self.list_runs(session_id=sid, limit=page_size, offset=offset, sort_desc=False)
+            if not rows:
+                break
+            run_rows.extend(rows)
+            if len(rows) < page_size:
+                break
+            offset += page_size
         ws_path = None
         removed = False
         store_row = None
@@ -760,6 +771,19 @@ class SandboxOrchestrator:
         store_removed = False
         with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
             store_removed = bool(self._store.delete_session(sid))
+        for row in run_rows:
+            try:
+                rid = str(row.get("id") or "").strip()
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                rid = ""
+            if not rid:
+                continue
+            try:
+                owner = str(row.get("user_id") or "").strip() or "unknown"
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                owner = "unknown"
+            with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+                self._remove_run_artifacts(rid, owner=owner, decrement_usage=True)
         if ws_path:
             with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
                 shutil.rmtree(ws_path, ignore_errors=True)
@@ -800,6 +824,46 @@ class SandboxOrchestrator:
             return max(0, int(raw))
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
             return 30
+
+    @staticmethod
+    def _artifact_dir_stats(art_dir: Path) -> tuple[int, int]:
+        files = 0
+        total_bytes = 0
+        for root, _dirs, names in os.walk(art_dir):
+            for fn in names:
+                files += 1
+                full = Path(root) / fn
+                with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+                    total_bytes += int(full.stat().st_size)
+        return files, total_bytes
+
+    def _remove_run_artifacts(
+        self,
+        run_id: str,
+        *,
+        owner: str,
+        decrement_usage: bool = True,
+    ) -> dict[str, int]:
+        art_dir = self._artifact_dir(owner or "unknown", run_id)
+        if not art_dir.exists():
+            with self._lock:
+                self._artifacts.pop(run_id, None)
+            return {"removed_runs": 0, "removed_files": 0, "removed_bytes": 0}
+        removed_files, removed_bytes = self._artifact_dir_stats(art_dir)
+        with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+            shutil.rmtree(art_dir, ignore_errors=True)
+        if art_dir.exists():
+            return {"removed_runs": 0, "removed_files": 0, "removed_bytes": 0}
+        with self._lock:
+            self._artifacts.pop(run_id, None)
+        if decrement_usage and removed_bytes > 0:
+            with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+                self._store.increment_user_artifact_bytes(owner or "unknown", -int(removed_bytes))
+        return {
+            "removed_runs": 1,
+            "removed_files": int(removed_files),
+            "removed_bytes": int(removed_bytes),
+        }
 
     def _maybe_prune_expired_artifacts(self) -> None:
         with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
@@ -871,33 +935,10 @@ class SandboxOrchestrator:
                     owner = str(row.get("user_id") or "").strip() or "unknown"
                 except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
                     owner = "unknown"
-                art_dir = self._artifact_dir(owner, rid)
-                if not art_dir.exists():
-                    with self._lock:
-                        self._artifacts.pop(rid, None)
-                    continue
-                dir_files = 0
-                dir_bytes = 0
-                for root, _dirs, files in os.walk(art_dir):
-                    for fn in files:
-                        full = Path(root) / fn
-                        try:
-                            dir_bytes += int(full.stat().st_size)
-                        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-                            pass
-                        dir_files += 1
-                with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
-                    shutil.rmtree(art_dir, ignore_errors=True)
-                if art_dir.exists():
-                    continue
-                with self._lock:
-                    self._artifacts.pop(rid, None)
-                if dir_bytes > 0:
-                    with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
-                        self._store.increment_user_artifact_bytes(owner, -dir_bytes)
-                removed_runs += 1
-                removed_files += dir_files
-                removed_bytes += dir_bytes
+                removed = self._remove_run_artifacts(rid, owner=owner, decrement_usage=True)
+                removed_runs += int(removed.get("removed_runs", 0) or 0)
+                removed_files += int(removed.get("removed_files", 0) or 0)
+                removed_bytes += int(removed.get("removed_bytes", 0) or 0)
             if len(rows) < page_size:
                 break
             offset += page_size

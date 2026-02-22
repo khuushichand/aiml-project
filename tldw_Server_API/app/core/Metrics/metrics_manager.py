@@ -587,6 +587,16 @@ class MetricsRegistry:
         )
         self.register_metric(
             MetricDefinition(
+                name="sandbox_queue_wait_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Queue wait time before sandbox run execution",
+                unit="s",
+                labels=["runtime"],
+                buckets=[0.001, 0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
                 name="sandbox_ws_connections_opened_total",
                 type=MetricType.COUNTER,
                 description="Total sandbox WS connections opened",
@@ -632,6 +642,98 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total files uploaded to sandbox workspaces",
                 labels=["kind"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_janitor_runs_total",
+                type=MetricType.COUNTER,
+                description="Total artifact janitor runs",
+                labels=["mode"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_janitor_removed_runs_total",
+                type=MetricType.COUNTER,
+                description="Total terminal runs with artifacts removed by janitor",
+                labels=["mode"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_janitor_removed_files_total",
+                type=MetricType.COUNTER,
+                description="Total artifact files removed by janitor",
+                labels=["mode"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_janitor_removed_bytes_total",
+                type=MetricType.COUNTER,
+                description="Total artifact bytes removed by janitor",
+                unit="bytes",
+                labels=["mode"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_janitor_duration_ms",
+                type=MetricType.HISTOGRAM,
+                description="Artifact janitor run duration in milliseconds",
+                unit="ms",
+                labels=["mode"],
+                buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_reconcile_runs_total",
+                type=MetricType.COUNTER,
+                description="Total artifact usage reconciliation runs",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_reconcile_corrected_users_total",
+                type=MetricType.COUNTER,
+                description="Total users whose artifact usage counters were corrected",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_reconcile_corrected_bytes_total",
+                type=MetricType.COUNTER,
+                description="Total absolute artifact-byte correction volume",
+                unit="bytes",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_reconcile_duration_ms",
+                type=MetricType.HISTOGRAM,
+                description="Artifact usage reconciliation duration in milliseconds",
+                unit="ms",
+                buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_maintenance_cycles_total",
+                type=MetricType.COUNTER,
+                description="Total artifact maintenance cycles executed by service",
+                labels=["trigger"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_artifact_maintenance_cycle_duration_ms",
+                type=MetricType.HISTOGRAM,
+                description="Artifact maintenance cycle duration in milliseconds",
+                unit="ms",
+                labels=["trigger"],
+                buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000],
             )
         )
 

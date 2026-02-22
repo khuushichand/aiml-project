@@ -151,7 +151,19 @@ class SandboxArtifactGuardRoute(APIRoute):
 
 router = APIRouter(prefix="/sandbox", tags=["sandbox"], route_class=SandboxArtifactGuardRoute)
 
-_service = SandboxService(enable_background_tasks=True)
+_service = SandboxService(enable_background_tasks=False)
+
+
+@router.on_event("startup")
+async def _sandbox_startup() -> None:
+    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+        _service.start_background_tasks()
+
+
+@router.on_event("shutdown")
+async def _sandbox_shutdown() -> None:
+    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+        _service.shutdown()
 
 _SANDBOX_WS_QUOTA_LOCK = threading.Lock()
 _SANDBOX_WS_ACTIVE_TOTAL = 0
@@ -1691,16 +1703,6 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         finally:
             return  # noqa: B012
 
-    await websocket.accept()
-    # Wrap for WS metrics; keep domain frames unchanged
-    stream = WebSocketStream(
-        websocket,
-        heartbeat_interval_s=0.0,
-        idle_timeout_s=None,
-        close_on_done=False,
-        labels={"component": "sandbox", "endpoint": "sandbox_run_ws"},
-    )
-    await stream.start()
     hub = get_hub()
     hub.set_loop(asyncio.get_running_loop())
     # Optional resume from specific sequence
@@ -1715,6 +1717,17 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         q = hub.subscribe_with_buffer_from_seq(run_id, int(from_seq))
     else:
         q = hub.subscribe_with_buffer(run_id)
+
+    await websocket.accept()
+    # Wrap for WS metrics; keep domain frames unchanged
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=0.0,
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "sandbox", "endpoint": "sandbox_run_ws"},
+    )
+    await stream.start()
     # Keep strong references to any background tasks spawned in this handler
     synth_task: asyncio.Task | None = None
     # No-op: retain default queue state; buffered frames are enqueued below.
@@ -1791,6 +1804,9 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                     with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         stream.mark_activity()
                 except WebSocketDisconnect:
+                    return
+                except RuntimeError:
+                    # Starlette raises RuntimeError when the websocket is no longer connected.
                     return
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     # Non-JSON or decode error: ignore and continue
@@ -1904,6 +1920,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 synth_task.cancel()
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+            hub.unsubscribe(run_id, q)
         with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
             await stream.ws.close()
         with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):

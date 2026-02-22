@@ -21,7 +21,7 @@ def test_get_config_section_and_value_reads_file(tmp_path, monkeypatch):
     monkeypatch.setenv("TLDW_CONFIG_FILE", str(cfg))
 
     section = config.get_config_section("Server")
-    assert section["host"] == "0.0.0.0"  # nosec B104
+    assert section["host"] == "0.0.0.0"  # nosec B104 # noqa: S104
     assert config.get_config_value("Server", "port") == "1234"
     assert config.get_config_value("Server", "missing", default="fallback") == "fallback"
 

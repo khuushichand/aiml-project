@@ -35,6 +35,9 @@ describe("P1 tutorial selector contracts", () => {
         for (const selector of selectors) {
           const isStableSelector =
             selector.startsWith('[data-testid="') || selector.startsWith("#")
+          if (!isStableSelector) {
+            throw new Error(`Unstable selector: ${selector}`)
+          }
           expect(isStableSelector).toBe(true)
         }
       }

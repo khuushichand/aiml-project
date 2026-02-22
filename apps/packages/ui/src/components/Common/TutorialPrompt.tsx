@@ -33,6 +33,7 @@ export const TutorialPrompt: React.FC = () => {
   const location = useLocation()
   const [api, contextHolder] = notification.useNotification()
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const notificationKeyRef = useRef<string | null>(null)
   const shownRef = useRef<Set<string>>(new Set())
   const lastPromptShownAtRef = useRef(0)
   const activePromptPageRef = useRef<string | null>(null)
@@ -54,9 +55,10 @@ export const TutorialPrompt: React.FC = () => {
     }
 
     // Always keep a single active notification instance.
-    if (activePromptPageRef.current) {
+    if (notificationKeyRef.current) {
       suppressCloseMarkRef.current = true
-      api.destroy(NOTIFICATION_KEY)
+      api.destroy(notificationKeyRef.current)
+      notificationKeyRef.current = null
       activePromptPageRef.current = null
     } else {
       suppressCloseMarkRef.current = false
@@ -102,18 +104,25 @@ export const TutorialPrompt: React.FC = () => {
       activePromptPageRef.current = pageKey
 
       const handleDismiss = () => {
-        api.destroy(NOTIFICATION_KEY)
+        if (notificationKeyRef.current) {
+          api.destroy(notificationKeyRef.current)
+          notificationKeyRef.current = null
+        }
         markPromptSeen(pageKey)
         activePromptPageRef.current = null
       }
 
       const handleStartTour = () => {
-        api.destroy(NOTIFICATION_KEY)
+        if (notificationKeyRef.current) {
+          api.destroy(notificationKeyRef.current)
+          notificationKeyRef.current = null
+        }
         markPromptSeen(pageKey)
         startTutorial(primaryTutorial.id)
         activePromptPageRef.current = null
       }
 
+      notificationKeyRef.current = NOTIFICATION_KEY
       api.info({
         key: NOTIFICATION_KEY,
         message: (
@@ -148,6 +157,7 @@ export const TutorialPrompt: React.FC = () => {
         placement: "bottomRight",
         className: "tutorial-prompt-notification",
         onClose: () => {
+          notificationKeyRef.current = null
           if (suppressCloseMarkRef.current) {
             suppressCloseMarkRef.current = false
             return
@@ -165,6 +175,12 @@ export const TutorialPrompt: React.FC = () => {
       if (timeoutRef.current) {
         window.clearTimeout(timeoutRef.current)
         timeoutRef.current = null
+      }
+      if (notificationKeyRef.current) {
+        suppressCloseMarkRef.current = true
+        api.destroy(notificationKeyRef.current)
+        notificationKeyRef.current = null
+        activePromptPageRef.current = null
       }
     }
   }, [

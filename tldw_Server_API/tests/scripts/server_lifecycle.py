@@ -30,6 +30,7 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
@@ -148,8 +149,15 @@ def health_check() -> None:
     while time.time() < deadline:
         for path in HEALTH_PATHS:
             url = f"{base_url}{path}"
+            parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"}:
+                print(
+                    f"[server-lifecycle] Unsupported health-check URL scheme "
+                    f"'{parsed.scheme or '<empty>'}' for {url}; skipping check."
+                )
+                continue
             try:
-                with urllib.request.urlopen(url, timeout=5) as response:  # nosec B310
+                with urllib.request.urlopen(url, timeout=5) as response:
                     # Accept 200 OK universally; accept 206 for aggregate health endpoints
                     if response.status == 200 or (response.status == 206 and path.endswith("/health")):
                         print(f"[server-lifecycle] Health check OK for '{label}' via {path} (status {response.status})")
@@ -215,8 +223,6 @@ def _process_alive(pid: int) -> bool:
 
 def _extract_port_from_url(url: str) -> Optional[str]:
     try:
-        from urllib.parse import urlparse
-
         parsed = urlparse(url)
         if parsed.port:
             return str(parsed.port)

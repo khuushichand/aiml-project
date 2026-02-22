@@ -7,6 +7,7 @@ This section is organized by product surface so you can quickly find the right d
 ## Server Guides
 
 ### Setup and Authentication
+
 - [Installation & Setup](Server/Installation-Setup-Guide.md)
 - [Authentication Setup](Server/Authentication_Setup.md)
 - [Multi-User Postgres Setup](Server/Multi-User_Postgres_Setup.md)
@@ -15,6 +16,7 @@ This section is organized by product surface so you can quickly find the right d
 - [OpenAI OAuth First-Time Setup](Server/OpenAI_OAuth_First_Time_Setup.md)
 
 ### Operations and Administration
+
 - [Production Hardening Checklist](Server/Production_Hardening_Checklist.md)
 - [Organizations and Sharing](Server/Organizations_and_Sharing.md)
 - [Organization Administration](Server/Organization_Administration.md)
@@ -24,6 +26,7 @@ This section is organized by product surface so you can quickly find the right d
 - [CLI Reference](Server/CLI_Reference.md)
 
 ### Ingestion, RAG, and Evaluations
+
 - [Media→Embeddings→RAG→Evals Workflow](Server/Media_to_RAG_Evals_Workflow.md)
 - [Web Scraping and Ingestion](Server/Web_Scraping_Ingestion_Guide.md)
 - [Chunking Templates User Guide](Server/Chunking_Templates_User_Guide.md)
@@ -40,6 +43,7 @@ This section is organized by product surface so you can quickly find the right d
 ## WebUI and Extension Guides
 
 ### Core Chat Experience
+
 - [User Guide](WebUI_Extension/User_Guide.md)
 - [Chat Pages](WebUI_Extension/Chat_Pages.md)
 - [Quick Chat Docs Assistant Guide](WebUI_Extension/Quick_Chat_Docs_Assistant_Guide.md)
@@ -49,6 +53,7 @@ This section is organized by product surface so you can quickly find the right d
 - [Prompt Engineering Notes](WebUI_Extension/Prompt_Engineering_Notes.md)
 
 ### Audio, Voice, and Media UX
+
 - [Getting Started: STT and TTS](WebUI_Extension/Getting-Started-STT_and_TTS.md)
 - [TTS Getting Started](WebUI_Extension/TTS_Getting_Started.md)
 - [TTS Setup Guide](WebUI_Extension/TTS-SETUP-GUIDE.md)
@@ -57,6 +62,7 @@ This section is organized by product surface so you can quickly find the right d
 - [Image Generation Setup](WebUI_Extension/Image_Generation_Setup.md)
 
 ### Characters and Learning
+
 - [Character Roleplay Quickstart](WebUI_Extension/Character_Roleplay_Quickstart.md)
 - [Effective Character Roleplay and You](WebUI_Extension/Effective_Character_Roleplay_and_You.md)
 - [Advanced Character Roleplay Guide](WebUI_Extension/Advanced_Character_Roleplay_Guide.md)
@@ -66,11 +72,13 @@ This section is organized by product surface so you can quickly find the right d
 - [Kanban Board Guide](WebUI_Extension/Kanban_Board_Guide.md)
 
 ### Chatbooks and Workflows
+
 - [Chatbook User Guide](WebUI_Extension/Chatbook_User_Guide.md)
 - [Chatbook Tools Getting Started](WebUI_Extension/Chatbook_Tools_Getting_Started.md)
 - [Workflows Examples](WebUI_Extension/Workflows_Examples.md)
 
 ## Integrations and Experiments
+
 - [Getting Started with ACP](Integrations_Experiments/Getting_Started_with_ACP.md)
 - [Anthropic ClaudeCode and Claude SDK Setup](Integrations_Experiments/Anthropic_ClaudeCode_ClaudeSDK_Setup.md)
 - [Project2025 RAG Guide](Integrations_Experiments/Project2025-RAG-Guide.md)

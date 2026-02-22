@@ -1,4 +1,4 @@
-def test_web_scraper_router_config_keys(monkeypatch):
+def test_web_scraper_router_config_keys(monkeypatch, tmp_path):
     from tldw_Server_API.app.core import config as cfg
 
     monkeypatch.delenv("CUSTOM_SCRAPERS_YAML_PATH", raising=False)
@@ -27,9 +27,11 @@ def test_web_scraper_router_config_keys(monkeypatch):
         def __getitem__(self, section):  # noqa: ARG002
             return {}
 
+    custom_scrapers_yaml_path = str(tmp_path / "custom_scrapers.yaml")
+
     fake = FakeConfig(
         {
-            ("Web-Scraper", "custom_scrapers_yaml_path"): "/tmp/custom_scrapers.yaml",  # nosec B108
+            ("Web-Scraper", "custom_scrapers_yaml_path"): custom_scrapers_yaml_path,
             ("Web-Scraper", "web_scraper_default_backend"): "curl",
             ("Web-Scraper", "web_scraper_ua_mode"): "rotate",
         }
@@ -40,6 +42,6 @@ def test_web_scraper_router_config_keys(monkeypatch):
     data = cfg.load_and_log_configs()
     ws_cfg = data["web_scraper"]
 
-    assert ws_cfg["custom_scrapers_yaml_path"] == "/tmp/custom_scrapers.yaml"  # nosec B108
+    assert ws_cfg["custom_scrapers_yaml_path"] == custom_scrapers_yaml_path
     assert ws_cfg["web_scraper_default_backend"] == "curl"
     assert ws_cfg["web_scraper_ua_mode"] == "rotate"

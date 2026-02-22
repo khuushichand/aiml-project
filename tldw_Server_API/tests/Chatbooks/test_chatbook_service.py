@@ -201,14 +201,14 @@ class TestChatbookService:
         assert result["message"] == "Chatbook created successfully"
         assert result["file_path"] == str(archive_path)
 
-    def test_get_export_job_parses_varied_timestamps(self, service, mock_db):
+    def test_get_export_job_parses_varied_timestamps(self, service, mock_db, tmp_path):
         """Ensure timestamp parser handles common DB formats."""
         mock_row = {
             "job_id": "job-plain",
             "user_id": service.user_id,
             "status": "completed",
             "chatbook_name": "Test",
-            "output_path": "/tmp/test.zip",  # nosec B108
+            "output_path": str(tmp_path / "test.zip"),
             "created_at": "2024-01-01 00:00:00",
             "started_at": "2024-01-01 00:00:00+00:00",
             "completed_at": "2024-01-01 00:00:00.000001",
@@ -1145,9 +1145,10 @@ class TestChatbookService:
         assert new_name == "Existing (2)"
         assert mock_lookup.call_count == 2
 
-    def test_get_export_job_status(self, service, mock_db):
+    def test_get_export_job_status(self, service, mock_db, tmp_path):
         """Test retrieving export job status."""
         # Return tuple matching database schema with metadata
+        export_path = tmp_path / "export.chatbook"
         metadata = json.dumps({
             "conversation_count": 5,
             "note_count": 3,
@@ -1155,7 +1156,7 @@ class TestChatbookService:
         })
         mock_db.execute_query.return_value = [
             ("job123", "test_user", "completed", "Test Export",
-             "/tmp/export.chatbook", "2024-01-01T00:00:00",  # nosec B108
+             str(export_path), "2024-01-01T00:00:00",
              "2024-01-01T00:01:00", "2024-01-01T00:05:00",
              None, 100, 100, 100, 1024, metadata, None)
         ]
@@ -1164,7 +1165,7 @@ class TestChatbookService:
 
         assert result["job_id"] == "job123"
         assert result["status"] == "completed"
-        assert result["file_path"] == "/tmp/export.chatbook"  # nosec B108
+        assert result["file_path"] == str(export_path)
         assert result["content_summary"]["conversations"] == 5
 
     def test_cancel_export_job(self, service, mock_db):
@@ -1246,27 +1247,29 @@ class TestChatbookService:
         call_args = mock_to_thread.await_args.args
         assert call_args[3] is ConflictResolution.SKIP
 
-    def test_create_import_job(self, service, mock_db):
+    def test_create_import_job(self, service, mock_db, tmp_path):
         """Test creating an import job."""
         test_uuid = uuid4()
         job_id = str(test_uuid)
+        test_file_path = tmp_path / "test.chatbook"
 
         with patch('tldw_Server_API.app.core.Chatbooks.chatbook_service.uuid4', return_value=test_uuid):
             mock_db.execute_query.return_value = None
 
             result = service.create_import_job(
-                file_path="/tmp/test.chatbook",  # nosec B108
+                file_path=str(test_file_path),
                 conflict_strategy="skip"
             )
 
         assert result["job_id"] == job_id
         assert result["status"] == "pending"
 
-    def test_get_import_job_status(self, service, mock_db):
+    def test_get_import_job_status(self, service, mock_db, tmp_path):
         """Test retrieving import job status."""
+        import_path = tmp_path / "import.chatbook"
         # Return tuple matching database schema
         mock_db.execute_query.return_value = [
-            ("job456", "test_user", "completed", "/tmp/import.chatbook",  # nosec B108
+            ("job456", "test_user", "completed", str(import_path),
              "2024-01-01T00:00:00", "2024-01-01T00:01:00", "2024-01-01T00:10:00",
              None, 100, 10, 10, 10, 0, 2, "[]", "[]")
         ]
@@ -1295,13 +1298,16 @@ class TestChatbookService:
         assert results[0]["chatbook_name"] == "Export 1"
         assert results[1]["status"] == "pending"
 
-    def test_list_import_jobs(self, service, mock_db):
+    def test_list_import_jobs(self, service, mock_db, tmp_path):
         """Test listing import jobs."""
+        first_import_path = tmp_path / "import.chatbook"
+        second_import_path = tmp_path / "import2.chatbook"
+
         # Return tuples matching database schema
         mock_db.execute_query.return_value = [
-            ("job3", "test_user", "completed", "/tmp/import.chatbook",  # nosec B108
+            ("job3", "test_user", "completed", str(first_import_path),
              "2024-01-01T00:00:00", None, None, None, 100, 5, 5, 5, 0, 0, "[]", "[]"),
-            ("job4", "test_user", "failed", "/tmp/import2.chatbook",  # nosec B108
+            ("job4", "test_user", "failed", str(second_import_path),
              "2024-01-01T00:00:00", None, None, "File not found", 0, 0, 0, 0, 0, 0, "[]", "[]")
         ]
 

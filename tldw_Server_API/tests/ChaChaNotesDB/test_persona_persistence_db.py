@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -10,12 +11,14 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def db_path(tmp_path) -> Path:
+def db_path(tmp_path: Path) -> Path:
+    """Return a temporary SQLite path for persona persistence database tests."""
     return tmp_path / "persona_persistence_test.sqlite"
 
 
 @pytest.fixture
-def db_instance(db_path: Path):
+def db_instance(db_path: Path) -> Iterator[CharactersRAGDB]:
+    """Provide a CharactersRAGDB instance and close it after each test."""
     db = CharactersRAGDB(db_path, "persona-persistence-test-client")
     yield db
     db.close_connection()

@@ -111,7 +111,7 @@ async def test_schedule_media_add_embeddings_jobs_mode_passes_provenance(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_schedule_media_add_embeddings_background_mode_adds_task(monkeypatch):
+async def test_schedule_media_add_embeddings_background_mode_adds_task(monkeypatch, tmp_path):
     monkeypatch.setenv("MEDIA_ADD_EMBEDDINGS_MODE", "background")
     tasks = _FakeBackgroundTasks()
 
@@ -121,7 +121,7 @@ async def test_schedule_media_add_embeddings_background_mode_adds_task(monkeypat
             "db_id": 88,
             "media_type": "document",
             "input_ref": "background.txt",
-            "processing_source": "/tmp/background.txt",  # nosec B108
+            "processing_source": str(tmp_path / "background.txt"),
         }
     ]
 

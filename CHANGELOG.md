@@ -45,6 +45,8 @@ and this project adheres to Some kind of Versioning
   - Refactored Ant Design table density selectors to shared `.ant-table-cell` targeting and centralized common vertical alignment for easier maintenance.
 - Backend quota sourcing:
   - User profile quota assembly now prefers live storage metrics from `calculate_user_storage(...)` for `storage_used_mb` and `storage_quota_mb`, with fallback to stored user values on failure.
+- Structured-output parser documentation:
+  - Added module/function docstrings in `tldw_Server_API/app/core/LLM_Calls/structured_output.py` clarifying candidate parsing order and strict/lenient semantics for shared endpoint and claims parsing paths.
 
 ### Removed
 - No removals in this session.

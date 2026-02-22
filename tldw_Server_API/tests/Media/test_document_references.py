@@ -23,9 +23,9 @@ def mock_user():
 
 
 @pytest.fixture
-def mock_db():
+def mock_db(tmp_path):
     db = MagicMock()
-    db.db_path_str = "/tmp/test_media.db"  # nosec B108
+    db.db_path_str = str(tmp_path / "test_media.db")
     return db
 
 

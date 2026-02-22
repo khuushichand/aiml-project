@@ -1,5 +1,6 @@
 import pytest
 
+from tldw_Server_API.app.core.exceptions import ValidationError
 from tldw_Server_API.app.core.Claims_Extraction.prompt_validation import (
     ClaimsPromptValidationError,
     validate_claims_prompt_preflight,
@@ -8,7 +9,8 @@ from tldw_Server_API.app.core.Claims_Extraction.prompt_validation import (
 
 
 @pytest.mark.unit
-def test_validate_claims_prompt_template_reports_missing_required_placeholders():
+def test_validate_claims_prompt_template_reports_missing_required_placeholders() -> None:
+    """Verify that missing required placeholders are reported."""
     report = validate_claims_prompt_template(
         "Extract up to {max_claims} claims and return JSON.",
         mode="warning",
@@ -19,7 +21,13 @@ def test_validate_claims_prompt_template_reports_missing_required_placeholders()
 
 
 @pytest.mark.unit
-def test_validate_claims_prompt_preflight_warning_mode_does_not_raise(monkeypatch):
+def test_claims_prompt_validation_error_uses_project_validation_hierarchy():
+    assert issubclass(ClaimsPromptValidationError, ValidationError)
+
+
+@pytest.mark.unit
+def test_validate_claims_prompt_preflight_warning_mode_does_not_raise(monkeypatch) -> None:
+    """Verify warning-mode preflight returns issues without raising."""
     import tldw_Server_API.app.core.Claims_Extraction.prompt_validation as prompt_validation
 
     monkeypatch.setattr(
@@ -38,7 +46,8 @@ def test_validate_claims_prompt_preflight_warning_mode_does_not_raise(monkeypatc
 
 
 @pytest.mark.unit
-def test_validate_claims_prompt_preflight_error_mode_raises(monkeypatch):
+def test_validate_claims_prompt_preflight_error_mode_raises(monkeypatch) -> None:
+    """Verify error-mode preflight raises ClaimsPromptValidationError."""
     import tldw_Server_API.app.core.Claims_Extraction.prompt_validation as prompt_validation
 
     monkeypatch.setattr(
@@ -57,7 +66,8 @@ def test_validate_claims_prompt_preflight_error_mode_raises(monkeypatch):
 
 
 @pytest.mark.unit
-def test_validate_claims_prompt_template_strict_mode_flags_non_exact_alignment():
+def test_validate_claims_prompt_template_strict_mode_flags_non_exact_alignment() -> None:
+    """Verify strict mode flags sample alignment failures."""
     report = validate_claims_prompt_template(
         "Extract from {answer} and return up to {max_claims} claims.",
         mode="warning",
