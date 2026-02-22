@@ -1,19 +1,16 @@
-import React, { Component, useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react"
+import React, { Component, Suspense, forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
 import type { ReactNode } from "react"
-import dynamic from "next/dynamic"
 import type { editor as MonacoEditor } from "monaco-editor"
 import type { Monaco } from "@monaco-editor/react"
 
-const Monaco = dynamic(
-  () => import("@monaco-editor/react"),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center rounded border border-border bg-bg p-4 text-xs text-text-muted" style={{ height: 400 }}>
-        Loading editor…
-      </div>
-    ),
-  },
+const Monaco = React.lazy(() => import("@monaco-editor/react"))
+
+const MonacoLoading = ({ height }: { height: number | string }) => (
+  <div
+    className="flex items-center justify-center rounded border border-border bg-bg p-4 text-xs text-text-muted"
+    style={{ height }}>
+    Loading editor…
+  </div>
 )
 
 /** Error boundary that catches Monaco load/render failures and triggers fallback. */
@@ -146,28 +143,30 @@ export const TemplateCodeEditor = forwardRef<TemplateCodeEditorHandle, TemplateC
 
     return (
       <MonacoErrorBoundary onError={handleError}>
-        <Monaco
-          defaultLanguage={language}
-          language={language}
-          value={value}
-          onChange={handleEditorChange}
-          height={height}
-          theme={theme as string}
-          options={{
-            readOnly: !!readOnly,
-            minimap: { enabled: false },
-            scrollBeyondLastLine: false,
-            wordWrap: "on",
-            fontSize: 13,
-            lineNumbers: "on",
-            renderLineHighlight: "line",
-            tabSize: 2,
-            bracketPairColorization: { enabled: true },
-            autoClosingBrackets: "always",
-            suggest: { showWords: false },
-          }}
-          onMount={handleEditorMount}
-        />
+        <Suspense fallback={<MonacoLoading height={height} />}>
+          <Monaco
+            defaultLanguage={language}
+            language={language}
+            value={value}
+            onChange={handleEditorChange}
+            height={height}
+            theme={theme as string}
+            options={{
+              readOnly: !!readOnly,
+              minimap: { enabled: false },
+              scrollBeyondLastLine: false,
+              wordWrap: "on",
+              fontSize: 13,
+              lineNumbers: "on",
+              renderLineHighlight: "line",
+              tabSize: 2,
+              bracketPairColorization: { enabled: true },
+              autoClosingBrackets: "always",
+              suggest: { showWords: false },
+            }}
+            onMount={handleEditorMount}
+          />
+        </Suspense>
       </MonacoErrorBoundary>
     )
   },

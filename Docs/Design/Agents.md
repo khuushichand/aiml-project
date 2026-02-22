@@ -20,6 +20,13 @@ https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
 https://github.com/can1357/oh-my-pi
 https://github.com/VoltAgent/awesome-claude-code-subagents
 https://github.com/mitsuhiko/agent-stuff/blob/main/skills/web-browser/SKILL.md
+https://github.com/tmustier/pi-for-excel
+https://meanderingthoughts.hashnode.dev/lets-do-some-actual-innovative-sht
+
+https://openclawsoul.org/create-openclaw-soul.html
+https://openclawsoul.org/openclaw-soul-community.html
+https://github.com/kesslerio/soulcraft-openclaw-skill
+https://docs.openclaw.ai/reference/templates/IDENTITY
 
 https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
 https://github.com/mitsuhiko/agent-stuff/blob/main/pi-extensions/todos.ts

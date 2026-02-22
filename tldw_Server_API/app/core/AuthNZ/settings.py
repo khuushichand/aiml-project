@@ -431,6 +431,16 @@ class Settings(BaseSettings):
         default_factory=lambda: ["/"],
         description="Allowed app-relative return path prefixes for OpenAI OAuth flow",
     )
+    OPENAI_OAUTH_MAX_OUTSTANDING_STATES: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Maximum outstanding OpenAI OAuth state records per user/provider",
+    )
+    OPENAI_OAUTH_REFRESH_LOCK_BACKEND: Literal["memory", "redis", "db"] = Field(
+        default="memory",
+        description="Backend used for OpenAI OAuth refresh locking",
+    )
 
     # ===== Token Rotation =====
     ROTATE_REFRESH_TOKENS: bool = Field(
@@ -1009,6 +1019,18 @@ class Settings(BaseSettings):
             return ["/"]
         return parsed
 
+    @field_validator("OPENAI_OAUTH_REFRESH_LOCK_BACKEND", mode="before")
+    @classmethod
+    def parse_openai_oauth_refresh_lock_backend(cls, v):
+        if v is None:
+            env_val = os.getenv("OPENAI_OAUTH_REFRESH_LOCK_BACKEND")
+            if env_val is not None:
+                v = env_val
+        text = str(v or "memory").strip().lower()
+        if text in {"memory", "redis", "db"}:
+            return text
+        return "memory"
+
     @field_validator("DATABASE_URL")
     @classmethod
     def validate_database_url(cls, v, info):
@@ -1126,6 +1148,16 @@ def _load_overrides_from_config() -> dict:
             "OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES",
             "openai_oauth_allowed_return_path_prefixes",
             _split_csv,
+        )
+        maybe_set(
+            "OPENAI_OAUTH_MAX_OUTSTANDING_STATES",
+            "openai_oauth_max_outstanding_states",
+            lambda v: int(v),
+        )
+        maybe_set(
+            "OPENAI_OAUTH_REFRESH_LOCK_BACKEND",
+            "openai_oauth_refresh_lock_backend",
+            lambda v: str(v).strip().lower(),
         )
         maybe_set("ENABLE_REGISTRATION", "enable_registration", _bool_from_str)
         # Legacy aliases in config.txt

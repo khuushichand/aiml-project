@@ -64,3 +64,20 @@ def test_postgres_statement_conversion_includes_persona_memory_namespace_migrati
     assert "idx_persona_memory_scope" in full
     assert "idx_persona_memory_session" in full
     assert re.search(r"SET\s+version\s*=\s*27", full, flags=re.IGNORECASE)
+
+
+def test_postgres_statement_conversion_includes_persona_profile_state_context_default_migration(
+    char_rag_db: CharactersRAGDB,
+) -> None:
+    """Verify v28 conversion output includes persona profile default state-context column."""
+
+    sql = char_rag_db._MIGRATION_SQL_V27_TO_V28
+    assert isinstance(sql, str) and "persona_profiles" in sql
+
+    stmts = char_rag_db._convert_sqlite_schema_to_postgres_statements(sql)
+    assert isinstance(stmts, list) and len(stmts) > 0
+
+    full = "\n".join(stmts)
+    assert "ALTER TABLE persona_profiles" in full
+    assert "use_persona_state_context_default BOOLEAN NOT NULL DEFAULT TRUE" in full
+    assert re.search(r"SET\s+version\s*=\s*28", full, flags=re.IGNORECASE)

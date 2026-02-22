@@ -101,4 +101,25 @@ describe("quick chat per-page tutorials", () => {
     const entries = buildQuickChatPageTutorialEntries("/settings/health", [])
     expect(entries).toEqual([])
   })
+
+  it("resolves knowledge tutorials for knowledge subroutes", () => {
+    const entries = buildQuickChatPageTutorialEntries("/knowledge/thread/abc123", [])
+    expect(entries.some((entry) => entry.tutorial.id === "knowledge-basics")).toBe(
+      true
+    )
+  })
+
+  it("still resolves tutorials when runtime path is sidepanel", () => {
+    const originalPath = `${window.location.pathname}${window.location.search}${window.location.hash}`
+
+    try {
+      window.history.replaceState({}, "", "/sidepanel.html")
+      const entries = buildQuickChatPageTutorialEntries("/chat", [])
+      expect(entries.some((entry) => entry.tutorial.id === "playground-basics")).toBe(
+        true
+      )
+    } finally {
+      window.history.replaceState({}, "", originalPath || "/")
+    }
+  })
 })

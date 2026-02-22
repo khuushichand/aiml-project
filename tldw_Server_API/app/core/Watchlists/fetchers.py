@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from functools import lru_cache
 from threading import Lock
 from typing import Any
 from urllib.parse import urljoin
@@ -65,6 +66,113 @@ _SELECTOR_CACHE_MAX = 512
 _XPATH_SELECTOR_CACHE: OrderedDict[str, Any] = OrderedDict()
 _CSS_SELECTOR_CACHE: OrderedDict[str, Any] = OrderedDict()
 _SELECTOR_CACHE_LOCK = Lock()
+_DEFAULT_MAX_SELECTOR_EXPR_LEN = 512
+_DEFAULT_MAX_XPATH_DESCENDANT_STEPS = 12
+_DEFAULT_MAX_XPATH_PREDICATES = 10
+_DEFAULT_MAX_XPATH_FUNCTION_CALLS = 8
+
+
+def _parse_guardrail_int_env(
+    env_name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = os.getenv(env_name)
+    if raw is None:
+        return default
+    text = raw.strip()
+    if not text:
+        return default
+    try:
+        value = int(text)
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Invalid {}='{}'; using default {}", env_name, raw, default)
+        return default
+    if value < minimum:
+        return minimum
+    if value > maximum:
+        return maximum
+    return value
+
+
+@lru_cache(maxsize=1)
+def _selector_guardrail_limits() -> tuple[int, int, int, int]:
+    """Return selector guardrail limits with environment overrides."""
+    return (
+        _parse_guardrail_int_env(
+            "WATCHLIST_SELECTOR_MAX_EXPR_LEN",
+            _DEFAULT_MAX_SELECTOR_EXPR_LEN,
+            minimum=32,
+            maximum=8192,
+        ),
+        _parse_guardrail_int_env(
+            "WATCHLIST_SELECTOR_MAX_XPATH_DESCENDANT_STEPS",
+            _DEFAULT_MAX_XPATH_DESCENDANT_STEPS,
+            minimum=1,
+            maximum=200,
+        ),
+        _parse_guardrail_int_env(
+            "WATCHLIST_SELECTOR_MAX_XPATH_PREDICATES",
+            _DEFAULT_MAX_XPATH_PREDICATES,
+            minimum=1,
+            maximum=200,
+        ),
+        _parse_guardrail_int_env(
+            "WATCHLIST_SELECTOR_MAX_XPATH_FUNCTION_CALLS",
+            _DEFAULT_MAX_XPATH_FUNCTION_CALLS,
+            minimum=0,
+            maximum=200,
+        ),
+    )
+
+
+def reload_selector_guardrails_from_env() -> None:
+    """Clear selector guardrail config cache so env changes take effect."""
+    _selector_guardrail_limits.cache_clear()
+
+
+def _selector_safety_error(selector: str) -> str | None:
+    (
+        max_selector_expr_len,
+        max_xpath_descendant_steps,
+        max_xpath_predicates,
+        max_xpath_function_calls,
+    ) = _selector_guardrail_limits()
+    expr = selector.strip()
+    if not expr:
+        return None
+    if len(expr) > max_selector_expr_len:
+        return f"selector_too_complex:length>{max_selector_expr_len}"
+
+    if expr.startswith("css:"):
+        css_expr = expr[4:].strip()
+        if len(css_expr) > max_selector_expr_len:
+            return f"selector_too_complex:length>{max_selector_expr_len}"
+        return None
+
+    # Keep XPath expressive enough for normal extraction, but block
+    # patterns that are commonly abused for expensive evaluation.
+    if "//*" in expr:
+        return "selector_too_complex:wildcard_descendant_not_allowed"
+    if "::" in expr:
+        return "selector_too_complex:axis_not_allowed"
+    if "|" in expr:
+        return "selector_too_complex:union_not_allowed"
+    if "$" in expr:
+        return "selector_too_complex:variables_not_allowed"
+
+    if expr.count("//") > max_xpath_descendant_steps:
+        return f"selector_too_complex:descendants>{max_xpath_descendant_steps}"
+    if expr.count("[") > max_xpath_predicates:
+        return f"selector_too_complex:predicates>{max_xpath_predicates}"
+
+    function_calls = len(re.findall(r"[A-Za-z_][A-Za-z0-9_-]*\s*\(", expr))
+    if function_calls > max_xpath_function_calls:
+        return f"selector_too_complex:function_calls>{max_xpath_function_calls}"
+
+    return None
 
 
 def _in_test_mode() -> bool:
@@ -208,6 +316,10 @@ def _css_table_nth_xpath(css_expr: str) -> str | None:
 def _select_nodes(node: HtmlElement, selector: str, *, context_sensitive: bool = False) -> list[Any]:
     expr = selector.strip()
     if not expr:
+        return []
+    safety_error = _selector_safety_error(expr)
+    if safety_error:
+        logger.debug(f"Selector rejected by safety guard ({safety_error}): '{expr[:160]}'")
         return []
     if expr.startswith("css:"):
         css_expr = expr[4:].strip()
@@ -825,6 +937,10 @@ def validate_selector_rules(
         expr = spec.get("selector")
         stripped = (expr or "").strip()
         if not stripped:
+            continue
+        safety_error = _selector_safety_error(stripped)
+        if safety_error:
+            errors.append({"key": key, "selector": stripped, "error": safety_error})
             continue
         if stripped.startswith("css:"):
             css_expr = stripped[4:].strip()

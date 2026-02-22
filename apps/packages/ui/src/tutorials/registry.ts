@@ -140,6 +140,11 @@ const LEGACY_ROUTE_ALIASES: Record<string, string> = {
   "/options/world-books": "/world-books"
 }
 
+const PREFIX_ROUTE_ALIASES: Array<{ pattern: RegExp; canonical: string }> = [
+  { pattern: /^\/knowledge\/thread(?:\/.*)?$/i, canonical: "/knowledge" },
+  { pattern: /^\/knowledge\/shared(?:\/.*)?$/i, canonical: "/knowledge" }
+]
+
 /**
  * Tutorials are only meant for the options surface. Sidepanel hosts can share
  * route-like paths (for example "/chat") that should not trigger options tours.
@@ -196,7 +201,18 @@ export function normalizeTutorialRoute(routeLike: string): string {
     route = route.slice(0, -1)
   }
 
-  return LEGACY_ROUTE_ALIASES[route] ?? route
+  const legacyAlias = LEGACY_ROUTE_ALIASES[route]
+  if (legacyAlias) {
+    return legacyAlias
+  }
+
+  for (const alias of PREFIX_ROUTE_ALIASES) {
+    if (alias.pattern.test(route)) {
+      return alias.canonical
+    }
+  }
+
+  return route
 }
 
 /**
@@ -204,8 +220,15 @@ export function normalizeTutorialRoute(routeLike: string): string {
  * @param pathname - The current route pathname (e.g., "/options/playground")
  * @returns Array of tutorials matching the route, sorted by priority
  */
-export function getTutorialsForRoute(pathname: string): TutorialDefinition[] {
-  if (isTutorialRuntimeSuppressed()) {
+type GetTutorialsForRouteOptions = {
+  ignoreRuntimeSuppression?: boolean
+}
+
+export function getTutorialsForRoute(
+  pathname: string,
+  options: GetTutorialsForRouteOptions = {}
+): TutorialDefinition[] {
+  if (!options.ignoreRuntimeSuppression && isTutorialRuntimeSuppressed()) {
     return []
   }
 

@@ -287,6 +287,49 @@ async def test_mixed_host_redirect_egress_denied(monkeypatch):
 
 @requires_httpx
 @pytest.mark.asyncio
+async def test_afetch_pins_dns_resolution_for_subsequent_egress_checks(monkeypatch):
+    import httpx
+    import types
+    from tldw_Server_API.app.core.http_client import afetch, create_async_client
+    from tldw_Server_API.app.core.Security import egress as egress_mod
+
+    observed_overrides: list[object] = []
+
+    def _fake_policy(url: str, *, block_private_override=None, resolved_ips_override=None):  # noqa: ARG001
+        observed_overrides.append(resolved_ips_override)
+        if resolved_ips_override is None:
+            return types.SimpleNamespace(
+                allowed=True,
+                reason=None,
+                resolved_ips=("93.184.216.34",),
+            )
+        return types.SimpleNamespace(
+            allowed=True,
+            reason=None,
+            resolved_ips=tuple(resolved_ips_override),
+        )
+
+    monkeypatch.setattr(egress_mod, "evaluate_url_policy", _fake_policy)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(302, request=request, headers={"Location": "/next"})
+        return httpx.Response(200, request=request, text="ok")
+
+    transport = httpx.MockTransport(handler)
+    client = create_async_client(transport=transport)
+    try:
+        resp = await afetch(method="GET", url="http://93.184.216.34/start", client=client, allow_redirects=True)
+        assert resp.status_code == 200
+        assert observed_overrides
+        assert observed_overrides[0] is None
+        assert all(v == ("93.184.216.34",) for v in observed_overrides[1:])
+    finally:
+        await client.aclose()
+
+
+@requires_httpx
+@pytest.mark.asyncio
 async def test_dns_resolution_error_not_retried():
     """
     Ensure DNS/unknown-host style errors are treated as permanent and not retried.

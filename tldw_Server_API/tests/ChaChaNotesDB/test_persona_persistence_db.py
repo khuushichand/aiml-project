@@ -65,6 +65,8 @@ def test_migration_v25_to_latest_creates_persona_tables(db_path: Path):
 
     profile_indexes = {row["name"] for row in conn.execute("PRAGMA index_list('persona_profiles')").fetchall()}
     assert "idx_persona_profiles_user_active" in profile_indexes
+    profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+    assert "use_persona_state_context_default" in profile_columns
     memory_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_memory_entries')").fetchall()}
     assert "scope_snapshot_id" in memory_columns
     assert "session_id" in memory_columns
@@ -93,17 +95,23 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     assert profile["name"] == "Research Persona"
     assert profile["mode"] == "session_scoped"
     assert profile["is_active"] is True
+    assert profile["use_persona_state_context_default"] is True
     expected_version = int(profile["version"])
 
     assert db_instance.update_persona_profile(
         persona_id=persona_id,
         user_id="user-1",
-        update_data={"mode": "persistent_scoped", "is_active": True},
+        update_data={
+            "mode": "persistent_scoped",
+            "is_active": True,
+            "use_persona_state_context_default": False,
+        },
         expected_version=expected_version,
     )
     updated_profile = db_instance.get_persona_profile(persona_id, user_id="user-1")
     assert updated_profile is not None
     assert updated_profile["mode"] == "persistent_scoped"
+    assert updated_profile["use_persona_state_context_default"] is False
 
     inserted_scope_count = db_instance.replace_persona_scope_rules(
         persona_id=persona_id,

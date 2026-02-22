@@ -67,6 +67,7 @@ class PersonaProfileCreate(BaseModel):
     mode: PersonaMode = "session_scoped"
     system_prompt: str | None = None
     is_active: bool = True
+    use_persona_state_context_default: bool = True
 
 
 class PersonaProfileUpdate(BaseModel):
@@ -75,6 +76,7 @@ class PersonaProfileUpdate(BaseModel):
     mode: PersonaMode | None = None
     system_prompt: str | None = None
     is_active: bool | None = None
+    use_persona_state_context_default: bool | None = None
 
 
 class PersonaProfileResponse(BaseModel):
@@ -84,6 +86,7 @@ class PersonaProfileResponse(BaseModel):
     mode: PersonaMode
     system_prompt: str | None = None
     is_active: bool = True
+    use_persona_state_context_default: bool = True
     created_at: str
     last_modified: str
     version: int = 1

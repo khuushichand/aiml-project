@@ -171,15 +171,24 @@ vi.mock('@/components/Media/SearchBar', () => ({
 vi.mock('@/components/Media/FilterPanel', () => ({
   FilterPanel: ({
     mediaTypes,
-    onKeywordSearch
+    onKeywordSearch,
+    onMediaTypesChange
   }: {
     mediaTypes?: string[]
     onKeywordSearch?: (query: string) => void
+    onMediaTypesChange?: (types: string[]) => void
   }) => (
     <div data-testid="filter-panel">
       <div data-testid="filter-panel-media-types">
         {(mediaTypes || []).join(',')}
       </div>
+      <button
+        type="button"
+        data-testid="filter-panel-apply-media-type"
+        onClick={() => onMediaTypesChange?.(['pdf'])}
+      >
+        apply-media-type
+      </button>
       <button
         type="button"
         data-testid="filter-panel-keyword-search"
@@ -204,7 +213,24 @@ vi.mock('@/components/Media/FilterChips', () => ({
 }))
 
 vi.mock('@/components/Media/Pagination', () => ({
-  Pagination: () => <div data-testid="pagination" />
+  Pagination: ({
+    currentPage,
+    onPageChange
+  }: {
+    currentPage: number
+    onPageChange?: (page: number) => void
+  }) => (
+    <div data-testid="pagination">
+      <div data-testid="pagination-current-page">{currentPage}</div>
+      <button
+        type="button"
+        data-testid="pagination-next-page"
+        onClick={() => onPageChange?.(currentPage + 1)}
+      >
+        next-page
+      </button>
+    </div>
+  )
 }))
 
 vi.mock('@/components/Media/MediaSectionNavigator', () => ({
@@ -324,7 +350,7 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
     window.localStorage.removeItem(MEDIA_TYPES_CACHE_KEY)
   })
 
-  it('debounces rapid query changes before triggering refetch', async () => {
+  it('debounces rapid query changes before triggering refetch with active filters', async () => {
     renderMediaPage('/media')
 
     const searchInput = await screen.findByRole('textbox', {
@@ -332,6 +358,12 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
     })
 
     // Ignore initial mount refetches.
+    await waitFor(() => {
+      expect(mocks.refetch.mock.calls.length).toBeGreaterThan(0)
+    })
+    mocks.refetch.mockClear()
+
+    fireEvent.click(screen.getByTestId('filter-panel-apply-media-type'))
     await waitFor(() => {
       expect(mocks.refetch.mock.calls.length).toBeGreaterThan(0)
     })
@@ -352,6 +384,47 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
       vi.advanceTimersByTime(1)
     })
     expect(mocks.refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps explicit pagination changes instead of snapping back to page 1', async () => {
+    renderMediaPage('/media')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pagination-current-page')).toHaveTextContent('1')
+    })
+
+    fireEvent.click(screen.getByTestId('pagination-next-page'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pagination-current-page')).toHaveTextContent('2')
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('pagination-current-page')).toHaveTextContent('2')
+    })
+  })
+
+  it('issues a single refetch when filters change from a non-first page', async () => {
+    renderMediaPage('/media')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pagination-current-page')).toHaveTextContent('1')
+    })
+
+    fireEvent.click(screen.getByTestId('pagination-next-page'))
+    await waitFor(() => {
+      expect(screen.getByTestId('pagination-current-page')).toHaveTextContent('2')
+    })
+
+    mocks.refetch.mockClear()
+
+    fireEvent.click(screen.getByTestId('filter-panel-apply-media-type'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pagination-current-page')).toHaveTextContent('1')
+    })
+    await waitFor(() => {
+      expect(mocks.refetch).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('wires resize observer + animation-frame height stabilization for content area', async () => {

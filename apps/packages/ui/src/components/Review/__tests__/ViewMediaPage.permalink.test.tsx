@@ -189,7 +189,24 @@ vi.mock('@/components/Media/FilterChips', () => ({
 }))
 
 vi.mock('@/components/Media/Pagination', () => ({
-  Pagination: () => <div data-testid="pagination" />
+  Pagination: ({
+    currentPage,
+    onPageChange
+  }: {
+    currentPage: number
+    onPageChange?: (page: number) => void
+  }) => (
+    <div data-testid="pagination">
+      <div data-testid="pagination-current-page">{currentPage}</div>
+      <button
+        type="button"
+        data-testid="pagination-next-page"
+        onClick={() => onPageChange?.(currentPage + 1)}
+      >
+        next-page
+      </button>
+    </div>
+  )
 }))
 
 vi.mock('@/components/Media/MediaSectionNavigator', () => ({
@@ -605,6 +622,35 @@ describe('ViewMediaPage Stage 3 permalinks', () => {
         String(call?.[0]?.path || '').startsWith('/api/v1/media/?page=0')
       )
     ).toBe(false)
+  })
+
+  it('does not reset pagination after an explicit page change', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 100,
+        title: 'Item 100',
+        snippet: '100',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+
+    renderMediaPage('/media?id=100')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pagination-current-page')).toHaveTextContent('1')
+    })
+
+    fireEvent.click(screen.getByTestId('pagination-next-page'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pagination-current-page')).toHaveTextContent('2')
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('pagination-current-page')).toHaveTextContent('2')
+    })
   })
 
   it('toggles keyboard shortcuts overlay with ? key', async () => {

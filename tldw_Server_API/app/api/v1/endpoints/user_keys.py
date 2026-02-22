@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
@@ -565,26 +566,14 @@ def _sanitize_return_path(raw_return_path: Any, *, allowed_prefixes: list[str]) 
     )
 
 
-def _resolve_openai_redirect_uri(settings: Any, request: Request | None) -> str:
+def _resolve_openai_redirect_uri(settings: Any) -> str:
     configured_redirect = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_REDIRECT_URI", None))
     if configured_redirect:
         return configured_redirect
-    if request is None:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="OpenAI OAuth redirect URI is not configured",
-        )
-    try:
-        base_url = str(request.base_url).rstrip("/")
-    except Exception as exc:
-        logger.warning("Failed to resolve OAuth callback base URL: {}", exc)
-        base_url = ""
-    if not base_url:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="OpenAI OAuth redirect URI is not configured",
-        )
-    return f"{base_url}/api/v1/users/keys/openai/oauth/callback"
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="OpenAI OAuth redirect URI is not configured",
+    )
 
 
 def _oauth_code_challenge_s256(code_verifier: str) -> str:
@@ -636,6 +625,8 @@ def _require_openai_oauth_settings() -> Any:
         missing.append("OPENAI_OAUTH_AUTH_URL")
     if not _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_TOKEN_URL", None)):
         missing.append("OPENAI_OAUTH_TOKEN_URL")
+    if not _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_REDIRECT_URI", None)):
+        missing.append("OPENAI_OAUTH_REDIRECT_URI")
     if missing:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -654,6 +645,15 @@ def _openai_oauth_state_ttl_minutes(settings: Any) -> int:
     if parsed <= 0:
         return _OPENAI_DEFAULT_OAUTH_STATE_TTL_MINUTES
     return parsed
+
+
+def _openai_oauth_max_outstanding_states(settings: Any) -> int:
+    raw_value = getattr(settings, "OPENAI_OAUTH_MAX_OUTSTANDING_STATES", 10)
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        parsed = 10
+    return max(1, parsed)
 
 
 async def _openai_oauth_token_exchange(
@@ -1085,7 +1085,7 @@ async def authorize_openai_oauth(
         allowed_prefixes=allowed_prefixes,
     )
 
-    redirect_uri = _resolve_openai_redirect_uri(settings, request)
+    redirect_uri = _resolve_openai_redirect_uri(settings)
     auth_url_base = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_AUTH_URL", None))
     client_id = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_CLIENT_ID", None))
     if not auth_url_base or not client_id:
@@ -1114,6 +1114,12 @@ async def authorize_openai_oauth(
         ) from exc
 
     state_repo = await _get_oauth_state_repo()
+    await state_repo.enforce_outstanding_cap(
+        user_id=user_id,
+        provider=_OPENAI_PROVIDER,
+        max_outstanding=_openai_oauth_max_outstanding_states(settings),
+        now=now,
+    )
     await state_repo.create_state(
         state=state,
         user_id=user_id,
@@ -1167,6 +1173,7 @@ async def callback_openai_oauth(
     request: Request,
     code: str,
     state: str,
+    redirect: bool = False,
 ) -> OpenAIOAuthCallbackResponse:
     settings = _require_openai_oauth_settings()
     failure_reason: str | None = None
@@ -1209,6 +1216,13 @@ async def callback_openai_oauth(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="OAuth state is missing redirect metadata",
+            )
+        expected_redirect_uri = _resolve_openai_redirect_uri(settings)
+        if redirect_uri != expected_redirect_uri:
+            failure_reason = "state_redirect_mismatch"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OAuth state redirect URI mismatch",
             )
 
         encrypted_pkce_blob = _coerce_nonempty_string(state_record.get("pkce_verifier_encrypted"))
@@ -1384,7 +1398,7 @@ async def callback_openai_oauth(
                 "return_path": _coerce_nonempty_string(state_record.get("return_path")),
             },
         )
-        return OpenAIOAuthCallbackResponse(
+        callback_response = OpenAIOAuthCallbackResponse(
             provider=_OPENAI_PROVIDER,
             status="stored",
             auth_source=_OPENAI_SOURCE_OAUTH,
@@ -1392,6 +1406,10 @@ async def callback_openai_oauth(
             updated_at=row.get("updated_at") or now,
             expires_at=expires_at,
         )
+        callback_return_path = _coerce_nonempty_string(state_record.get("return_path"))
+        if redirect and callback_return_path:
+            return RedirectResponse(url=callback_return_path, status_code=status.HTTP_303_SEE_OTHER)
+        return callback_response
     except HTTPException as exc:
         _record_openai_oauth_counter(
             "byok_oauth_callback_failure_total",

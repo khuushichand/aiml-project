@@ -82,6 +82,41 @@ export interface CurrentUserStorageQuotaResponse {
   usage_percentage: number
 }
 
+export interface OpenAIOAuthAuthorizeRequest {
+  credential_fields?: Record<string, unknown>
+  return_path?: string
+}
+
+export interface OpenAIOAuthAuthorizeResponse {
+  provider: "openai"
+  auth_url: string
+  auth_session_id: string
+  expires_at: string
+}
+
+export interface OpenAIOAuthStatusResponse {
+  provider: "openai"
+  connected: boolean
+  auth_source: "api_key" | "oauth" | "none"
+  updated_at?: string | null
+  last_used_at?: string | null
+  expires_at?: string | null
+  scope?: string | null
+}
+
+export interface OpenAIOAuthRefreshResponse {
+  provider: "openai"
+  status: string
+  updated_at?: string | null
+  expires_at?: string | null
+}
+
+export interface OpenAICredentialSourceSwitchResponse {
+  provider: "openai"
+  auth_source: "api_key" | "oauth"
+  updated_at?: string | null
+}
+
 export type UserProfileUpdateEntry = {
   key: string
   value: unknown | null
@@ -899,6 +934,49 @@ export class TldwApiClient {
     return await this.request<CurrentUserStorageQuotaResponse>({
       path: "/api/v1/users/storage",
       method: "GET"
+    })
+  }
+
+  async startOpenAIOAuthAuthorize(
+    payload: OpenAIOAuthAuthorizeRequest = {}
+  ): Promise<OpenAIOAuthAuthorizeResponse> {
+    return await this.request<OpenAIOAuthAuthorizeResponse>({
+      path: "/api/v1/users/keys/openai/oauth/authorize",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getOpenAIOAuthStatus(): Promise<OpenAIOAuthStatusResponse> {
+    return await this.request<OpenAIOAuthStatusResponse>({
+      path: "/api/v1/users/keys/openai/oauth/status",
+      method: "GET"
+    })
+  }
+
+  async refreshOpenAIOAuth(): Promise<OpenAIOAuthRefreshResponse> {
+    return await this.request<OpenAIOAuthRefreshResponse>({
+      path: "/api/v1/users/keys/openai/oauth/refresh",
+      method: "POST"
+    })
+  }
+
+  async disconnectOpenAIOAuth(): Promise<void> {
+    await this.request<void>({
+      path: "/api/v1/users/keys/openai/oauth",
+      method: "DELETE"
+    })
+  }
+
+  async switchOpenAICredentialSource(
+    authSource: "api_key" | "oauth"
+  ): Promise<OpenAICredentialSourceSwitchResponse> {
+    return await this.request<OpenAICredentialSourceSwitchResponse>({
+      path: "/api/v1/users/keys/openai/source",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { auth_source: authSource }
     })
   }
 

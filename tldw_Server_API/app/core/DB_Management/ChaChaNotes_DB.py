@@ -432,7 +432,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 27  # Schema v27 adds persona memory namespace keys (scope/session)
+    _CURRENT_SCHEMA_VERSION = 28  # Schema v28 adds persona profile state-context defaults
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -2839,6 +2839,19 @@ UPDATE db_schema_version
    AND version < 27;
 """
 
+    _MIGRATION_SQL_V27_TO_V28 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 28 - Persona profile state-context defaults (2026-02-22)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS use_persona_state_context_default BOOLEAN NOT NULL DEFAULT 1;
+
+UPDATE db_schema_version
+   SET version = 28
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 28;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4202,6 +4215,39 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V26->V27: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V27 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v27_to_v28(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V27 to V28 (persona profile state-context default flag)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V27 to V28 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+            if "use_persona_state_context_default" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE persona_profiles "
+                    "ADD COLUMN use_persona_state_context_default BOOLEAN NOT NULL DEFAULT 1"
+                )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 28
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 28;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 28:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V27->V28 failed version check. Expected 28, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V28 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V27->V28 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V27->V28 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V27->V28: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V28 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4420,6 +4466,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 27 and current_db_version == 26:
                         self._migrate_from_v26_to_v27(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 28 and current_db_version == 27:
+                        self._migrate_from_v27_to_v28(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4643,8 +4692,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         if target_version >= 27 and current_db_version == 26:
                             self._migrate_from_v26_to_v27(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 28 and current_db_version == 27:
+                            self._migrate_from_v27_to_v28(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 26 and target_version >= 27:
                         self._migrate_from_v26_to_v27(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 28 and current_db_version == 27:
+                            self._migrate_from_v27_to_v28(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 27 and target_version >= 28:
+                        self._migrate_from_v27_to_v28(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         # Fallback: attempt linear migrations for known versions.
@@ -4696,6 +4754,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v25_to_v26(conn)
                             elif fallback_version == 26:
                                 self._migrate_from_v26_to_v27(conn)
+                            elif fallback_version == 27:
+                                self._migrate_from_v27_to_v28(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -4752,6 +4812,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 27 and current_db_version == 26:
                     self._migrate_from_v26_to_v27(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 28 and current_db_version == 27:
+                    self._migrate_from_v27_to_v28(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -5022,6 +5085,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 27:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V26_TO_V27, conn, expected_version=27)
                 current_version = 27
+            if current_version < 28:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V27_TO_V28, conn, expected_version=28)
+                current_version = 28
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -6058,6 +6124,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return None
         item = dict(row)
         item["is_active"] = self._as_bool(item.get("is_active"))
+        item["use_persona_state_context_default"] = self._as_bool(
+            item.get("use_persona_state_context_default", True)
+        )
         item["deleted"] = self._as_bool(item.get("deleted"))
         return item
 
@@ -6169,6 +6238,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         mode = self._normalize_persona_mode(profile_data.get("mode"))
         system_prompt = profile_data.get("system_prompt")
         is_active = self._as_bool(profile_data.get("is_active", True))
+        use_persona_state_context_default = self._as_bool(
+            profile_data.get("use_persona_state_context_default", True)
+        )
         now = self._get_current_utc_timestamp_iso()
 
         character_card_id = profile_data.get("character_card_id")
@@ -6183,16 +6255,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         if self.backend_type == BackendType.POSTGRESQL:
             is_active_db = bool(is_active)
+            use_persona_state_context_default_db = bool(use_persona_state_context_default)
             deleted_db = bool(deleted_value)
         else:
             is_active_db = int(is_active)
+            use_persona_state_context_default_db = int(use_persona_state_context_default)
             deleted_db = int(deleted_value)
 
         query = (
             "INSERT INTO persona_profiles("
             "id, user_id, name, character_card_id, mode, system_prompt, "
-            "is_active, created_at, last_modified, deleted, version"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "is_active, use_persona_state_context_default, created_at, last_modified, deleted, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             persona_id,
@@ -6202,6 +6276,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             mode,
             system_prompt,
             is_active_db,
+            use_persona_state_context_default_db,
             profile_data.get("created_at") or now,
             profile_data.get("last_modified") or now,
             deleted_db,
@@ -6288,7 +6363,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not update_data:
             raise InputError("No profile fields provided for update.")  # noqa: TRY003
 
-        allowed_fields = {"name", "character_card_id", "mode", "system_prompt", "is_active", "deleted"}
+        allowed_fields = {
+            "name",
+            "character_card_id",
+            "mode",
+            "system_prompt",
+            "is_active",
+            "use_persona_state_context_default",
+            "deleted",
+        }
         set_parts: list[str] = []
         params: list[Any] = []
 
@@ -6298,7 +6381,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if key == "mode":
                 params.append(self._normalize_persona_mode(value))
                 set_parts.append("mode = ?")
-            elif key in {"is_active", "deleted"}:
+            elif key in {"is_active", "use_persona_state_context_default", "deleted"}:
                 cast_value = bool(self._as_bool(value)) if self.backend_type == BackendType.POSTGRESQL else int(
                     self._as_bool(value)
                 )

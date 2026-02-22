@@ -1,3 +1,5 @@
+import type { MediaDateRange, MediaSortBy } from './mediaSearchRequest'
+
 export type MetadataMatchMode = 'all' | 'any'
 
 export type MetadataSearchField =
@@ -28,6 +30,12 @@ interface BuildMetadataSearchPathArgs {
   matchMode: MetadataMatchMode
   page: number
   perPage: number
+  textQuery?: string
+  mediaTypes?: string[]
+  includeKeywords?: string[]
+  excludeKeywords?: string[]
+  dateRange?: MediaDateRange
+  sortBy?: MediaSortBy
 }
 
 const IDENTIFIER_FIELDS = new Set<MetadataSearchField>([
@@ -98,6 +106,17 @@ export const normalizeMetadataSearchFilters = (
     .filter((filter) => filter.value.length > 0)
 }
 
+const normalizeTokens = (tokens: string[] | undefined): string[] => {
+  if (!tokens || tokens.length === 0) return []
+  return Array.from(
+    new Set(
+      tokens
+        .map((token) => token.trim())
+        .filter(Boolean)
+    )
+  )
+}
+
 export const validateMetadataSearchFilters = (
   filters: MetadataSearchFilter[]
 ): string | null => {
@@ -120,6 +139,12 @@ export const buildMetadataSearchPath = ({
   matchMode,
   page,
   perPage,
+  textQuery,
+  mediaTypes,
+  includeKeywords,
+  excludeKeywords,
+  dateRange,
+  sortBy,
 }: BuildMetadataSearchPathArgs): string => {
   const normalized = normalizeMetadataSearchFilters(filters).map((filter) => ({
     field: filter.field,
@@ -135,6 +160,37 @@ export const buildMetadataSearchPath = ({
   params.set('group_by_media', 'true')
   params.set('page', String(page))
   params.set('per_page', String(perPage))
+
+  const trimmedTextQuery = textQuery?.trim()
+  if (trimmedTextQuery) {
+    params.set('q', trimmedTextQuery)
+  }
+
+  const normalizedMediaTypes = normalizeTokens(mediaTypes)
+  if (normalizedMediaTypes.length > 0) {
+    params.set('media_types', normalizedMediaTypes.join(','))
+  }
+
+  const mustHave = normalizeTokens(includeKeywords)
+  if (mustHave.length > 0) {
+    params.set('must_have', mustHave.join(','))
+  }
+
+  const mustNotHave = normalizeTokens(excludeKeywords)
+  if (mustNotHave.length > 0) {
+    params.set('must_not_have', mustNotHave.join(','))
+  }
+
+  if (dateRange?.startDate) {
+    params.set('date_start', dateRange.startDate)
+  }
+  if (dateRange?.endDate) {
+    params.set('date_end', dateRange.endDate)
+  }
+
+  if (sortBy && sortBy !== 'relevance') {
+    params.set('sort_by', sortBy)
+  }
 
   return `/api/v1/media/metadata-search?${params.toString()}`
 }

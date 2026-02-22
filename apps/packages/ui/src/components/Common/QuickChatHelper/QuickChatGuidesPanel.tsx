@@ -46,7 +46,9 @@ export const buildQuickChatPageTutorialEntries = (
     return []
   }
 
-  const tutorials = getTutorialsForRoute(normalizedRoute)
+  const tutorials = getTutorialsForRoute(normalizedRoute, {
+    ignoreRuntimeSuppression: true
+  })
   const completedSet = new Set(completedTutorialIds)
 
   return tutorials.map((tutorial) => {

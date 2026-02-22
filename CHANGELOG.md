@@ -9,10 +9,26 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
+- OpenAI OAuth BYOK account-linking support (opencode-style) under existing user key routes:
+  - Added `POST /api/v1/users/keys/openai/oauth/authorize`.
+  - Added `GET /api/v1/users/keys/openai/oauth/callback`.
+  - Added `GET /api/v1/users/keys/openai/oauth/status`.
+  - Added `POST /api/v1/users/keys/openai/oauth/refresh`.
+  - Added `DELETE /api/v1/users/keys/openai/oauth`.
+  - Added `POST /api/v1/users/keys/openai/source` for active credential source switching.
+- OpenAI OAuth UI linkage in settings:
+  - Added OpenAI account-linking card actions for `Connect OpenAI`, `Check status`, `Refresh`, `Disconnect`, and `Use API Key Instead`.
+  - Added frontend API client methods/types and OpenAPI guard entries for the new OpenAI OAuth routes.
+- OAuth/credential lifecycle coverage additions:
+  - Added SQLite state-repository cap enforcement coverage for outstanding OAuth state rows.
+  - Added frontend service-level regression coverage for OpenAI OAuth endpoint contracts.
 - Workspace account storage wiring in `/workspace-playground`:
   - Added authenticated client support for `GET /api/v1/users/storage`.
   - Added account quota fallback via `GET /api/v1/users/me/profile?sections=quotas`.
   - Added workspace header support for account usage/quota alongside local payload usage.
+- Quick Chat pop-out context state support:
+  - Added source-route serialization/restore for pop-out sessions so docs-mode retrieval and guide routing remain page-aware.
+  - Added dedicated pop-out state normalization/validation helper for safer session payload parsing.
 - Workspace persistence architecture upgrades:
   - Added split-key persistence (`index` + per-workspace `snapshot`/`chat`) with legacy monolith migration.
   - Added IndexedDB offload path for heavy chat/artifact payloads with localStorage pointer metadata.
@@ -23,10 +39,38 @@ and this project adheres to Some kind of Versioning
   - Added API client tests for `/api/v1/users/storage`.
   - Added workspace persistence tests for split-key migration/fallback, IndexedDB flag-off behavior, chat-retention bounds, and server-backed artifact truncation.
   - Added backend user-profile quota tests for live storage override and fallback behavior.
+  - Added Quick Chat regression tests for pop-out state parsing, sidepanel tutorial resolution behavior, and workflow-card parsing without explicit `routeLabel`.
 - Added and completed implementation plans for workspace UI refresh and workspace storage efficiency rollout.
+- Request-core security regression coverage:
+  - Added tests for default-deny absolute URL behavior, explicit absolute-origin allowlist behavior, and no-auth-header behavior for allowlisted absolute requests.
+- HTTP egress DNS pinning regression coverage:
+  - Added tests for egress resolved-IP override behavior and resolved-IP propagation in policy evaluation.
+  - Added HTTP client tests ensuring per-request host resolution is pinned across repeated egress checks and redirect hops.
+- Watchlists selector safety hardening:
+  - Added guardrails for user-controlled selector expressions so overly complex XPath/CSS rules are rejected during both selector validation and runtime selection.
+  - Added environment-configurable selector limits:
+    - `WATCHLIST_SELECTOR_MAX_EXPR_LEN`
+    - `WATCHLIST_SELECTOR_MAX_XPATH_DESCENDANT_STEPS`
+    - `WATCHLIST_SELECTOR_MAX_XPATH_PREDICATES`
+    - `WATCHLIST_SELECTOR_MAX_XPATH_FUNCTION_CALLS`
+  - Added regression coverage for complex-selector rejection and environment override behavior.
+- Extension bundle compatibility hardening:
+  - Added a bundle-contract test to ensure `TemplateCodeEditor` does not import `next/dynamic`, preventing extension build regressions in non-Next runtimes.
+- Media search remediation regression coverage:
+  - Added backend search-contract tests verifying `/api/v1/media/search` forwards `boost_fields` and relevance ordering changes under field-weight differences.
+  - Added frontend integration coverage for metadata-mode constrained search path serialization and metadata-result snippet rendering.
+  - Added frontend integration coverage for `ViewMediaPage` no-results recovery wiring (`clear search`, `clear filters`, `quick ingest` event dispatch).
+  - Added/confirmed request-churn guard coverage for debounced rapid typing with active filters.
 
 ### Changed
 
+- OpenAI OAuth runtime retry semantics in provider call paths:
+  - Chat, embeddings, and audio OpenAI OAuth `401` handling now force-refreshes once and retries once.
+  - If refresh/retry fails, handlers now propagate the original auth-class error (strict plan) instead of converting to reconnect-required payloads.
+- OpenAI OAuth observability:
+  - Added `byok_oauth_401_retry_total{provider,outcome}` outcome instrumentation for chat, embeddings, and audio retry flows.
+- OpenAI OAuth endpoint contract hardening:
+  - OAuth authorize tests now require and verify configured redirect URI propagation in the generated authorization URL.
 - Workspace Playground layout and interaction model:
   - Refined shell hierarchy and status signaling.
   - Converted empty-state examples into actionable prompt chips that seed composer input.
@@ -47,8 +91,25 @@ and this project adheres to Some kind of Versioning
   - Refactored Ant Design table density selectors to shared `.ant-table-cell` targeting and centralized common vertical alignment for easier maintenance.
 - Backend quota sourcing:
   - User profile quota assembly now prefers live storage metrics from `calculate_user_storage(...)` for `storage_used_mb` and `storage_quota_mb`, with fallback to stored user values on failure.
+- Quick Chat guide/tutorial behavior:
+  - Tutorial registry lookups now support an explicit suppression bypass for call sites that need route-scoped tutorial discovery outside options-runtime defaults.
+  - Browse Guides per-page tutorial lookup now opts into this explicit bypass for sidepanel-hosted Quick Chat.
+  - Workflow-card parsing now treats `routeLabel` as optional and derives fallback labels from route paths when omitted.
+  - Quick Chat workflow-card settings hint text now matches validation semantics (`title/question/answer/route` required; `id/routeLabel/tags` optional).
 - Structured-output parser documentation:
   - Added module/function docstrings in `tldw_Server_API/app/core/LLM_Calls/structured_output.py` clarifying candidate parsing order and strict/lenient semantics for shared endpoint and claims parsing paths.
+- Request core transport hardening:
+  - Absolute `http(s)` request targets are now blocked by default unless their origin is explicitly included in `absoluteUrlAllowlist`.
+  - Absolute URL requests now always skip auth injection at the core helper level (not only in background-proxy fallback paths).
+  - Multi-user token refresh retry logic is now bypassed for forced no-auth absolute URL requests.
+- HTTP client egress hardening:
+  - Egress policy evaluation now supports passing pre-resolved IPs and returning resolved IPs for callers that need consistent host checks.
+  - HTTP client retry/redirect loops now maintain a per-request DNS pin cache so subsequent checks for the same host reuse the initial resolved IP set.
+- Media search backend relevance/scoping behavior:
+  - `/api/v1/media/search` now threads `boost_fields` into DB search execution instead of silently ignoring weights.
+  - SQLite relevance sort now applies weighted BM25 scoring when `boost_fields` are supplied.
+  - PostgreSQL relevance sort now applies explicit weighted `ts_rank(...)` scoring when `boost_fields` are supplied.
+  - Metadata search (`/api/v1/media/metadata-search`) now applies optional standard constraints server-side before pagination (`q`, `media_types`, include/exclude keywords, date range, sort).
 
 ### Removed
 
@@ -56,8 +117,21 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 
+- Fixed OpenAI OAuth retry behavior drift from design by enforcing strict original-auth-error propagation after failed refresh+retry in chat, embeddings, and audio paths.
+- Fixed OpenAI OAuth endpoint test contract drift by aligning redirect URI requirements and assertions for both SQLite and PostgreSQL endpoint suites.
+- Fixed missing frontend linkage for OpenAI OAuth account controls in model settings by wiring API client methods, route guards, and action buttons.
 - Fixed workspace chat pane width reclaim issues when side panes were collapsed.
 - Fixed storage usage ambiguity by separating workspace payload budget, account quota usage, and browser-origin storage usage in the UI.
+- Fixed Quick Chat pop-out context loss where docs-mode and Browse Guides used `/quick-chat-popout` instead of the originating page route.
+- Fixed Browse Guides `Tutorials for this page` empties in sidepanel-hosted Quick Chat by enabling targeted route lookup for tutorial cards.
+- Fixed workflow-card validation/documentation mismatch by accepting valid cards that omit `routeLabel`.
+- Fixed an SSRF-adjacent request flow in shared request-core by enforcing default-deny absolute URL policy and explicit allowlist gating.
+- Fixed DNS rebinding exposure in server-side outbound HTTP by enforcing single-resolution IP pinning per host within a request lifecycle.
+- Fixed a watchlists XPath selector DoS risk by enforcing complexity limits on user-controlled selectors before compile/evaluation.
+- Fixed extension build/runtime compatibility for watchlist template editing by replacing `next/dynamic` usage in `TemplateCodeEditor` with `React.lazy` + `Suspense`, unblocking `quick-chat-guides-tutorials.spec.ts` Playwright runs.
+- Fixed media-search advanced controls drift where `boost_fields` UI controls had no backend relevance effect.
+- Fixed metadata-mode pagination/total-authority drift by enforcing server-side standard constraints before result pagination.
+- Fixed `ViewMediaPage` no-results recovery contract by wiring clear-search, clear-filters, and quick-ingest action dispatch through the page-level flow.
 
 ## [0.1.22] 2026-02-22
 

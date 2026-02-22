@@ -299,6 +299,12 @@ embedding_token_inputs_total = get_or_create_counter(
     ['mode']  # single or batch
 )
 
+byok_oauth_401_retry_total = get_or_create_counter(
+    'byok_oauth_401_retry_total',
+    'OpenAI OAuth 401 retry outcomes',
+    ['provider', 'outcome']
+)
+
 # DLQ/admin metrics
 dlq_requeued_total = get_or_create_counter(
     'embedding_dlq_requeued_total',
@@ -643,16 +649,11 @@ def _is_http_401_error(exc: BaseException) -> bool:
         return False
 
 
-def _raise_oauth_reconnect_required(provider: str) -> None:
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail={
-            "error_code": "oauth_reconnect_required",
-            "provider": provider,
-            "reconnect_required": True,
-            "message": f"{provider} OAuth access is no longer valid. Reconnect and retry.",
-        },
-    )
+def _record_oauth_401_retry(provider: str, outcome: str) -> None:
+    try:
+        byok_oauth_401_retry_total.labels(provider=provider, outcome=outcome).inc()
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        pass
 
 
 def _is_test_context() -> bool:
@@ -2579,10 +2580,12 @@ async def create_embedding_endpoint(
                                 p,
                                 force_oauth_refresh=True,
                             )
-                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                            _raise_oauth_reconnect_required(p)
+                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as refresh_exc:
+                            _record_oauth_401_retry(p, "refresh_failed")
+                            raise auth_exc from refresh_exc
                         if not refreshed_credentials.api_key:
-                            _raise_oauth_reconnect_required(p)
+                            _record_oauth_401_retry(p, "refresh_missing_api_key")
+                            raise auth_exc
                         try:
                             embeddings = await create_embeddings_batch_async(
                                 texts=texts_to_embed,
@@ -2594,8 +2597,11 @@ async def create_embedding_endpoint(
                             )
                         except HTTPException as retry_exc:
                             if _is_http_401_error(retry_exc):
-                                _raise_oauth_reconnect_required(p)
+                                _record_oauth_401_retry(p, "retry_auth_failed")
+                                raise auth_exc from retry_exc
+                            _record_oauth_401_retry(p, "retry_failed")
                             raise
+                        _record_oauth_401_retry(p, "success")
                     provider = p
                     if target_model_id:
                         model = target_model_id
@@ -2613,12 +2619,6 @@ async def create_embedding_endpoint(
                         he.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
                         and isinstance(getattr(he, "detail", None), dict)
                         and he.detail.get("error_code") == "missing_provider_credentials"
-                    ):
-                        raise
-                    if (
-                        he.status_code == status.HTTP_401_UNAUTHORIZED
-                        and isinstance(getattr(he, "detail", None), dict)
-                        and he.detail.get("error_code") == "oauth_reconnect_required"
                     ):
                         raise
                     if he.status_code and 400 <= he.status_code < 500 and he.status_code != 429:
@@ -2895,10 +2895,12 @@ async def create_embeddings_batch_endpoint(
                 request,
                 force_oauth_refresh=True,
             )
-        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-            _raise_oauth_reconnect_required(provider)
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as refresh_exc:
+            _record_oauth_401_retry(provider, "refresh_failed")
+            raise auth_exc from refresh_exc
         if not active_credentials.api_key:
-            _raise_oauth_reconnect_required(provider)
+            _record_oauth_401_retry(provider, "refresh_missing_api_key")
+            raise auth_exc
         try:
             embeddings = await create_embeddings_batch_async(
                 texts=texts,
@@ -2910,8 +2912,11 @@ async def create_embeddings_batch_endpoint(
             )
         except HTTPException as retry_exc:
             if _is_http_401_error(retry_exc):
-                _raise_oauth_reconnect_required(provider)
+                _record_oauth_401_retry(provider, "retry_auth_failed")
+                raise auth_exc from retry_exc
+            _record_oauth_401_retry(provider, "retry_failed")
             raise
+        _record_oauth_401_retry(provider, "success")
     await active_credentials.touch_last_used()
 
     if payload.dimensions is not None:
@@ -3017,10 +3022,12 @@ async def get_embedding_model_info(
                     request,
                     force_oauth_refresh=True,
                 )
-            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                _raise_oauth_reconnect_required(resolved_provider)
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as refresh_exc:
+                _record_oauth_401_retry(resolved_provider, "refresh_failed")
+                raise auth_exc from refresh_exc
             if not active_credentials.api_key:
-                _raise_oauth_reconnect_required(resolved_provider)
+                _record_oauth_401_retry(resolved_provider, "refresh_missing_api_key")
+                raise auth_exc
             try:
                 vectors = await create_embeddings_batch_async(
                     texts=["model probe"],
@@ -3031,8 +3038,11 @@ async def get_embedding_model_info(
                 )
             except HTTPException as retry_exc:
                 if _is_http_401_error(retry_exc):
-                    _raise_oauth_reconnect_required(resolved_provider)
+                    _record_oauth_401_retry(resolved_provider, "retry_auth_failed")
+                    raise auth_exc from retry_exc
+                _record_oauth_401_retry(resolved_provider, "retry_failed")
                 raise
+            _record_oauth_401_retry(resolved_provider, "success")
         await active_credentials.touch_last_used()
     except HTTPException:
         raise

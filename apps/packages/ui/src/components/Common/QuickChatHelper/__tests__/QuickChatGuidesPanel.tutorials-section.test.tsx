@@ -116,6 +116,31 @@ describe("QuickChatGuidesPanel tutorials section", () => {
     expect(screen.getByText("Ingest + summarize a source")).toBeInTheDocument()
   })
 
+  it("keeps workflow card Ask/Open actions wired after tutorials section changes", () => {
+    const onAskGuide = vi.fn()
+    const onOpenRoute = vi.fn()
+
+    render(
+      <QuickChatGuidesPanel
+        onAskGuide={onAskGuide}
+        onOpenRoute={onOpenRoute}
+        currentRoute="/prompts"
+      />
+    )
+
+    const guideCard = screen.getByText("Ingest + summarize a source").closest("section")
+    expect(guideCard).toBeTruthy()
+    if (!guideCard) return
+
+    fireEvent.click(within(guideCard).getByRole("button", { name: "Ask docs mode" }))
+    expect(onAskGuide).toHaveBeenCalledWith(
+      "How do I ingest a URL or file and then summarize it quickly?"
+    )
+
+    fireEvent.click(within(guideCard).getByRole("button", { name: /Open/i }))
+    expect(onOpenRoute).toHaveBeenCalledWith("/media")
+  })
+
   it("uses store startTutorial when no external start callback is provided", () => {
     render(
       <QuickChatGuidesPanel

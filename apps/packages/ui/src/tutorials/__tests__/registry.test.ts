@@ -50,6 +50,22 @@ describe("tutorial registry route matching", () => {
     )
   })
 
+  it("maps knowledge thread routes to canonical knowledge tutorials", () => {
+    const tutorials = getTutorialsForRoute("/knowledge/thread/abc123")
+
+    expect(tutorials.some((tutorial) => tutorial.id === "knowledge-basics")).toBe(
+      true
+    )
+  })
+
+  it("maps knowledge shared routes to canonical knowledge tutorials", () => {
+    const tutorials = getTutorialsForRoute("/knowledge/shared/share-token")
+
+    expect(tutorials.some((tutorial) => tutorial.id === "knowledge-basics")).toBe(
+      true
+    )
+  })
+
   it("supports wildcard route patterns", () => {
     const wildcardTutorial: TutorialDefinition = {
       id: "test-settings-wildcard",
@@ -117,6 +133,8 @@ describe("tutorial registry route matching", () => {
     expect(normalizeTutorialRoute("/options/notes")).toBe("/notes")
     expect(normalizeTutorialRoute("/options/flashcards")).toBe("/flashcards")
     expect(normalizeTutorialRoute("/options/world-books")).toBe("/world-books")
+    expect(normalizeTutorialRoute("/knowledge/thread/abc123")).toBe("/knowledge")
+    expect(normalizeTutorialRoute("/knowledge/shared/share-token")).toBe("/knowledge")
   })
 
   it("suppresses tutorials in sidepanel runtime context", () => {
@@ -126,6 +144,22 @@ describe("tutorial registry route matching", () => {
       window.history.replaceState({}, "", "/sidepanel.html")
       expect(isTutorialRuntimeSuppressed()).toBe(true)
       expect(getTutorialsForRoute("/chat")).toEqual([])
+    } finally {
+      window.history.replaceState({}, "", originalPath || "/")
+    }
+  })
+
+  it("can bypass sidepanel suppression when explicitly requested", () => {
+    const originalPath = `${window.location.pathname}${window.location.search}${window.location.hash}`
+
+    try {
+      window.history.replaceState({}, "", "/sidepanel.html")
+      const tutorials = getTutorialsForRoute("/chat", {
+        ignoreRuntimeSuppression: true
+      })
+      expect(tutorials.some((tutorial) => tutorial.id === "playground-basics")).toBe(
+        true
+      )
     } finally {
       window.history.replaceState({}, "", originalPath || "/")
     }

@@ -734,6 +734,38 @@ class TestDatabaseFTS:
         results, total = MediaDatabase.search_media_db(db_instance, search_query="nonexistent", search_fields=["content", "title"])
         assert total == 0
 
+    def test_fts_relevance_respects_boost_fields(self, db_instance):
+        title_match_id, _, _ = db_instance.add_media_with_keywords(
+            title="Quantum signal in title",
+            content="Background text only.",
+            media_type="fts_boost",
+        )
+        content_match_id, _, _ = db_instance.add_media_with_keywords(
+            title="Background title only",
+            content="Quantum signal appears in content.",
+            media_type="fts_boost",
+        )
+
+        title_boost_results, title_boost_total = MediaDatabase.search_media_db(
+            db_instance,
+            search_query="quantum signal",
+            search_fields=["title", "content"],
+            sort_by="relevance",
+            boost_fields={"title": 20.0, "content": 0.1},
+        )
+        content_boost_results, content_boost_total = MediaDatabase.search_media_db(
+            db_instance,
+            search_query="quantum signal",
+            search_fields=["title", "content"],
+            sort_by="relevance",
+            boost_fields={"title": 0.1, "content": 20.0},
+        )
+
+        assert title_boost_total == 2
+        assert content_boost_total == 2
+        assert title_boost_results[0]["id"] == title_match_id
+        assert content_boost_results[0]["id"] == content_match_id
+
     def test_fts_media_update_search(self, db_instance):
 
         """Test searching media via FTS after update."""
@@ -871,3 +903,96 @@ class TestDatabaseFTS:
         assert len(results) == 1
         assert results[0]['id'] == media_id_b
         assert results[0]['uuid'] == media_uuid_b
+
+    def test_search_by_safe_metadata_applies_standard_constraints(self, db_instance):
+        media_a_id, _, _ = db_instance.add_media_with_keywords(
+            title="Nature Biology Study",
+            content="Content A",
+            media_type="pdf",
+            keywords=["biology"],
+        )
+        media_b_id, _, _ = db_instance.add_media_with_keywords(
+            title="Private Report",
+            content="Content B",
+            media_type="audio",
+            keywords=["private"],
+        )
+
+        db_instance.create_document_version(
+            media_a_id,
+            "Content A v2",
+            safe_metadata=json.dumps({"doi": "10.1000/xyz", "journal": "Nature Medicine"}),
+        )
+        db_instance.create_document_version(
+            media_b_id,
+            "Content B v2",
+            safe_metadata=json.dumps({"doi": "10.1000/xyz", "journal": "Journal of Hidden Data"}),
+        )
+
+        rows, total = db_instance.search_by_safe_metadata(
+            filters=[{"field": "doi", "op": "eq", "value": "10.1000/xyz"}],
+            match_all=True,
+            page=1,
+            per_page=20,
+            group_by_media=True,
+            text_query="nature biology",
+            media_types=["pdf"],
+            must_have_keywords=["biology"],
+            must_not_have_keywords=["private"],
+            date_start="1990-01-01T00:00:00.000Z",
+            date_end="2999-12-31T23:59:59.999Z",
+            sort_by="date_desc",
+        )
+
+        assert total == 1
+        assert len(rows) == 1
+        assert rows[0]["media_id"] == media_a_id
+
+    def test_search_by_safe_metadata_sorts_before_pagination(self, db_instance):
+        media_a_id, _, _ = db_instance.add_media_with_keywords(
+            title="Alpha Study",
+            content="Content A",
+            media_type="pdf",
+            keywords=["biology"],
+        )
+        media_b_id, _, _ = db_instance.add_media_with_keywords(
+            title="Zulu Study",
+            content="Content B",
+            media_type="pdf",
+            keywords=["biology"],
+        )
+
+        db_instance.create_document_version(
+            media_a_id,
+            "Content A v2",
+            safe_metadata=json.dumps({"doi": "10.1000/xyz", "journal": "Journal A"}),
+        )
+        db_instance.create_document_version(
+            media_b_id,
+            "Content B v2",
+            safe_metadata=json.dumps({"doi": "10.1000/xyz", "journal": "Journal B"}),
+        )
+
+        page_one_rows, page_one_total = db_instance.search_by_safe_metadata(
+            filters=[{"field": "doi", "op": "eq", "value": "10.1000/xyz"}],
+            match_all=True,
+            page=1,
+            per_page=1,
+            group_by_media=True,
+            sort_by="title_asc",
+        )
+        page_two_rows, page_two_total = db_instance.search_by_safe_metadata(
+            filters=[{"field": "doi", "op": "eq", "value": "10.1000/xyz"}],
+            match_all=True,
+            page=2,
+            per_page=1,
+            group_by_media=True,
+            sort_by="title_asc",
+        )
+
+        assert page_one_total == 2
+        assert page_two_total == 2
+        assert len(page_one_rows) == 1
+        assert len(page_two_rows) == 1
+        assert page_one_rows[0]["title"] == "Alpha Study"
+        assert page_two_rows[0]["title"] == "Zulu Study"

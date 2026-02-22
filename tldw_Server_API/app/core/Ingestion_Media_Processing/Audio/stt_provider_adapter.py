@@ -254,7 +254,6 @@ class FasterWhisperAdapter(SttProviderAdapter):
             for seg in segments_for_response
             if isinstance(seg, dict)
         )
-        )
 
         return {
             "text": text,
@@ -329,7 +328,6 @@ class ParakeetAdapter(SttProviderAdapter):
             str(seg.get("text") or "").strip()
             for seg in segments_list
             if isinstance(seg, dict)
-        )
         )
         return {
             "text": text,
@@ -475,7 +473,6 @@ class Qwen2AudioAdapter(SttProviderAdapter):
             str(seg.get("text") or "").strip()
             for seg in segments_list
             if isinstance(seg, dict)
-        )
         )
         return {
             "text": text,

@@ -376,6 +376,7 @@ def _load_persona_policy_rules_for_session(
         "runtime_mode": "session_scoped",
         "scope_snapshot_id": None,
         "policy_rules": normalize_policy_rules(_DEFAULT_PERSONA_POLICY_RULES),
+        "persona_state_context_default": True,
         "session_exists": False,
     }
     sid = str(session_id or "").strip()
@@ -390,6 +391,13 @@ def _load_persona_policy_rules_for_session(
         runtime_mode = str(session_row.get("mode") or "session_scoped").strip().lower()
         if runtime_mode not in _PERSONA_RUNTIME_MODES:
             runtime_mode = "session_scoped"
+        persona_profile = db.get_persona_profile(persona_id, user_id=uid, include_deleted=False)
+        persona_state_context_default = True
+        if isinstance(persona_profile, dict):
+            persona_state_context_default = _coerce_bool(
+                persona_profile.get("use_persona_state_context_default"),
+                default=True,
+            )
         scope_snapshot_id = _scope_snapshot_id_from_snapshot(session_row.get("scope_snapshot") or {})
         policy_rules = db.list_persona_policy_rules(persona_id=persona_id, user_id=uid, include_deleted=False)
         return {
@@ -397,6 +405,7 @@ def _load_persona_policy_rules_for_session(
             "runtime_mode": runtime_mode,
             "scope_snapshot_id": scope_snapshot_id,
             "policy_rules": normalize_policy_rules(policy_rules),
+            "persona_state_context_default": persona_state_context_default,
             "session_exists": True,
         }
     except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
@@ -782,6 +791,10 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
         mode=str(profile.get("mode") or "session_scoped"),
         system_prompt=profile.get("system_prompt"),
         is_active=bool(profile.get("is_active", True)),
+        use_persona_state_context_default=_coerce_bool(
+            profile.get("use_persona_state_context_default"),
+            default=True,
+        ),
         created_at=str(profile.get("created_at") or _utc_now_iso()),
         last_modified=str(profile.get("last_modified") or _utc_now_iso()),
         version=int(profile.get("version") or 1),
@@ -2802,9 +2815,13 @@ async def persona_stream(
                     default=default_use_memory,
                 )
                 use_memory_context = requested_use_memory_context
+                runtime_persona_state_context_default = _coerce_bool(
+                    runtime_context.get("persona_state_context_default"),
+                    default=True,
+                )
                 default_use_persona_state_context = _coerce_bool(
                     existing_preferences.get("use_persona_state_context"),
-                    default=True,
+                    default=runtime_persona_state_context_default,
                 )
                 requested_use_persona_state_context = _coerce_bool(
                     msg.get("use_persona_state_context"),
@@ -2897,6 +2914,7 @@ async def persona_stream(
                     "runtime_mode": runtime_mode,
                     "persona_state_enabled": use_persona_state_context,
                     "persona_state_requested_enabled": requested_use_persona_state_context,
+                    "persona_state_profile_default": runtime_persona_state_context_default,
                     "persona_state_mode_allowed": state_context_allowed_by_mode,
                     "persona_state_applied_count": len(persona_state_fields),
                     "persona_state_fields": persona_state_fields,

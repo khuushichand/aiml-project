@@ -247,4 +247,64 @@ test.describe("Quick Chat Browse Guides tutorials validation", () => {
       await context.close()
     }
   })
+
+  test("shows knowledge tutorial card on /knowledge/thread route", async () => {
+    const { context, page, optionsUrl } = await launchWithBuiltExtension({
+      seedConfig: DEFAULT_SERVER_CONFIG,
+      seedLocalStorage: seedTutorialLocalStorage()
+    })
+
+    try {
+      await waitForConnectionStore(page, "quick-chat-guides-knowledge-thread")
+      await forceConnected(
+        page,
+        { serverUrl: DEFAULT_SERVER_CONFIG.serverUrl },
+        "quick-chat-guides-knowledge-thread"
+      )
+
+      await page.goto(`${optionsUrl}#/knowledge/thread/thread-123`)
+      await page.waitForLoadState("networkidle")
+      await dismissWelcomeOverlayIfPresent(page)
+
+      const modal = await openQuickChatBrowseGuides(page, "knowledge-thread")
+      await expect(
+        modal.getByTestId("quick-chat-guides-tutorial-knowledge-basics")
+      ).toBeVisible()
+      await expect(
+        modal.getByTestId("quick-chat-guides-tutorial-action-knowledge-basics")
+      ).toHaveText(/Start/i)
+    } finally {
+      await context.close()
+    }
+  })
+
+  test("shows knowledge tutorial card on /knowledge/shared route", async () => {
+    const { context, page, optionsUrl } = await launchWithBuiltExtension({
+      seedConfig: DEFAULT_SERVER_CONFIG,
+      seedLocalStorage: seedTutorialLocalStorage()
+    })
+
+    try {
+      await waitForConnectionStore(page, "quick-chat-guides-knowledge-shared")
+      await forceConnected(
+        page,
+        { serverUrl: DEFAULT_SERVER_CONFIG.serverUrl },
+        "quick-chat-guides-knowledge-shared"
+      )
+
+      await page.goto(`${optionsUrl}#/knowledge/shared/share-token-123`)
+      await page.waitForLoadState("networkidle")
+      await dismissWelcomeOverlayIfPresent(page)
+
+      const modal = await openQuickChatBrowseGuides(page, "knowledge-shared")
+      await expect(
+        modal.getByTestId("quick-chat-guides-tutorial-knowledge-basics")
+      ).toBeVisible()
+      await expect(
+        modal.getByTestId("quick-chat-guides-tutorial-action-knowledge-basics")
+      ).toHaveText(/Start/i)
+    } finally {
+      await context.close()
+    }
+  })
 })

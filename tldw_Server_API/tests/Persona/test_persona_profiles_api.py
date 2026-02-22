@@ -44,6 +44,7 @@ def test_persona_profile_scope_policy_crud(persona_db: CharactersRAGDB):
         profile = created.json()
         persona_id = profile["id"]
         assert profile["mode"] == "persistent_scoped"
+        assert profile["use_persona_state_context_default"] is True
 
         fetched = client.get(f"/api/v1/persona/profiles/{persona_id}")
         assert fetched.status_code == 200
@@ -86,10 +87,15 @@ def test_persona_profile_scope_policy_crud(persona_db: CharactersRAGDB):
 
         patched = client.patch(
             f"/api/v1/persona/profiles/{persona_id}",
-            json={"mode": "session_scoped", "is_active": True},
+            json={
+                "mode": "session_scoped",
+                "is_active": True,
+                "use_persona_state_context_default": False,
+            },
         )
         assert patched.status_code == 200, patched.text
         assert patched.json()["mode"] == "session_scoped"
+        assert patched.json()["use_persona_state_context_default"] is False
 
         listed = client.get("/api/v1/persona/profiles")
         assert listed.status_code == 200

@@ -90,6 +90,7 @@ async def _resolve_tts_byok(
     provider_hint: Optional[str],
     current_user,
     request,
+    force_oauth_refresh: bool = False,
 ):
     """Wrapper to preserve audio.py patch points for BYOK resolution."""
     user_id_int = None
@@ -118,6 +119,7 @@ async def _resolve_tts_byok(
             user_id=user_id_int,
             request=request,
             fallback_resolver=_tts_fallback_resolver,
+            force_oauth_refresh=force_oauth_refresh,
         )
         if byok_tts_resolution.uses_byok:
             tts_overrides = {"api_key": byok_tts_resolution.api_key}

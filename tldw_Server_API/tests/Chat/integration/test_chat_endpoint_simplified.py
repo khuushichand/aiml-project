@@ -355,7 +355,7 @@ def test_chat_completion_openai_oauth_auth_failure_retries_once(
     assert forced_refresh_flags[:2] == [False, True]
 
 
-def test_chat_completion_openai_oauth_reconnect_required_after_second_auth_failure(
+def test_chat_completion_openai_oauth_propagates_original_auth_error_after_second_failure(
     authenticated_client,
     mock_chacha_db,
     setup_dependencies,
@@ -391,9 +391,7 @@ def test_chat_completion_openai_oauth_reconnect_required_after_second_auth_failu
         response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    detail = response.json().get("detail", {})
-    assert detail.get("error_code") == "oauth_reconnect_required"
-    assert detail.get("reconnect_required") is True
+    assert response.json().get("detail") == "Unauthorized."
 
 
 def test_chat_completion_with_conversation_history(authenticated_client, mock_chacha_db, setup_dependencies):

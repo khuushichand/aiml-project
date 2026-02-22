@@ -120,7 +120,7 @@ describe("TutorialRunner retry behavior", () => {
     expect(tutorialState.setStepIndex).toHaveBeenCalledWith(1)
   })
 
-  it("ends tutorial and marks complete when last step keeps missing", () => {
+  it("ends tutorial without completion when last step keeps missing", () => {
     render(<TutorialRunner />)
     const callback = latestJoyrideProps.callback as (data: any) => void
 
@@ -141,7 +141,7 @@ describe("TutorialRunner retry behavior", () => {
       action: "next"
     })
 
-    expect(tutorialState.markComplete).toHaveBeenCalledWith("test-tutorial")
+    expect(tutorialState.markComplete).not.toHaveBeenCalled()
     expect(tutorialState.endTutorial).toHaveBeenCalledTimes(1)
   })
 })

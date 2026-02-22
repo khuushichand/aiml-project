@@ -62,6 +62,7 @@ def _seed_persona_session(
     user_id: str,
     session_id: str,
     mode: str,
+    use_persona_state_context_default: bool = True,
     scope_snapshot_json: dict | None = None,
 ) -> None:
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
@@ -79,6 +80,7 @@ def _seed_persona_session(
                 "mode": mode,
                 "system_prompt": "Helper",
                 "is_active": True,
+                "use_persona_state_context_default": bool(use_persona_state_context_default),
             }
         )
         _ = db.create_persona_session(
@@ -2083,6 +2085,98 @@ def test_persona_state_context_can_be_disabled_per_message(tmp_path, monkeypatch
     assert memory_payload.get("persona_state_enabled") is False
     assert memory_payload.get("persona_state_requested_enabled") is False
     assert memory_payload.get("persona_state_applied_count") == 0
+
+
+def test_persona_state_context_uses_profile_default_when_message_omits_override(tmp_path, monkeypatch):
+    identity_marker = "Profile-default-off state hint should not be injected"
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_state_profile_default_off",
+        mode="persistent_scoped",
+        use_persona_state_context_default=False,
+    )
+    _seed_persona_state_docs(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        persona_id="research_assistant",
+        identity_md=identity_marker,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_state_profile_default_off",
+                        "text": "find notes about pytest fixtures",
+                    }
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    first_step = plan["steps"][0]
+    assert first_step["step_type"] == "rag_query"
+    query_text = str((first_step.get("args") or {}).get("query") or "")
+    assert identity_marker not in query_text
+    memory_payload = plan.get("memory") or {}
+    assert memory_payload.get("persona_state_profile_default") is False
+    assert memory_payload.get("persona_state_requested_enabled") is False
+    assert memory_payload.get("persona_state_enabled") is False
+    assert memory_payload.get("persona_state_applied_count") == 0
+
+
+def test_persona_state_context_message_override_can_enable_when_profile_default_off(tmp_path, monkeypatch):
+    identity_marker = "Profile-default-off state hint can be enabled via message override"
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_state_profile_default_override",
+        mode="persistent_scoped",
+        use_persona_state_context_default=False,
+    )
+    _seed_persona_state_docs(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        persona_id="research_assistant",
+        identity_md=identity_marker,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_state_profile_default_override",
+                        "text": "find notes about pytest fixtures",
+                        "use_persona_state_context": True,
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "PERSONA_STATE_HINTS_APPLIED",
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    first_step = plan["steps"][0]
+    assert first_step["step_type"] == "rag_query"
+    query_text = str((first_step.get("args") or {}).get("query") or "")
+    assert identity_marker in query_text
+    memory_payload = plan.get("memory") or {}
+    assert memory_payload.get("persona_state_profile_default") is False
+    assert memory_payload.get("persona_state_requested_enabled") is True
+    assert memory_payload.get("persona_state_enabled") is True
+    assert memory_payload.get("persona_state_applied_count", 0) >= 1
 
 
 @pytest.mark.parametrize(

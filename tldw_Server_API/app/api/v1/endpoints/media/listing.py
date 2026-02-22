@@ -95,6 +95,16 @@ def _normalize_media_types(media_types: list[str] | None) -> list[str]:
     ]
 
 
+def _parse_csv_values(raw_value: str | None) -> list[str]:
+    if not raw_value:
+        return []
+    return [
+        value.strip()
+        for value in str(raw_value).split(",")
+        if value.strip()
+    ]
+
+
 def _should_delegate_media_search_to_email(
     *,
     search_params: SearchRequest,
@@ -577,6 +587,34 @@ async def search_by_metadata(
     group_by_media: bool = Query(True),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
+    q: Optional[str] = Query(
+        None,
+        description="Optional text query against title/safe metadata",
+    ),
+    media_types: Optional[str] = Query(
+        None,
+        description="Optional comma-separated media types",
+    ),
+    must_have: Optional[str] = Query(
+        None,
+        description="Optional comma-separated required keywords",
+    ),
+    must_not_have: Optional[str] = Query(
+        None,
+        description="Optional comma-separated excluded keywords",
+    ),
+    date_start: Optional[str] = Query(
+        None,
+        description="Optional lower date bound (ISO 8601 string)",
+    ),
+    date_end: Optional[str] = Query(
+        None,
+        description="Optional upper date bound (ISO 8601 string)",
+    ),
+    sort_by: Optional[str] = Query(
+        None,
+        description="Optional sort override: date_desc|date_asc|title_asc|title_desc",
+    ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> dict[str, Any]:
@@ -655,12 +693,43 @@ async def search_by_metadata(
                     detail=str(ve),
                 ) from ve
 
+        optional_search_kwargs: dict[str, Any] = {}
+
+        text_query = (q or "").strip()
+        if text_query:
+            optional_search_kwargs["text_query"] = text_query
+
+        normalized_media_types = [value.lower() for value in _parse_csv_values(media_types)]
+        if normalized_media_types:
+            optional_search_kwargs["media_types"] = normalized_media_types
+
+        must_have_keywords = _parse_csv_values(must_have)
+        if must_have_keywords:
+            optional_search_kwargs["must_have_keywords"] = must_have_keywords
+
+        must_not_have_keywords = _parse_csv_values(must_not_have)
+        if must_not_have_keywords:
+            optional_search_kwargs["must_not_have_keywords"] = must_not_have_keywords
+
+        normalized_date_start = (date_start or "").strip()
+        if normalized_date_start:
+            optional_search_kwargs["date_start"] = normalized_date_start
+
+        normalized_date_end = (date_end or "").strip()
+        if normalized_date_end:
+            optional_search_kwargs["date_end"] = normalized_date_end
+
+        normalized_sort_by = (sort_by or "").strip().lower()
+        if normalized_sort_by:
+            optional_search_kwargs["sort_by"] = normalized_sort_by
+
         rows, total = db.search_by_safe_metadata(
             filters=normalized_filters or None,
             match_all=(match_mode.lower() == "all"),
             page=page,
             per_page=per_page,
             group_by_media=group_by_media,
+            **optional_search_kwargs,
         )
 
         for r in rows:
@@ -908,6 +977,7 @@ async def search_media_items(
                 must_have_keywords=search_params.must_have,
                 must_not_have_keywords=search_params.must_not_have,
                 sort_by=search_params.sort_by,
+                boost_fields=search_params.boost_fields,
                 page=page,
                 results_per_page=results_per_page,
                 include_trash=False,

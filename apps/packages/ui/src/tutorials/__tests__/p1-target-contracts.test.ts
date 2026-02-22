@@ -10,9 +10,16 @@ const srcRoot = path.resolve(testDir, "../../")
 const readSource = (relativePath: string): string =>
   readFileSync(path.resolve(srcRoot, relativePath), "utf8")
 
-describe("P1 tutorial selector contracts", () => {
-  it("uses stable selector formats for all P1 tutorial steps", () => {
-    const p1TutorialIds = [
+describe("P0/P1 tutorial selector contracts", () => {
+  it("uses stable selector formats for all P0/P1 tutorial steps", () => {
+    const p0p1TutorialIds = [
+      "playground-basics",
+      "playground-tools",
+      "playground-voice",
+      "workspace-playground-basics",
+      "media-basics",
+      "knowledge-basics",
+      "characters-basics",
       "prompts-basics",
       "evaluations-basics",
       "notes-basics",
@@ -20,7 +27,7 @@ describe("P1 tutorial selector contracts", () => {
       "world-books-basics"
     ]
 
-    for (const tutorialId of p1TutorialIds) {
+    for (const tutorialId of p0p1TutorialIds) {
       const tutorial = getTutorialById(tutorialId)
       expect(tutorial).toBeDefined()
       if (!tutorial) continue
@@ -41,6 +48,97 @@ describe("P1 tutorial selector contracts", () => {
           expect(isStableSelector).toBe(true)
         }
       }
+    }
+  })
+
+  it("keeps required playground tutorial anchors in source", () => {
+    const formContent = readSource("components/Option/Playground/PlaygroundForm.tsx")
+    const toolbarContent = readSource("components/Option/Playground/ComposerToolbar.tsx")
+    const textareaContent = readSource("components/Option/Playground/ComposerTextarea.tsx")
+    const promptSelectContent = readSource("components/Common/PromptSelect.tsx")
+    const headerContent = readSource("components/Layouts/ChatHeader.tsx")
+    const chatSidebarContent = readSource("components/Common/ChatSidebar.tsx")
+
+    const formAnchors = [
+      'data-testid="model-selector"',
+      'data-testid="tools-button"',
+      'data-testid="attachment-button"',
+      'data-testid="mcp-tools-toggle"',
+      'data-testid="voice-chat-button"'
+    ]
+    for (const anchor of formAnchors) {
+      expect(formContent).toContain(anchor)
+    }
+
+    const toolbarAnchors = [
+      'data-testid="knowledge-search-toggle"',
+      'data-testid="web-search-toggle"',
+      'data-testid="dictation-button"'
+    ]
+    for (const anchor of toolbarAnchors) {
+      expect(toolbarContent).toContain(anchor)
+    }
+
+    expect(textareaContent).toContain('data-testid="chat-input"')
+    expect(promptSelectContent).toContain('dataTestId="chat-prompt-select"')
+    expect(headerContent).toContain('data-testid="new-chat-button"')
+    expect(chatSidebarContent).toContain('data-testid="chat-sidebar-new-chat"')
+  })
+
+  it("keeps required workspace playground tutorial anchors in source", () => {
+    const workspaceContent = readSource("components/Option/WorkspacePlayground/index.tsx")
+    const headerContent = readSource("components/Option/WorkspacePlayground/WorkspaceHeader.tsx")
+
+    expect(workspaceContent).toContain('id="workspace-sources-panel"')
+    expect(workspaceContent).toContain('id="workspace-main-content"')
+    expect(workspaceContent).toContain('id="workspace-studio-panel"')
+    expect(headerContent).toContain('data-testid="workspace-workspaces-button"')
+  })
+
+  it("keeps required media tutorial anchors in source", () => {
+    const searchContent = readSource("components/Media/SearchBar.tsx")
+    const reviewContent = readSource("components/Review/ViewMediaPage.tsx")
+    const resultsContent = readSource("components/Media/ResultsList.tsx")
+    const viewerContent = readSource("components/Media/ContentViewer.tsx")
+
+    expect(searchContent).toContain('data-testid="media-search-input"')
+    expect(reviewContent).toContain('id="media-search-panel"')
+    expect(reviewContent).toContain('data-testid="media-search-submit"')
+    expect(resultsContent).toContain('data-testid="media-results-list"')
+    expect(viewerContent).toContain('data-testid="content-scroll-container"')
+    expect(reviewContent).toContain('data-testid="media-library-tools-toggle"')
+  })
+
+  it("keeps required knowledge tutorial anchors in source", () => {
+    const searchContent = readSource("components/Option/KnowledgeQA/SearchBar.tsx")
+    const contextBarContent = readSource(
+      "components/Option/KnowledgeQA/context/KnowledgeContextBar.tsx"
+    )
+    const layoutContent = readSource("components/Option/KnowledgeQA/layout/KnowledgeQALayout.tsx")
+    const historyContent = readSource("components/Option/KnowledgeQA/HistorySidebar.tsx")
+
+    expect(searchContent).toContain('id="knowledge-search-input"')
+    expect(contextBarContent).toContain('id="knowledge-source-selector-toggle"')
+    expect(layoutContent).toContain('data-testid="knowledge-search-shell"')
+    expect(layoutContent).toContain('data-testid="knowledge-results-shell"')
+    expect(historyContent).toContain('data-testid="knowledge-history-desktop-open"')
+    expect(historyContent).toContain('data-testid="knowledge-history-desktop-collapsed"')
+    expect(historyContent).toContain('data-testid="knowledge-history-mobile-open"')
+  })
+
+  it("keeps required characters tutorial anchors in source", () => {
+    const managerContent = readSource("components/Option/Characters/Manager.tsx")
+    const anchors = [
+      'data-testid="characters-new-button"',
+      'data-testid="characters-search-input"',
+      'data-testid="characters-scope-segmented"',
+      'data-testid="characters-view-mode-segmented"',
+      'data-testid="characters-table-view"',
+      'data-testid="characters-gallery-view"'
+    ]
+
+    for (const anchor of anchors) {
+      expect(managerContent).toContain(anchor)
     }
   })
 

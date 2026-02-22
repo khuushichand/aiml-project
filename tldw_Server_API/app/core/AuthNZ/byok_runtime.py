@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
+import threading
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+from weakref import WeakKeyDictionary
 
 from loguru import logger
 
@@ -45,10 +49,15 @@ from tldw_Server_API.app.core.Metrics import increment_counter
 
 DEFAULT_LAST_USED_THROTTLE_SECONDS = 300
 DEFAULT_OPENAI_OAUTH_REFRESH_SKEW_SECONDS = 120
+DEFAULT_OPENAI_OAUTH_REFRESH_LOCK_BACKEND = "memory"
 _OPENAI_PROVIDER = "openai"
 _OPENAI_SOURCE_API_KEY = "api_key"
 _OPENAI_SOURCE_OAUTH = "oauth"
 _OPENAI_CREDENTIAL_VERSION = 2
+
+_openai_oauth_refresh_lock_guard = threading.Lock()
+_openai_oauth_refresh_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = WeakKeyDictionary()
+_openai_oauth_refresh_backend_warned: set[str] = set()
 
 _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -539,6 +548,76 @@ def _openai_oauth_refresh_skew_seconds() -> int:
     return max(0, parsed)
 
 
+def _normalize_openai_oauth_refresh_lock_backend(raw_value: Any) -> str:
+    text = _coerce_nonempty_string(raw_value)
+    if text is None:
+        return DEFAULT_OPENAI_OAUTH_REFRESH_LOCK_BACKEND
+    normalized = text.lower()
+    if normalized in {"memory", "redis", "db"}:
+        return normalized
+    return DEFAULT_OPENAI_OAUTH_REFRESH_LOCK_BACKEND
+
+
+def _openai_oauth_refresh_lock_backend() -> str:
+    env_override = os.getenv("OPENAI_OAUTH_REFRESH_LOCK_BACKEND")
+    if env_override is not None:
+        return _normalize_openai_oauth_refresh_lock_backend(env_override)
+    try:
+        settings = get_settings()
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
+        return DEFAULT_OPENAI_OAUTH_REFRESH_LOCK_BACKEND
+    setting_value = getattr(
+        settings,
+        "OPENAI_OAUTH_REFRESH_LOCK_BACKEND",
+        DEFAULT_OPENAI_OAUTH_REFRESH_LOCK_BACKEND,
+    )
+    return _normalize_openai_oauth_refresh_lock_backend(setting_value)
+
+
+def _openai_refresh_lock_key(*, user_id: int, provider: str) -> str:
+    return f"{int(user_id)}:{provider}"
+
+
+def _get_openai_refresh_lock(lock_key: str) -> asyncio.Lock:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = None
+    if loop is None:
+        return asyncio.Lock()
+    with _openai_oauth_refresh_lock_guard:
+        bucket = _openai_oauth_refresh_locks.get(loop)
+        if bucket is None:
+            bucket = {}
+            _openai_oauth_refresh_locks[loop] = bucket
+        lock = bucket.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            bucket[lock_key] = lock
+        return lock
+
+
+@contextlib.asynccontextmanager
+async def _openai_oauth_refresh_lock(*, user_id: int, provider: str):
+    backend = _openai_oauth_refresh_lock_backend()
+    if backend != "memory":
+        with _openai_oauth_refresh_lock_guard:
+            should_log = backend not in _openai_oauth_refresh_backend_warned
+            if should_log:
+                _openai_oauth_refresh_backend_warned.add(backend)
+        if should_log:
+            logger.warning(
+                "OPENAI_OAUTH_REFRESH_LOCK_BACKEND={} requested; falling back to in-process memory lock.",
+                backend,
+            )
+    lock = _get_openai_refresh_lock(_openai_refresh_lock_key(user_id=user_id, provider=provider))
+    async with lock:
+        yield
+
+
 def _openai_payload_needs_refresh(
     payload: dict[str, Any],
     *,
@@ -733,101 +812,133 @@ async def _resolve_openai_user_payload(
     )
 
     if needs_refresh:
-        settings = get_settings()
-        token_url = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_TOKEN_URL", None))
-        client_id = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_CLIENT_ID", None))
-        client_secret = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_CLIENT_SECRET", None))
-        oauth_enabled = bool(getattr(settings, "OPENAI_OAUTH_ENABLED", False))
-        refresh_token = _v2_payload_oauth_refresh_token(merged_payload)
-        token_payload: dict[str, Any] | None = None
-        refresh_succeeded = False
-        if oauth_enabled and token_url and client_id and client_secret and refresh_token:
-            token_payload = await _openai_oauth_token_refresh(
-                token_url=token_url,
-                client_id=client_id,
-                client_secret=client_secret,
-                refresh_token=refresh_token,
+        async with _openai_oauth_refresh_lock(user_id=user_id, provider=_OPENAI_PROVIDER):
+            try:
+                latest_row = await user_repo.fetch_secret_for_user(int(user_id), _OPENAI_PROVIDER)
+            except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(
+                    "BYOK user reload before OAuth refresh failed for user_id={} provider={}: {}",
+                    user_id,
+                    _OPENAI_PROVIDER,
+                    exc,
+                )
+                latest_row = None
+
+            if latest_row:
+                latest_payload = _extract_payload(latest_row, _OPENAI_PROVIDER)
+                if latest_payload:
+                    row = latest_row
+                    merged_payload = _coerce_openai_payload_v2(latest_payload)
+
+            now = datetime.now(timezone.utc)
+            runtime_api_key = _extract_runtime_api_key(merged_payload)
+            runtime_auth_source = _extract_runtime_auth_source(
+                merged_payload,
+                require_access_for_oauth=True,
+            )
+            needs_refresh = _openai_payload_needs_refresh(
+                merged_payload,
+                force_oauth_refresh=force_oauth_refresh,
+                now=now,
+                skew_seconds=_openai_oauth_refresh_skew_seconds(),
             )
 
-        if token_payload:
-            access_token = _coerce_nonempty_string(token_payload.get("access_token"))
-            if access_token:
-                oauth_payload = _openai_source_payload(merged_payload, _OPENAI_SOURCE_OAUTH)
-                next_refresh_token = _coerce_nonempty_string(token_payload.get("refresh_token")) or refresh_token
-                token_type = (
-                    _coerce_nonempty_string(token_payload.get("token_type"))
-                    or _coerce_nonempty_string(oauth_payload.get("token_type"))
-                    or "Bearer"
-                )
-                scope = _coerce_nonempty_string(token_payload.get("scope")) or _coerce_nonempty_string(
-                    oauth_payload.get("scope")
-                )
-                expires_in = _extract_positive_int(token_payload.get("expires_in"))
-                refreshed_at = datetime.now(timezone.utc)
-                refreshed_oauth_payload = dict(oauth_payload)
-                refreshed_oauth_payload["access_token"] = access_token
-                if next_refresh_token:
-                    refreshed_oauth_payload["refresh_token"] = next_refresh_token
-                refreshed_oauth_payload["token_type"] = token_type
-                refreshed_oauth_payload["issued_at"] = refreshed_at.isoformat()
-                if scope:
-                    refreshed_oauth_payload["scope"] = scope
-                if expires_in:
-                    refreshed_oauth_payload["expires_at"] = (
-                        refreshed_at + timedelta(seconds=expires_in)
-                    ).isoformat()
-                else:
-                    refreshed_oauth_payload.pop("expires_at", None)
+            if needs_refresh:
+                settings = get_settings()
+                token_url = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_TOKEN_URL", None))
+                client_id = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_CLIENT_ID", None))
+                client_secret = _coerce_nonempty_string(getattr(settings, "OPENAI_OAUTH_CLIENT_SECRET", None))
+                oauth_enabled = bool(getattr(settings, "OPENAI_OAUTH_ENABLED", False))
+                refresh_token = _v2_payload_oauth_refresh_token(merged_payload)
+                token_payload: dict[str, Any] | None = None
+                refresh_succeeded = False
+                if oauth_enabled and token_url and client_id and client_secret and refresh_token:
+                    token_payload = await _openai_oauth_token_refresh(
+                        token_url=token_url,
+                        client_id=client_id,
+                        client_secret=client_secret,
+                        refresh_token=refresh_token,
+                    )
 
-                credentials = _openai_credentials_map(merged_payload)
-                credentials[_OPENAI_SOURCE_OAUTH] = refreshed_oauth_payload
-                merged_payload["credentials"] = credentials
-                merged_payload["active_auth_source"] = _OPENAI_SOURCE_OAUTH
-                runtime_auth_source = _OPENAI_SOURCE_OAUTH
-                runtime_api_key = access_token
-                refresh_succeeded = True
-                await _persist_user_payload_update(
-                    repo=user_repo,
-                    provider=_OPENAI_PROVIDER,
-                    user_id=user_id,
-                    row=row,
-                    payload=merged_payload,
-                    updated_at=refreshed_at,
-                )
-            else:
-                logger.debug("OpenAI OAuth refresh response missing access_token")
+                if token_payload:
+                    access_token = _coerce_nonempty_string(token_payload.get("access_token"))
+                    if access_token:
+                        oauth_payload = _openai_source_payload(merged_payload, _OPENAI_SOURCE_OAUTH)
+                        next_refresh_token = _coerce_nonempty_string(token_payload.get("refresh_token")) or refresh_token
+                        token_type = (
+                            _coerce_nonempty_string(token_payload.get("token_type"))
+                            or _coerce_nonempty_string(oauth_payload.get("token_type"))
+                            or "Bearer"
+                        )
+                        scope = _coerce_nonempty_string(token_payload.get("scope")) or _coerce_nonempty_string(
+                            oauth_payload.get("scope")
+                        )
+                        expires_in = _extract_positive_int(token_payload.get("expires_in"))
+                        refreshed_at = datetime.now(timezone.utc)
+                        refreshed_oauth_payload = dict(oauth_payload)
+                        refreshed_oauth_payload["access_token"] = access_token
+                        if next_refresh_token:
+                            refreshed_oauth_payload["refresh_token"] = next_refresh_token
+                        refreshed_oauth_payload["token_type"] = token_type
+                        refreshed_oauth_payload["issued_at"] = refreshed_at.isoformat()
+                        if scope:
+                            refreshed_oauth_payload["scope"] = scope
+                        if expires_in:
+                            refreshed_oauth_payload["expires_at"] = (
+                                refreshed_at + timedelta(seconds=expires_in)
+                            ).isoformat()
+                        else:
+                            refreshed_oauth_payload.pop("expires_at", None)
 
-        if not refresh_succeeded:
-            runtime_api_key = None
-            runtime_auth_source = None
+                        credentials = _openai_credentials_map(merged_payload)
+                        credentials[_OPENAI_SOURCE_OAUTH] = refreshed_oauth_payload
+                        merged_payload["credentials"] = credentials
+                        merged_payload["active_auth_source"] = _OPENAI_SOURCE_OAUTH
+                        runtime_auth_source = _OPENAI_SOURCE_OAUTH
+                        runtime_api_key = access_token
+                        refresh_succeeded = True
+                        await _persist_user_payload_update(
+                            repo=user_repo,
+                            provider=_OPENAI_PROVIDER,
+                            user_id=user_id,
+                            row=row,
+                            payload=merged_payload,
+                            updated_at=refreshed_at,
+                        )
+                    else:
+                        logger.debug("OpenAI OAuth refresh response missing access_token")
 
-        if not runtime_api_key:
-            fallback_api_key = _v2_payload_api_key(merged_payload)
-            if fallback_api_key:
-                runtime_api_key = fallback_api_key
-                runtime_auth_source = _OPENAI_SOURCE_API_KEY
-                merged_payload["active_auth_source"] = _OPENAI_SOURCE_API_KEY
-                await _persist_user_payload_update(
-                    repo=user_repo,
-                    provider=_OPENAI_PROVIDER,
-                    user_id=user_id,
-                    row=row,
-                    payload=merged_payload,
-                    updated_at=datetime.now(timezone.utc),
-                )
-                return _OpenAIUserResolution(
-                    payload=merged_payload,
-                    api_key=runtime_api_key,
-                    auth_source=runtime_auth_source,
-                    fail_closed=False,
-                )
+                if not refresh_succeeded:
+                    runtime_api_key = None
+                    runtime_auth_source = None
 
-            return _OpenAIUserResolution(
-                payload=merged_payload,
-                api_key=None,
-                auth_source=None,
-                fail_closed=True,
-            )
+                if not runtime_api_key:
+                    fallback_api_key = _v2_payload_api_key(merged_payload)
+                    if fallback_api_key:
+                        runtime_api_key = fallback_api_key
+                        runtime_auth_source = _OPENAI_SOURCE_API_KEY
+                        merged_payload["active_auth_source"] = _OPENAI_SOURCE_API_KEY
+                        await _persist_user_payload_update(
+                            repo=user_repo,
+                            provider=_OPENAI_PROVIDER,
+                            user_id=user_id,
+                            row=row,
+                            payload=merged_payload,
+                            updated_at=datetime.now(timezone.utc),
+                        )
+                        return _OpenAIUserResolution(
+                            payload=merged_payload,
+                            api_key=runtime_api_key,
+                            auth_source=runtime_auth_source,
+                            fail_closed=False,
+                        )
+
+                    return _OpenAIUserResolution(
+                        payload=merged_payload,
+                        api_key=None,
+                        auth_source=None,
+                        fail_closed=True,
+                    )
 
     if runtime_api_key:
         return _OpenAIUserResolution(

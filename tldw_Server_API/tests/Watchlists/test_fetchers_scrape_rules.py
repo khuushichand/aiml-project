@@ -81,6 +81,27 @@ def test_parse_scraped_items_alternates():
     assert urls == ["https://example.com/alpha", "https://example.com/beta"]
 
 
+def test_parse_scraped_items_skips_unsafe_xpath_selectors():
+    html_text = """
+    <html>
+      <body>
+        <div class="entry">
+          <a href="/unsafe">Unsafe</a>
+        </div>
+      </body>
+    </html>
+    """
+    rules = {
+        "entry_xpath": "//div[@class='entry']",
+        # Wildcard descendant selectors are too broad and should be rejected.
+        "link_xpath": "//*",
+        "title_xpath": ".//a/text()",
+    }
+
+    result = parse_scraped_items(html_text, "https://example.com/blog", rules)
+    assert result["items"] == []
+
+
 @pytest.mark.asyncio
 async def test_fetch_site_items_with_rules_test_mode(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "1")

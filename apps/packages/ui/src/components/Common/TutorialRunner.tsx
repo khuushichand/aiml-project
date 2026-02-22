@@ -282,14 +282,11 @@ export const TutorialRunner: React.FC = () => {
           currentStep?.target
         )
 
-        // After retries are exhausted, skip to next step (or finish).
+        // After retries are exhausted, skip to next step (or end without completion).
         if (index < joyrideSteps.length - 1) {
           setStepIndex(index + 1)
         } else {
-          // Last step, end the tutorial
-          if (activeTutorialId) {
-            markComplete(activeTutorialId)
-          }
+          // Last step target never resolved, so end without granting completion.
           endTutorial()
         }
       }
