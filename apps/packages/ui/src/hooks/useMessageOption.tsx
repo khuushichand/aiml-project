@@ -181,7 +181,9 @@ export const useMessageOption = (
     compareMaxModels,
     setCompareMaxModels,
     compareModeActive,
-    markCompareHistoryCreated
+    markCompareHistoryCreated,
+    compareAutoDisabledFlag,
+    setCompareAutoDisabledFlag
   } = useCompareMode({ historyId, forceEnabled: opts.forceCompareEnabled })
 
   const currentChatModelSettings = useStoreChatModelSettings()
@@ -585,6 +587,8 @@ export const useMessageOption = (
     compareMaxModels,
     compareFeatureEnabled,
     markCompareHistoryCreated,
+    compareAutoDisabledFlag,
+    setCompareAutoDisabledFlag,
     messageSteeringPrompts,
     messageSteeringMode,
     messageSteeringForceNarrate,

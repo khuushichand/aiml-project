@@ -1846,6 +1846,7 @@ export const PlaygroundChat = ({
                         compareSelected={isSelected}
                         onToggleCompareSelect={handleToggle}
                         compareError={hasError}
+                        compareErrorModelLabel={hasError ? getModelLabel(modelKey) : undefined}
                         compareChosen={isChosenCard}
                         variants={message.variants}
                         activeVariantIndex={message.activeVariantIndex}
@@ -1860,7 +1861,7 @@ export const PlaygroundChat = ({
 
                       {threadPreviewItems.length > 1 && (
                         <div className="mt-2 space-y-1 rounded-md bg-surface2 p-2 text-[11px] text-text">
-                          <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-text-subtle">
+                          <div className="mb-0.5 text-[11px] font-medium tracking-wide text-text-subtle">
                             {t(
                               "playground:composer.compareThreadLabel",
                               "Per-model thread"
@@ -1988,12 +1989,12 @@ export const PlaygroundChat = ({
                               title={
                                 compareCanonicalByCluster[block.clusterId] === message.id
                                   ? (t(
-                                      "playground:composer.comparePrimaryOn",
-                                      "Main response"
+                                      "playground:composer.compareCanonicalOn",
+                                      "Chosen"
                                     ) as string)
                                   : (t(
-                                      "playground:composer.comparePrimaryOff",
-                                      "Use as main response"
+                                      "playground:composer.compareCanonicalOff",
+                                      "Choose as answer"
                                     ) as string)
                               }
                               className={`rounded px-2 py-0.5 text-[10px] font-medium border transition ${
@@ -2005,12 +2006,12 @@ export const PlaygroundChat = ({
                               {compareCanonicalByCluster[block.clusterId] ===
                               message.id
                                 ? t(
-                                    "playground:composer.comparePrimaryOn",
-                                    "Main response"
+                                    "playground:composer.compareCanonicalOn",
+                                    "Chosen"
                                   )
                                 : t(
-                                    "playground:composer.comparePrimaryOff",
-                                    "Use as main response"
+                                    "playground:composer.compareCanonicalOff",
+                                    "Choose as answer"
                                   )}
                             </button>
                           )}
@@ -2026,7 +2027,7 @@ export const PlaygroundChat = ({
                       <span className="font-medium">
                         {t(
                           "playground:composer.compareSelectedLabel",
-                          "Selected as answer:"
+                          "Chosen answer:"
                         )}
                       </span>
                       <div className="flex flex-wrap gap-1">
@@ -2136,8 +2137,8 @@ export const PlaygroundChat = ({
                       <div className="mb-1 flex items-center gap-2 text-[11px] font-medium">
                         <span className="uppercase tracking-wide">
                           {t(
-                            "playground:composer.comparePrimaryLabel",
-                            "Main response"
+                            "playground:composer.compareCanonicalLabel",
+                            "Chosen answer"
                           )}
                         </span>
                         <span className="text-success/80">

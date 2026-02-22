@@ -347,7 +347,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     contextFiles,
     documentContext,
     selectedKnowledge,
-    ragMediaIds
+    ragMediaIds,
+    compareAutoDisabledFlag,
+    setCompareAutoDisabledFlag
   } = useMessageOption()
   const setRagMediaIds = useStoreMessageOption((s) => s.setRagMediaIds)
   const setRagPinnedResults = useStoreMessageOption((s) => s.setRagPinnedResults)
@@ -371,6 +373,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const mobileComposerViewport = useMobileComposerViewport(isMobileViewport)
   const [openModelSettings, setOpenModelSettings] = React.useState(false)
   const [openActorSettings, setOpenActorSettings] = React.useState(false)
+  const [noticesExpanded, setNoticesExpanded] = React.useState(false)
   const systemPrompt = useStoreChatModelSettings((state) => state.systemPrompt)
   const setSystemPrompt = useStoreChatModelSettings(
     (state) => state.setSystemPrompt
@@ -866,6 +869,23 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       setCompareMode(false)
     }
   }, [compareFeatureEnabled, compareMode, setCompareMode])
+
+  React.useEffect(() => {
+    if (compareAutoDisabledFlag) {
+      notificationApi.info({
+        message: t(
+          "playground:compareDisabledNotice",
+          "Compare mode was turned off"
+        ),
+        description: t(
+          "playground:compareDisabledNoticeDesc",
+          "The compare feature was disabled. Your model selections are saved."
+        ),
+        duration: 4
+      })
+      setCompareAutoDisabledFlag(false)
+    }
+  }, [compareAutoDisabledFlag, setCompareAutoDisabledFlag, notificationApi, t])
 
   // Auto-select model on initial load when no model is selected
   // Priority: 1) First favorite model, 2) First available model
@@ -7626,7 +7646,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                               )}
                             </p>
                             <div className="space-y-1">
-                              {compareInteroperabilityNotices.map((notice) => (
+                              {(noticesExpanded
+                                ? compareInteroperabilityNotices
+                                : compareInteroperabilityNotices.slice(0, 2)
+                              ).map((notice) => (
                                 <div
                                   key={notice.id}
                                   className={`rounded border px-2 py-1 text-[11px] ${
@@ -7638,6 +7661,24 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                   {notice.text}
                                 </div>
                               ))}
+                              {compareInteroperabilityNotices.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setNoticesExpanded(!noticesExpanded)}
+                                  className="text-[10px] text-primary underline"
+                                >
+                                  {noticesExpanded
+                                    ? t(
+                                        "playground:compareNoticesCollapse",
+                                        "Show fewer"
+                                      )
+                                    : t(
+                                        "playground:compareNoticesExpand",
+                                        "{{count}} more notes",
+                                        { count: compareInteroperabilityNotices.length - 2 }
+                                      )}
+                                </button>
+                              )}
                             </div>
                           </div>
                         )}

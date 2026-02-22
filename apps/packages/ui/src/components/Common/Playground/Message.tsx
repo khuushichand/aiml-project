@@ -195,6 +195,8 @@ type Props = {
   compareSelected?: boolean
   onToggleCompareSelect?: () => void
   compareError?: boolean
+  compareErrorModelLabel?: string
+  onCompareRetry?: () => void
   compareChosen?: boolean
   // Tool/function calls (optional)
   toolCalls?: ToolCall[]
@@ -1879,10 +1881,28 @@ export const PlaygroundMessage = (props: Props) => {
                       </span>
                     )}
                     {props.compareError && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-danger/10 px-2 py-1 text-xs font-medium text-danger">
-                        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
-                        {t("error.label", "Error")}
-                      </span>
+                      <div className="flex items-center gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2">
+                        <AlertTriangle className="h-4 w-4 flex-shrink-0 text-danger" aria-hidden="true" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-medium text-danger">
+                            {t("playground:compareErrorTitle", "Response failed")}
+                          </p>
+                          {props.compareErrorModelLabel && (
+                            <p className="text-[10px] text-text-muted">
+                              {props.compareErrorModelLabel}
+                            </p>
+                          )}
+                        </div>
+                        {props.onCompareRetry && (
+                          <button
+                            type="button"
+                            onClick={props.onCompareRetry}
+                            className="rounded border border-danger/30 px-2 py-0.5 text-[10px] text-danger hover:bg-danger/10"
+                          >
+                            {t("playground:compareRetry", "Retry")}
+                          </button>
+                        )}
+                      </div>
                     )}
                     {props.compareChosen && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-1 text-xs font-medium text-success">
