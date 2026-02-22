@@ -727,3 +727,47 @@ export const fetchClaimClusters = async (params?: {
     method: "GET"
   })
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Template Validation & Preview
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TemplateValidationError {
+  line?: number | null
+  column?: number | null
+  message: string
+}
+
+export interface TemplateValidationResult {
+  valid: boolean
+  errors: TemplateValidationError[]
+}
+
+export interface TemplatePreviewResult {
+  rendered: string
+  context_keys: string[]
+  warnings: string[]
+}
+
+export const validateWatchlistTemplate = async (
+  content: string,
+  format: "md" | "html" = "md"
+): Promise<TemplateValidationResult> => {
+  return bgRequest<TemplateValidationResult>({
+    path: "/api/v1/watchlists/templates/validate" as any,
+    method: "POST",
+    body: { content, format }
+  })
+}
+
+export const previewWatchlistTemplate = async (
+  content: string,
+  runId: number,
+  format: "md" | "html" = "md"
+): Promise<TemplatePreviewResult> => {
+  return bgRequest<TemplatePreviewResult>({
+    path: "/api/v1/watchlists/templates/preview" as any,
+    method: "POST",
+    body: { content, format, run_id: runId }
+  })
+}

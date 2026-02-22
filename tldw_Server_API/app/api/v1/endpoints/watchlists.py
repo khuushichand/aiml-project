@@ -75,10 +75,13 @@ from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseError a
 from tldw_Server_API.app.services.outputs_service import (
     _build_output_filename,
     _ingest_output_to_media_db,
+    _normalize_template_syntax,
     _outputs_dir_for_user,
     _resolve_output_path_for_user,
     _strip_html_for_tts,
     _write_tts_audio_file,
+    build_source_name_map,
+    group_items as _group_items,
     render_output_template,
     summarize_items_for_output,
 )
@@ -171,6 +174,11 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     WatchlistTemplateValidationErrorResponse,
     WatchlistTemplateVersionsResponse,
     WatchlistTemplateVersionSummary,
+    TemplatePreviewRequest,
+    TemplatePreviewResponse,
+    TemplateValidateRequest,
+    TemplateValidationResult,
+    TemplateValidationErrorItem,
 )
 
 _WATCHLISTS_NONCRITICAL_EXCEPTIONS = (
@@ -884,6 +892,9 @@ def _build_output_context(
     job_row: Any,
     run_row: Any,
     items: list[ScrapedItem],
+    *,
+    groups: list[dict[str, Any]] | None = None,
+    briefing_summary: str | None = None,
 ) -> dict[str, Any]:
     markdown_lines = _items_to_markdown_lines(items)
     html_entries = _items_to_html_entries(items)
@@ -913,6 +924,8 @@ def _build_output_context(
         payload.setdefault("html_entry", html_entries[idx - 1])
         items_payload.append(payload)
 
+    effective_groups = groups or []
+    effective_summary = briefing_summary or ""
     context = {
         "title": title,
         "generated_at": _utcnow_iso(),
@@ -922,6 +935,11 @@ def _build_output_context(
         "items_markdown": markdown_lines,
         "items_html": html_entries,
         "item_count": len(items_payload),
+        "groups": effective_groups,
+        "group_count": len(effective_groups),
+        "has_groups": len(effective_groups) > 0,
+        "briefing_summary": effective_summary,
+        "has_briefing_summary": bool(effective_summary),
     }
     return context
 
@@ -4406,7 +4424,33 @@ async def create_output(
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Watchlists output summarization failed (non-critical): {exc}")
 
-    context = _build_output_context(title, job, run, item_models)
+    # Backend grouping (sync, fast — tag/source/custom modes only; topic is async)
+    output_groups: list[dict[str, Any]] = []
+    if payload.grouping and payload.grouping.group_by != "topic":
+        source_name_map: dict[int, str] = {}
+        if payload.grouping.group_by == "source":
+            all_source_ids = list({getattr(it, "source_id", None) for it in items if getattr(it, "source_id", None)})
+            source_name_map = build_source_name_map(db, all_source_ids)
+        custom_rules = None
+        if payload.grouping.custom_rules:
+            custom_rules = [r.model_dump() for r in payload.grouping.custom_rules]
+        items_as_dicts = []
+        for itm in item_models:
+            if hasattr(itm, "model_dump"):
+                items_as_dicts.append(itm.model_dump())
+            else:
+                items_as_dicts.append({"id": itm.id, "title": itm.title, "tags": itm.tags, "source_id": itm.source_id, "url": itm.url})
+        output_groups = _group_items(
+            items_as_dicts,
+            group_by=payload.grouping.group_by,
+            multi_tag_mode=payload.grouping.multi_tag_mode,
+            custom_rules=custom_rules,
+            ungrouped_label=payload.grouping.ungrouped_label,
+            sort_groups_by=payload.grouping.sort_groups_by,
+            source_name_map=source_name_map,
+        )
+
+    context = _build_output_context(title, job, run, item_models, groups=output_groups)
 
     # Inject LLM summaries into context
     if llm_summaries:
@@ -4468,6 +4512,27 @@ async def create_output(
     if tts_brief_auto:
         metadata["tts_brief_auto"] = True
         metadata["tts_brief_max_items"] = tts_brief_max_items
+
+    # Grouping and summary enrichment metadata
+    if output_groups:
+        metadata["group_count"] = len(output_groups)
+        metadata["group_by"] = payload.grouping.group_by if payload.grouping else None
+    needs_async_enrichment = False
+    if payload.briefing_summary and payload.briefing_summary.enabled:
+        metadata["summary_status"] = "pending"
+        needs_async_enrichment = True
+    if payload.grouping and payload.grouping.group_by == "topic":
+        metadata["grouping_status"] = "pending"
+        needs_async_enrichment = True
+    if payload.briefing_summary and payload.briefing_summary.per_group_summaries:
+        metadata["group_summary_status"] = "pending"
+        needs_async_enrichment = True
+    if needs_async_enrichment:
+        metadata["enrichment_status"] = "pending"
+        if payload.grouping:
+            metadata["_enrichment_grouping_config"] = payload.grouping.model_dump()
+        if payload.briefing_summary:
+            metadata["_enrichment_summary_config"] = payload.briefing_summary.model_dump()
 
     delivery_override = (
         payload.deliveries.model_dump(exclude_none=True) if payload.deliveries else {}
@@ -4996,6 +5061,87 @@ async def list_templates(
         for rec in records
     ]
     return WatchlistTemplateListResponse(items=items)
+
+
+@router.post(
+    "/templates/validate",
+    response_model=TemplateValidationResult,
+    summary="Validate Jinja2 template syntax",
+)
+async def validate_template(
+    payload: TemplateValidateRequest,
+    current_user: User = Depends(get_request_user),
+):
+    """Validate a Jinja2 template for syntax errors without rendering."""
+    from jinja2 import TemplateSyntaxError
+    from jinja2.sandbox import SandboxedEnvironment
+
+    errors: list[dict[str, Any]] = []
+    try:
+        env = SandboxedEnvironment(autoescape=True, enable_async=False)
+        normalized = _normalize_template_syntax(payload.content)
+        env.parse(normalized)
+    except TemplateSyntaxError as exc:
+        errors.append({
+            "line": exc.lineno,
+            "column": None,
+            "message": str(exc.message) if hasattr(exc, "message") else str(exc),
+        })
+    except Exception as exc:
+        errors.append({
+            "line": None,
+            "column": None,
+            "message": f"Unexpected error: {exc}",
+        })
+
+    return TemplateValidationResult(
+        valid=len(errors) == 0,
+        errors=[TemplateValidationErrorItem(**e) for e in errors],
+    )
+
+
+@router.post(
+    "/templates/preview",
+    response_model=TemplatePreviewResponse,
+    summary="Preview a template rendered against real run data",
+)
+async def preview_template(
+    payload: TemplatePreviewRequest,
+    current_user: User = Depends(get_request_user),
+    db=Depends(get_watchlists_db_for_user),
+    collections_db=Depends(get_collections_db_for_user),
+):
+    """Render a template against real run data for live preview."""
+    try:
+        run = db.get_run(payload.run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found") from None
+    try:
+        job = db.get_job(run.job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job_not_found") from None
+
+    items_raw, _ = db.list_items(run_id=payload.run_id, status="ingested", limit=1000, offset=0)
+    if not items_raw:
+        raise HTTPException(status_code=400, detail="no_items_available")
+
+    item_models = [_row_to_scraped_item(it) for it in items_raw]
+    title = getattr(job, "name", None) or f"Job-{job.id}"
+    context = _build_output_context(title, job, run, item_models)
+    context_keys = sorted(context.keys())
+
+    warnings: list[str] = []
+    try:
+        rendered = _render_template_with_context(payload.content, context)
+    except Exception as exc:
+        warnings.append(f"Render error: {exc}")
+        rendered = payload.content
+
+    return TemplatePreviewResponse(
+        rendered=rendered,
+        context_keys=context_keys,
+        warnings=warnings,
+    )
 
 
 @router.get(

@@ -500,6 +500,14 @@ class WatchlistOutputCreateRequest(BaseModel):
         default=None,
         description="Optional delivery configuration (email, chatbook). Overrides job defaults when provided.",
     )
+    grouping: GroupingConfig | None = Field(
+        default=None,
+        description="Backend grouping configuration for items",
+    )
+    briefing_summary: BriefingSummaryConfig | None = Field(
+        default=None,
+        description="Briefing-level LLM summary configuration (always async)",
+    )
 
 
 class WatchlistOutput(BaseModel):
@@ -589,3 +597,65 @@ class SourcesImportResponse(BaseModel):
     created: int
     skipped: int
     errors: int
+
+
+# --------------------
+# Grouping & Briefing Summary
+# --------------------
+class GroupingRule(BaseModel):
+    group_name: str
+    match_field: Literal["tag", "source_id", "url", "title"] = "tag"
+    match_pattern: str
+    match_mode: Literal["exact", "contains", "regex"] = "exact"
+
+
+class GroupingConfig(BaseModel):
+    group_by: Literal["tag", "source", "topic", "custom"] = "tag"
+    multi_tag_mode: Literal["primary", "duplicate"] = "primary"
+    custom_rules: list[GroupingRule] | None = None
+    ungrouped_label: str = "Uncategorized"
+    sort_groups_by: Literal["name", "item_count"] = "name"
+    topic_llm_provider: str | None = None
+    topic_llm_model: str | None = None
+    max_groups: int = Field(default=7, ge=2, le=20)
+
+
+class BriefingSummaryConfig(BaseModel):
+    enabled: bool = True
+    prompt: str | None = None
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    per_group_summaries: bool = False
+    per_group_prompt: str | None = None
+    max_items_for_direct_summary: int = Field(default=30, ge=1, le=200)
+
+
+# --------------------
+# Template Preview & Validation
+# --------------------
+class TemplatePreviewRequest(BaseModel):
+    content: str
+    format: Literal["md", "html"] = "md"
+    run_id: int
+
+
+class TemplatePreviewResponse(BaseModel):
+    rendered: str
+    context_keys: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TemplateValidateRequest(BaseModel):
+    content: str
+    format: Literal["md", "html"] = "md"
+
+
+class TemplateValidationErrorItem(BaseModel):
+    line: int | None = None
+    column: int | None = None
+    message: str
+
+
+class TemplateValidationResult(BaseModel):
+    valid: bool
+    errors: list[TemplateValidationErrorItem] = Field(default_factory=list)

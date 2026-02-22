@@ -629,3 +629,342 @@ async def summarize_items_for_output(
             except Exception as exc:
                 logger.debug(f"outputs_service: cache persist failed: {exc}")
     return items
+
+
+# ---------------------------------------------------------------------------
+# Backend Grouping Engine for watchlist outputs
+# ---------------------------------------------------------------------------
+
+def group_items(
+    items: list[dict[str, Any]],
+    *,
+    group_by: str = "tag",
+    multi_tag_mode: str = "primary",
+    custom_rules: list[dict[str, Any]] | None = None,
+    ungrouped_label: str = "Uncategorized",
+    sort_groups_by: str = "name",
+    source_name_map: dict[int, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Group items into named buckets. Returns list of {name, items, item_count, summary}."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+
+    if group_by == "tag":
+        for item in items:
+            tags = item.get("tags") or []
+            if not tags:
+                groups.setdefault(ungrouped_label, []).append(item)
+            elif multi_tag_mode == "duplicate":
+                for tag in tags:
+                    groups.setdefault(str(tag), []).append(item)
+            else:
+                # primary mode: use first tag only
+                groups.setdefault(str(tags[0]), []).append(item)
+
+    elif group_by == "source":
+        name_map = source_name_map or {}
+        for item in items:
+            source_id = item.get("source_id")
+            name = name_map.get(source_id, f"Source {source_id}") if source_id else ungrouped_label
+            groups.setdefault(name, []).append(item)
+
+    elif group_by == "custom" and custom_rules:
+        import re as _re
+        matched_ids: set[int] = set()
+        for rule in custom_rules:
+            rule_name = rule.get("group_name", ungrouped_label)
+            field = rule.get("match_field", "tag")
+            pattern = rule.get("match_pattern", "")
+            mode = rule.get("match_mode", "exact")
+            for item in items:
+                item_id = id(item)
+                if field == "tag":
+                    values = [str(t) for t in (item.get("tags") or [])]
+                else:
+                    val = item.get(field, "")
+                    values = [str(val)] if val else []
+                for val in values:
+                    match = False
+                    if mode == "exact":
+                        match = val == pattern
+                    elif mode == "contains":
+                        match = pattern.lower() in val.lower()
+                    elif mode == "regex":
+                        try:
+                            match = bool(_re.search(pattern, val))
+                        except _re.error:
+                            match = False
+                    if match:
+                        groups.setdefault(rule_name, []).append(item)
+                        matched_ids.add(item_id)
+                        break
+        # Ungrouped items
+        for item in items:
+            if id(item) not in matched_ids:
+                groups.setdefault(ungrouped_label, []).append(item)
+
+    else:
+        # Fallback: single group with all items
+        groups[ungrouped_label] = list(items)
+
+    # Build result list
+    result = [
+        {
+            "name": name,
+            "items": group_items_list,
+            "item_count": len(group_items_list),
+            "summary": None,
+        }
+        for name, group_items_list in groups.items()
+    ]
+
+    # Sort groups
+    if sort_groups_by == "item_count":
+        result.sort(key=lambda g: (-g["item_count"], g["name"]))
+    else:
+        result.sort(key=lambda g: g["name"])
+
+    return result
+
+
+def build_source_name_map(db: Any, source_ids: list[int]) -> dict[int, str]:
+    """Resolve source IDs to names from the watchlists DB."""
+    name_map: dict[int, str] = {}
+    if not source_ids:
+        return name_map
+    for sid in source_ids:
+        try:
+            source = db.get_source(sid)
+            name_map[sid] = getattr(source, "name", None) or f"Source {sid}"
+        except Exception:
+            name_map[sid] = f"Source {sid}"
+    return name_map
+
+
+# ---------------------------------------------------------------------------
+# LLM Summary Generation helpers (always async via Scheduler)
+# ---------------------------------------------------------------------------
+
+_BRIEFING_SUMMARY_DEFAULT_PROMPT = (
+    "Provide a 3-5 sentence executive summary of the following collection of articles. "
+    "Focus on the most important themes and key takeaways:\n\n{text}"
+)
+_GROUP_SUMMARY_DEFAULT_PROMPT = (
+    "Summarize the following group of related articles in 2-3 sentences. "
+    "Focus on the common theme and key points:\n\n{text}"
+)
+_TOPIC_CLASSIFY_PROMPT = (
+    "Classify the following articles into {max_groups} or fewer topic groups. "
+    "Return a JSON array of objects with keys 'group_name' (string) and 'item_indices' (array of 0-based integers). "
+    "Every article index must appear in exactly one group.\n\nArticles:\n{text}"
+)
+
+
+def _summarize_text_block(
+    text: str,
+    *,
+    api_name: str,
+    model_override: str | None = None,
+    custom_prompt: str | None = None,
+    max_chars: int = 20_000,
+) -> str:
+    """Shared helper to summarize a block of text via LLM. Synchronous."""
+    from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+
+    truncated = text[:max_chars]
+    prompt = (custom_prompt or _BRIEFING_SUMMARY_DEFAULT_PROMPT).format(text=truncated)
+    try:
+        result = analyze(
+            input_data=truncated,
+            custom_prompt=prompt,
+            api_name=api_name,
+            api_key=None,
+            model=model_override,
+        )
+        if isinstance(result, str) and result.strip():
+            return result.strip()
+    except Exception as exc:
+        logger.warning(f"outputs_service: LLM summarize_text_block failed: {exc}")
+    return ""
+
+
+async def generate_group_summaries(
+    groups: list[dict[str, Any]],
+    *,
+    api_name: str,
+    model_override: str | None = None,
+    custom_prompt: str | None = None,
+) -> list[dict[str, Any]]:
+    """Generate LLM summaries for each group. Sequential processing, tolerates per-group failure."""
+    loop = asyncio.get_running_loop()
+    for group in groups:
+        group_items = group.get("items", [])
+        if not group_items:
+            group["summary"] = ""
+            continue
+        texts = []
+        for item in group_items[:50]:
+            title = item.get("title", "")
+            summary = item.get("llm_summary") or item.get("summary", "")
+            if title:
+                texts.append(f"- {title}: {summary}" if summary else f"- {title}")
+        combined = "\n".join(texts)
+        prompt = (custom_prompt or _GROUP_SUMMARY_DEFAULT_PROMPT).format(text=combined)
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda t=combined, p=prompt: _summarize_text_block(
+                    t, api_name=api_name, model_override=model_override, custom_prompt=p,
+                ),
+            )
+            group["summary"] = result
+        except Exception as exc:
+            logger.warning(f"outputs_service: group summary failed for '{group.get('name')}': {exc}")
+            group["summary"] = ""
+    return groups
+
+
+async def generate_briefing_summary(
+    items: list[dict[str, Any]],
+    *,
+    groups: list[dict[str, Any]] | None = None,
+    api_name: str,
+    model_override: str | None = None,
+    custom_prompt: str | None = None,
+    max_items_for_direct: int = 30,
+) -> str:
+    """Generate a briefing-level summary. Uses hierarchical/map-reduce for large item sets."""
+    loop = asyncio.get_running_loop()
+
+    if len(items) <= max_items_for_direct:
+        # Direct: concatenate all summaries, one LLM call
+        texts = []
+        for item in items:
+            title = item.get("title", "")
+            summary = item.get("llm_summary") or item.get("summary", "")
+            if title:
+                texts.append(f"- {title}: {summary}" if summary else f"- {title}")
+        combined = "\n".join(texts)
+        return await loop.run_in_executor(
+            None,
+            lambda: _summarize_text_block(
+                combined, api_name=api_name, model_override=model_override, custom_prompt=custom_prompt,
+            ),
+        )
+
+    # Large set: check if group summaries are available
+    if groups:
+        group_summaries = [g.get("summary", "") for g in groups if g.get("summary")]
+        if group_summaries:
+            combined = "\n\n".join(
+                f"**{g.get('name', 'Group')}**: {g['summary']}" for g in groups if g.get("summary")
+            )
+            return await loop.run_in_executor(
+                None,
+                lambda: _summarize_text_block(
+                    combined, api_name=api_name, model_override=model_override, custom_prompt=custom_prompt,
+                ),
+            )
+
+    # Map-reduce: chunk items into batches, summarize each, then summarize batch summaries
+    batch_size = max_items_for_direct
+    batch_summaries: list[str] = []
+    for i in range(0, len(items), batch_size):
+        batch = items[i:i + batch_size]
+        texts = []
+        for item in batch:
+            title = item.get("title", "")
+            summary = item.get("llm_summary") or item.get("summary", "")
+            if title:
+                texts.append(f"- {title}: {summary}" if summary else f"- {title}")
+        combined = "\n".join(texts)
+        result = await loop.run_in_executor(
+            None,
+            lambda t=combined: _summarize_text_block(
+                t, api_name=api_name, model_override=model_override, custom_prompt=custom_prompt,
+            ),
+        )
+        if result:
+            batch_summaries.append(result)
+
+    if not batch_summaries:
+        return ""
+    if len(batch_summaries) == 1:
+        return batch_summaries[0]
+    # Final reduction
+    combined = "\n\n".join(f"Batch {i+1}: {s}" for i, s in enumerate(batch_summaries))
+    return await loop.run_in_executor(
+        None,
+        lambda: _summarize_text_block(
+            combined, api_name=api_name, model_override=model_override, custom_prompt=custom_prompt,
+        ),
+    )
+
+
+async def classify_items_by_topic(
+    items: list[dict[str, Any]],
+    *,
+    api_name: str,
+    model_override: str | None = None,
+    max_groups: int = 7,
+) -> list[dict[str, Any]] | None:
+    """Classify items into topic groups using LLM. Returns list of {name, items, item_count, summary} or None on failure."""
+    loop = asyncio.get_running_loop()
+    texts = []
+    for idx, item in enumerate(items):
+        title = item.get("title", "Untitled")
+        summary = item.get("llm_summary") or item.get("summary", "")
+        texts.append(f"[{idx}] {title}: {summary[:200]}" if summary else f"[{idx}] {title}")
+    combined = "\n".join(texts)
+    prompt = _TOPIC_CLASSIFY_PROMPT.format(max_groups=max_groups, text=combined)
+
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: _summarize_text_block(
+                combined, api_name=api_name, model_override=model_override, custom_prompt=prompt, max_chars=30_000,
+            ),
+        )
+        if not result:
+            return None
+        # Parse JSON from LLM response
+        import json as _json
+        # Try to extract JSON array from response
+        start = result.find("[")
+        end = result.rfind("]")
+        if start == -1 or end == -1:
+            logger.warning("outputs_service: topic classification response has no JSON array")
+            return None
+        parsed = _json.loads(result[start:end + 1])
+        if not isinstance(parsed, list):
+            return None
+
+        groups: list[dict[str, Any]] = []
+        assigned: set[int] = set()
+        for entry in parsed:
+            name = entry.get("group_name", "Unnamed")
+            indices = entry.get("item_indices", [])
+            group_items_list = []
+            for idx in indices:
+                if isinstance(idx, int) and 0 <= idx < len(items) and idx not in assigned:
+                    group_items_list.append(items[idx])
+                    assigned.add(idx)
+            if group_items_list:
+                groups.append({
+                    "name": str(name),
+                    "items": group_items_list,
+                    "item_count": len(group_items_list),
+                    "summary": None,
+                })
+        # Add unassigned items to "Other" group
+        unassigned = [items[i] for i in range(len(items)) if i not in assigned]
+        if unassigned:
+            groups.append({
+                "name": "Other",
+                "items": unassigned,
+                "item_count": len(unassigned),
+                "summary": None,
+            })
+        return groups if groups else None
+    except Exception as exc:
+        logger.warning(f"outputs_service: topic classification failed: {exc}")
+        return None
