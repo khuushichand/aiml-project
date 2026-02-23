@@ -225,7 +225,7 @@ git commit -m "feat(meetings): add session template artifact services"
 **Status**: Complete
 
 ### Task 4: Implement Session + Template + Artifact Endpoints
-**Progress**: Complete (in working tree, pending commit)
+**Progress**: Complete (`b268af3f8`)
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/endpoints/meetings.py`
@@ -293,9 +293,10 @@ git commit -m "feat(meetings): add sessions templates artifacts CRUD"
 **Goal**: Support live WS and SSE updates plus offline ingest/finalize flow.
 **Success Criteria**: Session stream emits standardized events and finalize generates artifacts.
 **Tests**: Streaming contract tests + ingest/finalize integration tests pass.
-**Status**: Not Started
+**Status**: In Progress
 
 ### Task 5: Add SSE and WS Meeting Event Transport
+**Progress**: Complete (in working tree, pending commit)
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/endpoints/meetings.py`

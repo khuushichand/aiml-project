@@ -548,6 +548,26 @@ class MeetingsDatabase:
             )
             return int(cursor.lastrowid or 0)
 
+    def list_events(
+        self,
+        *,
+        session_id: str,
+        user_id: int | str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        resolved_user_id = self._resolve_user_id(user_id)
+        rows = self.get_connection().execute(
+            """
+            SELECT id, user_id, session_id, event_type, payload_json, created_at
+            FROM meeting_event_log
+            WHERE session_id = ? AND user_id = ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (str(session_id), resolved_user_id, self._clamp_limit(limit)),
+        ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
     def record_integration_dispatch(
         self,
         *,

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import StreamingResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.Meetings_DB_Deps import get_meetings_db_for_user
 from tldw_Server_API.app.api.v1.schemas.meetings_schemas import (
@@ -19,7 +20,9 @@ from tldw_Server_API.app.api.v1.schemas.meetings_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Meetings_DB import MeetingsDatabase
 from tldw_Server_API.app.core.Meetings.artifact_service import MeetingArtifactService
+from tldw_Server_API.app.core.Meetings.events_service import MeetingEventsService
 from tldw_Server_API.app.core.Meetings.session_service import MeetingSessionService
+from tldw_Server_API.app.core.Meetings.stream_adapter import build_meeting_event, to_sse_frame
 from tldw_Server_API.app.core.Meetings.template_service import MeetingTemplateService
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
@@ -76,6 +79,7 @@ async def create_session(
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
 ) -> MeetingSessionResponse:
     service = MeetingSessionService(db=meetings_db)
+    events_service = MeetingEventsService(db=meetings_db)
     row = service.create_session(
         title=payload.title,
         meeting_type=payload.meeting_type,
@@ -83,6 +87,11 @@ async def create_session(
         language=payload.language,
         template_id=payload.template_id,
         metadata=payload.metadata,
+    )
+    events_service.emit(
+        session_id=str(row.get("id") or ""),
+        event_type="session.created",
+        data={"status": row.get("status"), "title": row.get("title")},
     )
     return _to_session_response(row)
 
@@ -119,12 +128,18 @@ async def transition_session_status(
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
 ) -> MeetingSessionResponse:
     service = MeetingSessionService(db=meetings_db)
+    events_service = MeetingEventsService(db=meetings_db)
     try:
         row = service.transition(session_id=session_id, to_status=payload.status)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting session not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    events_service.emit(
+        session_id=session_id,
+        event_type="session.status",
+        data={"status": row.get("status")},
+    )
     return _to_session_response(row)
 
 
@@ -195,6 +210,7 @@ async def create_artifact(
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
 ) -> MeetingArtifactResponse:
     service = MeetingArtifactService(db=meetings_db)
+    events_service = MeetingEventsService(db=meetings_db)
     try:
         row = service.create_artifact(
             session_id=session_id,
@@ -207,6 +223,11 @@ async def create_artifact(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting session not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    events_service.emit(
+        session_id=session_id,
+        event_type="artifact.ready",
+        data={"artifact_id": row.get("id"), "kind": row.get("kind")},
+    )
     return _to_artifact_response(row)
 
 
@@ -218,3 +239,78 @@ async def list_artifacts(
     service = MeetingArtifactService(db=meetings_db)
     rows = service.list_artifacts(session_id=session_id)
     return [_to_artifact_response(row) for row in rows]
+
+
+@router.get("/sessions/{session_id}/events")
+async def stream_session_events(
+    session_id: str,
+    meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
+) -> StreamingResponse:
+    session_service = MeetingSessionService(db=meetings_db)
+    events_service = MeetingEventsService(db=meetings_db)
+
+    try:
+        session_row = session_service.get_session(session_id=session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting session not found") from exc
+
+    events = events_service.recent(session_id=session_id, limit=100)
+    if not events:
+        events = [events_service.snapshot_for_session(session_row)]
+
+    async def _event_stream():
+        for event in events:
+            yield to_sse_frame(event)
+        yield to_sse_frame(
+            build_meeting_event(
+                event_type="stream.complete",
+                session_id=session_id,
+                data={"count": len(events)},
+            )
+        )
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
+@router.websocket("/sessions/{session_id}/stream")
+async def stream_session_ws(
+    websocket: WebSocket,
+    session_id: str,
+    meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
+) -> None:
+    session_service = MeetingSessionService(db=meetings_db)
+    events_service = MeetingEventsService(db=meetings_db)
+
+    await websocket.accept()
+    try:
+        session_row = session_service.get_session(session_id=session_id)
+    except KeyError:
+        await websocket.send_json({"type": "error", "detail": "Meeting session not found", "session_id": session_id})
+        await websocket.close(code=4404)
+        return
+
+    await websocket.send_json(events_service.snapshot_for_session(session_row))
+
+    while True:
+        try:
+            message = await websocket.receive_json()
+        except WebSocketDisconnect:
+            break
+        except Exception:
+            await websocket.send_json({"type": "error", "detail": "invalid_message", "session_id": session_id})
+            continue
+
+        msg_type = str(message.get("type") or "").strip().lower()
+        if msg_type == "ping":
+            await websocket.send_json({"type": "pong", "session_id": session_id})
+            continue
+        if msg_type in {"close", "disconnect"}:
+            await websocket.close(code=1000)
+            break
+
+        event = events_service.emit(
+            session_id=session_id,
+            event_type="transcript.partial",
+            data=message,
+        )
+        await websocket.send_json(event)
