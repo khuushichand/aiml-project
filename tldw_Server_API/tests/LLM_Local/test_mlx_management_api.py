@@ -126,6 +126,42 @@ def test_mlx_load_preserves_explicit_model_path_and_overrides(monkeypatch):
 
 
 @pytest.mark.unit
+def test_mlx_load_trims_explicit_model_path(monkeypatch):
+    registry = _RegistryStub()
+    monkeypatch.setattr(mlx_ep, "_default_settings", lambda: {"model_path": "default-model"})
+    app = _make_app_with_registry(registry)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/llm/providers/mlx/load",
+            json={"model_path": "  explicit-model  "},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["backend"] == "mlx"
+    assert registry.last_model_path == "explicit-model"
+
+
+@pytest.mark.unit
+def test_mlx_load_blank_explicit_model_path_falls_back_to_default(monkeypatch):
+    registry = _RegistryStub()
+    monkeypatch.setattr(mlx_ep, "_default_settings", lambda: {"model_path": "default-model"})
+    app = _make_app_with_registry(registry)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/llm/providers/mlx/load",
+            json={"model_path": "   "},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["backend"] == "mlx"
+    assert registry.last_model_path == "default-model"
+
+
+@pytest.mark.unit
 def test_mlx_load_accepts_empty_post_body(monkeypatch):
     registry = _RegistryStub(load_result={"active": True, "model": "stub-model"})
     monkeypatch.setattr(mlx_ep, "_default_settings", lambda: {"model_path": "stub-model"})

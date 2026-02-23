@@ -203,6 +203,8 @@ class MLXSessionRegistry:
 
     def load(self, *, model_path: str | None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         """Load or swap the active model. Keeps previous model on failure."""
+        if isinstance(model_path, str):
+            model_path = model_path.strip() or None
         if not model_path:
             raise ChatBadRequestError(provider="mlx", message="model_path is required")
         self._ensure_metrics()

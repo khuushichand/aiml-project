@@ -55,6 +55,13 @@ def test_load_and_unload(monkeypatch):
     assert reg.status()["active"] is False
 
 
+def test_load_blank_model_path_raises(monkeypatch):
+    _patch_mlx(monkeypatch)
+    reg = mp.get_mlx_registry()
+    with pytest.raises(ChatBadRequestError):
+        reg.load(model_path="   ", overrides={"max_concurrent": 1})
+
+
 def test_overflow_raises_rate_limit(monkeypatch):
     _patch_mlx(monkeypatch)
     reg = mp.get_mlx_registry()

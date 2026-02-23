@@ -32,6 +32,13 @@ def _normalize_mlx_response(payload: Any) -> dict[str, Any]:
     return normalized
 
 
+def _normalize_model_path(value: Any) -> str | None:
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    return value if isinstance(value, str) else None
+
+
 @router.post(
     "/llm/providers/mlx/load",
     summary="Load or swap the active MLX model",
@@ -42,7 +49,9 @@ async def load_mlx_model(
     registry: MLXSessionRegistry = Depends(_resolve_mlx_registry),
 ):
     overrides = payload.model_dump(exclude_none=True)
-    model_path = overrides.pop("model_path", None) or _default_settings().get("model_path")
+    model_path = _normalize_model_path(overrides.pop("model_path", None))
+    if model_path is None:
+        model_path = _normalize_model_path(_default_settings().get("model_path"))
     try:
         status = registry.load(model_path=model_path, overrides=overrides)
         return _normalize_mlx_response(status)
