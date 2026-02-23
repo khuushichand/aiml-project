@@ -105,6 +105,8 @@ The **Media Multi** page (`/media-multi`) is the multi-item media review and com
 - **Filter badge**: Shows count of active filters when filter section is collapsed, plus preview of active filter values
 - **Clear filters** button: Resets all filters at once
 
+> **Note for reviewers:** The `POST /search` endpoint also accepts `date_range`, `must_not_have` (exclude keywords), `exact_phrase`, and `boost_fields` (per-field relevance weights) — none of which are surfaced in the UI filter controls. The `GET /metadata-search` endpoint adds field-level filter operators (`eq`/`contains`/`startswith`/`endswith`), match modes (`all`/`any`), and sort options (`date_desc`/`date_asc`/`title_asc`/`title_desc`).
+
 ### Keyboard Shortcuts
 | Shortcut | Action |
 |----------|--------|
@@ -166,6 +168,8 @@ Please evaluate the page across these dimensions, providing specific findings fo
 - Does the filter badge on the collapsed filter section adequately communicate which filters are active?
 - How does the search interact with pagination and selection? (Searching resets to page 1; does it clear selection?)
 - What feedback does the user get during content search (which fetches details for all results)?
+- Would exposing the `metadata-search` endpoint's filter operators (field-level `eq`/`contains`/`startswith`) and sort options (`date_desc`, `title_asc`, etc.) benefit power users without overwhelming casual users?
+- For academic/research users: is there a way to find items by DOI, arXiv ID, or PubMed ID? (Backend supports `GET /by-identifier` but UI has no identifier search.)
 
 ### 4. Content Inspection & Comparison
 - Is the content/analysis expand/collapse per card intuitive? Does the user understand there are two separate collapsible sections?
@@ -174,6 +178,7 @@ Please evaluate the page across these dimensions, providing specific findings fo
 - Does the diff view handle very long documents well? (Line-by-line LCS on a 50k-character transcript)
 - Are the "Copy Content" and "Copy Analysis" buttons well-positioned? Would a single copy dropdown be cleaner?
 - Is the analysis section useful when it's empty ("No analysis available") for most items?
+- Could AI-generated insights (key findings, methods, limitations, research gaps) be shown as structured chips or an expandable section on each card, beyond the current flat "Analysis" text area? (Backend supports 8 insight categories: `summary`, `key_findings`, `methods`, `limitations`, `research_gap`, `research_question`, `motivation`, `future_work`.)
 
 ### 5. Batch Operations & Metadata Management
 - Beyond selection + chat handoff + diffing, what batch operations would users expect?
@@ -181,6 +186,8 @@ Please evaluate the page across these dimensions, providing specific findings fo
 - Is there a way to delete or archive items from this view? (Currently: no)
 - Can users export selected items (e.g., as a report, CSV, or chatbook)?
 - Can users reprocess items (re-transcribe, re-summarize) from this view?
+- Can users annotate (highlight, add notes to) items from this view? The backend supports highlights with 4 colors (yellow/green/blue/pink) and page-level notes, including batch sync.
+- Is there a way to see or update reading progress from this view? The backend tracks current page, percent complete, zoom level, view mode, EPUB CFI, and last-read timestamp per item.
 
 ### 6. User Flows & Task Completion
 Evaluate these critical flows for friction, dead ends, and missing affordances:
@@ -216,9 +223,13 @@ These backend endpoints exist under `/api/v1/media/` but are **not currently acc
 
 | Capability | Backend Endpoint | UI Status |
 |---|---|---|
-| Metadata search with field operators | `POST /search` (field boosting, sort options) | Partial (basic search only) |
-| Date range filtering | `GET /` (query params) | Not exposed |
-| Sort options (date, title, relevance, type) | `GET /` and `POST /search` | Not exposed |
+| Metadata search with field operators | `GET /metadata-search` — filter operators (`eq`, `contains`, `icontains`, `startswith`, `endswith`), match modes (`all`/`any`), scientific identifier fields, date range (`date_start`/`date_end`), sort (`date_desc`/`date_asc`/`title_asc`/`title_desc`) | Partial (basic search only; no field operators, sort, or date range exposed) |
+| Date range filtering | `POST /search` (`date_range` body param) and `GET /metadata-search` (`date_start`/`date_end`). The `GET /` listing endpoint does **not** support date range. | Not exposed |
+| Sort options | `GET /metadata-search` (`sort_by`: `date_desc`, `date_asc`, `title_asc`, `title_desc`); `POST /search` supports `sort_by` (default: `relevance`). `GET /` has **no** sort support. | Not exposed |
+| Scientific identifier lookup (DOI, PMID, arXiv, etc.) | `GET /by-identifier` — looks up by `doi`, `pmid`, `pmcid`, `arxiv_id`, `s2_paper_id`; identifiers auto-normalized | Not exposed |
+| Negative keyword filtering (must_not_have) | `POST /search` body param `must_not_have` — excludes items matching specified keywords | Not exposed |
+| Exact phrase search | `POST /search` body param `exact_phrase` — FTS phrase match, distinct from fuzzy `query` | Not exposed |
+| Include keywords in listing | `GET /?include_keywords=true` — returns keywords per item; batch-fetched for performance | Not exposed |
 | Per-item keyword CRUD (add/remove/set modes) | `PUT /{id}/keywords` | Not exposed |
 | Bulk keyword update | `POST /bulk/keyword-update` | Not exposed |
 | Patch media item metadata (title, etc.) | `PATCH /{id}` | Not exposed |
