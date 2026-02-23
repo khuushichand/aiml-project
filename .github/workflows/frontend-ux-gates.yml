@@ -59,6 +59,12 @@ jobs:
         run: bunx playwright install --with-deps chromium
         working-directory: apps/tldw-frontend
 
+      - name: Install PortAudio build deps
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps
         with:
@@ -157,6 +163,12 @@ jobs:
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/tldw-frontend
+
+      - name: Install PortAudio build deps
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
 
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps
