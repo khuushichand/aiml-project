@@ -1,5 +1,5 @@
 import React from "react"
-import { Input, Button, Spin, Tag, Tooltip, Radio, Pagination, Empty, Select, Checkbox, Typography, Skeleton, Switch, Alert, Collapse, Dropdown, Modal } from "antd"
+import { Input, Button, Spin, Tag, Tooltip, Radio, Pagination, Empty, Select, Checkbox, Typography, Skeleton, Switch, Alert, Collapse, Dropdown, Modal, Drawer } from "antd"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 import { bgRequest } from "@/services/background-proxy"
@@ -17,6 +17,7 @@ import { DiffViewModal } from "@/components/Media/DiffViewModal"
 import {
   DISCUSS_MEDIA_PROMPT_SETTING,
   LAST_MEDIA_ID_SETTING,
+  MEDIA_HIDE_TRANSCRIPT_TIMINGS_SETTING,
   MEDIA_REVIEW_ORIENTATION_SETTING,
   MEDIA_REVIEW_VIEW_MODE_SETTING,
   MEDIA_REVIEW_FILTERS_COLLAPSED_SETTING,
@@ -26,6 +27,10 @@ import {
 } from "@/services/settings/ui-settings"
 import { clearSetting, getSetting, setSetting } from "@/services/settings/registry"
 import { extractMediaDetailContent } from "@/utils/media-detail-content"
+import {
+  hasLeadingTranscriptTimings,
+  stripLeadingTranscriptTimings
+} from "@/utils/media-transcript-display"
 
 type MediaItem = {
   id: string | number
@@ -50,6 +55,12 @@ type MediaDetail = {
 const getContent = (d: MediaDetail): string => {
   return extractMediaDetailContent(d)
 }
+
+const idsEqual = (a: string | number, b: string | number): boolean =>
+  String(a) === String(b)
+
+const includesId = (ids: Array<string | number>, candidate: string | number): boolean =>
+  ids.some((id) => idsEqual(id, candidate))
 
 const getErrorStatusCode = (error: unknown): number | null => {
   if (!error || typeof error !== "object") return null
@@ -94,6 +105,9 @@ export const MediaReviewPage: React.FC = () => {
   const [orientation, setOrientation] = useSetting(
     MEDIA_REVIEW_ORIENTATION_SETTING
   )
+  const [hideTranscriptTimings, setHideTranscriptTimings] = useSetting(
+    MEDIA_HIDE_TRANSCRIPT_TIMINGS_SETTING
+  )
   const [selectedIds, setSelectedIds] = React.useState<Array<string | number>>([])
   const [details, setDetails] = React.useState<Record<string | number, MediaDetail>>({})
   const [availableTypes, setAvailableTypes] = React.useState<string[]>([])
@@ -115,11 +129,13 @@ export const MediaReviewPage: React.FC = () => {
   const [openAllLimit] = React.useState<number>(30)
   // Help modal state (for touch device accessibility)
   const [helpModalOpen, setHelpModalOpen] = React.useState(false)
+  const [selectedItemsDrawerOpen, setSelectedItemsDrawerOpen] = React.useState(false)
   // Copy confirmation state (track which buttons show checkmark)
   const [copiedIds, setCopiedIds] = React.useState<Set<string>>(new Set())
   // Persisted view mode
   const [persistedViewMode, setPersistedViewMode] = useSetting(MEDIA_REVIEW_VIEW_MODE_SETTING)
   const [viewModeState, setViewModeState] = React.useState<"spread" | "list" | "all">("spread")
+  const shouldHideTranscriptTimings = hideTranscriptTimings ?? true
   const viewMode = isMobileViewport ? "list" : viewModeState
   const setViewMode = React.useCallback((mode: "spread" | "list" | "all") => {
     if (isMobileViewport) {
@@ -169,6 +185,8 @@ export const MediaReviewPage: React.FC = () => {
   // Auto view mode setting
   const [autoViewModeSetting, setAutoViewModeSetting] = useSetting(MEDIA_REVIEW_AUTO_VIEW_MODE_SETTING)
   const autoViewMode = autoViewModeSetting ?? true
+  const [manualViewModePinned, setManualViewModePinned] = React.useState(false)
+  const [autoModeInlineNotice, setAutoModeInlineNotice] = React.useState<string | null>(null)
   // Last clicked for Shift+click range selection
   const lastClickedRef = React.useRef<string | number | null>(null)
   // Ref for viewer panel focus management
@@ -534,6 +552,10 @@ export const MediaReviewPage: React.FC = () => {
     })
   }, [selectedIds])
 
+  React.useEffect(() => {
+    if (selectedIds.length === 0) setSelectedItemsDrawerOpen(false)
+  }, [selectedIds.length])
+
   const cardCls = orientation === 'vertical'
     ? 'border border-border rounded p-3 bg-surface w-full'
     : 'border border-border rounded p-3 bg-surface w-full md:w-[48%]'
@@ -541,6 +563,13 @@ export const MediaReviewPage: React.FC = () => {
   const allResults: MediaItem[] = Array.isArray(data) ? data : []
   const hasResults = allResults.length > 0
   const viewerItems = selectedIds.map((id) => details[id]).filter(Boolean)
+  const hasTranscriptTimingContentInViewer = React.useMemo(
+    () =>
+      viewerItems.some((detail) =>
+        hasLeadingTranscriptTimings(getContent(detail) || "")
+      ),
+    [viewerItems]
+  )
   const visibleIds = viewMode === "spread"
     ? selectedIds
     : viewMode === "list"
@@ -569,12 +598,36 @@ export const MediaReviewPage: React.FC = () => {
     measureElement: (el) => el.getBoundingClientRect().height
   })
 
-  const openAllCurrent = React.useCallback(() => {
+  const addVisibleToSelection = React.useCallback(() => {
     if (allResults.length === 0) return
-    const slice = allResults.slice(0, Math.min(allResults.length, openAllLimit))
-    setSelectedIds(slice.map((m) => m.id))
-    slice.forEach((m) => void ensureDetail(m.id))
-    if (allResults.length > openAllLimit) {
+    if (selectedIds.length >= openAllLimit) {
+      message.warning(
+        t('mediaPage.selectionLimitReached', {
+          defaultValue: 'Selection limit reached ({{limit}} items)',
+          limit: openAllLimit
+        })
+      )
+      return
+    }
+
+    const visibleSlice = allResults.slice(0, Math.min(allResults.length, openAllLimit))
+    const next = [...selectedIds]
+    const newlyAdded: Array<string | number> = []
+
+    for (const item of visibleSlice) {
+      if (includesId(next, item.id)) continue
+      if (next.length >= openAllLimit) break
+      next.push(item.id)
+      newlyAdded.push(item.id)
+    }
+
+    setSelectedIds(next)
+    newlyAdded.forEach((id) => void ensureDetail(id))
+    if (newlyAdded.length > 0 && focusedId == null) {
+      setFocusedId(next[0] ?? null)
+    }
+
+    if (allResults.length > openAllLimit || next.length >= openAllLimit) {
       message.info(
         t("mediaPage.openAllCapped", {
           defaultValue: "Showing first {{count}} items to keep things smooth",
@@ -582,7 +635,52 @@ export const MediaReviewPage: React.FC = () => {
         })
       )
     }
-  }, [allResults, ensureDetail, openAllLimit, t])
+  }, [allResults, ensureDetail, openAllLimit, t, selectedIds, message, focusedId])
+
+  const replaceSelectionWithVisible = React.useCallback(() => {
+    if (allResults.length === 0) return
+    const previousSelection = [...selectedIds]
+    const previousFocus = focusedId
+    const visibleSlice = allResults.slice(0, Math.min(allResults.length, openAllLimit))
+    const nextIds = visibleSlice.map((m) => m.id)
+
+    setSelectedIds(nextIds)
+    nextIds.forEach((id) => void ensureDetail(id))
+    setFocusedId(nextIds[0] ?? null)
+
+    message.info(
+      <span>
+        {t('mediaPage.selectionReplaced', 'Selection replaced with current visible items.')}
+        {' '}
+        <Button
+          type="link"
+          size="small"
+          className="!p-0"
+          onClick={() => {
+            setSelectedIds(previousSelection)
+            setFocusedId(previousFocus ?? previousSelection[0] ?? null)
+            message.success(t('mediaPage.selectionRestored', 'Selection restored'))
+          }}
+        >
+          {t('mediaPage.undo', 'Undo')}
+        </Button>
+      </span>,
+      UNDO_DURATION_SECONDS
+    )
+  }, [allResults, selectedIds, focusedId, openAllLimit, ensureDetail, message, t])
+
+  const removeFromSelection = React.useCallback((id: string | number) => {
+    setSelectedIds((prev) => {
+      const next = prev.filter((candidate) => !idsEqual(candidate, id))
+      if (next.length !== prev.length) {
+        setFocusedId((current) => {
+          if (current == null) return next[0] ?? null
+          return idsEqual(current, id) ? next[0] ?? null : current
+        })
+      }
+      return next
+    })
+  }, [])
 
   const resolveDetailForCompare = React.useCallback(async (id: string | number): Promise<MediaDetail | null> => {
     const existing = details[id]
@@ -768,13 +866,7 @@ export const MediaReviewPage: React.FC = () => {
         case 'a': // Select all visible (with Ctrl/Cmd)
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault()
-            if (allResults.length === 0) return
-            const slice = allResults.slice(0, Math.min(allResults.length, openAllLimit))
-            setSelectedIds(slice.map((m) => m.id))
-            slice.forEach((m) => void ensureDetail(m.id))
-            if (allResults.length > openAllLimit) {
-              message.info(t("mediaPage.openAllCapped", { defaultValue: "Showing first {{count}} items to keep things smooth", count: openAllLimit }))
-            }
+            addVisibleToSelection()
           }
           break
         case '/': // Focus search field
@@ -842,17 +934,25 @@ export const MediaReviewPage: React.FC = () => {
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [goRelative, focusedId, selectedIds.length, clearSelectionWithGuard, t, allResults, openAllLimit, ensureDetail])
+  }, [goRelative, focusedId, selectedIds.length, clearSelectionWithGuard, t, addVisibleToSelection])
 
   // Auto-select view mode by item count with notification
   React.useEffect(() => {
     if (isMobileViewport) {
       prevAutoViewModeRef.current = "list"
+      setAutoModeInlineNotice(null)
       return
     }
-    if (!autoViewMode) return
+    if (!autoViewMode) {
+      setAutoModeInlineNotice(null)
+      return
+    }
+    if (manualViewModePinned) return
     const count = selectedIds.length
-    if (count === 0) return
+    if (count === 0) {
+      setAutoModeInlineNotice(null)
+      return
+    }
 
     let newMode: "spread" | "list" | "all"
     if (count === 1) newMode = "list"
@@ -862,18 +962,20 @@ export const MediaReviewPage: React.FC = () => {
     // Only notify if mode actually changed and wasn't initial load
     if (prevAutoViewModeRef.current !== null && prevAutoViewModeRef.current !== newMode) {
       const modeNames = { spread: t('mediaPage.spreadMode', 'Compare'), list: t('mediaPage.listMode', 'Focus'), all: t('mediaPage.allMode', 'Stack') }
+      const notice = t('mediaPage.autoViewModeSwitched', 'Auto-switched to {{mode}} view ({{count}} items)', {
+        mode: modeNames[newMode],
+        count
+      })
+      setAutoModeInlineNotice(notice)
       message.info(
-        t('mediaPage.autoViewModeSwitched', 'Switched to {{mode}} view ({{count}} items)', {
-          mode: modeNames[newMode],
-          count
-        }),
+        notice,
         3
       )
     }
 
     prevAutoViewModeRef.current = newMode
     setViewModeState(newMode)
-  }, [isMobileViewport, selectedIds.length, autoViewMode, t])
+  }, [isMobileViewport, selectedIds.length, autoViewMode, t, manualViewModePinned, message])
 
   // Compute active filter count for collapsed state display
   const activeFilterCount = types.length + keywordTokens.length + (includeContent ? 1 : 0)
@@ -890,7 +992,10 @@ export const MediaReviewPage: React.FC = () => {
     const { virtualRow, isAllMode } = opts || {}
     const key = String(d.id)
     const isFocused = d.id === focusedId
-    const content = getContent(d) || ""
+    const rawContent = getContent(d) || ""
+    const content = shouldHideTranscriptTimings
+      ? stripLeadingTranscriptTimings(rawContent)
+      : rawContent
     const analysisText =
       d.summary ||
       (d as any)?.analysis ||
@@ -919,7 +1024,9 @@ export const MediaReviewPage: React.FC = () => {
       rawSource && typeof rawSource === "object"
         ? (rawSource.url || rawSource.title || rawSource.href || "")
         : rawSource
-    const transcriptLen = content?.length ? Math.round(content.length / 1000) : null
+    const transcriptLen = rawContent?.length
+      ? Math.round(rawContent.length / 1000)
+      : null
 
     const style =
       virtualRow != null
@@ -960,9 +1067,9 @@ export const MediaReviewPage: React.FC = () => {
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             {viewMode === "spread" && (
-              <Tooltip title={t("mediaPage.unstackTooltip", "Remove from current comparison view")}>
-                <Button size="small" onClick={() => toggleSelect(d.id)}>
-                  {t("mediaPage.unstack", "Unstack")}
+              <Tooltip title={t("mediaPage.unstackTooltip", "Remove this item from selection")}>
+                <Button size="small" onClick={() => removeFromSelection(d.id)}>
+                  {t("mediaPage.unstack", "Remove from selection")}
                 </Button>
               </Tooltip>
             )}
@@ -1182,6 +1289,22 @@ export const MediaReviewPage: React.FC = () => {
                 )}
               </span>
             </div>
+            {selectedIds.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-text-muted whitespace-nowrap">
+                  {t('mediaPage.selectedAcrossPages', 'Selected across pages: {{count}}', {
+                    count: selectedIds.length
+                  })}
+                </span>
+                <Button
+                  size="small"
+                  onClick={() => setSelectedItemsDrawerOpen(true)}
+                  data-testid="view-selected-items-button"
+                >
+                  {t('mediaPage.viewSelectedItems', 'View selected items')}
+                </Button>
+              </div>
+            )}
           </div>
           {selectedIds.length > 5 && (
             <div
@@ -1262,7 +1385,7 @@ export const MediaReviewPage: React.FC = () => {
               </div>
               <div className="flex items-center gap-2 text-[11px] text-text-muted">
                 <span className="text-xs text-text-muted">
-                  {t("mediaPage.resultsHint", "Click to stack, Shift+click for range")}
+                  {t("mediaPage.resultsHint", "Search/filter here, then click to stack. Shift+click for range.")}
                 </span>
                 {selectedIds.length > 0 && (
                   <Button
@@ -1440,6 +1563,8 @@ export const MediaReviewPage: React.FC = () => {
                         value={viewMode}
                         onChange={(e) => {
                           const next = e.target.value as "spread" | "list" | "all"
+                          setManualViewModePinned(true)
+                          setAutoModeInlineNotice(null)
                           setViewMode(next)
                           if (next === "list") {
                             const id = focusedId ?? selectedIds[0] ?? allResults[0]?.id
@@ -1522,7 +1647,15 @@ export const MediaReviewPage: React.FC = () => {
                         label: (
                           <div className="flex items-center justify-between gap-4">
                             <span>{t("mediaPage.autoViewMode", "Auto-select view mode")}</span>
-                            <Switch size="small" checked={autoViewMode} onChange={(v) => void setAutoViewModeSetting(v)} />
+                            <Switch
+                              size="small"
+                              checked={autoViewMode}
+                              onChange={(v) => {
+                                void setAutoViewModeSetting(v)
+                                if (v) setManualViewModePinned(false)
+                                setAutoModeInlineNotice(null)
+                              }}
+                            />
                           </div>
                         )
                       },
@@ -1538,9 +1671,21 @@ export const MediaReviewPage: React.FC = () => {
                       { type: 'divider' },
                       {
                         key: 'openAll',
-                        label: `${t("mediaPage.openAll", "Review all on page")} (${Math.min(allResults.length, openAllLimit)})`,
-                        onClick: openAllCurrent,
+                        label: `${t("mediaPage.openAll", "Add visible to selection")} (${Math.min(allResults.length, openAllLimit)})`,
+                        onClick: addVisibleToSelection,
                         disabled: allResults.length === 0
+                      },
+                      {
+                        key: 'replaceWithVisible',
+                        label: `${t("mediaPage.replaceWithVisible", "Replace selection with visible")} (${Math.min(allResults.length, openAllLimit)})`,
+                        onClick: replaceSelectionWithVisible,
+                        disabled: allResults.length === 0
+                      },
+                      {
+                        key: 'viewSelectedItems',
+                        label: t('mediaPage.viewSelectedItems', 'View selected items'),
+                        onClick: () => setSelectedItemsDrawerOpen(true),
+                        disabled: selectedIds.length === 0
                       },
                       { type: 'divider' },
                       {
@@ -1581,6 +1726,11 @@ export const MediaReviewPage: React.FC = () => {
                 </Dropdown>
               </div>
             </div>
+            {autoModeInlineNotice && (
+              <div className="mb-2 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-primary">
+                {autoModeInlineNotice}
+              </div>
+            )}
             {/* Row 2: Navigation & Content Actions */}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
@@ -1612,6 +1762,18 @@ export const MediaReviewPage: React.FC = () => {
                 </Tooltip>
               </div>
               <div className="flex items-center gap-2">
+                {hasTranscriptTimingContentInViewer && (
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      void setHideTranscriptTimings((prev) => !(prev ?? true))
+                    }
+                  >
+                    {shouldHideTranscriptTimings
+                      ? t("mediaPage.showTimings", "Show timings")
+                      : t("mediaPage.hideTimings", "Hide timings")}
+                  </Button>
+                )}
                 <Dropdown
                   menu={{
                     items: [
@@ -1675,6 +1837,12 @@ export const MediaReviewPage: React.FC = () => {
             {selectedIds.length > 0 && (
               <div className="mt-2 flex items-center gap-2 overflow-x-auto text-xs text-text-muted">
                 <span className="font-medium">{t("mediaPage.openMiniMap", "Open items")}</span>
+                <span className="whitespace-nowrap">
+                  {t(
+                    "mediaPage.viewerFlowHint",
+                    "Search/filter in sidebar, inspect in viewer, jump using Open items."
+                  )}
+                </span>
                 {selectedIds.length <= MINIMAP_COLLAPSE_THRESHOLD ? (
                   // Horizontal button bar for ≤8 items
                   selectedIds.map((id, idx) => {
@@ -1808,6 +1976,72 @@ export const MediaReviewPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <Drawer
+        title={t('mediaPage.selectedItemsTitle', 'Selected items ({{count}})', {
+          count: selectedIds.length
+        })}
+        open={selectedItemsDrawerOpen}
+        onClose={() => setSelectedItemsDrawerOpen(false)}
+        placement="right"
+        width={360}
+      >
+        {selectedIds.length === 0 ? (
+          <Empty description={t('mediaPage.selectedItemsEmpty', 'No selected items yet.')} />
+        ) : (
+          <div className="space-y-2" data-testid="selected-items-drawer">
+            {selectedIds.map((id, idx) => {
+              const detail = details[id]
+              const row = allResults.find((candidate) => idsEqual(candidate.id, id))
+              const itemTitle = detail?.title || row?.title || `${t('mediaPage.media', 'Media')} ${id}`
+              const itemType = detail?.type || row?.type
+              const itemDate = detail?.created_at || row?.created_at
+              const isLoading = detailLoading[id]
+              const hasFailed = failedIds.has(id)
+
+              return (
+                <div
+                  key={String(id)}
+                  className="rounded border border-border p-2"
+                  data-testid={`selected-item-${String(id)}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[11px] text-text-muted">#{idx + 1}</div>
+                      <div className="truncate font-medium">{itemTitle}</div>
+                      <div className="mt-1 flex items-center gap-1 text-[11px] text-text-muted">
+                        {itemType ? <Tag>{String(itemType).toLowerCase()}</Tag> : null}
+                        {itemDate ? <span>{new Date(itemDate).toLocaleString()}</span> : null}
+                        {isLoading ? <span>{t('mediaPage.loading', 'Loading...')}</span> : null}
+                        {hasFailed ? <span>{t('mediaPage.loadFailed', 'Failed to load content')}</span> : null}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setFocusedId(id)
+                          void ensureDetail(id)
+                          scrollToCard(id)
+                          setSelectedItemsDrawerOpen(false)
+                        }}
+                      >
+                        {t('mediaPage.jumpToItem', 'Jump to item')}
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => removeFromSelection(id)}
+                      >
+                        {t("mediaPage.unstack", "Remove from selection")}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </Drawer>
 
       {/* Keyboard shortcuts modal (accessible on touch devices) */}
       <Modal
