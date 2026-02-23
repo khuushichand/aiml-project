@@ -64,11 +64,42 @@ type QuickIngestBatchResponse = {
   results?: QuickIngestBatchResult[]
 }
 
+export type QuickIngestStartAck = {
+  ok: boolean
+  sessionId?: string
+  error?: string
+}
+
+export type QuickIngestCancelInput = {
+  sessionId: string
+  reason?: string
+}
+
+export type QuickIngestCancelResponse = {
+  ok: boolean
+  error?: string
+}
+
 const EXTENSION_TIMEOUT_MS = 10_000
 const DIRECT_INGEST_TIMEOUT_MS = 5 * 60 * 1000
 
 const hasExtensionMessagingRuntime = (): boolean =>
   Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
+
+const sendExtensionMessageWithTimeout = async <T>(
+  message: Record<string, unknown>,
+  timeoutMs: number = EXTENSION_TIMEOUT_MS
+): Promise<T> => {
+  const extensionPromise = browser.runtime.sendMessage(message)
+  const timeoutPromise = new Promise<null>((resolve) => {
+    setTimeout(() => resolve(null), timeoutMs)
+  })
+  const result = await Promise.race([extensionPromise, timeoutPromise])
+  if (result === null) {
+    throw new Error("Extension messaging timed out. Please try again or reload the page.")
+  }
+  return result as T
+}
 
 const assignPath = (obj: Record<string, any>, path: string[], val: any) => {
   let cur: Record<string, any> = obj
@@ -404,19 +435,51 @@ export const submitQuickIngestBatch = async (
   input: QuickIngestBatchInput
 ): Promise<QuickIngestBatchResponse> => {
   if (hasExtensionMessagingRuntime()) {
-    const extensionPromise = browser.runtime.sendMessage({
+    const result = await sendExtensionMessageWithTimeout<QuickIngestBatchResponse>({
       type: "tldw:quick-ingest-batch",
       payload: input
     })
-    const timeoutPromise = new Promise<null>((resolve) => {
-      setTimeout(() => resolve(null), EXTENSION_TIMEOUT_MS)
-    })
-    const result = await Promise.race([extensionPromise, timeoutPromise])
-    if (result === null) {
-      throw new Error("Extension messaging timed out. Please try again or reload the page.")
-    }
-    return result as QuickIngestBatchResponse
+    return result
   }
 
   return await runDirectQuickIngestBatch(input)
+}
+
+export const startQuickIngestSession = async (
+  input: QuickIngestBatchInput
+): Promise<QuickIngestStartAck> => {
+  if (hasExtensionMessagingRuntime()) {
+    return await sendExtensionMessageWithTimeout<QuickIngestStartAck>({
+      type: "tldw:quick-ingest/start",
+      payload: input
+    })
+  }
+
+  // Direct runtimes currently run ingest synchronously. Return a local ack
+  // so session-native callers can still establish a run identity.
+  return {
+    ok: true,
+    sessionId: `qi-direct-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+}
+
+export const cancelQuickIngestSession = async (
+  input: QuickIngestCancelInput
+): Promise<QuickIngestCancelResponse> => {
+  const sessionId = String(input?.sessionId || "").trim()
+  if (!sessionId) {
+    return { ok: false, error: "Missing session id." }
+  }
+
+  if (hasExtensionMessagingRuntime()) {
+    return await sendExtensionMessageWithTimeout<QuickIngestCancelResponse>({
+      type: "tldw:quick-ingest/cancel",
+      payload: {
+        sessionId,
+        reason: input?.reason
+      }
+    })
+  }
+
+  return { ok: true }
 }
