@@ -332,6 +332,15 @@ export class MediaReviewPage {
     }
   }
 
+  async openCompareContentDiff(): Promise<void> {
+    const compareBtn = this.page.getByRole("button", { name: /compare content/i }).first()
+    await compareBtn.click({ timeout: 10_000 })
+  }
+
+  async hasDiffModal(): Promise<boolean> {
+    return this.page.getByText(/diff view/i).first().isVisible().catch(() => false)
+  }
+
   // ── Viewer Panel ────────────────────────────────────────────────────
 
   async getViewerItemCount(): Promise<number> {
@@ -346,6 +355,25 @@ export class MediaReviewPage {
       ".ant-empty, [data-testid*='empty'], :text('Select items')"
     )
     return (await empty.count()) > 0 && (await empty.first().isVisible().catch(() => false))
+  }
+
+  async isStackVirtualizedVisible(): Promise<boolean> {
+    return this.page.getByTestId("media-review-stack-virtualized").isVisible().catch(() => false)
+  }
+
+  async getStackRenderedCardCount(): Promise<number> {
+    const cards = this.page.locator("[data-testid='media-review-stack-virtualized'] .shadow-sm")
+    return cards.count()
+  }
+
+  async scrollStackContainer(pixels: number): Promise<number> {
+    const stackContainer = this.page.getByTestId("media-review-stack-virtualized")
+    return stackContainer.evaluate((node, amount) => {
+      const parent = node.parentElement
+      if (!parent) return 0
+      parent.scrollTop += amount
+      return parent.scrollTop
+    }, pixels)
   }
 
   // ── Pagination ──────────────────────────────────────────────────────

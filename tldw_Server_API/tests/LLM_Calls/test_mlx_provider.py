@@ -90,6 +90,23 @@ def test_chat_and_embeddings(monkeypatch):
     assert emb_resp["data"][0]["embedding"] == [0.1, 0.2, 0.3]
 
 
+def test_load_reports_unapplied_runtime_overrides(monkeypatch):
+    _patch_mlx(monkeypatch)
+    reg = mp.get_mlx_registry()
+    status = reg.load(
+        model_path="fake-model",
+        overrides={
+            "max_concurrent": 1,
+            "quantization": "4bit",
+            "max_kv_cache_size": 4096,
+        },
+    )
+
+    unapplied = status.get("config", {}).get("unapplied_runtime_overrides", {})
+    assert unapplied.get("quantization") == "4bit"
+    assert unapplied.get("max_kv_cache_size") == 4096
+
+
 def test_session_scope_without_load_raises():
     reg = mp.MLXSessionRegistry()
     with pytest.raises(ChatBadRequestError):

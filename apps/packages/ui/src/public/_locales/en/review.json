@@ -665,6 +665,12 @@
   "mediaPage_copyAnalysisLabel": {
     "message": "Copy Analysis"
   },
+  "mediaPage_copyMenuLabel": {
+    "message": "Copy"
+  },
+  "mediaPage_copyBothLabel": {
+    "message": "Copy both"
+  },
   "mediaPage_copyContentTooltip": {
     "message": "Copy content to clipboard"
   },
@@ -778,6 +784,12 @@
   },
   "mediaPage_analysisCopied": {
     "message": "Analysis copied"
+  },
+  "mediaPage_copyBothCopied": {
+    "message": "Content and analysis copied"
+  },
+  "mediaPage_noAnalysisToCopy": {
+    "message": "No analysis available to copy"
   },
   "mediaPage_copyFailed": {
     "message": "Copy failed"
@@ -1516,6 +1528,36 @@
   },
   "mediaPage_noAnalysis": {
     "message": "No analysis available"
+  },
+  "mediaPage_analysisUnavailableCompact": {
+    "message": "Analysis not available"
+  },
+  "mediaPage_showEmptyAnalysisPanel": {
+    "message": "Show panel"
+  },
+  "mediaPage_hideEmptyAnalysisPanel": {
+    "message": "Hide empty panel"
+  },
+  "mediaPage_largeComparisonTitle": {
+    "message": "Large comparison detected"
+  },
+  "mediaPage_largeComparisonBody": {
+    "message": "These documents are very large. Generate a sampled diff to keep this responsive."
+  },
+  "mediaPage_generateSampledDiff": {
+    "message": "Generate sampled diff"
+  },
+  "mediaPage_largeComparisonComputing": {
+    "message": "Large comparison: computing diff in background…"
+  },
+  "mediaPage_largeComparisonReady": {
+    "message": "Large comparison finished."
+  },
+  "mediaPage_largeComparisonFallback": {
+    "message": "Diff worker failed; fell back to direct diff."
+  },
+  "mediaPage_largeComparisonPending": {
+    "message": "Generate sampled diff to continue."
   },
   "mediaPage_expandAllContent": {
     "message": "Expand all content"

@@ -122,6 +122,28 @@ const seedSortFixtureDocuments = async (): Promise<{
   return { query: prefix }
 }
 
+const seedLongDiffFixtureDocuments = async (): Promise<{
+  query: string
+}> => {
+  const fixtureId = generateTestId("media-review-long-diff")
+  const prefix = `Media review long diff ${fixtureId}`
+  const leftTitle = `${prefix} Left`
+  const rightTitle = `${prefix} Right`
+  const leftContent = Array.from({ length: 2600 }, (_, idx) => `${prefix} left line ${idx}`).join("\n")
+  const rightContent = Array.from({ length: 2600 }, (_, idx) => `${prefix} right line ${idx}`).join("\n")
+
+  await seedMediaDocument(generateTestId("media-review-long-left"), {
+    title: leftTitle,
+    content: leftContent
+  })
+  await seedMediaDocument(generateTestId("media-review-long-right"), {
+    title: rightTitle,
+    content: rightContent
+  })
+
+  return { query: prefix }
+}
+
 const ensureMediaCountForCrossPageReview = async (
   minimumCount: number = MIN_MEDIA_ITEMS_FOR_CROSS_PAGE_SELECTION
 ): Promise<number> => {
@@ -722,6 +744,88 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       const currentPage = await reviewPage.getCurrentPage()
       expect(currentPage).toBe(2)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+
+  // ═════════════════════════════════════════════════════════════════════
+  // 4.7  Performance & Scalability
+  // ═════════════════════════════════════════════════════════════════════
+
+  test.describe("Performance & Scalability", () => {
+    test("handles long compare diffs with non-blocking status feedback", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      const fixture = await seedLongDiffFixtureDocuments()
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      await reviewPage.fillSearchQuery(fixture.query)
+      await expect
+        .poll(async () => await reviewPage.getItemCount(), { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(2)
+
+      await reviewPage.clickItem(0)
+      await reviewPage.clickItem(1)
+
+      await expect(
+        authedPage.getByRole("button", { name: /compare content/i })
+      ).toBeVisible({ timeout: 10_000 })
+      await reviewPage.openCompareContentDiff()
+
+      await expect(
+        authedPage.getByText(/diff view/i)
+      ).toBeVisible({ timeout: 10_000 })
+      await expect(
+        authedPage.getByRole("region", { name: /diff content/i })
+      ).toBeVisible({ timeout: 10_000 })
+      await expect(
+        authedPage.getByText(/large comparison/i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("keeps 30-item stack mode interactive with virtualized rendering", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      await ensureMediaCountForCrossPageReview(35)
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      await reviewPage.clickAddVisibleToSelection()
+      await authedPage.waitForTimeout(700)
+      await reviewPage.goToPage(2)
+      await authedPage.waitForTimeout(700)
+      await reviewPage.clickAddVisibleToSelection()
+      await authedPage.waitForTimeout(900)
+
+      await expect(
+        authedPage.getByText(/selected across pages:\s*30/i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      await reviewPage.setViewMode("all")
+      await expect(
+        authedPage.getByTestId("media-review-stack-virtualized")
+      ).toBeVisible({ timeout: 10_000 })
+
+      const renderedCardCount = await reviewPage.getStackRenderedCardCount()
+      expect(renderedCardCount).toBeGreaterThan(0)
+      expect(renderedCardCount).toBeLessThan(30)
+
+      const scrollTop = await reviewPage.scrollStackContainer(1200)
+      expect(scrollTop).toBeGreaterThan(0)
 
       await assertNoCriticalErrors(diagnostics)
     })

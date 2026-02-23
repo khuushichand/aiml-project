@@ -42,6 +42,12 @@ import {
   toProgressLabel,
   type ContentFilterProgress
 } from "@/components/Review/content-filtering-progress"
+import {
+  STACK_VIRTUAL_ESTIMATE_SIZE,
+  STACK_VIRTUAL_OVERSCAN,
+  shouldVirtualizeStackMode
+} from "@/components/Review/stack-virtualization"
+import { getContentLayout } from "@/components/Review/card-content-density"
 
 type MediaItem = {
   id: string | number
@@ -143,6 +149,7 @@ export const MediaReviewPage: React.FC = () => {
     React.useState<ContentFilterProgress>(IDLE_CONTENT_FILTER_PROGRESS)
   const [contentExpandedIds, setContentExpandedIds] = React.useState<Set<string>>(new Set())
   const [analysisExpandedIds, setAnalysisExpandedIds] = React.useState<Set<string>>(new Set())
+  const [showEmptyAnalysisIds, setShowEmptyAnalysisIds] = React.useState<Set<string>>(new Set())
   const [detailLoading, setDetailLoading] = React.useState<Record<string | number, boolean>>({})
   const [failedIds, setFailedIds] = React.useState<Set<string | number>>(new Set())
   const [openAllLimit] = React.useState<number>(30)
@@ -657,6 +664,7 @@ export const MediaReviewPage: React.FC = () => {
   const focusIndex = focusedId != null ? allResults.findIndex((r) => r.id === focusedId) : -1
   const listParentRef = React.useRef<HTMLDivElement | null>(null)
   const viewerParentRef = React.useRef<HTMLDivElement | null>(null)
+  const stackParentRef = React.useRef<HTMLDivElement | null>(null)
   const cardRefs = React.useRef<Record<string, HTMLElement | null>>({})
 
   const listVirtualizer = useVirtualizer({
@@ -668,11 +676,20 @@ export const MediaReviewPage: React.FC = () => {
   })
 
   const viewerVirtualizer = useVirtualizer({
-    count: viewMode === "spread" ? viewerItems.length : viewMode === "list" ? (focusedDetail ? 1 : 0) : viewerItems.length,
+    count: viewMode === "spread" ? viewerItems.length : viewMode === "list" ? (focusedDetail ? 1 : 0) : 0,
     getScrollElement: () => viewerParentRef.current,
     estimateSize: () => 520,
     overscan: 6,
     // allow dynamic measurement for long transcripts
+    measureElement: (el) => el.getBoundingClientRect().height
+  })
+
+  const stackVirtualizer = useVirtualizer({
+    count: viewMode === "all" && shouldVirtualizeStackMode(viewerItems.length) ? viewerItems.length : 0,
+    getScrollElement: () => stackParentRef.current,
+    estimateSize: () => STACK_VIRTUAL_ESTIMATE_SIZE,
+    overscan: STACK_VIRTUAL_OVERSCAN,
+    getItemKey: (index) => String(viewerItems[index]?.id ?? index),
     measureElement: (el) => el.getBoundingClientRect().height
   })
 
@@ -1191,15 +1208,17 @@ export const MediaReviewPage: React.FC = () => {
       (d as any)?.analysis_content ||
       (d as any)?.analysisContent ||
       ""
-    const contentIsLong = content.length > 2000
+    const hasAnalysis = analysisText.trim().length > 0
     const analysisIsLong = analysisText.length > 1600
     const contentExpanded = contentExpandedIds.has(key)
     const analysisExpanded = analysisExpandedIds.has(key)
+    const showEmptyAnalysisPanel = showEmptyAnalysisIds.has(key)
     const contentShown = content
     const analysisShown = !analysisIsLong || analysisExpanded ? analysisText : `${analysisText.slice(0, 1600)}…`
-    const contentDefaultHeight = `${MEDIA_CONTENT_DEFAULT_MIN_HEIGHT_EM}em`
+    const contentLayout = getContentLayout(content.length)
+    const contentDefaultHeight = `${contentLayout.minHeightEm}em`
     const contentContainerStyle =
-      contentExpanded || !contentIsLong
+      contentExpanded || !contentLayout.capped
         ? { minHeight: contentDefaultHeight }
         : {
             minHeight: contentDefaultHeight,
@@ -1227,6 +1246,51 @@ export const MediaReviewPage: React.FC = () => {
             transform: `translateY(${virtualRow.start}px)`
           }
         : undefined
+    const recentCopy =
+      copiedIds.has(`content-${key}`) ||
+      copiedIds.has(`analysis-${key}`) ||
+      copiedIds.has(`both-${key}`)
+
+    const handleCopyAction = async (mode: "content" | "analysis" | "both") => {
+      const copyKey = `${mode}-${key}`
+      if (mode === "analysis" && !analysisText) {
+        message.info(t("mediaPage.noAnalysisToCopy", "No analysis available to copy"))
+        return
+      }
+      const copyPayload =
+        mode === "content"
+          ? content
+          : mode === "analysis"
+            ? analysisText || ""
+            : [
+                content ? `${t("mediaPage.mediaContent", "Media Content")}:\n${content}` : "",
+                analysisText ? `${t("mediaPage.analysis", "Analysis")}:\n${analysisText}` : ""
+              ]
+                .filter(Boolean)
+                .join("\n\n")
+      try {
+        await navigator.clipboard.writeText(copyPayload)
+        setCopiedIds((prev) => new Set(prev).add(copyKey))
+        setTimeout(
+          () =>
+            setCopiedIds((prev) => {
+              const next = new Set(prev)
+              next.delete(copyKey)
+              return next
+            }),
+          2000
+        )
+        if (mode === "analysis") {
+          message.success(t('mediaPage.analysisCopied', 'Analysis copied'))
+        } else if (mode === "both") {
+          message.success(t('mediaPage.copyBothCopied', 'Content and analysis copied'))
+        } else {
+          message.success(t('mediaPage.contentCopied', 'Content copied'))
+        }
+      } catch {
+        message.error(t('mediaPage.copyFailed', 'Copy failed'))
+      }
+    }
 
     return (
       <div
@@ -1262,56 +1326,49 @@ export const MediaReviewPage: React.FC = () => {
                 </Button>
               </Tooltip>
             )}
-            <Tooltip title={t('mediaPage.copyContentTooltip', 'Copy content to clipboard')}>
+            <Dropdown
+              menu={{
+                items: [
+                  {
+                    key: "content",
+                    label: t("mediaPage.copyContentLabel", "Copy Content"),
+                    onClick: () => {
+                      void handleCopyAction("content")
+                    }
+                  },
+                  {
+                    key: "analysis",
+                    label: t("mediaPage.copyAnalysisLabel", "Copy Analysis"),
+                    disabled: !hasAnalysis && !isLoadingDetail,
+                    onClick: () => {
+                      void handleCopyAction("analysis")
+                    }
+                  },
+                  {
+                    key: "both",
+                    label: t("mediaPage.copyBothLabel", "Copy both"),
+                    disabled: !content && !hasAnalysis && !isLoadingDetail,
+                    onClick: () => {
+                      void handleCopyAction("both")
+                    }
+                  }
+                ]
+              }}
+              trigger={["click"]}
+            >
               <Button
                 size="small"
-                onClick={async () => {
-                  const copyKey = `content-${key}`
-                  try {
-                    await navigator.clipboard.writeText(content)
-                    setCopiedIds(prev => new Set(prev).add(copyKey))
-                    setTimeout(() => setCopiedIds(prev => {
-                      const next = new Set(prev)
-                      next.delete(copyKey)
-                      return next
-                    }), 2000)
-                    message.success(t('mediaPage.contentCopied', 'Content copied'))
-                  } catch {
-                    message.error(t('mediaPage.copyFailed', 'Copy failed'))
-                  }
-                }}
-                icon={copiedIds.has(`content-${key}`)
-                  ? (<Check className="w-4 h-4 text-success" />) as any
-                  : (<CopyIcon className="w-4 h-4" />) as any}
+                icon={
+                  recentCopy
+                    ? ((<Check className="w-4 h-4 text-success" />) as any)
+                    : ((<CopyIcon className="w-4 h-4" />) as any)
+                }
+                data-testid={`media-review-copy-menu-${key}`}
               >
-                {t("mediaPage.copyContentLabel", "Copy Content")}
+                {t("mediaPage.copyMenuLabel", "Copy")}
+                <ChevronDown className="ml-1 h-3 w-3" />
               </Button>
-            </Tooltip>
-            <Tooltip title={t('mediaPage.copyAnalysisTooltip', 'Copy analysis to clipboard')}>
-              <Button
-                size="small"
-                onClick={async () => {
-                  const copyKey = `analysis-${key}`
-                  try {
-                    await navigator.clipboard.writeText(analysisText || "")
-                    setCopiedIds(prev => new Set(prev).add(copyKey))
-                    setTimeout(() => setCopiedIds(prev => {
-                      const next = new Set(prev)
-                      next.delete(copyKey)
-                      return next
-                    }), 2000)
-                    message.success(t('mediaPage.analysisCopied', 'Analysis copied'))
-                  } catch {
-                    message.error(t('mediaPage.copyFailed', 'Copy failed'))
-                  }
-                }}
-                icon={copiedIds.has(`analysis-${key}`)
-                  ? (<Check className="w-4 h-4 text-success" />) as any
-                  : (<CopyIcon className="w-4 h-4" />) as any}
-              >
-                {t("mediaPage.copyAnalysisLabel", "Copy Analysis")}
-              </Button>
-            </Tooltip>
+            </Dropdown>
           </div>
         </div>
 
@@ -1354,6 +1411,7 @@ export const MediaReviewPage: React.FC = () => {
           <div
             className="mt-2 prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap break-words text-sm text-text leading-relaxed"
             style={contentContainerStyle}
+            data-testid={`media-review-content-body-${key}`}
           >
             {isLoadingDetail ? (
               <Skeleton active paragraph={{ rows: 3 }} title={false} />
@@ -1365,35 +1423,76 @@ export const MediaReviewPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="mt-3 rounded border border-border p-2">
-          <div className="flex items-center justify-between">
-            <Typography.Text type="secondary">{t("mediaPage.analysis", "Analysis")}</Typography.Text>
+        {(hasAnalysis || showEmptyAnalysisPanel || isLoadingDetail) ? (
+          <div
+            className="mt-3 rounded border border-border p-2"
+            data-testid={`media-review-analysis-panel-${key}`}
+          >
+            <div className="flex items-center justify-between">
+              <Typography.Text type="secondary">{t("mediaPage.analysis", "Analysis")}</Typography.Text>
+              <div className="flex items-center gap-2">
+                {!hasAnalysis && !isLoadingDetail && (
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => {
+                      setShowEmptyAnalysisIds((prev) => {
+                        const next = new Set(prev)
+                        next.delete(key)
+                        return next
+                      })
+                    }}
+                  >
+                    {t("mediaPage.hideEmptyAnalysisPanel", "Hide empty panel")}
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  type="text"
+                  icon={analysisExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  onClick={() => {
+                    setAnalysisExpandedIds((prev) => {
+                      const next = collapseOthers ? new Set<string>() : new Set(prev)
+                      if (next.has(key)) next.delete(key)
+                      else next.add(key)
+                      return next
+                    })
+                  }}
+                  disabled={!hasAnalysis && !isLoadingDetail}
+                >
+                  {analysisExpanded ? t('mediaPage.collapse', 'Collapse') : t('mediaPage.expand', 'Expand')}
+                </Button>
+              </div>
+            </div>
+            <div className="mt-2 prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap break-words text-sm text-text leading-relaxed">
+              {isLoadingDetail ? (
+                <Skeleton active paragraph={{ rows: 2 }} title={false} />
+              ) : hasAnalysis ? (
+                analysisShown
+              ) : (
+                <span className="text-text-muted">{t("mediaPage.noAnalysis", "No analysis available")}</span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div
+            className="mt-3 flex items-center justify-between rounded border border-dashed border-border px-3 py-2"
+            data-testid={`media-review-analysis-empty-${key}`}
+          >
+            <span className="text-xs text-text-muted">
+              {t("mediaPage.analysisUnavailableCompact", "Analysis not available")}
+            </span>
             <Button
               size="small"
-              type="text"
-              icon={analysisExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              type="link"
               onClick={() => {
-                setAnalysisExpandedIds((prev) => {
-                  const next = collapseOthers ? new Set<string>() : new Set(prev)
-                  if (next.has(key)) next.delete(key)
-                  else next.add(key)
-                  return next
-                })
+                setShowEmptyAnalysisIds((prev) => new Set(prev).add(key))
               }}
             >
-              {analysisExpanded ? t('mediaPage.collapse', 'Collapse') : t('mediaPage.expand', 'Expand')}
+              {t("mediaPage.showEmptyAnalysisPanel", "Show panel")}
             </Button>
           </div>
-          <div className="mt-2 prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap break-words text-sm text-text leading-relaxed">
-            {isLoadingDetail ? (
-              <Skeleton active paragraph={{ rows: 2 }} title={false} />
-            ) : analysisText ? (
-              analysisShown
-            ) : (
-              <span className="text-text-muted">{t("mediaPage.noAnalysis", "No analysis available")}</span>
-            )}
-          </div>
-        </div>
+        )}
       </div>
     )
   }
@@ -2229,12 +2328,25 @@ export const MediaReviewPage: React.FC = () => {
               ) : (
                 <>
                   <div
-                    ref={viewMode === "all" ? undefined : viewerParentRef}
-                    className={`relative flex-1 min-h-0 ${viewMode === "all" ? "overflow-visible" : "overflow-auto"}`}
+                    ref={viewMode === "all" ? stackParentRef : viewerParentRef}
+                    className="relative flex-1 min-h-0 overflow-auto"
                   >
                     {viewMode === "all" ? (
-                      <div className={orientation === 'horizontal' ? 'flex flex-wrap gap-3' : 'space-y-3'}>
-                        {viewerItems.map((d, idx) => renderCard(d, idx, { isAllMode: true }))}
+                      <div
+                        data-testid="media-review-stack-virtualized"
+                        style={{
+                          height: `${stackVirtualizer.getTotalSize()}px`,
+                          position: "relative"
+                        }}
+                      >
+                        {stackVirtualizer.getVirtualItems().map((virtualRow: VirtualItem) => {
+                          const d = viewerItems[virtualRow.index]
+                          if (!d) return null
+                          return renderCard(d, virtualRow.index, {
+                            virtualRow,
+                            isAllMode: true
+                          })
+                        })}
                       </div>
                     ) : (
                       <div
