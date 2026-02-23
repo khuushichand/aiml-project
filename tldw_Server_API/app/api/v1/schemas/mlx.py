@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class MLXLoadRequest(BaseModel):
+    model_id: str | None = Field(default=None, description="Relative model id under MLX_MODEL_DIR")
     model_path: str | None = Field(default=None, description="Local path or repo id for the MLX model")
     max_seq_len: int | None = Field(default=None, description="Override max sequence length")
     max_batch_size: int | None = Field(default=None, description="Override max batch size")
