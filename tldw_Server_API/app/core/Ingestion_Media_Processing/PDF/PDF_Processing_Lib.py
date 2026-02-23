@@ -76,6 +76,7 @@ _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?[:\- ]+\|[:\-\| ]+\s*$")
 _LOWERCASE_START_RE = re.compile(r"^[a-z]")
 _INLINE_WHITESPACE_RE = re.compile(r"[ \t]+")
 _PUNCTUATION_RE = re.compile(r"[^\w\s]")
+_LIST_CONTINUATION_RE = re.compile(r"^\s{2,}\S")
 #
 #######################################################################################################################
 # Function Definitions
@@ -109,6 +110,10 @@ def _is_structural_line(line: str) -> bool:
         return True
     # Preserve indented literal/code-style blocks.
     return line.startswith("    ") or line.startswith("\t")
+
+
+def _is_list_item_line(line: str) -> bool:
+    return bool(_LIST_ITEM_RE.match(line))
 
 
 def _collapse_inline_whitespace(value: str) -> str:
@@ -160,6 +165,7 @@ def normalize_pdf_text_for_storage(text: str) -> str:
     output_lines: list[str] = []
     paragraph_buffer: list[str] = []
     in_code_fence = False
+    in_list_context = False
 
     def _flush_paragraph_buffer() -> None:
         nonlocal paragraph_buffer
@@ -178,25 +184,36 @@ def normalize_pdf_text_for_storage(text: str) -> str:
             _flush_paragraph_buffer()
             output_lines.append(line)
             in_code_fence = not in_code_fence
+            in_list_context = False
             continue
 
         if in_code_fence:
             _flush_paragraph_buffer()
             output_lines.append(line)
+            in_list_context = False
             continue
 
         if not stripped:
             _flush_paragraph_buffer()
             if output_lines and output_lines[-1] != "":
                 output_lines.append("")
+            in_list_context = False
             continue
 
         if _is_structural_line(line):
             _flush_paragraph_buffer()
             output_lines.append(line)
+            in_list_context = _is_list_item_line(line)
+            continue
+
+        # Preserve list continuation indentation when directly following a list item.
+        if in_list_context and _LIST_CONTINUATION_RE.match(line):
+            _flush_paragraph_buffer()
+            output_lines.append(line)
             continue
 
         paragraph_buffer.append(line)
+        in_list_context = False
 
     _flush_paragraph_buffer()
     while output_lines and output_lines[-1] == "":

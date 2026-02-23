@@ -151,3 +151,33 @@ def test_table_separator_block_is_preserved():
     assert "| :--- | ---: |" in out
     assert "| 1 | 2 |" in out
     assert "Paragraph starts and continues." in out
+
+
+def test_mixed_list_and_paragraph_boundaries_are_preserved():
+    src = (
+        "- item one\n"
+        "- item two\n\n"
+        "Paragraph starts here\n"
+        "and continues here.\n\n"
+        "- item three\n"
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "- item one" in out
+    assert "- item two" in out
+    assert "- item three" in out
+    assert "Paragraph starts here and continues here." in out
+
+
+def test_list_continuation_line_stays_attached_to_list_context():
+    src = (
+        "1. first item\n"
+        "  continuation detail\n"
+        "2. second item\n\n"
+        "Paragraph starts\n"
+        "and ends."
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "1. first item" in out
+    assert "  continuation detail" in out
+    assert "2. second item" in out
+    assert "Paragraph starts and ends." in out
