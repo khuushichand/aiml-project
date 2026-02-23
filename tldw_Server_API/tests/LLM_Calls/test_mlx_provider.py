@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import platform
 import types
 
 import pytest
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatRateLimitError, ChatBadRequestError
 from tldw_Server_API.app.core.LLM_Calls.providers import mlx_provider as mp
-
-
-IS_APPLE = platform.system() == "Darwin"
-pytestmark = pytest.mark.skipif(not IS_APPLE, reason="MLX targets Apple Silicon; skip on non-Apple hosts")
 
 
 def _fake_mlx_module():
