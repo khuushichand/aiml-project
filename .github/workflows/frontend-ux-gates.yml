@@ -22,7 +22,9 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-      TEST_MODE: 'true'
+      TEST_MODE: 'false'
+      TLDW_TEST_MODE: '0'
+      TESTING: '0'
       DISABLE_HEAVY_STARTUP: '1'
       MINIMAL_TEST_APP: '1'
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
@@ -127,7 +129,9 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-      TEST_MODE: 'true'
+      TEST_MODE: 'false'
+      TLDW_TEST_MODE: '0'
+      TESTING: '0'
       DISABLE_HEAVY_STARTUP: '1'
       MINIMAL_TEST_APP: '1'
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
