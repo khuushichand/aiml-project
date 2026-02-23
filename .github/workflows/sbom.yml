@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   build-sbom:
@@ -107,7 +108,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Authenticate to GHCR
+        if: ${{ hashFiles('sbom-python.cdx.json') != '' && hashFiles('sbom-node.cdx.json') != '' }}
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Resolve CycloneDX CLI digest
+        if: ${{ hashFiles('sbom-python.cdx.json') != '' && hashFiles('sbom-node.cdx.json') != '' }}
         run: |
           set -euo pipefail
           ref="ghcr.io/cyclonedx/cyclonedx-cli:0.30.0"
@@ -147,7 +154,7 @@ jobs:
           path: sbom.cdx.json
 
       - name: Validate SBOM (CycloneDX CLI - pinned digest)
-        if: ${{ hashFiles('sbom.cdx.json') != '' }}
+        if: ${{ hashFiles('sbom.cdx.json') != '' && hashFiles('sbom-python.cdx.json') != '' && hashFiles('sbom-node.cdx.json') != '' }}
         continue-on-error: true
         run: |
           docker run --rm -v "$PWD":/work -w /work ghcr.io/cyclonedx/cyclonedx-cli@${CDX_CLI_DIGEST} \
