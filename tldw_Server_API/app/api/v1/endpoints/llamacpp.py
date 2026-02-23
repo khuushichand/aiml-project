@@ -110,6 +110,9 @@ async def start_llamacpp_server_endpoint(
             result = await target.start_server(model_filename=model_filename, server_args=server_args)
         else:
             result = await target.start_server(backend="llamacpp", model_name=model_filename, server_args=server_args)
+        if isinstance(result, dict):
+            result.setdefault("status", "started")
+            result.setdefault("backend", "llamacpp")
         return result
     except HTTPException:
         raise

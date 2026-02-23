@@ -71,6 +71,12 @@ class _StatusNoBackendStub(_ManagedStub):
         return {"status": "running", "model": "mock.gguf"}
 
 
+class _StartNoStatusStub(_ManagedStub):
+    async def start_server(self, *, backend: str, model_name: str, server_args=None, **kwargs):  # noqa: ANN001
+        _ = (backend, server_args, kwargs)
+        return {"model": model_name, "pid": 12345}
+
+
 def _make_app_with_manager(manager) -> FastAPI:  # noqa: ANN001
     app = FastAPI()
     app.include_router(lp.router, prefix="/api/v1")
@@ -112,6 +118,23 @@ def test_llamacpp_start_server_happy_path():
     body = r.json()
     assert body["status"] == "started"
     assert body["model"] == "mock.gguf"
+
+
+@pytest.mark.unit
+def test_llamacpp_start_server_adds_status_when_missing():
+    app = _make_app_with_manager(_StartNoStatusStub())
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/v1/llamacpp/start_server",
+            json={"model_filename": "mock.gguf", "server_args": {"port": 8080}},
+        )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["model"] == "mock.gguf"
+    assert body["pid"] == 12345
+    assert body["status"] == "started"
 
 
 @pytest.mark.unit
