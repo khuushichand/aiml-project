@@ -49,6 +49,12 @@ class MeetingSessionResponse(BaseModel):
     updated_at: datetime | None = None
 
 
+class MeetingSessionStatusUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: MeetingSessionStatus
+
+
 class MeetingTemplateCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -83,3 +89,12 @@ class MeetingArtifactResponse(BaseModel):
     payload_json: dict[str, Any]
     version: int = 1
     created_at: datetime | None = None
+
+
+class MeetingArtifactCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: MeetingArtifactKind
+    format: str = Field(..., min_length=1, max_length=64)
+    payload_json: dict[str, Any]
+    version: int = Field(default=1, ge=1)

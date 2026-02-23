@@ -159,7 +159,7 @@ git commit -m "feat(meetings): add persistence adapter and dependency"
 ```
 
 ### Task 3: Add Domain Services (Session/Template/Artifact)
-**Progress**: Complete (in working tree, pending commit)
+**Progress**: Complete (`3548e172e`)
 
 **Files:**
 - Create: `tldw_Server_API/app/core/Meetings/__init__.py`
@@ -222,9 +222,10 @@ git commit -m "feat(meetings): add session template artifact services"
 **Goal**: Expose sessions/templates/artifacts APIs with auth-aware access controls.
 **Success Criteria**: Endpoints enforce ownership/scope and return expected payloads.
 **Tests**: Endpoint integration tests pass in single-user and claims-aware multi-user fixtures.
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 4: Implement Session + Template + Artifact Endpoints
+**Progress**: Complete (in working tree, pending commit)
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/endpoints/meetings.py`
