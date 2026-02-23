@@ -126,12 +126,42 @@ def test_mlx_load_preserves_explicit_model_path_and_overrides(monkeypatch):
 
 
 @pytest.mark.unit
+def test_mlx_load_accepts_empty_post_body(monkeypatch):
+    registry = _RegistryStub(load_result={"active": True, "model": "stub-model"})
+    monkeypatch.setattr(mlx_ep, "_default_settings", lambda: {"model_path": "stub-model"})
+    app = _make_app_with_registry(registry)
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/llm/providers/mlx/load")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["backend"] == "mlx"
+    assert registry.last_model_path == "stub-model"
+    assert registry.last_overrides == {}
+
+
+@pytest.mark.unit
 def test_mlx_unload_adds_backend():
     registry = _RegistryStub(unload_result={"status": "unloaded"})
     app = _make_app_with_registry(registry)
 
     with TestClient(app) as client:
         response = client.post("/api/v1/llm/providers/mlx/unload", json={})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "unloaded"
+    assert body["backend"] == "mlx"
+
+
+@pytest.mark.unit
+def test_mlx_unload_accepts_empty_post_body():
+    registry = _RegistryStub(unload_result={"status": "unloaded"})
+    app = _make_app_with_registry(registry)
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/llm/providers/mlx/unload")
 
     assert response.status_code == 200, response.text
     body = response.json()

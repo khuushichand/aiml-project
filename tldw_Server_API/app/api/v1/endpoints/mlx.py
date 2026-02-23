@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_roles
@@ -38,7 +38,7 @@ def _normalize_mlx_response(payload: Any) -> dict[str, Any]:
     dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
 )
 async def load_mlx_model(
-    payload: MLXLoadRequest,
+    payload: MLXLoadRequest = Body(default_factory=MLXLoadRequest),
     registry: MLXSessionRegistry = Depends(_resolve_mlx_registry),
 ):
     overrides = payload.model_dump(exclude_none=True)
@@ -61,7 +61,7 @@ async def load_mlx_model(
     dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
 )
 async def unload_mlx_model(
-    payload: MLXUnloadRequest,
+    payload: MLXUnloadRequest = Body(default_factory=MLXUnloadRequest),
     registry: MLXSessionRegistry = Depends(_resolve_mlx_registry),
 ):
     try:
