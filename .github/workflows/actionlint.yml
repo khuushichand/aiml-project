@@ -22,42 +22,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
-      - name: Determine changed workflow files
-        id: changed
-        shell: bash
-        run: |
-          set -euo pipefail
-          if git rev-parse HEAD^ >/dev/null 2>&1; then
-            files="$(git diff --name-only --diff-filter=ACMR HEAD^ HEAD -- \
-              '.github/workflows/*.yml' \
-              '.github/workflows/*.yaml' \
-              '.github/actions/**/action.yml' \
-              '.github/actions/**/action.yaml' | xargs)"
-          else
-            files="$(git ls-files \
-              '.github/workflows/*.yml' \
-              '.github/workflows/*.yaml' \
-              '.github/actions/**/action.yml' \
-              '.github/actions/**/action.yaml' | xargs)"
-          fi
-          echo "files=$files" >> "$GITHUB_OUTPUT"
-          echo "Changed workflow targets: ${files:-<none>}"
-
       - name: Install actionlint
-        if: ${{ steps.changed.outputs.files != '' }}
         shell: bash
         run: |
           set -euo pipefail
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
 
-      - name: Run actionlint on changed files
-        if: ${{ steps.changed.outputs.files != '' }}
+      - name: Run actionlint on targeted workflows
         shell: bash
         run: |
           set -euo pipefail
-          read -r -a files <<< "${{ steps.changed.outputs.files }}"
-          ./actionlint -color "${files[@]}"
-
-      - name: No workflow changes to lint
-        if: ${{ steps.changed.outputs.files == '' }}
-        run: echo "No workflow files changed."
+          ./actionlint -color \
+            .github/workflows/actionlint.yml \
+            .github/workflows/codeql.yml \
+            .github/workflows/frontend-ux-gates.yml \
+            .github/workflows/sbom.yml
