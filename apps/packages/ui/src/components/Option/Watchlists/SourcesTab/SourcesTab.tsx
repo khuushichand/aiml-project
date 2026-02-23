@@ -14,7 +14,21 @@ import {
   message
 } from "antd"
 import type { ColumnsType } from "antd/es/table"
-import { Download, Edit2, ExternalLink, Eye, Plus, RefreshCw, Trash2, UploadCloud } from "lucide-react"
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Circle,
+  Download,
+  Edit2,
+  ExternalLink,
+  Eye,
+  LoaderCircle,
+  Plus,
+  RefreshCw,
+  Trash2,
+  UploadCloud,
+  XCircle
+} from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useWatchlistsStore } from "@/store/watchlists"
@@ -54,7 +68,7 @@ import {
   SOURCE_DELETE_UNDO_WINDOW_SECONDS,
   toSourceRestoreId
 } from "./source-undo"
-import { getSourceStatusVisual } from "./sourceStatus"
+import { getSourceStatusVisual, type SourceStatusIconToken } from "./sourceStatus"
 import { findActiveSourceUsage, mapActiveSourceUsage } from "./source-usage"
 import { mapWatchlistsError } from "../shared/watchlists-error"
 
@@ -71,6 +85,14 @@ const CLIENT_FILTER_MAX_ITEMS = 1000
 const SOURCE_USAGE_LOOKUP_PAGE_SIZE = 200
 const SOURCE_USAGE_LOOKUP_MAX_PAGES = 10
 const BULK_MOVE_NO_GROUP_VALUE = "__none__"
+
+const renderSourceStatusIcon = (iconToken: SourceStatusIconToken) => {
+  if (iconToken === "healthy") return <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+  if (iconToken === "activity") return <LoaderCircle className="h-3.5 w-3.5" aria-hidden />
+  if (iconToken === "attention") return <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+  if (iconToken === "error") return <XCircle className="h-3.5 w-3.5" aria-hidden />
+  return <Circle className="h-3.5 w-3.5" aria-hidden />
+}
 
 type BulkMoveTargetValue = number | typeof BULK_MOVE_NO_GROUP_VALUE | null
 
@@ -1106,7 +1128,12 @@ export const SourcesTab: React.FC = () => {
 
         return (
           <div className="flex flex-wrap items-center gap-1">
-            <Tag color={statusVisual.color}>{statusVisual.label}</Tag>
+            <Tag color={statusVisual.color}>
+              <span className="inline-flex items-center gap-1">
+                {renderSourceStatusIcon(statusVisual.iconToken)}
+                <span>{statusVisual.label}</span>
+              </span>
+            </Tag>
             {consecutiveNotModified > 0 && (
               <Tag color={consecutiveNotModified >= 5 ? "red" : "gold"}>
                 {t("watchlists:sources.staleCount", "Stale x{{count}}", {

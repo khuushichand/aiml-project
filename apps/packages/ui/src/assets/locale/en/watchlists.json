@@ -77,6 +77,11 @@
           "monitor": "Monitor",
           "review": "Review"
         },
+        "help": {
+          "feed": "Tip: paste a feed URL now. You can adjust feed settings later.",
+          "monitor": "No cron needed: choose a preset schedule for now.",
+          "review": "You can change any of these settings later from Feeds and Monitors."
+        },
         "fields": {
           "sourceName": "Feed name",
           "sourceUrl": "Feed URL",
@@ -660,7 +665,7 @@
   "schedule": {
     "presets": "Schedule presets",
     "custom": "Custom Schedule",
-    "cronPlaceholder": "Advanced schedule expression (cron, e.g., 0 9 * * MON)",
+    "cronPlaceholder": "Cron expression (advanced), e.g., 0 9 * * MON",
     "apply": "Apply",
     "clear": "Clear",
     "preview": "Preview",
@@ -695,9 +700,11 @@
         "description": "Runs once a week on the selected weekday and time."
       }
     },
-    "advancedLabel": "Advanced cron expression",
-    "advancedHint": "Enable only if presets cannot express the cadence you need.",
+    "beginnerHint": "Most users should use presets. Turn on cron only for uncommon timing.",
+    "advancedLabel": "Use custom cron (advanced)",
+    "advancedOptionalHint": "Most users should use presets. Turn on cron only for uncommon timing.",
     "cronFieldOrderHint": "Field order: minute hour day-of-month month day-of-week.",
+    "cronBeginnerHint": "If cron is new, start with a quick example below and edit one field at a time.",
     "cronFieldCountError": "Use exactly 5 cron fields: minute hour day-of-month month day-of-week.",
     "cronInvalidTokenError": "Cron tokens can only include letters, numbers, *, /, -, ?, and comma.",
     "examplesTitle": "Quick examples",
@@ -709,7 +716,7 @@
     },
     "tooFrequent": "Schedule is too frequent. Minimum interval is every {{minutes}} minutes.",
     "tooFrequentRemediation": "Increase schedule interval to meet the minimum cadence.",
-    "helpSimple": "Pick a schedule preset above. You can switch to Advanced cron for uncommon timing patterns.",
+    "helpSimple": "Use a preset above for most schedules. Turn on Advanced cron only if you need uncommon timing patterns.",
     "helpAdvanced": "Cron format: minute hour day-of-month month day-of-week. Example: 0 9 * * MON runs every Monday at 09:00."
   },
   "runs": {
@@ -741,6 +748,24 @@
     },
     "autoRefreshing": "Auto-refreshing",
     "lastRefreshed": "Last refreshed {{time}}",
+    "tableAria": "Activity runs table",
+    "statusLabels": {
+      "pending": "Pending",
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "unknown": "Unknown"
+    },
+    "statusAria": "Run status: {{status}}",
+    "progressAria": "Run ingestion progress {{percent}} percent",
+    "live": {
+      "loadError": "Activity refresh failed.",
+      "statusChangedSingle": "Run #{{id}} status changed to {{status}}.",
+      "statusChangedMultiple": "{{count}} runs changed status.",
+      "cancelRunSuccess": "Run #{{id}} cancelled.",
+      "cancelRunError": "Failed to cancel run #{{id}}."
+    },
     "exportOptions": "Export options",
     "columns": {
       "job": "Monitor",
@@ -847,6 +872,8 @@
     "totalItems": "{{total}} items",
     "selectPrompt": "Select an item to view its content",
     "reviewed": "Reviewed",
+    "rowStatusUnread": "Unread",
+    "rowStatusReviewed": "Reviewed",
     "published": "Published: {{date}}",
     "unknownDate": "Unknown",
     "openOriginal": "Open Original",
@@ -947,6 +974,16 @@
     "activeFiltersJob": "Monitor: {{name}}",
     "activeFiltersRun": "Run: #{{id}}",
     "metricsHint": "Showing core columns. Use advanced mode for format/run details.",
+    "tableAria": "Reports table",
+    "live": {
+      "loadError": "Reports refresh failed.",
+      "downloaded": "Downloaded {{title}}.",
+      "downloadError": "Failed to download {{title}}.",
+      "regenerated": "Regenerated {{title}}.",
+      "regenerateError": "Failed to regenerate {{title}}.",
+      "deliveryChangedSingle": "Delivery status updated for {{title}}.",
+      "deliveryChangedMultiple": "Delivery status updated for {{count}} reports."
+    },
     "deliveryOverflowTitle": "Additional delivery statuses",
     "deliveryOverflowAria": "Show additional delivery statuses",
     "deliveryOverflowCount": "+{{count}} more",
@@ -1002,17 +1039,18 @@
     "editTitle": "Edit Template",
     "nameRequired": "Name is required",
     "contentRequired": "Template content is required",
-    "contentPlaceholder": "Enter Jinja2 template...",
+    "contentPlaceholder": "Start with plain text or Markdown. Advanced users can add Jinja2 tags later.",
     "namePlaceholder": "my-briefing-template",
     "descriptionPlaceholder": "Optional description...",
     "modeLabel": "Editing mode",
     "modeBasic": "Basic",
     "modeAdvanced": "Advanced",
-    "modeHelpBasic": "Basic mode keeps editing focused on name, format, content, and preview.",
-    "modeHelpAdvanced": "Advanced mode unlocks snippets, variable docs, and version tools.",
+    "modeHelpBasic": "Basic mode is no-code: pick a recipe, edit text, and preview your output.",
+    "modeHelpAdvanced": "Advanced mode adds Jinja2 snippets, variable docs, and version tools.",
     "modeHiddenToolsNotice": "Advanced template tools are hidden in Basic mode. Your content and version context are preserved.",
     "modeVersionToolsHidden": "Version tools are available in Advanced mode.",
-    "modeBasicEditorHint": "Basic mode uses a simplified editor. Switch to Advanced for snippets, variable docs, and validation markers.",
+    "modeBasicEditorHint": "Start in Basic mode with plain text or Markdown. Switch to Advanced only if you need variables, loops, or version tools.",
+    "syntaxErrorBeforeSave": "Could not save template. Fix syntax errors, then try again.",
     "recipe": {
       "title": "Recipe builder",
       "recipeType": "Template recipe",

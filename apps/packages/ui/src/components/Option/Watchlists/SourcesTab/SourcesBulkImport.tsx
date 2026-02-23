@@ -107,6 +107,13 @@ const downloadText = (content: string, filename: string, mimeType: string): void
   URL.revokeObjectURL(url)
 }
 
+const toFileFromUploadInput = (file: RcFile | File | { originFileObj?: File | RcFile }): File | null => {
+  if (file instanceof File) return file
+  if ("originFileObj" in file && file.originFileObj instanceof File) return file.originFileObj
+  if (typeof (file as File).text === "function") return file as File
+  return null
+}
+
 export const SourcesBulkImport: React.FC<SourcesBulkImportProps> = ({
   open,
   onClose,
@@ -255,8 +262,15 @@ export const SourcesBulkImport: React.FC<SourcesBulkImportProps> = ({
     accept: ".opml,.xml",
     multiple: false,
     showUploadList: false,
-    beforeUpload: async (file: RcFile) => {
-      await handlePreflight(file)
+    beforeUpload: async (file: RcFile | { originFileObj?: RcFile }) => {
+      const normalizedFile = toFileFromUploadInput(file)
+      if (!normalizedFile) {
+        message.error(
+          t("watchlists:sources.importPreviewError", "Failed to preview OPML file")
+        )
+        return false
+      }
+      await handlePreflight(normalizedFile)
       return false
     }
   }

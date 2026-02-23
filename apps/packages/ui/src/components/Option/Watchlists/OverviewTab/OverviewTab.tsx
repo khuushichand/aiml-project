@@ -313,6 +313,21 @@ export const OverviewTab: React.FC = () => {
 
   const quickSetupValues = Form.useWatch([], quickSetupForm) as Partial<QuickSetupValues> | undefined
   const quickSetupIsLastStep = quickSetupStep >= QUICK_SETUP_MAX_STEP
+  const quickSetupStepHelp =
+    quickSetupStep === 0
+      ? t(
+          "watchlists:overview.onboarding.quickSetup.help.feed",
+          "Tip: paste a feed URL now. You can adjust feed settings later."
+        )
+      : quickSetupStep === 1
+        ? t(
+            "watchlists:overview.onboarding.quickSetup.help.monitor",
+            "No cron needed: choose a preset schedule for now."
+          )
+        : t(
+            "watchlists:overview.onboarding.quickSetup.help.review",
+            "You can change any of these settings later from Feeds and Monitors."
+          )
   const overviewBadges = getOverviewTabBadges(data?.health)
 
   if (loading && !data) {
@@ -752,6 +767,9 @@ export const OverviewTab: React.FC = () => {
               { title: t("watchlists:overview.onboarding.quickSetup.steps.review", "Review") }
             ]}
           />
+          <div className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-text-muted">
+            {quickSetupStepHelp}
+          </div>
 
           <Form
             form={quickSetupForm}

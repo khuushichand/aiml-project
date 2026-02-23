@@ -283,6 +283,12 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
         <div className="mt-2 text-xs text-text-muted">
           {selectedPreset?.description}
         </div>
+        <div className="mt-1 text-xs text-text-muted">
+          {t(
+            "watchlists:schedule.beginnerHint",
+            "Most users should use presets. Turn on cron only for uncommon timing."
+          )}
+        </div>
 
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
           {(presetState.preset === "daily" || presetState.preset === "weekly") && (
@@ -334,13 +340,13 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
       <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
         <div>
           <div className="flex items-center gap-1 text-sm font-medium">
-            {t("watchlists:schedule.advancedLabel", "Advanced cron expression")}
+            {t("watchlists:schedule.advancedLabel", "Use custom cron (advanced)")}
             <WatchlistsHelpTooltip topic="cron" />
           </div>
           <div className="text-xs text-text-muted">
             {t(
-              "watchlists:schedule.advancedHint",
-              "Enable only if presets cannot express the cadence you need."
+              "watchlists:schedule.advancedOptionalHint",
+              "Most users should use presets. Turn on cron only for uncommon timing."
             )}
           </div>
         </div>
@@ -356,7 +362,7 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
             <Input
               placeholder={t(
                 "watchlists:schedule.cronPlaceholder",
-                "Advanced schedule expression (cron, e.g., 0 9 * * MON)"
+                "Cron expression (advanced), e.g., 0 9 * * MON"
               )}
               value={customCron}
               onChange={(event) => {
@@ -378,6 +384,12 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
             {t(
               "watchlists:schedule.cronFieldOrderHint",
               "Field order: minute hour day-of-month month day-of-week."
+            )}
+          </div>
+          <div className="mt-2 text-xs text-text-muted">
+            {t(
+              "watchlists:schedule.cronBeginnerHint",
+              "If cron is new, start with a quick example below and edit one field at a time."
             )}
           </div>
           <div className="mt-2 rounded-md border border-border bg-surface p-2">
@@ -445,7 +457,7 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
             )
           : t(
               "watchlists:schedule.helpSimple",
-              "Pick a schedule preset above. You can switch to Advanced cron for uncommon timing patterns."
+              "Use a preset above for most schedules. Turn on Advanced cron only if you need uncommon timing patterns."
             )}
       </div>
     </div>

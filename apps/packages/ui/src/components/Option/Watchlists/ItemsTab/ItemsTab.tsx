@@ -47,6 +47,10 @@ import {
   SOURCE_LOAD_PAGE_SIZE,
   stripHtmlToText
 } from "./items-utils"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 
 const { Search } = Input
 
@@ -292,6 +296,11 @@ export const ItemsTab: React.FC = () => {
   const [effectiveSearchQuery, setEffectiveSearchQuery] = useState(searchQuery)
   const itemsRequestTokenRef = useRef(0)
   const smartCountsRequestTokenRef = useRef(0)
+  const shortcutsTriggerRef = useRef<HTMLElement | null>(null)
+  const shortcutsHelpButtonRef = useRef<HTMLButtonElement | null>(null)
+  const saveViewTriggerRef = useRef<HTMLElement | null>(null)
+  const wasShortcutsOpenRef = useRef(false)
+  const wasSaveViewModalOpenRef = useRef(false)
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -465,6 +474,30 @@ export const ItemsTab: React.FC = () => {
       // Ignore storage write errors (private browsing, quota, etc.)
     }
   }, [shortcutsHintVisible])
+
+  useEffect(() => {
+    if (shortcutsOpen) {
+      wasShortcutsOpenRef.current = true
+      return
+    }
+
+    if (wasShortcutsOpenRef.current) {
+      wasShortcutsOpenRef.current = false
+      restoreFocusToElement(shortcutsTriggerRef.current)
+    }
+  }, [shortcutsOpen])
+
+  useEffect(() => {
+    if (saveViewModalOpen) {
+      wasSaveViewModalOpenRef.current = true
+      return
+    }
+
+    if (wasSaveViewModalOpenRef.current) {
+      wasSaveViewModalOpenRef.current = false
+      restoreFocusToElement(saveViewTriggerRef.current)
+    }
+  }, [saveViewModalOpen])
 
   useEffect(() => {
     const visibleIds = new Set(items.map((item) => item.id))
@@ -904,6 +937,7 @@ export const ItemsTab: React.FC = () => {
     setNewViewName(
       t("watchlists:items.savedViews.defaultName", "My view")
     )
+    saveViewTriggerRef.current = getFocusableActiveElement()
     setSaveViewModalOpen(true)
   }, [
     activePresetId,
@@ -914,6 +948,27 @@ export const ItemsTab: React.FC = () => {
     statusFilter,
     t
   ])
+
+  const openShortcuts = useCallback((source: "button" | "keyboard" = "button") => {
+    const activeElement = getFocusableActiveElement()
+    const shortcutsButton =
+      shortcutsHelpButtonRef.current ||
+      (typeof document !== "undefined"
+        ? document.querySelector<HTMLButtonElement>(
+            "[data-testid='watchlists-items-shortcuts-help']"
+          )
+        : null)
+    if (source === "keyboard") {
+      shortcutsTriggerRef.current = shortcutsButton || activeElement
+    } else {
+      shortcutsTriggerRef.current = activeElement || shortcutsButton
+    }
+    setShortcutsOpen(true)
+  }, [])
+
+  const closeShortcuts = useCallback(() => {
+    setShortcutsOpen(false)
+  }, [])
 
   const createViewPreset = useCallback(() => {
     const trimmedName = newViewName.trim()
@@ -1073,6 +1128,12 @@ export const ItemsTab: React.FC = () => {
     if (isEditableTarget(event.target)) return
     if (shortcutsOpen && event.key !== "Escape") return
 
+    if (shortcutsOpen && event.key === "Escape") {
+      event.preventDefault()
+      closeShortcuts()
+      return
+    }
+
     const normalizedKey = event.key.toLowerCase()
 
     if (normalizedKey === "j") {
@@ -1116,16 +1177,18 @@ export const ItemsTab: React.FC = () => {
     const isQuestionMark = event.key === "?" || (event.key === "/" && event.shiftKey)
     if (isQuestionMark) {
       event.preventDefault()
-      setShortcutsOpen(true)
+      openShortcuts("keyboard")
     }
   }, [
     batchReviewScope,
     handleToggleReviewed,
     moveSelectionBy,
+    openShortcuts,
     openQuickCreateFlow,
     openSelectedItemOriginal,
     refreshItemsView,
     selectedItem,
+    closeShortcuts,
     shortcutsOpen,
     updatingItemId
   ])
@@ -1189,8 +1252,9 @@ export const ItemsTab: React.FC = () => {
           )}
           <Tooltip title={t("watchlists:items.shortcuts.helpHint", "Keyboard shortcuts (?)")}>
             <Button
+              ref={shortcutsHelpButtonRef}
               icon={<HelpCircle className="h-4 w-4" />}
-              onClick={() => setShortcutsOpen(true)}
+              onClick={() => openShortcuts("button")}
               data-testid="watchlists-items-shortcuts-help"
             >
               {t("watchlists:items.shortcuts.button", "Shortcuts")}
@@ -1221,7 +1285,7 @@ export const ItemsTab: React.FC = () => {
             <Button
               size="small"
               type="link"
-              onClick={() => setShortcutsOpen(true)}
+              onClick={() => openShortcuts("button")}
               data-testid="watchlists-items-shortcuts-hint-open"
             >
               {t("watchlists:items.shortcuts.openPanel", "View all")}
@@ -1521,6 +1585,9 @@ export const ItemsTab: React.FC = () => {
                     itemPreviewById.get(item.id) ||
                     t("watchlists:items.noSummary", "No summary available")
                   const imageUrl = itemImagesById.get(item.id)
+                  const reviewStateLabel = item.reviewed
+                    ? t("watchlists:items.rowStatusReviewed", "Reviewed")
+                    : t("watchlists:items.rowStatusUnread", "Unread")
 
                   return (
                     <button
@@ -1570,9 +1637,21 @@ export const ItemsTab: React.FC = () => {
                           <h4 className="line-clamp-2 text-base font-semibold text-text">
                             {item.title || t("watchlists:items.untitled", "Untitled item")}
                           </h4>
-                          <span className="shrink-0 text-xs font-medium text-text-subtle">
-                            {renderItemTimestamp(item, t)}
-                          </span>
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
+                                item.reviewed
+                                  ? "border-border text-text-subtle"
+                                  : "border-primary/40 text-primary"
+                              }`}
+                              data-testid={`watchlists-item-row-review-state-${item.id}`}
+                            >
+                              {reviewStateLabel}
+                            </span>
+                            <span className="text-xs font-medium text-text-subtle">
+                              {renderItemTimestamp(item, t)}
+                            </span>
+                          </div>
                         </div>
                         <p className="line-clamp-2 text-sm text-text-muted">{previewText}</p>
                         <p className="truncate text-xs font-medium text-text-subtle">
@@ -1806,11 +1885,21 @@ export const ItemsTab: React.FC = () => {
       <Modal
         title={t("watchlists:items.shortcuts.title", "Keyboard shortcuts")}
         open={shortcutsOpen}
-        onCancel={() => setShortcutsOpen(false)}
+        onCancel={closeShortcuts}
         footer={null}
         destroyOnHidden
       >
         <div className="space-y-2" data-testid="watchlists-items-shortcuts-modal">
+          <div className="flex justify-end">
+            <Button
+              size="small"
+              type="link"
+              onClick={closeShortcuts}
+              data-testid="watchlists-items-shortcuts-close"
+            >
+              {t("common:close", "Close")}
+            </Button>
+          </div>
           {shortcutRows.map((shortcut) => (
             <div
               key={shortcut.keys}

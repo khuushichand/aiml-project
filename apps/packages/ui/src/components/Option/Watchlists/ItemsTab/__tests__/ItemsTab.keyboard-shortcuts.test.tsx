@@ -244,4 +244,23 @@ describe("ItemsTab keyboard shortcuts", () => {
     expect(screen.getByTestId("watchlists-items-shortcuts-hint-strip")).toBeInTheDocument()
     expect(window.localStorage.getItem("watchlists:items:shortcuts-hint-dismissed")).toBe("0")
   })
+
+  it("restores focus to shortcuts button after dismissing help opened from keyboard", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    const shortcutsButton = screen.getByTestId("watchlists-items-shortcuts-help")
+
+    fireEvent.keyDown(document, { key: "?", shiftKey: true })
+    expect(await screen.findByTestId("watchlists-items-shortcuts-modal")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("watchlists-items-shortcuts-close"))
+
+    await waitFor(() => {
+      expect(shortcutsButton).toHaveFocus()
+    })
+  })
 })

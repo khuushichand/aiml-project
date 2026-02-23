@@ -40,6 +40,16 @@ const RUNS_ADVANCED_FILTERS_STORAGE_KEY = "watchlists:runs:advanced-filters:v1"
 const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
 type RunsCsvTalliesMode = "none" | "per_run" | "aggregate"
 
+const normalizeRunStatus = (status: unknown): string =>
+  String(status || "").trim().toLowerCase()
+
+const toStatusDefaultLabel = (status: string): string =>
+  status
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+
 const resolveRunsCsvServerThreshold = (): number => {
   const raw = process.env.NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD
   if (!raw || !raw.trim()) return DEFAULT_RUNS_CSV_SERVER_THRESHOLD
@@ -110,6 +120,7 @@ export const RunsTab: React.FC = () => {
   const [cancellingRunIds, setCancellingRunIds] = useState<number[]>([])
   const [failedCancelRunIds, setFailedCancelRunIds] = useState<number[]>([])
   const [runsLoadError, setRunsLoadError] = useState<ReturnType<typeof mapWatchlistsError> | null>(null)
+  const [runsLiveAnnouncement, setRunsLiveAnnouncement] = useState("")
   const hasActiveRunsFilters = Boolean(runsJobFilter || runsStatusFilter)
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(() => {
     const stored = readStoredDisclosureState(RUNS_ADVANCED_FILTERS_STORAGE_KEY)
@@ -130,6 +141,8 @@ export const RunsTab: React.FC = () => {
 
   // Refs for polling
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const previousVisibleRunsStatusRef = useRef<Map<number, string>>(new Map())
+  const hasRunsAnnouncementBaselineRef = useRef(false)
 
   // Fetch runs
   const loadRuns = useCallback(async (showLoading = true) => {
@@ -222,6 +235,17 @@ export const RunsTab: React.FC = () => {
     persistDisclosureState(RUNS_ADVANCED_FILTERS_STORAGE_KEY, showAdvancedFilters)
   }, [showAdvancedFilters])
 
+  const getRunStatusLabel = useCallback((status: string) => {
+    const normalized = normalizeRunStatus(status)
+    if (!normalized) {
+      return t("watchlists:runs.statusLabels.unknown", "Unknown")
+    }
+    return t(
+      `watchlists:runs.statusLabels.${normalized}`,
+      toStatusDefaultLabel(normalized)
+    )
+  }, [t])
+
   // Polling for active runs
   useEffect(() => {
     if (pollingActive) {
@@ -239,6 +263,51 @@ export const RunsTab: React.FC = () => {
       }
     }
   }, [pollingActive, loadRuns])
+
+  useEffect(() => {
+    const visibleRuns = Array.isArray(runs) ? runs : []
+    const nextStatuses = new Map<number, string>()
+    visibleRuns.forEach((run) => {
+      nextStatuses.set(run.id, normalizeRunStatus(run.status))
+    })
+
+    if (!hasRunsAnnouncementBaselineRef.current) {
+      hasRunsAnnouncementBaselineRef.current = true
+      previousVisibleRunsStatusRef.current = nextStatuses
+      return
+    }
+
+    const changedRuns = visibleRuns.filter((run) => {
+      const previousStatus = previousVisibleRunsStatusRef.current.get(run.id)
+      const currentStatus = normalizeRunStatus(run.status)
+      return Boolean(previousStatus) && previousStatus !== currentStatus
+    })
+
+    if (changedRuns.length === 1) {
+      const changedRun = changedRuns[0]
+      setRunsLiveAnnouncement(
+        t("watchlists:runs.live.statusChangedSingle", "Run #{{id}} status changed to {{status}}.", {
+          id: changedRun.id,
+          status: getRunStatusLabel(changedRun.status)
+        })
+      )
+    } else if (changedRuns.length > 1) {
+      setRunsLiveAnnouncement(
+        t("watchlists:runs.live.statusChangedMultiple", "{{count}} runs changed status.", {
+          count: changedRuns.length
+        })
+      )
+    }
+
+    previousVisibleRunsStatusRef.current = nextStatuses
+  }, [getRunStatusLabel, runs, t])
+
+  useEffect(() => {
+    if (!runsLoadError) return
+    setRunsLiveAnnouncement(
+      t("watchlists:runs.live.loadError", "Activity refresh failed.")
+    )
+  }, [runsLoadError, t])
 
   // Get job name by ID
   const getJobName = useCallback(
@@ -471,23 +540,29 @@ export const RunsTab: React.FC = () => {
       dataIndex: "status",
       key: "status",
       width: 120,
-      render: (status: string, record) => (
-        <div className="flex items-center gap-2">
-          <StatusTag status={status} />
-          {status === "running" && (
-            <Progress
-              percent={Math.round(
-                ((record.stats?.items_ingested || 0) /
-                  Math.max(record.stats?.items_found || 1, 1)) *
-                  100
-              )}
-              size="small"
-              showInfo={false}
-              className="w-16"
-            />
-          )}
-        </div>
-      )
+      render: (status: string, record) => {
+        const progressPercent = Math.round(
+          ((record.stats?.items_ingested || 0) /
+            Math.max(record.stats?.items_found || 1, 1)) *
+            100
+        )
+        return (
+          <div className="flex items-center gap-2">
+            <StatusTag status={status} />
+            {status === "running" && (
+              <Progress
+                percent={progressPercent}
+                size="small"
+                showInfo={false}
+                className="w-16"
+                aria-label={t("watchlists:runs.progressAria", "Run ingestion progress {{percent}} percent", {
+                  percent: progressPercent
+                })}
+              />
+            )}
+          </div>
+        )
+      }
     },
     {
       title: t("watchlists:runs.columns.started", "Started"),
@@ -623,11 +698,21 @@ export const RunsTab: React.FC = () => {
                       message.success(
                         t("watchlists:runs.cancelRunSuccess", "Run cancelled")
                       )
+                      setRunsLiveAnnouncement(
+                        t("watchlists:runs.live.cancelRunSuccess", "Run #{{id}} cancelled.", {
+                          id: record.id
+                        })
+                      )
                     } catch (err) {
                       console.error("Failed to cancel run:", err)
                       setFailedCancelRunIds((prev) => (prev.includes(record.id) ? prev : [...prev, record.id]))
                       message.error(
                         t("watchlists:runs.cancelRunError", "Failed to cancel run")
+                      )
+                      setRunsLiveAnnouncement(
+                        t("watchlists:runs.live.cancelRunError", "Failed to cancel run #{{id}}.", {
+                          id: record.id
+                        })
                       )
                     } finally {
                       setCancellingRunIds((prev) => prev.filter((id) => id !== record.id))
@@ -647,13 +732,13 @@ export const RunsTab: React.FC = () => {
     : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
 
   // Status options for filter
-  const statusOptions = [
-    { value: "pending", label: "Pending" },
-    { value: "running", label: "Running" },
-    { value: "completed", label: "Completed" },
-    { value: "failed", label: "Failed" },
-    { value: "cancelled", label: "Cancelled" }
-  ]
+  const statusOptions = useMemo(() => ([
+    { value: "pending", label: getRunStatusLabel("pending") },
+    { value: "running", label: getRunStatusLabel("running") },
+    { value: "completed", label: getRunStatusLabel("completed") },
+    { value: "failed", label: getRunStatusLabel("failed") },
+    { value: "cancelled", label: getRunStatusLabel("cancelled") }
+  ]), [getRunStatusLabel])
   const activeStatusLabel = statusOptions.find((option) => option.value === runsStatusFilter)?.label
   const activeRunsFilterSummary = [
     runsJobFilter
@@ -714,6 +799,16 @@ export const RunsTab: React.FC = () => {
 
   return (
     <div className="space-y-4">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid="watchlists-runs-live-region"
+      >
+        {runsLiveAnnouncement}
+      </div>
+
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -895,6 +990,7 @@ export const RunsTab: React.FC = () => {
         dataSource={Array.isArray(runs) ? runs : []}
         columns={columns}
         rowKey="id"
+        aria-label={t("watchlists:runs.tableAria", "Activity runs table")}
         loading={runsLoading}
         pagination={{
           current: runsPage,

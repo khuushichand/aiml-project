@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Button,
   InputNumber,
@@ -73,6 +73,15 @@ const persistDisclosureState = (key: string, value: boolean): void => {
   }
 }
 
+const normalizeDeliverySnapshot = (metadata: unknown): string => {
+  const deliveries = getOutputDeliveryStatuses(metadata)
+  if (!deliveries.length) return ""
+  return deliveries
+    .map((delivery) => `${delivery.channel}:${delivery.status}`.toLowerCase())
+    .sort()
+    .join("|")
+}
+
 export const OutputsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
 
@@ -106,11 +115,14 @@ export const OutputsTab: React.FC = () => {
   const [selectedTemplateVersion, setSelectedTemplateVersion] = useState<number | null>(null)
   const [customTitle, setCustomTitle] = useState("")
   const [regenLoading, setRegenLoading] = useState(false)
+  const [outputsLiveAnnouncement, setOutputsLiveAnnouncement] = useState("")
   const hasActiveOutputFilters = Boolean(outputsJobFilter || outputsRunFilter)
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(() => {
     const stored = readStoredDisclosureState(OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY)
     return stored ?? hasActiveOutputFilters
   })
+  const previousDeliverySnapshotRef = useRef<Map<number, string>>(new Map())
+  const hasOutputAnnouncementBaselineRef = useRef(false)
 
   const selectedTemplateVersionOptions = useMemo(() => {
     if (!selectedTemplate) return []
@@ -136,6 +148,9 @@ export const OutputsTab: React.FC = () => {
     } catch (err) {
       console.error("Failed to fetch outputs:", err)
       message.error(t("watchlists:outputs.fetchError", "Failed to load outputs"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.loadError", "Reports refresh failed.")
+      )
     } finally {
       setOutputsLoading(false)
     }
@@ -194,6 +209,47 @@ export const OutputsTab: React.FC = () => {
     persistDisclosureState(OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY, showAdvancedFilters)
   }, [showAdvancedFilters])
 
+  const getOutputAccessibleTitle = useCallback((output: WatchlistOutput) => {
+    const title = typeof output.title === "string" ? output.title.trim() : ""
+    return title.length > 0 ? title : `Output #${output.id}`
+  }, [])
+
+  useEffect(() => {
+    const outputItems = Array.isArray(outputs) ? outputs : []
+    const nextSnapshot = new Map<number, string>()
+    outputItems.forEach((output) => {
+      nextSnapshot.set(output.id, normalizeDeliverySnapshot(output.metadata))
+    })
+
+    if (!hasOutputAnnouncementBaselineRef.current) {
+      hasOutputAnnouncementBaselineRef.current = true
+      previousDeliverySnapshotRef.current = nextSnapshot
+      return
+    }
+
+    const changedOutputs = outputItems.filter((output) => {
+      const previousSnapshot = previousDeliverySnapshotRef.current.get(output.id)
+      const currentSnapshot = nextSnapshot.get(output.id)
+      return Boolean(previousSnapshot) && previousSnapshot !== currentSnapshot
+    })
+
+    if (changedOutputs.length === 1) {
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.deliveryChangedSingle", "Delivery status updated for {{title}}.", {
+          title: getOutputAccessibleTitle(changedOutputs[0])
+        })
+      )
+    } else if (changedOutputs.length > 1) {
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.deliveryChangedMultiple", "Delivery status updated for {{count}} reports.", {
+          count: changedOutputs.length
+        })
+      )
+    }
+
+    previousDeliverySnapshotRef.current = nextSnapshot
+  }, [getOutputAccessibleTitle, outputs, t])
+
   // Get job name by ID
   const getJobName = useCallback(
     (jobId: number) => {
@@ -238,9 +294,19 @@ export const OutputsTab: React.FC = () => {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       message.success(t("watchlists:outputs.downloaded", "Output downloaded"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.downloaded", "Downloaded {{title}}.", {
+          title: getOutputAccessibleTitle(output)
+        })
+      )
     } catch (err) {
       console.error("Failed to download output:", err)
       message.error(t("watchlists:outputs.downloadError", "Failed to download output"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.downloadError", "Failed to download {{title}}.", {
+          title: getOutputAccessibleTitle(output)
+        })
+      )
     }
   }
 
@@ -263,11 +329,21 @@ export const OutputsTab: React.FC = () => {
       })
       await createWatchlistOutput(regeneratePayload)
       message.success(t("watchlists:outputs.regenerated", "Output regenerated"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.regenerated", "Regenerated {{title}}.", {
+          title: getOutputAccessibleTitle(regenOutput)
+        })
+      )
       setRegenOpen(false)
       loadOutputs()
     } catch (err) {
       console.error("Failed to regenerate output:", err)
       message.error(t("watchlists:outputs.regenerateError", "Failed to regenerate output"))
+      setOutputsLiveAnnouncement(
+        t("watchlists:outputs.live.regenerateError", "Failed to regenerate {{title}}.", {
+          title: getOutputAccessibleTitle(regenOutput)
+        })
+      )
     } finally {
       setRegenLoading(false)
     }
@@ -478,6 +554,16 @@ export const OutputsTab: React.FC = () => {
 
   return (
     <div className="space-y-4">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid="watchlists-outputs-live-region"
+      >
+        {outputsLiveAnnouncement}
+      </div>
+
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -564,6 +650,7 @@ export const OutputsTab: React.FC = () => {
         dataSource={Array.isArray(outputs) ? outputs : []}
         columns={columns}
         rowKey="id"
+        aria-label={t("watchlists:outputs.tableAria", "Reports table")}
         loading={outputsLoading}
         pagination={{
           current: outputsPage,

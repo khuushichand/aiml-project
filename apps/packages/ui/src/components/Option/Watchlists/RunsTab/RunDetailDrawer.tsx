@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -36,6 +36,10 @@ import { formatRelativeTime } from "@/utils/dateFormatters"
 import { StatusTag } from "../shared"
 import { mapWatchlistsError } from "../shared/watchlists-error"
 import { classifyRunFailure, getRunFailureHint } from "./run-notifications"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 
 interface RunDetailDrawerProps {
   runId: number | null
@@ -81,6 +85,8 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const reconnectAttemptRef = useRef(0)
   const manuallyClosedRef = useRef(false)
   const currentStatusRef = useRef<string | null>(null)
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
   const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
   const addRun = useWatchlistsStore((s) => s.addRun)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
@@ -215,6 +221,21 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       setLoading(false)
     }
   }, [runId])
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
 
   useEffect(() => {
     if (open && runId) {

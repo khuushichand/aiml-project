@@ -43,6 +43,10 @@ describe("SchedulePicker contextual help", () => {
   it("shows a cron help trigger in the advanced schedule section", () => {
     render(<SchedulePicker value={null} onChange={vi.fn()} />)
 
+    expect(
+      screen.getAllByText("Most users should use presets. Turn on cron only for uncommon timing.")
+        .length
+    ).toBeGreaterThan(0)
     expect(screen.getByTestId("watchlists-help-cron")).toBeInTheDocument()
   })
 
@@ -53,7 +57,7 @@ describe("SchedulePicker contextual help", () => {
     fireEvent.click(screen.getByRole("switch"))
     fireEvent.change(
       screen.getByPlaceholderText(
-        "Advanced schedule expression (cron, e.g., 0 9 * * MON)"
+        "Cron expression (advanced), e.g., 0 9 * * MON"
       ),
       { target: { value: "* * * * *" } }
     )
@@ -79,7 +83,7 @@ describe("SchedulePicker contextual help", () => {
     fireEvent.click(screen.getByRole("switch"))
     fireEvent.change(
       screen.getByPlaceholderText(
-        "Advanced schedule expression (cron, e.g., 0 9 * * MON)"
+        "Cron expression (advanced), e.g., 0 9 * * MON"
       ),
       { target: { value: "0 9 * *" } }
     )
@@ -96,9 +100,14 @@ describe("SchedulePicker contextual help", () => {
     render(<SchedulePicker value={null} onChange={onChange} />)
 
     fireEvent.click(screen.getByRole("switch"))
+    expect(
+      screen.getByText(
+        "If cron is new, start with a quick example below and edit one field at a time."
+      )
+    ).toBeInTheDocument()
     fireEvent.click(screen.getByTestId("schedule-example-daily0900"))
     expect(
-      screen.getByPlaceholderText("Advanced schedule expression (cron, e.g., 0 9 * * MON)")
+      screen.getByPlaceholderText("Cron expression (advanced), e.g., 0 9 * * MON")
     ).toHaveValue("0 9 * * *")
 
     fireEvent.click(screen.getByRole("button", { name: "Apply" }))

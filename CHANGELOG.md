@@ -56,6 +56,17 @@ and this project adheres to Some kind of Versioning
   - Added direct retry affordances on source preflight and run-detail load failure surfaces with regression coverage.
   - Added grouped run notification fan-in with dedupe and deep-link payloads to prevent repeated toast spam during multi-run failure bursts.
   - Added stalled-run detection in notification polling and a persistent Runs-tab reliability attention banner with direct run/filter actions.
+- Watchlists article workflow and scale guardrail improvements:
+  - Added explicit route query handoff for Watchlists tab/filter deep links (`tab`, source/status/smart/search, job/run/output IDs) so cross-tab context is restorable and testable.
+  - Added regression coverage for article-to-monitor/run/reports handoff and include-in-next-briefing action paths.
+  - Added shared watchlists scale guardrail metadata (`WATCHLISTS_SCALE_GUARDRAILS`, `WATCHLISTS_SCALE_SCENARIOS`) and wired perf/load tests to those constants for repeatable threshold tracking.
+- Watchlists accessibility and inclusivity hardening (Plan 06 closeout):
+  - Completed staged accessibility delivery for keyboard focus restoration, screen-reader live announcements, non-color status encoding, and plain-language onboarding/scheduling/template guidance.
+  - Added release-gate checklist pass-rate tracking for Watchlists accessibility categories and recorded residual non-critical/manual review items.
+  - Confirmed accessibility regression matrix remains green in touched flows with no critical keyboard/SR defects, with only the known OPML import test baseline failure outside this scope.
+- Watchlists coordinated UX program closeout:
+  - Added cross-stream closeout report with verification summary and owned deferred backlog:
+    - `Docs/Plans/WATCHLISTS_UX_PROGRAM_CLOSEOUT_2026_02_22.md`
 
 ### Changed
 

@@ -1,10 +1,14 @@
-import React, { useEffect } from "react"
+import React, { useEffect, useLayoutEffect, useRef } from "react"
 import { Alert, Button, Form, Input, Modal, Select, message } from "antd"
 import { useTranslation } from "react-i18next"
 import { testWatchlistSource, testWatchlistSourceDraft } from "@/services/watchlists"
 import type { JobPreviewResult } from "@/types/watchlists"
 import type { WatchlistSource, SourceType } from "@/types/watchlists"
 import { mapWatchlistsError } from "../shared/watchlists-error"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 
 interface SourceFormModalProps {
   open: boolean
@@ -73,9 +77,26 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
   const [testResult, setTestResult] = React.useState<JobPreviewResult | null>(null)
   const [testError, setTestError] = React.useState<string | null>(null)
   const [testErrorHint, setTestErrorHint] = React.useState<string | null>(null)
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
 
   const isEditing = !!initialValues
   const testSourceId = typeof initialValues?.id === "number" ? initialValues.id : null
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
 
   // Reset form when modal opens/closes or initialValues change
   useEffect(() => {

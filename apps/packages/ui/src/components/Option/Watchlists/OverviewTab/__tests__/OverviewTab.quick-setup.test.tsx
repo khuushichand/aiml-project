@@ -190,6 +190,9 @@ describe("OverviewTab quick setup flow", () => {
     expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
       type: "quick_setup_opened"
     })
+    expect(
+      screen.getByText("Tip: paste a feed URL now. You can adjust feed settings later.")
+    ).toBeInTheDocument()
 
     fireEvent.change(
       screen.getByPlaceholderText("e.g., Daily Tech Feed"),
@@ -204,6 +207,9 @@ describe("OverviewTab quick setup flow", () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText("e.g., Morning Brief")).toBeInTheDocument()
     })
+    expect(
+      screen.getByText("No cron needed: choose a preset schedule for now.")
+    ).toBeInTheDocument()
   }, 20_000)
 
   it("routes to Reports after setup when briefing goal is selected and run-now is disabled", async () => {

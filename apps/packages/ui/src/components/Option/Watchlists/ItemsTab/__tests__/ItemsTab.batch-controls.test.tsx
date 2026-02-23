@@ -4,6 +4,7 @@ import React from "react"
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { ItemsTab } from "../ItemsTab"
+import { useWatchlistsStore } from "@/store/watchlists"
 import { ITEMS_PAGE_SIZE_STORAGE_KEY, ITEMS_VIEW_PRESETS_STORAGE_KEY } from "../items-utils"
 
 const serviceMocks = vi.hoisted(() => ({
@@ -152,6 +153,7 @@ describe("ItemsTab batch throughput controls", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    useWatchlistsStore.getState().resetStore()
 
     if (!window.matchMedia) {
       Object.defineProperty(window, "matchMedia", {
@@ -211,6 +213,9 @@ describe("ItemsTab batch throughput controls", () => {
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
     })
+
+    expect(screen.getByTestId("watchlists-item-row-review-state-101")).toHaveTextContent("Unread")
+    expect(screen.getByTestId("watchlists-item-row-review-state-103")).toHaveTextContent("Reviewed")
 
     expect(screen.getByTestId("watchlists-items-batch-scope-summary")).toHaveTextContent(
       "Selected: 0 unread"
@@ -327,5 +332,46 @@ describe("ItemsTab batch throughput controls", () => {
       expect(raw).toContain("system-needs-review")
       expect(raw).not.toContain("Triage Alpha")
     })
+  })
+
+  it("supports item handoff to monitor/run/reports and include-next-briefing action", async () => {
+    serviceMocks.updateScrapedItem.mockImplementation(async (itemId: number, updates?: Record<string, unknown>) => {
+      const item = makeItems().find((entry) => entry.id === itemId)
+      return {
+        ...(item || { id: itemId }),
+        reviewed: Boolean(updates?.reviewed ?? item?.reviewed),
+        status: typeof updates?.status === "string" ? updates.status : item?.status
+      }
+    })
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-103")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-item-row-103"))
+    fireEvent.click(screen.getByTestId("watchlists-item-include-briefing"))
+
+    await waitFor(() => {
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(103, { status: "ingested" })
+    })
+    expect(uiMocks.messageSuccess).toHaveBeenCalledWith("Added to the next briefing queue.")
+
+    fireEvent.click(screen.getByTestId("watchlists-item-jump-monitor"))
+    expect(useWatchlistsStore.getState().activeTab).toBe("jobs")
+    expect(useWatchlistsStore.getState().jobFormOpen).toBe(true)
+    expect(useWatchlistsStore.getState().jobFormEditId).toBe(1)
+
+    fireEvent.click(screen.getByTestId("watchlists-item-jump-run"))
+    expect(useWatchlistsStore.getState().activeTab).toBe("runs")
+    expect(useWatchlistsStore.getState().runsJobFilter).toBe(1)
+    expect(useWatchlistsStore.getState().runDetailOpen).toBe(true)
+    expect(useWatchlistsStore.getState().selectedRunId).toBe(1)
+
+    fireEvent.click(screen.getByTestId("watchlists-item-jump-outputs"))
+    expect(useWatchlistsStore.getState().activeTab).toBe("outputs")
+    expect(useWatchlistsStore.getState().outputsJobFilter).toBe(1)
+    expect(useWatchlistsStore.getState().outputsRunFilter).toBe(1)
   })
 })

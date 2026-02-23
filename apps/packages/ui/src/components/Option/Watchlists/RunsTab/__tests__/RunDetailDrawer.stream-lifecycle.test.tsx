@@ -38,14 +38,27 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("antd", () => {
-  const Drawer = ({ open, children, title, extra }: any) =>
-    open ? (
+  const Drawer = ({ open, children, title, extra, onClose, afterOpenChange }: any) => {
+    const closeRef = React.useRef<HTMLButtonElement | null>(null)
+    React.useEffect(() => {
+      afterOpenChange?.(open)
+      if (open) {
+        closeRef.current?.focus()
+      }
+    }, [afterOpenChange, open])
+
+    if (!open) return null
+    return (
       <div>
         <div>{title}</div>
         {extra}
+        <button type="button" ref={closeRef} onClick={() => onClose?.()}>
+          Close drawer
+        </button>
         {children}
       </div>
-    ) : null
+    )
+  }
 
   const Tabs = ({ items = [] }: any) => (
     <div>
@@ -459,5 +472,27 @@ describe("RunDetailDrawer stream lifecycle", () => {
     const logText = pre?.textContent || ""
     expect(logText.length).toBe(200_000)
     expect(logText.endsWith("a")).toBe(true)
+  })
+
+  it("restores focus to the launch control after drawer closes", async () => {
+    const trigger = document.createElement("button")
+    trigger.type = "button"
+    trigger.textContent = "Open run detail"
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    const { rerender } = render(<RunDetailDrawer open runId={10} onClose={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Close drawer" })).toHaveFocus()
+    })
+
+    rerender(<RunDetailDrawer open={false} runId={10} onClose={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(trigger).toHaveFocus()
+    })
+
+    trigger.remove()
   })
 })

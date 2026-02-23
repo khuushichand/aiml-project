@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react"
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -45,6 +45,10 @@ import {
   type TemplateRecipeOptions
 } from "./template-recipes"
 import { trackWatchlistsPreventionTelemetry } from "@/utils/watchlists-prevention-telemetry"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 
 interface TemplateEditorProps {
   template: WatchlistTemplate | null
@@ -74,6 +78,8 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   const [recipeOptions, setRecipeOptions] = useState<TemplateRecipeOptions>(
     createDefaultTemplateRecipeOptions()
   )
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
 
   const isEditing = !!template
   const authoringContext = isEditing ? "edit" : "create"
@@ -85,6 +91,21 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       TEMPLATE_RECIPE_DEFINITIONS[0],
     [selectedRecipeId]
   )
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
 
   const loadTemplate = async (templateName: string, version?: number) => {
     setLoadingVersion(true)
@@ -214,7 +235,12 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         const validation = await validateWatchlistTemplate(values.content, values.format)
         if (!validation.valid) {
           setValidationErrors(validation.errors)
-          message.error("Template has syntax errors. Fix them before saving.")
+          message.error(
+            t(
+              "watchlists:templates.syntaxErrorBeforeSave",
+              "Could not save template. Fix syntax errors, then try again."
+            )
+          )
           return
         }
         setValidationErrors([])
@@ -483,7 +509,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
             <div className="text-xs text-text-muted">
               {t(
                 "watchlists:templates.modeBasicEditorHint",
-                "Basic mode uses a simplified editor. Switch to Advanced for snippets, variable docs, and validation markers."
+                "Start in Basic mode with plain text or Markdown. Switch to Advanced only if you need variables, loops, or version tools."
               )}
             </div>
             <Form.Item
@@ -495,7 +521,10 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
                 rows={18}
                 value={contentValue || ""}
                 onChange={(event) => form.setFieldsValue({ content: event.target.value })}
-                placeholder={t("watchlists:templates.contentPlaceholder", "Enter Jinja2 template...")}
+                placeholder={t(
+                  "watchlists:templates.contentPlaceholder",
+                  "Start with plain text or Markdown. Advanced users can add Jinja2 tags later."
+                )}
               />
             </Form.Item>
           </div>
@@ -580,11 +609,11 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
             {authoringMode === "basic"
               ? t(
                 "watchlists:templates.modeHelpBasic",
-                "Basic mode keeps editing focused on name, format, content, and preview."
+                "Basic mode is no-code: pick a recipe, edit text, and preview your output."
               )
               : t(
                 "watchlists:templates.modeHelpAdvanced",
-                "Advanced mode unlocks snippets, variable docs, and version tools."
+                "Advanced mode adds Jinja2 snippets, variable docs, and version tools."
               )}
           </div>
           {authoringMode === "basic" && hasAdvancedTemplateContext && (
