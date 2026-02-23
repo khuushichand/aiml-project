@@ -158,6 +158,8 @@ async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depend
             status = await target.get_server_status()
         else:
             status = await target.get_server_status(backend="llamacpp")  # Via manager
+        if isinstance(status, dict):
+            status.setdefault("backend", "llamacpp")
         return status
     except HTTPException:
         raise
@@ -240,8 +242,6 @@ async def run_llamacpp_inference_endpoint(
     """
     try:
         handler = getattr(llm_manager, "llamacpp", None)
-        if handler is None:
-            raise _llamacpp_unavailable()
         # Prefer handler methods when available; fallback to manager for compatibility with tests
         if handler and hasattr(handler, "get_server_status") and hasattr(handler, "inference"):
             status = await handler.get_server_status()

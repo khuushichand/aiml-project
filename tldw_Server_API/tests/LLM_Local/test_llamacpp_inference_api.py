@@ -119,3 +119,37 @@ def test_llamacpp_inference_happy_path(llamacpp_client, monkeypatch):
     body = r.json()
     assert body["model"] == "mock.gguf"
     assert body["choices"][0]["message"]["content"] == "hi"
+
+
+@pytest.mark.integration
+def test_llamacpp_inference_falls_back_to_manager_when_handler_missing():
+    class _MgrNoHandler:
+        llamacpp = None
+        logger = _Logger()
+
+        async def get_server_status(self, backend: str):
+            return {"backend": backend, "model": "mock.gguf"}
+
+        async def run_inference(self, backend: str, model_name_or_path: str, prompt=None, **kwargs):
+            _ = prompt
+            return {
+                "model": model_name_or_path,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+                "kwargs": {"backend": backend, **kwargs},
+            }
+
+    app = _make_app_with_manager(_MgrNoHandler())
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "model": "ignored-by-server",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "temperature": 0.7,
+    }
+
+    with TestClient(app) as client:
+        r = client.post("/api/v1/llamacpp/inference", json=payload, headers=headers)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["model"] == "mock.gguf"
+    assert body["choices"][0]["message"]["content"] == "hi"

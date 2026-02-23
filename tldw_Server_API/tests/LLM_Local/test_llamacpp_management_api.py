@@ -65,6 +65,12 @@ class _FallbackModelsStub:
         return ["fallback.gguf"] if backend == "llamacpp" else []
 
 
+class _StatusNoBackendStub(_ManagedStub):
+    async def get_server_status(self, backend: str):
+        _ = backend
+        return {"status": "running", "model": "mock.gguf"}
+
+
 def _make_app_with_manager(manager) -> FastAPI:  # noqa: ANN001
     app = FastAPI()
     app.include_router(lp.router, prefix="/api/v1")
@@ -124,6 +130,20 @@ def test_llamacpp_stop_server_happy_path():
 @pytest.mark.unit
 def test_llamacpp_status_happy_path():
     app = _make_app_with_manager(_ManagedStub())
+
+    with TestClient(app) as client:
+        r = client.get("/api/v1/llamacpp/status")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "running"
+    assert body["model"] == "mock.gguf"
+    assert body["backend"] == "llamacpp"
+
+
+@pytest.mark.unit
+def test_llamacpp_status_adds_backend_when_missing():
+    app = _make_app_with_manager(_StatusNoBackendStub())
 
     with TestClient(app) as client:
         r = client.get("/api/v1/llamacpp/status")
