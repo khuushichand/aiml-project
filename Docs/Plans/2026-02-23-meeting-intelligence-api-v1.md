@@ -94,10 +94,10 @@ git commit -m "feat(meetings): add router and schema scaffold"
 **Goal**: Add additive meetings persistence and domain services for sessions/templates/artifacts.
 **Success Criteria**: CRUD operations work through DB adapter and service layer.
 **Tests**: DB unit tests + service unit tests pass.
-**Status**: In Progress
+**Status**: Complete
 
 ### Task 2: Implement Meetings DB Adapter
-**Progress**: Complete (in working tree, pending commit)
+**Progress**: Complete (`704b96c82`)
 
 **Files:**
 - Create: `tldw_Server_API/app/core/DB_Management/Meetings_DB.py`
@@ -159,6 +159,7 @@ git commit -m "feat(meetings): add persistence adapter and dependency"
 ```
 
 ### Task 3: Add Domain Services (Session/Template/Artifact)
+**Progress**: Complete (in working tree, pending commit)
 
 **Files:**
 - Create: `tldw_Server_API/app/core/Meetings/__init__.py`
