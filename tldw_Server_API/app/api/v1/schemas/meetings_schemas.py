@@ -98,3 +98,17 @@ class MeetingArtifactCreate(BaseModel):
     format: str = Field(..., min_length=1, max_length=64)
     payload_json: dict[str, Any]
     version: int = Field(default=1, ge=1)
+
+
+class MeetingFinalizeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcript_text: str = Field(..., min_length=1)
+    include: list[MeetingArtifactKind] | None = None
+
+
+class MeetingFinalizeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    artifacts: list[MeetingArtifactResponse]

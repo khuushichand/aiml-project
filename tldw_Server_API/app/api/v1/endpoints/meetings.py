@@ -9,6 +9,8 @@ from tldw_Server_API.app.api.v1.API_Deps.Meetings_DB_Deps import get_meetings_db
 from tldw_Server_API.app.api.v1.schemas.meetings_schemas import (
     MeetingArtifactCreate,
     MeetingArtifactResponse,
+    MeetingFinalizeRequest,
+    MeetingFinalizeResponse,
     MeetingHealthResponse,
     MeetingSessionCreate,
     MeetingSessionResponse,
@@ -239,6 +241,47 @@ async def list_artifacts(
     service = MeetingArtifactService(db=meetings_db)
     rows = service.list_artifacts(session_id=session_id)
     return [_to_artifact_response(row) for row in rows]
+
+
+@router.post("/sessions/{session_id}/commit", response_model=MeetingFinalizeResponse)
+async def finalize_session(
+    session_id: str,
+    payload: MeetingFinalizeRequest,
+    meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
+) -> MeetingFinalizeResponse:
+    session_service = MeetingSessionService(db=meetings_db)
+    artifact_service = MeetingArtifactService(db=meetings_db)
+    events_service = MeetingEventsService(db=meetings_db)
+
+    try:
+        session_service.get_session(session_id=session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting session not found") from exc
+
+    try:
+        artifacts = artifact_service.generate_final_artifacts(
+            session_id=session_id,
+            transcript_text=payload.transcript_text,
+            include=list(payload.include) if payload.include else None,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting session not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    meetings_db.update_session_status(session_id=session_id, status="completed")
+    events_service.emit(session_id=session_id, event_type="session.status", data={"status": "completed"})
+    for artifact in artifacts:
+        events_service.emit(
+            session_id=session_id,
+            event_type="artifact.ready",
+            data={"artifact_id": artifact.get("id"), "kind": artifact.get("kind")},
+        )
+
+    return MeetingFinalizeResponse(
+        session_id=session_id,
+        artifacts=[_to_artifact_response(row) for row in artifacts],
+    )
 
 
 @router.get("/sessions/{session_id}/events")

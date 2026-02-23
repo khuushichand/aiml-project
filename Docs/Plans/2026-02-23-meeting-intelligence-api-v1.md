@@ -296,7 +296,7 @@ git commit -m "feat(meetings): add sessions templates artifacts CRUD"
 **Status**: In Progress
 
 ### Task 5: Add SSE and WS Meeting Event Transport
-**Progress**: Complete (in working tree, pending commit)
+**Progress**: Complete (`602f28ef1`)
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/endpoints/meetings.py`
@@ -352,6 +352,7 @@ git commit -m "feat(meetings): add SSE and websocket event transport"
 ```
 
 ### Task 6: Implement Offline Ingest + Finalize Artifacts
+**Progress**: Complete (in working tree, pending commit)
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/endpoints/meetings.py`
