@@ -181,3 +181,22 @@ def test_list_continuation_line_stays_attached_to_list_context():
     assert "  continuation detail" in out
     assert "2. second item" in out
     assert "Paragraph starts and ends." in out
+
+
+def test_cjk_lines_join_without_inserting_ascii_space():
+    src = "我们正在研究模型的泛化能力\n并测试其在新任务上的表现。"
+    out = normalize_pdf_text_for_storage(src)
+    assert out == "我们正在研究模型的泛化能力并测试其在新任务上的表现。"
+
+
+def test_unicode_quotes_are_preserved_during_reflow():
+    src = "“This quoted sentence starts\nand continues with unicode punctuation.”"
+    out = normalize_pdf_text_for_storage(src)
+    assert out == "“This quoted sentence starts and continues with unicode punctuation.”"
+
+
+def test_math_like_wrapped_lines_reflow_cleanly():
+    src = "f(x) = x^2 + 2x + 1\nfor x in R.\n\ng(x)=sin(x)\nfor x in [0, pi]."
+    out = normalize_pdf_text_for_storage(src)
+    assert "f(x) = x^2 + 2x + 1 for x in R." in out
+    assert "g(x)=sin(x) for x in [0, pi]." in out

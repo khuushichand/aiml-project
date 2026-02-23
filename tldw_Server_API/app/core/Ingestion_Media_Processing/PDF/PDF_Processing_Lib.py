@@ -77,6 +77,7 @@ _LOWERCASE_START_RE = re.compile(r"^[a-z]")
 _INLINE_WHITESPACE_RE = re.compile(r"[ \t]+")
 _PUNCTUATION_RE = re.compile(r"[^\w\s]")
 _LIST_CONTINUATION_RE = re.compile(r"^\s{2,}\S")
+_CJK_CHAR_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]")
 #
 #######################################################################################################################
 # Function Definitions
@@ -120,6 +121,28 @@ def _collapse_inline_whitespace(value: str) -> str:
     return _INLINE_WHITESPACE_RE.sub(" ", value).strip()
 
 
+def _first_non_space_char(value: str) -> str:
+    for char in value:
+        if not char.isspace():
+            return char
+    return ""
+
+
+def _last_non_space_char(value: str) -> str:
+    for char in reversed(value):
+        if not char.isspace():
+            return char
+    return ""
+
+
+def _should_join_without_space(prev_text: str, next_text: str) -> bool:
+    prev_char = _last_non_space_char(prev_text)
+    next_char = _first_non_space_char(next_text)
+    if not prev_char or not next_char:
+        return False
+    return bool(_CJK_CHAR_RE.match(prev_char) and _CJK_CHAR_RE.match(next_char))
+
+
 def _is_artifact_heavy_block(lines: list[str]) -> bool:
     joined = " ".join(lines)
     if len(joined) < 40:
@@ -142,6 +165,8 @@ def _reflow_paragraph_lines(lines: list[str]) -> str:
     for line in cleaned_lines[1:]:
         if output.endswith("-") and _LOWERCASE_START_RE.match(line):
             output = output[:-1] + line
+        elif _should_join_without_space(output, line):
+            output = f"{output}{line}"
         else:
             output = f"{output} {line}"
     return _collapse_inline_whitespace(output)
