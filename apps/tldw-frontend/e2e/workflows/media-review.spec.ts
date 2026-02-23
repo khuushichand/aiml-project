@@ -21,7 +21,6 @@ import { MediaReviewPage } from "../utils/page-objects/MediaReviewPage"
 import {
   seedAuth,
   generateTestId,
-  waitForConnection,
   TEST_CONFIG,
   fetchWithApiKey
 } from "../utils/helpers"
@@ -71,15 +70,21 @@ const getMediaTotalCount = async (): Promise<number> => {
   return 0
 }
 
-const seedMediaDocument = async (seedLabel: string): Promise<void> => {
+const seedMediaDocument = async (
+  seedLabel: string,
+  options?: {
+    title?: string
+    content?: string
+  }
+): Promise<void> => {
   const body = new FormData()
   body.append("media_type", "document")
-  body.append("title", `Media review E2E ${seedLabel}`)
+  body.append("title", options?.title || `Media review E2E ${seedLabel}`)
   body.append("perform_analysis", "false")
   body.append("perform_chunking", "false")
   body.append(
     "files",
-    new Blob([`Seeded media review payload ${seedLabel}`], { type: "text/plain" }),
+    new Blob([options?.content || `Seeded media review payload ${seedLabel}`], { type: "text/plain" }),
     `media-review-${seedLabel}.txt`
   )
 
@@ -94,6 +99,27 @@ const seedMediaDocument = async (seedLabel: string): Promise<void> => {
   if (!response.ok) {
     throw new Error(`Failed to seed media: ${response.status} ${await response.text()}`)
   }
+}
+
+const seedSortFixtureDocuments = async (): Promise<{
+  query: string
+}> => {
+  const fixtureId = generateTestId("media-review-sort")
+  const prefix = `Media review sortable ${fixtureId}`
+  const titles = [
+    `${prefix} Zeta`,
+    `${prefix} Alpha`,
+    `${prefix} Mu`
+  ]
+
+  for (const title of titles) {
+    await seedMediaDocument(generateTestId("media-review-sort-doc"), {
+      title,
+      content: `${title} content body`
+    })
+  }
+
+  return { query: prefix }
 }
 
 const ensureMediaCountForCrossPageReview = async (
@@ -506,6 +532,76 @@ test.describe("Multi-Item Media Review Workflow", () => {
       // Clear filters
       await reviewPage.clearFilters()
       await authedPage.waitForTimeout(2000)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("applies title sort and date range filters for focused search results", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      const fixture = await seedSortFixtureDocuments()
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      await reviewPage.fillSearchQuery(fixture.query)
+      await authedPage.waitForTimeout(800)
+      await reviewPage.setSort("title_asc")
+      await reviewPage.setDateRange("2026-01-01", "2026-12-31")
+      const searchRequestPromise = authedPage.waitForRequest((request) => (
+        request.url().includes("/api/v1/media/search") &&
+        request.method().toUpperCase() === "POST"
+      ))
+      await authedPage.getByRole("button", { name: /^search$/i }).click()
+      const searchRequest = await searchRequestPromise
+      const payload = searchRequest.postDataJSON() as Record<string, any>
+      expect(payload.sort_by).toBe("title_asc")
+      expect(payload.date_range?.start ?? payload.date_range?.start_date).toBe("2026-01-01")
+      expect(payload.date_range?.end ?? payload.date_range?.end_date).toBe("2026-12-31")
+
+      await expect
+        .poll(async () => await reviewPage.getItemCount(), { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(1)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("shows content-search scope copy and progress feedback", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      await ensureMediaCountForCrossPageReview(6)
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      const slowRoutePattern = "**/api/v1/media/*?include_content=true&include_versions=false"
+      await authedPage.route(slowRoutePattern, async (route) => {
+        await sleep(150)
+        await route.continue()
+      })
+
+      try {
+        await reviewPage.fillSearchQuery("Media review")
+        await reviewPage.toggleContentSearch(true)
+        await authedPage.getByRole("button", { name: /^search$/i }).click()
+
+        await expect(
+          authedPage.getByText(/scans current page results/i)
+        ).toBeVisible({ timeout: 10_000 })
+        await expect(
+          authedPage.getByRole("status", { name: /content filtering progress/i })
+        ).toBeVisible({ timeout: 10_000 })
+      } finally {
+        await authedPage.unroute(slowRoutePattern)
+      }
 
       await assertNoCriticalErrors(diagnostics)
     })

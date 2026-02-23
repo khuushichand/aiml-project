@@ -1586,6 +1586,66 @@
   "mediaPage_filters": {
     "message": "Filters"
   },
+  "mediaPage_sort": {
+    "message": "Sort"
+  },
+  "mediaPage_sortRelevance": {
+    "message": "Relevance"
+  },
+  "mediaPage_sortDateDesc": {
+    "message": "Date: newest first"
+  },
+  "mediaPage_sortDateAsc": {
+    "message": "Date: oldest first"
+  },
+  "mediaPage_sortTitleAsc": {
+    "message": "Title: A-Z"
+  },
+  "mediaPage_sortTitleDesc": {
+    "message": "Title: Z-A"
+  },
+  "mediaPage_dateRange": {
+    "message": "Date range"
+  },
+  "mediaPage_startDate": {
+    "message": "Start date"
+  },
+  "mediaPage_endDate": {
+    "message": "End date"
+  },
+  "mediaPage_to": {
+    "message": "to"
+  },
+  "mediaPage_contentSearchLabel": {
+    "message": "Search full content (slower)"
+  },
+  "mediaPage_contentSearchScope": {
+    "message": "Scans current page results."
+  },
+  "mediaPage_contentSearchProgressAria": {
+    "message": "Content filtering progress"
+  },
+  "mediaPage_contentSearchProgress": {
+    "message": "Content filtering {{progress}}"
+  },
+  "mediaPage_cancel": {
+    "message": "Cancel"
+  },
+  "mediaPage_removeFilter": {
+    "message": "Remove filter {{label}}"
+  },
+  "mediaPage_sortChipLabel": {
+    "message": "Sort: {{value}}"
+  },
+  "mediaPage_dateRangeChipLabel": {
+    "message": "Date: {{value}}"
+  },
+  "mediaPage_dateRangeAnyStart": {
+    "message": "Any start"
+  },
+  "mediaPage_dateRangeAnyEnd": {
+    "message": "Any end"
+  },
   "mediaPage_analysisPending": {
     "message": "Pending save"
   },

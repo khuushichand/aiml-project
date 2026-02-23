@@ -31,6 +31,17 @@ import {
   hasLeadingTranscriptTimings,
   stripLeadingTranscriptTimings
 } from "@/utils/media-transcript-display"
+import {
+  buildMediaSearchPayload,
+  type MediaDateRange,
+  type MediaSortBy
+} from "@/components/Review/mediaSearchRequest"
+import { rankKeywordSuggestions } from "@/components/Review/filter-chip-priority"
+import {
+  IDLE_CONTENT_FILTER_PROGRESS,
+  toProgressLabel,
+  type ContentFilterProgress
+} from "@/components/Review/content-filtering-progress"
 
 type MediaItem = {
   id: string | number
@@ -83,6 +94,7 @@ const UNDO_DURATION_SECONDS = 15
 const MOBILE_REVIEW_MEDIA_QUERY = '(max-width: 1023px)'
 const MEDIA_CONTENT_DEFAULT_ROWS = 10
 const MEDIA_CONTENT_DEFAULT_MIN_HEIGHT_EM = MEDIA_CONTENT_DEFAULT_ROWS * 1.625
+const DEFAULT_SORT_BY: MediaSortBy = "relevance"
 
 const getIsMobileReviewViewport = (): boolean => {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -115,6 +127,11 @@ export const MediaReviewPage: React.FC = () => {
   const [keywordTokens, setKeywordTokens] = React.useState<string[]>([])
   const [keywordOptions, setKeywordOptions] = React.useState<string[]>([])
   const [includeContent, setIncludeContent] = React.useState<boolean>(false)
+  const [sortBy, setSortBy] = React.useState<MediaSortBy>(DEFAULT_SORT_BY)
+  const [dateRange, setDateRange] = React.useState<MediaDateRange>({
+    startDate: null,
+    endDate: null
+  })
   const [isMobileViewport, setIsMobileViewport] = React.useState<boolean>(() =>
     getIsMobileReviewViewport()
   )
@@ -122,6 +139,8 @@ export const MediaReviewPage: React.FC = () => {
     getIsMobileReviewViewport()
   )
   const [contentLoading, setContentLoading] = React.useState<boolean>(false)
+  const [contentFilterProgress, setContentFilterProgress] =
+    React.useState<ContentFilterProgress>(IDLE_CONTENT_FILTER_PROGRESS)
   const [contentExpandedIds, setContentExpandedIds] = React.useState<Set<string>>(new Set())
   const [analysisExpandedIds, setAnalysisExpandedIds] = React.useState<Set<string>>(new Set())
   const [detailLoading, setDetailLoading] = React.useState<Record<string | number, boolean>>({})
@@ -195,6 +214,8 @@ export const MediaReviewPage: React.FC = () => {
   const lastEscapePressRef = React.useRef<number>(0)
   // Track previous view mode for auto-mode notification
   const prevAutoViewModeRef = React.useRef<string | null>(null)
+  // Track latest full-content filter run to ignore stale updates/results
+  const contentFilterRunRef = React.useRef(0)
   // Check for reduced motion preference
   const prefersReducedMotion = React.useMemo(() =>
     typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -243,12 +264,120 @@ export const MediaReviewPage: React.FC = () => {
     void setSetting(MEDIA_REVIEW_FOCUSED_ID_SETTING, focusedId)
   }, [focusedId, selectionRestored])
 
+  const cancelContentFiltering = React.useCallback(() => {
+    contentFilterRunRef.current += 1
+    setContentLoading(false)
+    setContentFilterProgress(IDLE_CONTENT_FILTER_PROGRESS)
+  }, [])
+
+  const runContentFiltering = React.useCallback(async (items: MediaItem[]): Promise<MediaItem[]> => {
+    const hasQuery = query.trim().length > 0
+    const tokens = keywordTokens.map((k) => k.toLowerCase())
+    if (!includeContent || (!hasQuery && tokens.length === 0)) {
+      setContentLoading(false)
+      setContentFilterProgress(IDLE_CONTENT_FILTER_PROGRESS)
+      return items
+    }
+
+    const runId = contentFilterRunRef.current + 1
+    contentFilterRunRef.current = runId
+    setContentLoading(true)
+    setContentFilterProgress({
+      running: items.length > 0,
+      completed: 0,
+      total: items.length
+    })
+
+    if (items.length === 0) {
+      setContentLoading(false)
+      setContentFilterProgress(IDLE_CONTENT_FILTER_PROGRESS)
+      return items
+    }
+
+    const queryLower = query.toLowerCase()
+    const enriched: Array<{ m: MediaItem; content: string }> = []
+
+    for (let idx = 0; idx < items.length; idx += 1) {
+      if (contentFilterRunRef.current !== runId) {
+        return []
+      }
+      const m = items[idx]
+      let d = details[m.id]
+      if (!d) {
+        try {
+          d = await bgRequest<MediaDetail>({
+            path: `/api/v1/media/${m.id}?include_content=true&include_versions=false` as any,
+            method: 'GET' as any
+          })
+          if (contentFilterRunRef.current !== runId) {
+            return []
+          }
+          setDetails((prev) => (prev[m.id] ? prev : { ...prev, [m.id]: d! }))
+        } catch {
+          // Failed detail fetch should not terminate full list filtering.
+        }
+      }
+      enriched.push({ m, content: d ? getContent(d) : '' })
+      if (contentFilterRunRef.current === runId) {
+        setContentFilterProgress({
+          running: true,
+          completed: idx + 1,
+          total: items.length
+        })
+      }
+    }
+
+    if (contentFilterRunRef.current !== runId) {
+      return []
+    }
+
+    const filtered = enriched.filter(({ m, content }) => {
+      const hay = `${m.title || ''} ${m.snippet || ''} ${content}`.toLowerCase()
+      if (hasQuery && !hay.includes(queryLower)) return false
+      if (tokens.length > 0 && !tokens.every((token) => hay.includes(token))) return false
+      return true
+    }).map(({ m }) => m)
+
+    if (contentFilterRunRef.current === runId) {
+      setContentLoading(false)
+      setContentFilterProgress({
+        running: false,
+        completed: items.length,
+        total: items.length
+      })
+    }
+    return filtered
+  }, [details, includeContent, keywordTokens, query])
+
+  const mapMediaItems = React.useCallback((items: any[]): MediaItem[] => (
+    items.map((m: any) => ({
+      id: m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid,
+      title: m?.title || m?.filename || `Media ${m?.id}`,
+      snippet: m?.snippet || m?.summary || "",
+      type: String(m?.type || m?.media_type || "").toLowerCase(),
+      created_at: m?.created_at
+    }))
+  ), [])
+
   const fetchList = async (): Promise<MediaItem[]> => {
     const hasQuery = query.trim().length > 0
-    if (hasQuery) {
-      const body: any = { query, fields: ["title", "content"], sort_by: "relevance" }
-      if (types.length > 0) body.media_types = types
-      if (keywordTokens.length > 0) body.must_have = keywordTokens
+    const hasDateRange = Boolean(dateRange.startDate || dateRange.endDate)
+    const shouldUseSearchEndpoint =
+      hasQuery ||
+      types.length > 0 ||
+      keywordTokens.length > 0 ||
+      sortBy !== DEFAULT_SORT_BY ||
+      hasDateRange
+
+    if (shouldUseSearchEndpoint) {
+      const body = buildMediaSearchPayload({
+        query,
+        mediaTypes: types,
+        includeKeywords: keywordTokens,
+        excludeKeywords: [],
+        sortBy,
+        dateRange
+      })
       const res = await bgRequest<any>({
         path: `/api/v1/media/search?page=${page}&results_per_page=${pageSize}` as any,
         method: "POST" as any,
@@ -258,110 +387,47 @@ export const MediaReviewPage: React.FC = () => {
       const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res?.results) ? res.results : [])
       const pagination = res?.pagination
       setTotal(Number(pagination?.total_items || items.length || 0))
-      const mapped = items.map((m: any) => ({
-        id: m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid,
-        title: m?.title || m?.filename || `Media ${m?.id}`,
-        snippet: m?.snippet || m?.summary || "",
-        type: String(m?.type || m?.media_type || "").toLowerCase(),
-        created_at: m?.created_at
-      }))
-      // Update available types
+      const mapped = mapMediaItems(items)
       const typeSet = new Set(availableTypes)
       for (const it of mapped) if (it.type) typeSet.add(it.type)
       setAvailableTypes(Array.from(typeSet))
-      let filtered = mapped
-      if (types.length > 0) filtered = filtered.filter((m) => m.type && types.includes(m.type))
-      if (keywordTokens.length > 0) {
-        const toks = keywordTokens.map((k) => k.toLowerCase())
-        filtered = filtered.filter((m) => {
-          const hay = `${m.title || ''} ${m.snippet || ''}`.toLowerCase()
-          return toks.every((k) => hay.includes(k))
-        })
-      }
-      if (includeContent && (keywordTokens.length > 0 || hasQuery)) {
-        setContentLoading(true)
-        // Fetch details to include content in filtering
-        const enriched = await Promise.all(filtered.map(async (m) => {
-          let d = details[m.id]
-          if (!d) {
-            try {
-              d = await bgRequest<MediaDetail>({
-                path: `/api/v1/media/${m.id}?include_content=true&include_versions=false` as any,
-                method: 'GET' as any
-              })
-              setDetails((prev) => (prev[m.id] ? prev : { ...prev, [m.id]: d! }))
-            } catch {}
-          }
-          const content = d ? getContent(d) : ''
-          return { m, content }
-        }))
-        const toks = keywordTokens.map((k) => k.toLowerCase())
-        const ql = query.toLowerCase()
-        filtered = enriched.filter(({ m, content }) => {
-          const hay = `${m.title || ''} ${m.snippet || ''} ${content}`.toLowerCase()
-          if (hasQuery && !hay.includes(ql)) return false
-          if (toks.length > 0 && !toks.every((k) => hay.includes(k))) return false
-          return true
-        }).map(({ m }) => m)
-        setContentLoading(false)
-      }
-      return filtered
+      return runContentFiltering(mapped)
     }
-    // Browse listing when no query
-    const res = await bgRequest<any>({ path: `/api/v1/media/?page=${page}&results_per_page=${pageSize}` as any, method: "GET" as any })
+
+    const params = new URLSearchParams({
+      page: String(page),
+      results_per_page: String(pageSize)
+    })
+    if (sortBy !== DEFAULT_SORT_BY) params.set("sort_by", sortBy)
+    if (dateRange.startDate) params.set("start_date", dateRange.startDate)
+    if (dateRange.endDate) params.set("end_date", dateRange.endDate)
+    const res = await bgRequest<any>({
+      path: `/api/v1/media/?${params.toString()}` as any,
+      method: "GET" as any
+    })
     const items = Array.isArray(res?.items) ? res.items : []
     const pagination = res?.pagination
     setTotal(Number(pagination?.total_items || items.length || 0))
-    const mapped = items.map((m: any) => ({
-      id: m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid,
-      title: m?.title || m?.filename || `Media ${m?.id}`,
-      snippet: m?.snippet || m?.summary || "",
-      type: String(m?.type || m?.media_type || "").toLowerCase(),
-      created_at: m?.created_at
-    }))
+    const mapped = mapMediaItems(items)
     const typeSet = new Set(availableTypes)
     for (const it of mapped) if (it.type) typeSet.add(it.type)
     setAvailableTypes(Array.from(typeSet))
-    let filtered = mapped
-    if (types.length > 0) filtered = filtered.filter((m) => m.type && types.includes(m.type))
-    if (keywordTokens.length > 0) {
-      const toks = keywordTokens.map((k) => k.toLowerCase())
-      filtered = filtered.filter((m) => {
-        const hay = `${m.title || ''} ${m.snippet || ''}`.toLowerCase()
-        return toks.every((k) => hay.includes(k))
-      })
-    }
-    if (includeContent && (keywordTokens.length > 0 || query.trim().length > 0)) {
-      setContentLoading(true)
-      const enriched = await Promise.all(filtered.map(async (m) => {
-        let d = details[m.id]
-        if (!d) {
-          try {
-            d = await bgRequest<MediaDetail>({
-              path: `/api/v1/media/${m.id}?include_content=true&include_versions=false` as any,
-              method: 'GET' as any
-            })
-            setDetails((prev) => (prev[m.id] ? prev : { ...prev, [m.id]: d! }))
-          } catch {}
-        }
-        const content = d ? getContent(d) : ''
-        return { m, content }
-      }))
-      const toks = keywordTokens.map((k) => k.toLowerCase())
-      const ql = query.toLowerCase()
-      filtered = enriched.filter(({ m, content }) => {
-        const hay = `${m.title || ''} ${m.snippet || ''} ${content}`.toLowerCase()
-        if (query.trim().length > 0 && !hay.includes(ql)) return false
-        if (toks.length > 0 && !toks.every((k) => hay.includes(k))) return false
-        return true
-      }).map(({ m }) => m)
-      setContentLoading(false)
-    }
-    return filtered
+    return runContentFiltering(mapped)
   }
 
   const { data, isFetching, refetch } = useQuery({
-    queryKey: ["media-review", query, page, pageSize],
+    queryKey: [
+      "media-review",
+      query,
+      page,
+      pageSize,
+      types.join(","),
+      keywordTokens.join(","),
+      includeContent,
+      sortBy,
+      dateRange.startDate ?? "",
+      dateRange.endDate ?? ""
+    ],
     queryFn: fetchList,
     // React Query v5: use placeholderData helper to keep previous data
     placeholderData: keepPreviousData,
@@ -373,15 +439,27 @@ export const MediaReviewPage: React.FC = () => {
     refetch()
   }, [])
 
+  React.useEffect(() => {
+    if (!includeContent) {
+      cancelContentFiltering()
+    }
+  }, [includeContent, cancelContentFiltering])
+
+  React.useEffect(() => {
+    return () => {
+      cancelContentFiltering()
+    }
+  }, [cancelContentFiltering])
+
   // Keyword suggestions: preload and on-demand search
   const loadKeywordSuggestions = React.useCallback(async (q?: string) => {
     try {
       if (q && q.trim().length > 0) {
         const arr = await searchNoteKeywords(q, 10)
-        setKeywordOptions(arr)
+        setKeywordOptions(rankKeywordSuggestions(arr, q))
       } else {
         const arr = await getNoteKeywords(200)
-        setKeywordOptions(arr)
+        setKeywordOptions(rankKeywordSuggestions(arr, ""))
       }
     } catch {
       // Keyword load failed - feature will use empty suggestions
@@ -978,7 +1056,118 @@ export const MediaReviewPage: React.FC = () => {
   }, [isMobileViewport, selectedIds.length, autoViewMode, t, manualViewModePinned, message])
 
   // Compute active filter count for collapsed state display
-  const activeFilterCount = types.length + keywordTokens.length + (includeContent ? 1 : 0)
+  const hasDateRangeFilter = Boolean(dateRange.startDate || dateRange.endDate)
+  const activeFilterCount =
+    types.length +
+    keywordTokens.length +
+    (includeContent ? 1 : 0) +
+    (sortBy !== DEFAULT_SORT_BY ? 1 : 0) +
+    (hasDateRangeFilter ? 1 : 0)
+  const contentProgressLabel = toProgressLabel(contentFilterProgress)
+  const sortOptions = React.useMemo(
+    () => [
+      { value: "relevance" as MediaSortBy, label: t("mediaPage.sortRelevance", "Relevance") },
+      { value: "date_desc" as MediaSortBy, label: t("mediaPage.sortDateDesc", "Date: newest first") },
+      { value: "date_asc" as MediaSortBy, label: t("mediaPage.sortDateAsc", "Date: oldest first") },
+      { value: "title_asc" as MediaSortBy, label: t("mediaPage.sortTitleAsc", "Title: A-Z") },
+      { value: "title_desc" as MediaSortBy, label: t("mediaPage.sortTitleDesc", "Title: Z-A") }
+    ],
+    [t]
+  )
+  const sortLabelLookup = React.useMemo(
+    () => Object.fromEntries(sortOptions.map((option) => [option.value, option.label])),
+    [sortOptions]
+  )
+  const dateRangeLabel = React.useMemo(() => {
+    if (!hasDateRangeFilter) return null
+    const start = dateRange.startDate || t("mediaPage.dateRangeAnyStart", "Any start")
+    const end = dateRange.endDate || t("mediaPage.dateRangeAnyEnd", "Any end")
+    return `${start} → ${end}`
+  }, [dateRange.endDate, dateRange.startDate, hasDateRangeFilter, t])
+
+  const collapsedFilterChips = React.useMemo(() => {
+    const chips: Array<{
+      key: string
+      label: string
+      remove: () => void
+    }> = []
+
+    for (const type of types) {
+      chips.push({
+        key: `type-${type}`,
+        label: type,
+        remove: () => {
+          setTypes((prev) => prev.filter((candidate) => candidate !== type))
+          setPage(1)
+          refetch()
+        }
+      })
+    }
+
+    for (const keyword of keywordTokens) {
+      chips.push({
+        key: `keyword-${keyword}`,
+        label: keyword,
+        remove: () => {
+          setKeywordTokens((prev) => prev.filter((candidate) => candidate !== keyword))
+          setPage(1)
+          refetch()
+        }
+      })
+    }
+
+    if (includeContent) {
+      chips.push({
+        key: "content-scope",
+        label: t("mediaPage.contentSearchLabel", "Search full content (slower)"),
+        remove: () => {
+          setIncludeContent(false)
+          setPage(1)
+          refetch()
+        }
+      })
+    }
+
+    if (sortBy !== DEFAULT_SORT_BY) {
+      chips.push({
+        key: "sort",
+        label: t("mediaPage.sortChipLabel", "Sort: {{value}}", {
+          value: sortLabelLookup[sortBy] || sortBy
+        }),
+        remove: () => {
+          setSortBy(DEFAULT_SORT_BY)
+          setPage(1)
+          refetch()
+        }
+      })
+    }
+
+    if (hasDateRangeFilter && dateRangeLabel) {
+      chips.push({
+        key: "date-range",
+        label: t("mediaPage.dateRangeChipLabel", "Date: {{value}}", {
+          value: dateRangeLabel
+        }),
+        remove: () => {
+          setDateRange({ startDate: null, endDate: null })
+          setPage(1)
+          refetch()
+        }
+      })
+    }
+
+    return chips
+  }, [
+    dateRangeLabel,
+    hasDateRangeFilter,
+    includeContent,
+    keywordTokens,
+    refetch,
+    sortBy,
+    sortLabelLookup,
+    t,
+    types
+  ])
 
   const renderCard = (
     d: MediaDetail,
@@ -1243,20 +1432,7 @@ export const MediaReviewPage: React.FC = () => {
               {filtersCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               {t('mediaPage.filters', 'Filters')}
               {activeFilterCount > 0 && (
-                <>
-                  <Tag color="blue" className="ml-1">{activeFilterCount}</Tag>
-                  {filtersCollapsed && (
-                    <span className="text-xs text-text-muted max-w-[180px] truncate">
-                      {[
-                        ...types.slice(0, 2),
-                        types.length > 2 ? `+${types.length - 2}` : null,
-                        ...keywordTokens.slice(0, 2),
-                        keywordTokens.length > 2 ? `+${keywordTokens.length - 2}` : null,
-                        includeContent ? t('mediaPage.content', 'Content') : null
-                      ].filter(Boolean).join(', ')}
-                    </span>
-                  )}
-                </>
+                <Tag color="blue" className="ml-1">{activeFilterCount}</Tag>
               )}
             </button>
             {/* Selection count with progress bar */}
@@ -1306,6 +1482,24 @@ export const MediaReviewPage: React.FC = () => {
               </div>
             )}
           </div>
+          {filtersCollapsed && collapsedFilterChips.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-1 text-xs">
+              {collapsedFilterChips.map((chip) => (
+                <button
+                  key={chip.key}
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded border border-border bg-surface2 px-2 py-1 text-text-muted hover:text-text"
+                  onClick={chip.remove}
+                  aria-label={t("mediaPage.removeFilter", "Remove filter {{label}}", {
+                    label: chip.label
+                  }) as string}
+                >
+                  <span className="truncate max-w-[180px]">{chip.label}</span>
+                  <span aria-hidden="true">×</span>
+                </button>
+              ))}
+            </div>
+          )}
           {selectedIds.length > 5 && (
             <div
               className="mb-2 text-[11px] text-text-muted"
@@ -1320,7 +1514,7 @@ export const MediaReviewPage: React.FC = () => {
 
           {/* Collapsible filter section */}
           {!filtersCollapsed && (
-            <div id="filter-section" className="flex items-center gap-2 w-full mb-2 animate-in fade-in duration-150">
+            <div id="filter-section" className="flex flex-wrap items-center gap-2 w-full mb-2 animate-in fade-in duration-150">
               <Select
                 mode="multiple"
                 allowClear
@@ -1333,6 +1527,58 @@ export const MediaReviewPage: React.FC = () => {
                 onChange={(vals) => { setTypes(vals as string[]); setPage(1); refetch() }}
                 options={availableTypes.map((t) => ({ label: t, value: t }))}
               />
+              <Select
+                value={sortBy}
+                aria-label={t('mediaPage.sort', 'Sort') as string}
+                className="min-w-[12rem]"
+                onChange={(value) => {
+                  setSortBy(value as MediaSortBy)
+                  setPage(1)
+                  refetch()
+                }}
+                options={sortOptions.map((option) => ({
+                  value: option.value,
+                  label: option.label
+                }))}
+              />
+              <div
+                role="group"
+                aria-label={t('mediaPage.dateRange', 'Date range') as string}
+                className="flex items-center gap-2 rounded border border-border px-2 py-1"
+              >
+                <span className="text-xs text-text-muted">
+                  {t('mediaPage.dateRange', 'Date range')}
+                </span>
+                <input
+                  type="date"
+                  aria-label={t('mediaPage.startDate', 'Start date') as string}
+                  className="rounded border border-border bg-surface px-2 py-1 text-xs"
+                  value={dateRange.startDate ?? ""}
+                  onChange={(event) => {
+                    setDateRange((prev) => ({
+                      ...prev,
+                      startDate: event.target.value || null
+                    }))
+                    setPage(1)
+                    refetch()
+                  }}
+                />
+                <span className="text-xs text-text-muted">{t('mediaPage.to', 'to')}</span>
+                <input
+                  type="date"
+                  aria-label={t('mediaPage.endDate', 'End date') as string}
+                  className="rounded border border-border bg-surface px-2 py-1 text-xs"
+                  value={dateRange.endDate ?? ""}
+                  onChange={(event) => {
+                    setDateRange((prev) => ({
+                      ...prev,
+                      endDate: event.target.value || null
+                    }))
+                    setPage(1)
+                    refetch()
+                  }}
+                />
+              </div>
               <Select
                 mode="tags"
                 allowClear
@@ -1347,11 +1593,46 @@ export const MediaReviewPage: React.FC = () => {
                 onChange={(vals) => { setKeywordTokens(vals as string[]); setPage(1); refetch() }}
                 options={keywordOptions.map((k) => ({ label: k, value: k }))}
               />
-              <Checkbox checked={includeContent} onChange={(e) => { setIncludeContent(e.target.checked); setPage(1); refetch() }}>
-                {t('mediaPage.content', 'Content')} {contentLoading && (<Spin size="small" className="ml-1" />)}
-              </Checkbox>
+              <div className="flex items-center gap-2">
+                <Checkbox checked={includeContent} onChange={(e) => { setIncludeContent(e.target.checked); setPage(1); refetch() }}>
+                  {t('mediaPage.contentSearchLabel', 'Search full content (slower)')}
+                </Checkbox>
+                <span className="text-[11px] text-text-muted">
+                  {t('mediaPage.contentSearchScope', 'Scans current page results.')}
+                </span>
+                {contentLoading && (<Spin size="small" className="ml-1" />)}
+                {contentFilterProgress.running && (
+                  <>
+                    <span
+                      role="status"
+                      aria-label={t("mediaPage.contentSearchProgressAria", "Content filtering progress") as string}
+                      className="text-[11px] text-text-muted"
+                    >
+                      {t("mediaPage.contentSearchProgress", "Content filtering {{progress}}", {
+                        progress: contentProgressLabel
+                      })}
+                    </span>
+                    <Button
+                      size="small"
+                      type="link"
+                      className="!px-1"
+                      onClick={cancelContentFiltering}
+                    >
+                      {t("mediaPage.cancel", "Cancel")}
+                    </Button>
+                  </>
+                )}
+              </div>
               {activeFilterCount > 0 && (
-                <Button size="small" onClick={() => { setTypes([]); setKeywordTokens([]); setIncludeContent(false); setPage(1); refetch() }}>
+                <Button size="small" onClick={() => {
+                  setTypes([])
+                  setKeywordTokens([])
+                  setIncludeContent(false)
+                  setSortBy(DEFAULT_SORT_BY)
+                  setDateRange({ startDate: null, endDate: null })
+                  setPage(1)
+                  refetch()
+                }}>
                   {t('mediaPage.resetFilters', 'Clear filters')}
                 </Button>
               )}

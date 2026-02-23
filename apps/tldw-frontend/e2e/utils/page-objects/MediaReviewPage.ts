@@ -73,6 +73,17 @@ export class MediaReviewPage {
     await items.nth(index).click()
   }
 
+  async getItemTitle(index: number): Promise<string> {
+    const items = await this.getMediaItems()
+    const row = items.nth(index)
+    const title = row.locator(".font-medium").first()
+    if ((await title.count()) > 0) {
+      return ((await title.textContent()) ?? "").trim()
+    }
+    const fallback = row.locator("div").first()
+    return ((await fallback.textContent()) ?? "").trim()
+  }
+
   async shiftClickItem(index: number): Promise<void> {
     const items = await this.getMediaItems()
     await items.nth(index).click({ modifiers: ["Shift"] })
@@ -211,14 +222,72 @@ export class MediaReviewPage {
     }
   }
 
-  async filterByMediaType(type: string): Promise<void> {
+  async ensureFiltersVisible(): Promise<void> {
     const filterToggle = this.page.locator("button[aria-controls='filter-section']").first()
-    if ((await filterToggle.count()) > 0) {
-      const expanded = await filterToggle.getAttribute("aria-expanded")
-      if (expanded === "false") {
-        await filterToggle.click()
-      }
+    if ((await filterToggle.count()) === 0) return
+    const expanded = await filterToggle.getAttribute("aria-expanded")
+    if (expanded === "false") {
+      await filterToggle.click()
     }
+  }
+
+  async setSort(sortValue: "relevance" | "date_desc" | "date_asc" | "title_asc" | "title_desc"): Promise<void> {
+    await this.ensureFiltersVisible()
+    const sortSelect = this.page.locator("select[aria-label='Sort']").first()
+    if ((await sortSelect.count()) > 0 && (await sortSelect.isVisible().catch(() => false))) {
+      await sortSelect.selectOption(sortValue)
+      return
+    }
+
+    const sortCombo = this.page.getByRole("combobox", { name: /sort/i }).first()
+    if (!(await sortCombo.isVisible().catch(() => false))) return
+    await sortCombo.click()
+    const optionLabels: Record<string, RegExp> = {
+      relevance: /relevance/i,
+      date_desc: /date:\s*newest first/i,
+      date_asc: /date:\s*oldest first/i,
+      title_asc: /title:\s*a-z/i,
+      title_desc: /title:\s*z-a/i
+    }
+    const option = this.page
+      .locator(".ant-select-item-option")
+      .filter({ hasText: optionLabels[sortValue] })
+      .first()
+    if ((await option.count()) > 0 && (await option.isVisible().catch(() => false))) {
+      await option.click()
+    } else {
+      await this.page.keyboard.press("Escape").catch(() => {})
+    }
+  }
+
+  async setDateRange(startDate?: string, endDate?: string): Promise<void> {
+    await this.ensureFiltersVisible()
+    const startInput = this.page.locator("input[aria-label='Start date']").first()
+    const endInput = this.page.locator("input[aria-label='End date']").first()
+    if ((await startInput.count()) > 0 && (await startInput.isVisible().catch(() => false))) {
+      await startInput.fill(startDate ?? "")
+    }
+    if ((await endInput.count()) > 0 && (await endInput.isVisible().catch(() => false))) {
+      await endInput.fill(endDate ?? "")
+    }
+  }
+
+  async toggleContentSearch(enabled: boolean): Promise<void> {
+    await this.ensureFiltersVisible()
+    const checkbox = this.page.getByRole("checkbox", { name: /search full content/i }).first()
+    const current = await checkbox.isChecked().catch(() => false)
+    if (current !== enabled) {
+      await checkbox.click()
+    }
+  }
+
+  async hasContentSearchProgress(): Promise<boolean> {
+    const progress = this.page.getByRole("status", { name: /content filtering progress/i }).first()
+    return progress.isVisible().catch(() => false)
+  }
+
+  async filterByMediaType(type: string): Promise<void> {
+    await this.ensureFiltersVisible()
 
     const select = this.page.locator("#filter-section .ant-select").first()
     if ((await select.count()) === 0 || !(await select.isVisible().catch(() => false))) return
