@@ -344,7 +344,8 @@ curl http://localhost:8000/health
 ```bash
 # Optional pip extras
 pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
-pip install -e ".[dev]"           # tests, linters, tooling
+pip install -e ".[tooling]"       # unified tooling smoke helpers/scripts
+pip install -e ".[dev]"           # tests and linters
 pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
 
 # pyaudio (needed for audio capture and some processing paths)
@@ -419,6 +420,27 @@ Notes:
 - Compose overlay: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build`.
 - systemd and launchd examples: `Docs/Deployment/Sidecar_Workers.md`.
 In-process workers are fine for light dev use, but SQLite + multiple Uvicorn workers can increase lock contention; use sidecars or Postgres for heavier workloads.
+</details>
+
+<details>
+<summary>Model container cycling (optional, Docker)</summary>
+
+For low-VRAM dev rigs, you can cycle model containers instead of running all model stacks at once:
+
+```bash
+make model-cycle \
+  MODEL_CYCLE_FIRST=your-llm-container \
+  MODEL_CYCLE_SECOND=your-tts-container \
+  MODEL_CYCLE_EXCLUDED=postgres,redis \
+  MODEL_CYCLE_FIRST_BOOT_WAIT=30 \
+  MODEL_CYCLE_SECOND_BOOT_WAIT=10
+```
+
+Notes:
+- Runs `Helper_Scripts/model_container_cycle.py`.
+- Workflow is: stop all running containers except exclusions, start first model container, stop it, then start second model container.
+- Use `MODEL_CYCLE_DRY_RUN=true` to print Docker commands without executing them.
+- Container names are whatever Docker reports via `docker ps --format '{{.Names}}'`.
 </details>
 
 ### Run the Web UI (WIP)
@@ -939,6 +961,7 @@ All limits are designed to be conservative by default and can be tuned using the
 - `python -m pytest --cov=tldw_Server_API --cov-report=term-missing` - coverage report.
 - Use markers (`unit`, `integration`, `e2e`, `external_api`, `performance`) to focus specific areas.
 - Enable optional suites with environment flags such as `RUN_MCP_TESTS=1`, `TLDW_TEST_POSTGRES_REQUIRED=1`, or `RUN_MOCK_OPENAI=1`.
+- `make tooling-smoke` - runs unified tooling smoke checks (`streaming_unified_smoke.py` + `watchlists_audio_smoke.py`) against a running local API (`http://127.0.0.1:8000` by default).
 
 </details>
 
