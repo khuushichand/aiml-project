@@ -14,7 +14,7 @@ export class MediaReviewPage {
   // ── Navigation ──────────────────────────────────────────────────────
 
   async goto(): Promise<void> {
-    await this.page.goto("/content-review", { waitUntil: "domcontentloaded" })
+    await this.page.goto("/media-multi", { waitUntil: "domcontentloaded" })
     await waitForConnection(this.page)
   }
 
@@ -103,6 +103,15 @@ export class MediaReviewPage {
   async getSelectionCountValue(): Promise<number> {
     const text = await this.getSelectionCountDisplay()
     const match = text.match(/(\d+)\s*\/\s*(\d+)/)
+    if (!match) return 0
+    return Number.parseInt(match[1], 10)
+  }
+
+  async getSelectedAcrossPagesCount(): Promise<number> {
+    const indicator = this.page.getByText(/Selected across pages:\s*\d+/i).first()
+    if (!(await indicator.isVisible().catch(() => false))) return 0
+    const text = (await indicator.textContent()) ?? ""
+    const match = text.match(/Selected across pages:\s*(\d+)/i)
     if (!match) return 0
     return Number.parseInt(match[1], 10)
   }

@@ -18,7 +18,105 @@ import {
   assertNoCriticalErrors
 } from "../utils/fixtures"
 import { MediaReviewPage } from "../utils/page-objects/MediaReviewPage"
-import { seedAuth, generateTestId, waitForConnection } from "../utils/helpers"
+import {
+  seedAuth,
+  generateTestId,
+  waitForConnection,
+  TEST_CONFIG,
+  fetchWithApiKey
+} from "../utils/helpers"
+
+const MIN_MEDIA_ITEMS_FOR_CROSS_PAGE_SELECTION = 22
+const MAX_MEDIA_COUNT_POLL_ATTEMPTS = 24
+const MEDIA_COUNT_POLL_INTERVAL_MS = 500
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const seedAppAuthWithApiKey = async (page: import("@playwright/test").Page) => {
+  await page.context().addInitScript((cfg) => {
+    try {
+      localStorage.setItem(
+        "tldwConfig",
+        JSON.stringify({
+          serverUrl: cfg.serverUrl,
+          apiKey: cfg.apiKey,
+          authMode: "single-user"
+        })
+      )
+      localStorage.setItem("__tldw_first_run_complete", "true")
+      localStorage.setItem("__tldw_allow_offline", "true")
+    } catch {
+      // Ignore localStorage failures in hardened browser contexts.
+    }
+  }, { serverUrl: TEST_CONFIG.serverUrl, apiKey: TEST_CONFIG.apiKey })
+}
+
+const getMediaTotalCount = async (): Promise<number> => {
+  const response = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/media/?page=1&results_per_page=1`,
+    TEST_CONFIG.apiKey
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to fetch media count: ${response.status} ${await response.text()}`)
+  }
+  const payload = await response.json().catch(() => ({}))
+  const totalCandidate =
+    payload?.pagination?.total_items ??
+    payload?.pagination?.total ??
+    payload?.total ??
+    payload?.count
+  const parsed = Number(totalCandidate)
+  if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  if (Array.isArray(payload?.items)) return payload.items.length
+  return 0
+}
+
+const seedMediaDocument = async (seedLabel: string): Promise<void> => {
+  const body = new FormData()
+  body.append("media_type", "document")
+  body.append("title", `Media review E2E ${seedLabel}`)
+  body.append("perform_analysis", "false")
+  body.append("perform_chunking", "false")
+  body.append(
+    "files",
+    new Blob([`Seeded media review payload ${seedLabel}`], { type: "text/plain" }),
+    `media-review-${seedLabel}.txt`
+  )
+
+  const response = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/media/add`,
+    TEST_CONFIG.apiKey,
+    {
+      method: "POST",
+      body
+    }
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to seed media: ${response.status} ${await response.text()}`)
+  }
+}
+
+const ensureMediaCountForCrossPageReview = async (
+  minimumCount: number = MIN_MEDIA_ITEMS_FOR_CROSS_PAGE_SELECTION
+): Promise<number> => {
+  let currentCount = await getMediaTotalCount()
+  if (currentCount >= minimumCount) return currentCount
+
+  const needed = minimumCount - currentCount
+  for (let idx = 0; idx < needed; idx += 1) {
+    await seedMediaDocument(generateTestId(`media-review-cross-page-${idx}`))
+  }
+
+  for (let attempt = 0; attempt < MAX_MEDIA_COUNT_POLL_ATTEMPTS; attempt += 1) {
+    currentCount = await getMediaTotalCount()
+    if (currentCount >= minimumCount) return currentCount
+    await sleep(MEDIA_COUNT_POLL_INTERVAL_MS)
+  }
+
+  throw new Error(
+    `Timed out waiting for media count >= ${minimumCount}; current count=${currentCount}`
+  )
+}
 
 test.describe("Multi-Item Media Review Workflow", () => {
   let reviewPage: MediaReviewPage
@@ -198,26 +296,24 @@ test.describe("Multi-Item Media Review Workflow", () => {
       diagnostics
     }) => {
       skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      await ensureMediaCountForCrossPageReview()
       reviewPage = new MediaReviewPage(authedPage)
       await reviewPage.goto()
       await reviewPage.waitForReady()
 
       const itemCount = await reviewPage.getItemCount()
-      if (itemCount === 0) {
-        test.skip(true, "No media items available")
-        return
-      }
+      expect(itemCount).toBeGreaterThan(0)
 
       const totalPages = await reviewPage.getTotalPages()
-      if (totalPages < 2) {
-        test.skip(true, "Need at least 2 pages of media results")
-        return
-      }
+      expect(totalPages).toBeGreaterThanOrEqual(2)
 
       await reviewPage.clickItem(0)
-      await authedPage.waitForTimeout(400)
+      await expect(
+        authedPage.getByText(/Selected across pages:\s*1/i)
+      ).toBeVisible({ timeout: 10_000 })
 
-      const selectionBefore = await reviewPage.getSelectionCountValue()
+      const selectionBefore = await reviewPage.getSelectedAcrossPagesCount()
       expect(selectionBefore).toBeGreaterThanOrEqual(1)
 
       await reviewPage.goToPage(2)
@@ -226,7 +322,7 @@ test.describe("Multi-Item Media Review Workflow", () => {
       await reviewPage.clickAddVisibleToSelection()
       await authedPage.waitForTimeout(800)
 
-      const selectionAfter = await reviewPage.getSelectionCountValue()
+      const selectionAfter = await reviewPage.getSelectedAcrossPagesCount()
       expect(selectionAfter).toBeGreaterThan(selectionBefore)
       await expect(
         authedPage.getByText(/selected across pages:/i)
