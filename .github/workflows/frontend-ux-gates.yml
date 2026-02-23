@@ -53,7 +53,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: apps
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium
@@ -152,7 +152,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: apps
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium
