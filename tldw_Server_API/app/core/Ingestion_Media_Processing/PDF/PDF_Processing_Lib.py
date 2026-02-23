@@ -65,10 +65,145 @@ except ImportError:
 media_config = loaded_config_data.get('media_processing', {}) if loaded_config_data else {}
 MAX_FILE_SIZE_MB = media_config.get('max_pdf_file_size_mb', 50)
 CONVERSION_TIMEOUT_SECONDS = media_config.get('pdf_conversion_timeout_seconds', 300)
+
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
+_LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)")
+_BLOCKQUOTE_RE = re.compile(r"^\s{0,3}>\s*")
+_CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_PAGE_MARKER_RE = re.compile(r"^\s*##\s+Page\s+\d+\s*$", re.IGNORECASE)
+_HRULE_RE = re.compile(r"^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$")
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?[:\- ]+\|[:\-\| ]+\s*$")
+_LOWERCASE_START_RE = re.compile(r"^[a-z]")
+_INLINE_WHITESPACE_RE = re.compile(r"[ \t]+")
+_PUNCTUATION_RE = re.compile(r"[^\w\s]")
 #
 #######################################################################################################################
 # Function Definitions
 #
+
+
+def _is_table_like_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if _TABLE_SEPARATOR_RE.match(stripped):
+        return True
+    return stripped.count("|") >= 2
+
+
+def _is_structural_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if _HEADING_RE.match(line):
+        return True
+    if _LIST_ITEM_RE.match(line):
+        return True
+    if _BLOCKQUOTE_RE.match(line):
+        return True
+    if _PAGE_MARKER_RE.match(line):
+        return True
+    if _HRULE_RE.match(line):
+        return True
+    if _is_table_like_line(line):
+        return True
+    # Preserve indented literal/code-style blocks.
+    return line.startswith("    ") or line.startswith("\t")
+
+
+def _collapse_inline_whitespace(value: str) -> str:
+    return _INLINE_WHITESPACE_RE.sub(" ", value).strip()
+
+
+def _is_artifact_heavy_block(lines: list[str]) -> bool:
+    joined = " ".join(lines)
+    if len(joined) < 40:
+        return False
+    punctuation_count = len(_PUNCTUATION_RE.findall(joined))
+    punctuation_density = punctuation_count / max(len(joined), 1)
+    has_heavy_delimiters = any(line.count("|") >= 2 or line.count("\t") >= 2 for line in lines)
+    return punctuation_density >= 0.32 and has_heavy_delimiters
+
+
+def _reflow_paragraph_lines(lines: list[str]) -> str:
+    cleaned_lines = [_collapse_inline_whitespace(line) for line in lines]
+    cleaned_lines = [line for line in cleaned_lines if line]
+    if not cleaned_lines:
+        return ""
+    if _is_artifact_heavy_block(cleaned_lines):
+        return "\n".join(cleaned_lines)
+
+    output = cleaned_lines[0]
+    for line in cleaned_lines[1:]:
+        if output.endswith("-") and _LOWERCASE_START_RE.match(line):
+            output = output[:-1] + line
+        else:
+            output = f"{output} {line}"
+    return _collapse_inline_whitespace(output)
+
+
+def normalize_pdf_text_for_storage(text: str) -> str:
+    """
+    Normalize extracted PDF text to paragraph-safe flowed text for storage.
+
+    Single-line soft wraps are joined only inside non-structural paragraph
+    blocks. Headings, lists, tables, code fences, and page markers are
+    preserved as-is.
+    """
+    if not isinstance(text, str):
+        return ""
+    if not text:
+        return ""
+
+    normalized_newlines = text.replace("\r\n", "\n").replace("\r", "\n")
+    raw_lines = normalized_newlines.split("\n")
+    output_lines: list[str] = []
+    paragraph_buffer: list[str] = []
+    in_code_fence = False
+
+    def _flush_paragraph_buffer() -> None:
+        nonlocal paragraph_buffer
+        if not paragraph_buffer:
+            return
+        reflowed = _reflow_paragraph_lines(paragraph_buffer)
+        if reflowed:
+            output_lines.append(reflowed)
+        paragraph_buffer = []
+
+    for raw_line in raw_lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if _CODE_FENCE_RE.match(stripped):
+            _flush_paragraph_buffer()
+            output_lines.append(line)
+            in_code_fence = not in_code_fence
+            continue
+
+        if in_code_fence:
+            _flush_paragraph_buffer()
+            output_lines.append(line)
+            continue
+
+        if not stripped:
+            _flush_paragraph_buffer()
+            if output_lines and output_lines[-1] != "":
+                output_lines.append("")
+            continue
+
+        if _is_structural_line(line):
+            _flush_paragraph_buffer()
+            output_lines.append(line)
+            continue
+
+        paragraph_buffer.append(line)
+
+    _flush_paragraph_buffer()
+    while output_lines and output_lines[-1] == "":
+        output_lines.pop()
+
+    return "\n".join(output_lines).strip()
+
 
 def extract_text_and_format_from_pdf(pdf_path):
     """
@@ -713,6 +848,29 @@ def process_pdf(
             logging.warning(f"VLM processing failed for {filename}: {vlm_err}")
             result["warnings"].append(f"VLM processing error: {vlm_err}")
 
+
+        # Normalize the final extracted text (including OCR merge) before chunking.
+        final_content = result.get("content")
+        if isinstance(final_content, str):
+            content = final_content
+        if content and content.strip():
+            try:
+                normalized_content = normalize_pdf_text_for_storage(content)
+                result["content"] = normalized_content
+                content = normalized_content
+                result.setdefault("analysis_details", {})["text_normalization"] = {
+                    "applied": True,
+                    "mode": "paragraph_safe",
+                    "chars_before": len(final_content or ""),
+                    "chars_after": len(normalized_content),
+                    "line_breaks_before": (final_content or "").count("\n"),
+                    "line_breaks_after": normalized_content.count("\n"),
+                }
+            except _PDF_NONCRITICAL_EXCEPTIONS as normalization_error:
+                logging.warning(f"PDF text normalization failed for {filename}: {normalization_error}")
+                result["warnings"] = (result.get("warnings") or []) + [
+                    f"Text normalization failed: {normalization_error}"
+                ]
 
         # --- Step 3: Chunking ---
         processed_chunks = None

@@ -1,0 +1,55 @@
+import pytest
+
+from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import (
+    normalize_pdf_text_for_storage,
+)
+
+
+pytestmark = pytest.mark.unit
+
+
+def test_reflows_soft_wrapped_paragraph_lines():
+    src = (
+        "We are not just interested in models that perform well on a\n"
+        "single physical task, but rather models that robustly generalize.\n\n"
+        "Therefore, we test generalization."
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "perform well on a single physical task" in out
+    assert "\n\nTherefore, we test generalization." in out
+
+
+def test_preserves_structural_blocks():
+    src = (
+        "## Page 1\n\n"
+        "# Heading\n"
+        "- list item one\n"
+        "- list item two\n\n"
+        "| a | b |\n"
+        "|---|---|\n"
+        "| 1 | 2 |\n\n"
+        "Paragraph line one\n"
+        "line two\n\n"
+        "---\n"
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "# Heading" in out
+    assert "- list item one" in out
+    assert "| a | b |" in out
+    assert "Paragraph line one line two" in out
+    assert "## Page 1" in out
+    assert "\n---\n" in f"\n{out}\n"
+
+
+def test_repairs_hyphenated_soft_wraps():
+    src = "generaliza-\ntion improves.\n\nnon-\nLinear stays separated."
+    out = normalize_pdf_text_for_storage(src)
+    assert "generalization improves." in out
+    assert "non- Linear stays separated." in out
+
+
+def test_idempotent_normalization():
+    src = "Line one\nline two\n\n# Keep heading\n"
+    first = normalize_pdf_text_for_storage(src)
+    second = normalize_pdf_text_for_storage(first)
+    assert first == second
