@@ -35,12 +35,16 @@ jobs:
 
           gen_from_requirements() {
             local req="$1"
+            local req_dir req_file out_file
+            req_dir="$(dirname "$req")"
+            req_file="$(basename "$req")"
+            out_file="$PWD/sbom-python.cdx.json"
             echo "Generating Python SBOM from ${req}"
 
             # Try modern CLI first: cyclonedx-py requirements -i <file>
             if command -v cyclonedx-py >/dev/null 2>&1; then
               echo "Using cyclonedx-py"
-              if cyclonedx-py requirements -i "$req" -o sbom-python.cdx.json; then
+              if (cd "$req_dir" && cyclonedx-py requirements -i "$req_file" -o "$out_file"); then
                 return 0
               fi
               echo "cyclonedx-py failed; will try fallbacks"
@@ -49,7 +53,7 @@ jobs:
             # Module invocation for modern CLI (avoid depending on CLI binary layout)
             if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('cyclonedx_py') else 1)" >/dev/null 2>&1; then
               echo "Using python -m cyclonedx_py"
-              if python -m cyclonedx_py requirements -i "$req" -o sbom-python.cdx.json; then
+              if (cd "$req_dir" && python -m cyclonedx_py requirements -i "$req_file" -o "$out_file"); then
                 return 0
               fi
               echo "python -m cyclonedx_py failed; trying legacy CLI"
@@ -58,7 +62,7 @@ jobs:
             # Legacy CLI: cyclonedx-bom -r <file>
             if command -v cyclonedx-bom >/dev/null 2>&1; then
               echo "Using cyclonedx-bom (legacy)"
-              if cyclonedx-bom -r "$req" -o sbom-python.cdx.json; then
+              if (cd "$req_dir" && cyclonedx-bom -r "$req_file" -o "$out_file"); then
                 return 0
               fi
               echo "cyclonedx-bom failed; trying legacy module"
@@ -67,7 +71,7 @@ jobs:
             # Legacy module invocation
             if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('cyclonedx_bom') else 1)" >/dev/null 2>&1; then
               echo "Using python -m cyclonedx_bom (legacy)"
-              if python -m cyclonedx_bom -r "$req" -o sbom-python.cdx.json; then
+              if (cd "$req_dir" && python -m cyclonedx_bom -r "$req_file" -o "$out_file"); then
                 return 0
               fi
             fi
