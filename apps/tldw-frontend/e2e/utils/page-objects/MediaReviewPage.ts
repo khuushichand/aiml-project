@@ -100,6 +100,13 @@ export class MediaReviewPage {
     return ""
   }
 
+  async getSelectionCountValue(): Promise<number> {
+    const text = await this.getSelectionCountDisplay()
+    const match = text.match(/(\d+)\s*\/\s*(\d+)/)
+    if (!match) return 0
+    return Number.parseInt(match[1], 10)
+  }
+
   // ── View Modes ──────────────────────────────────────────────────────
 
   async setViewMode(mode: "spread" | "list" | "all"): Promise<void> {
@@ -353,7 +360,23 @@ export class MediaReviewPage {
 
   async clickOpenAllOnPage(): Promise<void> {
     await this.openOptionsMenu()
-    const menuItem = this.page.locator(".ant-dropdown-menu-item:has-text('Review all')")
+    const menuItem = this.page
+      .locator(".ant-dropdown-menu-item")
+      .filter({ hasText: /Add visible to selection|Review all/i })
+      .first()
+    await menuItem.click()
+  }
+
+  async clickAddVisibleToSelection(): Promise<void> {
+    await this.clickOpenAllOnPage()
+  }
+
+  async clickReplaceSelectionWithVisible(): Promise<void> {
+    await this.openOptionsMenu()
+    const menuItem = this.page
+      .locator(".ant-dropdown-menu-item")
+      .filter({ hasText: /Replace selection with visible/i })
+      .first()
     await menuItem.click()
   }
 

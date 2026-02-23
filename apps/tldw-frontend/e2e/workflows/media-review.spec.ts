@@ -191,6 +191,49 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       await assertNoCriticalErrors(diagnostics)
     })
+
+    test("preserves cross-page selection when adding visible page items", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      const itemCount = await reviewPage.getItemCount()
+      if (itemCount === 0) {
+        test.skip(true, "No media items available")
+        return
+      }
+
+      const totalPages = await reviewPage.getTotalPages()
+      if (totalPages < 2) {
+        test.skip(true, "Need at least 2 pages of media results")
+        return
+      }
+
+      await reviewPage.clickItem(0)
+      await authedPage.waitForTimeout(400)
+
+      const selectionBefore = await reviewPage.getSelectionCountValue()
+      expect(selectionBefore).toBeGreaterThanOrEqual(1)
+
+      await reviewPage.goToPage(2)
+      await authedPage.waitForTimeout(800)
+
+      await reviewPage.clickAddVisibleToSelection()
+      await authedPage.waitForTimeout(800)
+
+      const selectionAfter = await reviewPage.getSelectionCountValue()
+      expect(selectionAfter).toBeGreaterThan(selectionBefore)
+      await expect(
+        authedPage.getByText(/selected across pages:/i)
+      ).toBeVisible()
+
+      await assertNoCriticalErrors(diagnostics)
+    })
   })
 
   // ═════════════════════════════════════════════════════════════════════

@@ -1482,7 +1482,7 @@
     "message": "Server offline"
   },
   "mediaPage_resultsHint": {
-    "message": "Click to stack, Shift+click for range"
+    "message": "Search/filter here, then click to stack. Shift+click for range."
   },
   "mediaPage_paginationHint": {
     "message": "Use pagination or open all visible items"
@@ -1506,10 +1506,10 @@
     "message": "{{k}}k chars"
   },
   "mediaPage_unstack": {
-    "message": "Unstack"
+    "message": "Remove from selection"
   },
   "mediaPage_unstackTooltip": {
-    "message": "Remove from current comparison view"
+    "message": "Remove this item from selection"
   },
   "mediaPage_analysis": {
     "message": "Analysis"
@@ -1533,7 +1533,10 @@
     "message": "Collapse others on expand"
   },
   "mediaPage_openAll": {
-    "message": "Review all on page"
+    "message": "Add visible to selection"
+  },
+  "mediaPage_replaceWithVisible": {
+    "message": "Replace selection with visible"
   },
   "mediaPage_openAllCapped": {
     "message": "Showing first {{count}} items to keep things smooth"
@@ -1550,8 +1553,23 @@
   "mediaPage_openMiniMap": {
     "message": "Open items"
   },
+  "mediaPage_viewerFlowHint": {
+    "message": "Search/filter in sidebar, inspect in viewer, jump using Open items."
+  },
+  "mediaPage_viewSelectedItems": {
+    "message": "View selected items"
+  },
+  "mediaPage_selectedItemsTitle": {
+    "message": "Selected items ({{count}})"
+  },
+  "mediaPage_selectedItemsEmpty": {
+    "message": "No selected items yet."
+  },
   "mediaPage_selectionCount": {
     "message": "{{selected}} / {{limit}}"
+  },
+  "mediaPage_selectedAcrossPages": {
+    "message": "Selected across pages: {{count}}"
   },
   "mediaPage_selectionLimitReached": {
     "message": "Selection limit reached ({{limit}} items)"
@@ -1577,6 +1595,9 @@
   "mediaPage_selectionClearedCount": {
     "message": "Selection cleared ({{count}} items)."
   },
+  "mediaPage_selectionReplaced": {
+    "message": "Selection replaced with current visible items."
+  },
   "mediaPage_selectionRestored": {
     "message": "Selection restored"
   },
@@ -1587,7 +1608,7 @@
     "message": "Press Escape again to clear {{count}} items"
   },
   "mediaPage_autoViewModeSwitched": {
-    "message": "Switched to {{mode}} view ({{count}} items)"
+    "message": "Auto-switched to {{mode}} view ({{count}} items)"
   },
   "mediaPage_showGuide": {
     "message": "Show getting started guide"
