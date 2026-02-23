@@ -183,3 +183,70 @@ class TestPreviewTemplate:
         assert body["warnings"][0] == "Template rendering failed"
         # Must NOT leak internals
         assert "/internal/path" not in str(body["warnings"])
+
+
+class TestTemplateComposerMetadata:
+    def test_create_and_get_template_with_composer_metadata(self, client_with_user: TestClient):
+        payload = {
+            "name": "composer_meta_template",
+            "format": "md",
+            "content": "# {{ title }}",
+            "description": "Composer metadata contract",
+            "overwrite": False,
+            "composer_ast": {"nodes": [{"id": "header-1", "type": "HeaderBlock"}]},
+            "composer_schema_version": "1.0.0",
+            "composer_sync_hash": "abc123",
+            "composer_sync_status": "in_sync",
+        }
+        create = client_with_user.post("/api/v1/watchlists/templates", json=payload)
+        assert create.status_code == 200, create.text
+        created = create.json()
+        assert created["composer_ast"]["nodes"][0]["type"] == "HeaderBlock"
+        assert created["composer_schema_version"] == "1.0.0"
+        assert created["composer_sync_hash"] == "abc123"
+        assert created["composer_sync_status"] == "in_sync"
+
+        loaded = client_with_user.get("/api/v1/watchlists/templates/composer_meta_template")
+        assert loaded.status_code == 200, loaded.text
+        body = loaded.json()
+        assert body["composer_ast"]["nodes"][0]["type"] == "HeaderBlock"
+        assert body["composer_schema_version"] == "1.0.0"
+        assert body["composer_sync_hash"] == "abc123"
+        assert body["composer_sync_status"] == "in_sync"
+
+
+class TestTemplateComposerAuthoringEndpoints:
+    def test_compose_section_returns_generated_content(self, client_with_user: TestClient):
+        run_id = _create_run(client_with_user)
+        payload = {
+            "run_id": run_id,
+            "block_id": "intro-summary",
+            "prompt": "Write a concise introduction in 2 sentences.",
+            "input_scope": "all_items",
+            "style": "neutral",
+            "length_target": "short",
+        }
+        r = client_with_user.post("/api/v1/watchlists/templates/compose/section", json=payload)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["block_id"] == "intro-summary"
+        assert "content" in body
+        assert isinstance(body["warnings"], list)
+        assert isinstance(body["diagnostics"], dict)
+
+    def test_flow_check_returns_diff_for_suggest_mode(self, client_with_user: TestClient):
+        run_id = _create_run(client_with_user)
+        payload = {
+            "run_id": run_id,
+            "mode": "suggest_only",
+            "sections": [
+                {"id": "intro", "content": "Intro paragraph."},
+                {"id": "body", "content": "Body paragraph."},
+            ],
+        }
+        r = client_with_user.post("/api/v1/watchlists/templates/compose/flow-check", json=payload)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["mode"] == "suggest_only"
+        assert isinstance(body["issues"], list)
+        assert "diff" in body

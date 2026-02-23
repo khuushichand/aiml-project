@@ -73,3 +73,28 @@ def test_template_store_missing_version_raises(tmp_path, monkeypatch):
     with pytest.raises(template_store.TemplateVersionNotFoundError):
         template_store.load_template("snapshot", version=3)
 
+
+def test_template_store_persists_composer_metadata(tmp_path, monkeypatch):
+    monkeypatch.setitem(settings, "WATCHLIST_TEMPLATE_DIR", str(tmp_path))
+
+    saved = template_store.save_template(
+        name="composer_meta",
+        fmt="md",
+        content="# {{ title }}",
+        description="composer metadata",
+        overwrite=False,
+        composer_ast={"nodes": [{"id": "header-1", "type": "HeaderBlock"}]},
+        composer_schema_version="1.0.0",
+        composer_sync_hash="abc123",
+        composer_sync_status="in_sync",
+    )
+    assert saved.composer_ast == {"nodes": [{"id": "header-1", "type": "HeaderBlock"}]}
+    assert saved.composer_schema_version == "1.0.0"
+    assert saved.composer_sync_hash == "abc123"
+    assert saved.composer_sync_status == "in_sync"
+
+    loaded = template_store.load_template("composer_meta")
+    assert loaded.composer_ast == {"nodes": [{"id": "header-1", "type": "HeaderBlock"}]}
+    assert loaded.composer_schema_version == "1.0.0"
+    assert loaded.composer_sync_hash == "abc123"
+    assert loaded.composer_sync_status == "in_sync"

@@ -47,6 +47,10 @@ class TemplateRecord:
     version: int = 1
     history_count: int = 0
     available_versions: list[int] | None = None
+    composer_ast: dict[str, Any] | None = None
+    composer_schema_version: str | None = None
+    composer_sync_hash: str | None = None
+    composer_sync_status: str | None = None
 
 
 @dataclass
@@ -211,6 +215,10 @@ def _save_metadata(
     description: str | None,
     current_version: int,
     history: list[dict[str, Any]],
+    composer_ast: dict[str, Any] | None = None,
+    composer_schema_version: str | None = None,
+    composer_sync_hash: str | None = None,
+    composer_sync_status: str | None = None,
 ) -> None:
     payload: dict[str, Any] = {}
     if description is not None:
@@ -219,6 +227,14 @@ def _save_metadata(
         payload["current_version"] = current_version
     if history:
         payload["history"] = history
+    if composer_ast is not None:
+        payload["composer_ast"] = composer_ast
+    if composer_schema_version is not None:
+        payload["composer_schema_version"] = composer_schema_version
+    if composer_sync_hash is not None:
+        payload["composer_sync_hash"] = composer_sync_hash
+    if composer_sync_status is not None:
+        payload["composer_sync_status"] = composer_sync_status
 
     if payload:
         meta_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -239,6 +255,37 @@ def _sanitize_name(name: str) -> str:
     if not _SLUG_RE.fullmatch(name):
         raise InvalidTemplateNameError(_INVALID_TEMPLATE_NAME_ERROR)
     return name
+
+
+_VALID_COMPOSER_SYNC_STATUSES = {"in_sync", "needs_repair", "recovered_from_code"}
+
+
+def _load_composer_metadata(meta: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None, str | None]:
+    composer_ast_raw = meta.get("composer_ast")
+    composer_ast = composer_ast_raw if isinstance(composer_ast_raw, dict) else None
+
+    composer_schema_version_raw = meta.get("composer_schema_version")
+    composer_schema_version = (
+        str(composer_schema_version_raw)
+        if composer_schema_version_raw is not None
+        else None
+    )
+
+    composer_sync_hash_raw = meta.get("composer_sync_hash")
+    composer_sync_hash = (
+        str(composer_sync_hash_raw)
+        if composer_sync_hash_raw is not None
+        else None
+    )
+
+    composer_sync_status_raw = meta.get("composer_sync_status")
+    composer_sync_status = (
+        str(composer_sync_status_raw)
+        if str(composer_sync_status_raw) in _VALID_COMPOSER_SYNC_STATUSES
+        else None
+    )
+
+    return composer_ast, composer_schema_version, composer_sync_hash, composer_sync_status
 
 
 _BUILTIN_BRIEFING_MARKDOWN = """\
@@ -364,6 +411,7 @@ def list_templates() -> list[TemplateRecord]:
         description = str(meta.get("description")) if meta.get("description") is not None else None
         history = _load_history(meta)
         version = _safe_int(meta.get("current_version"), default=1)
+        composer_ast, composer_schema_version, composer_sync_hash, composer_sync_status = _load_composer_metadata(meta)
         available_versions = _available_versions(version, history)
         updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
         records.append(
@@ -376,6 +424,10 @@ def list_templates() -> list[TemplateRecord]:
                 version=version,
                 history_count=len(history),
                 available_versions=available_versions,
+                composer_ast=composer_ast,
+                composer_schema_version=composer_schema_version,
+                composer_sync_hash=composer_sync_hash,
+                composer_sync_status=composer_sync_status,
             )
         )
     return records
@@ -395,6 +447,7 @@ def load_template(name: str, *, version: int | None = None) -> TemplateRecord:
             current_version = _safe_int(meta.get("current_version"), default=1)
             requested_version = _safe_int(version, default=current_version) if version is not None else current_version
             description = str(meta.get("description")) if meta.get("description") is not None else None
+            composer_ast, composer_schema_version, composer_sync_hash, composer_sync_status = _load_composer_metadata(meta)
             available_versions = _available_versions(current_version, history)
 
             if requested_version == current_version:
@@ -424,6 +477,10 @@ def load_template(name: str, *, version: int | None = None) -> TemplateRecord:
                 version=requested_version,
                 history_count=len(history),
                 available_versions=available_versions,
+                composer_ast=composer_ast,
+                composer_schema_version=composer_schema_version,
+                composer_sync_hash=composer_sync_hash,
+                composer_sync_status=composer_sync_status,
             )
     raise TemplateNotFoundError(name)
 
@@ -435,6 +492,10 @@ def save_template(
     *,
     description: str | None = None,
     overwrite: bool = False,
+    composer_ast: dict[str, Any] | None = None,
+    composer_schema_version: str | None = None,
+    composer_sync_hash: str | None = None,
+    composer_sync_status: str | None = None,
 ) -> TemplateRecord:
     name = _sanitize_name(name)
     fmt = fmt.lower()
@@ -458,6 +519,29 @@ def save_template(
     existing_meta = _load_metadata(meta_path)
     existing_history = _load_history(existing_meta)
     current_version = _safe_int(existing_meta.get("current_version"), default=1)
+    (
+        existing_composer_ast,
+        existing_composer_schema_version,
+        existing_composer_sync_hash,
+        existing_composer_sync_status,
+    ) = _load_composer_metadata(existing_meta)
+
+    effective_composer_ast = composer_ast if composer_ast is not None else existing_composer_ast
+    effective_composer_schema_version = (
+        composer_schema_version
+        if composer_schema_version is not None
+        else existing_composer_schema_version
+    )
+    effective_composer_sync_hash = (
+        composer_sync_hash
+        if composer_sync_hash is not None
+        else existing_composer_sync_hash
+    )
+    effective_composer_sync_status = (
+        composer_sync_status
+        if composer_sync_status in _VALID_COMPOSER_SYNC_STATUSES
+        else existing_composer_sync_status
+    )
 
     if existing_variants:
         current_file = existing_variants[0]
@@ -499,6 +583,10 @@ def save_template(
         description=description,
         current_version=next_version,
         history=existing_history,
+        composer_ast=effective_composer_ast,
+        composer_schema_version=effective_composer_schema_version,
+        composer_sync_hash=effective_composer_sync_hash,
+        composer_sync_status=effective_composer_sync_status,
     )
     return load_template(name)
 

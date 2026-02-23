@@ -540,6 +540,10 @@ class WatchlistTemplateSummary(BaseModel):
     updated_at: str
     version: int = 1
     history_count: int = 0
+    composer_ast: dict[str, Any] | None = None
+    composer_schema_version: str | None = None
+    composer_sync_hash: str | None = None
+    composer_sync_status: Literal["in_sync", "needs_repair", "recovered_from_code"] | None = None
 
 
 class WatchlistTemplateDetail(WatchlistTemplateSummary):
@@ -569,6 +573,22 @@ class WatchlistTemplateCreateRequest(BaseModel):
     content: str = Field(..., description="Template content")
     description: str | None = Field(None, description="Optional human-readable description")
     overwrite: bool = Field(False, description="If false, creation fails when template already exists")
+    composer_ast: dict[str, Any] | None = Field(
+        None,
+        description="Optional visual composer AST representation for template editing.",
+    )
+    composer_schema_version: str | None = Field(
+        None,
+        description="Optional semantic version for the composer AST schema.",
+    )
+    composer_sync_hash: str | None = Field(
+        None,
+        description="Optional sync checksum for Jinja content and composer AST parity.",
+    )
+    composer_sync_status: Literal["in_sync", "needs_repair", "recovered_from_code"] | None = Field(
+        None,
+        description="Optional parity status between content and composer AST.",
+    )
 
 
 class WatchlistTemplateValidationErrorDetail(BaseModel):
@@ -659,3 +679,46 @@ class TemplateValidationErrorItem(BaseModel):
 class TemplateValidationResult(BaseModel):
     valid: bool
     errors: list[TemplateValidationErrorItem] = Field(default_factory=list)
+
+
+# --------------------
+# Template Composer Authoring (Manual Preview)
+# --------------------
+class TemplateComposerSectionRequest(BaseModel):
+    run_id: int = Field(..., ge=1)
+    block_id: str = Field(..., min_length=1, max_length=128)
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    input_scope: Literal["all_items", "top_items", "selected_items"] = "all_items"
+    style: str | None = Field(default=None, max_length=128)
+    length_target: Literal["short", "medium", "long"] = "medium"
+
+
+class TemplateComposerSectionResponse(BaseModel):
+    block_id: str
+    content: str
+    warnings: list[str] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+
+class TemplateComposerFlowSection(BaseModel):
+    id: str = Field(..., min_length=1, max_length=128)
+    content: str = Field(default="", max_length=20000)
+
+
+class TemplateComposerFlowCheckRequest(BaseModel):
+    run_id: int = Field(..., ge=1)
+    mode: Literal["suggest_only", "auto_apply"] = "suggest_only"
+    sections: list[TemplateComposerFlowSection] = Field(default_factory=list, max_length=128)
+
+
+class TemplateComposerFlowIssue(BaseModel):
+    section_id: str | None = None
+    severity: Literal["info", "warning"] = "info"
+    message: str
+
+
+class TemplateComposerFlowCheckResponse(BaseModel):
+    mode: Literal["suggest_only", "auto_apply"]
+    issues: list[TemplateComposerFlowIssue] = Field(default_factory=list)
+    diff: str = ""
+    sections: list[TemplateComposerFlowSection] = Field(default_factory=list)
