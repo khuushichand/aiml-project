@@ -107,6 +107,16 @@ def test_load_reports_unapplied_runtime_overrides(monkeypatch):
     assert unapplied.get("max_kv_cache_size") == 4096
 
 
+def test_embeddings_response_uses_active_session_model(monkeypatch):
+    _patch_mlx(monkeypatch)
+    reg = mp.get_mlx_registry()
+    reg.load(model_path="fake-model", overrides={"max_concurrent": 1})
+    emb_adapter = mp.MLXEmbeddingsAdapter()
+
+    resp = emb_adapter.embed({"input": "hello", "model": "wrong-model"})
+    assert resp["model"] == "fake-model"
+
+
 def test_session_scope_without_load_raises():
     reg = mp.MLXSessionRegistry()
     with pytest.raises(ChatBadRequestError):

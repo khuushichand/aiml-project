@@ -648,7 +648,7 @@ class MLXEmbeddingsAdapter(EmbeddingsProvider):
             data = [{"index": i, "embedding": vec} for i, vec in enumerate(vectors)]  # type: ignore[arg-type]
         else:
             data = [{"index": 0, "embedding": vectors}]  # type: ignore[list-item]
-        return {"data": data, "object": "list", "model": request.get("model")}
+        return {"data": data, "object": "list", "model": session.model_id}
 
 
 __all__ = ["MLXChatAdapter", "MLXEmbeddingsAdapter", "MLXSessionRegistry", "get_mlx_registry"]
