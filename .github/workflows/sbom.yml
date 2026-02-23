@@ -136,7 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f sbom-python.cdx.json ] && [ -f sbom-node.cdx.json ]; then \
-            docker run --rm -v "$PWD":/work -w /work ghcr.io/cyclonedx/cyclonedx-cli@${CDX_CLI_DIGEST} \
+            docker run --rm -v "$PWD":/work -w /work "ghcr.io/cyclonedx/cyclonedx-cli@${CDX_CLI_DIGEST}" \
               merge --input-files sbom-python.cdx.json sbom-node.cdx.json --output-file sbom.cdx.json; \
           elif [ -f sbom-python.cdx.json ]; then \
             cp sbom-python.cdx.json sbom.cdx.json; \
@@ -157,5 +157,5 @@ jobs:
         if: ${{ hashFiles('sbom.cdx.json') != '' && hashFiles('sbom-python.cdx.json') != '' && hashFiles('sbom-node.cdx.json') != '' }}
         continue-on-error: true
         run: |
-          docker run --rm -v "$PWD":/work -w /work ghcr.io/cyclonedx/cyclonedx-cli@${CDX_CLI_DIGEST} \
+          docker run --rm -v "$PWD":/work -w /work "ghcr.io/cyclonedx/cyclonedx-cli@${CDX_CLI_DIGEST}" \
             validate --input-file sbom.cdx.json
