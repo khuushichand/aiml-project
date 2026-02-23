@@ -536,6 +536,37 @@ export const Playground = () => {
     historyId && compareParentByHistory
       ? compareParentByHistory[historyId]
       : undefined
+  const branchDepth = React.useMemo(() => {
+    if (!historyId || !compareParentByHistory) return 0
+    let depth = 0
+    let cursor = historyId
+    const seen = new Set<string>()
+    while (cursor && !seen.has(cursor)) {
+      seen.add(cursor)
+      const meta = compareParentByHistory[cursor]
+      if (!meta?.parentHistoryId) break
+      depth += 1
+      cursor = meta.parentHistoryId
+    }
+    return depth
+  }, [compareParentByHistory, historyId])
+  const branchForkPointLabel = React.useMemo(() => {
+    if (!parentMeta?.parentHistoryId) return null
+    if (parentMeta.clusterId) {
+      return t("playground:branching.forkPointCluster", "Fork point: {{cluster}}", {
+        cluster: parentMeta.clusterId
+      } as any)
+    }
+    return t("playground:branching.forkPointParent", "Fork point: {{historyId}}", {
+      historyId: parentMeta.parentHistoryId
+    } as any)
+  }, [parentMeta?.clusterId, parentMeta?.parentHistoryId, t])
+  const branchDepthLabel = React.useMemo(() => {
+    if (branchDepth <= 0) return null
+    return t("playground:branching.depth", "Depth {{depth}}", {
+      depth: branchDepth
+    } as any)
+  }, [branchDepth, t])
   const compareActive = compareFeatureEnabled && compareMode
   const compactFeatureNoticeVisible =
     isMobileViewport &&
@@ -779,28 +810,46 @@ export const Playground = () => {
         <div className="flex h-full min-w-0 flex-1 flex-col">
           {parentMeta?.parentHistoryId && (
             <div className="flex w-full justify-center px-5 pt-2">
-              <button
-                type="button"
-                className="inline-flex items-center gap-2 rounded-full border border-primary bg-surface2 px-3 py-1 text-[11px] font-medium text-primaryStrong hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                title={t(
-                  "playground:composer.compareBreadcrumb",
-                  "Back to comparison chat"
-                )}
-                onClick={() => {
-                  window.dispatchEvent(
-                    new CustomEvent("tldw:open-history", {
-                      detail: { historyId: parentMeta.parentHistoryId }
-                    })
-                  )
-                }}>
-                <span aria-hidden="true">←</span>
-                <span>
-                  {t(
+              <div className="inline-flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 rounded-full border border-primary bg-surface2 px-3 py-1 text-[11px] font-medium text-primaryStrong hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                  title={t(
                     "playground:composer.compareBreadcrumb",
                     "Back to comparison chat"
                   )}
-                </span>
-              </button>
+                  onClick={() => {
+                    window.dispatchEvent(
+                      new CustomEvent("tldw:open-history", {
+                        detail: { historyId: parentMeta.parentHistoryId }
+                      })
+                    )
+                  }}>
+                  <span aria-hidden="true">←</span>
+                  <span>
+                    {t(
+                      "playground:composer.compareBreadcrumb",
+                      "Back to comparison chat"
+                    )}
+                  </span>
+                </button>
+                {branchForkPointLabel && (
+                  <span
+                    data-testid="playground-branch-fork-point"
+                    className="inline-flex items-center rounded-full border border-border bg-surface2 px-2 py-0.5 text-[10px] text-text-muted"
+                  >
+                    {branchForkPointLabel}
+                  </span>
+                )}
+                {branchDepthLabel && (
+                  <span
+                    data-testid="playground-branch-depth"
+                    className="inline-flex items-center rounded-full border border-border bg-surface2 px-2 py-0.5 text-[10px] text-text-muted"
+                  >
+                    {branchDepthLabel}
+                  </span>
+                )}
+              </div>
             </div>
           )}
           <div className="px-4 pt-2">

@@ -434,6 +434,33 @@ describe("ComposerToolbar web search", () => {
     expect(screen.getByText("Suggested now")).toBeInTheDocument()
   })
 
+  it("surfaces degraded provider status in the runtime summary chip", () => {
+    render(
+      <ComposerToolbar
+        {...createProps({
+          contextItems: [
+            {
+              id: "providerStatus",
+              label: "Provider",
+              value: "Degraded",
+              tone: "warning"
+            },
+            {
+              id: "routingPolicy",
+              label: "Routing",
+              value: "Auto fallback",
+              tone: "active"
+            }
+          ]
+        })}
+      />
+    )
+
+    const runtimeChip = screen.getByTestId("composer-casual-runtime-context-chip")
+    expect(runtimeChip).toHaveTextContent("Degraded + Auto fallback")
+    expect(runtimeChip.className).toContain("border-warn/40")
+  })
+
   it("uses a bottom persistence chip to toggle saved vs temporary", () => {
     const onToggleTemporaryChat = vi.fn()
     render(

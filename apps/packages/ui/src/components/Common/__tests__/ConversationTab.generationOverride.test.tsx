@@ -6,6 +6,7 @@ import {
   CONVERSATION_TAB_QUERY_KEYS,
   ConversationTab
 } from "../Settings/tabs/ConversationTab"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 
 vi.mock("react-i18next", () => ({
@@ -101,7 +102,9 @@ describe("ConversationTab generation override controls", () => {
     } as any)
   })
 
-  const renderConversationTab = () =>
+  const renderConversationTab = (
+    overrides: Partial<React.ComponentProps<typeof ConversationTab>> = {}
+  ) =>
     render(
       <ConversationTab
         historyId="history-1"
@@ -111,10 +114,11 @@ describe("ConversationTab generation override controls", () => {
         onRemoveFile={() => {}}
         serverChatId={TEST_SERVER_CHAT_ID}
         serverChatState="in-progress"
-        onStateChange={() => {}}
+        onStateChange={vi.fn()}
         serverChatTopic={null}
         onTopicChange={() => {}}
-        onVersionChange={() => {}}
+        onVersionChange={vi.fn()}
+        {...overrides}
       />
     )
 
@@ -205,5 +209,36 @@ describe("ConversationTab generation override controls", () => {
     expect(
       await screen.findByText("Failed to load pinned messages.")
     ).toBeInTheDocument()
+  })
+
+  it("persists conversation state transitions and updates local state/version", async () => {
+    const onStateChange = vi.fn()
+    const onVersionChange = vi.fn()
+
+    vi.mocked(tldwClient.updateChat).mockResolvedValueOnce({ version: 8 })
+    vi.mocked(tldwClient.updateChat).mockResolvedValueOnce({ version: 9 })
+
+    renderConversationTab({ onStateChange, onVersionChange })
+
+    const stateSelect = screen.getByTestId("conversation-state-select")
+    fireEvent.change(stateSelect, { target: { value: "resolved" } })
+    fireEvent.change(stateSelect, { target: { value: "backlog" } })
+
+    await waitFor(() => {
+      expect(onStateChange).toHaveBeenNthCalledWith(1, "resolved")
+      expect(onStateChange).toHaveBeenNthCalledWith(2, "backlog")
+      expect(vi.mocked(tldwClient.updateChat)).toHaveBeenNthCalledWith(
+        1,
+        TEST_SERVER_CHAT_ID,
+        { state: "resolved" }
+      )
+      expect(vi.mocked(tldwClient.updateChat)).toHaveBeenNthCalledWith(
+        2,
+        TEST_SERVER_CHAT_ID,
+        { state: "backlog" }
+      )
+      expect(onVersionChange).toHaveBeenNthCalledWith(1, 8)
+      expect(onVersionChange).toHaveBeenNthCalledWith(2, 9)
+    })
   })
 })

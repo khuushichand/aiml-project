@@ -262,7 +262,70 @@ export function useModelSelector({
       ? models.find(m => favoriteModels.includes(String(m.model)))?.model
       : null
 
-    const getModelDescription = (model: any, capabilities: string[], contextLength: number | undefined) => {
+    const normalizePositiveNumber = (value: unknown): number | undefined => {
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+        return value
+      }
+      if (typeof value === "string") {
+        const parsed = Number.parseFloat(value)
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed
+        }
+      }
+      return undefined
+    }
+
+    const resolvePriceHint = (model: any): string | null => {
+      const directHints = [
+        model?.details?.price_hint,
+        model?.details?.pricing_hint,
+        model?.price_hint,
+        model?.pricing_hint
+      ]
+      const direct = directHints.find(
+        (value) => typeof value === "string" && value.trim().length > 0
+      )
+      if (typeof direct === "string") {
+        return direct.trim()
+      }
+
+      const pricing = model?.details?.pricing
+      if (!pricing || typeof pricing !== "object") {
+        return null
+      }
+
+      const input = normalizePositiveNumber(
+        (pricing as any).input_per_million ??
+          (pricing as any).prompt_per_million ??
+          (pricing as any).input
+      )
+      const output = normalizePositiveNumber(
+        (pricing as any).output_per_million ??
+          (pricing as any).completion_per_million ??
+          (pricing as any).output
+      )
+
+      const formatUsd = (value: number) =>
+        `$${value >= 1 ? value.toFixed(2) : value.toPrecision(2)}`
+
+      if (typeof input === "number" && typeof output === "number") {
+        return `${formatUsd(input)}/${formatUsd(output)}`
+      }
+      if (typeof input === "number") {
+        return `${formatUsd(input)} in`
+      }
+      if (typeof output === "number") {
+        return `${formatUsd(output)} out`
+      }
+      return null
+    }
+
+    const getModelDescription = (
+      model: any,
+      capabilities: string[],
+      contextLength: number | undefined,
+      priceHint: string | null
+    ) => {
       const parts: string[] = []
       const providerDisplay = getProviderDisplayName(toProviderKey(model.provider))
       parts.push(`${providerDisplay} model.`)
@@ -271,6 +334,9 @@ export function useModelSelector({
       }
       if (capabilities.includes("tools") || model.supportsTools) {
         parts.push("Supports tool use and function calling.")
+      }
+      if (capabilities.includes("streaming") || model.supportsStreaming) {
+        parts.push("Supports streaming output.")
       }
       if (typeof contextLength === "number") {
         if (contextLength > 100000) {
@@ -281,6 +347,9 @@ export function useModelSelector({
       }
       if (capabilities.includes("fast") || model.fast) {
         parts.push("Optimized for speed.")
+      }
+      if (priceHint) {
+        parts.push(`Estimated price: ${priceHint}.`)
       }
       return parts.join(" ")
     }
@@ -294,15 +363,45 @@ export function useModelSelector({
         ? t("playground:composer.favoriteRemove", "Remove from favorites")
         : t("playground:composer.favoriteAdd", "Add to favorites")
 
-      const capabilities = model.details?.capabilities || model.capabilities || []
-      const contextLength = model.context_length ?? model.contextLength ?? model.details?.context_length
+      const rawCapabilities = model.details?.capabilities || model.capabilities || []
+      const capabilities = Array.isArray(rawCapabilities)
+        ? rawCapabilities.map((cap) => String(cap).toLowerCase())
+        : []
+      const contextLength = normalizePositiveNumber(
+        model.context_length ??
+          model.contextLength ??
+          model.context_window ??
+          model.details?.context_length ??
+          model.details?.contextLength ??
+          model.details?.context_window
+      )
+      const priceHint = resolvePriceHint(model)
       const capabilityBadges: string[] = []
-      if (capabilities.includes("vision") || model.supportsVision) capabilityBadges.push("Vision")
-      if (capabilities.includes("fast") || model.fast) capabilityBadges.push("Fast")
-      if (typeof contextLength === "number" && contextLength > 100000) capabilityBadges.push("Long context")
-      if (capabilities.includes("tools") || model.supportsTools) capabilityBadges.push("Tools")
+      if (capabilities.includes("vision") || model.supportsVision) {
+        capabilityBadges.push("Vision")
+      }
+      if (capabilities.includes("tools") || model.supportsTools) {
+        capabilityBadges.push("Tools")
+      }
+      if (capabilities.includes("streaming") || model.supportsStreaming) {
+        capabilityBadges.push("Streaming")
+      }
+      if (typeof contextLength === "number" && contextLength > 0) {
+        capabilityBadges.push(`${Math.max(1, Math.round(contextLength / 1000))}k ctx`)
+      }
+      if (capabilities.includes("fast") || model.fast) {
+        capabilityBadges.push("Fast")
+      }
+      if (priceHint) {
+        capabilityBadges.push(priceHint)
+      }
 
-      const modelDescription = getModelDescription(model, capabilities, contextLength)
+      const modelDescription = getModelDescription(
+        model,
+        capabilities,
+        contextLength,
+        priceHint
+      )
 
       return {
         key: model.model,
@@ -321,7 +420,7 @@ export function useModelSelector({
                   {t("playground:composer.recommended", "Recommended")}
                 </span>
               )}
-              {capabilityBadges.slice(0, 2).map(cap => (
+              {capabilityBadges.slice(0, 5).map(cap => (
                 <span key={cap} className="rounded bg-surface2 px-1 py-0.5 text-[9px] text-text-muted">
                   {cap}
                 </span>

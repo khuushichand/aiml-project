@@ -487,8 +487,11 @@ export function MessageActionsBar({
             >
               <ChevronLeft className="h-3 w-3" />
             </button>
-            <span className="tabular-nums text-[11px]">
-              {resolvedVariantIndex + 1}/{variantCount}
+            <span
+              data-testid="variant-count-label"
+              className="tabular-nums text-[11px]"
+            >
+              {`${resolvedVariantIndex + 1} of ${variantCount}`}
             </span>
             <button
               type="button"

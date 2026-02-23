@@ -1034,6 +1034,7 @@ export function ConversationTab({
           'Default state is "in-progress." Update it as the conversation progresses.'
         )}>
         <Select
+          data-testid="conversation-state-select"
           value={serverChatState || "in-progress"}
           options={conversationStateOptions}
           onChange={handleStateChange}
