@@ -182,11 +182,11 @@ def _coerce_int(val):
         return None
 
 
-def _coerce_float(val):
+def _coerce_float(val, default=None):
     try:
         return float(val)
     except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
-        return None
+        return default
 
 
 def _looks_like_error_text(text: Any) -> bool:
