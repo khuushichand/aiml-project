@@ -210,9 +210,7 @@ async def get_llamafile_metrics_endpoint(llm_manager: LLMInferenceManager = Depe
 async def list_llamacpp_models_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         handler = getattr(llm_manager, "llamacpp", None)
-        if handler is None:
-            raise _llamacpp_unavailable()
-        if hasattr(handler, "list_models"):
+        if handler is not None and hasattr(handler, "list_models"):
             models = await handler.list_models()
         elif hasattr(llm_manager, "list_local_models"):
             models = await llm_manager.list_local_models(backend="llamacpp")
