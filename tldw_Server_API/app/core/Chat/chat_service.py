@@ -71,6 +71,10 @@ from tldw_Server_API.app.core.Chat.streaming_utils import (
 from tldw_Server_API.app.core.Chat.tool_auto_exec import execute_assistant_tool_calls
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
+from tldw_Server_API.app.core.LLM_Calls.openrouter_model_inventory import (
+    clear_openrouter_model_cache as _clear_openrouter_model_cache_shared,
+    discover_openrouter_models as _discover_openrouter_models_shared,
+)
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
@@ -168,6 +172,8 @@ _PROVIDER_MODEL_CONFIG_FIELDS: dict[str, tuple[str, str]] = {
     "aphrodite": ("Local-API", "aphrodite_model"),
 }
 
+_OPENROUTER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 5.0
+
 
 def _parse_tool_allow_catalog(value: str | None) -> list[str]:
     """Parse chat tool allow-catalog from comma-separated names/prefixes.
@@ -209,6 +215,38 @@ def _split_model_list(raw_value: str | None) -> list[str]:
     if not raw:
         return []
     return [item.strip() for item in raw.split(",") if item and item.strip()]
+
+
+def _resolve_openrouter_api_key_for_discovery() -> str:
+    env_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if env_key:
+        return env_key
+
+    try:
+        if _config and _config.has_section("API"):
+            cfg_key = (_config.get("API", "openrouter_api_key", fallback="") or "").strip()
+            if cfg_key and not (cfg_key.startswith("<") and cfg_key.endswith(">")):
+                return cfg_key
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return ""
+    return ""
+
+
+def _discover_openrouter_models_for_chat(*, force_refresh: bool = False) -> tuple[str, ...]:
+    if os.getenv("PYTEST_CURRENT_TEST") and not _shared_is_truthy(
+        os.getenv("CHAT_ALLOW_OPENROUTER_DISCOVERY_IN_TESTS", "0")
+    ):
+        return tuple()
+
+    return tuple(
+        _discover_openrouter_models_shared(
+            _resolve_openrouter_api_key_for_discovery(),
+            force_refresh=force_refresh,
+            include_extended_aliases=True,
+            timeout_seconds=_OPENROUTER_MODEL_DISCOVERY_TIMEOUT_SECONDS,
+            log_prefix="[OpenRouter model discovery/chat]",
+        )
+    )
 
 
 @lru_cache(maxsize=64)
@@ -262,6 +300,10 @@ def is_model_known_for_provider(provider: str, model: str) -> bool | None:
         return None
 
     known_models = known_models_for_provider_cached(provider_key)
+    if provider_key == "openrouter":
+        discovered_models = _discover_openrouter_models_for_chat(force_refresh=False)
+        if discovered_models:
+            known_models = tuple(sorted(set(known_models) | set(discovered_models)))
     if not known_models:
         return None
 
@@ -277,17 +319,36 @@ def is_model_known_for_provider(provider: str, model: str) -> bool | None:
         if not normalized:
             return set()
         candidates = {normalized}
+        namespace = ""
+        model_part = normalized
         if "/" in normalized:
-            _, suffix = normalized.split("/", 1)
-            if suffix:
-                candidates.add(suffix)
+            namespace, model_part = normalized.split("/", 1)
+            if model_part:
+                candidates.add(model_part)
+        base_model = re.sub(r"-(?:\d{4}-\d{2}-\d{2}|\d{4,8})$", "", model_part)
+        if base_model and base_model != model_part:
+            candidates.add(base_model)
+            if namespace:
+                candidates.add(f"{namespace}/{base_model}")
         return candidates
 
     known_aliases: set[str] = set()
     for known in known_models:
         known_aliases.update(_aliases(str(known)))
 
-    return bool(_aliases(model_key) & known_aliases)
+    if _aliases(model_key) & known_aliases:
+        return True
+
+    # If there is a near real-time provider inventory, force one refresh on miss.
+    # This avoids stale-cache false negatives for newly published OpenRouter ids.
+    refreshed_models = _discover_openrouter_models_for_chat(force_refresh=True)
+    if not refreshed_models:
+        return False
+
+    refreshed_aliases: set[str] = set()
+    for known in refreshed_models:
+        refreshed_aliases.update(_aliases(str(known)))
+    return bool(_aliases(model_key) & refreshed_aliases)
 
 
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
@@ -665,6 +726,8 @@ def invalidate_model_alias_caches() -> None:
         _configured_models_for_provider_cached.cache_clear()
     with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         known_models_for_provider_cached.cache_clear()
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+        _clear_openrouter_model_cache_shared()
 
 
 def queue_is_active(queue: Any) -> bool:
