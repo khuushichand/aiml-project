@@ -59,7 +59,7 @@ describe("MentionsDropdown integration", () => {
     expect(screen.getByTestId("mentions-category-api.example.com")).toBeInTheDocument()
   })
 
-  it("supports keyboard traversal, selection, and escape close", () => {
+  it("uses grouped render order for keyboard selection and supports escape close", () => {
     const onSelectTab = vi.fn()
     const onClose = vi.fn()
     renderDropdown({ onSelectTab, onClose })
@@ -68,6 +68,14 @@ describe("MentionsDropdown integration", () => {
     fireEvent.keyDown(document, { key: "Enter" })
 
     expect(onSelectTab).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 3, title: "Release notes" })
+    )
+
+    fireEvent.keyDown(document, { key: "ArrowDown" })
+    fireEvent.keyDown(document, { key: "Enter" })
+
+    expect(onSelectTab).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({ id: 2, title: "API reference" })
     )
 

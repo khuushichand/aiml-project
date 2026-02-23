@@ -53,9 +53,14 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
     }))
   }, [tabs])
 
+  const orderedTabs = React.useMemo(
+    () => groupedTabs.flatMap((group) => group.items),
+    [groupedTabs]
+  )
+
   React.useEffect(() => {
     setSelectedIndex(0)
-  }, [tabs])
+  }, [orderedTabs])
 
   React.useEffect(() => {
     if (show && textareaRef.current && dropdownRef.current) {
@@ -67,7 +72,7 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
         left: 0
       })
     }
-  }, [show, tabs])
+  }, [show, orderedTabs])
 
   React.useEffect(() => {
     if (show) {
@@ -81,19 +86,21 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
 
       switch (e.key) {
         case "ArrowDown":
-          if (tabs.length === 0) return
+          if (orderedTabs.length === 0) return
           e.preventDefault()
-          setSelectedIndex((prev) => (prev + 1) % tabs.length)
+          setSelectedIndex((prev) => (prev + 1) % orderedTabs.length)
           break
         case "ArrowUp":
-          if (tabs.length === 0) return
+          if (orderedTabs.length === 0) return
           e.preventDefault()
-          setSelectedIndex((prev) => (prev - 1 + tabs.length) % tabs.length)
+          setSelectedIndex(
+            (prev) => (prev - 1 + orderedTabs.length) % orderedTabs.length
+          )
           break
         case "Enter":
           e.preventDefault()
-          if (tabs[selectedIndex]) {
-            onSelectTab(tabs[selectedIndex])
+          if (orderedTabs[selectedIndex]) {
+            onSelectTab(orderedTabs[selectedIndex])
           }
           break
         case "Escape":
@@ -107,7 +114,7 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
       document.addEventListener("keydown", handleKeyDown)
       return () => document.removeEventListener("keydown", handleKeyDown)
     }
-  }, [show, tabs, selectedIndex, onSelectTab, onClose])
+  }, [show, orderedTabs, selectedIndex, onSelectTab, onClose])
 
   const handleRefreshTabs = async () => {
     if (isRefreshing) return
@@ -219,7 +226,7 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
         })()}
       </div>
 
-      {tabs.length === 0 && (
+      {orderedTabs.length === 0 && (
         <div className="p-4 text-center text-text-subtle text-sm">
           {mentionPosition?.query ? (
             <p>
