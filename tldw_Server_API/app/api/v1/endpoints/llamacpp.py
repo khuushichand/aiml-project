@@ -9,7 +9,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
 
@@ -87,7 +87,11 @@ def _resolve_llamacpp_target(llm_manager: LLMInferenceManager, required: tuple[s
 
 
 # --- Llama.cpp Specific Endpoints ---
-@router.post("/llamacpp/start_server", summary="Start or Swap Llama.cpp Server Model")
+@router.post(
+    "/llamacpp/start_server",
+    summary="Start or Swap Llama.cpp Server Model",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def start_llamacpp_server_endpoint(
         model_filename: str = Body(..., embed=True,
                                    description="Filename of the GGUF model to load (e.g., 'mistral-7b-v0.1.Q4_K_M.gguf')"),
@@ -118,7 +122,11 @@ async def start_llamacpp_server_endpoint(
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
-@router.post("/llamacpp/stop_server", summary="Stop Llama.cpp Server")
+@router.post(
+    "/llamacpp/stop_server",
+    summary="Stop Llama.cpp Server",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         target = _resolve_llamacpp_target(llm_manager, ("stop_server",))
@@ -138,7 +146,11 @@ async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depen
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
-@router.get("/llamacpp/status", summary="Get Llama.cpp Server Status")
+@router.get(
+    "/llamacpp/status",
+    summary="Get Llama.cpp Server Status",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         target = _resolve_llamacpp_target(llm_manager, ("get_server_status",))
@@ -156,7 +168,11 @@ async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depend
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
-@router.get("/llamacpp/metrics", summary="Get Llama.cpp Metrics")
+@router.get(
+    "/llamacpp/metrics",
+    summary="Get Llama.cpp Metrics",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def get_llamacpp_metrics_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         handler = _resolve_llamacpp_target(llm_manager, ("get_metrics",))
@@ -186,7 +202,11 @@ async def get_llamafile_metrics_endpoint(llm_manager: LLMInferenceManager = Depe
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
-@router.get("/llamacpp/models", summary="List available Llama.cpp models")
+@router.get(
+    "/llamacpp/models",
+    summary="List available Llama.cpp models",
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
+)
 async def list_llamacpp_models_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         handler = getattr(llm_manager, "llamacpp", None)

@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+from typing import Optional
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from starlette.requests import Request
+
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.api.v1.endpoints import llamacpp as llamacpp_mod
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+
+
+def _make_principal(
+    *,
+    kind: str = "user",
+    is_admin: bool = False,
+    roles: Optional[list[str]] = None,
+    permissions: Optional[list[str]] = None,
+) -> AuthPrincipal:
+    return AuthPrincipal(
+        kind=kind,
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=roles or [],
+        permissions=permissions or [],
+        is_admin=is_admin,
+        org_ids=[],
+        team_ids=[],
+    )
+
+
+class _StubModelsHandler:
+    async def list_models(self) -> list[str]:
+        return ["toy.gguf"]
+
+    def get_metrics(self) -> dict[str, int]:
+        return {"starts": 1}
+
+
+class _StubManager:
+    class _Logger:
+        def error(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            return
+
+    def __init__(self) -> None:
+        self.logger = self._Logger()
+        # Keep handler for `/llamacpp/models` and `/llamacpp/metrics`.
+        # Start/stop/status resolve through manager compatibility methods.
+        self.llamacpp = _StubModelsHandler()
+
+    async def start_server(
+        self,
+        *,
+        backend: str,
+        model_name: str | None = None,
+        server_args: dict | None = None,
+    ) -> dict:
+        return {
+            "status": "started",
+            "backend": backend,
+            "model": model_name,
+            "server_args": server_args or {},
+        }
+
+    async def stop_server(self, *, backend: str, pid: int | None = None, port: int | None = None) -> str:
+        _ = (pid, port)
+        return f"{backend} stopped"
+
+    async def get_server_status(self, *, backend: str) -> dict:
+        return {"status": "running", "backend": backend, "model": "toy.gguf"}
+
+    async def list_local_models(self, *, backend: str) -> list[str]:
+        _ = backend
+        return ["toy.gguf"]
+
+
+def _build_app_with_overrides(
+    principal: Optional[AuthPrincipal],
+    *,
+    fail_with_401: bool = False,
+) -> FastAPI:
+    app = FastAPI()
+    app.include_router(llamacpp_mod.router, prefix="/api/v1")
+    app.state.llm_manager = _StubManager()
+
+    async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        if fail_with_401:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        assert principal is not None, "principal must be provided when fail_with_401 is False"
+        ip = request.client.host if getattr(request, "client", None) else None
+        ua = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
+        request_id = request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
+        request.state.auth = AuthContext(
+            principal=principal,
+            ip=ip,
+            user_agent=ua,
+            request_id=request_id,
+        )
+        return principal
+
+    async def _fake_check_rate_limit() -> None:
+        return
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
+    app.dependency_overrides[auth_deps.check_rate_limit] = _fake_check_rate_limit
+    app.dependency_overrides[llamacpp_mod.check_rate_limit] = _fake_check_rate_limit
+
+    return app
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "method,path,payload",
+    [
+        ("post", "/api/v1/llamacpp/start_server", {"model_filename": "toy.gguf", "server_args": {}}),
+        ("post", "/api/v1/llamacpp/stop_server", {}),
+        ("get", "/api/v1/llamacpp/status", None),
+        ("get", "/api/v1/llamacpp/models", None),
+        ("get", "/api/v1/llamacpp/metrics", None),
+    ],
+)
+def test_llamacpp_lifecycle_401_when_principal_unavailable(method: str, path: str, payload: dict | None):
+    app = _build_app_with_overrides(principal=None, fail_with_401=True)
+
+    with TestClient(app) as client:
+        if method == "post":
+            resp = client.post(path, json=payload or {})
+        else:
+            resp = client.get(path)
+
+    assert resp.status_code == 401
+    assert "Authentication required" in resp.json().get("detail", "")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "method,path,payload",
+    [
+        ("post", "/api/v1/llamacpp/start_server", {"model_filename": "toy.gguf", "server_args": {}}),
+        ("post", "/api/v1/llamacpp/stop_server", {}),
+        ("get", "/api/v1/llamacpp/status", None),
+        ("get", "/api/v1/llamacpp/models", None),
+        ("get", "/api/v1/llamacpp/metrics", None),
+    ],
+)
+def test_llamacpp_lifecycle_403_when_missing_admin_role(method: str, path: str, payload: dict | None):
+    principal = _make_principal(
+        is_admin=False,
+        roles=["user"],
+        permissions=[],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        if method == "post":
+            resp = client.post(path, json=payload or {})
+        else:
+            resp = client.get(path)
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "method,path,payload",
+    [
+        ("post", "/api/v1/llamacpp/start_server", {"model_filename": "toy.gguf", "server_args": {}}),
+        ("post", "/api/v1/llamacpp/stop_server", {}),
+        ("get", "/api/v1/llamacpp/status", None),
+        ("get", "/api/v1/llamacpp/models", None),
+        ("get", "/api/v1/llamacpp/metrics", None),
+    ],
+)
+def test_llamacpp_lifecycle_200_for_admin_principal(method: str, path: str, payload: dict | None):
+    principal = _make_principal(
+        is_admin=True,
+        roles=["admin"],
+        permissions=[],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        if method == "post":
+            resp = client.post(path, json=payload or {})
+        else:
+            resp = client.get(path)
+
+    assert resp.status_code == 200
