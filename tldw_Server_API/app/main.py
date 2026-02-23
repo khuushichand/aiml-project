@@ -823,6 +823,7 @@ _HAS_NOTES_GRAPH = False
 _HAS_READING_HIGHLIGHTS = False
 _HAS_KANBAN = False
 _HAS_DATA_TABLES = False
+_HAS_MEETINGS = False
 
 # Minimal test-app gating: when enabled, skip importing heavy routers
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
@@ -939,6 +940,13 @@ else:
     except _IMPORT_EXCEPTIONS as _o_err:
         logger.warning(f"Outputs endpoints unavailable; skipping import: {_o_err}")
         _HAS_OUTPUTS = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.meetings import router as meetings_router
+
+        _HAS_MEETINGS = True
+    except _IMPORT_EXCEPTIONS as _meetings_err:
+        logger.warning(f"Meetings endpoints unavailable; skipping import: {_meetings_err}")
+        _HAS_MEETINGS = False
     try:
         from tldw_Server_API.app.api.v1.endpoints.collections_feeds import router as collections_feeds_router
 
@@ -5718,6 +5726,14 @@ else:
         _include_if_enabled("outputs", _outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Outputs endpoint not available: {_e}")
+    if _HAS_MEETINGS and "meetings_router" in locals():
+        _include_if_enabled(
+            "meetings",
+            meetings_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["meetings"],
+            default_stable=False,
+        )
     try:
         # Optional audiobook creation endpoint
         from tldw_Server_API.app.api.v1.endpoints.audio.audiobooks import router as audiobooks_router
