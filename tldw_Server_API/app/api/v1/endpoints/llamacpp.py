@@ -273,6 +273,8 @@ async def run_llamacpp_inference_endpoint(
             )
         else:
             raise _llamacpp_unavailable()
+        if isinstance(result, dict):
+            result.setdefault("backend", "llamacpp")
         return result
     except HTTPException:
         raise

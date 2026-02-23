@@ -119,6 +119,7 @@ def test_llamacpp_inference_happy_path(llamacpp_client, monkeypatch):
     body = r.json()
     assert body["model"] == "mock.gguf"
     assert body["choices"][0]["message"]["content"] == "hi"
+    assert body["backend"] == "llamacpp"
 
 
 @pytest.mark.integration
@@ -153,3 +154,4 @@ def test_llamacpp_inference_falls_back_to_manager_when_handler_missing():
     body = r.json()
     assert body["model"] == "mock.gguf"
     assert body["choices"][0]["message"]["content"] == "hi"
+    assert body["backend"] == "llamacpp"
