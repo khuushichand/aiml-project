@@ -29,9 +29,10 @@ Known environment caveat:
 **Goal**: Introduce the dedicated meetings router and contract skeleton without business logic.
 **Success Criteria**: `/api/v1/meetings/*` routes are mounted and contract validation works.
 **Tests**: Route smoke test and schema validation tests pass.
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 1: Add Meetings Schemas + Router Mount
+**Progress**: Complete (`e5a753956`)
 
 **Files:**
 - Create: `tldw_Server_API/app/api/v1/schemas/meetings_schemas.py`
@@ -93,9 +94,10 @@ git commit -m "feat(meetings): add router and schema scaffold"
 **Goal**: Add additive meetings persistence and domain services for sessions/templates/artifacts.
 **Success Criteria**: CRUD operations work through DB adapter and service layer.
 **Tests**: DB unit tests + service unit tests pass.
-**Status**: Not Started
+**Status**: In Progress
 
 ### Task 2: Implement Meetings DB Adapter
+**Progress**: Complete (in working tree, pending commit)
 
 **Files:**
 - Create: `tldw_Server_API/app/core/DB_Management/Meetings_DB.py`
@@ -509,4 +511,3 @@ git commit -m "docs(meetings): add API reference and feature status updates"
 - Slack/webhook delivery retries are observable and policy-constrained.
 - Bandit run on touched scope completed with no unresolved new high-severity issues.
 - Documentation updated with exact endpoints and rollout limitations.
-
