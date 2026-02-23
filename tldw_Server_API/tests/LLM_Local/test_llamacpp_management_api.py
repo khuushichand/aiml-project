@@ -158,6 +158,7 @@ def test_llamacpp_stop_server_happy_path():
     body = r.json()
     assert body["status"] == "stopped"
     assert "message" in body
+    assert body["backend"] == "llamacpp"
 
 
 @pytest.mark.unit
@@ -198,6 +199,7 @@ def test_llamacpp_models_happy_path():
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["available_models"] == ["mock.gguf", "other.gguf"]
+    assert body["backend"] == "llamacpp"
 
 
 @pytest.mark.unit
@@ -210,6 +212,7 @@ def test_llamacpp_models_fallback_to_manager_when_handler_missing():
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["available_models"] == ["fallback.gguf"]
+    assert body["backend"] == "llamacpp"
 
 
 @pytest.mark.unit

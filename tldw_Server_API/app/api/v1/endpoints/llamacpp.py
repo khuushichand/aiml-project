@@ -138,7 +138,7 @@ async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depen
             result = await target.stop_server()
         else:
             result = await target.stop_server(backend="llamacpp")
-        return {"status": "stopped", "message": result}
+        return {"status": "stopped", "message": result, "backend": "llamacpp"}
     except HTTPException:
         raise
     except InferenceError as e:
@@ -227,7 +227,7 @@ async def list_llamacpp_models_endpoint(llm_manager: LLMInferenceManager = Depen
             models = await llm_manager.list_local_models(backend="llamacpp")
         else:
             raise _llamacpp_unavailable()
-        return {"available_models": models}
+        return {"available_models": models, "backend": "llamacpp"}
     except HTTPException:
         raise
     except InferenceError as e:
