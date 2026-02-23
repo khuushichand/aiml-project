@@ -200,3 +200,40 @@ def test_math_like_wrapped_lines_reflow_cleanly():
     out = normalize_pdf_text_for_storage(src)
     assert "f(x) = x^2 + 2x + 1 for x in R." in out
     assert "g(x)=sin(x) for x in [0, pi]." in out
+
+
+def test_unindented_bullet_continuation_stays_in_list_context():
+    src = (
+        "- First bullet starts here\n"
+        "continues on wrapped line\n"
+        "- Second bullet remains separate"
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert out == (
+        "- First bullet starts here continues on wrapped line\n"
+        "- Second bullet remains separate"
+    )
+
+
+def test_mixed_script_wrap_keeps_expected_spacing():
+    src = "Model 使用中文\nand English mixed output."
+    out = normalize_pdf_text_for_storage(src)
+    assert out == "Model 使用中文 and English mixed output."
+
+
+def test_table_caption_boundaries_are_preserved():
+    src = (
+        "Table 1: Benchmark results\n"
+        "across evaluated models\n"
+        "| model | acc |\n"
+        "|---|---|\n"
+        "| A | 90 |\n"
+        "Caption after table starts\n"
+        "and continues here."
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "Table 1: Benchmark results across evaluated models" in out
+    assert "| model | acc |" in out
+    assert "|---|---|" in out
+    assert "| A | 90 |" in out
+    assert "Caption after table starts and continues here." in out

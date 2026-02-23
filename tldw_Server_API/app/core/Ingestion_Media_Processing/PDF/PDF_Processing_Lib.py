@@ -143,6 +143,17 @@ def _should_join_without_space(prev_text: str, next_text: str) -> bool:
     return bool(_CJK_CHAR_RE.match(prev_char) and _CJK_CHAR_RE.match(next_char))
 
 
+def _join_wrapped_line(prev_text: str, next_text: str) -> str:
+    collapsed_next = _collapse_inline_whitespace(next_text)
+    if not collapsed_next:
+        return prev_text
+    if prev_text.endswith("-") and _LOWERCASE_START_RE.match(collapsed_next):
+        return prev_text[:-1] + collapsed_next
+    if _should_join_without_space(prev_text, collapsed_next):
+        return f"{prev_text}{collapsed_next}"
+    return f"{prev_text} {collapsed_next}"
+
+
 def _is_artifact_heavy_block(lines: list[str]) -> bool:
     joined = " ".join(lines)
     if len(joined) < 40:
@@ -163,12 +174,7 @@ def _reflow_paragraph_lines(lines: list[str]) -> str:
 
     output = cleaned_lines[0]
     for line in cleaned_lines[1:]:
-        if output.endswith("-") and _LOWERCASE_START_RE.match(line):
-            output = output[:-1] + line
-        elif _should_join_without_space(output, line):
-            output = f"{output}{line}"
-        else:
-            output = f"{output} {line}"
+        output = _join_wrapped_line(output, line)
     return _collapse_inline_whitespace(output)
 
 
@@ -235,6 +241,12 @@ def normalize_pdf_text_for_storage(text: str) -> str:
         if in_list_context and _LIST_CONTINUATION_RE.match(line):
             _flush_paragraph_buffer()
             output_lines.append(line)
+            continue
+
+        # Treat non-structural unindented lines after list items as wrapped continuations.
+        if in_list_context and output_lines and output_lines[-1] != "":
+            _flush_paragraph_buffer()
+            output_lines[-1] = _join_wrapped_line(output_lines[-1], line)
             continue
 
         paragraph_buffer.append(line)
