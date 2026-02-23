@@ -15,11 +15,13 @@ import {
 } from "antd"
 import { useTranslation } from "react-i18next"
 import {
+  composeWatchlistTemplateSection,
   createWatchlistTemplate,
   fetchWatchlistRuns,
   getWatchlistTemplate,
   getWatchlistTemplateVersions,
-  validateWatchlistTemplate
+  validateWatchlistTemplate,
+  type TemplateComposerFlowSection
 } from "@/services/watchlists"
 import type {
   WatchlistTemplate,
@@ -31,6 +33,7 @@ import { TemplateCodeEditor, type TemplateCodeEditorHandle } from "./TemplateCod
 import { TemplateVariablesPanel } from "./TemplateVariablesPanel"
 import { TemplateSnippetPalette } from "./TemplateSnippetPalette"
 import { TemplatePreviewPane } from "./TemplatePreviewPane"
+import { VisualComposerPane } from "./VisualComposerPane"
 import {
   buildTemplateSavePayload,
   hasTemplateAdvancedContext,
@@ -44,6 +47,15 @@ import {
   type TemplateRecipeId,
   type TemplateRecipeOptions
 } from "./template-recipes"
+import {
+  createEmptyComposerAst,
+  type ComposerAst
+} from "./composer-types"
+import {
+  compileComposerAstToTemplate,
+  computeComposerSyncHash,
+  parseTemplateToComposerAst
+} from "./composer-roundtrip"
 import { trackWatchlistsPreventionTelemetry } from "@/utils/watchlists-prevention-telemetry"
 import {
   getFocusableActiveElement,
@@ -65,12 +77,14 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
   const [loadingVersion, setLoadingVersion] = useState(false)
-  const [activeTab, setActiveTab] = useState<"editor" | "preview" | "docs">("editor")
+  const [activeTab, setActiveTab] = useState<"visual" | "editor" | "preview" | "docs">("visual")
   const [authoringMode, setAuthoringMode] = useState<TemplateAuthoringMode>("basic")
   const [templateVersions, setTemplateVersions] = useState<WatchlistTemplateVersionSummary[]>([])
   const [selectedVersion, setSelectedVersion] = useState<number | undefined>(undefined)
   const [loadedVersion, setLoadedVersion] = useState<number | null>(null)
   const [loadedContentBaseline, setLoadedContentBaseline] = useState("")
+  const [composerAst, setComposerAst] = useState<ComposerAst>(createEmptyComposerAst())
+  const [selectedComposeRunId, setSelectedComposeRunId] = useState<number | undefined>(undefined)
   const editorRef = useRef<TemplateCodeEditorHandle>(null)
   const [validationErrors, setValidationErrors] = useState<Array<{ line?: number | null; column?: number | null; message: string }>>([])
   const [availableRuns, setAvailableRuns] = useState<Array<{ id: number; label: string }>>([])
@@ -92,6 +106,16 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     [selectedRecipeId]
   )
 
+  const syncComposerFromContent = (content: string) => {
+    setComposerAst(parseTemplateToComposerAst(content))
+  }
+
+  const applyComposerAst = (nextAst: ComposerAst) => {
+    setComposerAst(nextAst)
+    const compiled = compileComposerAstToTemplate(nextAst)
+    form.setFieldsValue({ content: compiled })
+  }
+
   useLayoutEffect(() => {
     if (open) {
       if (!wasOpenRef.current) {
@@ -111,14 +135,20 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     setLoadingVersion(true)
     try {
       const result = await getWatchlistTemplate(templateName, version ? { version } : undefined)
+      const resolvedContent = result.content || ""
+      const resolvedComposerAst =
+        result.composer_ast && typeof result.composer_ast === "object"
+          ? (result.composer_ast as ComposerAst)
+          : parseTemplateToComposerAst(resolvedContent)
       form.setFieldsValue({
         name: result.name,
         description: result.description || "",
-        content: result.content || "",
+        content: resolvedContent,
         format: result.format || "html"
       })
       setLoadedVersion(typeof result.version === "number" ? result.version : null)
-      setLoadedContentBaseline(result.content || "")
+      setLoadedContentBaseline(resolvedContent)
+      setComposerAst(resolvedComposerAst)
     } finally {
       setLoadingVersion(false)
     }
@@ -126,6 +156,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
 
   useEffect(() => {
     if (open && template) {
+      setSelectedComposeRunId(undefined)
       void trackWatchlistsPreventionTelemetry({
         type: "watchlists_authoring_started",
         surface: "template_editor",
@@ -137,17 +168,24 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         getWatchlistTemplateVersions(template.name).catch(() => ({ items: [] }))
       ])
         .then(([result, versions]) => {
+          const resolvedContent = result.content || ""
+          const resolvedComposerAst =
+            result.composer_ast && typeof result.composer_ast === "object"
+              ? (result.composer_ast as ComposerAst)
+              : parseTemplateToComposerAst(resolvedContent)
           form.setFieldsValue({
             name: result.name,
             description: result.description || "",
-            content: result.content || "",
+            content: resolvedContent,
             format: result.format || "html"
           })
           setLoadedVersion(typeof result.version === "number" ? result.version : null)
-          setLoadedContentBaseline(result.content || "")
+          setLoadedContentBaseline(resolvedContent)
+          setComposerAst(resolvedComposerAst)
           setTemplateVersions(Array.isArray(versions.items) ? versions.items : [])
           setSelectedVersion(undefined)
           setAuthoringMode("advanced")
+          setActiveTab("visual")
           setSelectedRecipeId("briefing_md")
           setRecipeOptions(createDefaultTemplateRecipeOptions())
         })
@@ -158,11 +196,14 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           setSelectedVersion(undefined)
           setLoadedVersion(null)
           setLoadedContentBaseline("")
+          setComposerAst(createEmptyComposerAst())
           setAuthoringMode("advanced")
+          setActiveTab("visual")
           setSelectedRecipeId("briefing_md")
           setRecipeOptions(createDefaultTemplateRecipeOptions())
         })
     } else if (open) {
+      setSelectedComposeRunId(undefined)
       void trackWatchlistsPreventionTelemetry({
         type: "watchlists_authoring_started",
         surface: "template_editor",
@@ -175,8 +216,9 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       setSelectedVersion(undefined)
       setLoadedVersion(null)
       setLoadedContentBaseline(DEFAULT_HTML_TEMPLATE)
+      setComposerAst(parseTemplateToComposerAst(DEFAULT_HTML_TEMPLATE))
       setAuthoringMode("basic")
-      setActiveTab("editor")
+      setActiveTab("visual")
       setSelectedRecipeId("briefing_md")
       setRecipeOptions(createDefaultTemplateRecipeOptions())
     }
@@ -250,7 +292,13 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         setValidationErrors([])
       }
       setSaving(true)
-      const payload: WatchlistTemplateCreate = buildTemplateSavePayload(values, isEditing)
+      const payload: WatchlistTemplateCreate = {
+        ...buildTemplateSavePayload(values, isEditing),
+        composer_ast: composerAst as unknown as Record<string, unknown>,
+        composer_schema_version: composerAst.schema_version || "1.0.0",
+        composer_sync_hash: computeComposerSyncHash(String(values.content || ""), composerAst),
+        composer_sync_status: "in_sync"
+      }
       await createWatchlistTemplate(payload)
       void trackWatchlistsPreventionTelemetry({
         type: "watchlists_authoring_saved",
@@ -284,10 +332,40 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     }
   }, [formatValue, form, isEditing, open])
 
+  useEffect(() => {
+    if (!open || activeTab !== "visual") return
+    syncComposerFromContent(String(form.getFieldValue("content") || ""))
+  }, [activeTab, form, open])
+
   const hasVersionDrift = useMemo(() => {
     if (!isEditing || typeof loadedVersion !== "number") return false
     return String(contentValue || "") !== loadedContentBaseline
   }, [contentValue, isEditing, loadedContentBaseline, loadedVersion])
+
+  const composerSections = useMemo<TemplateComposerFlowSection[]>(
+    () =>
+      (composerAst.nodes || [])
+        .map((node) => ({
+          id: node.id,
+          content: String(node.source || "")
+        }))
+        .filter((section) => section.content.trim().length > 0),
+    [composerAst]
+  )
+
+  const applyFlowSectionsToComposer = (sections: TemplateComposerFlowSection[]) => {
+    if (!Array.isArray(sections) || sections.length === 0) return
+    const sectionMap = new Map(sections.map((section) => [section.id, section.content]))
+    const nextAst: ComposerAst = {
+      ...composerAst,
+      nodes: (composerAst.nodes || []).map((node) =>
+        sectionMap.has(node.id)
+          ? { ...node, source: String(sectionMap.get(node.id) || "") }
+          : node
+      )
+    }
+    applyComposerAst(nextAst)
+  }
 
   const hasAdvancedTemplateContext = hasTemplateAdvancedContext({
     isEditing,
@@ -324,16 +402,20 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   }
 
   const insertSnippet = (snippet: string) => {
+    let newContent = ""
     if (editorRef.current) {
       editorRef.current.insertSnippet(snippet)
       // Sync form value from editor
       const newVal = editorRef.current.getValue()
-      form.setFieldsValue({ content: newVal })
+      newContent = String(newVal || "")
+      form.setFieldsValue({ content: newContent })
     } else {
       const current = String(form.getFieldValue("content") || "")
       const needsSpacer = current.length > 0 && !current.endsWith("\n")
-      form.setFieldsValue({ content: `${current}${needsSpacer ? "\n\n" : ""}${snippet}` })
+      newContent = `${current}${needsSpacer ? "\n\n" : ""}${snippet}`
+      form.setFieldsValue({ content: newContent })
     }
+    syncComposerFromContent(newContent)
     setActiveTab("editor")
   }
 
@@ -368,6 +450,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       { name: "content", touched: true },
       { name: "format", touched: true }
     ])
+    syncComposerFromContent(generated.content)
     void trackWatchlistsPreventionTelemetry({
       type: "watchlists_template_recipe_applied",
       surface: "template_editor",
@@ -378,6 +461,15 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     message.success(t("watchlists:templates.recipe.applied", "Template recipe applied."))
   }
 
+  const handleGenerateComposerSection = async (input: {
+    run_id: number
+    block_id: string
+    prompt: string
+    input_scope: "all_items" | "top_items" | "selected_items"
+    style?: string
+    length_target: "short" | "medium" | "long"
+  }) => composeWatchlistTemplateSection(input)
+
   const QUICK_SNIPPETS = [
     { label: t("watchlists:templates.snippetLoop", "Items loop"), snippet: "{% for item in items %}\n{{ item.title }}\n{% endfor %}" },
     { label: t("watchlists:templates.snippetGroupsLoop", "Groups loop"), snippet: "{% for group in groups %}\n## {{ group.name }}\n{% for item in group.items %}\n- {{ item.title }}\n{% endfor %}\n{% endfor %}" },
@@ -387,6 +479,20 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   ]
 
   const tabItems = [
+    {
+      key: "visual",
+      label: t("watchlists:templates.visual.tab", "Visual"),
+      children: (
+        <VisualComposerPane
+          ast={composerAst}
+          onChange={applyComposerAst}
+          runs={availableRuns}
+          selectedRunId={selectedComposeRunId}
+          onSelectedRunIdChange={setSelectedComposeRunId}
+          onGenerateSection={handleGenerateComposerSection}
+        />
+      )
+    },
     {
       key: "editor",
       label: t("watchlists:templates.editor.tab", "Editor"),
@@ -539,6 +645,8 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           content={contentValue || ""}
           format={formatValue === "md" ? "md" : "html"}
           runs={availableRuns}
+          sections={composerSections}
+          onApplyFlowSections={applyFlowSectionsToComposer}
         />
       )
     },
@@ -711,7 +819,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
 
         <Tabs
           activeKey={activeTab}
-          onChange={(key) => setActiveTab(key as "editor" | "preview" | "docs")}
+          onChange={(key) => setActiveTab(key as "visual" | "editor" | "preview" | "docs")}
           items={tabItems}
         />
       </Form>
