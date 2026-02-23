@@ -202,7 +202,8 @@ def normalize_pdf_text_for_storage(text: str) -> str:
     while output_lines and output_lines[-1] == "":
         output_lines.pop()
 
-    return "\n".join(output_lines).strip()
+    # Only trim boundary newlines; preserve intentional leading indentation.
+    return "\n".join(output_lines).strip("\n")
 
 
 def extract_text_and_format_from_pdf(pdf_path):

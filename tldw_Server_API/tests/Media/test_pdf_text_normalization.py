@@ -80,3 +80,41 @@ def test_preserves_blockquote_lines():
     assert "> quoted line one" in out
     assert "> quoted line two" in out
     assert "Paragraph starts and continues." in out
+
+
+def test_reflows_with_crlf_input():
+    src = "Alpha line one\r\nline two\r\n\r\nBeta line one\r\nline two"
+    out = normalize_pdf_text_for_storage(src)
+    assert out == "Alpha line one line two\n\nBeta line one line two"
+
+
+def test_preserves_indented_code_style_blocks():
+    src = (
+        "    def foo():\n"
+        "        return 1\n\n"
+        "Paragraph starts\n"
+        "and continues"
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "    def foo():" in out
+    assert "        return 1" in out
+    assert "Paragraph starts and continues" in out
+
+
+def test_preserves_ordered_list_blocks():
+    src = (
+        "1. first item\n"
+        "2. second item\n\n"
+        "Paragraph starts\n"
+        "and continues."
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "1. first item" in out
+    assert "2. second item" in out
+    assert "Paragraph starts and continues." in out
+
+
+def test_single_pipe_text_still_reflows():
+    src = "A | B relation starts here\nand continues there."
+    out = normalize_pdf_text_for_storage(src)
+    assert out == "A | B relation starts here and continues there."
