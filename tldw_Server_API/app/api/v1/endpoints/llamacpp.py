@@ -67,7 +67,7 @@ def _resolve_llm_manager(request: Request) -> LLMInferenceManager:
     return mgr  # type: ignore[return-value]
 
 def _llamacpp_unavailable(detail: Optional[str] = None) -> HTTPException:
-    base = "Llama.cpp backend is not configured."
+    base = "Managed llama.cpp backend is not configured."
     guidance = "Enable [LlamaCpp] enabled=true in Config_Files/config.txt and restart the server."
     message = f"{base} ({detail}) {guidance}" if detail else f"{base} {guidance}"
     return HTTPException(status_code=503, detail=message)
@@ -134,7 +134,7 @@ async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depen
             result = await target.stop_server()
         else:
             result = await target.stop_server(backend="llamacpp")
-        return {"message": result}
+        return {"status": "stopped", "message": result}
     except HTTPException:
         raise
     except InferenceError as e:
