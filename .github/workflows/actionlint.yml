@@ -27,14 +27,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-            files="$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}"...HEAD -- \
-              '.github/workflows/*.yml' \
-              '.github/workflows/*.yaml' \
-              '.github/actions/**/action.yml' \
-              '.github/actions/**/action.yaml' | xargs)"
-          elif git rev-parse HEAD^ >/dev/null 2>&1; then
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
             files="$(git diff --name-only --diff-filter=ACMR HEAD^ HEAD -- \
               '.github/workflows/*.yml' \
               '.github/workflows/*.yaml' \
