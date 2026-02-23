@@ -77,6 +77,16 @@ class _StartNoStatusStub(_ManagedStub):
         return {"model": model_name, "pid": 12345}
 
 
+class _MetricsSyncStub(_ManagedStub):
+    def get_metrics(self):
+        return {"requests_total": 3}
+
+
+class _MetricsAsyncStub(_ManagedStub):
+    async def get_metrics(self):
+        return {"requests_total": 7}
+
+
 def _make_app_with_manager(manager) -> FastAPI:  # noqa: ANN001
     app = FastAPI()
     app.include_router(lp.router, prefix="/api/v1")
@@ -200,3 +210,29 @@ def test_llamacpp_models_fallback_to_manager_when_handler_missing():
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["available_models"] == ["fallback.gguf"]
+
+
+@pytest.mark.unit
+def test_llamacpp_metrics_happy_path_sync():
+    app = _make_app_with_manager(_MetricsSyncStub())
+
+    with TestClient(app) as client:
+        r = client.get("/api/v1/llamacpp/metrics")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["requests_total"] == 3
+    assert body["backend"] == "llamacpp"
+
+
+@pytest.mark.unit
+def test_llamacpp_metrics_happy_path_async():
+    app = _make_app_with_manager(_MetricsAsyncStub())
+
+    with TestClient(app) as client:
+        r = client.get("/api/v1/llamacpp/metrics")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["requests_total"] == 7
+    assert body["backend"] == "llamacpp"

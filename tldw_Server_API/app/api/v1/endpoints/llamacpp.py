@@ -2,6 +2,7 @@
 # Description: This file contains the API endpoints for managing Llama.cpp server operations in tldw_Server_API.
 #
 # Imports
+import inspect
 from typing import Any, Optional
 
 #
@@ -181,7 +182,12 @@ async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depend
 async def get_llamacpp_metrics_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         handler = _resolve_llamacpp_target(llm_manager, ("get_metrics",))
-        return handler.get_metrics()
+        metrics = handler.get_metrics()
+        if inspect.isawaitable(metrics):
+            metrics = await metrics
+        if isinstance(metrics, dict):
+            metrics.setdefault("backend", "llamacpp")
+        return metrics
     except HTTPException:
         raise
     except InferenceError as e:
