@@ -114,7 +114,6 @@ def _merge_tokens_midpoint(
     return [token for token in existing if token.get("end", 0.0) <= cutoff_time] + [
         token for token in incoming if token.get("start", 0.0) >= cutoff_time
     ]
-    ]
 
 
 def _merge_tokens_longest_contiguous(

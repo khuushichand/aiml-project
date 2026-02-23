@@ -20,7 +20,7 @@ UVICORN_EXTRA_ARGS="${UVICORN_EXTRA_ARGS:-}"
 SIDECAR_PROFILE="${TLDW_SIDECAR_PROFILE:-full}"
 SIDECAR_DRY_RUN="${TLDW_SIDECAR_DRY_RUN:-false}"
 WAIT_FOR_SERVER_HEALTH="${TLDW_WAIT_FOR_SERVER_HEALTH:-true}"
-SERVER_HEALTH_URL="${TLDW_SERVER_HEALTH_URL:-http://${UVICORN_HOST}:${UVICORN_PORT}/healthz}"
+SERVER_HEALTH_URL="${TLDW_SERVER_HEALTH_URL:-http://${UVICORN_HOST}:${UVICORN_PORT}/health}"
 SERVER_HEALTH_RETRIES="${TLDW_SERVER_HEALTH_RETRIES:-60}"
 SERVER_HEALTH_INTERVAL="${TLDW_SERVER_HEALTH_INTERVAL:-1}"
 
@@ -161,7 +161,7 @@ start_proc "server" "${server_cmd[@]}"
 SERVER_PID="${PIDS[$(( ${#PIDS[@]} - 1 ))]}"
 
 if ! wait_for_server_health; then
-  printf 'Server failed health check at %s\n' "${SERVER_HEALTH_URL}" >&2
+  printf 'Server failed health check at %s (set TLDW_SERVER_HEALTH_URL to override)\n' "${SERVER_HEALTH_URL}" >&2
   exit 1
 fi
 

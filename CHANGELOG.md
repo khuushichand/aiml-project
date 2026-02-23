@@ -63,7 +63,7 @@ and this project adheres to Some kind of Versioning
 - Watchlists accessibility and inclusivity hardening (Plan 06 closeout):
   - Completed staged accessibility delivery for keyboard focus restoration, screen-reader live announcements, non-color status encoding, and plain-language onboarding/scheduling/template guidance.
   - Added release-gate checklist pass-rate tracking for Watchlists accessibility categories and recorded residual non-critical/manual review items.
-  - Confirmed accessibility regression matrix remains green in touched flows with no critical keyboard/SR defects, with only the known OPML import test baseline failure outside this scope.
+  - Confirmed accessibility regression matrix remains green in touched flows with no critical keyboard/SR defects.
 - Watchlists coordinated UX program closeout:
   - Added cross-stream closeout report with verification summary and owned deferred backlog:
     - `Docs/Plans/WATCHLISTS_UX_PROGRAM_CLOSEOUT_2026_02_22.md`
@@ -88,6 +88,9 @@ and this project adheres to Some kind of Versioning
 - Fixed backward compatibility for older persistent persona memory rows with null `scope_snapshot_id` by adding deterministic legacy namespace mapping and scoped backfill.
 - Fixed Persona full-suite runtime instability caused by heavy app import side effects in auth tests.
 - Fixed Persona auth test contract drift with API key validation scope handling.
+- Fixed Watchlists OPML bulk import preflight handling for wrapped upload objects (`originFileObj`), restoring `SourcesBulkImport.preflight-commit` test coverage.
+- Fixed Watchlists admin runs wrapper route contract by restoring redirect behavior to `/admin/server`.
+- Fixed Watchlists suite runtime abort path in constrained environments by stubbing heavy STT imports (`torch`/`faster_whisper`/`transformers`) in Watchlists test setup.
 
 ## [0.1.23] 2026-02-22
 

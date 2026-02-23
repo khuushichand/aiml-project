@@ -45,7 +45,14 @@ def _load_env_prompt_file(module: str, key: str) -> Optional[str]:
     try:
         with open(path, encoding="utf-8") as f:
             return f.read().strip()
-    except OSError:
+    except OSError as exc:
+        logger.warning(
+            "Prompt override file read failed for env '{}' (module='{}', key='{}', error_type='{}')",
+            env_name,
+            module,
+            key,
+            exc.__class__.__name__,
+        )
         return None
 
 

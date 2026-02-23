@@ -3,6 +3,14 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
+
+def test_start_sidecars_default_health_url_targets_root_health():
+    script = Path("start-sidecars.sh").read_text(encoding="utf-8")
+    if 'TLDW_SERVER_HEALTH_URL:-http://${UVICORN_HOST}:${UVICORN_PORT}/health}' not in script:
+        pytest.fail("Expected start-sidecars.sh to default health probe URL to /health")
+
 
 def test_start_sidecars_dry_run_profile(tmp_path):
     manifest = tmp_path / "manifest.json"

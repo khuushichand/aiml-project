@@ -97,7 +97,13 @@ def test_update_job_recomputes_next_and_updates_enabled(client_user):
 
     c = client_user
     # Create a simple job
-    body = {"name": "Quarter Hour", "scope": {}, "schedule_expr": "*/30 * * * *", "timezone": "UTC", "active": True}
+    body = {
+        "name": "Quarter Hour",
+        "scope": {"tags": ["scheduler-integration-update"]},
+        "schedule_expr": "*/30 * * * *",
+        "timezone": "UTC",
+        "active": True,
+    }
     r = c.post("/api/v1/watchlists/jobs", json=body)
     assert r.status_code == 200
     job = r.json()
@@ -114,9 +120,15 @@ def test_run_now_updates_last_and_next(client_user):
 
 
     c = client_user
-    body = {"name": "Every Minute", "scope": {}, "schedule_expr": "* * * * *", "timezone": "UTC", "active": True}
+    body = {
+        "name": "Every Minute",
+        "scope": {"tags": ["scheduler-integration-run"]},
+        "schedule_expr": "*/5 * * * *",
+        "timezone": "UTC",
+        "active": True,
+    }
     r = c.post("/api/v1/watchlists/jobs", json=body)
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     jid = r.json()["id"]
     # Trigger run-now
     r = c.post(f"/api/v1/watchlists/jobs/{jid}/run")
