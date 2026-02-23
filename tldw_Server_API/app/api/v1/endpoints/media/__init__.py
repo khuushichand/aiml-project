@@ -73,9 +73,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     save_uploaded_files as core_save_uploaded_files,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
-    validate_add_media_inputs as _validate_inputs,
-)
 # Keep heavyweight processor imports lazy to avoid hard-abort side effects
 # (e.g., OpenMP/torch initialization) during router import.
 _process_audio_files_core = None
@@ -84,6 +81,14 @@ _smart_download = _optional_import_attr(
     "tldw_Server_API.app.core.Utils.Utils",
     "smart_download",
 )  # type: ignore[assignment]
+
+
+def _validate_inputs(media_type, urls, files):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+        validate_add_media_inputs as _validate_add_media_inputs,
+    )
+
+    return _validate_add_media_inputs(media_type, urls, files)
 
 
 def _load_process_audio_files_core():

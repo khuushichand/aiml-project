@@ -119,6 +119,25 @@ Add endpoint to cancel by `batch_id`/session in one call instead of per-job dele
 
 Optimize batch job listing/filtering by leveraging indexed grouping in job records instead of payload scan patterns.
 
+#### Implemented API Surface (2026-02-23)
+
+1. `GET /api/v1/media/ingest/jobs/events/stream`
+   - SSE stream with ownership enforcement.
+   - Supports `batch_id` and `after_id`.
+   - Emits initial `snapshot` plus `job` events from `job_events` outbox.
+
+2. `POST /api/v1/media/ingest/jobs/cancel`
+   - Cancels by `batch_id` or `session_id` alias in one call.
+   - Enforces owner/admin authorization at batch scope.
+   - Returns summary counters: `requested`, `cancelled`, `already_terminal` (plus `failed` when applicable).
+
+3. `GET /api/v1/media/ingest/jobs?batch_id=...`
+   - Uses indexed `batch_group` filtering first.
+   - Falls back to legacy payload-based `batch_id` scan for backward compatibility.
+
+4. `POST /api/v1/media/ingest/jobs`
+   - Persists `batch_group=batch_id` for each created job to support indexed lookup/cancel paths.
+
 ## Error Handling
 
 1. Start failure:
