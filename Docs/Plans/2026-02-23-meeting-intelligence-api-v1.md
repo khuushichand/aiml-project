@@ -293,7 +293,7 @@ git commit -m "feat(meetings): add sessions templates artifacts CRUD"
 **Goal**: Support live WS and SSE updates plus offline ingest/finalize flow.
 **Success Criteria**: Session stream emits standardized events and finalize generates artifacts.
 **Tests**: Streaming contract tests + ingest/finalize integration tests pass.
-**Status**: In Progress
+**Status**: Complete
 
 ### Task 5: Add SSE and WS Meeting Event Transport
 **Progress**: Complete (`602f28ef1`)
@@ -352,7 +352,7 @@ git commit -m "feat(meetings): add SSE and websocket event transport"
 ```
 
 ### Task 6: Implement Offline Ingest + Finalize Artifacts
-**Progress**: Complete (in working tree, pending commit)
+**Progress**: Complete (`44e157880`)
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/endpoints/meetings.py`
@@ -400,9 +400,10 @@ git commit -m "feat(meetings): add ingest and finalize artifact generation"
 **Goal**: Add Slack/webhook dispatch with retries and complete verification/docs.
 **Success Criteria**: Sharing endpoints dispatch reliably and observability/security checks pass.
 **Tests**: Integration + worker tests pass; touched-path Bandit scan clean of new issues.
-**Status**: Not Started
+**Status**: In Progress
 
 ### Task 7: Slack + Webhook Dispatch + DLQ Worker
+**Progress**: Complete (in working tree, pending commit)
 
 **Files:**
 - Create: `tldw_Server_API/app/core/Meetings/integration_service.py`

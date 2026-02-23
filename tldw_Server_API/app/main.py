@@ -2676,6 +2676,33 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Jobs webhooks worker: {e}")
 
+    # Meetings webhook DLQ worker
+    try:
+        import asyncio as _asyncio
+        import os as _os
+
+        from tldw_Server_API.app.services.meetings_webhook_dlq_service import (
+            run_meetings_webhook_dlq_worker as _run_meetings_dlq,
+        )
+
+        _meetings_dlq_enabled = _os.getenv("MEETINGS_WEBHOOK_DLQ_ENABLED", "false").lower() in {
+            "true",
+            "1",
+            "yes",
+            "y",
+            "on",
+        }
+        if _meetings_dlq_enabled:
+            meetings_webhook_dlq_stop_event = _asyncio.Event()
+            meetings_webhook_dlq_task = _asyncio.create_task(
+                _run_meetings_dlq(meetings_webhook_dlq_stop_event)
+            )
+            logger.info("Meetings webhook DLQ worker started with explicit stop_event signal")
+        else:
+            logger.info("Meetings webhook DLQ worker disabled by flag")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Meetings webhook DLQ worker: {e}")
+
     # Workflows webhook DLQ retry worker
     try:
         import asyncio as _asyncio
@@ -3548,6 +3575,19 @@ async def lifespan(app: FastAPI):
             except _STARTUP_GUARD_EXCEPTIONS:
                 with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     jobs_webhooks_task.cancel()
+
+        # Meetings webhook DLQ worker shutdown
+        if "meetings_webhook_dlq_task" in locals() and meetings_webhook_dlq_task:
+            try:
+                if "meetings_webhook_dlq_stop_event" in locals() and meetings_webhook_dlq_stop_event:
+                    meetings_webhook_dlq_stop_event.set()
+                    await _asyncio.wait_for(meetings_webhook_dlq_task, timeout=5.0)
+                    logger.info("Meetings webhook DLQ worker stopped via stop_event")
+                else:
+                    meetings_webhook_dlq_task.cancel()
+            except _STARTUP_GUARD_EXCEPTIONS:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                    meetings_webhook_dlq_task.cancel()
 
         # Workflows webhook DLQ worker shutdown
         if "workflows_dlq_task" in locals() and workflows_dlq_task:

@@ -16,6 +16,8 @@ from tldw_Server_API.app.api.v1.schemas.meetings_schemas import (
     MeetingSessionResponse,
     MeetingSessionStatus,
     MeetingSessionStatusUpdate,
+    MeetingShareRequest,
+    MeetingShareResponse,
     MeetingTemplateCreate,
     MeetingTemplateResponse,
 )
@@ -23,6 +25,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.DB_Management.Meetings_DB import MeetingsDatabase
 from tldw_Server_API.app.core.Meetings.artifact_service import MeetingArtifactService
 from tldw_Server_API.app.core.Meetings.events_service import MeetingEventsService
+from tldw_Server_API.app.core.Meetings.integration_service import MeetingIntegrationService
 from tldw_Server_API.app.core.Meetings.session_service import MeetingSessionService
 from tldw_Server_API.app.core.Meetings.stream_adapter import build_meeting_event, to_sse_frame
 from tldw_Server_API.app.core.Meetings.template_service import MeetingTemplateService
@@ -72,6 +75,15 @@ def _to_artifact_response(row: dict[str, Any]) -> MeetingArtifactResponse:
         payload_json=row.get("payload_json") or {},
         version=int(row.get("version") or 1),
         created_at=row.get("created_at"),
+    )
+
+
+def _to_share_response(row: dict[str, Any]) -> MeetingShareResponse:
+    return MeetingShareResponse(
+        dispatch_id=int(row.get("id") or 0),
+        session_id=str(row.get("session_id") or ""),
+        integration_type=str(row.get("integration_type") or "webhook"),
+        status="queued",
     )
 
 
@@ -281,6 +293,77 @@ async def finalize_session(
     return MeetingFinalizeResponse(
         session_id=session_id,
         artifacts=[_to_artifact_response(row) for row in artifacts],
+    )
+
+
+def _queue_share_dispatch(
+    *,
+    session_id: str,
+    integration_type: str,
+    payload: MeetingShareRequest,
+    meetings_db: MeetingsDatabase,
+) -> MeetingShareResponse:
+    integration_service = MeetingIntegrationService(db=meetings_db)
+    events_service = MeetingEventsService(db=meetings_db)
+
+    try:
+        dispatch_row = integration_service.queue_dispatch(
+            session_id=session_id,
+            integration_type=integration_type,
+            webhook_url=payload.webhook_url,
+            artifact_ids=list(payload.artifact_ids or []),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting session not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    events_service.emit(
+        session_id=session_id,
+        event_type="integration.queued",
+        data={
+            "dispatch_id": dispatch_row.get("id"),
+            "integration_type": dispatch_row.get("integration_type"),
+        },
+    )
+    return _to_share_response(dispatch_row)
+
+
+@router.post(
+    "/sessions/{session_id}/share/slack",
+    response_model=MeetingShareResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def share_session_to_slack(
+    session_id: str,
+    payload: MeetingShareRequest,
+    meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
+) -> MeetingShareResponse:
+    return _queue_share_dispatch(
+        session_id=session_id,
+        integration_type="slack",
+        payload=payload,
+        meetings_db=meetings_db,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/share/webhook",
+    response_model=MeetingShareResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def share_session_to_webhook(
+    session_id: str,
+    payload: MeetingShareRequest,
+    meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
+) -> MeetingShareResponse:
+    return _queue_share_dispatch(
+        session_id=session_id,
+        integration_type="webhook",
+        payload=payload,
+        meetings_db=meetings_db,
     )
 
 

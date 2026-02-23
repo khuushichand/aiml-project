@@ -26,6 +26,7 @@ _ARTIFACT_KINDS = {
     "speaker_stats",
     "sentiment",
 }
+_DISPATCH_STATUSES = {"queued", "processing", "retrying", "delivered", "failed"}
 
 
 class MeetingsDatabaseError(Exception):
@@ -176,12 +177,15 @@ class MeetingsDatabase:
                     payload_json TEXT,
                     response_json TEXT,
                     attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT,
                     last_error TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_meeting_dispatch_user_session
                     ON meeting_integration_dispatch(user_id, session_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_meeting_dispatch_due
+                    ON meeting_integration_dispatch(user_id, status, next_attempt_at, updated_at);
 
                 CREATE TABLE IF NOT EXISTS meeting_event_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,11 +199,26 @@ class MeetingsDatabase:
                     ON meeting_event_log(user_id, session_id, created_at DESC);
                 """
             )
+            self._run_schema_migrations(conn)
             conn.commit()
             self._schema_init_paths.add(self._db_path_str)
         except sqlite3.Error as exc:
             conn.rollback()
             raise SchemaError(f"Failed to initialize Meetings DB schema: {exc}") from exc
+
+    def _run_schema_migrations(self, conn: sqlite3.Connection) -> None:
+        cols = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(meeting_integration_dispatch)").fetchall()
+        }
+        if "next_attempt_at" not in cols:
+            conn.execute("ALTER TABLE meeting_integration_dispatch ADD COLUMN next_attempt_at TEXT")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_meeting_dispatch_due
+            ON meeting_integration_dispatch(user_id, status, next_attempt_at, updated_at)
+            """
+        )
 
     @staticmethod
     def _loads_maybe_json(value: Any) -> Any:
@@ -249,6 +268,13 @@ class MeetingsDatabase:
         normalized = str(kind).strip().lower()
         if normalized not in _ARTIFACT_KINDS:
             raise InputError(f"Invalid meeting artifact kind: {kind}")
+        return normalized
+
+    @staticmethod
+    def _validate_dispatch_status(status: str) -> str:
+        normalized = str(status).strip().lower()
+        if normalized not in _DISPATCH_STATUSES:
+            raise InputError(f"Invalid meeting dispatch status: {status}")
         return normalized
 
     @staticmethod
@@ -577,24 +603,23 @@ class MeetingsDatabase:
         payload_json: dict[str, Any] | None = None,
         response_json: dict[str, Any] | None = None,
         attempts: int = 0,
+        next_attempt_at: str | None = None,
         last_error: str | None = None,
         user_id: int | str | None = None,
     ) -> int:
         resolved_user_id = self._resolve_user_id(user_id)
         clean_integration_type = str(integration_type).strip().lower()
-        clean_status = str(status).strip().lower()
+        clean_status = self._validate_dispatch_status(status)
         if not clean_integration_type:
             raise InputError("integration_type is required")
-        if not clean_status:
-            raise InputError("dispatch status is required")
         now = self._utcnow_iso()
         with self.transaction() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO meeting_integration_dispatch (
                     user_id, session_id, integration_type, status, payload_json, response_json,
-                    attempts, last_error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    attempts, next_attempt_at, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     resolved_user_id,
@@ -604,9 +629,152 @@ class MeetingsDatabase:
                     json.dumps(payload_json) if payload_json is not None else None,
                     json.dumps(response_json) if response_json is not None else None,
                     max(0, int(attempts)),
+                    str(next_attempt_at).strip() if next_attempt_at else None,
                     last_error,
                     now,
                     now,
                 ),
             )
             return int(cursor.lastrowid or 0)
+
+    def get_integration_dispatch(
+        self,
+        *,
+        dispatch_id: int,
+        user_id: int | str | None = None,
+    ) -> dict[str, Any] | None:
+        resolved_user_id = self._resolve_user_id(user_id)
+        row = self.get_connection().execute(
+            """
+            SELECT id, user_id, session_id, integration_type, status, payload_json, response_json,
+                   attempts, next_attempt_at, last_error, created_at, updated_at
+            FROM meeting_integration_dispatch
+            WHERE id = ? AND user_id = ?
+            """,
+            (int(dispatch_id), resolved_user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_dict(row)
+
+    def list_integration_dispatches(
+        self,
+        *,
+        session_id: str | None = None,
+        status: str | None = None,
+        user_id: int | str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        resolved_user_id = self._resolve_user_id(user_id)
+        query = (
+            """
+            SELECT id, user_id, session_id, integration_type, status, payload_json, response_json,
+                   attempts, next_attempt_at, last_error, created_at, updated_at
+            FROM meeting_integration_dispatch
+            WHERE user_id = ?
+            """
+        )
+        params: list[Any] = [resolved_user_id]
+        if session_id:
+            query += " AND session_id = ?"
+            params.append(str(session_id))
+        if status:
+            query += " AND status = ?"
+            params.append(self._validate_dispatch_status(status))
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.append(self._clamp_limit(limit))
+        params.append(self._clamp_offset(offset))
+
+        rows = self.get_connection().execute(query, tuple(params)).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    def claim_due_integration_dispatches(
+        self,
+        *,
+        limit: int = 25,
+        max_attempts: int = 8,
+        user_id: int | str | None = None,
+    ) -> list[dict[str, Any]]:
+        resolved_user_id = self._resolve_user_id(user_id)
+        now = self._utcnow_iso()
+        safe_limit = self._clamp_limit(limit)
+        safe_max_attempts = max(1, int(max_attempts))
+        claimable_states = ("queued", "retrying")
+
+        with self.transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, session_id, integration_type, status, payload_json, response_json,
+                       attempts, next_attempt_at, last_error, created_at, updated_at
+                FROM meeting_integration_dispatch
+                WHERE user_id = ?
+                  AND status IN (?, ?)
+                  AND attempts < ?
+                  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (
+                    resolved_user_id,
+                    claimable_states[0],
+                    claimable_states[1],
+                    safe_max_attempts,
+                    now,
+                    safe_limit,
+                ),
+            ).fetchall()
+
+            claimed: list[dict[str, Any]] = []
+            for row in rows:
+                dispatch_id = int(row["id"])
+                cursor = conn.execute(
+                    """
+                    UPDATE meeting_integration_dispatch
+                    SET status = 'processing', updated_at = ?
+                    WHERE id = ? AND user_id = ? AND status IN (?, ?)
+                    """,
+                    (now, dispatch_id, resolved_user_id, claimable_states[0], claimable_states[1]),
+                )
+                if int(cursor.rowcount or 0) <= 0:
+                    continue
+                as_dict = self._row_to_dict(row)
+                as_dict["status"] = "processing"
+                as_dict["updated_at"] = now
+                claimed.append(as_dict)
+            return claimed
+
+    def update_integration_dispatch(
+        self,
+        *,
+        dispatch_id: int,
+        status: str,
+        attempts: int,
+        next_attempt_at: str | None = None,
+        last_error: str | None = None,
+        response_json: dict[str, Any] | None = None,
+        user_id: int | str | None = None,
+    ) -> bool:
+        resolved_user_id = self._resolve_user_id(user_id)
+        clean_status = self._validate_dispatch_status(status)
+        now = self._utcnow_iso()
+
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE meeting_integration_dispatch
+                SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ?, response_json = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    clean_status,
+                    max(0, int(attempts)),
+                    str(next_attempt_at).strip() if next_attempt_at else None,
+                    last_error,
+                    json.dumps(response_json) if response_json is not None else None,
+                    now,
+                    int(dispatch_id),
+                    resolved_user_id,
+                ),
+            )
+            return int(cursor.rowcount or 0) > 0

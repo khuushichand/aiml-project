@@ -17,6 +17,7 @@ MeetingArtifactKind = Literal[
     "speaker_stats",
     "sentiment",
 ]
+MeetingIntegrationType = Literal["slack", "webhook"]
 
 
 class MeetingHealthResponse(BaseModel):
@@ -112,3 +113,19 @@ class MeetingFinalizeResponse(BaseModel):
 
     session_id: str
     artifacts: list[MeetingArtifactResponse]
+
+
+class MeetingShareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    webhook_url: str = Field(..., min_length=1, max_length=2048)
+    artifact_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class MeetingShareResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dispatch_id: int
+    session_id: str
+    integration_type: MeetingIntegrationType
+    status: Literal["queued"] = "queued"
