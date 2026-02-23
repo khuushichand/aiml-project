@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Quickstart targets (first-time setup)
 # -----------------------------------------------------------------------------
-.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui verify pypi-build pypi-check
+.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui model-cycle verify pypi-build pypi-check tooling-install tooling-smoke
 
 PYTHON ?= python3
 VENV_DIR ?= .venv
@@ -12,6 +12,12 @@ DOCKER_BASE_COMPOSE ?= Dockerfiles/docker-compose.yml
 DOCKER_WEBUI_COMPOSE ?= Dockerfiles/docker-compose.webui.yml
 NEXT_PUBLIC_API_URL ?= http://localhost:8000
 PYPI_BUILD_ARGS ?= --no-isolation
+MODEL_CYCLE_FIRST ?=
+MODEL_CYCLE_SECOND ?=
+MODEL_CYCLE_EXCLUDED ?=postgres,redis
+MODEL_CYCLE_FIRST_BOOT_WAIT ?=0
+MODEL_CYCLE_SECOND_BOOT_WAIT ?=0
+MODEL_CYCLE_DRY_RUN ?=false
 
 quickstart-prereqs:
 	@command -v $(PYTHON) >/dev/null 2>&1 || (echo "[quickstart] $(PYTHON) not found. Install Python 3.10+ and retry." && exit 1)
@@ -59,6 +65,17 @@ quickstart: quickstart-prereqs
 	@echo "[quickstart] API docs at: http://127.0.0.1:8000/docs"
 	$(PYTHON) -m uvicorn tldw_Server_API.app.main:app --host 127.0.0.1 --port 8000
 
+tooling-install:
+	@command -v $(PYTHON) >/dev/null 2>&1 || (echo "[tooling-install] $(PYTHON) not found. Install Python 3.10+ and retry." && exit 1)
+	@$(PYTHON) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || (echo "[tooling-install] Python 3.10+ is required." && exit 1)
+	@if [ ! -x "$(VENV_PYTHON)" ]; then \
+		echo "[tooling-install] Creating virtualenv at $(VENV_DIR)"; \
+		$(PYTHON) -m venv $(VENV_DIR); \
+	fi
+	@echo "[tooling-install] Installing tooling extras into $(VENV_DIR)..."
+	@$(VENV_PYTHON) -m pip install --upgrade pip setuptools wheel
+	@$(VENV_PYTHON) -m pip install -e ".[tooling]"
+
 quickstart-docker-bootstrap:
 	@echo "[quickstart-docker-bootstrap] Ensuring $(TLDW_ENV_FILE) has safe first-use auth defaults..."
 	@bash Helper_Scripts/docker_prepare_env.sh "$(TLDW_ENV_FILE)" "$(TLDW_ENV_TEMPLATE)"
@@ -80,6 +97,19 @@ quickstart-docker-webui: quickstart-docker-bootstrap
 	@echo "[quickstart-docker-webui] First-use auth initialization is handled automatically by the app entrypoint."
 	@echo "[quickstart-docker-webui] API:   http://localhost:8000"
 	@echo "[quickstart-docker-webui] WebUI: http://localhost:8080"
+
+model-cycle:
+	@command -v docker >/dev/null 2>&1 || (echo "[model-cycle] docker not found. Install Docker and retry." && exit 1)
+	@test -n "$(MODEL_CYCLE_FIRST)" || (echo "[model-cycle] Set MODEL_CYCLE_FIRST=<container_name>" && exit 1)
+	@test -n "$(MODEL_CYCLE_SECOND)" || (echo "[model-cycle] Set MODEL_CYCLE_SECOND=<container_name>" && exit 1)
+	@echo "[model-cycle] Cycling $(MODEL_CYCLE_FIRST) -> $(MODEL_CYCLE_SECOND) (excluded=$(MODEL_CYCLE_EXCLUDED), dry_run=$(MODEL_CYCLE_DRY_RUN))"
+	$(PYTHON) Helper_Scripts/model_container_cycle.py \
+		--first-container "$(MODEL_CYCLE_FIRST)" \
+		--second-container "$(MODEL_CYCLE_SECOND)" \
+		--excluded "$(MODEL_CYCLE_EXCLUDED)" \
+		--first-boot-wait "$(MODEL_CYCLE_FIRST_BOOT_WAIT)" \
+		--second-boot-wait "$(MODEL_CYCLE_SECOND_BOOT_WAIT)" \
+		$(if $(filter true TRUE 1 yes YES,$(MODEL_CYCLE_DRY_RUN)),--dry-run,)
 
 verify:
 	@echo "[verify] Checking server health..."
@@ -174,6 +204,19 @@ watchlists-audio-smoke:
 		--base-url "$(WATCHLISTS_BASE_URL)" \
 		--api-key "$(WATCHLISTS_API_KEY)" \
 		$(WATCHLISTS_AUDIO_SMOKE_ARGS)
+
+# -----------------------------------------------------------------------------
+# Unified tooling smoke (streaming + watchlists audio)
+# -----------------------------------------------------------------------------
+
+TOOLING_SMOKE_BASE_URL ?= http://127.0.0.1:8000
+TOOLING_SMOKE_API_KEY ?= $(SINGLE_USER_API_KEY)
+
+tooling-smoke:
+	@echo "[tooling-smoke] Running unified tooling smoke checks against $(TOOLING_SMOKE_BASE_URL)"
+	$(PYTHON) Helper_Scripts/tooling_smoke.py \
+		--base-url "$(TOOLING_SMOKE_BASE_URL)" \
+		--api-key "$(TOOLING_SMOKE_API_KEY)"
 
 # -----------------------------------------------------------------------------
 # Prompt Studio tests

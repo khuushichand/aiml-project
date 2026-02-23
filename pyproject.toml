@@ -199,6 +199,12 @@ dev = [
   "locust>=2.20.0"
 ]
 
+# Tooling smoke helpers and local scripts
+tooling = [
+  "requests>=2.31.0",
+  "websockets>=12.0",
+]
+
 # OpenTelemetry (optional, for metrics/tracing export)
 otel = [
   "opentelemetry-distro>=0.48b0",
