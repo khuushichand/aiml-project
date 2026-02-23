@@ -118,3 +118,36 @@ def test_single_pipe_text_still_reflows():
     src = "A | B relation starts here\nand continues there."
     out = normalize_pdf_text_for_storage(src)
     assert out == "A | B relation starts here and continues there."
+
+
+def test_preserves_page_markers_and_hrules():
+    src = (
+        "## Page 2\n\n"
+        "Paragraph line one\n"
+        "line two\n\n"
+        "---\n\n"
+        "## Page 3\n\n"
+        "Next paragraph\n"
+        "continues here"
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "## Page 2" in out
+    assert "## Page 3" in out
+    assert "\n---\n" in f"\n{out}\n"
+    assert "Paragraph line one line two" in out
+    assert "Next paragraph continues here" in out
+
+
+def test_table_separator_block_is_preserved():
+    src = (
+        "| col a | col b |\n"
+        "| :--- | ---: |\n"
+        "| 1 | 2 |\n\n"
+        "Paragraph starts\n"
+        "and continues."
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "| col a | col b |" in out
+    assert "| :--- | ---: |" in out
+    assert "| 1 | 2 |" in out
+    assert "Paragraph starts and continues." in out
