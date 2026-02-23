@@ -136,6 +136,8 @@ Contract:
 2. Gap report mapped to files/endpoints.
 3. Prioritized improvement backlog (P0/P1/P2).
 4. Test plan linking each fix to concrete regression tests.
+5. Plane-clarity reference doc:
+   - `Docs/API-related/llamacpp_integration_modes.md` (managed plane vs provider plane mapping and troubleshooting).
 
 ## Acceptance Criteria
 - Every P0 gap has a concrete fix plan and regression test design.
