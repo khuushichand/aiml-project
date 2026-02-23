@@ -400,10 +400,10 @@ git commit -m "feat(meetings): add ingest and finalize artifact generation"
 **Goal**: Add Slack/webhook dispatch with retries and complete verification/docs.
 **Success Criteria**: Sharing endpoints dispatch reliably and observability/security checks pass.
 **Tests**: Integration + worker tests pass; touched-path Bandit scan clean of new issues.
-**Status**: In Progress
+**Status**: Complete (in working tree, pending commit)
 
 ### Task 7: Slack + Webhook Dispatch + DLQ Worker
-**Progress**: Complete (in working tree, pending commit)
+**Progress**: Complete (`bdb0892f9`)
 
 **Files:**
 - Create: `tldw_Server_API/app/core/Meetings/integration_service.py`
@@ -460,6 +460,7 @@ git commit -m "feat(meetings): add slack and webhook dispatch pipeline"
 ```
 
 ### Task 8: Final Verification, Security Scan, and Docs
+**Progress**: Complete (in working tree, pending commit)
 
 **Files:**
 - Create: `Docs/API-related/Meeting_Intelligence_API.md`

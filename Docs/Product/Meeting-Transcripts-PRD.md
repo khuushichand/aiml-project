@@ -7,6 +7,31 @@
 
 Current transcription workflows focus on generic media ingestion. Power users need meeting-first capabilities: guided structure, actionable insights, and shareable artifacts similar to Granola, Hyprnote, and Shadow. This PRD covers the first release of a meeting-optimized experience across API and WebUI.
 
+## Implementation Status (v1, 2026-02-23)
+
+Implemented in API:
+- Dedicated meetings API domain with health/session/template/artifact routes:
+  - `tldw_Server_API/app/api/v1/endpoints/meetings.py`
+  - `tldw_Server_API/app/api/v1/schemas/meetings_schemas.py`
+- Meetings persistence and domain services:
+  - `tldw_Server_API/app/core/DB_Management/Meetings_DB.py`
+  - `tldw_Server_API/app/core/Meetings/`
+- Live updates via SSE and WebSocket:
+  - `GET /api/v1/meetings/sessions/{session_id}/events`
+  - `WS /api/v1/meetings/sessions/{session_id}/stream`
+- Offline finalize flow (`POST /api/v1/meetings/sessions/{session_id}/commit`) generating:
+  - `summary`, `action_items`, `decisions`, `speaker_stats`
+- Sharing integrations limited to v1 scope:
+  - `POST /api/v1/meetings/sessions/{session_id}/share/slack`
+  - `POST /api/v1/meetings/sessions/{session_id}/share/webhook`
+  - Retry worker: `tldw_Server_API/app/services/meetings_webhook_dlq_service.py`
+
+Not yet implemented from PRD roadmap:
+- Calendar-based scheduling/ingestion and conferencing connectors.
+- CRM/PM integrations beyond Slack/generic webhooks.
+- Advanced diarization upgrades and richer analytics dashboards.
+- WebUI-specific meeting workflows described in later roadmap phases.
+
 ## Goals
 
 - Deliver meeting-ready transcripts surfacing decisions, next steps, owners, and highlights without manual cleanup.

@@ -46,6 +46,16 @@ Legend
 |---|---|---|---|
 | Voice assistant (REST + WS) | WIP | `POST /api/v1/voice/command`, `WS /api/v1/voice/assistant` | [docs](../API/Voice_Assistant.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/voice_assistant.py) |
 
+## Meeting Intelligence
+
+| Capability | Status | Notes | Links |
+|---|---|---|---|
+| Meetings sessions/templates/artifacts API | Working | Dedicated ` /api/v1/meetings/* ` domain for v1 flows | [docs](../API-related/Meeting_Intelligence_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/meetings.py) |
+| Live meeting events (SSE + WS) | Working | SSE event feed + WS stream transport | [docs](../API-related/Meeting_Intelligence_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/Meetings/stream_adapter.py) |
+| Offline finalize artifact generation | Working | Commit endpoint emits summary, actions, decisions, speaker stats | [docs](../API-related/Meeting_Intelligence_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/Meetings/artifact_service.py) |
+| Sharing (Slack + generic webhook) | Working | Queue + retry pipeline with egress checks and DLQ worker | [docs](../API-related/Meeting_Intelligence_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/services/meetings_webhook_dlq_service.py) |
+| Calendar/CRM integrations | WIP | Not in v1; later phase scope | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Meeting-Transcripts-PRD.md) |
+
 ## RAG & Search
 
 | Capability | Status | Notes | Links |
