@@ -243,3 +243,79 @@ def test_mlx_load_maps_provider_error_to_500(monkeypatch):
 
     assert response.status_code == 500
     assert "mlx-lm is not installed" in response.json().get("detail", "")
+
+
+@pytest.mark.unit
+def test_mlx_models_returns_200_with_warning_when_model_dir_unset():
+    registry = _RegistryStub()
+    registry.last_refresh = None
+
+    def _list_models(*, refresh: bool = False):
+        registry.last_refresh = refresh
+        return {
+            "model_dir": None,
+            "model_dir_configured": False,
+            "warnings": ["MLX_MODEL_DIR is not configured"],
+            "available_models": [],
+        }
+
+    registry.list_models = _list_models  # type: ignore[attr-defined]
+    app = _make_app_with_registry(registry)
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/llm/providers/mlx/models")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["backend"] == "mlx"
+    assert body["available_models"] == []
+    assert body["warnings"]
+    assert registry.last_refresh is False
+
+
+@pytest.mark.unit
+def test_mlx_load_with_model_id_resolves_and_calls_registry(monkeypatch):
+    registry = _RegistryStub()
+    registry.last_model_id = None
+    registry.last_refresh_discovery = None
+
+    def _resolve_model_id(model_id: str, *, refresh_discovery: bool = False) -> str:
+        registry.last_model_id = model_id
+        registry.last_refresh_discovery = refresh_discovery
+        return f"/tmp/mlx-models/{model_id}"
+
+    registry.resolve_model_id = _resolve_model_id  # type: ignore[attr-defined]
+    monkeypatch.setattr(mlx_ep, "_default_settings", lambda: {"model_path": "default-model", "model_dir": "/tmp/mlx-models"})
+    app = _make_app_with_registry(registry)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/llm/providers/mlx/load",
+            json={"model_id": "family/model-a", "max_concurrent": 2},
+        )
+
+    assert response.status_code == 200, response.text
+    assert registry.last_model_id == "family/model-a"
+    assert registry.last_model_path == "/tmp/mlx-models/family/model-a"
+    assert registry.last_overrides == {"max_concurrent": 2}
+
+
+@pytest.mark.unit
+def test_mlx_load_rejects_traversal_model_id(monkeypatch):
+    registry = _RegistryStub()
+
+    def _resolve_model_id(model_id: str, *, refresh_discovery: bool = False) -> str:
+        raise ChatBadRequestError(provider="mlx", message="model_id resolves outside MLX_MODEL_DIR")
+
+    registry.resolve_model_id = _resolve_model_id  # type: ignore[attr-defined]
+    monkeypatch.setattr(mlx_ep, "_default_settings", lambda: {"model_dir": "/tmp/mlx-models"})
+    app = _make_app_with_registry(registry)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/llm/providers/mlx/load",
+            json={"model_id": "../escape"},
+        )
+
+    assert response.status_code == 400
+    assert "outside MLX_MODEL_DIR" in response.json().get("detail", "")

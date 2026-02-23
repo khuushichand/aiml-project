@@ -86,6 +86,9 @@ def _build_app_with_overrides(
         def status(self):
             return {"ok": True}
 
+        def list_models(self, *, refresh: bool = False):
+            return {"available_models": [], "warnings": [], "model_dir": None, "model_dir_configured": False}
+
     def _get_stub_registry() -> _StubRegistry:
         return _StubRegistry()
 
@@ -167,6 +170,49 @@ def test_mlx_lifecycle_200_for_admin_principal(monkeypatch, method: str, path: s
             resp = client.post(path, json=payload or {})
         else:
             resp = client.get(path)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("backend") == "mlx"
+
+
+@pytest.mark.unit
+def test_mlx_models_401_when_principal_unavailable():
+    app = _build_app_with_overrides(principal=None, fail_with_401=True)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/llm/providers/mlx/models")
+
+    assert resp.status_code == 401
+    assert "Authentication required" in resp.json().get("detail", "")
+
+
+@pytest.mark.unit
+def test_mlx_models_403_when_missing_admin_role():
+    principal = _make_principal(
+        is_admin=False,
+        roles=["user"],
+        permissions=[],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/llm/providers/mlx/models")
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.unit
+def test_mlx_models_200_for_admin_principal():
+    principal = _make_principal(
+        is_admin=True,
+        roles=["admin"],
+        permissions=[],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/llm/providers/mlx/models")
 
     assert resp.status_code == 200
     body = resp.json()
