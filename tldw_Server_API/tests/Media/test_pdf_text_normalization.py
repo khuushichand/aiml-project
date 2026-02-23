@@ -53,3 +53,30 @@ def test_idempotent_normalization():
     first = normalize_pdf_text_for_storage(src)
     second = normalize_pdf_text_for_storage(first)
     assert first == second
+
+
+def test_preserves_fenced_code_blocks():
+    src = (
+        "```python\n"
+        "foo = 1\n"
+        "bar = 2\n"
+        "```\n\n"
+        "Paragraph line one\n"
+        "line two"
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "```python\nfoo = 1\nbar = 2\n```" in out
+    assert "Paragraph line one line two" in out
+
+
+def test_preserves_blockquote_lines():
+    src = (
+        "> quoted line one\n"
+        "> quoted line two\n\n"
+        "Paragraph starts\n"
+        "and continues."
+    )
+    out = normalize_pdf_text_for_storage(src)
+    assert "> quoted line one" in out
+    assert "> quoted line two" in out
+    assert "Paragraph starts and continues." in out
