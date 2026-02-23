@@ -56,6 +56,15 @@ const mobileViewportState = vi.hoisted(() => ({
   value: false
 }))
 
+const storeOptionState = vi.hoisted(() => ({
+  value: {
+    compareParentByHistory: {} as Record<
+      string,
+      { parentHistoryId: string; clusterId?: string }
+    >
+  }
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, defaultValue?: string, options?: Record<string, unknown>) => {
@@ -139,8 +148,9 @@ vi.mock("../Knowledge/utils/unsupported-types", () => ({
 }))
 
 vi.mock("@/store/option", () => ({
-  useStoreMessageOption: (selector: (state: { compareParentByHistory: Record<string, unknown> }) => unknown) =>
-    selector({ compareParentByHistory: {} })
+  useStoreMessageOption: (
+    selector: (state: typeof storeOptionState.value) => unknown
+  ) => selector(storeOptionState.value)
 }))
 
 vi.mock("@/store/artifacts", () => ({
@@ -177,6 +187,7 @@ describe("Playground thread search integration", () => {
     vi.clearAllMocks()
     mobileViewportState.value = false
     artifactsState.value.isOpen = false
+    storeOptionState.value.compareParentByHistory = {}
   })
 
   it("opens in-thread search on Cmd/Ctrl+F and forwards query to PlaygroundChat", () => {
@@ -247,5 +258,42 @@ describe("Playground thread search integration", () => {
         screen.getByTestId("playground-artifacts-trigger")
       )
     })
+  })
+
+  it("shows branch fork context and returns to parent history in one action", () => {
+    storeOptionState.value.compareParentByHistory = {
+      "history-1": {
+        parentHistoryId: "history-parent",
+        clusterId: "cluster-a"
+      },
+      "history-parent": {
+        parentHistoryId: "history-root"
+      }
+    }
+
+    const openHistorySpy = vi.fn()
+    const onOpenHistory = ((event: Event) => {
+      openHistorySpy((event as CustomEvent).detail)
+    }) as EventListener
+    window.addEventListener("tldw:open-history", onOpenHistory)
+
+    render(<Playground />)
+
+    expect(screen.getByTestId("playground-branch-fork-point")).toHaveTextContent(
+      "Fork point: cluster-a"
+    )
+    expect(screen.getByTestId("playground-branch-depth")).toHaveTextContent(
+      "Depth 2"
+    )
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to comparison chat" })
+    )
+
+    expect(openHistorySpy).toHaveBeenCalledWith({
+      historyId: "history-parent"
+    })
+
+    window.removeEventListener("tldw:open-history", onOpenHistory)
   })
 })

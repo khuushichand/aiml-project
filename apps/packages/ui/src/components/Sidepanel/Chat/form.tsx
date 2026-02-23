@@ -1558,8 +1558,7 @@ export const SidepanelForm = ({
   }, [resetTranscript, speechToTextLanguage, startListening])
 
   const handleDictationToggle = React.useCallback(() => {
-    const toggleIntent = dictationStrategy.toggleIntent
-    switch (toggleIntent) {
+    switch (dictationStrategy.toggleIntent) {
       case "start_server":
         void startServerDictation()
         break
@@ -1583,7 +1582,7 @@ export const SidepanelForm = ({
       resolvedMode: snapshot.resolvedMode,
       speechAvailable: snapshot.speechAvailable,
       speechUsesServer: snapshot.speechUsesServer,
-      toggleIntent,
+      toggleIntent: dictationStrategy.toggleIntent,
       fallbackReason: snapshot.fallbackReason
     })
   }, [
