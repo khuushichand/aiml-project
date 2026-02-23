@@ -1629,6 +1629,7 @@ export default defineBackground({
         }
         if (runtimeContext) {
           void runtimeContext.emitProgress(progressPayload)
+          return
         }
 
         try {

@@ -40,11 +40,13 @@ describe("quick ingest session runtime", () => {
 
   it("marks cancelled sessions immediately and suppresses completed emission", async () => {
     let release: (() => void) | null = null
+    let registeredController: AbortController | null = null
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
-    const run = vi.fn(async ({ registerAbortController }: any) => {
-      registerAbortController(new AbortController())
+    const run = vi.fn(async (_payload: any, context: any) => {
+      registeredController = new AbortController()
+      context.registerAbortController(registeredController)
       await gate
       return { results: [] }
     })
@@ -52,9 +54,13 @@ describe("quick ingest session runtime", () => {
     const runtime = createQuickIngestSessionRuntime({ run, emit })
 
     const ack = runtime.start({ entries: [], files: [] })
+    await vi.waitFor(() => {
+      expect(registeredController).toBeTruthy()
+    })
     const cancelResp = runtime.cancel(ack.sessionId, "user_cancelled")
 
     expect(cancelResp).toEqual({ ok: true })
+    expect(registeredController?.signal.aborted).toBe(true)
     expect(
       emit.mock.calls.some(
         ([type, payload]) =>

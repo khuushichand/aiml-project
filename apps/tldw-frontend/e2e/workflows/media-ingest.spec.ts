@@ -502,6 +502,150 @@ test.describe("Media Ingestion Workflow", () => {
 
       await assertNoCriticalErrors(diagnostics)
     })
+
+    test("should cancel quick ingest mid-process with confirmation", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      test.setTimeout(180000)
+      skipIfServerUnavailable(serverInfo)
+
+      await authedPage.context().addInitScript((cfg) => {
+        try {
+          localStorage.setItem(
+            "tldwConfig",
+            JSON.stringify({
+              serverUrl: cfg.serverUrl,
+              apiKey: cfg.apiKey,
+              authMode: "single-user"
+            })
+          )
+          localStorage.setItem("__tldw_first_run_complete", "true")
+          localStorage.setItem("__tldw_allow_offline", "true")
+        } catch {
+          // Ignore localStorage failures in hardened browser contexts.
+        }
+        try {
+          const originalFetch = window.fetch.bind(window)
+          const mockedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url =
+              typeof input === "string"
+                ? input
+                : input instanceof Request
+                  ? input.url
+                  : String(input)
+            if (/\/api\/v1\/media\/add\/?(?:\?|$)/i.test(url)) {
+              await new Promise((resolve) => setTimeout(resolve, 1400))
+              return new Response(
+                JSON.stringify({
+                  media_id: "qi-web-cancel-mock-media-id",
+                  title: "Quick ingest web cancel E2E"
+                }),
+                {
+                  status: 200,
+                  headers: {
+                    "Content-Type": "application/json"
+                  }
+                }
+              )
+            }
+            return originalFetch(input, init)
+          }
+          window.fetch = mockedFetch
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ;(globalThis as any).fetch = mockedFetch
+        } catch {
+          // Ignore fetch monkeypatch failures in constrained browser contexts.
+        }
+      }, {
+        serverUrl: TEST_CONFIG.serverUrl,
+        apiKey: TEST_CONFIG.apiKey
+      })
+
+      await authedPage.goto("/setup", { waitUntil: "domcontentloaded" })
+      await waitForConnection(authedPage)
+      await authedPage
+        .getByTestId("onboarding-connect")
+        .evaluate((el: HTMLElement) => el.click())
+      await expect(authedPage.getByTestId("onboarding-success-screen")).toBeVisible({
+        timeout: 30000
+      })
+      await authedPage
+        .getByTestId("onboarding-success-ingest")
+        .evaluate((el: HTMLElement) => el.click())
+
+      await expect(authedPage).toHaveURL(/\/(?:[?#].*)?$/, {
+        timeout: 30000
+      })
+
+      const modal = authedPage
+        .getByRole("dialog", { name: /quick ingest/i })
+        .first()
+      await expect(modal).toBeVisible({ timeout: 30000 })
+
+      const urlsInput = modal.locator("#quick-ingest-url-input")
+      await expect(urlsInput).toBeVisible({ timeout: 20000 })
+
+      const ingestUrl = `https://example.com/qi-web-cancel-${generateTestId("quick-ingest-web-cancel")}`
+      await urlsInput.fill(ingestUrl)
+
+      const inspectorDialog = authedPage.getByRole("dialog", { name: /^inspector$/i })
+      if (await inspectorDialog.isVisible().catch(() => false)) {
+        const dismissInspector = inspectorDialog
+          .getByRole("button", { name: /got it|close/i })
+          .first()
+        if (await dismissInspector.isVisible().catch(() => false)) {
+          await dismissInspector.evaluate((el: HTMLElement) => el.click())
+          await expect(inspectorDialog).toBeHidden({ timeout: 10000 })
+        }
+      }
+
+      const addUrlsButton = modal.getByRole("button", { name: /add urls/i })
+      await expect(addUrlsButton).toBeEnabled({ timeout: 15000 })
+      await addUrlsButton.evaluate((el: HTMLElement) => el.click())
+
+      await expect
+        .poll(async () => {
+          const sourceValues = await modal
+            .getByRole("textbox", { name: /source url/i })
+            .evaluateAll((elements) =>
+              elements.map((el) =>
+                (el as HTMLInputElement)?.value?.trim() || ""
+              )
+            )
+          return sourceValues.includes(ingestUrl)
+        }, { timeout: 15000 })
+        .toBeTruthy()
+
+      const runButton = modal.getByTestId("quick-ingest-run")
+      await expect(runButton).toBeVisible({ timeout: 20000 })
+      await expect(runButton).toBeEnabled({ timeout: 30000 })
+      await runButton.evaluate((el: HTMLElement) => el.click())
+
+      const cancelButton = modal.getByTestId("quick-ingest-cancel")
+      await expect(cancelButton).toBeVisible({ timeout: 15000 })
+
+      await cancelButton.click()
+      const keepRunningButton = authedPage.getByRole("button", { name: /keep running/i })
+      await expect(keepRunningButton).toBeVisible({ timeout: 10000 })
+      await keepRunningButton.click()
+      await expect(cancelButton).toBeVisible()
+
+      await cancelButton.click()
+      const confirmCancelButton = authedPage.getByRole("button", { name: /cancel run/i })
+      await expect(confirmCancelButton).toBeVisible({ timeout: 10000 })
+      await confirmCancelButton.click()
+
+      const completionCard = modal.getByTestId("quick-ingest-complete")
+      await expect(completionCard).toBeVisible({ timeout: 30000 })
+      await expect(completionCard).toContainText(/cancelled/i)
+
+      await authedPage.waitForTimeout(1800)
+      await expect(completionCard).toContainText(/cancelled/i)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
   })
 
   test.describe("Content Review Flow", () => {

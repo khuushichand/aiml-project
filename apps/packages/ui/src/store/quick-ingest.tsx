@@ -3,7 +3,11 @@ import { createWithEqualityFn } from "zustand/traditional"
 const normalizeCount = (value: number) =>
   Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 
-export type QuickIngestLastRunStatus = "idle" | "success" | "error"
+export type QuickIngestLastRunStatus =
+  | "idle"
+  | "success"
+  | "error"
+  | "cancelled"
 
 export type QuickIngestLastRunSummary = {
   status: QuickIngestLastRunStatus
@@ -12,6 +16,7 @@ export type QuickIngestLastRunSummary = {
   totalCount: number
   successCount: number
   failedCount: number
+  cancelledCount: number
   firstMediaId: string | null
   primarySourceLabel: string | null
   errorMessage: string | null
@@ -25,6 +30,7 @@ export const createInitialQuickIngestLastRunSummary =
     totalCount: 0,
     successCount: 0,
     failedCount: 0,
+    cancelledCount: 0,
     firstMediaId: null,
     primarySourceLabel: null,
     errorMessage: null
@@ -60,6 +66,13 @@ type QuickIngestStore = {
   recordRunFailure: (payload?: {
     totalCount?: number
     failedCount?: number
+    errorMessage?: string | null
+  }) => void
+  recordRunCancelled: (payload?: {
+    totalCount?: number
+    successCount?: number
+    failedCount?: number
+    cancelledCount?: number
     errorMessage?: string | null
   }) => void
   resetLastRunSummary: () => void
@@ -104,6 +117,7 @@ export const useQuickIngestStore = createWithEqualityFn<QuickIngestStore>((set) 
         totalCount: nextTotal,
         successCount: nextSuccess,
         failedCount: nextFailed,
+        cancelledCount: 0,
         firstMediaId:
           firstMediaId === null || typeof firstMediaId === "undefined"
             ? null
@@ -130,6 +144,31 @@ export const useQuickIngestStore = createWithEqualityFn<QuickIngestStore>((set) 
         totalCount,
         successCount: 0,
         failedCount,
+        cancelledCount: 0,
+        firstMediaId: null,
+        primarySourceLabel: null,
+        errorMessage: payload?.errorMessage?.trim() || null
+      }
+    })
+  },
+  recordRunCancelled: (payload) => {
+    const now = Date.now()
+    const totalCount = normalizeCount(payload?.totalCount ?? 0)
+    const successCount = normalizeCount(payload?.successCount ?? 0)
+    const failedCount = normalizeCount(payload?.failedCount ?? 0)
+    const cancelledCount = normalizeCount(
+      payload?.cancelledCount ??
+        Math.max(totalCount - successCount - failedCount, 1)
+    )
+    set({
+      lastRunSummary: {
+        status: "cancelled",
+        attemptedAt: now,
+        completedAt: now,
+        totalCount,
+        successCount,
+        failedCount,
+        cancelledCount,
         firstMediaId: null,
         primarySourceLabel: null,
         errorMessage: payload?.errorMessage?.trim() || null
