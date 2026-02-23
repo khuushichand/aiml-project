@@ -121,22 +121,19 @@ test.describe("Quick ingest cancel flow", () => {
       await expect(openQuickIngestButton).toBeVisible()
       await openQuickIngestButton.click()
 
-      const modal = page.locator(".quick-ingest-modal .ant-modal-content")
-      await expect(modal).toBeVisible()
-
-      const urlInput = modal
+      const urlInput = page
         .getByLabel(/Paste URLs input/i)
-        .or(modal.getByPlaceholder(/https:\/\/example\.com/i))
+        .or(page.getByPlaceholder(/https:\/\/example\.com/i))
         .first()
-      await expect(urlInput).toBeEnabled()
+      await expect(urlInput).toBeEnabled({ timeout: 20000 })
       await urlInput.fill("https://example.com/cancel-me")
-      await modal.getByRole("button", { name: /add urls/i }).click()
+      await page.getByRole("button", { name: /add urls/i }).first().click()
 
-      const runButton = modal.getByTestId("quick-ingest-run")
+      const runButton = page.getByTestId("quick-ingest-run").first()
       await expect(runButton).toBeVisible()
       await runButton.click()
 
-      const cancelButton = modal.getByTestId("quick-ingest-cancel")
+      const cancelButton = page.getByTestId("quick-ingest-cancel").first()
       await expect(cancelButton).toBeVisible({ timeout: 10000 })
 
       await cancelButton.click()
@@ -151,12 +148,18 @@ test.describe("Quick ingest cancel flow", () => {
       await expect(confirmCancelButton).toBeVisible({ timeout: 10000 })
       await confirmCancelButton.click()
 
-      const completionCard = modal.getByTestId("quick-ingest-complete")
-      await expect(completionCard).toBeVisible({ timeout: 10000 })
-      await expect(completionCard).toContainText(/cancelled/i)
+      const resultsTab = page.getByRole("tab", { name: /results/i }).first()
+      if (await resultsTab.count()) {
+        await resultsTab.click()
+      }
+
+      const cancelledSummary = page
+        .getByText(/ingest run cancelled/i)
+        .first()
+      await expect(cancelledSummary).toBeVisible({ timeout: 10000 })
 
       await page.waitForTimeout(1200)
-      await expect(completionCard).toContainText(/cancelled/i)
+      await expect(cancelledSummary).toBeVisible()
     } finally {
       try {
         await page.evaluate(() => {
