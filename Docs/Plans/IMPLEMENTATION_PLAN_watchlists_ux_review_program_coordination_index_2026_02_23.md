@@ -69,7 +69,7 @@
 - Group 01 Stage 2 completed: task-view navigation strip (`Collect`, `Review`, `Briefings`) added with legacy-tab fallback mapping and experimental IA interaction coverage.
 - Group 03 Stage 2 completed: dedicated Overview pipeline builder implemented with run-now output preview routing and rollback handling for partial failures.
 - Group 02 Stage 2 completed: quick setup expanded for multi-feed UC2 setup, explicit audio toggle, and goal-based destination routing with failure-path coverage.
-- Next execution focus: Group 09 Stage 1 accessibility baseline and keyboard/screen-reader contract coverage.
+- Next execution focus: Group 09 Stage 2 keyboard and focus-management hardening across modal/drawer flows.
 
 ## Stage 3: Authoring and Reliability Execution (Groups 04, 05, 07, 08)
 **Goal**: Improve complex configuration ergonomics and reduce failure risk.
@@ -167,6 +167,11 @@
   - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx --maxWorkers=1 --no-file-parallelism`
   - `Docs/Plans/WATCHLISTS_READER_SCALE_MOBILE_QA_CHECKLIST_2026_02_24.md`
   - `/tmp/bandit_watchlists_group06_stage5_2026_02_24.json`
+- Group 09 Stage 1 completed: accessibility baseline gap registry now catalogs keyboard/focus/ARIA/signaling/localization gaps across Watchlists tabs, and focused accessibility regression coverage was added for Articles reader control labeling and text-based status signals.
+- Group 09 Stage 1 validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/shared/__tests__/StatusTag.accessibility.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `Docs/Plans/WATCHLISTS_ACCESSIBILITY_BASELINE_GAP_REGISTRY_2026_02_24.md`
+  - `/tmp/bandit_watchlists_group09_stage1_2026_02_24.json`
 
 ## Stage 5: Program Closeout and Operationalization
 **Goal**: Complete evidence-led closure and handoff for sustained quality.
@@ -205,7 +210,7 @@
 | 06 | Mike | Robert | 4 | Complete | Stage 1 baseline artifact + telemetry exports + Group 06 Stage 1 prioritization/sort baseline + Stage 5 source-window/mobile/high-volume validation + reader scale QA checklist + ItemsTab focused regressions + Bandit stage artifact | articles/triage |
 | 07 | Robert | Mike | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 07 Stage 1 output/audio contract completion + Group 07 Stage 2 audio discoverability completion + Group 07 Stage 3 audio test/preview completion + Group 07 Stage 4 delivery/recovery visibility completion + Group 07 Stage 5 UC2 runbook + fallback integration coverage + focused Jobs/Outputs/backend regressions + Bandit artifacts | outputs/audio |
 | 08 | Mike | Robert | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 08 Stage 1/2/3/4/5 completion notes + template mode/preview/telemetry regressions + Bandit stage artifacts + template authoring runbook | templates |
-| 09 | Robert | Mike | 4 | Not Started | Stage 1 baseline artifact + telemetry exports | accessibility |
+| 09 | Robert | Mike | 4 | In Progress | Stage 1 baseline artifact + telemetry exports + Group 09 Stage 1 gap registry + Items/Runs/Outputs/shared accessibility regressions + Bandit stage artifact | accessibility |
 | 10 | Mike | Robert | 4 | Not Started | Stage 1 baseline artifact + telemetry exports | scalability |
 
 ## Exit Criteria
