@@ -85,6 +85,28 @@ const CLIENT_FILTER_MAX_ITEMS = 1000
 const SOURCE_USAGE_LOOKUP_PAGE_SIZE = 200
 const SOURCE_USAGE_LOOKUP_MAX_PAGES = 10
 const BULK_MOVE_NO_GROUP_VALUE = "__none__"
+const SOURCES_ADVANCED_COLUMNS_STORAGE_KEY = "watchlists:sources:advanced-columns:v1"
+
+const readStoredDisclosureState = (key: string): boolean | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw === "1") return true
+    if (raw === "0") return false
+  } catch {
+    return null
+  }
+  return null
+}
+
+const persistDisclosureState = (key: string, value: boolean): void => {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(key, value ? "1" : "0")
+  } catch {
+    // Ignore storage persistence failures
+  }
+}
 
 const renderSourceStatusIcon = (iconToken: SourceStatusIconToken) => {
   if (iconToken === "healthy") return <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
@@ -152,6 +174,10 @@ export const SourcesTab: React.FC = () => {
   const [seenDrawerSourceId, setSeenDrawerSourceId] = useState<number | null>(null)
   const [sourceHealthById, setSourceHealthById] = useState<Record<number, SourceHealthSnapshot>>({})
   const [sourcesLoadError, setSourcesLoadError] = useState<ReturnType<typeof mapWatchlistsError> | null>(null)
+  const [showAdvancedColumns, setShowAdvancedColumns] = useState<boolean>(() => {
+    const stored = readStoredDisclosureState(SOURCES_ADVANCED_COLUMNS_STORAGE_KEY)
+    return stored ?? false
+  })
 
   const selectedSources = useMemo(
     () => sources.filter((source) => selectedRowKeys.includes(source.id)),
@@ -334,6 +360,10 @@ export const SourcesTab: React.FC = () => {
     }
   }, [bulkMoveTargetValue, selectedRowKeys.length])
 
+  useEffect(() => {
+    persistDisclosureState(SOURCES_ADVANCED_COLUMNS_STORAGE_KEY, showAdvancedColumns)
+  }, [showAdvancedColumns])
+
   // Handle toggle active
   const handleToggleActive = async (source: WatchlistSource) => {
     try {
@@ -458,6 +488,13 @@ export const SourcesTab: React.FC = () => {
               }
             )}
           </p>
+          <p className="text-sm text-text-muted">
+            {t(
+              "watchlists:sources.deleteConfirmUndoWindow",
+              "You can undo this deletion for {{seconds}} seconds.",
+              { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+            )}
+          </p>
           <ul className="list-disc pl-5">
             {activeUsage.slice(0, 5).map((job) => (
               <li key={job.id}>{job.name}</li>
@@ -477,7 +514,11 @@ export const SourcesTab: React.FC = () => {
           )}
         </div>
       ) : (
-        t("watchlists:sources.deleteConfirmDescription", "This action cannot be undone.")
+        t(
+          "watchlists:sources.deleteConfirmDescription",
+          "You can undo this deletion for {{seconds}} seconds.",
+          { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+        )
       ),
       okText: usageCount > 0
         ? t("watchlists:sources.deleteConfirmForce", "Delete anyway")
@@ -739,11 +780,12 @@ export const SourcesTab: React.FC = () => {
           <p>
             {t(
               "watchlists:sources.bulkDeleteConfirmDescription",
-              "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive).",
+              "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive). Undo is available for {{seconds}} seconds.",
               {
                 count: selectedSourceSummary.total,
                 active: selectedSourceSummary.active,
-                inactive: selectedSourceSummary.inactive
+                inactive: selectedSourceSummary.inactive,
+                seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS
               }
             )}
           </p>
@@ -1079,6 +1121,25 @@ export const SourcesTab: React.FC = () => {
     : undefined
 
   // Table columns
+  const tagsColumn: ColumnsType<WatchlistSource>[number] = {
+    title: t("watchlists:sources.columns.tags", "Tags"),
+    dataIndex: "tags",
+    key: "tags",
+    width: 200,
+    render: (tags: string[]) => (
+      <div className="flex flex-wrap gap-1">
+        {tags.slice(0, 3).map((tag) => (
+          <Tag key={tag} className="text-xs">
+            {tag}
+          </Tag>
+        ))}
+        {tags.length > 3 && (
+          <Tag className="text-xs">+{tags.length - 3}</Tag>
+        )}
+      </div>
+    )
+  }
+
   const columns: ColumnsType<WatchlistSource> = [
     {
       title: t("watchlists:sources.columns.name", "Name"),
@@ -1086,20 +1147,42 @@ export const SourcesTab: React.FC = () => {
       key: "name",
       ellipsis: true,
       render: (name: string, record) => (
-        <div className="flex items-center gap-2">
-          <span className="font-medium">{name}</span>
-          {record.url && (
-            <Tooltip title={record.url}>
-              <a
-                href={record.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-text-subtle hover:text-text-muted"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-              </a>
-            </Tooltip>
+        <div className="space-y-0.5">
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{name}</span>
+            {record.url && (
+              <Tooltip title={record.url}>
+                <a
+                  href={record.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-text-subtle hover:text-text-muted"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </Tooltip>
+            )}
+          </div>
+          {!showAdvancedColumns && (
+            <div className="text-xs text-text-muted" data-testid={`source-compact-summary-${record.id}`}>
+              {t(
+                "watchlists:sources.compactSummary",
+                "{{groups}} {{groupLabel}} • {{tags}} {{tagLabel}}",
+                {
+                  groups: toNormalizedGroupIds(record).length,
+                  groupLabel:
+                    toNormalizedGroupIds(record).length === 1
+                      ? t("watchlists:sources.compactSummaryGroupSingular", "group")
+                      : t("watchlists:sources.compactSummaryGroupPlural", "groups"),
+                  tags: (record.tags || []).length,
+                  tagLabel:
+                    (record.tags || []).length === 1
+                      ? t("watchlists:sources.compactSummaryTagSingular", "tag")
+                      : t("watchlists:sources.compactSummaryTagPlural", "tags")
+                }
+              )}
+            </div>
           )}
         </div>
       )
@@ -1153,24 +1236,6 @@ export const SourcesTab: React.FC = () => {
           </div>
         )
       }
-    },
-    {
-      title: t("watchlists:sources.columns.tags", "Tags"),
-      dataIndex: "tags",
-      key: "tags",
-      width: 200,
-      render: (tags: string[]) => (
-        <div className="flex flex-wrap gap-1">
-          {tags.slice(0, 3).map((tag) => (
-            <Tag key={tag} className="text-xs">
-              {tag}
-            </Tag>
-          ))}
-          {tags.length > 3 && (
-            <Tag className="text-xs">+{tags.length - 3}</Tag>
-          )}
-        </div>
-      )
     },
     {
       title: t("watchlists:sources.columns.lastScraped", "Last Scraped"),
@@ -1271,6 +1336,10 @@ export const SourcesTab: React.FC = () => {
     }
   ]
 
+  const tableColumns = showAdvancedColumns
+    ? [columns[0], columns[1], columns[2], tagsColumn, columns[3], columns[4], columns[5]]
+    : columns
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
@@ -1313,6 +1382,15 @@ export const SourcesTab: React.FC = () => {
         </div>
         <div className="flex items-center gap-2">
           <Button
+            type={showAdvancedColumns ? "default" : "dashed"}
+            data-testid="watchlists-sources-advanced-toggle"
+            onClick={() => setShowAdvancedColumns((previous) => !previous)}
+          >
+            {showAdvancedColumns
+              ? t("watchlists:sources.hideAdvancedDetails", "Hide advanced details")
+              : t("watchlists:sources.showAdvancedDetails", "Show advanced details")}
+          </Button>
+          <Button
             icon={<RefreshCw className="h-4 w-4" />}
             onClick={loadSources}
             loading={sourcesLoading}
@@ -1340,6 +1418,15 @@ export const SourcesTab: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {!showAdvancedColumns && (
+        <div className="text-xs text-text-muted" data-testid="watchlists-sources-density-hint">
+          {t(
+            "watchlists:sources.metricsHint",
+            "Showing core columns. Use advanced mode for tag-level source details."
+          )}
+        </div>
+      )}
 
       {sourcesLoadError && (
         <Alert
@@ -1464,8 +1551,9 @@ export const SourcesTab: React.FC = () => {
           <div className="flex-1">
             <Table
               dataSource={Array.isArray(sources) ? sources : []}
-              columns={columns}
+              columns={tableColumns}
               rowKey="id"
+              aria-label={t("watchlists:sources.tableAria", "Feeds table")}
               loading={sourcesLoading}
               locale={{
                 emptyText: (

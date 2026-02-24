@@ -65,6 +65,14 @@ const persistDisclosureState = (key: string, value: boolean): void => {
   }
 }
 
+const isAudioBriefingEnabled = (outputPrefs: unknown): boolean => {
+  if (!outputPrefs || typeof outputPrefs !== "object" || Array.isArray(outputPrefs)) {
+    return false
+  }
+  const value = (outputPrefs as Record<string, unknown>).generate_audio
+  return value === true
+}
+
 export const JobsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
   const { showUndoNotification } = useUndoNotification()
@@ -260,7 +268,14 @@ export const JobsTab: React.FC = () => {
       ellipsis: true,
       render: (name: string, record) => (
         <div>
-          <span className="font-medium">{name}</span>
+          <span className="inline-flex items-center gap-2">
+            <span className="font-medium">{name}</span>
+            {isAudioBriefingEnabled(record.output_prefs) && (
+              <Tag color="purple" data-testid={`job-audio-enabled-chip-${record.id}`}>
+                {t("watchlists:jobs.audioEnabledChip", "Audio on")}
+              </Tag>
+            )}
+          </span>
           {record.description && (
             <div className="text-xs text-text-muted truncate">
               {record.description}
@@ -534,6 +549,7 @@ export const JobsTab: React.FC = () => {
         dataSource={Array.isArray(jobs) ? jobs : []}
         columns={columns}
         rowKey="id"
+        aria-label={t("watchlists:jobs.tableAria", "Monitors table")}
         loading={jobsLoading}
         pagination={{
           current: jobsPage,

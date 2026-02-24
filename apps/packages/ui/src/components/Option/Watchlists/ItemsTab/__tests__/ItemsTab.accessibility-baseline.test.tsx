@@ -199,5 +199,16 @@ describe("ItemsTab accessibility baseline", () => {
       screen.getByRole("button", { name: "Mark all filtered as reviewed" })
     ).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Shortcuts" })).toBeInTheDocument()
+
+    expect(screen.getByRole("complementary", { name: "Feed filters" })).toBeInTheDocument()
+    expect(screen.getByRole("region", { name: "Feeds list" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("region", { name: "Article list and triage controls" })
+    ).toBeInTheDocument()
+    expect(screen.getByRole("region", { name: "Articles list" })).toBeInTheDocument()
+    expect(screen.getByRole("region", { name: "Article reader" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Item One from Tech Daily. Unread." })
+    ).toBeInTheDocument()
   })
 })

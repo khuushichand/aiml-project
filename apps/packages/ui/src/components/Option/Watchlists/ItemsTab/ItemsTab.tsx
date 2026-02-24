@@ -1394,6 +1394,7 @@ export const ItemsTab: React.FC = () => {
         <div className="grid min-h-[720px] grid-cols-1 xl:grid-cols-[280px_minmax(420px,34vw)_minmax(0,1fr)] 2xl:grid-cols-[300px_minmax(500px,36vw)_minmax(0,1fr)]">
           <aside
             className="border-b border-border bg-surface/70 p-4 xl:border-b-0 xl:border-r"
+            aria-label={t("watchlists:items.feedFiltersRegionAria", "Feed filters")}
             data-testid="watchlists-items-left-pane">
             <div className="space-y-4">
               <div>
@@ -1443,6 +1444,8 @@ export const ItemsTab: React.FC = () => {
                   ref={sourceListRef}
                   className="max-h-[430px] space-y-1 overflow-y-auto pr-1"
                   onScroll={expandVisibleSourcesIfNeeded}
+                  role="region"
+                  aria-label={t("watchlists:items.feedListAria", "Feeds list")}
                   data-testid="watchlists-items-source-list"
                 >
                   <button
@@ -1512,6 +1515,7 @@ export const ItemsTab: React.FC = () => {
 
           <section
             className="border-b border-border p-4 xl:border-b-0 xl:border-r"
+            aria-label={t("watchlists:items.articleListRegionAria", "Article list and triage controls")}
             data-testid="watchlists-items-list-pane">
             <div className="mb-3 space-y-2">
               <div className="flex items-end justify-between gap-2">
@@ -1701,6 +1705,8 @@ export const ItemsTab: React.FC = () => {
 
             <div
               className="max-h-[560px] space-y-2 overflow-y-auto pr-1"
+              role="region"
+              aria-label={t("watchlists:items.articleListAria", "Articles list")}
               data-testid="watchlists-items-list">
               {itemsLoading ? (
                 <div className="flex items-center justify-center py-12">
@@ -1724,12 +1730,22 @@ export const ItemsTab: React.FC = () => {
                   const reviewStateLabel = item.reviewed
                     ? t("watchlists:items.rowStatusReviewed", "Reviewed")
                     : t("watchlists:items.rowStatusUnread", "Unread")
+                  const rowAriaLabel = t(
+                    "watchlists:items.rowAriaLabel",
+                    "{{title}} from {{source}}. {{state}}.",
+                    {
+                      title: item.title || t("watchlists:items.untitled", "Untitled item"),
+                      source: sourceLabel,
+                      state: reviewStateLabel
+                    }
+                  )
 
                   return (
                     <button
                       key={item.id}
                       type="button"
                       data-testid={`watchlists-item-row-${item.id}`}
+                      aria-label={rowAriaLabel}
                       className={`flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition ${
                         selected
                           ? "border-primary bg-primary/15"
@@ -1831,7 +1847,11 @@ export const ItemsTab: React.FC = () => {
             </div>
           </section>
 
-          <section className="min-h-[720px] p-5" data-testid="watchlists-items-reader-pane">
+          <section
+            className="min-h-[720px] p-5"
+            aria-label={t("watchlists:items.readerRegionAria", "Article reader")}
+            data-testid="watchlists-items-reader-pane"
+          >
             {itemsLoading && !selectedItem ? (
               <div className="flex h-full items-center justify-center">
                 <Spin />

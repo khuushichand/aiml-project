@@ -56,7 +56,7 @@
 **Tests**:
 - Add tests for aria-label/role attributes on key controls.
 - Add tests verifying live-region announcement content changes.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Visual and Cognitive Accessibility Improvements
 **Goal**: Reduce ambiguity and cognitive burden for status-heavy interfaces.
@@ -107,3 +107,20 @@
 - Stage 2 validation evidence:
   - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx --maxWorkers=1 --no-file-parallelism`
   - `/tmp/bandit_watchlists_group09_stage2_2026_02_24.json`
+
+### 2026-02-24 - Stage 3 completion (screen-reader semantics + live status contracts)
+
+- Added explicit assistive labels/regions for high-density Watchlists surfaces:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobsTab.tsx` (`Monitors table` label)
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/SourcesTab.tsx` (`Feeds table` label)
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx` (feed/article region labels + article row accessible names)
+- Added regression contracts for semantic labels and region discoverability:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx`
+- Revalidated existing run/output live-region announcement coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
+- Stage 3 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage3_2026_02_24.json`

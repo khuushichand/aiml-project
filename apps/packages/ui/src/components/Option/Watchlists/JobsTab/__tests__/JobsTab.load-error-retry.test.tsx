@@ -38,7 +38,9 @@ vi.mock("antd", () => {
     </button>
   )
 
-  const Table = () => <div data-testid="jobs-table" />
+  const Table = ({ "aria-label": ariaLabel }: any) => (
+    <div data-testid="jobs-table" role="table" aria-label={ariaLabel} />
+  )
   const Popconfirm = ({ children }: any) => <>{children}</>
   const Space = ({ children }: any) => <>{children}</>
   const Switch = () => <button type="button">switch</button>
@@ -143,6 +145,8 @@ describe("JobsTab load-error retry", () => {
       .mockResolvedValueOnce({ items: [], total: 0, has_more: false })
 
     render(<JobsTab />)
+
+    expect(screen.getByRole("table", { name: "Monitors table" })).toBeInTheDocument()
 
     await waitFor(() => {
       expect(screen.getByText("Could not load Monitors.")).toBeInTheDocument()

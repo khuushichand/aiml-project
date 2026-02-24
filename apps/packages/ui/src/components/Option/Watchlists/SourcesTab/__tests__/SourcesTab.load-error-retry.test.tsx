@@ -87,7 +87,9 @@ vi.mock("antd", () => {
     Select,
     Space: ({ children }: any) => <>{children}</>,
     Switch: () => <button type="button">switch</button>,
-    Table: () => <div data-testid="sources-table" />,
+    Table: ({ "aria-label": ariaLabel }: any) => (
+      <div data-testid="sources-table" role="table" aria-label={ariaLabel} />
+    ),
     Tag: ({ children }: any) => <span>{children}</span>,
     Tooltip: ({ children }: any) => <>{children}</>,
     message: {
@@ -208,6 +210,37 @@ describe("SourcesTab load-error retry", () => {
 
     await waitFor(() => {
       expect(mocks.fetchWatchlistSourcesMock).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it("labels the feeds table for screen reader navigation", async () => {
+    const sourceRecord = {
+      id: 44,
+      name: "AI Feed",
+      url: "https://example.com/feed.xml",
+      source_type: "rss",
+      active: true,
+      tags: [],
+      group_ids: [],
+      created_at: "2026-02-18T00:00:00Z",
+      last_scraped_at: null,
+      status: "healthy"
+    }
+    mocks.storeStateRef.current = baseState({
+      sources: [sourceRecord],
+      sourcesTotal: 1
+    })
+
+    mocks.fetchWatchlistSourcesMock.mockResolvedValue({
+      items: [sourceRecord],
+      total: 1,
+      has_more: false
+    })
+
+    render(<SourcesTab />)
+
+    await waitFor(() => {
+      expect(screen.getByRole("table", { name: "Feeds table" })).toBeInTheDocument()
     })
   })
 })
