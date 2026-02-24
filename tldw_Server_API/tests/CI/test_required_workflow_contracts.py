@@ -35,3 +35,15 @@ def test_security_required_lane_exists_and_uses_threshold_policy() -> None:
     workflow = _load(".github/workflows/security-required.yml")
     jobs = workflow["jobs"]
     assert "security-required" in jobs
+
+
+def test_required_gate_names_documented() -> None:
+    text = Path("Docs/Development/CI_REQUIRED_GATES.md").read_text(encoding="utf-8")
+    for check_name in [
+        "backend-required",
+        "security-required",
+        "coverage-required",
+        "frontend-required",
+        "e2e-required",
+    ]:
+        assert check_name in text

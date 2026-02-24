@@ -989,6 +989,9 @@ Notes:
 | --- | --- |
 | E2E Critical Smoke (In-Process) | [![E2E Critical Smoke](https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml/badge.svg)](https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml) |
 
+Required gate policy and check-name contract:
+- `Docs/Development/CI_REQUIRED_GATES.md`
+
 Run locally
 
 - In-process (no open port):
