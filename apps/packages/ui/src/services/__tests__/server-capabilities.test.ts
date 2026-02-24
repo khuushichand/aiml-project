@@ -131,6 +131,21 @@ describe("server capabilities docs-info merge", () => {
     expect(capabilities.hasPersona).toBe(true)
   })
 
+  it("detects media capability from ingest jobs endpoint alone", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "ingest-jobs-only" },
+      paths: {
+        "/api/v1/media/ingest/jobs": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasMedia).toBe(true)
+  })
+
   it("derives hasAudio from STT-only support while keeping TTS/voice flags explicit", async () => {
     mocks.getOpenAPISpec.mockResolvedValue({
       info: { version: "audio-split-stt" },
