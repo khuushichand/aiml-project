@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import os
 import shlex
+import sys
 # Required to execute fixed local CI gate commands.
 import subprocess  # nosec B404
 import time
@@ -135,7 +136,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv or [])
+    args = _parse_args(argv if argv is not None else sys.argv[1:])
     working_directory = Path(args.working_directory)
     summary_output = Path(args.summary_output)
     json_output = Path(args.json_output)

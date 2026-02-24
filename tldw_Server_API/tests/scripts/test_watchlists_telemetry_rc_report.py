@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 from pathlib import Path
 
@@ -133,5 +134,55 @@ def test_main_returns_nonzero_for_operational_failure(monkeypatch):
         )
 
         assert exit_code == 1
+        assert summary_path.exists()
+        assert json_path.exists()
+
+
+def test_main_honors_process_argv_when_argv_not_provided(monkeypatch):
+    module = _load_script_module()
+
+    def _fake_fetch_rc_summary(*, api_base_url: str, api_key: str | None, timeout_seconds: float):
+        _ = api_base_url, api_key, timeout_seconds
+        return {
+            "onboarding": {"rates": {"setup_completion_rate": 0.93}, "timings": {"median_seconds_to_first_output_success": 500.0}},
+            "uc2_backend": {"first_output_success_rate": 0.07},
+        }
+
+    monkeypatch.setattr(module, "fetch_rc_summary", _fake_fetch_rc_summary)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        baseline_path = tmp / "baseline.json"
+        baseline_path.write_text(
+            json.dumps(
+                {
+                    "funnel_metrics": {
+                        "UC1_F1_first_source_setup": {"percent": 92.96},
+                        "UC1_F2_time_to_first_review": {"median_seconds": 567.49},
+                        "UC2_F2_text_output_success": {"percent": 0.06},
+                        "UC2_F3_audio_output_success": {"percent": 0.03},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        summary_path = tmp / "cli-report.md"
+        json_path = tmp / "cli-report.json"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "watchlists_telemetry_rc_report.py",
+                "--baseline-json",
+                str(baseline_path),
+                "--summary-output",
+                str(summary_path),
+                "--json-output",
+                str(json_path),
+            ],
+        )
+
+        exit_code = module.main()
+        assert exit_code == 0
         assert summary_path.exists()
         assert json_path.exists()

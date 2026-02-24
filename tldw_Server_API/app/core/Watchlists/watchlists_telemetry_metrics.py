@@ -13,6 +13,7 @@ _REGISTERED = False
 
 
 def register_watchlists_telemetry_metrics() -> None:
+    """Register watchlists telemetry metrics once per process."""
     global _REGISTERED
     if _REGISTERED:
         return
@@ -47,6 +48,7 @@ def register_watchlists_telemetry_metrics() -> None:
 
 
 def record_onboarding_ingest_result(result: str) -> None:
+    """Increment onboarding ingest attempt counters grouped by result label."""
     try:
         register_watchlists_telemetry_metrics()
         get_metrics_registry().increment(
@@ -59,6 +61,7 @@ def record_onboarding_ingest_result(result: str) -> None:
 
 
 def record_summary_request(endpoint: str, status: str, duration_seconds: float) -> None:
+    """Record summary request counters and duration histogram samples."""
     try:
         register_watchlists_telemetry_metrics()
         reg = get_metrics_registry()

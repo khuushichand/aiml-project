@@ -6,6 +6,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -235,7 +236,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv or [])
+    args = _parse_args(argv if argv is not None else sys.argv[1:])
     metadata = collect_metadata()
     baseline_path = Path(args.baseline_json)
     summary_output = Path(args.summary_output)

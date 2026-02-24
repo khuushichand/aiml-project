@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tempfile
 from pathlib import Path
 
@@ -122,3 +123,36 @@ def test_main_returns_zero_when_all_gates_pass(monkeypatch):
         )
 
     assert exit_code == 0
+
+
+def test_main_honors_process_argv_when_argv_not_provided(monkeypatch):
+    module = _load_script_module()
+
+    def fake_execute_all_gates(*, gates, working_directory):
+        _ = gates, working_directory
+        return [
+            {"id": "help", "command": "bun run test:watchlists:help", "status": "passed", "duration_seconds": 1.0},
+        ]
+
+    monkeypatch.setattr(module, "execute_all_gates", fake_execute_all_gates)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        summary_path = tmp / "cli-summary.md"
+        json_path = tmp / "cli-results.json"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "watchlists_rc_gate.py",
+                "--summary-output",
+                str(summary_path),
+                "--json-output",
+                str(json_path),
+            ],
+        )
+
+        exit_code = module.main()
+        assert exit_code == 0
+        assert summary_path.exists()
+        assert json_path.exists()
