@@ -29,6 +29,14 @@
 - [ ] If Watchlists UI behavior changed: monitor/feed active state is not color-only (explicit text or icon signal is present)
 - [ ] If Watchlists UI behavior changed: known assistive-tech constraints reviewed in `Docs/Plans/WATCHLISTS_ASSISTIVE_TECH_AUDIT_2026_02_24.md`
 
+## Watchlists Scale Checklist (Group 10 Stage 5)
+
+- [ ] If Watchlists UI behavior changed: `cd apps/packages/ui && bun run test:watchlists:scale` passes locally
+- [ ] If Watchlists polling/notifications behavior changed: no duplicate terminal notifications during in-flight polling overlap
+- [ ] If Watchlists Activity polling changed: auto-refresh is gated to active + visible Activity context (no background tab polling churn)
+- [ ] If Watchlists batch triage behavior changed: partial-failure retry path remains available and updates only failed IDs
+- [ ] If Watchlists scale behavior changed: constraints/mitigations reviewed in `Docs/Plans/WATCHLISTS_SCALE_READINESS_RUNBOOK_2026_02_24.md`
+
 ## Risk & Rollback
 
 - Risk level: Low / Medium / High

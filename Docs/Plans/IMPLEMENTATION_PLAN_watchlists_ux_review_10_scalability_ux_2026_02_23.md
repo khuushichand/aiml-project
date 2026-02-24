@@ -78,7 +78,7 @@
 **Tests**:
 - Run scale scenario suite and record timings/evidence.
 - Validate that core UC1/UC2 workflows remain functional under load.
-**Status**: Not Started
+**Status**: Complete
 
 ## Execution Notes
 
@@ -149,5 +149,19 @@
   - `apps/packages/ui/package.json` (`test:watchlists:scale`)
 - Stage 4 validation evidence:
   - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/run-notifications.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `cd apps/packages/ui && bun run test:watchlists:scale`
+  - `/tmp/bandit_watchlists_group10_stage4_2026_02_24.json`
+
+### 2026-02-24 - Stage 5 completion (scale gate operationalization + runbook closure)
+
+- Published scale readiness runbook covering 5/50/200 profile scenarios, UC1/UC2 validation expectations, and known constraints/mitigations:
+  - `Docs/Plans/WATCHLISTS_SCALE_READINESS_RUNBOOK_2026_02_24.md`
+- Added dedicated Watchlists scale CI gate workflow:
+  - `.github/workflows/ui-watchlists-scale-gates.yml`
+- Added PR checklist criteria for Watchlists scale-sensitive changes:
+  - `.github/pull_request_template.md` (Watchlists scale checklist section)
+- Expanded Watchlists scale regression gate command to include polling/notification behavior and Activity polling conditions:
+  - `apps/packages/ui/package.json` (`test:watchlists:scale`)
+- Stage 5 validation evidence:
   - `cd apps/packages/ui && bun run test:watchlists:scale`
   - `/tmp/bandit_watchlists_group10_stage4_2026_02_24.json`
