@@ -172,6 +172,11 @@
   - `bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/shared/__tests__/StatusTag.accessibility.test.tsx --maxWorkers=1 --no-file-parallelism`
   - `Docs/Plans/WATCHLISTS_ACCESSIBILITY_BASELINE_GAP_REGISTRY_2026_02_24.md`
   - `/tmp/bandit_watchlists_group09_stage1_2026_02_24.json`
+- Group 09 Stage 2 completed: modal/drawer keyboard focus restoration now consistently covers monitor setup, monitor preview, guided setup, pipeline builder, and output preview close flows.
+- Group 09 Stage 2 validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage2_2026_02_24.json`
+- Next execution focus: Group 09 Stage 3 screen-reader semantics and live status announcement hardening.
 
 ## Stage 5: Program Closeout and Operationalization
 **Goal**: Complete evidence-led closure and handoff for sustained quality.
@@ -210,7 +215,7 @@
 | 06 | Mike | Robert | 4 | Complete | Stage 1 baseline artifact + telemetry exports + Group 06 Stage 1 prioritization/sort baseline + Stage 5 source-window/mobile/high-volume validation + reader scale QA checklist + ItemsTab focused regressions + Bandit stage artifact | articles/triage |
 | 07 | Robert | Mike | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 07 Stage 1 output/audio contract completion + Group 07 Stage 2 audio discoverability completion + Group 07 Stage 3 audio test/preview completion + Group 07 Stage 4 delivery/recovery visibility completion + Group 07 Stage 5 UC2 runbook + fallback integration coverage + focused Jobs/Outputs/backend regressions + Bandit artifacts | outputs/audio |
 | 08 | Mike | Robert | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 08 Stage 1/2/3/4/5 completion notes + template mode/preview/telemetry regressions + Bandit stage artifacts + template authoring runbook | templates |
-| 09 | Robert | Mike | 4 | In Progress | Stage 1 baseline artifact + telemetry exports + Group 09 Stage 1 gap registry + Items/Runs/Outputs/shared accessibility regressions + Bandit stage artifact | accessibility |
+| 09 | Robert | Mike | 4 | In Progress | Stage 1 baseline artifact + telemetry exports + Group 09 Stage 1 gap registry + Group 09 Stage 2 keyboard/focus restoration coverage + Sources/Runs/Items/Jobs/Overview/Outputs a11y regressions + Bandit stage artifacts | accessibility |
 | 10 | Mike | Robert | 4 | Not Started | Stage 1 baseline artifact + telemetry exports | scalability |
 
 ## Exit Criteria

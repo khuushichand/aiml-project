@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Empty,
   Form,
   Input,
@@ -29,8 +30,12 @@ import {
 import { useTranslation } from "react-i18next"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
+  bulkCreateSources,
+  createWatchlistOutput,
   createWatchlistJob,
   createWatchlistSource,
+  deleteWatchlistJob,
+  fetchWatchlistSources,
   triggerWatchlistRun
 } from "@/services/watchlists"
 import {
@@ -40,24 +45,75 @@ import {
 } from "@/services/watchlists-overview"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import {
+  parseQuickSetupExtraSourceUrls,
   QUICK_SETUP_DEFAULT_VALUES,
   type QuickSetupValues,
   toQuickSetupJobPayload,
   toQuickSetupSourcePayload
 } from "./quick-setup"
 import {
+  buildPipelineReviewSummary,
+  toPipelineJobCreatePayload,
+  toPipelineOutputCreatePayload,
+  validateBriefingPipelineDraft,
+  type BriefingPipelineDraft
+} from "./pipeline-contract"
+import {
+  type WatchlistsOnboardingPath,
+  readWatchlistsOnboardingPath,
+  writeWatchlistsOnboardingPath
+} from "../shared/onboarding-path"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
+import {
   trackWatchlistsOnboardingTelemetry,
   type WatchlistsQuickSetupStep
 } from "@/utils/watchlists-onboarding-telemetry"
+import type { WatchlistSource } from "@/types/watchlists"
 
 const OVERVIEW_REFRESH_INTERVAL_MS = 30_000
 const QUICK_SETUP_MAX_STEP = 2
 const QUICK_SETUP_STEP_KEYS: WatchlistsQuickSetupStep[] = ["feed", "monitor", "review"]
 const QUICK_SETUP_STEP_FIELDS: Array<Array<keyof QuickSetupValues>> = [
-  ["sourceName", "sourceUrl", "sourceType"],
-  ["monitorName", "schedulePreset", "setupGoal", "runNow"],
+  ["sourceName", "sourceUrl", "sourceType", "extraSourceUrls"],
+  ["monitorName", "schedulePreset", "setupGoal", "runNow", "includeAudioBriefing"],
   []
 ]
+const PIPELINE_SETUP_MAX_STEP = 2
+
+interface PipelineBuilderValues {
+  sourceIds: number[]
+  monitorName: string
+  schedulePreset: "none" | "hourly" | "daily" | "weekdays"
+  templateName: string
+  includeAudio: boolean
+  audioVoice: string
+  targetAudioMinutes: number
+  runNow: boolean
+}
+
+const PIPELINE_DEFAULT_VALUES: PipelineBuilderValues = {
+  sourceIds: [],
+  monitorName: "",
+  schedulePreset: "daily",
+  templateName: "briefing_md",
+  includeAudio: true,
+  audioVoice: "alloy",
+  targetAudioMinutes: 8,
+  runNow: true
+}
+
+const toPipelineDraft = (values: PipelineBuilderValues): BriefingPipelineDraft => ({
+  monitorName: values.monitorName,
+  sourceIds: values.sourceIds || [],
+  schedulePreset: values.schedulePreset,
+  templateName: values.templateName,
+  includeAudio: values.includeAudio,
+  audioVoice: values.includeAudio ? values.audioVoice : undefined,
+  targetAudioMinutes: values.includeAudio ? Number(values.targetAudioMinutes) : undefined
+})
 
 export const OverviewTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
@@ -68,13 +124,28 @@ export const OverviewTab: React.FC = () => {
   const [quickSetupOpen, setQuickSetupOpen] = useState(false)
   const [quickSetupStep, setQuickSetupStep] = useState(0)
   const [quickSetupSubmitting, setQuickSetupSubmitting] = useState(false)
+  const [pipelineSetupOpen, setPipelineSetupOpen] = useState(false)
+  const [pipelineSetupStep, setPipelineSetupStep] = useState(0)
+  const [pipelineSetupSubmitting, setPipelineSetupSubmitting] = useState(false)
+  const [pipelineSourcesLoading, setPipelineSourcesLoading] = useState(false)
+  const [pipelineSources, setPipelineSources] = useState<WatchlistSource[]>([])
+  const [onboardingPath, setOnboardingPath] = useState<WatchlistsOnboardingPath>(() =>
+    readWatchlistsOnboardingPath()
+  )
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const quickSetupRestoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const pipelineSetupRestoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const quickSetupWasOpenRef = useRef(false)
+  const pipelineSetupWasOpenRef = useRef(false)
   const [quickSetupForm] = Form.useForm<QuickSetupValues>()
+  const [pipelineSetupForm] = Form.useForm<PipelineBuilderValues>()
 
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const setRunsStatusFilter = useWatchlistsStore((s) => s.setRunsStatusFilter)
   const setOverviewHealth = useWatchlistsStore((s) => s.setOverviewHealth)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
+  const openOutputPreview = useWatchlistsStore((s) => s.openOutputPreview)
   const openSourceForm = useWatchlistsStore((s) => s.openSourceForm)
   const openJobForm = useWatchlistsStore((s) => s.openJobForm)
 
@@ -111,6 +182,36 @@ export const OverviewTab: React.FC = () => {
       intervalRef.current = null
     }
   }, [loadOverview])
+
+  useLayoutEffect(() => {
+    if (quickSetupOpen) {
+      if (!quickSetupWasOpenRef.current) {
+        quickSetupRestoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      quickSetupWasOpenRef.current = true
+      return
+    }
+
+    if (quickSetupWasOpenRef.current) {
+      quickSetupWasOpenRef.current = false
+      restoreFocusToElement(quickSetupRestoreFocusTargetRef.current)
+    }
+  }, [quickSetupOpen])
+
+  useLayoutEffect(() => {
+    if (pipelineSetupOpen) {
+      if (!pipelineSetupWasOpenRef.current) {
+        pipelineSetupRestoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      pipelineSetupWasOpenRef.current = true
+      return
+    }
+
+    if (pipelineSetupWasOpenRef.current) {
+      pipelineSetupWasOpenRef.current = false
+      restoreFocusToElement(pipelineSetupRestoreFocusTargetRef.current)
+    }
+  }, [pipelineSetupOpen])
 
   const handleOpenRun = useCallback((runId: number) => {
     setActiveTab("runs")
@@ -157,6 +258,11 @@ export const OverviewTab: React.FC = () => {
   const handleOpenAttentionSources = useCallback(() => {
     setActiveTab("sources")
   }, [setActiveTab])
+
+  const handleOnboardingPathChange = useCallback((path: WatchlistsOnboardingPath) => {
+    setOnboardingPath(path)
+    writeWatchlistsOnboardingPath(path)
+  }, [])
 
   const openQuickSetup = useCallback(() => {
     quickSetupForm.setFieldsValue(QUICK_SETUP_DEFAULT_VALUES)
@@ -228,9 +334,46 @@ export const OverviewTab: React.FC = () => {
       const source = await createWatchlistSource(
         toQuickSetupSourcePayload(values)
       )
+      const sourceIds: number[] = [source.id]
+      const rawExtraSourceUrls = String(values.extraSourceUrls || "").trim()
+      const extraSourceUrls = parseQuickSetupExtraSourceUrls(rawExtraSourceUrls)
+
+      if (rawExtraSourceUrls.length > 0 && extraSourceUrls.length === 0) {
+        throw new Error("quick_setup_invalid_extra_source_urls")
+      }
+
+      if (extraSourceUrls.length > 0) {
+        const bulkResult = await bulkCreateSources(
+          extraSourceUrls.map((url, index) => {
+            const host = (() => {
+              try {
+                return new URL(url).hostname || `Feed ${index + 2}`
+              } catch {
+                return `Feed ${index + 2}`
+              }
+            })()
+            return {
+              name: host,
+              url,
+              source_type: values.sourceType,
+              active: true
+            }
+          })
+        )
+
+        const createdExtraSourceIds = (bulkResult.items || [])
+          .filter((entry) => entry.status === "created" && Number.isFinite(Number(entry.id)))
+          .map((entry) => Number(entry.id))
+
+        if (createdExtraSourceIds.length !== extraSourceUrls.length) {
+          throw new Error("quick_setup_bulk_source_creation_failed")
+        }
+
+        sourceIds.push(...createdExtraSourceIds)
+      }
 
       const job = await createWatchlistJob(
-        toQuickSetupJobPayload(values, source.id)
+        toQuickSetupJobPayload(values, sourceIds)
       )
 
       let runId: number | null = null
@@ -311,6 +454,189 @@ export const OverviewTab: React.FC = () => {
     t
   ])
 
+  const loadPipelineSources = useCallback(async () => {
+    setPipelineSourcesLoading(true)
+    try {
+      const result = await fetchWatchlistSources({ page: 1, size: 200 })
+      const items = Array.isArray(result.items) ? result.items : []
+      setPipelineSources(items)
+      const selectedIds = pipelineSetupForm.getFieldValue("sourceIds") as number[] | undefined
+      if ((!selectedIds || selectedIds.length === 0) && items.length === 1) {
+        pipelineSetupForm.setFieldsValue({ sourceIds: [items[0].id] })
+      }
+    } catch (err) {
+      console.error("Failed to load watchlist sources for pipeline setup:", err)
+      setPipelineSources([])
+      message.error(
+        t(
+          "watchlists:overview.pipelineSetup.sourcesError",
+          "Failed to load feeds for the pipeline builder."
+        )
+      )
+    } finally {
+      setPipelineSourcesLoading(false)
+    }
+  }, [pipelineSetupForm, t])
+
+  const openPipelineSetup = useCallback(() => {
+    pipelineSetupForm.setFieldsValue(PIPELINE_DEFAULT_VALUES)
+    setPipelineSetupStep(0)
+    setPipelineSetupOpen(true)
+    void loadPipelineSources()
+  }, [loadPipelineSources, pipelineSetupForm])
+
+  const closePipelineSetup = useCallback(() => {
+    if (pipelineSetupSubmitting) return
+    setPipelineSetupOpen(false)
+    setPipelineSetupStep(0)
+    pipelineSetupForm.resetFields()
+  }, [pipelineSetupForm, pipelineSetupSubmitting])
+
+  const handlePipelineSetupBack = useCallback(() => {
+    setPipelineSetupStep((prev) => Math.max(0, prev - 1))
+  }, [])
+
+  const handlePipelineSetupNext = useCallback(async () => {
+    try {
+      if (pipelineSetupStep === 0) {
+        await pipelineSetupForm.validateFields(["sourceIds"])
+      } else if (pipelineSetupStep === 1) {
+        const includeAudio = Boolean(pipelineSetupForm.getFieldValue("includeAudio"))
+        const fields: Array<keyof PipelineBuilderValues> = [
+          "monitorName",
+          "schedulePreset",
+          "templateName"
+        ]
+        if (includeAudio) {
+          fields.push("audioVoice", "targetAudioMinutes")
+        }
+        await pipelineSetupForm.validateFields(fields)
+      }
+      setPipelineSetupStep((prev) => Math.min(prev + 1, PIPELINE_SETUP_MAX_STEP))
+    } catch {
+      // Field-level validation state is already surfaced by antd form.
+    }
+  }, [pipelineSetupForm, pipelineSetupStep])
+
+  const completePipelineSetup = useCallback(async () => {
+    let createdJobId: number | null = null
+    let createdRunId: number | null = null
+
+    try {
+      setPipelineSetupSubmitting(true)
+      const values = {
+        ...PIPELINE_DEFAULT_VALUES,
+        ...pipelineSetupForm.getFieldsValue(true)
+      } as PipelineBuilderValues
+
+      const draft = toPipelineDraft(values)
+      const validation = validateBriefingPipelineDraft(draft)
+      if (!validation.valid) {
+        const errorFields = validation.errors.map((key) => ({
+          name: key as keyof PipelineBuilderValues,
+          errors: [
+            t(
+              "watchlists:overview.pipelineSetup.validation.required",
+              "Complete this field before continuing."
+            )
+          ]
+        }))
+        pipelineSetupForm.setFields(errorFields)
+        if (validation.errors.includes("sourceIds")) {
+          setPipelineSetupStep(0)
+        } else {
+          setPipelineSetupStep(1)
+        }
+        message.error(
+          t(
+            "watchlists:overview.pipelineSetup.validationError",
+            "Review the highlighted pipeline fields."
+          )
+        )
+        return
+      }
+
+      const job = await createWatchlistJob(toPipelineJobCreatePayload(draft))
+      createdJobId = job.id
+
+      if (!values.runNow) {
+        closePipelineSetup()
+        void loadOverview(false)
+        setActiveTab("jobs")
+        message.success(
+          t(
+            "watchlists:overview.pipelineSetup.created",
+            "Pipeline created. Open Monitors to review schedule and trigger runs."
+          )
+        )
+        return
+      }
+
+      const run = await triggerWatchlistRun(job.id)
+      createdRunId = run.id
+      const output = await createWatchlistOutput(
+        toPipelineOutputCreatePayload(run.id, draft)
+      )
+
+      closePipelineSetup()
+      void loadOverview(false)
+      if (typeof setOutputsRunFilter === "function") {
+        setOutputsRunFilter(run.id)
+      }
+      setActiveTab("outputs")
+      openOutputPreview(output.id)
+      message.success(
+        t(
+          "watchlists:overview.pipelineSetup.createdAndRunning",
+          "Pipeline created. First run started and report is ready for review."
+        )
+      )
+    } catch (err) {
+      console.error("Failed to complete pipeline setup:", err)
+      if (createdJobId != null && createdRunId == null) {
+        try {
+          await deleteWatchlistJob(createdJobId)
+          message.warning(
+            t(
+              "watchlists:overview.pipelineSetup.rollbackSuccess",
+              "Pipeline setup failed before run start. Monitor creation was rolled back."
+            )
+          )
+        } catch (rollbackError) {
+          console.error("Failed to rollback pipeline monitor creation:", rollbackError)
+          message.error(
+            t(
+              "watchlists:overview.pipelineSetup.rollbackFailed",
+              "Pipeline setup failed and rollback was incomplete. Review Monitors for cleanup."
+            )
+          )
+        }
+      } else {
+        if (createdRunId != null) {
+          setActiveTab("runs")
+          openRunDetail(createdRunId)
+        }
+        message.error(
+          t(
+            "watchlists:overview.pipelineSetup.error",
+            "Pipeline setup failed. Open Activity or Reports to inspect recovery options."
+          )
+        )
+      }
+    } finally {
+      setPipelineSetupSubmitting(false)
+    }
+  }, [
+    closePipelineSetup,
+    loadOverview,
+    openOutputPreview,
+    openRunDetail,
+    pipelineSetupForm,
+    setActiveTab,
+    setOutputsRunFilter,
+    t
+  ])
+
   const quickSetupValues = Form.useWatch([], quickSetupForm) as Partial<QuickSetupValues> | undefined
   const quickSetupIsLastStep = quickSetupStep >= QUICK_SETUP_MAX_STEP
   const quickSetupStepHelp =
@@ -328,6 +654,32 @@ export const OverviewTab: React.FC = () => {
             "watchlists:overview.onboarding.quickSetup.help.review",
             "You can change any of these settings later from Feeds and Monitors."
           )
+  const quickSetupExtraSourceUrls = parseQuickSetupExtraSourceUrls(
+    String(quickSetupValues?.extraSourceUrls || "")
+  )
+  const quickSetupDestinationHint = quickSetupValues?.runNow
+    ? t(
+        "watchlists:overview.onboarding.quickSetup.destination.runs",
+        "After setup, you will land in Activity to monitor the active run."
+      )
+    : quickSetupValues?.setupGoal === "briefing"
+      ? t(
+          "watchlists:overview.onboarding.quickSetup.destination.outputs",
+          "After setup, you will land in Reports to review generated briefings."
+        )
+      : t(
+          "watchlists:overview.onboarding.quickSetup.destination.jobs",
+          "After setup, you will land in Monitors to schedule and tune your workflow."
+        )
+  const pipelineSetupValues = Form.useWatch([], pipelineSetupForm) as
+    | Partial<PipelineBuilderValues>
+    | undefined
+  const pipelineDraftPreview = toPipelineDraft({
+    ...PIPELINE_DEFAULT_VALUES,
+    ...(pipelineSetupValues || {})
+  } as PipelineBuilderValues)
+  const pipelineReviewSummary = buildPipelineReviewSummary(pipelineDraftPreview)
+  const pipelineSetupIsLastStep = pipelineSetupStep >= PIPELINE_SETUP_MAX_STEP
   const overviewBadges = getOverviewTabBadges(data?.health)
 
   if (loading && !data) {
@@ -364,6 +716,14 @@ export const OverviewTab: React.FC = () => {
           >
             {t("common:refresh", "Refresh")}
           </Button>
+          <Button
+            type="default"
+            onClick={openPipelineSetup}
+            data-testid="watchlists-overview-cta-pipeline-builder"
+            disabled={(data?.sources.total || 0) === 0}
+          >
+            {t("watchlists:overview.pipelineSetup.open", "Briefing pipeline builder")}
+          </Button>
         </Space>
       </div>
 
@@ -383,6 +743,40 @@ export const OverviewTab: React.FC = () => {
                   "watchlists:overview.onboarding.pipeline",
                   "Add Feed -> Create Monitor -> Review Results"
                 )}
+              </p>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium uppercase tracking-wide text-text-muted">
+                  {t("watchlists:overview.onboarding.path.label", "Onboarding mode")}
+                </span>
+                <Button
+                  size="small"
+                  type={onboardingPath === "beginner" ? "primary" : "default"}
+                  onClick={() => handleOnboardingPathChange("beginner")}
+                  data-testid="watchlists-overview-onboarding-path-beginner"
+                  aria-pressed={onboardingPath === "beginner"}
+                >
+                  {t("watchlists:overview.onboarding.path.beginner", "Beginner (guided)")}
+                </Button>
+                <Button
+                  size="small"
+                  type={onboardingPath === "advanced" ? "primary" : "default"}
+                  onClick={() => handleOnboardingPathChange("advanced")}
+                  data-testid="watchlists-overview-onboarding-path-advanced"
+                  aria-pressed={onboardingPath === "advanced"}
+                >
+                  {t("watchlists:overview.onboarding.path.advanced", "Advanced (direct forms)")}
+                </Button>
+              </div>
+              <p className="mb-3 text-xs text-text-muted">
+                {onboardingPath === "beginner"
+                  ? t(
+                      "watchlists:overview.onboarding.path.beginnerHint",
+                      "Guided setup keeps the flow simple and avoids cron/template setup first."
+                    )
+                  : t(
+                      "watchlists:overview.onboarding.path.advancedHint",
+                      "Advanced mode prioritizes direct Feed and Monitor forms."
+                    )}
               </p>
               <Steps
                 size="small"
@@ -413,14 +807,28 @@ export const OverviewTab: React.FC = () => {
               />
               <Space className="mt-4" wrap>
                 <Button
+                  type={onboardingPath === "beginner" ? "primary" : "default"}
                   onClick={openQuickSetup}
                   data-testid="watchlists-overview-cta-guided-setup"
                 >
                   {t("watchlists:overview.onboarding.cta.guidedSetup", "Guided setup")}
                 </Button>
-                {data.sources.total === 0 && (
+                {onboardingPath === "advanced" && (
                   <Button
                     type="primary"
+                    onClick={
+                      data.sources.total === 0 ? handleStartSourceQuickCreate : handleStartJobQuickCreate
+                    }
+                    data-testid="watchlists-overview-cta-advanced-direct"
+                  >
+                    {data.sources.total === 0
+                      ? t("watchlists:overview.onboarding.cta.addFeed", "Add first feed")
+                      : t("watchlists:overview.onboarding.cta.createMonitor", "Create first monitor")}
+                  </Button>
+                )}
+                {data.sources.total === 0 && (
+                  <Button
+                    type="default"
                     onClick={handleStartSourceQuickCreate}
                     data-testid="watchlists-overview-cta-add-feed"
                   >
@@ -429,7 +837,7 @@ export const OverviewTab: React.FC = () => {
                 )}
                 {data.sources.total > 0 && data.jobs.total === 0 && (
                   <Button
-                    type="primary"
+                    type="default"
                     onClick={handleStartJobQuickCreate}
                     data-testid="watchlists-overview-cta-create-monitor"
                   >
@@ -844,6 +1252,46 @@ export const OverviewTab: React.FC = () => {
                 </Form.Item>
 
                 <Form.Item
+                  label={t(
+                    "watchlists:overview.onboarding.quickSetup.fields.extraSourceUrls",
+                    "Additional feed URLs (optional)"
+                  )}
+                  name="extraSourceUrls"
+                  rules={[
+                    {
+                      validator: (_rule, value) => {
+                        const raw = String(value || "").trim()
+                        if (!raw) return Promise.resolve()
+                        const entries = raw
+                          .split(/\r?\n|,/)
+                          .map((entry) => entry.trim())
+                          .filter((entry) => entry.length > 0)
+                        const validEntries = parseQuickSetupExtraSourceUrls(raw)
+                        if (entries.length === validEntries.length) {
+                          return Promise.resolve()
+                        }
+                        return Promise.reject(
+                          new Error(
+                            t(
+                              "watchlists:overview.onboarding.quickSetup.validation.extraSourceUrlsInvalid",
+                              "Enter valid http(s) URLs separated by commas or new lines"
+                            )
+                          )
+                        )
+                      }
+                    }
+                  ]}
+                >
+                  <Input.TextArea
+                    autoSize={{ minRows: 2, maxRows: 5 }}
+                    placeholder={t(
+                      "watchlists:overview.onboarding.quickSetup.placeholders.extraSourceUrls",
+                      "https://example.com/feed-a.xml\nhttps://example.com/feed-b.xml"
+                    )}
+                  />
+                </Form.Item>
+
+                <Form.Item
                   label={t("watchlists:overview.onboarding.quickSetup.fields.sourceType", "Feed type")}
                   name="sourceType"
                 >
@@ -942,12 +1390,32 @@ export const OverviewTab: React.FC = () => {
                   />
                 </Form.Item>
 
+                {(quickSetupValues?.setupGoal || "briefing") === "briefing" && (
+                  <Form.Item
+                    label={t(
+                      "watchlists:overview.onboarding.quickSetup.fields.includeAudioBriefing",
+                      "Include audio briefing"
+                    )}
+                    name="includeAudioBriefing"
+                    valuePropName="checked"
+                  >
+                    <Switch
+                      aria-label={t(
+                        "watchlists:overview.onboarding.quickSetup.fields.includeAudioBriefing",
+                        "Include audio briefing"
+                      )}
+                    />
+                  </Form.Item>
+                )}
+
                 <Form.Item
                   label={t("watchlists:overview.onboarding.quickSetup.fields.runNow", "Run immediately")}
                   name="runNow"
                   valuePropName="checked"
                 >
-                  <Switch />
+                  <Switch
+                    aria-label={t("watchlists:overview.onboarding.quickSetup.fields.runNow", "Run immediately")}
+                  />
                 </Form.Item>
               </div>
             )}
@@ -969,6 +1437,11 @@ export const OverviewTab: React.FC = () => {
                   </p>
                   <p className="text-text-muted">
                     {quickSetupValues?.sourceUrl || "—"}
+                  </p>
+                  <p className="mt-1 text-text-muted">
+                    {t("watchlists:overview.onboarding.quickSetup.review.feedCount", "Total feeds: {{count}}", {
+                      count: (quickSetupValues?.sourceUrl ? 1 : 0) + quickSetupExtraSourceUrls.length
+                    })}
                   </p>
                   <p className="mt-2">
                     <span className="font-medium">
@@ -999,6 +1472,16 @@ export const OverviewTab: React.FC = () => {
                           "Generate briefing reports"
                         )}
                   </p>
+                  {(quickSetupValues?.setupGoal || "briefing") === "briefing" && (
+                    <p>
+                      <span className="font-medium">
+                        {t("watchlists:overview.onboarding.quickSetup.review.audio", "Audio briefing")}:
+                      </span>{" "}
+                      {quickSetupValues?.includeAudioBriefing
+                        ? t("common:enabled", "Enabled")
+                        : t("common:disabled", "Disabled")}
+                    </p>
+                  )}
                   <p>
                     <span className="font-medium">
                       {t("watchlists:overview.onboarding.quickSetup.review.runNow", "Run now")}:
@@ -1006,6 +1489,277 @@ export const OverviewTab: React.FC = () => {
                     {quickSetupValues?.runNow
                       ? t("common:yes", "Yes")
                       : t("common:no", "No")}
+                  </p>
+                </div>
+                <p className="text-xs text-text-muted">{quickSetupDestinationHint}</p>
+              </div>
+            )}
+          </Form>
+        </div>
+      </Modal>
+
+      <Modal
+        open={pipelineSetupOpen}
+        title={t("watchlists:overview.pipelineSetup.title", "Briefing pipeline builder")}
+        onCancel={closePipelineSetup}
+        destroyOnHidden
+        maskClosable={!pipelineSetupSubmitting}
+        footer={[
+          <Button
+            key="cancel"
+            onClick={closePipelineSetup}
+            disabled={pipelineSetupSubmitting}
+          >
+            {t("common:cancel", "Cancel")}
+          </Button>,
+          <Button
+            key="back"
+            onClick={handlePipelineSetupBack}
+            disabled={pipelineSetupSubmitting || pipelineSetupStep === 0}
+          >
+            {t("common:back", "Back")}
+          </Button>,
+          <Button
+            key="next"
+            type="primary"
+            loading={pipelineSetupSubmitting}
+            onClick={() => {
+              if (pipelineSetupIsLastStep) {
+                void completePipelineSetup()
+              } else {
+                void handlePipelineSetupNext()
+              }
+            }}
+          >
+            {pipelineSetupIsLastStep
+              ? t("watchlists:overview.pipelineSetup.actions.finish", "Create pipeline")
+              : t("common:next", "Next")}
+          </Button>
+        ]}
+      >
+        <div className="space-y-4">
+          <Steps
+            size="small"
+            current={pipelineSetupStep}
+            items={[
+              {
+                title: t("watchlists:overview.pipelineSetup.steps.scope", "Scope")
+              },
+              {
+                title: t("watchlists:overview.pipelineSetup.steps.briefing", "Briefing")
+              },
+              {
+                title: t("watchlists:overview.pipelineSetup.steps.review", "Review")
+              }
+            ]}
+          />
+
+          <Form
+            form={pipelineSetupForm}
+            layout="vertical"
+            initialValues={PIPELINE_DEFAULT_VALUES}
+          >
+            {pipelineSetupStep === 0 && (
+              <div className="space-y-2">
+                <Form.Item
+                  label={t("watchlists:overview.pipelineSetup.fields.sources", "Feeds")}
+                  name="sourceIds"
+                  rules={[
+                    {
+                      validator: (_rule, value) => {
+                        if (Array.isArray(value) && value.length > 0) {
+                          return Promise.resolve()
+                        }
+                        return Promise.reject(
+                          new Error(
+                            t(
+                              "watchlists:overview.pipelineSetup.validation.sourcesRequired",
+                              "Select at least one feed"
+                            )
+                          )
+                        )
+                      }
+                    }
+                  ]}
+                >
+                  <Checkbox.Group className="grid gap-2">
+                    {pipelineSources.map((source) => (
+                      <Checkbox key={source.id} value={source.id}>
+                        {source.name || `Feed #${source.id}`}
+                      </Checkbox>
+                    ))}
+                  </Checkbox.Group>
+                </Form.Item>
+                {pipelineSourcesLoading && (
+                  <div className="text-xs text-text-muted">
+                    {t("watchlists:overview.pipelineSetup.sourcesLoading", "Loading feeds...")}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {pipelineSetupStep === 1 && (
+              <div className="space-y-1">
+                <Form.Item
+                  label={t("watchlists:overview.pipelineSetup.fields.monitorName", "Monitor name")}
+                  name="monitorName"
+                  rules={[
+                    {
+                      required: true,
+                      message: t(
+                        "watchlists:overview.pipelineSetup.validation.monitorNameRequired",
+                        "Enter a monitor name"
+                      )
+                    }
+                  ]}
+                >
+                  <Input autoFocus />
+                </Form.Item>
+
+                <Form.Item
+                  label={t("watchlists:overview.pipelineSetup.fields.schedule", "Schedule")}
+                  name="schedulePreset"
+                >
+                  <Select
+                    options={[
+                      { value: "none", label: t("watchlists:overview.onboarding.quickSetup.schedule.none", "Manual only") },
+                      { value: "hourly", label: t("watchlists:overview.onboarding.quickSetup.schedule.hourly", "Hourly") },
+                      { value: "daily", label: t("watchlists:overview.onboarding.quickSetup.schedule.daily", "Daily at 08:00") },
+                      { value: "weekdays", label: t("watchlists:overview.onboarding.quickSetup.schedule.weekdays", "Weekdays at 08:00") }
+                    ]}
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  label={t("watchlists:overview.pipelineSetup.fields.template", "Template")}
+                  name="templateName"
+                  rules={[
+                    {
+                      required: true,
+                      message: t(
+                        "watchlists:overview.pipelineSetup.validation.templateRequired",
+                        "Enter a template name"
+                      )
+                    }
+                  ]}
+                >
+                  <Input />
+                </Form.Item>
+
+                <Form.Item
+                  label={t("watchlists:overview.pipelineSetup.fields.includeAudio", "Include audio briefing")}
+                  name="includeAudio"
+                  valuePropName="checked"
+                >
+                  <Switch
+                    aria-label={t(
+                      "watchlists:overview.pipelineSetup.fields.includeAudio",
+                      "Include audio briefing"
+                    )}
+                  />
+                </Form.Item>
+
+                {pipelineSetupValues?.includeAudio && (
+                  <>
+                    <Form.Item
+                      label={t("watchlists:overview.pipelineSetup.fields.audioVoice", "Audio voice")}
+                      name="audioVoice"
+                      rules={[
+                        {
+                          required: true,
+                          message: t(
+                            "watchlists:overview.pipelineSetup.validation.audioVoiceRequired",
+                            "Select an audio voice"
+                          )
+                        }
+                      ]}
+                    >
+                      <Select
+                        options={[
+                          { value: "alloy", label: "Alloy" },
+                          { value: "nova", label: "Nova" },
+                          { value: "echo", label: "Echo" }
+                        ]}
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label={t("watchlists:overview.pipelineSetup.fields.audioMinutes", "Target audio minutes")}
+                      name="targetAudioMinutes"
+                      rules={[
+                        {
+                          required: true,
+                          type: "number",
+                          min: 1,
+                          message: t(
+                            "watchlists:overview.pipelineSetup.validation.audioMinutesRequired",
+                            "Enter target audio minutes"
+                          )
+                        }
+                      ]}
+                    >
+                      <Input type="number" min={1} />
+                    </Form.Item>
+                  </>
+                )}
+
+                <Form.Item
+                  label={t("watchlists:overview.pipelineSetup.fields.runNow", "Run immediately")}
+                  name="runNow"
+                  valuePropName="checked"
+                >
+                  <Switch
+                    aria-label={t("watchlists:overview.pipelineSetup.fields.runNow", "Run immediately")}
+                  />
+                </Form.Item>
+              </div>
+            )}
+
+            {pipelineSetupStep === 2 && (
+              <div className="space-y-3 text-sm">
+                <p className="text-text-muted">
+                  {t(
+                    "watchlists:overview.pipelineSetup.reviewDescription",
+                    "Confirm this pipeline before creating monitor, run, and output artifacts."
+                  )}
+                </p>
+                <div className="rounded-md border border-border bg-surface p-3">
+                  <p>
+                    <span className="font-medium">
+                      {t("watchlists:overview.pipelineSetup.review.monitor", "Monitor")}:
+                    </span>{" "}
+                    {pipelineSetupValues?.monitorName || "—"}
+                  </p>
+                  <p>
+                    <span className="font-medium">
+                      {t("watchlists:overview.pipelineSetup.review.feeds", "Feeds")}:
+                    </span>{" "}
+                    {Array.isArray(pipelineSetupValues?.sourceIds)
+                      ? pipelineSetupValues?.sourceIds.length
+                      : 0}
+                  </p>
+                  <p>
+                    <span className="font-medium">
+                      {t("watchlists:overview.pipelineSetup.review.schedule", "Schedule")}:
+                    </span>{" "}
+                    {pipelineReviewSummary.scheduleLabel}
+                  </p>
+                  <p>
+                    <span className="font-medium">
+                      {t("watchlists:overview.pipelineSetup.review.artifacts", "Artifacts")}:
+                    </span>{" "}
+                    {pipelineReviewSummary.artifacts.join(", ")}
+                  </p>
+                  <p>
+                    <span className="font-medium">
+                      {t("watchlists:overview.pipelineSetup.review.deliveries", "Deliveries")}:
+                    </span>{" "}
+                    {pipelineReviewSummary.deliveries.join(", ")}
+                  </p>
+                  <p>
+                    <span className="font-medium">
+                      {t("watchlists:overview.pipelineSetup.review.runNow", "Run now")}:
+                    </span>{" "}
+                    {pipelineSetupValues?.runNow ? t("common:yes", "Yes") : t("common:no", "No")}
                   </p>
                 </div>
               </div>

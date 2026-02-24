@@ -45,7 +45,7 @@
 **Tests**:
 - Add keyboard navigation tests for tabs, forms, lists, and reader interactions.
 - Add focus trap/restore tests for modal and drawer components.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Screen Reader Semantics and Live Status Updates
 **Goal**: Improve semantic structure and narrated state changes.
@@ -91,3 +91,19 @@
 - Stage 1 validation evidence:
   - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/shared/__tests__/StatusTag.accessibility.test.tsx --maxWorkers=1 --no-file-parallelism`
   - `/tmp/bandit_watchlists_group09_stage1_2026_02_24.json`
+
+### 2026-02-24 - Stage 2 completion (keyboard + focus hardening)
+
+- Added focus restoration coverage for key Watchlists modal/drawer flows used in UC1/UC2 setup and output review:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobFormModal.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobPreviewModal.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputPreviewDrawer.tsx`
+- Added regression tests proving focus returns to launch controls after close:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx`
+- Stage 2 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage2_2026_02_24.json`

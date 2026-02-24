@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Button,
   Drawer,
@@ -15,7 +15,12 @@ import { useTranslation } from "react-i18next"
 import { downloadWatchlistOutput, downloadWatchlistOutputBinary } from "@/services/watchlists"
 import type { WatchlistOutput } from "@/types/watchlists"
 import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
+import {
   getDeliveryStatusColor,
+  getOutputArtifactLabel,
   getOutputFileExtension,
   getOutputDeliveryStatuses,
   getOutputMimeType,
@@ -43,6 +48,23 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<"rendered" | "source">("rendered")
   const outputIsAudio = useMemo(() => isAudioOutput(output), [output])
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
 
   const updateAudioObjectUrl = useCallback((nextUrl: string | null) => {
     if (audioObjectUrlRef.current && audioObjectUrlRef.current !== nextUrl) {
@@ -140,6 +162,9 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   const templateVersion = useMemo(() => {
     return getOutputTemplateVersion(output?.metadata)
   }, [output?.metadata])
+  const artifactLabel = useMemo(() => {
+    return getOutputArtifactLabel(output)
+  }, [output])
 
   // Open in new tab (for HTML)
   const handleOpenInNewTab = () => {
@@ -189,7 +214,7 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
         <div className="text-center py-12 text-danger">{error}</div>
       ) : outputIsAudio ? (
         <div className="space-y-4">
-          {(templateName || templateVersion || deliveryStatuses.length > 0 || output?.chatbook_path || output?.storage_path) && (
+          {output && (
             <div className="rounded-lg border border-border p-3 space-y-2 bg-surface">
               {(templateName || templateVersion) && (
                 <div className="text-sm text-text">
@@ -198,6 +223,24 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
                   </span>{" "}
                   {templateName || t("watchlists:outputs.templateUnknown", "Unknown")}
                   {templateVersion ? ` v${templateVersion}` : ""}
+                </div>
+              )}
+              {output && (
+                <div className="space-y-1" data-testid="output-preview-provenance">
+                  <div className="text-sm font-medium text-text">
+                    {t("watchlists:outputs.provenanceLabel", "Provenance")}
+                  </div>
+                  <div className="text-xs text-text-muted">
+                    {t(
+                      "watchlists:outputs.provenanceDescription",
+                      "Monitor #{{job}} • Run #{{run}} • Artifact: {{artifact}}",
+                      {
+                        job: output.job_id,
+                        run: output.run_id,
+                        artifact: artifactLabel
+                      }
+                    )}
+                  </div>
                 </div>
               )}
               {deliveryStatuses.length > 0 && (
@@ -253,7 +296,7 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
         </div>
       ) : content ? (
         <div className="space-y-4">
-          {(templateName || templateVersion || deliveryStatuses.length > 0 || output?.chatbook_path) && (
+          {output && (
             <div className="rounded-lg border border-border p-3 space-y-2 bg-surface">
               {(templateName || templateVersion) && (
                 <div className="text-sm text-text">
@@ -262,6 +305,24 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
                   </span>{" "}
                   {templateName || t("watchlists:outputs.templateUnknown", "Unknown")}
                   {templateVersion ? ` v${templateVersion}` : ""}
+                </div>
+              )}
+              {output && (
+                <div className="space-y-1" data-testid="output-preview-provenance">
+                  <div className="text-sm font-medium text-text">
+                    {t("watchlists:outputs.provenanceLabel", "Provenance")}
+                  </div>
+                  <div className="text-xs text-text-muted">
+                    {t(
+                      "watchlists:outputs.provenanceDescription",
+                      "Monitor #{{job}} • Run #{{run}} • Artifact: {{artifact}}",
+                      {
+                        job: output.job_id,
+                        run: output.run_id,
+                        artifact: artifactLabel
+                      }
+                    )}
+                  </div>
                 </div>
               )}
               {deliveryStatuses.length > 0 && (

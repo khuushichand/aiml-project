@@ -4,17 +4,26 @@ import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { OverviewTab } from "../OverviewTab"
+import { QUICK_SETUP_DEFAULT_VALUES } from "../quick-setup"
+
+const ONBOARDING_PATH_STORAGE_KEY = "watchlists:onboarding-path:v1"
 
 const mockState = vi.hoisted(() => ({
   fetchOverviewMock: vi.fn(),
+  fetchWatchlistSourcesMock: vi.fn(),
+  bulkCreateSourcesMock: vi.fn(),
   createWatchlistSourceMock: vi.fn(),
   createWatchlistJobMock: vi.fn(),
+  deleteWatchlistJobMock: vi.fn(),
   triggerWatchlistRunMock: vi.fn(),
+  createWatchlistOutputMock: vi.fn(),
   trackWatchlistsOnboardingTelemetryMock: vi.fn(),
   setActiveTabMock: vi.fn(),
+  setOutputsRunFilterMock: vi.fn(),
   openSourceFormMock: vi.fn(),
   openJobFormMock: vi.fn(),
-  openRunDetailMock: vi.fn()
+  openRunDetailMock: vi.fn(),
+  openOutputPreviewMock: vi.fn()
 }))
 
 vi.mock("react-i18next", () => ({
@@ -52,9 +61,13 @@ vi.mock("@/services/watchlists-overview", () => ({
 }))
 
 vi.mock("@/services/watchlists", () => ({
+  fetchWatchlistSources: (...args: unknown[]) => mockState.fetchWatchlistSourcesMock(...args),
+  bulkCreateSources: (...args: unknown[]) => mockState.bulkCreateSourcesMock(...args),
   createWatchlistSource: (...args: unknown[]) => mockState.createWatchlistSourceMock(...args),
   createWatchlistJob: (...args: unknown[]) => mockState.createWatchlistJobMock(...args),
-  triggerWatchlistRun: (...args: unknown[]) => mockState.triggerWatchlistRunMock(...args)
+  deleteWatchlistJob: (...args: unknown[]) => mockState.deleteWatchlistJobMock(...args),
+  triggerWatchlistRun: (...args: unknown[]) => mockState.triggerWatchlistRunMock(...args),
+  createWatchlistOutput: (...args: unknown[]) => mockState.createWatchlistOutputMock(...args)
 }))
 
 vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
@@ -66,9 +79,11 @@ vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: Record<string, unknown>) => unknown) =>
     selector({
       setActiveTab: mockState.setActiveTabMock,
+      setOutputsRunFilter: mockState.setOutputsRunFilterMock,
       openSourceForm: mockState.openSourceFormMock,
       openJobForm: mockState.openJobFormMock,
-      openRunDetail: mockState.openRunDetailMock
+      openRunDetail: mockState.openRunDetailMock,
+      openOutputPreview: mockState.openOutputPreviewMock
     })
 }))
 
@@ -140,6 +155,23 @@ describe("OverviewTab quick setup flow", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockState.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)
+    mockState.bulkCreateSourcesMock.mockResolvedValue({
+      items: [],
+      total: 0,
+      created: 0,
+      errors: 0
+    })
+    mockState.fetchWatchlistSourcesMock.mockResolvedValue({
+      items: [
+        { id: 11, name: "AI Feed" },
+        { id: 12, name: "Security Feed" }
+      ],
+      total: 2
+    })
+    QUICK_SETUP_DEFAULT_VALUES.setupGoal = "briefing"
+    QUICK_SETUP_DEFAULT_VALUES.runNow = true
+    QUICK_SETUP_DEFAULT_VALUES.includeAudioBriefing = true
+    localStorage.removeItem(ONBOARDING_PATH_STORAGE_KEY)
   })
 
   it("opens Feed creation directly from quick setup", async () => {
@@ -212,6 +244,39 @@ describe("OverviewTab quick setup flow", () => {
     ).toBeInTheDocument()
   }, 20_000)
 
+  it("persists onboarding path selection and restores it on next render", async () => {
+    mockState.fetchOverviewMock.mockResolvedValue(createOverviewPayload())
+
+    const { unmount } = render(<OverviewTab />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("watchlists-overview-onboarding-path-beginner")
+      ).toBeInTheDocument()
+    })
+
+    expect(
+      screen.getByTestId("watchlists-overview-onboarding-path-beginner")
+    ).toHaveAttribute("aria-pressed", "true")
+
+    fireEvent.click(screen.getByTestId("watchlists-overview-onboarding-path-advanced"))
+
+    expect(localStorage.getItem(ONBOARDING_PATH_STORAGE_KEY)).toBe("advanced")
+    expect(
+      screen.getByTestId("watchlists-overview-onboarding-path-advanced")
+    ).toHaveAttribute("aria-pressed", "true")
+
+    unmount()
+    render(<OverviewTab />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("watchlists-overview-onboarding-path-advanced")
+      ).toHaveAttribute("aria-pressed", "true")
+    })
+    expect(screen.getByTestId("watchlists-overview-cta-advanced-direct")).toBeInTheDocument()
+  })
+
   it("routes to Reports after setup when briefing goal is selected and run-now is disabled", async () => {
     mockState.fetchOverviewMock.mockResolvedValue(createOverviewPayload())
     mockState.createWatchlistSourceMock.mockResolvedValue({ id: 101 })
@@ -239,7 +304,7 @@ describe("OverviewTab quick setup flow", () => {
     fireEvent.change(screen.getByPlaceholderText("e.g., Morning Brief"), {
       target: { value: "AM Brief" }
     })
-    fireEvent.click(screen.getByRole("switch"))
+    fireEvent.click(screen.getByLabelText("Run immediately"))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Create setup" })).toBeInTheDocument()
@@ -252,9 +317,9 @@ describe("OverviewTab quick setup flow", () => {
     expect(mockState.triggerWatchlistRunMock).not.toHaveBeenCalled()
     expect(mockState.createWatchlistJobMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        output_prefs: {
+        output_prefs: expect.objectContaining({
           template_name: "briefing_md"
-        }
+        })
       })
     )
     expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
@@ -264,4 +329,340 @@ describe("OverviewTab quick setup flow", () => {
       destination: "outputs"
     })
   }, 20_000)
+
+  it("creates quick setup monitor scope with multiple feeds when extra URLs are provided", async () => {
+    mockState.fetchOverviewMock.mockResolvedValue(createOverviewPayload())
+    mockState.createWatchlistSourceMock.mockResolvedValue({ id: 101 })
+    mockState.bulkCreateSourcesMock.mockResolvedValue({
+      items: [
+        { id: 201, url: "https://example.com/feed-b.xml", status: "created" },
+        { id: 202, url: "https://example.com/feed-c.xml", status: "created" }
+      ],
+      total: 2,
+      created: 2,
+      errors: 0
+    })
+    mockState.createWatchlistJobMock.mockResolvedValue({ id: 303 })
+
+    render(<OverviewTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-overview-cta-guided-setup")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-overview-cta-guided-setup"))
+    fireEvent.change(screen.getByPlaceholderText("e.g., Daily Tech Feed"), {
+      target: { value: "AI Feed" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/feed.xml"), {
+      target: { value: "https://example.com/feed-a.xml" }
+    })
+    fireEvent.change(screen.getByLabelText("Additional feed URLs (optional)"), {
+      target: {
+        value: "https://example.com/feed-b.xml\nhttps://example.com/feed-c.xml"
+      }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Run immediately")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByLabelText("Run immediately"))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Create setup" })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create setup" }))
+
+    await waitFor(() => {
+      expect(mockState.createWatchlistJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scope: { sources: [101, 201, 202] }
+        })
+      )
+    })
+    expect(mockState.bulkCreateSourcesMock).toHaveBeenCalledTimes(1)
+    expect(mockState.triggerWatchlistRunMock).not.toHaveBeenCalled()
+  }, 20_000)
+
+  it("fails quick setup when additional feed creation is partial and does not create a monitor", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    mockState.fetchOverviewMock.mockResolvedValue(createOverviewPayload())
+    mockState.createWatchlistSourceMock.mockResolvedValue({ id: 101 })
+    mockState.bulkCreateSourcesMock.mockResolvedValue({
+      items: [
+        { id: 201, url: "https://example.com/feed-b.xml", status: "created" },
+        { url: "https://example.com/feed-c.xml", status: "error", error: "timeout" }
+      ],
+      total: 2,
+      created: 1,
+      errors: 1
+    })
+
+    render(<OverviewTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-overview-cta-guided-setup")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-overview-cta-guided-setup"))
+    fireEvent.change(screen.getByPlaceholderText("e.g., Daily Tech Feed"), {
+      target: { value: "AI Feed" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/feed.xml"), {
+      target: { value: "https://example.com/feed-a.xml" }
+    })
+    fireEvent.change(screen.getByLabelText("Additional feed URLs (optional)"), {
+      target: {
+        value: "https://example.com/feed-b.xml\nhttps://example.com/feed-c.xml"
+      }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByLabelText("Run immediately")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Create setup" })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create setup" }))
+
+    await waitFor(() => {
+      expect(mockState.createWatchlistJobMock).not.toHaveBeenCalled()
+    })
+    consoleErrorSpy.mockRestore()
+  }, 20_000)
+
+  it("routes to Activity after setup when briefing goal runs immediately", async () => {
+    mockState.fetchOverviewMock.mockResolvedValue(createOverviewPayload())
+    mockState.createWatchlistSourceMock.mockResolvedValue({ id: 101 })
+    mockState.createWatchlistJobMock.mockResolvedValue({ id: 202 })
+    mockState.triggerWatchlistRunMock.mockResolvedValue({ id: 303 })
+
+    render(<OverviewTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-overview-cta-guided-setup")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-overview-cta-guided-setup"))
+    fireEvent.change(screen.getByPlaceholderText("e.g., Daily Tech Feed"), {
+      target: { value: "AI Feed" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/feed.xml"), {
+      target: { value: "https://example.com/rss.xml" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByLabelText("Run immediately")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Create setup" })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create setup" }))
+
+    await waitFor(() => {
+      expect(mockState.setActiveTabMock).toHaveBeenLastCalledWith("runs")
+    })
+    expect(mockState.openRunDetailMock).toHaveBeenCalledWith(303)
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "quick_setup_completed",
+      goal: "briefing",
+      runNow: true,
+      destination: "runs"
+    })
+  }, 20_000)
+
+  it("routes to Monitors when triage goal is selected without run-now", async () => {
+    QUICK_SETUP_DEFAULT_VALUES.setupGoal = "triage"
+    QUICK_SETUP_DEFAULT_VALUES.runNow = false
+    QUICK_SETUP_DEFAULT_VALUES.includeAudioBriefing = false
+
+    mockState.fetchOverviewMock.mockResolvedValue(createOverviewPayload())
+    mockState.createWatchlistSourceMock.mockResolvedValue({ id: 101 })
+    mockState.createWatchlistJobMock.mockResolvedValue({ id: 202 })
+
+    render(<OverviewTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-overview-cta-guided-setup")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-overview-cta-guided-setup"))
+    fireEvent.change(screen.getByPlaceholderText("e.g., Daily Tech Feed"), {
+      target: { value: "AI Feed" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/feed.xml"), {
+      target: { value: "https://example.com/rss.xml" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByLabelText("Run immediately")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Create setup" })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create setup" }))
+
+    await waitFor(() => {
+      expect(mockState.setActiveTabMock).toHaveBeenLastCalledWith("jobs")
+    })
+    expect(mockState.triggerWatchlistRunMock).not.toHaveBeenCalled()
+    expect(mockState.createWatchlistJobMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        output_prefs: expect.anything()
+      })
+    )
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "quick_setup_completed",
+      goal: "triage",
+      runNow: false,
+      destination: "jobs"
+    })
+  }, 20_000)
+
+  it("creates run-now pipeline and routes to output preview when output is generated", async () => {
+    mockState.fetchOverviewMock.mockResolvedValue(
+      createOverviewPayload({
+        sources: { total: 2, healthy: 2 },
+        jobs: { total: 1, active: 1 }
+      })
+    )
+    mockState.createWatchlistJobMock.mockResolvedValue({ id: 303 })
+    mockState.triggerWatchlistRunMock.mockResolvedValue({ id: 404 })
+    mockState.createWatchlistOutputMock.mockResolvedValue({ id: 505 })
+
+    render(<OverviewTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-overview-cta-pipeline-builder")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-overview-cta-pipeline-builder"))
+    await waitFor(() => {
+      expect(screen.getByLabelText("AI Feed")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByLabelText("AI Feed"))
+    fireEvent.click(screen.getByLabelText("Security Feed"))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+    })
+    fireEvent.change(screen.getByLabelText("Monitor name"), {
+      target: { value: "Morning Brief" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Create pipeline" })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create pipeline" }))
+
+    await waitFor(() => {
+      expect(mockState.createWatchlistJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scope: { sources: [11, 12] }
+        })
+      )
+    })
+    expect(mockState.triggerWatchlistRunMock).toHaveBeenCalledWith(303)
+    expect(mockState.createWatchlistOutputMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run_id: 404
+      })
+    )
+    expect(mockState.setOutputsRunFilterMock).toHaveBeenCalledWith(404)
+    expect(mockState.setActiveTabMock).toHaveBeenLastCalledWith("outputs")
+    expect(mockState.openOutputPreviewMock).toHaveBeenCalledWith(505)
+  })
+
+  it("rolls back monitor creation when pipeline creation fails before completion", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    mockState.fetchOverviewMock.mockResolvedValue(
+      createOverviewPayload({
+        sources: { total: 2, healthy: 2 },
+        jobs: { total: 1, active: 1 }
+      })
+    )
+    mockState.createWatchlistJobMock.mockResolvedValue({ id: 303 })
+    mockState.triggerWatchlistRunMock.mockRejectedValue(new Error("run failed"))
+    mockState.deleteWatchlistJobMock.mockResolvedValue({ success: true, job_id: 303 })
+
+    render(<OverviewTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-overview-cta-pipeline-builder")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-overview-cta-pipeline-builder"))
+    await waitFor(() => {
+      expect(screen.getByLabelText("AI Feed")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByLabelText("AI Feed"))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+    })
+    fireEvent.change(screen.getByLabelText("Monitor name"), {
+      target: { value: "Morning Brief" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Create pipeline" })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create pipeline" }))
+
+    await waitFor(() => {
+      expect(mockState.deleteWatchlistJobMock).toHaveBeenCalledWith(303)
+    })
+    expect(mockState.openOutputPreviewMock).not.toHaveBeenCalled()
+    expect(mockState.openRunDetailMock).not.toHaveBeenCalled()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("restores focus to guided setup trigger after quick setup modal closes", async () => {
+    mockState.fetchOverviewMock.mockResolvedValue(createOverviewPayload())
+
+    render(<OverviewTab />)
+
+    const trigger = await screen.findByTestId("watchlists-overview-cta-guided-setup")
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+
+    fireEvent.click(trigger)
+    await waitFor(() => {
+      expect(screen.getByText("Guided quick setup")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+    await waitFor(() => {
+      expect(trigger).toHaveFocus()
+    })
+  })
+
+  it("restores focus to pipeline builder trigger after modal closes", async () => {
+    mockState.fetchOverviewMock.mockResolvedValue(
+      createOverviewPayload({
+        sources: { total: 2, healthy: 2 },
+        jobs: { total: 1, active: 1 }
+      })
+    )
+
+    render(<OverviewTab />)
+
+    const trigger = await screen.findByTestId("watchlists-overview-cta-pipeline-builder")
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+
+    fireEvent.click(trigger)
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+    await waitFor(() => {
+      expect(trigger).toHaveFocus()
+    })
+  })
 })
