@@ -186,6 +186,8 @@ class ImageAdapter:
             return set(config.novita_image_allowed_extra_params or [])
         if backend == "together":
             return set(config.together_image_allowed_extra_params or [])
+        if backend == "modelstudio":
+            return set(config.modelstudio_image_allowed_extra_params or [])
         return set()
 
     def _validate_extra_params(
