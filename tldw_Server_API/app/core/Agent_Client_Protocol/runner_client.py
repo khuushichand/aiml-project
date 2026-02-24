@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from loguru import logger
@@ -22,6 +24,22 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import (
 
 # Permission timeout in seconds (5 minutes)
 PERMISSION_TIMEOUT_SECONDS = 300
+
+_ACP_GOVERNANCE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 @dataclass
@@ -48,6 +66,136 @@ class SessionWebSocketRegistry:
     batch_approved_tiers: set[str] = field(default_factory=set)
 
 
+class ACPGovernanceDeniedError(ACPResponseError):
+    """Raised when ACP governance blocks prompt execution."""
+
+    def __init__(
+        self,
+        message: str = "Prompt blocked by governance policy",
+        *,
+        governance: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.governance = governance or {}
+
+
+class ACPGovernanceCoordinator:
+    """Shared governance checks and approval outcome merge logic for ACP."""
+
+    def __init__(self) -> None:
+        self._service: Any | None = None
+        self._store: Any | None = None
+        self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _decision_action(decision: dict[str, Any] | None) -> str:
+        if not isinstance(decision, dict):
+            return ""
+        action = str(decision.get("action") or decision.get("status") or "").strip().lower()
+        return action
+
+    @classmethod
+    def is_denied(cls, decision: dict[str, Any] | None) -> bool:
+        return cls._decision_action(decision) == "deny"
+
+    @classmethod
+    def resolve_permission_outcome(
+        cls,
+        *,
+        tier: str,
+        batch_tier_approved: bool,
+        governance: dict[str, Any] | None,
+    ) -> str:
+        """Return one of: approve | deny | prompt."""
+        action = cls._decision_action(governance)
+        if action == "deny":
+            return "deny"
+        if action == "require_approval":
+            return "prompt"
+        if tier == "auto":
+            return "approve"
+        if tier == "batch" and batch_tier_approved:
+            return "approve"
+        return "prompt"
+
+    @classmethod
+    def _serialize_decision(cls, decision: Any) -> dict[str, Any]:
+        if decision is None:
+            return {}
+        if isinstance(decision, dict):
+            return {str(k): v for k, v in decision.items()}
+        dump = getattr(decision, "model_dump", None)
+        if callable(dump):
+            try:
+                dumped = dump()
+                if isinstance(dumped, dict):
+                    return {str(k): v for k, v in dumped.items()}
+            except _ACP_GOVERNANCE_NONCRITICAL_EXCEPTIONS:
+                pass
+        payload: dict[str, Any] = {}
+        for key in ("action", "status", "category", "category_source", "fallback_reason", "matched_rules"):
+            value = getattr(decision, key, None)
+            if value is not None:
+                payload[key] = value
+        return payload
+
+    async def _ensure_service(self) -> Any | None:
+        if self._service is not None:
+            return self._service
+
+        async with self._lock:
+            if self._service is not None:
+                return self._service
+            try:
+                from tldw_Server_API.app.core.Governance.service import GovernanceService
+                from tldw_Server_API.app.core.Governance.store import GovernanceStore
+                from tldw_Server_API.app.core.MCP_unified.config import get_config
+            except _ACP_GOVERNANCE_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("ACP governance coordinator unavailable (import failure): {}", exc)
+                return None
+
+            try:
+                cfg = get_config()
+                configured_path = getattr(cfg, "governance_db_path", None)
+                sqlite_path = str(configured_path or "Databases/governance.db")
+                db_path = Path(sqlite_path).expanduser()
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+
+                self._store = GovernanceStore(sqlite_path=str(db_path))
+                await self._store.ensure_schema()
+                self._service = GovernanceService(store=self._store)
+                return self._service
+            except _ACP_GOVERNANCE_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("ACP governance coordinator disabled (service init failure): {}", exc)
+                self._service = None
+                self._store = None
+                return None
+
+    async def validate_change(
+        self,
+        *,
+        surface: str,
+        summary: str,
+        category: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        service = await self._ensure_service()
+        if service is None:
+            return None
+
+        try:
+            decision = await service.validate_change(
+                surface=surface,
+                summary=summary,
+                category=category,
+                metadata=metadata,
+            )
+            return self._serialize_decision(decision)
+        except _ACP_GOVERNANCE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("ACP governance validation failed open: {}", exc)
+            return None
+
+
 class ACPRunnerClient:
     def __init__(self, config: ACPRunnerConfig) -> None:
         self.config = config
@@ -65,6 +213,7 @@ class ACPRunnerClient:
         # WebSocket registry per session
         self._ws_registry: dict[str, SessionWebSocketRegistry] = {}
         self._ws_registry_lock = asyncio.Lock()
+        self._governance = ACPGovernanceCoordinator()
 
     @classmethod
     def from_config(cls) -> ACPRunnerClient:
@@ -131,7 +280,92 @@ class ACPRunnerClient:
         response = await self._client.call("agent/list", {})
         return response.result or {}
 
+    @staticmethod
+    def _safe_json_summary(payload: Any, *, max_chars: int = 1200) -> str:
+        try:
+            rendered = json.dumps(payload or {}, sort_keys=True, default=str)
+        except _ACP_GOVERNANCE_NONCRITICAL_EXCEPTIONS:
+            rendered = str(payload)
+        if len(rendered) > max_chars:
+            return rendered[:max_chars]
+        return rendered
+
+    @staticmethod
+    def _resolve_tool_category(tool_name: str) -> str:
+        if isinstance(tool_name, str) and "." in tool_name:
+            prefix = tool_name.split(".", 1)[0].strip().lower()
+            if prefix:
+                return prefix
+        return "acp"
+
+    def _build_governance_metadata(
+        self,
+        session_id: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+        user_id: int | None = None,
+    ) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        if isinstance(metadata, dict):
+            merged.update(metadata)
+        merged.setdefault("session_id", str(session_id))
+        owner = self._session_owners.get(str(session_id))
+        if owner is not None:
+            merged.setdefault("user_id", int(owner))
+        if user_id is not None:
+            merged.setdefault("user_id", int(user_id))
+        return merged
+
+    async def check_prompt_governance(
+        self,
+        session_id: str,
+        prompt: list[dict[str, Any]],
+        *,
+        user_id: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        merged_metadata = self._build_governance_metadata(
+            session_id,
+            metadata=metadata,
+            user_id=user_id,
+        )
+        return await self._governance.validate_change(
+            surface="acp_prompt",
+            summary=f"session={session_id}; prompt={self._safe_json_summary(prompt)}",
+            category="acp",
+            metadata=merged_metadata,
+        )
+
+    async def check_permission_governance(
+        self,
+        session_id: str,
+        tool_name: str,
+        tool_arguments: dict[str, Any],
+        *,
+        tier: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        merged_metadata = self._build_governance_metadata(
+            session_id,
+            metadata=metadata,
+        )
+        merged_metadata.setdefault("permission_tier", tier)
+        merged_metadata.setdefault("tool_name", tool_name)
+        return await self._governance.validate_change(
+            surface="acp_permission",
+            summary=(
+                f"session={session_id}; tier={tier}; tool={tool_name}; "
+                f"input={self._safe_json_summary(tool_arguments)}"
+            ),
+            category=self._resolve_tool_category(tool_name),
+            metadata=merged_metadata,
+        )
+
     async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
+        governance = await self.check_prompt_governance(session_id, prompt)
+        if self._governance.is_denied(governance):
+            raise ACPGovernanceDeniedError(governance=governance or {})
+
         response = await self._client.call(
             "session/prompt",
             {
@@ -327,20 +561,36 @@ class ACPRunnerClient:
 
         # Determine permission tier
         tier = self._determine_permission_tier(tool_name)
-
-        # Check if tier is batch-approved
         registry = self._ws_registry.get(session_id)
-        if registry and tier in registry.batch_approved_tiers:
-            logger.info("Auto-approving {} (tier {} is batch-approved)", tool_name, tier)
+
+        batch_tier_approved = bool(registry and tier in registry.batch_approved_tiers)
+        governance = await self.check_permission_governance(
+            session_id,
+            tool_name,
+            tool_arguments,
+            tier=tier,
+        )
+        approval_outcome = self._governance.resolve_permission_outcome(
+            tier=tier,
+            batch_tier_approved=batch_tier_approved,
+            governance=governance,
+        )
+
+        if approval_outcome == "deny":
+            outcome_payload: dict[str, Any] = {"outcome": "denied"}
+            if isinstance(governance, dict) and governance:
+                outcome_payload["governance"] = governance
             return ACPMessage(
                 jsonrpc="2.0",
                 id=msg.id,
-                result={"outcome": {"outcome": "approved"}},
+                result={"outcome": outcome_payload},
             )
 
-        # Check if tier is auto-approve
-        if tier == "auto":
-            logger.debug("Auto-approving {} (auto tier)", tool_name)
+        if approval_outcome == "approve":
+            if batch_tier_approved:
+                logger.info("Auto-approving {} (tier {} is batch-approved)", tool_name, tier)
+            else:
+                logger.debug("Auto-approving {} (auto tier)", tool_name)
             return ACPMessage(
                 jsonrpc="2.0",
                 id=msg.id,
@@ -383,6 +633,8 @@ class ACPRunnerClient:
             "tier": tier,
             "timeout_seconds": PERMISSION_TIMEOUT_SECONDS,
         }
+        if isinstance(governance, dict) and governance:
+            permission_message["governance"] = governance
         await self._broadcast_to_session(session_id, permission_message)
 
         # Re-check connections after broadcast - all might have failed
