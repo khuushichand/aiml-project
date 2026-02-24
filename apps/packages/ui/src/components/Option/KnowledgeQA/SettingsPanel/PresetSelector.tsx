@@ -5,7 +5,7 @@
 import React, { useRef, useCallback, useState } from "react"
 import { Zap, Scale, Brain, Beaker, Settings } from "lucide-react"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import type { RagPresetName } from "@/services/rag/unified-rag"
 
 type PresetConfig = {

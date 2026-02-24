@@ -2,7 +2,7 @@ import React from "react"
 import { Input, InputNumber, Select, Switch } from "antd"
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import { DEFAULT_RAG_SETTINGS, type RagSettings } from "@/services/rag/unified-rag"
 import { CollapsibleSection } from "../shared/CollapsibleSection"
 

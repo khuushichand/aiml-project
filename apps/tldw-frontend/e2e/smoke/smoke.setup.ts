@@ -467,6 +467,8 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "/settings/speech",
       "/chatbooks",
       "/watchlists",
+      "/prompts",
+      "/reading",
       "/admin",
       "/admin/server",
       "/notes",
@@ -477,6 +479,57 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "/audio",
       "/__wayfinding-missing-route__"
     ]
+  },
+  {
+    id: "m5-drawer-width-deprecation-noise",
+    scope: "console",
+    pattern: /Warning:\s+\[antd:\s*Drawer\]\s+`width` is deprecated\. Please use `size` instead\./i,
+    rationale:
+      "Known Ant Design Drawer deprecation warning in selected routes; no functional regression in smoke path.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/media-multi", "/kanban", "/review"]
+  },
+  {
+    id: "m5-model-oauth-status-403-noise",
+    scope: "console",
+    pattern: /Failed to load resource: the server responded with a status of 403 \(Forbidden\)/i,
+    rationale:
+      "Model settings probes optional OAuth status endpoint that can return 403 in minimal smoke backend profile.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/settings/model"]
+  },
+  {
+    id: "m5-notes-title-settings-cors-noise",
+    scope: "console",
+    pattern:
+      /Access to fetch at 'http:\/\/127\.0\.0\.1:\d+\/api\/v1\/admin\/notes\/title-settings'.*blocked by CORS policy/i,
+    rationale:
+      "Notes title settings probe may be CORS-blocked in isolated smoke backend mode while page remains recoverable.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/notes"]
+  },
+  {
+    id: "m5-notes-title-settings-net-failed-noise",
+    scope: "console",
+    pattern: /Failed to load resource: net::ERR_FAILED/i,
+    rationale:
+      "Companion browser error after expected CORS rejection for notes title settings probe in smoke mode.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/notes"]
+  },
+  {
+    id: "m5-notes-title-settings-request-failure-noise",
+    scope: "request",
+    pattern: /\/api\/v1\/admin\/notes\/title-settings\s+\(net::ERR_FAILED\)/i,
+    rationale:
+      "Request-failure companion signal for expected notes title settings CORS rejection in isolated smoke mode.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/notes"]
   },
   {
     id: "m5-media-not-found-search-console-noise",
@@ -552,7 +605,7 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "Known Ant Design message context warning in collections route; no functional regression.",
     owner: "WebUI",
     expiresOn: "2026-03-31",
-    routes: ["/collections"]
+    routes: ["/collections", "/reading"]
   },
   {
     id: "m5-model-metadata-rate-limit-log-noise",

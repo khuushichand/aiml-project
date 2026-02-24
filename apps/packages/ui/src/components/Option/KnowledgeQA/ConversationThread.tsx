@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { GitBranch, MessageSquare, Sparkles } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import type { KnowledgeQAMessage, RagContextData } from "./types"
 import { useKnowledgeQaBranching } from "@/hooks/useFeatureFlags"
 import { createComparisonDraft, isComparisonReady } from "./comparisonModel"
