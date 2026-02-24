@@ -1,11 +1,12 @@
 # Image Generation Setup (stable-diffusion.cpp)
 
-This guide explains how to enable image generation in tldw_server using the stable-diffusion.cpp adapter, including Z-Image and FLUX.2 models. Outputs are **inline-only** (base64 in the response) and are **not stored** on the server.
+This guide explains how to enable image generation in tldw_server using the stable-diffusion.cpp adapter, plus supported remote backends (SwarmUI, OpenRouter, Novita, Together, Alibaba Model Studio). Outputs are **inline-only** (base64 in the response) and are **not stored** on the server.
 
 ## What You Get
 - `POST /api/v1/files/create` with `file_type: "image"`.
 - Inline PNG/JPG/WebP output in the response (no server-side files).
 - Backend selection via config + `payload.backend`.
+- Remote image backends with API-key auth and backend-specific timeouts.
 
 ## Prerequisites
 - A working `sd-cli` binary from stable-diffusion.cpp.
@@ -117,6 +118,18 @@ together_image_api_key =
 together_image_default_model = black-forest-labs/FLUX.1-schnell-Free
 together_image_allowed_extra_params = []
 together_image_timeout_seconds = 120
+
+# Alibaba Model Studio image defaults
+modelstudio_image_base_url = https://dashscope-intl.aliyuncs.com/api/v1
+modelstudio_image_api_key =
+modelstudio_image_default_model = qwen-image
+# Region presets for base URL routing: sg | cn | us
+modelstudio_image_region = sg
+# sync | async | auto (auto prefers sync endpoint, then falls back)
+modelstudio_image_mode = auto
+modelstudio_image_poll_interval_seconds = 2
+modelstudio_image_timeout_seconds = 180
+modelstudio_image_allowed_extra_params = []
 ```
 
 Notes:
@@ -124,6 +137,8 @@ Notes:
 - **For full SD models** (single combined model), set `sd_cpp_model_path` instead of `sd_cpp_diffusion_model_path`.
 - `inline_max_bytes` controls the max inline payload size; larger images will fail with `export_size_exceeded`.
 - `sd_cpp_allowed_extra_params` controls which `extra_params` keys are accepted (default: deny all).
+- For Model Studio, set `modelstudio_image_region` to `sg`, `cn`, or `us` and provide `modelstudio_image_api_key` (or env `DASHSCOPE_API_KEY` / `QWEN_API_KEY`).
+- For Model Studio mode control, set `modelstudio_image_mode` globally or pass `payload.extra_params.mode` (`sync` or `async`) per request.
 
 ## Security Considerations (Binary Execution)
 - **Treat the CLI as privileged**: `sd_cpp_binary_path` is executed directly. Only use trusted binaries from known sources.
@@ -158,6 +173,25 @@ curl -sS http://127.0.0.1:8000/api/v1/files/create \
 The response includes:
 - `artifact.export.content_b64` (base64 bytes)
 - `artifact.export.content_type` (image MIME type)
+
+### Model Studio example (`backend=modelstudio`)
+
+```bash
+curl -sS http://127.0.0.1:8000/api/v1/files/create \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: <your-key>" \
+  -d '{
+    "file_type": "image",
+    "payload": {
+      "backend": "modelstudio",
+      "prompt": "A watercolor skyline at sunrise",
+      "width": 1024,
+      "height": 1024,
+      "extra_params": {"mode": "async"}
+    },
+    "export": {"format": "png", "mode": "inline", "async_mode": "sync"}
+  }'
+```
 
 ## Parameter Mapping
 - `sd_cpp_binary_path` -> `sd-cli` binary path.
@@ -198,7 +232,9 @@ Avoid allowlisting flags that accept paths or control outputs (let the server ow
 
 ## Troubleshooting
 - `image_backend_unavailable`: ensure `enabled_backends` includes `stable_diffusion_cpp` and `sd_cpp_binary_path` exists.
+- `image_backend_unavailable` (Model Studio): ensure `enabled_backends` includes `modelstudio` and a key is configured (`modelstudio_image_api_key`, `DASHSCOPE_API_KEY`, or `QWEN_API_KEY`).
 - `image_generation_failed`: check model/vae/llm paths and CLI compatibility.
+- `image_generation_failed` (Model Studio): verify `modelstudio_image_region`, endpoint availability, and whether the selected model supports sync vs async mode.
 - `export_size_exceeded`: reduce resolution or raise `inline_max_bytes`.
 - CLI flag mismatch: stable-diffusion.cpp changes frequently; verify the CLI doc and adjust `extra_params` as needed.
 
