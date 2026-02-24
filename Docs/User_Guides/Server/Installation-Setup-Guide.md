@@ -179,27 +179,9 @@ mlx_warmup = true
 mlx_max_concurrent = 1
 ```
 
-Optional (recommended): configure a dynamic model directory so admins can select discovered models by `model_id`:
-
-```bash
-# .env or shell environment
-MLX_MODEL_DIR=/absolute/path/to/mlx_models
-```
-
-Each model should live in its own subdirectory under `MLX_MODEL_DIR`. Discovery scans the directory on access (and supports refresh) so new models can be added without restarting the server.
-
 3) Load/unload via API (admin-only):
 
 ```
-GET /api/v1/llm/providers/mlx/models
-
-# Preferred: resolve model_id server-side under MLX_MODEL_DIR
-POST /api/v1/llm/providers/mlx/load
-{
-  "model_id": "family/model-a"
-}
-
-# Manual fallback: repo id or explicit path
 POST /api/v1/llm/providers/mlx/load
 {
   "model_path": "Qwen/Qwen3-0.6B-MLX-4bit"
@@ -210,10 +192,7 @@ POST /api/v1/llm/providers/mlx/unload
 ```
 
 Notes:
-- `GET /api/v1/llm/providers/mlx/models?refresh=true` forces a rescan of `MLX_MODEL_DIR` and returns selectable/non-selectable entries with reasons.
-- `model_id` is a relative path under `MLX_MODEL_DIR` and is resolved server-side (safer than sending full host paths from clients).
 - `mlx_model_path` can be a local path or a repo id; downloads and caching are handled by `mlx-lm`.
-- `model_path` remains available as a manual fallback when you are not selecting from discovered models.
 - Use `/api/v1/chat/completions` with `api_provider=mlx`. `/api/v1/embeddings` works when the model supports embeddings.
 
 Quick usage examples (use `X-API-KEY` for single-user or `Authorization: Bearer` for multi-user):

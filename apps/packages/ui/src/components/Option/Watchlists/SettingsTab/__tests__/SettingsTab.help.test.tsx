@@ -14,10 +14,20 @@ const mocks = vi.hoisted(() => ({
   messageErrorMock: vi.fn()
 }))
 
+const interpolate = (template: string, values?: Record<string, unknown>) => {
+  if (!values) return template
+  return template.replace(/\{\{(\w+)\}\}/g, (_match, token) => {
+    const value = values[token]
+    return value == null ? "" : String(value)
+  })
+}
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (_key: string, defaultValue?: unknown) =>
-      typeof defaultValue === "string" ? defaultValue : _key
+    t: (_key: string, defaultValue?: unknown, values?: Record<string, unknown>) =>
+      typeof defaultValue === "string"
+        ? interpolate(defaultValue, values)
+        : _key
   })
 }))
 
@@ -65,8 +75,44 @@ vi.mock("antd", () => {
     </select>
   )
   const Skeleton = () => <div>Loading...</div>
-  const Switch = () => null
-  const Table = ({ dataSource = [] }: any) => <div>{dataSource.length}</div>
+  const Switch = ({
+    checked,
+    onChange,
+    disabled,
+    loading: _loading,
+    checkedChildren,
+    unCheckedChildren,
+    ...rest
+  }: any) => (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked ? "true" : "false"}
+      disabled={Boolean(disabled)}
+      onClick={() => onChange?.(!checked)}
+      {...rest}
+    >
+      {checked ? checkedChildren || "On" : unCheckedChildren || "Off"}
+    </button>
+  )
+  const Table = ({ dataSource = [], columns = [] }: any) => (
+    <table>
+      <tbody>
+        {dataSource.map((record: any, rowIndex: number) => (
+          <tr key={record.id ?? rowIndex}>
+            {columns.map((column: any, columnIndex: number) => {
+              const key = String(column.key ?? column.dataIndex ?? columnIndex)
+              const value = column.dataIndex ? record[column.dataIndex] : undefined
+              const content = column.render
+                ? column.render(value, record, rowIndex)
+                : value
+              return <td key={key}>{content}</td>
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
   const Tooltip = ({ title, children }: any) => (
     <div>
       {children}
@@ -189,6 +235,32 @@ describe("SettingsTab contextual help", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Internal diagnostics")).toBeInTheDocument()
+    })
+  })
+
+  it("exposes descriptive switch labels for cluster subscriptions", async () => {
+    mocks.fetchWatchlistJobsMock.mockResolvedValue({
+      items: [{ id: 99, name: "Market Monitor" }],
+      total: 1,
+      has_more: false
+    })
+    mocks.fetchClaimClustersMock.mockResolvedValue([
+      {
+        id: 42,
+        summary: "Model updates",
+        canonical_claim_text: null,
+        member_count: 3,
+        updated_at: "2026-02-20T00:00:00Z"
+      }
+    ])
+    mocks.fetchJobClaimClustersMock.mockResolvedValue([])
+
+    render(<SettingsTab />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("switch", { name: "Toggle subscription for Model updates" })
+      ).toBeInTheDocument()
     })
   })
 })

@@ -1,11 +1,10 @@
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { render, screen } from "@testing-library/react"
 import MlxAdminPage from "../MlxAdminPage"
 
 const apiMock = vi.hoisted(() => ({
   getMlxStatus: vi.fn(),
-  getMlxModels: vi.fn(),
   getLlmProviders: vi.fn(),
   loadMlxModel: vi.fn(),
   unloadMlxModel: vi.fn()
@@ -74,13 +73,6 @@ describe("MlxAdminPage", () => {
       model: null,
       max_concurrent: 2
     })
-    apiMock.getMlxModels.mockResolvedValue({
-      backend: "mlx",
-      model_dir: "/tmp/mlx-models",
-      model_dir_configured: true,
-      warnings: [],
-      available_models: []
-    })
     apiMock.getLlmProviders.mockResolvedValue({
       providers: []
     })
@@ -97,74 +89,6 @@ describe("MlxAdminPage", () => {
         "Concurrency is a configured limit and applies once a model is active."
       )
     ).toBeTruthy()
-  })
-
-  it("loads discovered model using model_id", async () => {
-    apiMock.getMlxModels.mockResolvedValueOnce({
-      backend: "mlx",
-      model_dir: "/tmp/mlx-models",
-      model_dir_configured: true,
-      warnings: [],
-      available_models: [
-        {
-          id: "family/model-a",
-          name: "model-a",
-          selectable: true,
-          reasons: []
-        }
-      ]
-    })
-
-    render(<MlxAdminPage />)
-
-    await screen.findByText("model-a (family/model-a)")
-    fireEvent.click(screen.getByRole("button", { name: "Load Model" }))
-
-    await waitFor(() => {
-      expect(apiMock.loadMlxModel).toHaveBeenCalledWith(
-        expect.objectContaining({ model_id: "family/model-a" })
-      )
-    })
-  })
-
-  it("shows non-selectable discovered model reasons", async () => {
-    apiMock.getMlxModels.mockResolvedValueOnce({
-      backend: "mlx",
-      model_dir: "/tmp/mlx-models",
-      model_dir_configured: true,
-      warnings: [],
-      available_models: [
-        {
-          id: "family/model-b",
-          name: "model-b",
-          selectable: false,
-          reasons: ["Missing tokenizer.json or tokenizer.model"]
-        }
-      ]
-    })
-
-    render(<MlxAdminPage />)
-
-    expect(await screen.findByText("Missing tokenizer.json or tokenizer.model")).toBeTruthy()
-  })
-
-  it("uses manual model_path fallback when no discovered model is selected", async () => {
-    render(<MlxAdminPage />)
-
-    const manualPathWrapper = await screen.findByTestId("mlx-manual-model-path")
-    const manualPathInput = manualPathWrapper.querySelector("input")
-    expect(manualPathInput).toBeTruthy()
-
-    fireEvent.change(manualPathInput as HTMLInputElement, {
-      target: { value: "/tmp/manual-model" }
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Load Model" }))
-
-    await waitFor(() => {
-      expect(apiMock.loadMlxModel).toHaveBeenCalledWith(
-        expect.objectContaining({ model_path: "/tmp/manual-model" })
-      )
-    })
   })
 
   it("gates controls when admin APIs are unavailable", async () => {

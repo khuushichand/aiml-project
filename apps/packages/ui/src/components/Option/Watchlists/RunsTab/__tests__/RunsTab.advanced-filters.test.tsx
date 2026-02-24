@@ -49,7 +49,17 @@ vi.mock("antd", () => {
   )
 
   const Dropdown = ({ children }: any) => <>{children}</>
-  const Table = () => <div data-testid="runs-table" />
+  const Table = ({ dataSource = [] }: any) => (
+    <table data-testid="runs-table">
+      <tbody>
+        {dataSource.map((record: any) => (
+          <tr key={String(record.id)}>
+            <td>{String(record.id)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
   const Progress = () => <div />
   const Tooltip = ({ children }: any) => <>{children}</>
   const Space = ({ children }: any) => <>{children}</>
@@ -121,6 +131,20 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   ...overrides
 })
 
+const buildRun = (id: number) => ({
+  id,
+  job_id: id % 5 ? 1 : 2,
+  status: id % 4 === 0 ? "completed" : "running",
+  started_at: "2026-02-18T00:00:00Z",
+  finished_at: null,
+  stats: {
+    items_found: 12,
+    items_ingested: 8,
+    items_filtered: 3,
+    items_errored: 1
+  }
+})
+
 describe("RunsTab advanced filters disclosure", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -150,5 +174,18 @@ describe("RunsTab advanced filters disclosure", () => {
     render(<RunsTab />)
 
     expect(screen.getByTestId("watchlists-runs-job-filter")).toBeInTheDocument()
+  })
+
+  it("renders high-density activity tables while keeping filters responsive", () => {
+    const runs = Array.from({ length: 500 }, (_value, index) => buildRun(index + 1))
+    mocks.storeStateRef.current = baseState({
+      runs,
+      runsTotal: runs.length
+    })
+
+    const { container } = render(<RunsTab />)
+
+    expect(screen.getByTestId("watchlists-runs-advanced-toggle")).toBeInTheDocument()
+    expect(container.querySelectorAll("tr").length).toBe(500)
   })
 })

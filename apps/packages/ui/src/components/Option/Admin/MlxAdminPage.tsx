@@ -15,12 +15,7 @@ import {
 } from "antd"
 import { useTranslation } from "react-i18next"
 import { AlertTriangle } from "lucide-react"
-import {
-  tldwClient,
-  type MlxStatus,
-  type MlxLoadRequest,
-  type MlxDiscoveredModel
-} from "@/services/tldw/TldwApiClient"
+import { tldwClient, type MlxStatus, type MlxLoadRequest } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
 import { buildMlxLoadRequest } from "@/utils/build-mlx-load-request"
 import { StatusBanner } from "./StatusBanner"
@@ -92,13 +87,6 @@ export const MlxAdminPage: React.FC = () => {
   // Provider state
   const [mlxProvider, setMlxProvider] = React.useState<ProviderConfig | null>(null)
   const [loadingProvider, setLoadingProvider] = React.useState(false)
-  const [discoveredModels, setDiscoveredModels] = React.useState<MlxDiscoveredModel[]>([])
-  const [loadingDiscoveredModels, setLoadingDiscoveredModels] = React.useState(false)
-  const [discoveredModelWarnings, setDiscoveredModelWarnings] = React.useState<string[]>([])
-  const [discoveredModelError, setDiscoveredModelError] = React.useState<string | null>(null)
-  const [modelDirConfigured, setModelDirConfigured] = React.useState(false)
-  const [modelDirPath, setModelDirPath] = React.useState<string | null>(null)
-  const [selectedDiscoveredModelId, setSelectedDiscoveredModelId] = React.useState<string | undefined>()
 
   // Status state
   const [status, setStatus] = React.useState<MlxStatus | null>(null)
@@ -190,73 +178,25 @@ export const MlxAdminPage: React.FC = () => {
     }
   }, [])
 
-  const loadDiscoveredModels = React.useCallback(async (refresh = false) => {
-    try {
-      setLoadingDiscoveredModels(true)
-      setDiscoveredModelError(null)
-
-      const payload = await tldwClient.getMlxModels(refresh)
-      const availableModels = Array.isArray(payload?.available_models)
-        ? payload.available_models
-        : []
-      const warnings = Array.isArray(payload?.warnings)
-        ? payload.warnings.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-        : []
-
-      setDiscoveredModels(availableModels)
-      setDiscoveredModelWarnings(warnings)
-      setModelDirConfigured(Boolean(payload?.model_dir_configured))
-      setModelDirPath(typeof payload?.model_dir === "string" && payload.model_dir.trim().length > 0 ? payload.model_dir : null)
-      setSelectedDiscoveredModelId((current) => {
-        if (current && availableModels.some((entry) => entry.id === current && entry.selectable)) {
-          return current
-        }
-        const firstSelectable = availableModels.find((entry) => entry.selectable)
-        return firstSelectable?.id
-      })
-    } catch (e: any) {
-      setDiscoveredModels([])
-      setDiscoveredModelWarnings([])
-      setDiscoveredModelError(
-        sanitizeAdminErrorMessage(e, "Failed to discover MLX models from MLX_MODEL_DIR.")
-      )
-      setModelDirConfigured(false)
-      setModelDirPath(null)
-      setSelectedDiscoveredModelId(undefined)
-      markAdminGuardFromError(e)
-    } finally {
-      setLoadingDiscoveredModels(false)
-    }
-  }, [])
-
   React.useEffect(() => {
     let cancelled = false
     const init = async () => {
-      await Promise.all([loadStatus(), loadProviders(), loadDiscoveredModels()])
+      await Promise.all([loadStatus(), loadProviders()])
       if (cancelled) return
     }
     void init()
     return () => {
       cancelled = true
     }
-  }, [loadDiscoveredModels, loadProviders, loadStatus])
+  }, [loadProviders, loadStatus])
 
   const handleLoadModel = async () => {
     const path = modelPath.trim()
-    const selectedDiscoveredModel = discoveredModels.find(
-      (entry) => entry.id === selectedDiscoveredModelId
-    )
-    const useManualPath = path.length > 0
-    const resolvedModelId = !useManualPath && selectedDiscoveredModel?.selectable
-      ? selectedDiscoveredModel.id
-      : undefined
-
-    if (!resolvedModelId && !useManualPath) return
+    if (!path) return
 
     try {
       setActionLoading(true)
       const payload: MlxLoadRequest = buildMlxLoadRequest({
-        modelId: resolvedModelId,
         modelPath,
         compile: compileFlag,
         warmup: warmupFlag,
@@ -310,45 +250,9 @@ export const MlxAdminPage: React.FC = () => {
       .filter((option): option is { value: string; label: string } => option !== null)
   }, [mlxProvider])
 
-  const discoveredModelOptions = React.useMemo(
-    () =>
-      discoveredModels.map((entry) => ({
-        value: entry.id,
-        label: `${entry.name} (${entry.id})`,
-        disabled: !entry.selectable
-      })),
-    [discoveredModels]
-  )
-
-  const discoveredModelReasonTags = React.useMemo(
-    () =>
-      discoveredModels.flatMap((entry) =>
-        entry.selectable
-          ? []
-          : (entry.reasons || []).map((reason) => ({
-              key: `${entry.id}:${reason}`,
-              reason
-            }))
-      ),
-    [discoveredModels]
-  )
-
-  const selectedDiscoveredModel = React.useMemo(
-    () => discoveredModels.find((entry) => entry.id === selectedDiscoveredModelId),
-    [discoveredModels, selectedDiscoveredModelId]
-  )
-
   const effectiveState = status?.active ? "active" : "inactive"
   const providerModels = (mlxProvider?.models_info || []) as Array<Record<string, any>>
   const statusUnavailable = !status && Boolean(statusError)
-  const manualPath = modelPath.trim()
-  const canLoadModel = Boolean(
-    manualPath ||
-      (selectedDiscoveredModel &&
-        selectedDiscoveredModel.selectable &&
-        !actionLoading &&
-        !statusLoading)
-  )
   const concurrencyLabel = status?.active
     ? t("settings:admin.mlxConcurrency", "Concurrent")
     : t(
@@ -462,137 +366,14 @@ export const MlxAdminPage: React.FC = () => {
             {/* Model Load Card */}
             <Card title={t("settings:admin.mlxLoadTitle", "Load Model")}>
               <Space orientation="vertical" size="middle" className="w-full">
-                <div className="rounded-lg border border-border p-4">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <Text strong>
-                      {t("settings:admin.mlxDiscoveredModelsLabel", "Discovered models (MLX_MODEL_DIR)")}
-                    </Text>
-                    <Button
-                      size="small"
-                      onClick={() => void loadDiscoveredModels(true)}
-                      loading={loadingDiscoveredModels}
-                      disabled={statusUnavailable}
-                    >
-                      {t("common:refresh", "Refresh")}
-                    </Button>
-                  </div>
-
-                  {modelDirConfigured ? (
-                    <Text type="secondary" className="mb-2 block text-xs">
-                      {t("settings:admin.mlxModelDirectory", "Directory")}:{" "}
-                      <Text code>{modelDirPath || "—"}</Text>
-                    </Text>
-                  ) : (
-                    <Alert
-                      type="info"
-                      showIcon
-                      className="mb-2"
-                      title={t(
-                        "settings:admin.mlxModelDirectoryUnset",
-                        "MLX_MODEL_DIR is not configured. Set it to enable discovered model selection."
-                      )}
-                    />
-                  )}
-
-                  {discoveredModelWarnings.length > 0 && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      className="mb-2"
-                      title={t(
-                        "settings:admin.mlxModelDirectoryWarnings",
-                        "Model directory warnings"
-                      )}
-                      description={
-                        <Space orientation="vertical" size={4} className="w-full">
-                          {discoveredModelWarnings.map((warning) => (
-                            <Text key={warning} className="text-xs">
-                              {warning}
-                            </Text>
-                          ))}
-                        </Space>
-                      }
-                    />
-                  )}
-
-                  {discoveredModelError && (
-                    <Alert
-                      type="error"
-                      showIcon
-                      className="mb-2"
-                      title={discoveredModelError}
-                    />
-                  )}
-
-                  <Select
-                    data-testid="mlx-discovered-model-select"
-                    className="w-full"
-                    value={selectedDiscoveredModelId}
-                    onChange={(nextValue) => {
-                      setSelectedDiscoveredModelId(nextValue)
-                      if (nextValue) {
-                        setModelPath("")
-                      }
-                    }}
-                    options={discoveredModelOptions}
-                    placeholder={t(
-                      "settings:admin.mlxDiscoveredModelPlaceholder",
-                      "Select a discovered MLX model"
-                    )}
-                    loading={loadingDiscoveredModels}
-                    allowClear
-                    disabled={!modelDirConfigured}
-                  />
-                  <Text type="secondary" className="mt-1 block text-xs">
-                    {t(
-                      "settings:admin.mlxDiscoveredModelHint",
-                      "Discovered model_id is resolved server-side. Enter a manual path below to override it."
-                    )}
-                  </Text>
-
-                  {selectedDiscoveredModel && !selectedDiscoveredModel.selectable && selectedDiscoveredModel.reasons.length > 0 && (
-                    <Space wrap className="mt-2">
-                      {selectedDiscoveredModel.reasons.map((reason) => (
-                        <Tag key={`${selectedDiscoveredModel.id}:${reason}`} color="warning">
-                          {reason}
-                        </Tag>
-                      ))}
-                    </Space>
-                  )}
-
-                  {discoveredModelReasonTags.length > 0 && (
-                    <div className="mt-2">
-                      <Text type="secondary" className="block text-xs">
-                        {t(
-                          "settings:admin.mlxDiscoveredModelUnavailable",
-                          "Unavailable discovered models:"
-                        )}
-                      </Text>
-                      <Space wrap className="mt-1">
-                        {discoveredModelReasonTags.map((entry) => (
-                          <Tag key={entry.key} color="default">
-                            {entry.reason}
-                          </Tag>
-                        ))}
-                      </Space>
-                    </div>
-                  )}
-                </div>
-
                 {/* Model Path Input */}
                 <div>
                   <Text strong className="mb-2 block">
                     {t("settings:admin.mlxModelPathLabel", "Model path or HuggingFace repo")}
                   </Text>
                   <AutoComplete
-                    data-testid="mlx-manual-model-path"
                     value={modelPath}
-                    onChange={(nextValue) => {
-                      setModelPath(nextValue)
-                      if (nextValue.trim().length > 0) {
-                        setSelectedDiscoveredModelId(undefined)
-                      }
-                    }}
+                    onChange={setModelPath}
                     options={modelOptions}
                     placeholder={t(
                       "settings:admin.mlxModelPathPlaceholder",
@@ -868,7 +649,7 @@ export const MlxAdminPage: React.FC = () => {
                     type="primary"
                     onClick={handleLoadModel}
                     loading={actionLoading}
-                    disabled={!canLoadModel || statusLoading || statusUnavailable}
+                    disabled={!modelPath.trim() || statusLoading || statusUnavailable}
                   >
                     {t("settings:admin.mlxLoadCta", "Load Model")}
                   </Button>
@@ -920,10 +701,7 @@ export const MlxAdminPage: React.FC = () => {
                             key="use"
                             size="small"
                             type="link"
-                            onClick={() => {
-                              setModelPath(idLabel)
-                              setSelectedDiscoveredModelId(undefined)
-                            }}
+                            onClick={() => setModelPath(idLabel)}
                           >
                             {t("common:use", "Use")}
                           </Button>

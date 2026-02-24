@@ -39,7 +39,6 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import (
 )
 from tldw_Server_API.app.core.Utils.common import parse_boolean
 
-from .mlx_model_discovery import MLXModelDiscoveryCache, resolve_mlx_model_id
 from .base import ChatProvider, EmbeddingsProvider
 
 _MLX_NONCRITICAL_EXCEPTIONS = (
@@ -97,7 +96,6 @@ def _default_settings() -> dict[str, Any]:
     """Load MLX defaults from env/config shape (env-first)."""
     return {
         "model_path": os.getenv("MLX_MODEL_PATH"),
-        "model_dir": os.getenv("MLX_MODEL_DIR"),
         "max_seq_len": _coerce_int(os.getenv("MLX_MAX_SEQ_LEN")),
         "max_batch_size": _coerce_int(os.getenv("MLX_MAX_BATCH_SIZE")),
         "device": os.getenv("MLX_DEVICE", "auto"),
@@ -140,8 +138,6 @@ class MLXSessionRegistry:
         self._session: MLXSession | None = None
         self._inflight: int = 0
         self._metrics_registered = False
-        ttl = _coerce_int(os.getenv("MLX_MODEL_SCAN_TTL_SECONDS"), default=3) or 3
-        self._model_discovery_cache = MLXModelDiscoveryCache(ttl_seconds=float(max(1, ttl)))
 
     def _set_concurrency(self, max_concurrent: int) -> None:
         max_concurrent = max(1, int(max_concurrent))
@@ -204,25 +200,6 @@ class MLXSessionRegistry:
             return importlib.import_module("mlx_lm")
         except ImportError as exc:  # pragma: no cover - env/optional
             raise ChatProviderError(provider="mlx", message="mlx-lm is not installed") from exc
-
-    def list_models(self, *, refresh: bool = False) -> dict[str, Any]:
-        settings = _default_settings()
-        model_dir = settings.get("model_dir")
-        return self._model_discovery_cache.get(model_dir=model_dir, refresh=refresh)
-
-    def resolve_model_id(self, model_id: str, *, refresh_discovery: bool = False) -> str:
-        settings = _default_settings()
-        model_dir = settings.get("model_dir")
-        models_payload = self.list_models(refresh=refresh_discovery)
-        try:
-            resolved = resolve_mlx_model_id(
-                model_dir=model_dir,
-                model_id=model_id,
-                discovered_models=models_payload.get("available_models"),
-            )
-        except ValueError as exc:
-            raise ChatBadRequestError(provider="mlx", message=str(exc)) from exc
-        return str(resolved)
 
     def load(self, *, model_path: str | None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         """Load or swap the active model. Keeps previous model on failure."""

@@ -50,11 +50,11 @@ describe("WatchlistsHelpTooltip", () => {
   it("uses keyboard-focusable, screen-reader discoverable triggers", () => {
     render(<WatchlistsHelpTooltip topic="cron" />)
     const trigger = screen.getByRole("button", {
-      name: "Open help for cron scheduling"
+      name: "Open help for advanced schedule timing"
     })
     trigger.focus()
     expect(trigger).toHaveFocus()
-    expect(trigger).toHaveAttribute("aria-label", "Open help for cron scheduling")
+    expect(trigger).toHaveAttribute("aria-label", "Open help for advanced schedule timing")
     expect(screen.getByRole("link", { name: "Learn more" })).toHaveAttribute(
       "href",
       "https://crontab.guru/"
