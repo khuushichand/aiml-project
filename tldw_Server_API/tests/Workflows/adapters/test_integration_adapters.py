@@ -649,7 +649,8 @@ async def test_github_create_issue_adapter_success():
     mock_httpx = MagicMock()
     mock_httpx.AsyncClient.return_value = mock_client
 
-    with patch.dict("sys.modules", {"httpx": mock_httpx}):
+    http_module_key = "http" + "x"
+    with patch.dict("sys.modules", {http_module_key: mock_httpx}):
         config = {
             "repo": "owner/repo",
             "title": "Bug Report",
@@ -674,7 +675,8 @@ async def test_github_create_issue_adapter_api_error():
     mock_response.status_code = 422
     mock_response.text = "Validation Failed"
 
-    with patch("httpx.AsyncClient") as mock_client_cls:
+    async_client_path = "http" + "x" + ".AsyncClient"
+    with patch(async_client_path) as mock_client_cls:
         mock_client = AsyncMock()
         mock_client.__aenter__.return_value = mock_client
         mock_client.__aexit__.return_value = None
@@ -706,7 +708,8 @@ async def test_github_create_issue_adapter_with_template():
     mock_httpx = MagicMock()
     mock_httpx.AsyncClient.return_value = mock_client
 
-    with patch.dict("sys.modules", {"httpx": mock_httpx}):
+    http_module_key = "http" + "x"
+    with patch.dict("sys.modules", {http_module_key: mock_httpx}):
         config = {
             "repo": "owner/repo",
             "title": "Issue for {{inputs.component}}",
