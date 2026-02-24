@@ -2425,7 +2425,6 @@ class WatchlistsDatabase:
 
     @staticmethod
     def _median(values: list[float]) -> float:
-        """Return the median value for a numeric list, or ``0.0`` when empty."""
         if not values:
             return 0.0
         sorted_values = sorted(values)

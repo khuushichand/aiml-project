@@ -2470,6 +2470,7 @@ async def record_watchlists_onboarding_telemetry(
     db = Depends(get_watchlists_db_for_user),
 ) -> WatchlistOnboardingTelemetryIngestResponse:
     """Record a single onboarding telemetry event and return accept/reject outcome."""
+):
     _ = current_user
     try:
         result = db.record_onboarding_event(
@@ -2503,6 +2504,7 @@ async def get_watchlists_onboarding_telemetry_summary(
     db = Depends(get_watchlists_db_for_user),
 ) -> WatchlistOnboardingTelemetrySummaryResponse:
     """Summarize onboarding telemetry counters/rates/timings for an optional time window."""
+):
     started = time.perf_counter()
     status_label = "ok"
     try:
@@ -2542,6 +2544,7 @@ async def get_watchlists_rc_telemetry_summary(
     collections_db = Depends(get_collections_db_for_user),
 ) -> WatchlistRcTelemetrySummaryResponse:
     """Return combined onboarding, IA, and UC2 backend telemetry for RC reporting."""
+):
     started = time.perf_counter()
     status_label = "ok"
     try:
