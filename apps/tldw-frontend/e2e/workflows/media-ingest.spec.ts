@@ -398,6 +398,7 @@ test.describe("Media Ingestion Workflow", () => {
         }
         try {
           const originalFetch = window.fetch.bind(window)
+          let statusPollCount = 0
           const mockedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
             const url =
               typeof input === "string"
@@ -405,7 +406,47 @@ test.describe("Media Ingestion Workflow", () => {
                 : input instanceof Request
                   ? input.url
                   : String(input)
-            if (/\/api\/v1\/media\/(add|process-web-scraping)\/?(?:\?|$)/i.test(url)) {
+            const method = String(
+              init?.method || (input instanceof Request ? input.method : "GET")
+            ).toUpperCase()
+
+            if (
+              method === "POST" &&
+              /\/api\/v1\/media\/ingest\/jobs\/?(?:\?|$)/i.test(url)
+            ) {
+              return new Response(
+                JSON.stringify({
+                  batch_id: "qi-web-mock-batch-id",
+                  jobs: [{ id: 9101, status: "queued" }]
+                }),
+                {
+                  status: 200,
+                  headers: {
+                    "Content-Type": "application/json"
+                  }
+                }
+              )
+            }
+            if (/\/api\/v1\/media\/ingest\/jobs\/9101(?:\?|$)/i.test(url)) {
+              statusPollCount += 1
+              return new Response(
+                JSON.stringify({
+                  id: 9101,
+                  status: statusPollCount > 1 ? "completed" : "processing",
+                  result: {
+                    media_id: "qi-web-mock-media-id",
+                    title: "Quick ingest web E2E"
+                  }
+                }),
+                {
+                  status: 200,
+                  headers: {
+                    "Content-Type": "application/json"
+                  }
+                }
+              )
+            }
+            if (/\/api\/v1\/media\/process-web-scraping\/?(?:\?|$)/i.test(url)) {
               return new Response(
                 JSON.stringify({
                   media_id: "qi-web-mock-media-id",
@@ -528,6 +569,7 @@ test.describe("Media Ingestion Workflow", () => {
         }
         try {
           const originalFetch = window.fetch.bind(window)
+          let cancelRequested = false
           const mockedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
             const url =
               typeof input === "string"
@@ -535,12 +577,56 @@ test.describe("Media Ingestion Workflow", () => {
                 : input instanceof Request
                   ? input.url
                   : String(input)
-            if (/\/api\/v1\/media\/add\/?(?:\?|$)/i.test(url)) {
+            const method = String(
+              init?.method || (input instanceof Request ? input.method : "GET")
+            ).toUpperCase()
+
+            if (
+              method === "POST" &&
+              /\/api\/v1\/media\/ingest\/jobs\/?(?:\?|$)/i.test(url)
+            ) {
               await new Promise((resolve) => setTimeout(resolve, 1400))
               return new Response(
                 JSON.stringify({
-                  media_id: "qi-web-cancel-mock-media-id",
-                  title: "Quick ingest web cancel E2E"
+                  batch_id: "qi-web-cancel-mock-batch-id",
+                  jobs: [{ id: 9201, status: "queued" }]
+                }),
+                {
+                  status: 200,
+                  headers: {
+                    "Content-Type": "application/json"
+                  }
+                }
+              )
+            }
+            if (/\/api\/v1\/media\/ingest\/jobs\/9201(?:\?|$)/i.test(url)) {
+              return new Response(
+                JSON.stringify({
+                  id: 9201,
+                  status: cancelRequested ? "cancelled" : "processing",
+                  cancellation_reason: cancelRequested ? "user_cancelled" : null
+                }),
+                {
+                  status: 200,
+                  headers: {
+                    "Content-Type": "application/json"
+                  }
+                }
+              )
+            }
+            if (
+              method === "POST" &&
+              /\/api\/v1\/media\/ingest\/jobs\/cancel\/?(?:\?|$)/i.test(url)
+            ) {
+              cancelRequested = true
+              return new Response(
+                JSON.stringify({
+                  success: true,
+                  batch_id: "qi-web-cancel-mock-batch-id",
+                  requested: 1,
+                  cancelled: 1,
+                  already_terminal: 0,
+                  failed: 0
                 }),
                 {
                   status: 200,

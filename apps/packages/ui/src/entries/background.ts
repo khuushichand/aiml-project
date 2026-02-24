@@ -37,6 +37,10 @@ import {
   createQuickIngestSessionRuntime,
   type QuickIngestSessionRunContext
 } from "@/entries/shared/quick-ingest-session-runtime"
+import {
+  createIngestJobsTracker,
+  pollTrackedIngestJobs
+} from "@/services/tldw/ingest-jobs-orchestrator"
 
 type BackgroundDiagnostics = {
   startedAt: number
@@ -96,6 +100,7 @@ type IngestSession = {
   normalizedUrl: string
   tabId?: number
   status: IngestLifecycleStatus
+  batchId?: string
   jobIds: number[]
   createdAt: number
   retryCount: number
@@ -1155,16 +1160,28 @@ export default defineBackground({
         canCancel: false,
         canRetry: true
       })
-      for (const jobId of session.jobIds) {
+      if (session.batchId) {
         await handleTldwRequest({
-          path: `/api/v1/media/ingest/jobs/${jobId}?reason=${encodeURIComponent(
-            reason || "user_cancelled"
-          )}`,
-          method: "DELETE",
-          timeoutMs: 8000
+          path: `/api/v1/media/ingest/jobs/cancel?batch_id=${encodeURIComponent(
+            session.batchId
+          )}&reason=${encodeURIComponent(reason || "user_cancelled")}`,
+          method: "POST",
+          timeoutMs: 10_000
         }).catch((error) => {
-          logBackgroundError(`cancel ingest job ${jobId}`, error)
+          logBackgroundError(`cancel ingest batch ${session.batchId}`, error)
         })
+      } else {
+        for (const jobId of session.jobIds) {
+          await handleTldwRequest({
+            path: `/api/v1/media/ingest/jobs/${jobId}?reason=${encodeURIComponent(
+              reason || "user_cancelled"
+            )}`,
+            method: "DELETE",
+            timeoutMs: 8000
+          }).catch((error) => {
+            logBackgroundError(`cancel ingest job ${jobId}`, error)
+          })
+        }
       }
       await emitIngestStatus(session, {
         status: "cancelled",
@@ -1187,6 +1204,7 @@ export default defineBackground({
       session.lastError = undefined
       session.mediaId = undefined
       session.jobIds = []
+      session.batchId = undefined
 
       if (options?.trackContextClick) {
         await appendIngestFunnelMetric("context_click", session.funnelId, {
@@ -1323,6 +1341,10 @@ export default defineBackground({
       }
 
       session.jobIds = extractIngestJobIds(jobsResp.data)
+      session.batchId =
+        typeof jobsResp.data?.batch_id === "string"
+          ? jobsResp.data.batch_id
+          : undefined
       if (session.jobIds.length === 0) {
         const msg = "Ingest job submission returned no job IDs."
         session.lastError = msg
@@ -1487,6 +1509,13 @@ export default defineBackground({
       const totalCount = entries.length + files.length
       let processedCount = 0
       const out: any[] = []
+      type QuickIngestRemoteResultMeta = {
+        id: string
+        type: string
+        url?: string
+        fileName?: string
+      }
+      const queuedRemoteJobs = createIngestJobsTracker<QuickIngestRemoteResultMeta>()
 
       const isCancelled = () =>
         Boolean(runtimeContext?.isCancelled?.() || isQuickIngestCancelled(sessionId))
@@ -1649,6 +1678,92 @@ export default defineBackground({
         }
       }
 
+      const trackRemoteJobs = (
+        submitData: any,
+        resultTemplate: QuickIngestRemoteResultMeta
+      ): number => {
+        const trackedJobIds = queuedRemoteJobs.trackSubmit(submitData, resultTemplate)
+        runtimeContext?.setJobIds(queuedRemoteJobs.getJobIds())
+        return trackedJobIds.length
+      }
+
+      const cancelQueuedRemoteBatches = async (reason: string) => {
+        await queuedRemoteJobs.cancelTrackedBatches(async (batchId) => {
+          try {
+            await handleTldwRequest({
+              path: `/api/v1/media/ingest/jobs/cancel?batch_id=${encodeURIComponent(
+                batchId
+              )}&reason=${encodeURIComponent(reason || "user_cancelled")}`,
+              method: "POST",
+              timeoutMs: 10_000
+            })
+          } catch (error) {
+            logBackgroundError(`cancel quick ingest batch ${batchId}`, error)
+          }
+        })
+      }
+
+      const pollQueuedRemoteJobs = async (): Promise<any[]> => {
+        return await pollTrackedIngestJobs({
+          tracker: queuedRemoteJobs,
+          timeoutMs: ingestTimeoutMs,
+          pollIntervalMs: 1200,
+          isCancelled,
+          onCancel: async () => {
+            await cancelQueuedRemoteBatches("user_cancelled")
+          },
+          onPendingJobIds: (jobIds) => {
+            runtimeContext?.setJobIds(jobIds)
+          },
+          fetchJob: async (jobId) =>
+            (await handleTldwRequest({
+              path: `/api/v1/media/ingest/jobs/${jobId}`,
+              method: "GET",
+              timeoutMs: 4200
+            })) as { ok: boolean; status?: number; data?: any; error?: string } | undefined,
+          mapRequestError: (item, response) => {
+            if (isLikelyAuthError(Number(response?.status || 0), response?.error)) {
+              return {
+                id: item.meta.id,
+                status: "error",
+                url: item.meta.url,
+                fileName: item.meta.fileName,
+                type: item.meta.type,
+                error: response?.error || "Authentication required.",
+                data: undefined
+              }
+            }
+            return undefined
+          },
+          mapCompleted: (item, data) => ({
+            id: item.meta.id,
+            status: "ok",
+            url: item.meta.url,
+            fileName: item.meta.fileName,
+            type: item.meta.type,
+            data
+          }),
+          mapCancelled: (item) => ({
+            id: item.meta.id,
+            status: "error",
+            url: item.meta.url,
+            fileName: item.meta.fileName,
+            type: item.meta.type,
+            error: "Cancelled by user.",
+            data: undefined
+          }),
+          mapFailure: (item, details) => ({
+            id: item.meta.id,
+            status: "error",
+            url: item.meta.url,
+            fileName: item.meta.fileName,
+            type: item.meta.type,
+            error: String(details.error || `Ingest ${details.status || "failed"}`),
+            data: details.data
+          })
+        })
+      }
+
       for (const r of entries) {
         if (isCancelled()) break
         const url = String(r?.url || "").trim()
@@ -1663,7 +1778,7 @@ export default defineBackground({
             const fields: Record<string, any> = buildFields(t, r, resolvedDefaults)
             fields.urls = [url]
             const resp = await handleUpload({
-              path: "/api/v1/media/add",
+              path: "/api/v1/media/ingest/jobs",
               method: "POST",
               fields,
               timeoutMs: ingestTimeoutMs,
@@ -1673,7 +1788,12 @@ export default defineBackground({
               const msg = resp?.error || `Upload failed: ${resp?.status}`
               throw new Error(msg)
             }
-            data = resp.data
+            trackRemoteJobs(resp.data, {
+              id: String(r.id || crypto.randomUUID()),
+              url,
+              type: t
+            })
+            continue
           } else if (t === "html") {
             data = await processWebScrape(url, r)
           } else {
@@ -1729,7 +1849,7 @@ export default defineBackground({
               resolvedFileDefaults
             )
             const resp = await handleUpload({
-              path: "/api/v1/media/add",
+              path: "/api/v1/media/ingest/jobs",
               method: "POST",
               fields,
               file: { name, type: f?.type || "application/octet-stream", data: f?.data },
@@ -1740,7 +1860,12 @@ export default defineBackground({
               const msg = resp?.error || `Upload failed: ${resp?.status}`
               throw new Error(msg)
             }
-            data = resp.data
+            trackRemoteJobs(resp.data, {
+              id: String(id),
+              fileName: name,
+              type: mediaType
+            })
+            continue
           } else {
             const fields: Record<string, any> = buildFields(
               mediaType,
@@ -1773,6 +1898,14 @@ export default defineBackground({
             type: "file",
             error: e?.message || "Upload failed"
           }
+          out.push(result)
+          emitProgress(result)
+        }
+      }
+
+      if (shouldStoreRemote && queuedRemoteJobs.hasItems()) {
+        const remoteResults = await pollQueuedRemoteJobs()
+        for (const result of remoteResults) {
           out.push(result)
           emitProgress(result)
         }
