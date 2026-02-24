@@ -29,3 +29,9 @@ def test_e2e_required_lane_exists_and_is_conditional() -> None:
     workflow = _load(".github/workflows/e2e-required.yml")
     jobs = workflow["jobs"]
     assert "e2e-required" in jobs
+
+
+def test_security_required_lane_exists_and_uses_threshold_policy() -> None:
+    workflow = _load(".github/workflows/security-required.yml")
+    jobs = workflow["jobs"]
+    assert "security-required" in jobs
