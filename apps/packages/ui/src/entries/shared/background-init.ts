@@ -128,7 +128,6 @@ const checkOpenApiDrift = async (storage: Storage) => {
       "/api/v1/rag/search",
       "/api/v1/rag/search/stream",
       "/api/v1/media/ingest/jobs",
-      "/api/v1/media/add",
       "/api/v1/media/process-videos",
       "/api/v1/media/process-audios",
       "/api/v1/media/process-pdfs",

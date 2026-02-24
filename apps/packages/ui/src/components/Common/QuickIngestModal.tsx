@@ -2772,9 +2772,7 @@ export const QuickIngestModal: React.FC<Props> = ({
     const paths = spec?.paths || {}
     const mediaAddSchema = extractSchemaFromPath(paths, [
       '/api/v1/media/ingest/jobs',
-      '/api/v1/media/ingest/jobs/',
-      '/api/v1/media/add',
-      '/api/v1/media/add/'
+      '/api/v1/media/ingest/jobs/'
     ])
     const webScrapeSchema = extractSchemaFromPath(paths, [
       '/api/v1/media/process-web-scraping',
