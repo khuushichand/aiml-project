@@ -559,26 +559,7 @@ export interface MlxStatus {
   config?: MlxStatusConfig
 }
 
-export interface MlxDiscoveredModel {
-  id: string
-  name: string
-  relative_path?: string
-  modified_at?: number | null
-  size_bytes?: number | null
-  selectable: boolean
-  reasons: string[]
-}
-
-export interface MlxModelsResponse {
-  backend: string
-  model_dir: string | null
-  model_dir_configured: boolean
-  warnings: string[]
-  available_models: MlxDiscoveredModel[]
-}
-
 export interface MlxLoadRequest {
-  model_id?: string
   model_path?: string
   max_seq_len?: number
   max_batch_size?: number
@@ -1441,14 +1422,6 @@ export class TldwApiClient {
   async getMlxStatus(): Promise<MlxStatus> {
     return await bgRequest<MlxStatus>({
       path: "/api/v1/llm/providers/mlx/status",
-      method: "GET"
-    })
-  }
-
-  async getMlxModels(refresh = false): Promise<MlxModelsResponse> {
-    const query = this.buildQuery(refresh ? { refresh: true } : {})
-    return await bgRequest<MlxModelsResponse>({
-      path: `/api/v1/llm/providers/mlx/models${query}`,
       method: "GET"
     })
   }

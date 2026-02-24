@@ -141,6 +141,9 @@ describe("RunsTab accessibility live-region behavior", () => {
   it("announces visible run status transitions in the SR live region", async () => {
     const { rerender } = render(<RunsTab />)
     expect(screen.getByTestId("watchlists-runs-live-region")).toHaveTextContent("")
+    expect(screen.getByTestId("watchlists-runs-live-region")).toHaveAttribute("role", "status")
+    expect(screen.getByTestId("watchlists-runs-live-region")).toHaveAttribute("aria-live", "polite")
+    expect(screen.getByTestId("watchlists-runs-live-region")).toHaveAttribute("aria-atomic", "true")
 
     mocks.storeStateRef.current = baseState({
       runs: [buildRun("completed")],

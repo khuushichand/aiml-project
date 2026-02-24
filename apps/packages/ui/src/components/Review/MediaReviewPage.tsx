@@ -3,6 +3,7 @@ import { Input, Button, Spin, Tag, Tooltip, Radio, Pagination, Empty, Select, Ch
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 import { bgRequest } from "@/services/background-proxy"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useQuery, keepPreviousData } from "@tanstack/react-query"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { getNoteKeywords, searchNoteKeywords } from "@/services/note-keywords"
@@ -48,6 +49,15 @@ import {
   shouldVirtualizeStackMode
 } from "@/components/Review/stack-virtualization"
 import { getContentLayout } from "@/components/Review/card-content-density"
+import { downloadBlob } from "@/utils/download-blob"
+import {
+  buildBatchExportArtifact,
+  parseBatchKeywords,
+  type MediaMultiBatchExportFormat,
+  type MediaMultiBatchExportItem
+} from "@/components/Review/media-multi-batch-actions"
+import { buildMediaTrashHandoffSearch } from "@/components/Review/mediaPermalink"
+import { shouldHandleGlobalShortcut } from "@/components/Review/interaction-context"
 
 type MediaItem = {
   id: string | number
@@ -101,6 +111,7 @@ const MOBILE_REVIEW_MEDIA_QUERY = '(max-width: 1023px)'
 const MEDIA_CONTENT_DEFAULT_ROWS = 10
 const MEDIA_CONTENT_DEFAULT_MIN_HEIGHT_EM = MEDIA_CONTENT_DEFAULT_ROWS * 1.625
 const DEFAULT_SORT_BY: MediaSortBy = "relevance"
+const RESULTS_ROW_ESTIMATE_SIZE = 84
 
 const getIsMobileReviewViewport = (): boolean => {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -127,6 +138,15 @@ export const MediaReviewPage: React.FC = () => {
     MEDIA_HIDE_TRANSCRIPT_TIMINGS_SETTING
   )
   const [selectedIds, setSelectedIds] = React.useState<Array<string | number>>([])
+  const [batchKeywordsDraft, setBatchKeywordsDraft] = React.useState("")
+  const [batchExportFormat, setBatchExportFormat] =
+    React.useState<MediaMultiBatchExportFormat>("json")
+  const [batchActionLoading, setBatchActionLoading] = React.useState<
+    null | "keywords" | "trash" | "export" | "reprocess"
+  >(null)
+  const [batchTrashHandoffIds, setBatchTrashHandoffIds] = React.useState<
+    Array<string | number>
+  >([])
   const [details, setDetails] = React.useState<Record<string | number, MediaDetail>>({})
   const [availableTypes, setAvailableTypes] = React.useState<string[]>([])
   const [types, setTypes] = React.useState<string[]>([])
@@ -162,15 +182,17 @@ export const MediaReviewPage: React.FC = () => {
   const [persistedViewMode, setPersistedViewMode] = useSetting(MEDIA_REVIEW_VIEW_MODE_SETTING)
   const [viewModeState, setViewModeState] = React.useState<"spread" | "list" | "all">("spread")
   const shouldHideTranscriptTimings = hideTranscriptTimings ?? true
-  const viewMode = isMobileViewport ? "list" : viewModeState
+  const viewMode = isMobileViewport
+    ? (viewModeState === "all" && selectedIds.length > 1 ? "all" : "list")
+    : viewModeState
   const setViewMode = React.useCallback((mode: "spread" | "list" | "all") => {
     if (isMobileViewport) {
-      setViewModeState("list")
+      setViewModeState(mode === "all" && selectedIds.length > 1 ? "all" : "list")
       return
     }
     setViewModeState(mode)
     void setPersistedViewMode(mode)
-  }, [isMobileViewport, setPersistedViewMode])
+  }, [isMobileViewport, selectedIds.length, setPersistedViewMode])
   // Initialize view mode from persisted setting
   React.useEffect(() => {
     if (persistedViewMode) setViewModeState(persistedViewMode)
@@ -217,6 +239,7 @@ export const MediaReviewPage: React.FC = () => {
   const lastClickedRef = React.useRef<string | number | null>(null)
   // Ref for viewer panel focus management
   const viewerRef = React.useRef<HTMLDivElement>(null)
+  const pendingRestoreFocusIdRef = React.useRef<string | number | null>(null)
   // Track last Escape press for double-tap detection
   const lastEscapePressRef = React.useRef<number>(0)
   // Track previous view mode for auto-mode notification
@@ -541,9 +564,18 @@ export const MediaReviewPage: React.FC = () => {
     // Always provide undo for any selection size (hospital interruption recovery)
     const selectionToRestore = [...selectedIds]
     const focusToRestore = focusedId
+    const activeElement = document.activeElement as HTMLElement | null
+    const activeResultRow = activeElement?.closest<HTMLElement>("[data-media-id][role='button']")
+    const activeResultRowId = activeResultRow?.dataset.mediaId ?? null
+    const restoreFocusId =
+      activeResultRowId ??
+      focusToRestore ??
+      selectionToRestore[0] ??
+      null
 
     setSelectedIds([])
     setFocusedId(null)
+    pendingRestoreFocusIdRef.current = restoreFocusId
 
     message.info(
       <span>
@@ -555,7 +587,23 @@ export const MediaReviewPage: React.FC = () => {
           className="!p-0"
           onClick={() => {
             setSelectedIds(selectionToRestore)
-            setFocusedId(focusToRestore ?? selectionToRestore[0] ?? null)
+            const restoredFocusId = focusToRestore ?? selectionToRestore[0] ?? null
+            setFocusedId(restoredFocusId)
+            pendingRestoreFocusIdRef.current = restoreFocusId
+            window.setTimeout(() => {
+              const focusId = pendingRestoreFocusIdRef.current
+              if (focusId == null) return
+              const container = listParentRef.current
+              if (!container) return
+              const selectorValue =
+                typeof CSS !== "undefined" && typeof CSS.escape === "function"
+                  ? CSS.escape(String(focusId))
+                  : String(focusId).replace(/["\\]/g, "\\$&")
+              const row = container.querySelector<HTMLElement>(
+                `[data-media-id="${selectorValue}"][role="button"]`
+              )
+              if (row) row.focus()
+            }, 140)
             message.success(t('mediaPage.selectionRestored', 'Selection restored'))
           }}
         >
@@ -564,7 +612,7 @@ export const MediaReviewPage: React.FC = () => {
       </span>,
       UNDO_DURATION_SECONDS // Extended to 15 seconds for hospital context
     )
-  }, [selectedIds, focusedId, t])
+  }, [selectedIds, focusedId, t, message])
 
   const toggleSelect = async (id: string | number, event?: React.MouseEvent) => {
     // Shift+click range selection
@@ -670,9 +718,11 @@ export const MediaReviewPage: React.FC = () => {
   const listVirtualizer = useVirtualizer({
     count: allResults.length,
     getScrollElement: () => listParentRef.current,
-    estimateSize: () => 110,
+    estimateSize: () => RESULTS_ROW_ESTIMATE_SIZE,
     overscan: 8,
-    getItemKey: (index) => String((allResults[index] as any)?.id ?? index)
+    getItemKey: (index) => String((allResults[index] as any)?.id ?? index),
+    // Keep row spacing tight by measuring actual rendered heights.
+    measureElement: (el) => el.getBoundingClientRect().height
   })
 
   const viewerVirtualizer = useVirtualizer({
@@ -894,6 +944,319 @@ export const MediaReviewPage: React.FC = () => {
     )
   }, [message, navigate, selectedIds, setChatMode, setRagMediaIds, setSelectedKnowledge, t])
 
+  const getSelectedNumericIds = React.useCallback(() => {
+    return Array.from(
+      new Set(
+        selectedIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+          .map((id) => Math.trunc(id))
+      )
+    )
+  }, [selectedIds])
+
+  const openTrashFromBatch = React.useCallback(
+    (deletedIds: Array<string | number>) => {
+      setBatchTrashHandoffIds([])
+      navigate(`/media-trash${buildMediaTrashHandoffSearch(deletedIds)}`)
+    },
+    [navigate]
+  )
+
+  const handleBatchAddTags = React.useCallback(async () => {
+    if (selectedIds.length === 0) {
+      message.warning(
+        t("mediaPage.batchRequiresSelection", "Select at least one item.")
+      )
+      return
+    }
+
+    const keywords = parseBatchKeywords(batchKeywordsDraft)
+    if (keywords.length === 0) {
+      message.warning(
+        t("mediaPage.batchKeywordsMissing", "Enter one or more tags first.")
+      )
+      return
+    }
+
+    const mediaIds = getSelectedNumericIds()
+    if (mediaIds.length === 0) {
+      message.warning(
+        t(
+          "mediaPage.batchNoNumericMediaIds",
+          "Selected items are unavailable for this action."
+        )
+      )
+      return
+    }
+
+    setBatchActionLoading("keywords")
+    try {
+      const result = await tldwClient.bulkUpdateMediaKeywords({
+        media_ids: mediaIds,
+        keywords,
+        mode: "add"
+      })
+      const updated = Number(result?.updated ?? 0)
+      const failed = Number(result?.failed ?? 0)
+
+      setBatchKeywordsDraft("")
+      if (failed > 0) {
+        message.warning(
+          t(
+            "mediaPage.batchKeywordsPartial",
+            "Updated keywords for {{updated}} item(s); {{failed}} failed.",
+            { updated, failed }
+          )
+        )
+        return
+      }
+
+      message.success(
+        t("mediaPage.batchKeywordsSuccess", "Updated keywords for {{count}} item(s).", {
+          count: updated || mediaIds.length
+        })
+      )
+    } catch {
+      message.error(
+        t("mediaPage.batchKeywordsFailed", "Failed to update selected item tags.")
+      )
+    } finally {
+      setBatchActionLoading(null)
+    }
+  }, [batchKeywordsDraft, getSelectedNumericIds, message, selectedIds.length, t])
+
+  const confirmBatchTrash = React.useCallback(async (): Promise<boolean> => {
+    const confirmFn = (Modal as any)?.confirm
+    if (typeof confirmFn !== "function") {
+      return true
+    }
+
+    return await new Promise<boolean>((resolve) => {
+      confirmFn({
+        title: t("mediaPage.batchTrashConfirmTitle", "Move selected items to trash?"),
+        content: t(
+          "mediaPage.batchTrashConfirmBody",
+          "You can restore them later from trash."
+        ),
+        okText: t("mediaPage.batchTrashAction", "Move to trash"),
+        cancelText: t("mediaPage.cancel", "Cancel"),
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false)
+      })
+    })
+  }, [t])
+
+  const handleBatchMoveToTrash = React.useCallback(async () => {
+    if (selectedIds.length === 0) {
+      message.warning(
+        t("mediaPage.batchRequiresSelection", "Select at least one item.")
+      )
+      return
+    }
+
+    const confirmed = await confirmBatchTrash()
+    if (!confirmed) return
+
+    const idsToDelete = [...selectedIds]
+    setBatchActionLoading("trash")
+    try {
+      const settled = await Promise.allSettled(
+        idsToDelete.map((id) => tldwClient.deleteMedia(id))
+      )
+      const deletedIds: Array<string | number> = []
+      let failedCount = 0
+      settled.forEach((entry, index) => {
+        if (entry.status === "fulfilled") {
+          deletedIds.push(idsToDelete[index])
+        } else {
+          failedCount += 1
+        }
+      })
+
+      if (deletedIds.length === 0) {
+        setBatchTrashHandoffIds([])
+        message.error(
+          t("mediaPage.batchTrashFailed", "Failed to move selected items to trash.")
+        )
+        return
+      }
+
+      setSelectedIds((prev) => {
+        const next = prev.filter(
+          (candidate) =>
+            !deletedIds.some((deletedId) => idsEqual(deletedId, candidate))
+        )
+        setFocusedId((current) => {
+          if (current == null) return next[0] ?? null
+          return next.some((candidate) => idsEqual(candidate, current))
+            ? current
+            : next[0] ?? null
+        })
+        return next
+      })
+      setDetails((prev) => {
+        const next = { ...prev }
+        deletedIds.forEach((id) => {
+          delete next[id]
+        })
+        return next
+      })
+      setBatchTrashHandoffIds(deletedIds)
+
+      const toastContent = (
+        <span>
+          {failedCount > 0
+            ? t(
+                "mediaPage.batchTrashPartial",
+                "Moved {{deleted}} item(s) to trash; {{failed}} failed.",
+                {
+                  deleted: deletedIds.length,
+                  failed: failedCount
+                }
+              )
+            : t("mediaPage.batchTrashSuccess", "Moved {{count}} item(s) to trash.", {
+                count: deletedIds.length
+              })}
+          {" "}
+          <Button
+            type="link"
+            size="small"
+            className="!p-0"
+            onClick={() => openTrashFromBatch(deletedIds)}
+          >
+            {t("mediaPage.openTrash", "Open trash")}
+          </Button>
+        </span>
+      )
+
+      if (failedCount > 0) {
+        message.warning(toastContent, UNDO_DURATION_SECONDS)
+      } else {
+        message.success(toastContent, UNDO_DURATION_SECONDS)
+      }
+    } catch {
+      setBatchTrashHandoffIds([])
+      message.error(
+        t("mediaPage.batchTrashFailed", "Failed to move selected items to trash.")
+      )
+    } finally {
+      setBatchActionLoading(null)
+    }
+  }, [confirmBatchTrash, message, openTrashFromBatch, selectedIds, t])
+
+  const handleBatchExport = React.useCallback(() => {
+    if (selectedIds.length === 0) {
+      message.warning(
+        t("mediaPage.batchRequiresSelection", "Select at least one item.")
+      )
+      return
+    }
+
+    setBatchActionLoading("export")
+    try {
+      const currentResults: MediaItem[] = Array.isArray(data) ? data : []
+      const exportItems: MediaMultiBatchExportItem[] = selectedIds.map((id) => {
+        const row = currentResults.find((candidate) => idsEqual(candidate.id, id))
+        const detail = details[id]
+        const analysisText =
+          detail?.summary ||
+          (detail as any)?.analysis ||
+          (detail as any)?.analysis_content ||
+          (detail as any)?.analysisContent ||
+          ""
+        return {
+          id,
+          title:
+            detail?.title ||
+            row?.title ||
+            `${t("mediaPage.media", "Media")} ${id}`,
+          snippet: row?.snippet || "",
+          type: String(detail?.type || row?.type || "") || null,
+          created_at: detail?.created_at || row?.created_at || null,
+          keywords: Array.isArray((row as any)?.keywords)
+            ? ((row as any).keywords as string[])
+            : [],
+          content: detail ? getContent(detail) : "",
+          analysis: analysisText
+        }
+      })
+
+      const artifact = buildBatchExportArtifact(exportItems, batchExportFormat)
+      const blob = new Blob([artifact.content], {
+        type: artifact.mimeType
+      })
+      downloadBlob(
+        blob,
+        `media-multi-export-${Date.now()}.${artifact.extension}`
+      )
+      message.success(
+        t("mediaPage.batchExportReady", "Exported {{count}} selected item(s).", {
+          count: exportItems.length
+        })
+      )
+    } catch {
+      message.error(t("mediaPage.batchExportFailed", "Failed to export selection."))
+    } finally {
+      setBatchActionLoading(null)
+    }
+  }, [batchExportFormat, data, details, message, selectedIds, t])
+
+  const handleBatchReprocess = React.useCallback(async () => {
+    const mediaIds = getSelectedNumericIds()
+    if (mediaIds.length === 0) {
+      message.warning(
+        t(
+          "mediaPage.batchNoNumericMediaIds",
+          "Selected items are unavailable for this action."
+        )
+      )
+      return
+    }
+
+    setBatchActionLoading("reprocess")
+    try {
+      const settled = await Promise.allSettled(
+        mediaIds.map((id) =>
+          tldwClient.reprocessMedia(id, {
+            perform_chunking: true,
+            generate_embeddings: true
+          })
+        )
+      )
+      const successCount = settled.filter(
+        (entry) => entry.status === "fulfilled"
+      ).length
+      const failedCount = mediaIds.length - successCount
+
+      if (failedCount > 0) {
+        message.warning(
+          t(
+            "mediaPage.batchReprocessPartial",
+            "Queued reprocess for {{success}} item(s); {{failed}} failed.",
+            { success: successCount, failed: failedCount }
+          )
+        )
+        return
+      }
+
+      message.success(
+        t("mediaPage.batchReprocessSuccess", "Queued reprocess for {{count}} item(s).", {
+          count: successCount
+        })
+      )
+    } catch {
+      message.error(
+        t(
+          "mediaPage.batchReprocessFailed",
+          "Failed to queue reprocess for selected items."
+        )
+      )
+    } finally {
+      setBatchActionLoading(null)
+    }
+  }, [getSelectedNumericIds, message, t])
+
   const expandAllContent = React.useCallback(() => {
     setContentExpandedIds(new Set(visibleIds.map((id) => String(id))))
   }, [visibleIds])
@@ -953,9 +1316,8 @@ export const MediaReviewPage: React.FC = () => {
   // Global keyboard shortcuts
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in input/textarea/select
-      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase()
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return
+      if (!shouldHandleGlobalShortcut(e.target)) return
+      if (helpModalOpen || compareDiffOpen || selectedItemsDrawerOpen) return
 
       switch (e.key) {
         case 'a': // Select all visible (with Ctrl/Cmd)
@@ -1029,7 +1391,17 @@ export const MediaReviewPage: React.FC = () => {
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [goRelative, focusedId, selectedIds.length, clearSelectionWithGuard, t, addVisibleToSelection])
+  }, [
+    goRelative,
+    focusedId,
+    selectedIds.length,
+    clearSelectionWithGuard,
+    t,
+    addVisibleToSelection,
+    helpModalOpen,
+    compareDiffOpen,
+    selectedItemsDrawerOpen
+  ])
 
   // Auto-select view mode by item count with notification
   React.useEffect(() => {
@@ -1074,6 +1446,18 @@ export const MediaReviewPage: React.FC = () => {
 
   // Compute active filter count for collapsed state display
   const hasDateRangeFilter = Boolean(dateRange.startDate || dateRange.endDate)
+  const selectionStatusLevel =
+    selectedIds.length >= openAllLimit
+      ? "limit"
+      : selectedIds.length >= SELECTION_WARNING_THRESHOLD
+        ? "warning"
+        : "safe"
+  const selectionStatusText =
+    selectionStatusLevel === "limit"
+      ? t("mediaPage.selectionStatusLimit", "Limit reached")
+      : selectionStatusLevel === "warning"
+        ? t("mediaPage.selectionStatusWarning", "Warning")
+        : t("mediaPage.selectionStatusSafe", "Safe")
   const activeFilterCount =
     types.length +
     keywordTokens.length +
@@ -1563,6 +1947,14 @@ export const MediaReviewPage: React.FC = () => {
                   <span className="ml-1">({openAllLimit - selectedIds.length} {t('mediaPage.remaining', 'left')})</span>
                 )}
               </span>
+              <span
+                className="text-[11px] whitespace-nowrap text-text-muted"
+                data-testid="media-multi-selection-status"
+              >
+                {t("mediaPage.selectionStatus", "Selection status: {{status}}", {
+                  status: selectionStatusText
+                })}
+              </span>
             </div>
             {selectedIds.length > 0 && (
               <div className="flex items-center gap-2">
@@ -1581,6 +1973,119 @@ export const MediaReviewPage: React.FC = () => {
               </div>
             )}
           </div>
+          {selectedIds.length > 0 && (
+            <div
+              className="mb-2 flex flex-wrap items-center gap-2 rounded border border-border bg-surface2/40 px-2 py-2"
+              data-testid="media-multi-batch-toolbar"
+            >
+              <span className="text-xs font-medium text-text-muted">
+                {t("mediaPage.batchToolbarSelected", "{{count}} selected", {
+                  count: selectedIds.length
+                })}
+              </span>
+              <Input
+                value={batchKeywordsDraft}
+                onChange={(event) => setBatchKeywordsDraft(event.target.value)}
+                placeholder={t(
+                  "mediaPage.batchKeywordsPlaceholder",
+                  "Batch keywords (comma-separated)"
+                )}
+                aria-label={
+                  t(
+                    "mediaPage.batchKeywordsLabel",
+                    "Batch keywords"
+                  ) as string
+                }
+                className="min-w-[14rem] max-w-[22rem]"
+              />
+              <Button
+                size="small"
+                onClick={() => {
+                  void handleBatchAddTags()
+                }}
+                disabled={batchActionLoading != null && batchActionLoading !== "keywords"}
+              >
+                {t("mediaPage.batchAddTags", "Add tags")}
+              </Button>
+              <Select
+                value={batchExportFormat}
+                aria-label={t("mediaPage.batchExportFormat", "Export format") as string}
+                className="min-w-[10rem]"
+                onChange={(value) =>
+                  setBatchExportFormat(value as MediaMultiBatchExportFormat)
+                }
+                options={[
+                  {
+                    value: "json",
+                    label: t("mediaPage.batchExportJson", "JSON")
+                  },
+                  {
+                    value: "markdown",
+                    label: t("mediaPage.batchExportMarkdown", "Markdown")
+                  },
+                  {
+                    value: "text",
+                    label: t("mediaPage.batchExportText", "Text")
+                  }
+                ]}
+              />
+              <Button
+                size="small"
+                onClick={handleBatchExport}
+                disabled={batchActionLoading != null && batchActionLoading !== "export"}
+              >
+                {t("mediaPage.batchExportSelected", "Export selected")}
+              </Button>
+              <Button
+                size="small"
+                onClick={() => {
+                  void handleBatchReprocess()
+                }}
+                disabled={batchActionLoading != null && batchActionLoading !== "reprocess"}
+              >
+                {t("mediaPage.batchReprocess", "Reprocess")}
+              </Button>
+              <Button
+                size="small"
+                danger
+                className="ml-auto"
+                onClick={() => {
+                  void handleBatchMoveToTrash()
+                }}
+                disabled={batchActionLoading != null && batchActionLoading !== "trash"}
+              >
+                {t("mediaPage.batchTrashAction", "Move to trash")}
+              </Button>
+            </div>
+          )}
+          {batchTrashHandoffIds.length > 0 && (
+            <div
+              className="mb-2 flex flex-wrap items-center gap-2 rounded border border-primary/30 bg-primary/10 px-2 py-2 text-xs text-primary"
+              data-testid="media-multi-trash-handoff"
+            >
+              <span>
+                {t(
+                  "mediaPage.batchTrashHandoff",
+                  "Batch delete complete. Review items in trash."
+                )}
+              </span>
+              <Button
+                size="small"
+                type="link"
+                className="!p-0"
+                onClick={() => openTrashFromBatch(batchTrashHandoffIds)}
+              >
+                {t("mediaPage.openTrash", "Open trash")}
+              </Button>
+              <Button
+                size="small"
+                type="text"
+                onClick={() => setBatchTrashHandoffIds([])}
+              >
+                {t("mediaPage.dismiss", "Dismiss")}
+              </Button>
+            </div>
+          )}
           {filtersCollapsed && collapsedFilterChips.length > 0 && (
             <div className="mb-2 flex flex-wrap items-center gap-1 text-xs">
               {collapsedFilterChips.map((chip) => (
@@ -1821,6 +2326,10 @@ export const MediaReviewPage: React.FC = () => {
                       return (
                         <div
                           key={item.id}
+                          ref={(el) => {
+                            if (el) listVirtualizer.measureElement(el)
+                          }}
+                          data-media-id={String(item.id)}
                           data-index={virtualRow.index}
                           role="button"
                           aria-selected={isSelected}
@@ -1900,8 +2409,8 @@ export const MediaReviewPage: React.FC = () => {
             onClick={() => setSidebarHidden((v) => !v)}
             className={
               isMobileViewport
-                ? "h-8 w-full rounded bg-surface2 hover:bg-surface flex items-center justify-center text-xs font-semibold text-text-muted"
-                : "h-full w-6 rounded bg-surface2 hover:bg-surface flex items-center justify-center text-xs font-semibold text-text-muted"
+                ? "h-11 min-h-[44px] w-full rounded bg-surface2 hover:bg-surface flex items-center justify-center text-xs font-semibold text-text-muted"
+                : "h-full min-h-[44px] min-w-[44px] w-11 rounded bg-surface2 hover:bg-surface flex items-center justify-center text-xs font-semibold text-text-muted"
             }
           >
             {isMobileViewport
@@ -1933,9 +2442,35 @@ export const MediaReviewPage: React.FC = () => {
                   </div>
                 </div>
                 {isMobileViewport ? (
-                  <Tag data-testid="mobile-view-mode-badge">
-                    {t("mediaPage.listMode", "Focus")}
-                  </Tag>
+                  <div className="flex items-center gap-2">
+                    <Tag data-testid="mobile-view-mode-badge">
+                      {viewMode === "all"
+                        ? t("mediaPage.allMode", "Stack")
+                        : t("mediaPage.listMode", "Focus")}
+                    </Tag>
+                    {selectedIds.length > 1 && (
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          const nextMode = viewMode === "all" ? "list" : "all"
+                          setViewModeState(nextMode)
+                          if (nextMode === "all") {
+                            selectedIds.forEach((id) => void ensureDetail(id))
+                          } else {
+                            const nextFocused = focusedId ?? selectedIds[0] ?? allResults[0]?.id
+                            if (nextFocused != null) {
+                              setFocusedId(nextFocused)
+                              void ensureDetail(nextFocused)
+                            }
+                          }
+                        }}
+                      >
+                        {viewMode === "all"
+                          ? t("mediaPage.listMode", "Focus")
+                          : t("mediaPage.allMode", "Stack")}
+                      </Button>
+                    )}
+                  </div>
                 ) : (
                   <Tooltip title={t("mediaPage.spreadModeTooltip", "View selected items side-by-side for comparison")}>
                     <span>
@@ -2099,7 +2634,12 @@ export const MediaReviewPage: React.FC = () => {
                   }}
                   trigger={['click']}
                 >
-                  <Button size="small" icon={<Settings2 className="w-3.5 h-3.5" />}>
+                  <Button
+                    size="small"
+                    icon={<Settings2 className="w-3.5 h-3.5" />}
+                    aria-haspopup="menu"
+                    className="min-h-[44px] min-w-[44px]"
+                  >
                     {t("mediaPage.viewerOptions", "Options")}
                     <ChevronDown className="w-3 h-3 ml-1" />
                   </Button>
@@ -2173,6 +2713,7 @@ export const MediaReviewPage: React.FC = () => {
                 </Dropdown>
                 {selectedIds.length === 2 && (
                   <Button
+                    data-compare-content-trigger="true"
                     size="small"
                     onClick={() => void handleCompareContent()}
                   >
@@ -2208,16 +2749,19 @@ export const MediaReviewPage: React.FC = () => {
                       "Multi-Item Review keyboard shortcuts"
                     ) as string
                   }
-                  className="text-text-subtle hover:text-text"
+                  className="text-text-subtle hover:text-text min-h-[44px] min-w-[44px]"
                 >
                   ?
                 </Button>
               </div>
             </div>
             {selectedIds.length > 0 && (
-              <div className="mt-2 flex items-center gap-2 overflow-x-auto text-xs text-text-muted">
-                <span className="font-medium">{t("mediaPage.openMiniMap", "Open items")}</span>
-                <span className="whitespace-nowrap">
+              <div
+                data-testid="media-review-open-items"
+                className="mt-2 flex w-full min-w-0 flex-wrap items-start gap-2 text-xs text-text-muted"
+              >
+                <span className="font-medium shrink-0">{t("mediaPage.openMiniMap", "Open items")}</span>
+                <span className="min-w-0 break-words">
                   {t(
                     "mediaPage.viewerFlowHint",
                     "Search/filter in sidebar, inspect in viewer, jump using Open items."
@@ -2225,27 +2769,31 @@ export const MediaReviewPage: React.FC = () => {
                 </span>
                 {selectedIds.length <= MINIMAP_COLLAPSE_THRESHOLD ? (
                   // Horizontal button bar for ≤8 items
-                  selectedIds.map((id, idx) => {
-                    const d = details[id]
-                    const isLoading = detailLoading[id]
-                    const hasFailed = failedIds.has(id)
-                    return (
-                      <Button
-                        key={String(id)}
-                        size="small"
-                        type={focusedId === id ? "primary" : "default"}
-                        danger={hasFailed}
-                        onClick={() => {
-                          setFocusedId(id)
-                          scrollToCard(id)
-                        }}
-                        className={isLoading ? "animate-pulse" : ""}
-                      >
-                        {isLoading && <Spin size="small" className="mr-1" />}
-                        {idx + 1}. {d?.title || `${t('mediaPage.media', 'Media')} ${id}`} {d?.type ? `(${String(d.type)})` : ""}
-                      </Button>
-                    )
-                  })
+                  <div className="flex w-full min-w-0 flex-wrap items-start gap-2">
+                    {selectedIds.map((id, idx) => {
+                      const d = details[id]
+                      const isLoading = detailLoading[id]
+                      const hasFailed = failedIds.has(id)
+                      const itemLabel = `${idx + 1}. ${d?.title || `${t('mediaPage.media', 'Media')} ${id}`}${d?.type ? ` (${String(d.type)})` : ""}`
+                      return (
+                        <Button
+                          key={String(id)}
+                          size="small"
+                          type={focusedId === id ? "primary" : "default"}
+                          danger={hasFailed}
+                          onClick={() => {
+                            setFocusedId(id)
+                            scrollToCard(id)
+                          }}
+                          title={itemLabel}
+                          className={`${isLoading ? "animate-pulse" : ""} min-h-[44px] min-w-[44px] max-w-[42ch] !h-auto whitespace-normal break-words text-left leading-5`}
+                        >
+                          {isLoading && <Spin size="small" className="mr-1" />}
+                          <span className="whitespace-normal break-words">{itemLabel}</span>
+                        </Button>
+                      )
+                    })}
+                  </div>
                 ) : (
                   // Dropdown for >8 items
                   <Dropdown
@@ -2273,7 +2821,7 @@ export const MediaReviewPage: React.FC = () => {
                     }}
                     trigger={['click']}
                   >
-                    <Button size="small">
+                    <Button size="small" className="min-h-[44px] min-w-[44px]">
                       {t("mediaPage.jumpToItem", "Jump to item")} ({selectedIds.length})
                       <ChevronDown className="w-3 h-3 ml-1" />
                     </Button>

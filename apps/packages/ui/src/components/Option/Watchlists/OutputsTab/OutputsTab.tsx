@@ -34,6 +34,7 @@ import {
 } from "@/services/watchlists"
 import type { WatchlistJob, WatchlistOutput, WatchlistTemplate } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
+import { trackWatchlistsOnboardingTelemetry } from "@/utils/watchlists-onboarding-telemetry"
 import { OutputPreviewDrawer } from "./OutputPreviewDrawer"
 import {
   buildDeliveryDisclosureSummary,
@@ -103,6 +104,10 @@ export const OutputsTab: React.FC = () => {
   const setOutputsPageSize = useWatchlistsStore((s) => s.setOutputsPageSize)
   const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
   const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
+  const setRunsJobFilter = useWatchlistsStore((s) => s.setRunsJobFilter)
+  const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const openJobForm = useWatchlistsStore((s) => s.openJobForm)
   const openOutputPreview = useWatchlistsStore((s) => s.openOutputPreview)
   const closeOutputPreview = useWatchlistsStore((s) => s.closeOutputPreview)
 
@@ -145,6 +150,16 @@ export const OutputsTab: React.FC = () => {
         size: outputsPageSize
       })
       setOutputs(result.items, result.total)
+      if (!outputsJobFilter && !outputsRunFilter && Number(result.total) > 0) {
+        void trackWatchlistsOnboardingTelemetry({
+          type: "quick_setup_first_run_succeeded",
+          source: "outputs"
+        })
+        void trackWatchlistsOnboardingTelemetry({
+          type: "quick_setup_first_output_succeeded",
+          source: "outputs"
+        })
+      }
     } catch (err) {
       console.error("Failed to fetch outputs:", err)
       message.error(t("watchlists:outputs.fetchError", "Failed to load outputs"))
@@ -278,6 +293,17 @@ export const OutputsTab: React.FC = () => {
     return parts.join(" • ")
   }, [getJobName, outputsJobFilter, outputsRunFilter, t])
 
+  const handleJumpToMonitor = useCallback((jobId: number) => {
+    setActiveTab("jobs")
+    openJobForm(jobId)
+  }, [openJobForm, setActiveTab])
+
+  const handleJumpToRun = useCallback((runId: number, jobId: number) => {
+    setRunsJobFilter(jobId)
+    setActiveTab("runs")
+    openRunDetail(runId)
+  }, [openRunDetail, setActiveTab, setRunsJobFilter])
+
   // Handle download
   const handleDownload = async (output: WatchlistOutput) => {
     try {
@@ -393,9 +419,16 @@ export const OutputsTab: React.FC = () => {
       width: 180,
       ellipsis: true,
       render: (_, record) => (
-        <span className="text-sm text-text-muted">
+        <Button
+          type="link"
+          size="small"
+          className="px-0"
+          onClick={() => handleJumpToMonitor(record.job_id)}
+          data-testid={`watchlists-output-jump-monitor-${record.id}`}
+          aria-label={t("watchlists:outputs.jumpMonitor", "Open monitor")}
+        >
           {getJobName(record.job_id)}
-        </span>
+        </Button>
       )
     },
     {
@@ -403,8 +436,17 @@ export const OutputsTab: React.FC = () => {
       dataIndex: "run_id",
       key: "run_id",
       width: 100,
-      render: (runId: number) => (
-        <span className="text-sm text-text-muted">#{runId}</span>
+      render: (runId: number, record) => (
+        <Button
+          type="link"
+          size="small"
+          className="px-0"
+          onClick={() => handleJumpToRun(runId, record.job_id)}
+          data-testid={`watchlists-output-jump-run-${record.id}`}
+          aria-label={t("watchlists:outputs.jumpRun", "Open run")}
+        >
+          #{runId}
+        </Button>
       )
     },
     {

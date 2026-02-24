@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, type RefObject } from 'react'
 import { Modal, Radio } from 'antd'
 import { useTranslation } from 'react-i18next'
 import {
@@ -18,6 +18,7 @@ interface DiffViewModalProps {
   rightText: string
   leftLabel?: string
   rightLabel?: string
+  fallbackFocusRef?: RefObject<HTMLElement | null>
   metadataDiff?: {
     left?: string[]
     right?: string[]
@@ -32,6 +33,7 @@ export function DiffViewModal({
   rightText,
   leftLabel = 'Left',
   rightLabel = 'Right',
+  fallbackFocusRef,
   metadataDiff
 }: DiffViewModalProps) {
   const { t } = useTranslation(['review'])
@@ -55,8 +57,30 @@ export function DiffViewModal({
       // Focus the diff content for keyboard scrolling
       setTimeout(() => contentRef.current?.focus(), 0)
     } else {
-      // Restore focus to trigger element when modal closes
-      triggerRef.current?.focus()
+      const canFocus = (candidate: HTMLElement | null): candidate is HTMLElement =>
+        Boolean(
+          candidate &&
+            candidate.isConnected &&
+            typeof candidate.focus === 'function' &&
+            !(candidate as HTMLButtonElement).disabled
+        )
+
+      // Restore focus to trigger element when modal closes, then fallback to compare trigger.
+      if (canFocus(triggerRef.current)) {
+        triggerRef.current.focus()
+        return
+      }
+      const explicitFallback = fallbackFocusRef?.current ?? null
+      if (canFocus(explicitFallback)) {
+        explicitFallback.focus()
+        return
+      }
+      const compareFallback = document.querySelector<HTMLElement>(
+        "[data-compare-content-trigger='true']"
+      )
+      if (canFocus(compareFallback)) {
+        compareFallback.focus()
+      }
     }
   }
 

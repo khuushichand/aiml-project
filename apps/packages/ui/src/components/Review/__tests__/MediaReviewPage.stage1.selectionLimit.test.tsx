@@ -1,5 +1,6 @@
 import React from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import axe from 'axe-core'
 import MediaReviewPage from '../MediaReviewPage'
@@ -1121,6 +1122,68 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     expect(screen.queryByRole('button', { name: 'Unstack' })).not.toBeInTheDocument()
   })
 
+  it('wraps long open-item labels instead of forcing one horizontal minimap line', async () => {
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      const idMatch = path.match(/\/api\/v1\/media\/([^?]+)/)
+      const id = idMatch ? Number(idMatch[1]) : null
+      return {
+        id: id ?? 1,
+        title: `Extremely long selected media title ${id ?? 1} that should wrap into another line in the open items strip`,
+        type: 'document',
+        content: `Content ${id ?? 1}`
+      }
+    })
+
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    const openItemsRow = await screen.findByTestId('media-review-open-items')
+    expect(openItemsRow).not.toHaveClass('overflow-x-auto')
+
+    const firstOpenItemButton = screen.getByRole('button', {
+      name: /1\.\s*Extremely long selected media title/i
+    })
+    expect(firstOpenItemButton.className).toContain('max-w-[42ch]')
+    expect(firstOpenItemButton.className).toContain('whitespace-normal')
+  })
+
+  it('exposes named controls and keyboard focus progression for selection management actions', async () => {
+    const user = userEvent.setup()
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/selected across pages: 2/i)).toBeInTheDocument()
+    })
+
+    const optionsButton = screen.getByRole('button', { name: /options/i })
+    const viewSelectedItemsButton = screen.getByTestId('view-selected-items-button')
+    const selectionStatus = screen.getByTestId('media-multi-selection-status')
+
+    expect(optionsButton).toHaveAttribute('aria-haspopup', 'menu')
+    expect(viewSelectedItemsButton).toBeInTheDocument()
+    expect(selectionStatus).toHaveTextContent(/selection status:/i)
+
+    optionsButton.focus()
+    expect(optionsButton).toHaveFocus()
+    await user.tab()
+    expect(document.activeElement).not.toBe(optionsButton)
+    expect((document.activeElement as HTMLElement).tagName.toLowerCase()).toBe('button')
+  })
+
   it('has no axe violations for core aria naming and region rules', async () => {
     const { container } = render(<MediaReviewPage />)
 
@@ -1132,10 +1195,13 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       runOnly: {
         type: 'rule',
         values: [
+          'aria-command-name',
+          'aria-input-field-name',
           'aria-required-attr',
           'aria-valid-attr',
           'aria-valid-attr-value',
           'button-name',
+          'focus-order-semantics',
           'region'
         ]
       }

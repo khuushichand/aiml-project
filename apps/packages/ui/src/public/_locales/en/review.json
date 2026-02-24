@@ -1610,8 +1610,107 @@
   "mediaPage_selectionCount": {
     "message": "{{selected}} / {{limit}}"
   },
+  "mediaPage_selectionStatus": {
+    "message": "Selection status: {{status}}"
+  },
+  "mediaPage_selectionStatusSafe": {
+    "message": "Safe"
+  },
+  "mediaPage_selectionStatusWarning": {
+    "message": "Warning"
+  },
+  "mediaPage_selectionStatusLimit": {
+    "message": "Limit reached"
+  },
   "mediaPage_selectedAcrossPages": {
     "message": "Selected across pages: {{count}}"
+  },
+  "mediaPage_batchToolbarSelected": {
+    "message": "{{count}} selected"
+  },
+  "mediaPage_batchKeywordsLabel": {
+    "message": "Batch keywords"
+  },
+  "mediaPage_batchKeywordsPlaceholder": {
+    "message": "Batch keywords (comma-separated)"
+  },
+  "mediaPage_batchAddTags": {
+    "message": "Add tags"
+  },
+  "mediaPage_batchTrashAction": {
+    "message": "Move to trash"
+  },
+  "mediaPage_batchExportFormat": {
+    "message": "Export format"
+  },
+  "mediaPage_batchExportJson": {
+    "message": "JSON"
+  },
+  "mediaPage_batchExportMarkdown": {
+    "message": "Markdown"
+  },
+  "mediaPage_batchExportText": {
+    "message": "Text"
+  },
+  "mediaPage_batchExportSelected": {
+    "message": "Export selected"
+  },
+  "mediaPage_batchReprocess": {
+    "message": "Reprocess"
+  },
+  "mediaPage_batchRequiresSelection": {
+    "message": "Select at least one item."
+  },
+  "mediaPage_batchKeywordsMissing": {
+    "message": "Enter one or more tags first."
+  },
+  "mediaPage_batchNoNumericMediaIds": {
+    "message": "Selected items are unavailable for this action."
+  },
+  "mediaPage_batchKeywordsSuccess": {
+    "message": "Updated keywords for {{count}} item(s)."
+  },
+  "mediaPage_batchKeywordsPartial": {
+    "message": "Updated keywords for {{updated}} item(s); {{failed}} failed."
+  },
+  "mediaPage_batchKeywordsFailed": {
+    "message": "Failed to update selected item tags."
+  },
+  "mediaPage_batchTrashConfirmTitle": {
+    "message": "Move selected items to trash?"
+  },
+  "mediaPage_batchTrashConfirmBody": {
+    "message": "You can restore them later from trash."
+  },
+  "mediaPage_batchTrashSuccess": {
+    "message": "Moved {{count}} item(s) to trash."
+  },
+  "mediaPage_batchTrashPartial": {
+    "message": "Moved {{deleted}} item(s) to trash; {{failed}} failed."
+  },
+  "mediaPage_batchTrashFailed": {
+    "message": "Failed to move selected items to trash."
+  },
+  "mediaPage_batchTrashHandoff": {
+    "message": "Batch delete complete. Review items in trash."
+  },
+  "mediaPage_dismiss": {
+    "message": "Dismiss"
+  },
+  "mediaPage_batchExportReady": {
+    "message": "Exported {{count}} selected item(s)."
+  },
+  "mediaPage_batchExportFailed": {
+    "message": "Failed to export selection."
+  },
+  "mediaPage_batchReprocessSuccess": {
+    "message": "Queued reprocess for {{count}} item(s)."
+  },
+  "mediaPage_batchReprocessPartial": {
+    "message": "Queued reprocess for {{success}} item(s); {{failed}} failed."
+  },
+  "mediaPage_batchReprocessFailed": {
+    "message": "Failed to queue reprocess for selected items."
   },
   "mediaPage_selectionLimitReached": {
     "message": "Selection limit reached ({{limit}} items)"

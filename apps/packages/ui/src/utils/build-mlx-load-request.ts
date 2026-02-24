@@ -1,7 +1,6 @@
 import type { MlxLoadRequest } from "@/services/tldw/TldwApiClient"
 
 export interface MlxLoadRequestInput {
-  modelId?: string
   modelPath: string
   compile: boolean
   warmup: boolean
@@ -21,7 +20,6 @@ export interface MlxLoadRequestInput {
 }
 
 export const buildMlxLoadRequest = ({
-  modelId,
   modelPath,
   compile,
   warmup,
@@ -39,19 +37,11 @@ export const buildMlxLoadRequest = ({
   adapter,
   adapterWeights
 }: MlxLoadRequestInput): MlxLoadRequest => {
-  const normalizedModelId = modelId?.trim() || ""
-  const normalizedModelPath = modelPath.trim()
-
   const req: MlxLoadRequest = {
+    model_path: modelPath.trim(),
     compile,
     warmup,
     max_concurrent: maxConcurrent
-  }
-
-  if (normalizedModelId) {
-    req.model_id = normalizedModelId
-  } else if (normalizedModelPath) {
-    req.model_path = normalizedModelPath
   }
 
   if (device && device !== "auto") req.device = device

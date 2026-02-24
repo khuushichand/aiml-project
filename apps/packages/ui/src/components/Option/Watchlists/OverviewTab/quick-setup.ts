@@ -13,6 +13,7 @@ export interface QuickSetupValues {
   sourceType: SourceType
   monitorName: string
   schedulePreset: QuickSetupSchedulePreset
+  audioBriefing: boolean
   runNow: boolean
   setupGoal: QuickSetupGoal
 }
@@ -23,6 +24,7 @@ export const QUICK_SETUP_DEFAULT_VALUES: QuickSetupValues = {
   sourceType: "rss",
   monitorName: "",
   schedulePreset: "daily",
+  audioBriefing: false,
   runNow: true,
   setupGoal: "briefing"
 }
@@ -58,7 +60,7 @@ export const toQuickSetupSourcePayload = (
 })
 
 export const toQuickSetupJobPayload = (
-  values: Pick<QuickSetupValues, "monitorName" | "schedulePreset" | "setupGoal">,
+  values: Pick<QuickSetupValues, "monitorName" | "schedulePreset" | "setupGoal" | "audioBriefing">,
   sourceId: number
 ): WatchlistJobCreate => {
   const payload: WatchlistJobCreate = {
@@ -70,7 +72,8 @@ export const toQuickSetupJobPayload = (
 
   if ((values.setupGoal || "briefing") === "briefing") {
     payload.output_prefs = {
-      template_name: "briefing_md"
+      template_name: "briefing_md",
+      ...(values.audioBriefing ? { generate_audio: true } : {})
     }
   }
 
