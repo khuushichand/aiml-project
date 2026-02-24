@@ -213,7 +213,7 @@ jobs:
 
       - name: Run all-pages UX smoke gate
         working-directory: apps/tldw-frontend
-        run: bunx playwright test e2e/smoke/all-pages.spec.ts --reporter=line
+        run: bun run e2e:smoke:all-pages:gate
 
       - name: Upload smoke artifacts
         if: always()
