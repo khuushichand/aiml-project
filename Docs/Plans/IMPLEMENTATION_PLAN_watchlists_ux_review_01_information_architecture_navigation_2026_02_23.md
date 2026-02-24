@@ -77,7 +77,20 @@
 **Tests**:
 - Add component tests for guidance banners and cross-navigation buttons.
 - Add journey tests for Overview -> Feeds -> Monitors -> Activity -> Reports transitions.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 3 Completion Notes (2026-02-24)
+
+- Added a per-tab orientation guidance banner in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx` with explicit “what this tab is” + “what to do next” copy.
+- Added explicit cross-tab next-step actions with outcome-oriented labels, including the missing key transition:
+  - `Activity -> Reports`
+  - `Articles -> Monitors`
+- Added localized orientation copy in `apps/packages/ui/src/assets/locale/en/watchlists.json` under `orientation.*`.
+- Added focused guidance + journey test coverage in:
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx`
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
 
 ## Stage 4: Experimental IA Rollout and Safety
 **Goal**: Replace ad hoc IA experiment flags with a controlled rollout plan.

@@ -54,6 +54,49 @@
     "briefings": "Briefings",
     "briefingsHint": "Reports and templates"
   },
+  "orientation": {
+    "actions": {
+      "openOverview": "Open Overview",
+      "openFeeds": "Open Feeds",
+      "openMonitors": "Open Monitors",
+      "openActivity": "Open Activity",
+      "openArticles": "Open Articles",
+      "openReports": "Open Reports",
+      "openTemplates": "Open Templates"
+    },
+    "overview": {
+      "title": "Overview: watchlist health at a glance",
+      "description": "Review current health and attention signals, then start by adding or refining feeds."
+    },
+    "sources": {
+      "title": "Feeds: define what to collect",
+      "description": "Add or clean feed inputs here. Next, configure monitors to schedule collection."
+    },
+    "jobs": {
+      "title": "Monitors: control schedule and processing",
+      "description": "Monitors run your feed pipeline. Next, check Activity to confirm runs are healthy."
+    },
+    "runs": {
+      "title": "Activity: run health and history",
+      "description": "Inspect failures and logs here. Next, open Reports to view generated briefings."
+    },
+    "items": {
+      "title": "Articles: triage captured content",
+      "description": "Review and prioritize captured items. Next, tune monitor scope or open reports."
+    },
+    "outputs": {
+      "title": "Reports: generated briefing outputs",
+      "description": "Download, review, or regenerate briefings. Next, edit templates when format needs change."
+    },
+    "templates": {
+      "title": "Templates: define briefing format",
+      "description": "Template changes apply to future output generation. Next, run monitors or open reports."
+    },
+    "settings": {
+      "title": "Settings: workspace-level watchlists defaults",
+      "description": "Adjust watchlists defaults and integration settings. Return to overview to validate health."
+    }
+  },
   "overview": {
     "description": "At-a-glance watchlist health, activity, and failure signals.",
     "lastUpdated": "Updated {{time}}",

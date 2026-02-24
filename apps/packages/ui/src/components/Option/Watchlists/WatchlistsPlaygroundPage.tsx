@@ -58,6 +58,27 @@ const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
 type GuidedTourTab = "sources" | "jobs" | "runs" | "items" | "outputs"
 type GuidedTourStatus = "idle" | "in_progress" | "dismissed" | "completed"
 type TaskViewKey = "collect" | "review" | "briefings"
+type WatchlistsTabKey =
+  | "overview"
+  | "sources"
+  | "jobs"
+  | "runs"
+  | "items"
+  | "outputs"
+  | "templates"
+  | "settings"
+
+interface OrientationAction {
+  key: string
+  label: string
+  target: WatchlistsTabKey
+}
+
+interface TabOrientation {
+  title: string
+  description: string
+  actions: OrientationAction[]
+}
 interface GuidedTourState {
   status: GuidedTourStatus
   step: number
@@ -217,6 +238,161 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     }
   ]
   const activeTaskView = resolveTaskViewForTab(activeTab)
+  const tabOrientation: Record<WatchlistsTabKey, TabOrientation> = {
+    overview: {
+      title: t("watchlists:orientation.overview.title", "Overview: watchlist health at a glance"),
+      description: t(
+        "watchlists:orientation.overview.description",
+        "Review current health and attention signals, then start by adding or refining feeds."
+      ),
+      actions: [
+        {
+          key: "open-feeds",
+          label: t("watchlists:orientation.actions.openFeeds", "Open Feeds"),
+          target: "sources"
+        },
+        {
+          key: "open-monitors",
+          label: t("watchlists:orientation.actions.openMonitors", "Open Monitors"),
+          target: "jobs"
+        }
+      ]
+    },
+    sources: {
+      title: t("watchlists:orientation.sources.title", "Feeds: define what to collect"),
+      description: t(
+        "watchlists:orientation.sources.description",
+        "Add or clean feed inputs here. Next, configure monitors to schedule collection."
+      ),
+      actions: [
+        {
+          key: "open-monitors",
+          label: t("watchlists:orientation.actions.openMonitors", "Open Monitors"),
+          target: "jobs"
+        },
+        {
+          key: "open-activity",
+          label: t("watchlists:orientation.actions.openActivity", "Open Activity"),
+          target: "runs"
+        }
+      ]
+    },
+    jobs: {
+      title: t("watchlists:orientation.jobs.title", "Monitors: control schedule and processing"),
+      description: t(
+        "watchlists:orientation.jobs.description",
+        "Monitors run your feed pipeline. Next, check Activity to confirm runs are healthy."
+      ),
+      actions: [
+        {
+          key: "open-activity",
+          label: t("watchlists:orientation.actions.openActivity", "Open Activity"),
+          target: "runs"
+        },
+        {
+          key: "open-articles",
+          label: t("watchlists:orientation.actions.openArticles", "Open Articles"),
+          target: "items"
+        }
+      ]
+    },
+    runs: {
+      title: t("watchlists:orientation.runs.title", "Activity: run health and history"),
+      description: t(
+        "watchlists:orientation.runs.description",
+        "Inspect failures and logs here. Next, open Reports to view generated briefings."
+      ),
+      actions: [
+        {
+          key: "open-reports",
+          label: t("watchlists:orientation.actions.openReports", "Open Reports"),
+          target: "outputs"
+        },
+        {
+          key: "open-articles",
+          label: t("watchlists:orientation.actions.openArticles", "Open Articles"),
+          target: "items"
+        }
+      ]
+    },
+    items: {
+      title: t("watchlists:orientation.items.title", "Articles: triage captured content"),
+      description: t(
+        "watchlists:orientation.items.description",
+        "Review and prioritize captured items. Next, tune monitor scope or open reports."
+      ),
+      actions: [
+        {
+          key: "open-monitors",
+          label: t("watchlists:orientation.actions.openMonitors", "Open Monitors"),
+          target: "jobs"
+        },
+        {
+          key: "open-reports",
+          label: t("watchlists:orientation.actions.openReports", "Open Reports"),
+          target: "outputs"
+        }
+      ]
+    },
+    outputs: {
+      title: t("watchlists:orientation.outputs.title", "Reports: generated briefing outputs"),
+      description: t(
+        "watchlists:orientation.outputs.description",
+        "Download, review, or regenerate briefings. Next, edit templates when format needs change."
+      ),
+      actions: [
+        {
+          key: "open-templates",
+          label: t("watchlists:orientation.actions.openTemplates", "Open Templates"),
+          target: "templates"
+        },
+        {
+          key: "open-activity",
+          label: t("watchlists:orientation.actions.openActivity", "Open Activity"),
+          target: "runs"
+        }
+      ]
+    },
+    templates: {
+      title: t("watchlists:orientation.templates.title", "Templates: define briefing format"),
+      description: t(
+        "watchlists:orientation.templates.description",
+        "Template changes apply to future output generation. Next, run monitors or open reports."
+      ),
+      actions: [
+        {
+          key: "open-monitors",
+          label: t("watchlists:orientation.actions.openMonitors", "Open Monitors"),
+          target: "jobs"
+        },
+        {
+          key: "open-reports",
+          label: t("watchlists:orientation.actions.openReports", "Open Reports"),
+          target: "outputs"
+        }
+      ]
+    },
+    settings: {
+      title: t("watchlists:orientation.settings.title", "Settings: workspace-level watchlists defaults"),
+      description: t(
+        "watchlists:orientation.settings.description",
+        "Adjust watchlists defaults and integration settings. Return to overview to validate health."
+      ),
+      actions: [
+        {
+          key: "open-overview",
+          label: t("watchlists:orientation.actions.openOverview", "Open Overview"),
+          target: "overview"
+        },
+        {
+          key: "open-feeds",
+          label: t("watchlists:orientation.actions.openFeeds", "Open Feeds"),
+          target: "sources"
+        }
+      ]
+    }
+  }
+  const activeTabOrientation = tabOrientation[activeTab as WatchlistsTabKey] || tabOrientation.overview
 
   const activeTabHelpHref = WATCHLISTS_TAB_HELP_DOCS[activeTab] || WATCHLISTS_MAIN_DOCS_URL
   const activeTabHelpLabel = tabHelpLabels[activeTab] || t("watchlists:help.docs", "Watchlists docs")
@@ -860,6 +1036,28 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      <Alert
+        type="info"
+        showIcon
+        className="mb-4"
+        title={<span data-testid="watchlists-orientation-title">{activeTabOrientation.title}</span>}
+        description={<span data-testid="watchlists-orientation-description">{activeTabOrientation.description}</span>}
+        action={(
+          <div className="flex flex-wrap gap-2">
+            {activeTabOrientation.actions.map((action) => (
+              <Button
+                key={action.key}
+                size="small"
+                data-testid={`watchlists-orientation-action-${action.key}`}
+                onClick={() => setActiveTab(action.target as typeof activeTab)}
+              >
+                {action.label}
+              </Button>
+            ))}
+          </div>
+        )}
+      />
 
       {showGuidedTourCompletion && (
         <Alert
