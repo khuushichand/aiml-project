@@ -124,6 +124,8 @@ export const OutputsTab: React.FC = () => {
   const setRunsJobFilter = useWatchlistsStore((s) => s.setRunsJobFilter)
   const setRunsStatusFilter = useWatchlistsStore((s) => s.setRunsStatusFilter)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
+  const openJobForm = useWatchlistsStore((s) => s.openJobForm)
 
   const [jobs, setJobs] = useState<WatchlistJob[]>([])
   const [regenOpen, setRegenOpen] = useState(false)
@@ -353,6 +355,18 @@ export const OutputsTab: React.FC = () => {
     setActiveTab("runs")
   }, [setActiveTab, setRunsJobFilter, setRunsStatusFilter])
 
+  const openOutputMonitor = useCallback((jobId: number) => {
+    setActiveTab("jobs")
+    openJobForm(jobId)
+  }, [openJobForm, setActiveTab])
+
+  const openOutputRun = useCallback((output: WatchlistOutput) => {
+    setRunsJobFilter(output.job_id)
+    setRunsStatusFilter(null)
+    setActiveTab("runs")
+    openRunDetail(output.run_id)
+  }, [openRunDetail, setActiveTab, setRunsJobFilter, setRunsStatusFilter])
+
   const deliveryStatusFilterOptions = useMemo(
     () => [
       { label: t("watchlists:outputs.deliveryStatus.failed", "Failed"), value: "failed" },
@@ -482,9 +496,15 @@ export const OutputsTab: React.FC = () => {
       width: 180,
       ellipsis: true,
       render: (_, record) => (
-        <span className="text-sm text-text-muted">
+        <Button
+          type="link"
+          size="small"
+          className="px-0"
+          onClick={() => openOutputMonitor(record.job_id)}
+          data-testid={`watchlists-output-open-job-${record.id}`}
+        >
           {getJobName(record.job_id)}
-        </span>
+        </Button>
       )
     },
     {
@@ -492,8 +512,16 @@ export const OutputsTab: React.FC = () => {
       dataIndex: "run_id",
       key: "run_id",
       width: 100,
-      render: (runId: number) => (
-        <span className="text-sm text-text-muted">#{runId}</span>
+      render: (runId: number, record) => (
+        <Button
+          type="link"
+          size="small"
+          className="px-0"
+          onClick={() => openOutputRun(record)}
+          data-testid={`watchlists-output-open-run-${record.id}`}
+        >
+          #{runId}
+        </Button>
       )
     },
     {
@@ -636,7 +664,7 @@ export const OutputsTab: React.FC = () => {
       )
     }
   ]
-  const defaultColumnKeys = new Set(["title", "job", "created_at", "delivery", "actions"])
+  const defaultColumnKeys = new Set(["title", "job", "run_id", "created_at", "delivery", "actions"])
   const columns = showAdvancedFilters
     ? allColumns
     : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))

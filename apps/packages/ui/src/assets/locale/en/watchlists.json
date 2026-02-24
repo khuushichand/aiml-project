@@ -830,6 +830,8 @@
     "triggerError": "Failed to trigger run",
     "runTriggered": "Run triggered successfully",
     "viewDetails": "View Details",
+    "openReports": "Open Reports",
+    "includedInBriefing": "Included in briefing",
     "cancelRun": "Cancel run",
     "cancelling": "Cancelling...",
     "cancelFailedRetry": "Cancel failed. Retry.",
@@ -891,7 +893,9 @@
         "itemsFound": "Items Found",
         "itemsIngested": "Items Ingested",
         "itemsFiltered": "Items Filtered",
-        "errors": "Errors"
+        "errors": "Errors",
+        "monitor": "Monitor",
+        "outputs": "Reports"
       },
       "logs": "Logs",
       "items": "Scraped Items",
@@ -905,6 +909,8 @@
       "remediationFallback": "Open logs and adjust source or monitor settings, then retry.",
       "retryRun": "Retry run",
       "editMonitor": "Edit monitor schedule",
+      "openMonitor": "Open monitor settings",
+      "openOutputs": "Open reports for this run",
       "openSources": "Review source settings",
       "itemsUntitled": "Untitled",
       "errorMessage": "Error Message",

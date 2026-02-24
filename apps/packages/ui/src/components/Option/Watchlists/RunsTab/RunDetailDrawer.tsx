@@ -90,6 +90,8 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
   const addRun = useWatchlistsStore((s) => s.addRun)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
+  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const openJobForm = useWatchlistsStore((s) => s.openJobForm)
 
   const downloadCsv = (content: string, filename: string): void => {
@@ -732,6 +734,14 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     onClose()
   }
 
+  const handleOpenOutputs = () => {
+    if (!data) return
+    setOutputsJobFilter(data.job_id)
+    setOutputsRunFilter(data.id)
+    setActiveTab("outputs")
+    onClose()
+  }
+
   const tabItems = [
     {
       key: "stats",
@@ -763,6 +773,22 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
               </Descriptions.Item>
               <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.errors", "Errors")}>
                 {data.stats?.items_errored ?? 0}
+              </Descriptions.Item>
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.monitor", "Monitor")}>
+                <Button size="small" type="link" className="px-0" onClick={handleEditMonitor}>
+                  {t("watchlists:runs.detail.openMonitor", "Open monitor settings")}
+                </Button>
+              </Descriptions.Item>
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.outputs", "Reports")}>
+                <Button
+                  size="small"
+                  type="link"
+                  className="px-0"
+                  onClick={handleOpenOutputs}
+                  data-testid="watchlists-run-detail-open-outputs"
+                >
+                  {t("watchlists:runs.detail.openOutputs", "Open reports for this run")}
+                </Button>
               </Descriptions.Item>
             </Descriptions>
           )}

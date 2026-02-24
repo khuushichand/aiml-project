@@ -90,7 +90,29 @@
 **Tests**:
 - Add UI tests for relationship labels and jump actions.
 - Add integration tests for deep-linking between related entities.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 3 Completion Notes (2026-02-24)
+
+- Added explicit run/output relationship visibility and destination handoffs in `apps/packages/ui/src/components/Option/Watchlists/RunsTab/RunsTab.tsx`:
+  - completed runs with ingested items now show `Included in briefing`,
+  - Activity actions now include `Open Reports` deep-linking (`outputsJobFilter` + `outputsRunFilter` + `outputs` tab).
+- Added upstream monitor/run jump actions in `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputsTab.tsx`:
+  - monitor column opens monitor settings (`jobs` tab + `openJobForm`),
+  - run column opens Activity run detail (`runs` tab + run filter + `openRunDetail`),
+  - run linkage is now visible in compact mode by default.
+- Added run-detail output linkage in `apps/packages/ui/src/components/Option/Watchlists/RunsTab/RunDetailDrawer.tsx`:
+  - statistics panel now includes explicit `Monitor` and `Reports` jump actions,
+  - reports action routes directly to Reports filtered to the active run.
+- Added Stage 3 linkage/deep-link test coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.cancel-run.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx`
+  - existing Articles handoff coverage in `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx` remained green.
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.cancel-run.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.cancel-run.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists -f json -o /tmp/bandit_watchlists_group03_stage3_2026_02_24.json`
 
 ## Stage 4: Preview Before Commit and First-Output Confidence
 **Goal**: Let users see likely briefing outcomes before schedules run long-term.

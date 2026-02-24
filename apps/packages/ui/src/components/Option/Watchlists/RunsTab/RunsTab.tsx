@@ -140,6 +140,9 @@ export const RunsTab: React.FC = () => {
   const setRunsPageSize = useWatchlistsStore((s) => s.setRunsPageSize)
   const setRunsJobFilter = useWatchlistsStore((s) => s.setRunsJobFilter)
   const setRunsStatusFilter = useWatchlistsStore((s) => s.setRunsStatusFilter)
+  const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
+  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const setPollingActive = useWatchlistsStore((s) => s.setPollingActive)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const closeRunDetail = useWatchlistsStore((s) => s.closeRunDetail)
@@ -574,6 +577,12 @@ export const RunsTab: React.FC = () => {
       key: "status",
       width: 120,
       render: (status: string, record) => {
+        const statusNormalized = normalizeRunStatus(status)
+        const ingestedCount = Number(record.stats?.items_ingested || 0)
+        const hasBriefingOutputSignal =
+          statusNormalized === "completed" &&
+          Number.isFinite(ingestedCount) &&
+          ingestedCount > 0
         const progressPercent = Math.round(
           ((record.stats?.items_ingested || 0) /
             Math.max(record.stats?.items_found || 1, 1)) *
@@ -592,6 +601,14 @@ export const RunsTab: React.FC = () => {
                   percent: progressPercent
                 })}
               />
+            )}
+            {hasBriefingOutputSignal && (
+              <span
+                className="text-xs text-text-muted"
+                data-testid={`watchlists-run-briefing-included-${record.id}`}
+              >
+                {t("watchlists:runs.includedInBriefing", "Included in briefing")}
+              </span>
             )}
           </div>
         )
@@ -677,15 +694,29 @@ export const RunsTab: React.FC = () => {
         const cancelFailed = failedCancelRunIds.includes(record.id)
         return (
           <Space size={4}>
-          <Tooltip title={t("watchlists:runs.viewDetails", "View Details")}>
-            <Button
-              type="text"
-              size="small"
-              aria-label={t("watchlists:runs.viewDetails", "View Details")}
-              icon={<Eye className="h-4 w-4" />}
-              onClick={() => openRunDetail(record.id)}
-            />
-          </Tooltip>
+            <Tooltip title={t("watchlists:runs.viewDetails", "View Details")}>
+              <Button
+                type="text"
+                size="small"
+                aria-label={t("watchlists:runs.viewDetails", "View Details")}
+                icon={<Eye className="h-4 w-4" />}
+                onClick={() => openRunDetail(record.id)}
+              />
+            </Tooltip>
+            <Tooltip title={t("watchlists:runs.openReports", "Open Reports")}>
+              <Button
+                type="text"
+                size="small"
+                aria-label={t("watchlists:runs.openReports", "Open Reports")}
+                icon={<Download className="h-4 w-4" />}
+                data-testid={`watchlists-run-open-outputs-${record.id}`}
+                onClick={() => {
+                  setOutputsJobFilter(record.job_id)
+                  setOutputsRunFilter(record.id)
+                  setActiveTab("outputs")
+                }}
+              />
+            </Tooltip>
             {isCancellable && (
               <Tooltip
                 title={

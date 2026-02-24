@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   updateRunInListMock: vi.fn(),
   addRunMock: vi.fn(),
   setActiveTabMock: vi.fn(),
+  setOutputsJobFilterMock: vi.fn(),
+  setOutputsRunFilterMock: vi.fn(),
   openJobFormMock: vi.fn(),
   translateMock: vi.fn(
     (key: string, defaultValue?: unknown, options?: Record<string, unknown>) => {
@@ -128,6 +130,8 @@ vi.mock("@/store/watchlists", () => ({
       updateRunInList: mocks.updateRunInListMock,
       addRun: mocks.addRunMock,
       setActiveTab: mocks.setActiveTabMock,
+      setOutputsJobFilter: mocks.setOutputsJobFilterMock,
+      setOutputsRunFilter: mocks.setOutputsRunFilterMock,
       openJobForm: mocks.openJobFormMock
     })
 }))
@@ -286,6 +290,29 @@ describe("RunDetailDrawer source column", () => {
     await waitFor(() => {
       expect(screen.getByText("#5")).toBeInTheDocument()
     })
+  })
+
+  it("opens Reports filtered to this run from the detail summary", async () => {
+    const onClose = vi.fn()
+    mocks.fetchWatchlistSourcesMock.mockResolvedValue({
+      items: [{ id: 5, name: "TechCrunch" }],
+      total: 1,
+      page: 1,
+      size: 1000,
+      has_more: false
+    })
+
+    render(<RunDetailDrawer open runId={10} onClose={onClose} />)
+
+    const openReportsButton = await screen.findByRole("button", {
+      name: "Open reports for this run"
+    })
+    openReportsButton.click()
+
+    expect(mocks.setOutputsJobFilterMock).toHaveBeenCalledWith(1)
+    expect(mocks.setOutputsRunFilterMock).toHaveBeenCalledWith(10)
+    expect(mocks.setActiveTabMock).toHaveBeenCalledWith("outputs")
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 
   it("uses localized duration copy from i18n keys", async () => {

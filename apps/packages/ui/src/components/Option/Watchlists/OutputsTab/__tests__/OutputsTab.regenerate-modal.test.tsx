@@ -182,6 +182,11 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   setOutputsPageSize: vi.fn(),
   setOutputsJobFilter: vi.fn(),
   setOutputsRunFilter: vi.fn(),
+  setRunsJobFilter: vi.fn(),
+  setRunsStatusFilter: vi.fn(),
+  setActiveTab: vi.fn(),
+  openRunDetail: vi.fn(),
+  openJobForm: vi.fn(),
   openOutputPreview: vi.fn(),
   closeOutputPreview: vi.fn(),
   ...overrides
@@ -296,5 +301,34 @@ describe("OutputsTab regenerate modal", () => {
     await waitFor(() => {
       expect(trigger).toHaveFocus()
     })
+  })
+
+  it("links output rows to upstream monitor and run activity", async () => {
+    const setActiveTab = vi.fn()
+    const setRunsJobFilter = vi.fn()
+    const setRunsStatusFilter = vi.fn()
+    const openRunDetail = vi.fn()
+    const openJobForm = vi.fn()
+    mocks.storeStateRef.current = baseState({
+      outputs: [buildOutput()],
+      outputsTotal: 1,
+      setActiveTab,
+      setRunsJobFilter,
+      setRunsStatusFilter,
+      openRunDetail,
+      openJobForm
+    })
+
+    render(<OutputsTab />)
+
+    fireEvent.click(screen.getByTestId("watchlists-output-open-job-18"))
+    expect(setActiveTab).toHaveBeenCalledWith("jobs")
+    expect(openJobForm).toHaveBeenCalledWith(4)
+
+    fireEvent.click(screen.getByTestId("watchlists-output-open-run-18"))
+    expect(setRunsJobFilter).toHaveBeenCalledWith(4)
+    expect(setRunsStatusFilter).toHaveBeenCalledWith(null)
+    expect(setActiveTab).toHaveBeenCalledWith("runs")
+    expect(openRunDetail).toHaveBeenCalledWith(91)
   })
 })

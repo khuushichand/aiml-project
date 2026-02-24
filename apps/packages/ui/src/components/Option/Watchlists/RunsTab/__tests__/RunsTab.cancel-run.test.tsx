@@ -126,6 +126,9 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   setRunsPageSize: vi.fn(),
   setRunsJobFilter: vi.fn(),
   setRunsStatusFilter: vi.fn(),
+  setOutputsJobFilter: vi.fn(),
+  setOutputsRunFilter: vi.fn(),
+  setActiveTab: vi.fn(),
   setPollingActive: vi.fn(),
   openRunDetail: vi.fn(),
   closeRunDetail: vi.fn(),
@@ -206,5 +209,41 @@ describe("RunsTab cancellation controls", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("watchlists-run-cancel-202")).not.toBeInTheDocument()
     })
+  })
+
+  it("opens Reports filtered to a run from Activity row action", async () => {
+    const setOutputsJobFilter = vi.fn()
+    const setOutputsRunFilter = vi.fn()
+    const setActiveTab = vi.fn()
+    const completedRun = {
+      id: 303,
+      job_id: 44,
+      status: "completed",
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+      stats: {
+        items_ingested: 12
+      }
+    }
+    mocks.storeStateRef.current = baseState({
+      runs: [completedRun],
+      runsTotal: 1,
+      setOutputsJobFilter,
+      setOutputsRunFilter,
+      setActiveTab
+    })
+    mocks.fetchWatchlistRunsMock.mockResolvedValue({
+      items: [completedRun],
+      total: 1,
+      has_more: false
+    })
+
+    render(<RunsTab />)
+
+    fireEvent.click(await screen.findByTestId("watchlists-run-open-outputs-303"))
+
+    expect(setOutputsJobFilter).toHaveBeenCalledWith(44)
+    expect(setOutputsRunFilter).toHaveBeenCalledWith(303)
+    expect(setActiveTab).toHaveBeenCalledWith("outputs")
   })
 })
