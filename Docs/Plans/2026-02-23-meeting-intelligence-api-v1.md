@@ -463,7 +463,7 @@ git commit -m "feat(meetings): add slack and webhook dispatch pipeline"
 **Progress**: Complete (`f93ebeca3`)
 
 **Files:**
-- Create: `Docs/API-related/Meeting_Intelligence_API.md`
+- Create: `Docs/Design/Meeting_Intelligence_API.md`
 - Modify: `Docs/Published/Overview/Feature_Status.md`
 - Modify: `Docs/Product/Meeting-Transcripts-PRD.md` (implementation status notes / links)
 
@@ -500,7 +500,7 @@ Document:
 **Step 5: Commit**
 
 ```bash
-git add Docs/API-related/Meeting_Intelligence_API.md \
+git add Docs/Design/Meeting_Intelligence_API.md \
         Docs/Published/Overview/Feature_Status.md \
         Docs/Product/Meeting-Transcripts-PRD.md
 git commit -m "docs(meetings): add API reference and feature status updates"

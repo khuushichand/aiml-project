@@ -46,3 +46,8 @@ def test_create_builtin_template_is_forbidden(meetings_api_client):
         },
     )
     assert create_resp.status_code == 403
+
+
+def test_list_templates_rejects_invalid_scope(meetings_api_client):
+    resp = meetings_api_client.get("/api/v1/meetings/templates", params={"scope": "invalid"})
+    assert resp.status_code == 422

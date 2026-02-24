@@ -143,16 +143,26 @@ async def run_meetings_webhook_dlq_worker(stop_event: asyncio.Event | None = Non
         f"(interval={interval}s, batch={batch}, timeout={timeout_sec}s, max_attempts={max_attempts})"
     )
 
-    while not stop.is_set():
-        targets = discover_meetings_db_targets()
-        processed_any = False
+    db_instances: dict[tuple[str, str], MeetingsDatabase] = {}
+    try:
+        while not stop.is_set():
+            targets = discover_meetings_db_targets()
+            processed_any = False
 
-        for db_path, user_id in targets:
-            if stop.is_set():
-                break
+            for db_path, user_id in targets:
+                if stop.is_set():
+                    break
 
-            db = MeetingsDatabase(db_path=db_path, client_id=f"meetings-dlq-{user_id}", user_id=user_id)
-            try:
+                cache_key = (str(db_path), str(user_id))
+                db = db_instances.get(cache_key)
+                if db is None:
+                    db = MeetingsDatabase(
+                        db_path=db_path,
+                        client_id=f"meetings-dlq-{user_id}",
+                        user_id=user_id,
+                    )
+                    db_instances[cache_key] = db
+
                 rows = db.claim_due_integration_dispatches(limit=batch, max_attempts=max_attempts)
                 if not rows:
                     continue
@@ -219,13 +229,15 @@ async def run_meetings_webhook_dlq_worker(stop_event: asyncio.Event | None = Non
                                 "error": error,
                             },
                         )
-            finally:
+
+            if processed_any:
+                continue
+
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=max(1, interval))
+    finally:
+        for db in db_instances.values():
+            with contextlib.suppress(_MEETINGS_DLQ_NONCRITICAL_EXCEPTIONS):
                 db.close_connection()
-
-        if processed_any:
-            continue
-
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(stop.wait(), timeout=max(1, interval))
 
     logger.info("Meetings webhook DLQ worker stopped")

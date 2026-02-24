@@ -182,7 +182,7 @@ def _coerce_int(val):
         return None
 
 
-def _coerce_float(val, default=None):
+def _coerce_float(val: Any, default: float | None = None) -> float | None:
     try:
         return float(val)
     except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:

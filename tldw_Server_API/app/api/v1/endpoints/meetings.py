@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import StreamingResponse
+from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.Meetings_DB_Deps import get_meetings_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Meetings_DB_Deps import (
+    get_meetings_db_for_user,
+    get_meetings_db_for_websocket,
+)
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.schemas.meetings_schemas import (
     MeetingArtifactCreate,
     MeetingArtifactResponse,
@@ -20,6 +26,7 @@ from tldw_Server_API.app.api.v1.schemas.meetings_schemas import (
     MeetingShareResponse,
     MeetingTemplateCreate,
     MeetingTemplateResponse,
+    MeetingTemplateScope,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Meetings_DB import MeetingsDatabase
@@ -87,8 +94,13 @@ def _to_share_response(row: dict[str, Any]) -> MeetingShareResponse:
     )
 
 
-@router.post("/sessions", response_model=MeetingSessionResponse, status_code=status.HTTP_201_CREATED)
-async def create_session(
+@router.post(
+    "/sessions",
+    response_model=MeetingSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
+)
+def create_session(
     payload: MeetingSessionCreate,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
 ) -> MeetingSessionResponse:
@@ -110,8 +122,12 @@ async def create_session(
     return _to_session_response(row)
 
 
-@router.get("/sessions", response_model=list[MeetingSessionResponse])
-async def list_sessions(
+@router.get(
+    "/sessions",
+    response_model=list[MeetingSessionResponse],
+    dependencies=[Depends(check_rate_limit)],
+)
+def list_sessions(
     status_filter: MeetingSessionStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -122,8 +138,12 @@ async def list_sessions(
     return [_to_session_response(row) for row in rows]
 
 
-@router.get("/sessions/{session_id}", response_model=MeetingSessionResponse)
-async def get_session(
+@router.get(
+    "/sessions/{session_id}",
+    response_model=MeetingSessionResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+def get_session(
     session_id: str,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
 ) -> MeetingSessionResponse:
@@ -135,8 +155,12 @@ async def get_session(
     return _to_session_response(row)
 
 
-@router.post("/sessions/{session_id}/status", response_model=MeetingSessionResponse)
-async def transition_session_status(
+@router.post(
+    "/sessions/{session_id}/status",
+    response_model=MeetingSessionResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+def transition_session_status(
     session_id: str,
     payload: MeetingSessionStatusUpdate,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
@@ -157,8 +181,13 @@ async def transition_session_status(
     return _to_session_response(row)
 
 
-@router.post("/templates", response_model=MeetingTemplateResponse, status_code=status.HTTP_201_CREATED)
-async def create_template(
+@router.post(
+    "/templates",
+    response_model=MeetingTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
+)
+def create_template(
     payload: MeetingTemplateCreate,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
     current_user: User = Depends(get_request_user),
@@ -189,9 +218,13 @@ async def create_template(
     return _to_template_response(row)
 
 
-@router.get("/templates", response_model=list[MeetingTemplateResponse])
-async def list_templates(
-    scope: str | None = Query(default=None),
+@router.get(
+    "/templates",
+    response_model=list[MeetingTemplateResponse],
+    dependencies=[Depends(check_rate_limit)],
+)
+def list_templates(
+    scope: MeetingTemplateScope | None = Query(default=None),
     include_disabled: bool = Query(default=False),
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
 ) -> list[MeetingTemplateResponse]:
@@ -200,8 +233,12 @@ async def list_templates(
     return [_to_template_response(row) for row in rows]
 
 
-@router.get("/templates/{template_id}", response_model=MeetingTemplateResponse)
-async def get_template(
+@router.get(
+    "/templates/{template_id}",
+    response_model=MeetingTemplateResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+def get_template(
     template_id: str,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
 ) -> MeetingTemplateResponse:
@@ -217,8 +254,9 @@ async def get_template(
     "/sessions/{session_id}/artifacts",
     response_model=MeetingArtifactResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
 )
-async def create_artifact(
+def create_artifact(
     session_id: str,
     payload: MeetingArtifactCreate,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
@@ -245,8 +283,12 @@ async def create_artifact(
     return _to_artifact_response(row)
 
 
-@router.get("/sessions/{session_id}/artifacts", response_model=list[MeetingArtifactResponse])
-async def list_artifacts(
+@router.get(
+    "/sessions/{session_id}/artifacts",
+    response_model=list[MeetingArtifactResponse],
+    dependencies=[Depends(check_rate_limit)],
+)
+def list_artifacts(
     session_id: str,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
 ) -> list[MeetingArtifactResponse]:
@@ -255,8 +297,12 @@ async def list_artifacts(
     return [_to_artifact_response(row) for row in rows]
 
 
-@router.post("/sessions/{session_id}/commit", response_model=MeetingFinalizeResponse)
-async def finalize_session(
+@router.post(
+    "/sessions/{session_id}/commit",
+    response_model=MeetingFinalizeResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+def finalize_session(
     session_id: str,
     payload: MeetingFinalizeRequest,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
@@ -335,8 +381,9 @@ def _queue_share_dispatch(
     "/sessions/{session_id}/share/slack",
     response_model=MeetingShareResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(check_rate_limit)],
 )
-async def share_session_to_slack(
+def share_session_to_slack(
     session_id: str,
     payload: MeetingShareRequest,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
@@ -353,8 +400,9 @@ async def share_session_to_slack(
     "/sessions/{session_id}/share/webhook",
     response_model=MeetingShareResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(check_rate_limit)],
 )
-async def share_session_to_webhook(
+def share_session_to_webhook(
     session_id: str,
     payload: MeetingShareRequest,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
@@ -367,7 +415,7 @@ async def share_session_to_webhook(
     )
 
 
-@router.get("/sessions/{session_id}/events")
+@router.get("/sessions/{session_id}/events", dependencies=[Depends(check_rate_limit)])
 async def stream_session_events(
     session_id: str,
     meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
@@ -376,11 +424,11 @@ async def stream_session_events(
     events_service = MeetingEventsService(db=meetings_db)
 
     try:
-        session_row = session_service.get_session(session_id=session_id)
+        session_row = await asyncio.to_thread(session_service.get_session, session_id=session_id)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting session not found") from exc
 
-    events = events_service.recent(session_id=session_id, limit=100)
+    events = await asyncio.to_thread(events_service.recent, session_id=session_id, limit=100)
     if not events:
         events = [events_service.snapshot_for_session(session_row)]
 
@@ -398,18 +446,29 @@ async def stream_session_events(
     return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
 
+def _resolve_ws_event_persistence(msg_type: str, message: dict[str, Any]) -> tuple[str, bool]:
+    is_final = bool(message.get("final")) or bool(message.get("is_final"))
+    if msg_type in {"transcript.final", "final", "segment.final"} or is_final:
+        return "transcript.final", True
+    if msg_type in {"transcript.partial", "partial", "transcript.interim", "interim", ""}:
+        return "transcript.partial", False
+    if msg_type.startswith("transcript.") and msg_type != "transcript.partial":
+        return msg_type, True
+    return "transcript.partial", False
+
+
 @router.websocket("/sessions/{session_id}/stream")
 async def stream_session_ws(
     websocket: WebSocket,
     session_id: str,
-    meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_user),
+    meetings_db: MeetingsDatabase = Depends(get_meetings_db_for_websocket),
 ) -> None:
     session_service = MeetingSessionService(db=meetings_db)
     events_service = MeetingEventsService(db=meetings_db)
 
     await websocket.accept()
     try:
-        session_row = session_service.get_session(session_id=session_id)
+        session_row = await asyncio.to_thread(session_service.get_session, session_id=session_id)
     except KeyError:
         await websocket.send_json({"type": "error", "detail": "Meeting session not found", "session_id": session_id})
         await websocket.close(code=4404)
@@ -422,7 +481,12 @@ async def stream_session_ws(
             message = await websocket.receive_json()
         except WebSocketDisconnect:
             break
-        except Exception:
+        except Exception as exc:
+            logger.warning("Meetings websocket received invalid JSON frame: {}", exc)
+            await websocket.send_json({"type": "error", "detail": "invalid_message", "session_id": session_id})
+            continue
+
+        if not isinstance(message, dict):
             await websocket.send_json({"type": "error", "detail": "invalid_message", "session_id": session_id})
             continue
 
@@ -434,9 +498,18 @@ async def stream_session_ws(
             await websocket.close(code=1000)
             break
 
-        event = events_service.emit(
-            session_id=session_id,
-            event_type="transcript.partial",
-            data=message,
-        )
+        event_type, persist_event = _resolve_ws_event_persistence(msg_type, message)
+        if persist_event:
+            event = await asyncio.to_thread(
+                events_service.emit,
+                session_id=session_id,
+                event_type=event_type,
+                data=message,
+            )
+        else:
+            event = build_meeting_event(
+                event_type=event_type,
+                session_id=session_id,
+                data=message,
+            )
         await websocket.send_json(event)

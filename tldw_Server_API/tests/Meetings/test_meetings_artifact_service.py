@@ -44,3 +44,10 @@ def test_create_artifact_requires_existing_session(artifact_context):
             format="json",
             payload_json={"summary": "none"},
         )
+
+
+def test_extract_action_items_without_markers_returns_empty_list():
+    items = MeetingArtifactService._extract_action_items(
+        "Team reviewed architecture and aligned on timeline."
+    )
+    assert items == []

@@ -52,3 +52,33 @@ def test_sessions_are_scoped_per_user(tmp_path):
     finally:
         db_user_1.close_connection()
         db_user_2.close_connection()
+
+
+def test_session_delete_cascades_dispatch_and_event_rows(meetings_db):
+    session_id = meetings_db.create_session(title="Cascade Session", meeting_type="sync")
+    meetings_db.append_event(
+        session_id=session_id,
+        event_type="session.created",
+        payload_json={"status": "scheduled"},
+    )
+    meetings_db.record_integration_dispatch(
+        session_id=session_id,
+        integration_type="webhook",
+        status="queued",
+        payload_json={"destination": {"url": "https://hooks.example.test/path"}, "request_body": {}},
+    )
+
+    conn = meetings_db.get_connection()
+    conn.execute("DELETE FROM meeting_sessions WHERE id = ? AND user_id = ?", (session_id, meetings_db.user_id))
+    conn.commit()
+
+    event_rows = conn.execute(
+        "SELECT COUNT(1) AS count FROM meeting_event_log WHERE session_id = ? AND user_id = ?",
+        (session_id, meetings_db.user_id),
+    ).fetchone()
+    dispatch_rows = conn.execute(
+        "SELECT COUNT(1) AS count FROM meeting_integration_dispatch WHERE session_id = ? AND user_id = ?",
+        (session_id, meetings_db.user_id),
+    ).fetchone()
+    assert int(event_rows["count"]) == 0
+    assert int(dispatch_rows["count"]) == 0

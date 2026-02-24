@@ -1,5 +1,10 @@
 # Meeting Intelligence API (v1)
 
+Design metadata:
+- `design_created`: 2026-02-23
+- `moved_to_docs_design`: 2026-02-24
+- `original_location`: `Docs/API-related/Meeting_Intelligence_API.md`
+
 Meeting Intelligence v1 is exposed under ` /api/v1/meetings ` and provides:
 - Meeting sessions, templates, and artifacts CRUD.
 - Finalization from transcript text to summary/action artifacts.
@@ -87,6 +92,7 @@ Current event types:
 - `session.status`
 - `artifact.ready`
 - `transcript.partial`
+- `transcript.final`
 - `integration.queued`
 - `integration.retrying`
 - `integration.delivered`

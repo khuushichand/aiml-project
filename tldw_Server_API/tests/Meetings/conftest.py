@@ -4,7 +4,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.api.v1.API_Deps.Meetings_DB_Deps import get_meetings_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Meetings_DB_Deps import (
+    get_meetings_db_for_user,
+    get_meetings_db_for_websocket,
+)
 from tldw_Server_API.app.api.v1.endpoints.meetings import router as meetings_router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Meetings_DB import MeetingsDatabase
@@ -29,6 +32,7 @@ def meetings_api_client(tmp_path):
         )
 
     app.dependency_overrides[get_meetings_db_for_user] = _override_meetings_db
+    app.dependency_overrides[get_meetings_db_for_websocket] = _override_meetings_db
     app.dependency_overrides[get_request_user] = _override_user
 
     with TestClient(app) as client:

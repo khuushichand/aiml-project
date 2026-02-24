@@ -9,10 +9,15 @@ Current transcription workflows focus on generic media ingestion. Power users ne
 
 ## Implementation Status (v1, 2026-02-23)
 
+Design doc:
+- `Docs/Design/Meeting_Intelligence_API.md`
+
 Implemented in API:
 - Dedicated meetings API domain with health/session/template/artifact routes:
   - `tldw_Server_API/app/api/v1/endpoints/meetings.py`
   - `tldw_Server_API/app/api/v1/schemas/meetings_schemas.py`
+- Test coverage:
+  - 30 tests in `tldw_Server_API/tests/Meetings`
 - Meetings persistence and domain services:
   - `tldw_Server_API/app/core/DB_Management/Meetings_DB.py`
   - `tldw_Server_API/app/core/Meetings/`

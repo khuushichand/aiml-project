@@ -180,7 +180,8 @@ class MeetingsDatabase:
                     next_attempt_at TEXT,
                     last_error TEXT,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES meeting_sessions(id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_meeting_dispatch_user_session
                     ON meeting_integration_dispatch(user_id, session_id, created_at DESC);
@@ -193,7 +194,8 @@ class MeetingsDatabase:
                     session_id TEXT NOT NULL,
                     event_type TEXT NOT NULL,
                     payload_json TEXT,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES meeting_sessions(id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_meeting_event_user_session
                     ON meeting_event_log(user_id, session_id, created_at DESC);
@@ -217,6 +219,111 @@ class MeetingsDatabase:
             """
             CREATE INDEX IF NOT EXISTS idx_meeting_dispatch_due
             ON meeting_integration_dispatch(user_id, status, next_attempt_at, updated_at)
+            """
+        )
+        if not self._has_session_cascade_fk(conn, "meeting_integration_dispatch", "session_id"):
+            self._rebuild_integration_dispatch_with_session_fk(conn)
+        if not self._has_session_cascade_fk(conn, "meeting_event_log", "session_id"):
+            self._rebuild_event_log_with_session_fk(conn)
+
+    @staticmethod
+    def _has_session_cascade_fk(
+        conn: sqlite3.Connection,
+        table_name: str,
+        from_column: str,
+    ) -> bool:
+        try:
+            fk_rows = conn.execute(f"PRAGMA foreign_key_list({table_name})").fetchall()
+        except sqlite3.Error:
+            return False
+        for row in fk_rows:
+            table = str(row["table"])
+            source_column = str(row["from"])
+            on_delete = str(row["on_delete"]).upper()
+            if table == "meeting_sessions" and source_column == from_column and on_delete == "CASCADE":
+                return True
+        return False
+
+    def _rebuild_integration_dispatch_with_session_fk(self, conn: sqlite3.Connection) -> None:
+        conn.execute("ALTER TABLE meeting_integration_dispatch RENAME TO meeting_integration_dispatch_legacy")
+        conn.execute(
+            """
+            CREATE TABLE meeting_integration_dispatch (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                integration_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                payload_json TEXT,
+                response_json TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES meeting_sessions(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO meeting_integration_dispatch (
+                id, user_id, session_id, integration_type, status, payload_json, response_json,
+                attempts, next_attempt_at, last_error, created_at, updated_at
+            )
+            SELECT
+                id, user_id, session_id, integration_type, status, payload_json, response_json,
+                attempts, next_attempt_at, last_error, created_at, updated_at
+            FROM meeting_integration_dispatch_legacy legacy
+            WHERE EXISTS (
+                SELECT 1 FROM meeting_sessions sessions WHERE sessions.id = legacy.session_id
+            )
+            """
+        )
+        conn.execute("DROP TABLE meeting_integration_dispatch_legacy")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_meeting_dispatch_user_session
+            ON meeting_integration_dispatch(user_id, session_id, created_at DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_meeting_dispatch_due
+            ON meeting_integration_dispatch(user_id, status, next_attempt_at, updated_at)
+            """
+        )
+
+    def _rebuild_event_log_with_session_fk(self, conn: sqlite3.Connection) -> None:
+        conn.execute("ALTER TABLE meeting_event_log RENAME TO meeting_event_log_legacy")
+        conn.execute(
+            """
+            CREATE TABLE meeting_event_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES meeting_sessions(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO meeting_event_log (id, user_id, session_id, event_type, payload_json, created_at)
+            SELECT id, user_id, session_id, event_type, payload_json, created_at
+            FROM meeting_event_log_legacy legacy
+            WHERE EXISTS (
+                SELECT 1 FROM meeting_sessions sessions WHERE sessions.id = legacy.session_id
+            )
+            """
+        )
+        conn.execute("DROP TABLE meeting_event_log_legacy")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_meeting_event_user_session
+            ON meeting_event_log(user_id, session_id, created_at DESC)
             """
         )
 

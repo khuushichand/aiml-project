@@ -103,11 +103,7 @@ class MeetingArtifactService:
         items = [match.strip() for match in matches if match.strip()]
         if items:
             return items
-        fallback = transcript_text.split(".")
-        candidates = [segment.strip() for segment in fallback if segment.strip()]
-        if not candidates:
-            return ["Review meeting transcript."]
-        return [candidates[0]]
+        return []
 
     @staticmethod
     def _extract_decisions(transcript_text: str) -> list[str]:
