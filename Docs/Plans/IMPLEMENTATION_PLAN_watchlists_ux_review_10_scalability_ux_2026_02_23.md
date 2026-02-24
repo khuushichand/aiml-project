@@ -56,7 +56,7 @@
 **Tests**:
 - Add tests for batch operation progress states and terminal outcomes.
 - Add tests for partial failure reconciliation and retry paths.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Polling, Notifications, and Refresh Efficiency
 **Goal**: Reduce redundant background activity while preserving freshness.
@@ -115,3 +115,19 @@
 - Stage 2 validation evidence:
   - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/runs-filter-fetch.test.ts src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/shared/__tests__/scale-benchmark.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.performance.test.ts --maxWorkers=1 --no-file-parallelism`
   - `cd apps/packages/ui && bun run test:watchlists:scale`
+
+### 2026-02-24 - Stage 3 completion (bulk action progress + retry recovery)
+
+- Added persistent batch-operation progress model in Articles triage controls with live processed/succeeded/failed counts and terminal summaries:
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx`
+- Added manual partial-failure recovery entrypoint (`Retry failed`) that reruns only failed item IDs and keeps successful row updates intact:
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
+- Added explicit copy for batch progress/terminal states and recovery actions:
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
+- Expanded scale gate command to include high-volume batch-throughput regression coverage:
+  - `apps/packages/ui/package.json` (`test:watchlists:scale`)
+- Stage 3 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group10_stage3_2026_02_24.json`

@@ -124,6 +124,14 @@ const makeItems = () => ([
   }
 ])
 
+const createDeferred = <TValue,>() => {
+  let resolve!: (value: TValue | PromiseLike<TValue>) => void
+  const promise = new Promise<TValue>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
 const setupFetchScrapedItemsMock = (listItems = makeItems()) => {
   ;(serviceMocks.fetchScrapedItems as Mock).mockImplementation(async (params?: Record<string, unknown>) => {
     if (params?.size === 1) {
@@ -330,6 +338,44 @@ describe("ItemsTab batch throughput controls", () => {
     )
   })
 
+  it("shows batch progress state while updates are running and keeps terminal summary visible", async () => {
+    const pendingById = new Map<number, ReturnType<typeof createDeferred<{ id: number; reviewed: boolean }>>>()
+    pendingById.set(101, createDeferred<{ id: number; reviewed: boolean }>())
+    pendingById.set(102, createDeferred<{ id: number; reviewed: boolean }>())
+
+    serviceMocks.updateScrapedItem.mockImplementation((itemId: number) => {
+      const pending = pendingById.get(itemId)
+      if (!pending) throw new Error(`missing deferred for ${itemId}`)
+      return pending.promise
+    })
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-mark-page"))
+    await waitFor(() => {
+      expect(uiMocks.modalConfirm).toHaveBeenCalled()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-items-batch-progress")).toBeInTheDocument()
+      expect(screen.getByTestId("watchlists-items-batch-progress-count")).toHaveTextContent("0 / 2")
+    })
+
+    pendingById.get(101)?.resolve({ id: 101, reviewed: true })
+    pendingById.get(102)?.resolve({ id: 102, reviewed: true })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-items-batch-progress-count")).toHaveTextContent("2 / 2")
+      expect(screen.getByTestId("watchlists-items-batch-progress-summary")).toHaveTextContent(
+        "Batch review complete: 2 succeeded, 0 failed."
+      )
+    })
+  })
+
   it("supports saved view preset save, apply, and delete", async () => {
     render(<ItemsTab />)
 
@@ -500,6 +546,42 @@ describe("ItemsTab batch throughput controls", () => {
 
     expect(screen.getByTestId("watchlists-item-row-review-state-101")).toHaveTextContent("Reviewed")
     expect(screen.getByTestId("watchlists-item-row-review-state-102")).toHaveTextContent("Unread")
+    expect(screen.getByTestId("watchlists-items-batch-retry-failed")).toHaveTextContent(
+      "Retry 1 failed"
+    )
+  })
+
+  it("retries failed batch updates from the recovery entrypoint", async () => {
+    const failOnce = new Set([102])
+    serviceMocks.updateScrapedItem.mockImplementation(async (itemId: number) => {
+      if (failOnce.has(itemId)) {
+        failOnce.delete(itemId)
+        throw new Error("transient failure")
+      }
+      return { id: itemId, reviewed: true }
+    })
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-mark-page"))
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-items-batch-retry-failed")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-batch-retry-failed"))
+
+    await waitFor(() => {
+      const callsFor102 = serviceMocks.updateScrapedItem.mock.calls.filter(
+        ([itemId]) => Number(itemId) === 102
+      )
+      expect(callsFor102).toHaveLength(2)
+      expect(screen.getByTestId("watchlists-item-row-review-state-102")).toHaveTextContent("Reviewed")
+      expect(screen.queryByTestId("watchlists-items-batch-retry-failed")).not.toBeInTheDocument()
+    })
   })
 
   it("paginates all-filtered review lookups for thousand-item datasets", async () => {
