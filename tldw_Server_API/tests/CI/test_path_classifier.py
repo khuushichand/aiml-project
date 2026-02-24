@@ -22,3 +22,15 @@ def test_api_schema_change_enables_e2e() -> None:
     )
     assert flags["backend_changed"] is True
     assert flags["e2e_changed"] is True
+
+
+def test_emitter_writes_github_output(tmp_path, monkeypatch) -> None:
+    out = tmp_path / "github_output.txt"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+
+    from Helper_Scripts.ci.emit_ci_gate_flags import emit
+
+    emit(["apps/tldw-frontend/src/app/page.tsx"])
+    text = out.read_text(encoding="utf-8")
+    assert "frontend_changed=true" in text
+    assert "backend_changed=false" in text
