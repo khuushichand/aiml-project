@@ -1,4 +1,4 @@
-name: CI (informational during required-gate rollout)
+name: CI
 
 on:
   # Run on direct pushes to protected branches only

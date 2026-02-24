@@ -57,10 +57,16 @@ jobs:
         if: needs.changes.outputs.security_relevant_changed != 'true'
         run: echo "No security-relevant paths changed; bandit scan skipped by policy."
 
+      - name: Dependency review (high/critical)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
       - name: Run Bandit scan
         if: needs.changes.outputs.security_relevant_changed == 'true'
         run: |
-          python -m bandit -r tldw_Server_API/app -f json -o /tmp/bandit_security_required.json
+          python -m bandit -r tldw_Server_API/app -f json -o /tmp/bandit_security_required.json --exit-zero
 
       - name: Enforce high/critical threshold with allowlist
         if: needs.changes.outputs.security_relevant_changed == 'true'

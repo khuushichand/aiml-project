@@ -47,3 +47,24 @@ def test_required_gate_names_documented() -> None:
         "e2e-required",
     ]:
         assert check_name in text
+
+
+def test_security_required_bandit_does_not_preempt_threshold_filter() -> None:
+    workflow = _load(".github/workflows/security-required.yml")
+    steps = workflow["jobs"]["security-required"]["steps"]
+    bandit_steps = [step for step in steps if step.get("name") == "Run Bandit scan"]
+    assert bandit_steps, "Run Bandit scan step missing"
+    assert "--exit-zero" in bandit_steps[0]["run"]
+
+
+def test_security_required_includes_dependency_review_gate() -> None:
+    workflow = _load(".github/workflows/security-required.yml")
+    steps = workflow["jobs"]["security-required"]["steps"]
+    dep_review_steps = [step for step in steps if step.get("name") == "Dependency review (high/critical)"]
+    assert dep_review_steps, "Dependency review step missing"
+    assert dep_review_steps[0]["uses"].startswith("actions/dependency-review-action@")
+
+
+def test_legacy_ci_workflow_name_remains_stable_for_branch_protection() -> None:
+    workflow = _load(".github/workflows/ci.yml")
+    assert workflow["name"] == "CI"
