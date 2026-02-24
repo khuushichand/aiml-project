@@ -158,28 +158,28 @@ describe("ItemsTab keyboard shortcuts", () => {
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
     })
-    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
-
-    fireEvent.keyDown(document, { key: "j" })
     expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item Two")
 
-    fireEvent.keyDown(document, { key: "k" })
+    fireEvent.keyDown(document, { key: "j" })
     expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
+
+    fireEvent.keyDown(document, { key: "k" })
+    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item Two")
 
     const searchInput = screen.getByPlaceholderText("Search feed items...")
     searchInput.focus()
     fireEvent.keyDown(searchInput, { key: "j" })
-    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
+    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item Two")
     searchInput.blur()
 
     fireEvent.keyDown(document, { key: " " })
     await waitFor(() => {
-      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(101, { reviewed: true })
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(102, { reviewed: true })
     })
 
     fireEvent.keyDown(document, { key: "o" })
     expect(openSpy).toHaveBeenCalledWith(
-      "https://example.com/one",
+      "https://example.com/two",
       "_blank",
       "noopener,noreferrer"
     )

@@ -30,21 +30,30 @@ import { formatRelativeTime } from "@/utils/dateFormatters"
 import {
   buildDefaultItemsViewPresets,
   extractImageUrl,
+  getInitialSourceRenderCount,
+  getNextSourceRenderCount,
   ITEM_PAGE_SIZE_OPTIONS,
   filterSourcesForReader,
   isSystemItemsViewPresetId,
+  loadPersistedItemsSortMode,
   loadPersistedItemPageSize,
   loadPersistedItemsViewPresets,
+  normalizeReaderSortMode,
   orderSourcesForReader,
+  persistItemsSortMode,
   type PersistedItemsViewPreset,
   persistItemPageSize,
   persistItemsViewPresets,
   provisionItemsViewPresets,
+  type ReaderSortMode,
   resolveSelectedItemId,
   shouldReloadItemsAfterReviewMutation,
+  sortItemsForReader,
   SYSTEM_ITEMS_VIEW_PRESET_IDS,
+  SOURCE_LIST_INITIAL_RENDER_COUNT,
   SOURCE_LOAD_MAX_ITEMS,
   SOURCE_LOAD_PAGE_SIZE,
+  shouldExpandSourceRenderWindow,
   stripHtmlToText
 } from "./items-utils"
 import {
@@ -57,9 +66,10 @@ const { Search } = Input
 type ReaderStatusFilter = "all" | "ingested" | "filtered"
 type SmartFeedFilter = "all" | "today" | "todayUnread" | "unread" | "reviewed"
 type BatchReviewScope = "selected" | "page" | "allFiltered"
-type ItemsViewPreset = Omit<PersistedItemsViewPreset, "smartFilter" | "statusFilter"> & {
+type ItemsViewPreset = Omit<PersistedItemsViewPreset, "smartFilter" | "statusFilter" | "sortMode"> & {
   smartFilter: SmartFeedFilter
   statusFilter: ReaderStatusFilter
+  sortMode: ReaderSortMode
 }
 const SHORTCUTS_HINT_DISMISSED_STORAGE_KEY = "watchlists:items:shortcuts-hint-dismissed"
 
@@ -157,6 +167,7 @@ export const ItemsTab: React.FC = () => {
   const [sources, setSources] = useState<WatchlistSource[]>([])
   const [sourcesLoading, setSourcesLoading] = useState(false)
   const [sourceSearch, setSourceSearch] = useState("")
+  const [visibleSourceCount, setVisibleSourceCount] = useState(SOURCE_LIST_INITIAL_RENDER_COUNT)
   const [items, setItems] = useState<ScrapedItem[]>([])
   const [itemsLoading, setItemsLoading] = useState(false)
   const [itemsTotal, setItemsTotal] = useState(0)
@@ -164,6 +175,11 @@ export const ItemsTab: React.FC = () => {
   const [itemsPage, setItemsPage] = useState(1)
   const [itemsPageSize, setItemsPageSize] = useState<number>(() =>
     loadPersistedItemPageSize(
+      typeof window !== "undefined" ? window.localStorage : undefined
+    )
+  )
+  const [sortMode, setSortMode] = useState<ReaderSortMode>(() =>
+    loadPersistedItemsSortMode(
       typeof window !== "undefined" ? window.localStorage : undefined
     )
   )
@@ -209,7 +225,8 @@ export const ItemsTab: React.FC = () => {
     ).map((preset) => ({
       ...preset,
       smartFilter: normalizeSmartFilter(preset.smartFilter),
-      statusFilter: normalizeStatusFilter(preset.statusFilter)
+      statusFilter: normalizeStatusFilter(preset.statusFilter),
+      sortMode: normalizeReaderSortMode(preset.sortMode)
     }))
   )
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
@@ -246,10 +263,20 @@ export const ItemsTab: React.FC = () => {
     () => orderSourcesForReader(filteredSources, selectedSourceId),
     [filteredSources, selectedSourceId]
   )
+  const visibleSources = useMemo(
+    () => orderedSources.slice(0, visibleSourceCount),
+    [orderedSources, visibleSourceCount]
+  )
+  const hasCollapsedSources = visibleSources.length < orderedSources.length
+
+  const sortedItems = useMemo(
+    () => sortItemsForReader(items, sortMode),
+    [items, sortMode]
+  )
 
   const selectedItem = useMemo(
-    () => items.find((item) => item.id === selectedItemId) || null,
-    [items, selectedItemId]
+    () => sortedItems.find((item) => item.id === selectedItemId) || null,
+    [selectedItemId, sortedItems]
   )
 
   const selectedItemRawBody = selectedItem
@@ -296,6 +323,7 @@ export const ItemsTab: React.FC = () => {
   const [effectiveSearchQuery, setEffectiveSearchQuery] = useState(searchQuery)
   const itemsRequestTokenRef = useRef(0)
   const smartCountsRequestTokenRef = useRef(0)
+  const sourceListRef = useRef<HTMLDivElement | null>(null)
   const shortcutsTriggerRef = useRef<HTMLElement | null>(null)
   const shortcutsHelpButtonRef = useRef<HTMLButtonElement | null>(null)
   const saveViewTriggerRef = useRef<HTMLElement | null>(null)
@@ -368,6 +396,24 @@ export const ItemsTab: React.FC = () => {
     }
   }, [t])
 
+  const expandVisibleSourcesIfNeeded = useCallback(() => {
+    const listElement = sourceListRef.current
+    if (!listElement) return
+    if (!hasCollapsedSources) return
+    if (
+      !shouldExpandSourceRenderWindow(
+        listElement.scrollTop,
+        listElement.scrollHeight,
+        listElement.clientHeight
+      )
+    ) {
+      return
+    }
+    setVisibleSourceCount((currentCount) =>
+      getNextSourceRenderCount(currentCount, orderedSources.length)
+    )
+  }, [hasCollapsedSources, orderedSources.length])
+
   const loadItems = useCallback(async () => {
     const requestToken = itemsRequestTokenRef.current + 1
     itemsRequestTokenRef.current = requestToken
@@ -381,9 +427,10 @@ export const ItemsTab: React.FC = () => {
       )
       if (requestToken !== itemsRequestTokenRef.current) return
       const nextItems = Array.isArray(response.items) ? response.items : []
+      const sortedNextItems = sortItemsForReader(nextItems, sortMode)
       setItems(nextItems)
       setItemsTotal(response.total || nextItems.length)
-      setSelectedItemId((prev) => resolveSelectedItemId(prev, nextItems))
+      setSelectedItemId((prev) => resolveSelectedItemId(prev, sortedNextItems))
     } catch (error) {
       if (requestToken !== itemsRequestTokenRef.current) return
       console.error("Failed to load watchlist items:", error)
@@ -395,7 +442,7 @@ export const ItemsTab: React.FC = () => {
       if (requestToken !== itemsRequestTokenRef.current) return
       setItemsLoading(false)
     }
-  }, [buildBaseFilterParams, itemsPage, itemsPageSize, t])
+  }, [buildBaseFilterParams, itemsPage, itemsPageSize, sortMode, t])
 
   const loadSmartCounts = useCallback(async () => {
     const requestToken = smartCountsRequestTokenRef.current + 1
@@ -450,6 +497,22 @@ export const ItemsTab: React.FC = () => {
   }, [loadSmartCounts])
 
   useEffect(() => {
+    setVisibleSourceCount((currentCount) => {
+      const nextInitial = getInitialSourceRenderCount(orderedSources.length, sourceSearch)
+      if (nextInitial === 0) return 0
+      if (sourceSearch.trim().length > 0) {
+        return orderedSources.length
+      }
+      if (currentCount === 0) return nextInitial
+      return Math.min(currentCount, orderedSources.length)
+    })
+  }, [orderedSources.length, sourceSearch])
+
+  useEffect(() => {
+    expandVisibleSourcesIfNeeded()
+  }, [expandVisibleSourcesIfNeeded, visibleSourceCount])
+
+  useEffect(() => {
     persistItemPageSize(
       typeof window !== "undefined" ? window.localStorage : undefined,
       itemsPageSize
@@ -462,6 +525,13 @@ export const ItemsTab: React.FC = () => {
       viewPresets
     )
   }, [viewPresets])
+
+  useEffect(() => {
+    persistItemsSortMode(
+      typeof window !== "undefined" ? window.localStorage : undefined,
+      sortMode
+    )
+  }, [sortMode])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -500,13 +570,17 @@ export const ItemsTab: React.FC = () => {
   }, [saveViewModalOpen])
 
   useEffect(() => {
-    const visibleIds = new Set(items.map((item) => item.id))
+    const visibleIds = new Set(sortedItems.map((item) => item.id))
     setSelectedItemIds((prev) => {
       if (prev.length === 0) return prev
       const filtered = prev.filter((id) => visibleIds.has(id))
       return filtered.length === prev.length ? prev : filtered
     })
-  }, [items])
+  }, [sortedItems])
+
+  useEffect(() => {
+    setSelectedItemId((prev) => resolveSelectedItemId(prev, sortedItems))
+  }, [sortedItems])
 
   useEffect(() => {
     setSelectedItemIds((prev) => (prev.length === 0 ? prev : []))
@@ -518,11 +592,12 @@ export const ItemsTab: React.FC = () => {
         preset.sourceId === selectedSourceId &&
         preset.smartFilter === smartFilter &&
         preset.statusFilter === statusFilter &&
+        preset.sortMode === sortMode &&
         preset.searchQuery === searchQuery
     )
     const nextId = matchingPreset?.id ?? null
     setActivePresetId((prev) => (prev === nextId ? prev : nextId))
-  }, [searchQuery, selectedSourceId, smartFilter, statusFilter, viewPresets])
+  }, [searchQuery, selectedSourceId, smartFilter, sortMode, statusFilter, viewPresets])
 
   const handleSourceSelect = (sourceId: number | null) => {
     setStoreSelectedSourceId(sourceId)
@@ -536,6 +611,11 @@ export const ItemsTab: React.FC = () => {
 
   const handleSmartFilterChange = (nextFilter: SmartFeedFilter) => {
     setStoreSmartFilter(nextFilter)
+    setItemsPage(1)
+  }
+
+  const handleSortModeChange = (nextSortMode: ReaderSortMode) => {
+    setSortMode(nextSortMode)
     setItemsPage(1)
   }
 
@@ -603,11 +683,11 @@ export const ItemsTab: React.FC = () => {
     }
   }, [loadItems, loadSmartCounts, statusFilter, t])
 
-  const pageItemIds = useMemo(() => items.map((item) => item.id), [items])
+  const pageItemIds = useMemo(() => sortedItems.map((item) => item.id), [sortedItems])
 
   const pageUnreviewedItemIds = useMemo(
-    () => items.filter((item) => !item.reviewed).map((item) => item.id),
-    [items]
+    () => sortedItems.filter((item) => !item.reviewed).map((item) => item.id),
+    [sortedItems]
   )
 
   const selectedItemIdSet = useMemo(
@@ -617,10 +697,10 @@ export const ItemsTab: React.FC = () => {
 
   const selectedUnreviewedItemIds = useMemo(
     () =>
-      items
+      sortedItems
         .filter((item) => selectedItemIdSet.has(item.id) && !item.reviewed)
         .map((item) => item.id),
-    [items, selectedItemIdSet]
+    [selectedItemIdSet, sortedItems]
   )
   const selectedUnreviewedCount = selectedUnreviewedItemIds.length
   const pageUnreviewedCount = pageUnreviewedItemIds.length
@@ -673,7 +753,8 @@ export const ItemsTab: React.FC = () => {
       provisionItemsViewPresets(presets, defaultViewPresets).map((preset) => ({
         ...preset,
         smartFilter: normalizeSmartFilter(preset.smartFilter),
-        statusFilter: normalizeStatusFilter(preset.statusFilter)
+        statusFilter: normalizeStatusFilter(preset.statusFilter),
+        sortMode: normalizeReaderSortMode(preset.sortMode)
       })),
     [defaultViewPresets]
   )
@@ -902,6 +983,7 @@ export const ItemsTab: React.FC = () => {
     setStoreSelectedSourceId(preset.sourceId)
     setStoreSmartFilter(preset.smartFilter)
     setStoreStatusFilter(preset.statusFilter)
+    setSortMode(normalizeReaderSortMode(preset.sortMode))
     setStoreItemsSearch(preset.searchQuery)
     setItemsPage(1)
     setActivePresetId(preset.id)
@@ -910,6 +992,7 @@ export const ItemsTab: React.FC = () => {
     setStoreSelectedSourceId,
     setStoreSmartFilter,
     setStoreStatusFilter,
+    setSortMode,
     viewPresets
   ])
 
@@ -924,6 +1007,7 @@ export const ItemsTab: React.FC = () => {
                 sourceId: selectedSourceId,
                 smartFilter,
                 statusFilter,
+                sortMode,
                 searchQuery
               }
             : preset
@@ -945,6 +1029,7 @@ export const ItemsTab: React.FC = () => {
     searchQuery,
     selectedSourceId,
     smartFilter,
+    sortMode,
     statusFilter,
     t
   ])
@@ -984,6 +1069,7 @@ export const ItemsTab: React.FC = () => {
       sourceId: selectedSourceId,
       smartFilter,
       statusFilter,
+      sortMode,
       searchQuery
     }
     setViewPresets((prev) => normalizeViewPresets([newPreset, ...prev]))
@@ -997,6 +1083,7 @@ export const ItemsTab: React.FC = () => {
     searchQuery,
     selectedSourceId,
     smartFilter,
+    sortMode,
     statusFilter,
     t
   ])
@@ -1029,13 +1116,13 @@ export const ItemsTab: React.FC = () => {
   }, [activePresetId, normalizeViewPresets, t, viewPresets])
 
   const moveSelectionBy = useCallback((offset: number) => {
-    if (items.length === 0) return
-    const currentIndex = items.findIndex((item) => item.id === selectedItemId)
+    if (sortedItems.length === 0) return
+    const currentIndex = sortedItems.findIndex((item) => item.id === selectedItemId)
     const baseIndex =
-      currentIndex === -1 ? (offset >= 0 ? 0 : items.length - 1) : currentIndex
-    const nextIndex = Math.max(0, Math.min(items.length - 1, baseIndex + offset))
-    setSelectedItemId(items[nextIndex]?.id ?? null)
-  }, [items, selectedItemId])
+      currentIndex === -1 ? (offset >= 0 ? 0 : sortedItems.length - 1) : currentIndex
+    const nextIndex = Math.max(0, Math.min(sortedItems.length - 1, baseIndex + offset))
+    setSelectedItemId(sortedItems[nextIndex]?.id ?? null)
+  }, [selectedItemId, sortedItems])
 
   const openSelectedItemOriginal = useCallback(() => {
     if (!selectedItem?.url) return
@@ -1320,12 +1407,13 @@ export const ItemsTab: React.FC = () => {
                       <button
                         key={row.key}
                         type="button"
-                        className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm transition ${
+                      className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm transition ${
                           isActive
                             ? "bg-primary/15 text-text"
                             : "text-text-muted hover:bg-surface-hover hover:text-text"
                         }`}
                         onClick={() => handleSmartFilterChange(row.key)}
+                        data-testid={`watchlists-items-smart-feed-${row.key}`}
                       >
                         <span className="flex items-center gap-2">
                           {row.icon}
@@ -1351,7 +1439,12 @@ export const ItemsTab: React.FC = () => {
                   allowClear
                   className="mb-2"
                 />
-                <div className="max-h-[430px] space-y-1 overflow-y-auto pr-1">
+                <div
+                  ref={sourceListRef}
+                  className="max-h-[430px] space-y-1 overflow-y-auto pr-1"
+                  onScroll={expandVisibleSourcesIfNeeded}
+                  data-testid="watchlists-items-source-list"
+                >
                   <button
                     type="button"
                     className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm transition ${
@@ -1377,12 +1470,13 @@ export const ItemsTab: React.FC = () => {
                       description={t("watchlists:items.noFeeds", "No feeds found")}
                     />
                   ) : (
-                    orderedSources.map((source) => {
+                    visibleSources.map((source) => {
                       const selected = selectedSourceId === source.id
                       return (
                         <button
                           key={source.id}
                           type="button"
+                          data-testid={`watchlists-items-source-row-${source.id}`}
                           className={`w-full rounded-lg px-2.5 py-2 text-left text-sm transition ${
                             selected
                               ? "bg-primary/15 text-text"
@@ -1397,6 +1491,21 @@ export const ItemsTab: React.FC = () => {
                     })
                   )}
                 </div>
+                {hasCollapsedSources && (
+                  <p
+                    className="mt-2 text-xs text-text-subtle"
+                    data-testid="watchlists-items-source-window-hint"
+                  >
+                    {t(
+                      "watchlists:items.sourceWindowHint",
+                      "Showing {{visible}} of {{total}} feeds. Scroll to load more.",
+                      {
+                        visible: visibleSources.length,
+                        total: orderedSources.length
+                      }
+                    )}
+                  </p>
+                )}
               </div>
             </div>
           </aside>
@@ -1442,6 +1551,33 @@ export const ItemsTab: React.FC = () => {
                   }
                 ]}
               />
+
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface/70 px-2.5 py-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
+                  {t("watchlists:items.sort.label", "Sort")}
+                </span>
+                <Select<ReaderSortMode>
+                  size="small"
+                  value={sortMode}
+                  options={[
+                    {
+                      label: t("watchlists:items.sort.newest", "Newest first"),
+                      value: "newest"
+                    },
+                    {
+                      label: t("watchlists:items.sort.unreadFirst", "Unread first"),
+                      value: "unreadFirst"
+                    },
+                    {
+                      label: t("watchlists:items.sort.oldest", "Oldest first"),
+                      value: "oldest"
+                    }
+                  ]}
+                  onChange={(nextSortMode) => handleSortModeChange(nextSortMode)}
+                  className="min-w-[170px]"
+                  data-testid="watchlists-items-sort-select"
+                />
+              </div>
 
               <div className="rounded-lg border border-border bg-surface/70 p-2.5">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1576,7 +1712,7 @@ export const ItemsTab: React.FC = () => {
                   description={t("watchlists:items.empty", "No feed items found")}
                 />
               ) : (
-                items.map((item) => {
+                sortedItems.map((item) => {
                   const selected = item.id === selectedItemId
                   const sourceLabel =
                     sourceNameById.get(item.source_id) ||

@@ -2,10 +2,17 @@ import type { ScrapedItem, WatchlistSource } from "@/types/watchlists"
 
 export const SOURCE_LOAD_PAGE_SIZE = 200
 export const SOURCE_LOAD_MAX_ITEMS = 1000
+export const SOURCE_LIST_INITIAL_RENDER_COUNT = 120
+export const SOURCE_LIST_RENDER_CHUNK = 120
+export const SOURCE_LIST_SCROLL_EXPAND_THRESHOLD_PX = 180
 export const ITEM_PAGE_SIZE = 25
 export const ITEM_PAGE_SIZE_OPTIONS = [20, 25, 50, 100] as const
 export const ITEMS_PAGE_SIZE_STORAGE_KEY = "watchlists:items:page-size"
+export const ITEMS_SORT_MODE_STORAGE_KEY = "watchlists:items:sort-mode"
 export const ITEMS_VIEW_PRESETS_STORAGE_KEY = "watchlists:items:view-presets"
+
+export const READER_SORT_MODES = ["newest", "oldest", "unreadFirst"] as const
+export type ReaderSortMode = (typeof READER_SORT_MODES)[number]
 
 export const SYSTEM_ITEMS_VIEW_PRESET_IDS = {
   unreadToday: "system-unread-today",
@@ -22,6 +29,7 @@ export interface PersistedItemsViewPreset {
   sourceId: number | null
   smartFilter: string
   statusFilter: string
+  sortMode?: string
   searchQuery: string
 }
 
@@ -34,6 +42,7 @@ export const buildDefaultItemsViewPresets = (
     sourceId: null,
     smartFilter: "todayUnread",
     statusFilter: "ingested",
+    sortMode: "unreadFirst",
     searchQuery: ""
   },
   {
@@ -42,6 +51,7 @@ export const buildDefaultItemsViewPresets = (
     sourceId: null,
     smartFilter: "todayUnread",
     statusFilter: "ingested",
+    sortMode: "unreadFirst",
     searchQuery: "urgent"
   },
   {
@@ -50,6 +60,7 @@ export const buildDefaultItemsViewPresets = (
     sourceId: null,
     smartFilter: "unread",
     statusFilter: "all",
+    sortMode: "newest",
     searchQuery: ""
   }
 ]
@@ -109,6 +120,18 @@ export const normalizeItemPageSize = (value: unknown): number => {
   return ITEM_PAGE_SIZE
 }
 
+export const normalizeReaderSortMode = (value: unknown): ReaderSortMode => {
+  const normalized = String(value || "")
+  if (
+    normalized === "newest" ||
+    normalized === "oldest" ||
+    normalized === "unreadFirst"
+  ) {
+    return normalized
+  }
+  return "newest"
+}
+
 export const loadPersistedItemPageSize = (
   storage: Pick<Storage, "getItem"> | null | undefined
 ): number => {
@@ -132,6 +155,29 @@ export const persistItemPageSize = (
   }
 }
 
+export const loadPersistedItemsSortMode = (
+  storage: Pick<Storage, "getItem"> | null | undefined
+): ReaderSortMode => {
+  try {
+    const raw = storage?.getItem(ITEMS_SORT_MODE_STORAGE_KEY)
+    if (raw == null) return "newest"
+    return normalizeReaderSortMode(raw)
+  } catch {
+    return "newest"
+  }
+}
+
+export const persistItemsSortMode = (
+  storage: Pick<Storage, "setItem"> | null | undefined,
+  sortMode: ReaderSortMode
+): void => {
+  try {
+    storage?.setItem(ITEMS_SORT_MODE_STORAGE_KEY, normalizeReaderSortMode(sortMode))
+  } catch {
+    // Ignore storage write errors (private browsing, quota, etc.)
+  }
+}
+
 const isPersistedItemsViewPreset = (value: unknown): value is PersistedItemsViewPreset => {
   if (!value || typeof value !== "object") return false
   const candidate = value as Record<string, unknown>
@@ -141,6 +187,7 @@ const isPersistedItemsViewPreset = (value: unknown): value is PersistedItemsView
   if (sourceId !== null && typeof sourceId !== "number") return false
   if (typeof candidate.smartFilter !== "string") return false
   if (typeof candidate.statusFilter !== "string") return false
+  if (candidate.sortMode != null && typeof candidate.sortMode !== "string") return false
   if (typeof candidate.searchQuery !== "string") return false
   return true
 }
@@ -185,6 +232,51 @@ export const filterSourcesForReader = (
     if (source.url.toLowerCase().includes(trimmed)) return true
     return source.tags.some((tag) => tag.toLowerCase().includes(trimmed))
   })
+}
+
+export const getInitialSourceRenderCount = (
+  totalSources: number,
+  searchQuery: string
+): number => {
+  const normalizedTotal = Number.isFinite(totalSources)
+    ? Math.max(0, Math.floor(totalSources))
+    : 0
+  if (normalizedTotal === 0) return 0
+  if (searchQuery.trim().length > 0) return normalizedTotal
+  return Math.min(normalizedTotal, SOURCE_LIST_INITIAL_RENDER_COUNT)
+}
+
+export const getNextSourceRenderCount = (
+  currentCount: number,
+  totalSources: number
+): number => {
+  const normalizedTotal = Number.isFinite(totalSources)
+    ? Math.max(0, Math.floor(totalSources))
+    : 0
+  const normalizedCurrent = Number.isFinite(currentCount)
+    ? Math.max(0, Math.floor(currentCount))
+    : 0
+
+  if (normalizedCurrent >= normalizedTotal) return normalizedTotal
+  return Math.min(normalizedTotal, normalizedCurrent + SOURCE_LIST_RENDER_CHUNK)
+}
+
+export const shouldExpandSourceRenderWindow = (
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number
+): boolean => {
+  if (
+    !Number.isFinite(scrollTop) ||
+    !Number.isFinite(scrollHeight) ||
+    !Number.isFinite(clientHeight)
+  ) {
+    return false
+  }
+  if (scrollHeight <= 0 || clientHeight <= 0) return false
+
+  const remaining = scrollHeight - (scrollTop + clientHeight)
+  return remaining <= SOURCE_LIST_SCROLL_EXPAND_THRESHOLD_PX
 }
 
 const sourcePriorityTimestamp = (source: WatchlistSource): number => {
@@ -235,6 +327,36 @@ export const resolveSelectedItemId = (
   if (items.length === 0) return null
   if (currentId && items.some((item) => item.id === currentId)) return currentId
   return items[0].id
+}
+
+const toItemTimestamp = (item: ScrapedItem): number => {
+  const candidate = item.published_at || item.created_at || ""
+  const parsed = new Date(candidate).getTime()
+  if (Number.isNaN(parsed)) return Number.NEGATIVE_INFINITY
+  return parsed
+}
+
+export const sortItemsForReader = (
+  items: ScrapedItem[],
+  sortMode: ReaderSortMode
+): ScrapedItem[] => {
+  const normalizedMode = normalizeReaderSortMode(sortMode)
+  return [...items].sort((left, right) => {
+    const leftTs = toItemTimestamp(left)
+    const rightTs = toItemTimestamp(right)
+
+    if (normalizedMode === "unreadFirst" && left.reviewed !== right.reviewed) {
+      return left.reviewed ? 1 : -1
+    }
+
+    if (normalizedMode === "oldest") {
+      if (leftTs !== rightTs) return leftTs - rightTs
+    } else {
+      if (leftTs !== rightTs) return rightTs - leftTs
+    }
+
+    return left.id - right.id
+  })
 }
 
 export const stripHtmlToText = (value: string): string => {
