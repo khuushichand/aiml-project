@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CloudOff, Search, Sparkles, Square, X } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import { trackKnowledgeQaSearchMetric } from "@/utils/knowledge-qa-search-metrics"
 import {
   buildLocalQuerySuggestions,

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react"
 import { X, PanelRightOpen, FileText, BarChart3 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import { useDesktop } from "@/hooks/useMediaQuery"
 import { SourceList } from "../SourceList"
 import { SearchDetailsPanel } from "../SearchDetailsPanel"
