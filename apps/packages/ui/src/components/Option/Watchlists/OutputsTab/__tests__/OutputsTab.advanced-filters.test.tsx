@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   fetchWatchlistOutputsMock: vi.fn(),
   fetchWatchlistTemplatesMock: vi.fn(),
   downloadWatchlistOutputMock: vi.fn(),
+  trackWatchlistsOnboardingTelemetryMock: vi.fn(),
   storeStateRef: { current: {} as Record<string, any> }
 }))
 
@@ -111,6 +112,11 @@ vi.mock("@/services/watchlists", () => ({
 
 vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: any) => unknown) => selector(mocks.storeStateRef.current)
+}))
+
+vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
+  trackWatchlistsOnboardingTelemetry: (...args: any[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
 }))
 
 vi.mock("../OutputPreviewDrawer", () => ({
@@ -258,5 +264,23 @@ describe("OutputsTab advanced filters disclosure", () => {
     expect(setRunsStatusFilter).toHaveBeenCalledWith("failed")
     expect(setRunsJobFilter).toHaveBeenCalledWith(null)
     expect(setActiveTab).toHaveBeenCalledWith("runs")
+  })
+
+  it("tracks first output milestone when outputs load returns items", async () => {
+    mocks.fetchWatchlistOutputsMock.mockResolvedValue({
+      items: [buildOutput(501, "sent")],
+      total: 1,
+      has_more: false
+    })
+
+    render(<OutputsTab />)
+
+    await waitFor(() => {
+      expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+        type: "first_output_succeeded",
+        outputId: 501,
+        format: "md"
+      })
+    })
   })
 })

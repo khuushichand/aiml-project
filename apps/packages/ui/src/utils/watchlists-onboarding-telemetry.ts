@@ -27,6 +27,8 @@ export type WatchlistsOnboardingTelemetryEvent =
   | { type: "guided_tour_completed" }
   | { type: "guided_tour_dismissed"; step: WatchlistsGuidedTourStep }
   | { type: "guided_tour_resumed"; step: WatchlistsGuidedTourStep }
+  | { type: "first_run_succeeded"; runId: number }
+  | { type: "first_output_succeeded"; outputId: number; format: string | null }
 
 type WatchlistsOnboardingRecentEvent = {
   type: WatchlistsOnboardingTelemetryEvent["type"]
@@ -54,6 +56,12 @@ export type WatchlistsOnboardingTelemetryState = {
     dismissed: number
     resumed: number
     step_views: GuidedStepCounters
+  }
+  value_milestones: {
+    first_run_succeeded: number
+    first_output_succeeded: number
+    first_run_succeeded_at: number | null
+    first_output_succeeded_at: number | null
   }
   last_event_at: number | null
   recent_events: WatchlistsOnboardingRecentEvent[]
@@ -93,6 +101,12 @@ const DEFAULT_STATE: WatchlistsOnboardingTelemetryState = {
     dismissed: 0,
     resumed: 0,
     step_views: { ...DEFAULT_GUIDED_STEP_COUNTERS }
+  },
+  value_milestones: {
+    first_run_succeeded: 0,
+    first_output_succeeded: 0,
+    first_run_succeeded_at: null,
+    first_output_succeeded_at: null
   },
   last_event_at: null,
   recent_events: []
@@ -158,6 +172,10 @@ const readTelemetryState =
           ...(state.guided_tour?.step_views || {})
         }
       },
+      value_milestones: {
+        ...DEFAULT_STATE.value_milestones,
+        ...(state.value_milestones || {})
+      },
       recent_events: Array.isArray(state.recent_events)
         ? state.recent_events.slice(-MAX_RECENT_EVENTS)
         : []
@@ -174,9 +192,7 @@ export const trackWatchlistsOnboardingTelemetry = async (
   try {
     const state = await readTelemetryState()
     const now = Date.now()
-
-    state.last_event_at = now
-    incrementCounter(state.counters, event.type)
+    let shouldRecord = true
 
     switch (event.type) {
       case "quick_setup_step_completed":
@@ -211,9 +227,30 @@ export const trackWatchlistsOnboardingTelemetry = async (
       case "guided_tour_step_viewed":
         state.guided_tour.step_views[String(event.step) as keyof GuidedStepCounters] += 1
         break
+      case "first_run_succeeded":
+        if (state.value_milestones.first_run_succeeded > 0) {
+          shouldRecord = false
+          break
+        }
+        state.value_milestones.first_run_succeeded = 1
+        state.value_milestones.first_run_succeeded_at = now
+        break
+      case "first_output_succeeded":
+        if (state.value_milestones.first_output_succeeded > 0) {
+          shouldRecord = false
+          break
+        }
+        state.value_milestones.first_output_succeeded = 1
+        state.value_milestones.first_output_succeeded_at = now
+        break
       default:
         break
     }
+
+    if (!shouldRecord) return
+
+    state.last_event_at = now
+    incrementCounter(state.counters, event.type)
 
     state.recent_events.push({
       type: event.type,

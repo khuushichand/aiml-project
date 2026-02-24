@@ -57,6 +57,15 @@ describe("watchlists-onboarding-telemetry", () => {
       type: "guided_tour_dismissed",
       step: 2
     })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_run_succeeded",
+      runId: 91
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_output_succeeded",
+      outputId: 301,
+      format: "md"
+    })
 
     const state = storageMap.get(STORAGE_KEY) as Record<string, any>
     expect(state.counters.quick_setup_opened).toBe(1)
@@ -70,7 +79,11 @@ describe("watchlists-onboarding-telemetry", () => {
     expect(state.guided_tour.dismissed).toBe(1)
     expect(state.guided_tour.step_views["1"]).toBe(1)
     expect(state.guided_tour.step_views["2"]).toBe(1)
-    expect(state.recent_events).toHaveLength(8)
+    expect(state.value_milestones.first_run_succeeded).toBe(1)
+    expect(state.value_milestones.first_output_succeeded).toBe(1)
+    expect(state.value_milestones.first_run_succeeded_at).toBeTypeOf("number")
+    expect(state.value_milestones.first_output_succeeded_at).toBeTypeOf("number")
+    expect(state.recent_events).toHaveLength(10)
   })
 
   it("caps recent events to the configured maximum", async () => {
@@ -86,5 +99,38 @@ describe("watchlists-onboarding-telemetry", () => {
     const state = storageMap.get(STORAGE_KEY) as Record<string, any>
     expect(state.recent_events.length).toBe(200)
     expect(state.counters.guided_tour_step_viewed).toBe(260)
+  })
+
+  it("records first-value milestones only once", async () => {
+    const telemetry = await import("@/utils/watchlists-onboarding-telemetry")
+
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_run_succeeded",
+      runId: 1
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_run_succeeded",
+      runId: 2
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_output_succeeded",
+      outputId: 11,
+      format: "md"
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_output_succeeded",
+      outputId: 12,
+      format: "html"
+    })
+
+    const state = storageMap.get(STORAGE_KEY) as Record<string, any>
+    expect(state.counters.first_run_succeeded).toBe(1)
+    expect(state.counters.first_output_succeeded).toBe(1)
+    expect(state.value_milestones.first_run_succeeded).toBe(1)
+    expect(state.value_milestones.first_output_succeeded).toBe(1)
+    const milestoneEvents = state.recent_events.filter((event: Record<string, unknown>) =>
+      event.type === "first_run_succeeded" || event.type === "first_output_succeeded"
+    )
+    expect(milestoneEvents).toHaveLength(2)
   })
 })

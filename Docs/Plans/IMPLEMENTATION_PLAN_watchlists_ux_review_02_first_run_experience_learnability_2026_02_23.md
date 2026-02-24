@@ -143,4 +143,21 @@
 **Tests**:
 - Add telemetry schema tests for onboarding events.
 - Run onboarding regression suite for happy path and interruption recovery.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 5 Completion Notes (2026-02-24)
+
+- Extended onboarding telemetry schema in `apps/packages/ui/src/utils/watchlists-onboarding-telemetry.ts` with value milestones:
+  - `first_run_succeeded` + `first_run_succeeded_at`
+  - `first_output_succeeded` + `first_output_succeeded_at`
+  - one-time milestone dedupe to prevent duplicate first-value counts.
+- Wired milestone event emitters into core onboarding-to-value surfaces:
+  - successful run polling in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`
+  - successful output fetch in `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputsTab.tsx`.
+- Added Stage 5 telemetry and regression coverage:
+  - `apps/packages/ui/src/utils/__tests__/watchlists-onboarding-telemetry.test.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+- Verification evidence:
+  - `bunx vitest run src/utils/__tests__/watchlists-onboarding-telemetry.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists apps/packages/ui/src/utils -f json -o /tmp/bandit_watchlists_group02_stage5_2026_02_24.json`

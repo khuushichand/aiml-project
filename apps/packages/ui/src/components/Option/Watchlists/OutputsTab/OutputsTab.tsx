@@ -35,6 +35,7 @@ import {
 } from "@/services/watchlists"
 import type { WatchlistJob, WatchlistOutput, WatchlistTemplate } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
+import { trackWatchlistsOnboardingTelemetry } from "@/utils/watchlists-onboarding-telemetry"
 import { OutputPreviewDrawer } from "./OutputPreviewDrawer"
 import {
   buildDeliveryDisclosureSummary,
@@ -170,6 +171,14 @@ export const OutputsTab: React.FC = () => {
         size: outputsPageSize
       })
       setOutputs(result.items, result.total)
+      const firstOutput = Array.isArray(result.items) ? result.items[0] : null
+      if (firstOutput) {
+        void trackWatchlistsOnboardingTelemetry({
+          type: "first_output_succeeded",
+          outputId: firstOutput.id,
+          format: typeof firstOutput.format === "string" ? firstOutput.format : null
+        })
+      }
     } catch (err) {
       console.error("Failed to fetch outputs:", err)
       message.error(t("watchlists:outputs.fetchError", "Failed to load outputs"))

@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     notificationSuccessMock: vi.fn(),
     notificationWarningMock: vi.fn(),
     openRunDetailMock: vi.fn(),
+    trackWatchlistsOnboardingTelemetryMock: vi.fn(),
     state
   }
 })
@@ -109,7 +110,8 @@ vi.mock("@/utils/watchlists-ia-experiment-telemetry", () => ({
 }))
 
 vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
-  trackWatchlistsOnboardingTelemetry: vi.fn()
+  trackWatchlistsOnboardingTelemetry: (...args: unknown[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
 }))
 
 vi.mock("../OverviewTab/OverviewTab", () => ({
@@ -269,6 +271,34 @@ describe("WatchlistsPlaygroundPage run notifications", () => {
 
     await waitFor(() => {
       expect(mocks.fetchWatchlistRunsMock).toHaveBeenCalledTimes(2)
+    }, { timeout: 3000 })
+  })
+
+  it("tracks first successful run once polling sees a completed run", async () => {
+    mocks.fetchWatchlistRunsMock.mockReset()
+    mocks.fetchWatchlistRunsMock.mockResolvedValue({
+      items: [
+        {
+          id: 77,
+          job_id: 9,
+          status: "completed",
+          started_at: "2026-02-18T09:58:00Z",
+          finished_at: "2026-02-18T10:01:00Z",
+          error_msg: null,
+          stats: {}
+        }
+      ],
+      total: 1,
+      has_more: false
+    })
+
+    render(<WatchlistsPlaygroundPage />)
+
+    await waitFor(() => {
+      expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+        type: "first_run_succeeded",
+        runId: 77
+      })
     }, { timeout: 3000 })
   })
 })

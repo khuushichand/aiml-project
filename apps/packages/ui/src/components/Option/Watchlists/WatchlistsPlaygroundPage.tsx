@@ -59,6 +59,7 @@ const RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS = 30_000
 const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
 const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
 const TEACH_POINTS_STORAGE_KEY = "watchlists:teach-points:v1"
+const SUCCESSFUL_RUN_STATUSES = new Set(["completed", "succeeded", "success", "done", "finished"])
 
 type GuidedTourTab = "sources" | "jobs" | "runs" | "items" | "outputs"
 type GuidedTourStatus = "idle" | "in_progress" | "dismissed" | "completed"
@@ -753,6 +754,15 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         size: runNotificationsPollPlan.pageSize
       })
       const nextRuns = Array.isArray(response.items) ? response.items : []
+      const firstSuccessfulRun = nextRuns.find((run) =>
+        SUCCESSFUL_RUN_STATUSES.has(String(run.status || "").toLowerCase())
+      )
+      if (firstSuccessfulRun) {
+        void trackWatchlistsOnboardingTelemetry({
+          type: "first_run_succeeded",
+          runId: firstSuccessfulRun.id
+        })
+      }
       const previousStatusMap = runStatusRef.current
       const nextStatusMap = new Map<number, string>()
       const initialized = initializedRunPollingRef.current
