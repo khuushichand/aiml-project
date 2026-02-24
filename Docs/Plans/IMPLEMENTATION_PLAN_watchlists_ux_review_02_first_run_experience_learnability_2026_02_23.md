@@ -118,7 +118,21 @@
 **Tests**:
 - Add snapshot tests for key onboarding copy blocks.
 - Add copy contract tests for terminology consistency in first-run keys.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 4 Completion Notes (2026-02-24)
+
+- Refined first-run copy across onboarding and guided-tour surfaces in `apps/packages/ui/src/assets/locale/en/watchlists.json` and fallback strings in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`:
+  - replaced mixed system aliases with canonical terms (`Feeds`, `Monitors`, `Activity`, `Articles`, `Reports`),
+  - made “what happens next” wording explicit in onboarding path hints and guided steps,
+  - reduced jargon density while preserving advanced discoverability via teach-point/task guidance.
+- Updated contextual help fallback copy in `apps/packages/ui/src/components/Option/Watchlists/shared/WatchlistsHelpTooltip.tsx` to task-oriented guidance for cron and Jinja2 topics.
+- Extended copy governance tests:
+  - added first-run terminology contract assertions in `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`,
+  - updated guided-tour and teach-point assertions in `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`,
+  - refreshed snapshot baseline in `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/__snapshots__/WatchlistsHelpTooltip.test.tsx.snap`.
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx`
 
 ## Stage 5: Onboarding Effectiveness Validation
 **Goal**: Validate that users reach first successful run and first report faster.

@@ -29,6 +29,31 @@ const REQUIRED_PLAIN_LANGUAGE_KEYS = [
   "sources.bulkDeleteConfirmDescription"
 ] as const
 
+const FIRST_RUN_CANONICAL_TERMINOLOGY_KEYS = [
+  "overview.onboarding.pipeline",
+  "overview.onboarding.path.beginnerHint",
+  "overview.onboarding.path.advancedHint",
+  "overview.onboarding.steps.addFeed.description",
+  "overview.onboarding.steps.createMonitor.description",
+  "overview.onboarding.steps.reviewResults.description",
+  "guide.steps.sources.description",
+  "guide.steps.jobs.description",
+  "guide.steps.runs.description",
+  "guide.steps.items.description",
+  "guide.steps.outputs.description",
+  "guide.completedDescription",
+  "teachPoints.jobs.description",
+  "teachPoints.templates.description"
+] as const
+
+const FORBIDDEN_FIRST_RUN_ALIASES = [
+  /\bsource(s)?\b/i,
+  /\bjob(s)?\b/i,
+  /\brun(s)?\b/i,
+  /\bitem(s)?\b/i,
+  /\boutput(s)?\b/i
+] as const
+
 describe("Watchlists plain-language copy contract", () => {
   it("keeps key helper copy strings present for onboarding, scheduling, and templates", () => {
     const labels = watchlistsLocale as JsonObject
@@ -48,5 +73,20 @@ describe("Watchlists plain-language copy contract", () => {
     expect(singleDeleteCopy.toLowerCase()).toContain("undo")
     expect(singleDeleteCopy.toLowerCase()).not.toContain("cannot be undone")
     expect(bulkDeleteCopy.toLowerCase()).toContain("undo")
+  })
+
+  it("keeps first-run guidance aligned with canonical watchlists terms", () => {
+    const labels = watchlistsLocale as JsonObject
+
+    for (const keyPath of FIRST_RUN_CANONICAL_TERMINOLOGY_KEYS) {
+      const value = String(getNestedValue(labels, keyPath) || "")
+      expect(value.trim().length, `Missing first-run copy key: ${keyPath}`).toBeGreaterThan(0)
+      for (const forbiddenAlias of FORBIDDEN_FIRST_RUN_ALIASES) {
+        expect(
+          forbiddenAlias.test(value),
+          `First-run copy should avoid system alias ${forbiddenAlias} at ${keyPath}`
+        ).toBe(false)
+      }
+    }
   })
 })

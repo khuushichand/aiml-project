@@ -444,7 +444,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.sources.title", "1. Add feeds"),
       description: t(
         "watchlists:guide.steps.sources.description",
-        "Feeds are inputs for monitors. Add RSS/site sources before scheduling runs."
+        "Feeds are inputs for monitors. Add RSS/site feeds before scheduling Activity checks."
       )
     },
     {
@@ -452,7 +452,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.jobs.title", "2. Create monitors"),
       description: t(
         "watchlists:guide.steps.jobs.description",
-        "Monitors define schedule, filters, and template-driven briefing outputs, including optional audio."
+        "Monitors define schedule, filters, and template-driven reports, including optional audio."
       )
     },
     {
@@ -460,7 +460,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.runs.title", "3. Check activity"),
       description: t(
         "watchlists:guide.steps.runs.description",
-        "Activity shows run status, logs, and failures for each monitor."
+        "Activity shows monitor status, logs, and failures."
       )
     },
     {
@@ -468,7 +468,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.items.title", "4. Review articles"),
       description: t(
         "watchlists:guide.steps.items.description",
-        "Articles are captured content from successful runs, ready for triage."
+        "Articles are captured content from successful monitor checks, ready for triage."
       )
     },
     {
@@ -488,7 +488,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         title: t("watchlists:teachPoints.jobs.title", "Monitor setup tip"),
         description: t(
           "watchlists:teachPoints.jobs.description",
-          "Start with schedule presets first. Use cron and advanced filters only after your first successful run."
+          "Start with schedule presets first. Use cron and advanced filters only after your first successful Activity check."
         ),
         actionLabel: t("watchlists:teachPoints.jobs.action", "Open Templates"),
         actionTarget: "templates" as WatchlistsTabKey
@@ -500,7 +500,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         title: t("watchlists:teachPoints.templates.title", "Template setup tip"),
         description: t(
           "watchlists:teachPoints.templates.description",
-          "Start from a preset template, preview changes, then regenerate reports to compare text and audio output."
+          "Start from a preset template, preview changes, then regenerate reports to compare text and audio results."
         ),
         actionLabel: t("watchlists:teachPoints.templates.action", "Open Reports"),
         actionTarget: "outputs" as WatchlistsTabKey
@@ -1179,7 +1179,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           title={t("watchlists:guide.completedTitle", "Guided tour complete")}
           description={t(
             "watchlists:guide.completedDescription",
-            "Next: monitor Activity for run health, review Articles for captured content, and open Reports for generated briefings."
+            "Next: monitor Activity for monitor health, review Articles for captured content, and open Reports for generated briefings."
           )}
           action={(
             <div className="flex flex-wrap gap-2">

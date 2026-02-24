@@ -126,13 +126,13 @@
         "label": "Onboarding mode",
         "beginner": "Beginner (guided)",
         "advanced": "Advanced (direct forms)",
-        "beginnerHint": "Guided setup keeps the flow simple and avoids cron/template setup first.",
-        "advancedHint": "Advanced mode prioritizes direct Feed and Monitor forms."
+        "beginnerHint": "Guided setup keeps the flow simple. You can customize exact timing and template formatting later.",
+        "advancedHint": "Advanced mode opens full Feed and Monitor forms, including custom schedules and template options."
       },
       "steps": {
         "addFeed": {
           "title": "Add your first feed",
-          "description": "Start by adding an RSS/site source in Feeds."
+          "description": "Start by adding an RSS/site feed in Feeds."
         },
         "createMonitor": {
           "title": "Create your first monitor",
@@ -140,7 +140,7 @@
         },
         "reviewResults": {
           "title": "Review results",
-          "description": "Open Activity for run health, Articles for captured content, and Reports for generated briefings."
+          "description": "Open Activity for monitor health, Articles for captured content, and Reports for generated briefings."
         }
       },
       "cta": {
@@ -257,25 +257,25 @@
     "finish": "Finish",
     "progress": "Step {{current}} of {{total}}",
     "completedTitle": "Guided tour complete",
-    "completedDescription": "Next: monitor Activity for run health, review Articles for captured content, and open Reports for generated briefings.",
+    "completedDescription": "Next: monitor Activity for monitor health, review Articles for captured content, and open Reports for generated briefings.",
     "openActivity": "Open Activity",
     "openArticles": "Open Articles",
     "steps": {
       "sources": {
         "title": "1. Add feeds",
-        "description": "Feeds are inputs for monitors. Add RSS/site sources before scheduling runs."
+        "description": "Feeds are inputs for monitors. Add RSS/site feeds before scheduling Activity checks."
       },
       "jobs": {
         "title": "2. Create monitors",
-        "description": "Monitors define schedule, filters, and template-driven briefing outputs, including optional audio."
+        "description": "Monitors define schedule, filters, and template-driven reports, including optional audio."
       },
       "runs": {
         "title": "3. Check activity",
-        "description": "Activity shows run status, logs, and failures for each monitor."
+        "description": "Activity shows monitor status, logs, and failures."
       },
       "items": {
         "title": "4. Review articles",
-        "description": "Articles are captured content from successful runs, ready for triage."
+        "description": "Articles are captured content from successful monitor checks, ready for triage."
       },
       "outputs": {
         "title": "5. Deliver reports",
@@ -286,12 +286,12 @@
   "teachPoints": {
     "jobs": {
       "title": "Monitor setup tip",
-      "description": "Start with schedule presets first. Use cron and advanced filters only after your first successful run.",
+      "description": "Start with schedule presets first. Use cron and advanced filters only after your first successful Activity check.",
       "action": "Open Templates"
     },
     "templates": {
       "title": "Template setup tip",
-      "description": "Start from a preset template, preview changes, then regenerate reports to compare text and audio output.",
+      "description": "Start from a preset template, preview changes, then regenerate reports to compare text and audio results.",
       "action": "Open Reports"
     }
   },

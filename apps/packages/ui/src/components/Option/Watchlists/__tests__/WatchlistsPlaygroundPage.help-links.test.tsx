@@ -263,13 +263,13 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     expect(screen.getByText("Watchlists guided tour")).toBeInTheDocument()
     expect(screen.getByText("Step 1 of 5")).toBeInTheDocument()
     expect(
-      screen.getByText("Feeds are inputs for monitors. Add RSS/site sources before scheduling runs.")
+      screen.getByText("Feeds are inputs for monitors. Add RSS/site feeds before scheduling Activity checks.")
     ).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     expect(screen.getByText("Step 2 of 5")).toBeInTheDocument()
     expect(
-      screen.getByText("Monitors define schedule, filters, and template-driven briefing outputs, including optional audio.")
+      screen.getByText("Monitors define schedule, filters, and template-driven reports, including optional audio.")
     ).toBeInTheDocument()
 
     const persisted = JSON.parse(localStorage.getItem("watchlists:guided-tour:v1") || "{}")
@@ -302,7 +302,7 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
 
     expect(screen.getByTestId("watchlists-teach-point-title")).toHaveTextContent("Monitor setup tip")
     expect(screen.getByTestId("watchlists-teach-point-description")).toHaveTextContent(
-      "Start with schedule presets first. Use cron and advanced filters only after your first successful run."
+      "Start with schedule presets first. Use cron and advanced filters only after your first successful Activity check."
     )
     fireEvent.click(
       within(screen.getByTestId("watchlists-teach-point-alert")).getByRole("button", { name: "Dismiss" })
