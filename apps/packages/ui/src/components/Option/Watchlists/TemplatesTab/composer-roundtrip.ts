@@ -1,10 +1,10 @@
 import {
   COMPOSER_SCHEMA_VERSION,
-  createComposerNode,
   createEmptyComposerAst,
   DEFAULT_BLOCK_SOURCE,
   type ComposerAst,
-  type ComposerNode
+  type ComposerNode,
+  type ComposerNodeType
 } from "./composer-types"
 
 const UNSUPPORTED_JINJA_TOKENS = [
@@ -24,16 +24,38 @@ const looksLikeHeaderBlock = (source: string): boolean => {
   return trimmed.startsWith("#") && trimmed.includes("{{ title }}")
 }
 
-const rawCodeNode = (source: string): ComposerNode =>
-  createComposerNode("RawCodeBlock", source.trim())
+const deterministicTypeKey = (type: ComposerNodeType): string =>
+  type
+    .replace(/Block$/, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase()
 
-const headerOrRawNode = (source: string): ComposerNode =>
+const createDeterministicNode = (
+  type: ComposerNodeType,
+  source: string,
+  counters: Record<string, number>
+): ComposerNode => {
+  const key = deterministicTypeKey(type)
+  counters[key] = (counters[key] || 0) + 1
+  return {
+    id: `${key}-${counters[key]}`,
+    type,
+    source: source.trim(),
+    enabled: true
+  }
+}
+
+const rawCodeNode = (source: string, counters: Record<string, number>): ComposerNode =>
+  createDeterministicNode("RawCodeBlock", source, counters)
+
+const headerOrRawNode = (source: string, counters: Record<string, number>): ComposerNode =>
   looksLikeHeaderBlock(source)
-    ? createComposerNode("HeaderBlock", source.trim())
-    : rawCodeNode(source)
+    ? createDeterministicNode("HeaderBlock", source, counters)
+    : rawCodeNode(source, counters)
 
 export const parseTemplateToComposerAst = (content: string): ComposerAst => {
   const normalized = String(content || "").trim()
+  const idCounters: Record<string, number> = {}
   if (!normalized) {
     return createEmptyComposerAst()
   }
@@ -41,7 +63,7 @@ export const parseTemplateToComposerAst = (content: string): ComposerAst => {
   if (UNSUPPORTED_JINJA_TOKENS.some((token) => normalized.includes(token))) {
     return {
       schema_version: COMPOSER_SCHEMA_VERSION,
-      nodes: [rawCodeNode(normalized)]
+      nodes: [rawCodeNode(normalized, idCounters)]
     }
   }
 
@@ -49,7 +71,7 @@ export const parseTemplateToComposerAst = (content: string): ComposerAst => {
   if (!loopMatch) {
     return {
       schema_version: COMPOSER_SCHEMA_VERSION,
-      nodes: [headerOrRawNode(normalized)]
+      nodes: [headerOrRawNode(normalized, idCounters)]
     }
   }
 
@@ -60,11 +82,11 @@ export const parseTemplateToComposerAst = (content: string): ComposerAst => {
   const nodes: ComposerNode[] = []
 
   if (prefix) {
-    nodes.push(headerOrRawNode(prefix))
+    nodes.push(headerOrRawNode(prefix, idCounters))
   }
-  nodes.push(createComposerNode("ItemLoopBlock", loopSource))
+  nodes.push(createDeterministicNode("ItemLoopBlock", loopSource, idCounters))
   if (suffix) {
-    nodes.push(headerOrRawNode(suffix))
+    nodes.push(headerOrRawNode(suffix, idCounters))
   }
 
   return {

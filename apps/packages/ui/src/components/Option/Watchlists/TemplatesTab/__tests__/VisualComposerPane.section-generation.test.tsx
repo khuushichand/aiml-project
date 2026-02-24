@@ -100,4 +100,34 @@ describe("VisualComposerPane section generation", () => {
     const lastAstArg = onChange.mock.calls.at(-1)?.[0] as ComposerAst
     expect(lastAstArg.nodes[0].source).toBe("Generated introduction paragraph.")
   })
+
+  it("avoids duplicate node ids when adding blocks to existing AST", () => {
+    const ast: ComposerAst = {
+      schema_version: "1.0.0",
+      nodes: [
+        {
+          id: "header-1",
+          type: "HeaderBlock",
+          source: "# {{ title }}"
+        }
+      ]
+    }
+
+    const onChange = vi.fn()
+    render(
+      <VisualComposerPane
+        ast={ast}
+        onChange={onChange}
+        runs={[]}
+        selectedRunId={undefined}
+        onSelectedRunIdChange={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId("visual-add-HeaderBlock"))
+
+    const nextAst = onChange.mock.calls.at(-1)?.[0] as ComposerAst
+    const ids = nextAst.nodes.map((node) => node.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
 })

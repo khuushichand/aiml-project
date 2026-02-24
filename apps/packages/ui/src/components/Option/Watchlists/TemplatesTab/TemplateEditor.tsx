@@ -292,12 +292,24 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         setValidationErrors([])
       }
       setSaving(true)
+      const content = String(values.content || "")
+      const currentAstMatchesContent =
+        compileComposerAstToTemplate(composerAst).trim() === content.trim()
+      const astToSave = currentAstMatchesContent
+        ? composerAst
+        : parseTemplateToComposerAst(content)
+      const compiledFromAst = compileComposerAstToTemplate(astToSave)
+      const composerSyncStatus =
+        compiledFromAst.trim() === content.trim() ? "in_sync" : "needs_repair"
+      if (!currentAstMatchesContent) {
+        setComposerAst(astToSave)
+      }
       const payload: WatchlistTemplateCreate = {
         ...buildTemplateSavePayload(values, isEditing),
-        composer_ast: composerAst as unknown as Record<string, unknown>,
-        composer_schema_version: composerAst.schema_version || "1.0.0",
-        composer_sync_hash: computeComposerSyncHash(String(values.content || ""), composerAst),
-        composer_sync_status: "in_sync"
+        composer_ast: astToSave as unknown as Record<string, unknown>,
+        composer_schema_version: astToSave.schema_version || "1.0.0",
+        composer_sync_hash: computeComposerSyncHash(content, astToSave),
+        composer_sync_status: composerSyncStatus
       }
       await createWatchlistTemplate(payload)
       void trackWatchlistsPreventionTelemetry({

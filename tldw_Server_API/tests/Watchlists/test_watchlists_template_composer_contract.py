@@ -1,6 +1,10 @@
 import pytest
+from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
+    TemplateComposerFlowCheckRequest,
+    TemplateComposerFlowSection,
+    TemplateComposerSectionRequest,
     WatchlistTemplateCreateRequest,
     WatchlistTemplateDetail,
 )
@@ -49,3 +53,41 @@ def test_template_detail_exposes_composer_metadata_fields():
     assert payload["composer_schema_version"] == "1.0.0"
     assert payload["composer_sync_hash"] == "def456"
     assert payload["composer_sync_status"] == "recovered_from_code"
+
+
+def test_template_composer_section_request_rejects_whitespace_fields():
+    with pytest.raises(ValidationError):
+        TemplateComposerSectionRequest(
+            run_id=1,
+            block_id="   ",
+            prompt="Write summary.",
+            input_scope="all_items",
+            length_target="medium",
+        )
+
+    with pytest.raises(ValidationError):
+        TemplateComposerSectionRequest(
+            run_id=1,
+            block_id="intro",
+            prompt="   ",
+            input_scope="all_items",
+            length_target="medium",
+        )
+
+
+def test_template_composer_flow_section_rejects_whitespace_id():
+    with pytest.raises(ValidationError):
+        TemplateComposerFlowSection(id="   ", content="Section content.")
+
+
+def test_template_composer_flow_check_request_rejects_oversized_total_content():
+    oversized_section = ("x" * 19999) + "."
+    with pytest.raises(ValidationError):
+        TemplateComposerFlowCheckRequest(
+            run_id=1,
+            mode="suggest_only",
+            sections=[
+                TemplateComposerFlowSection(id=f"sec-{index}", content=oversized_section)
+                for index in range(1, 8)
+            ],
+        )

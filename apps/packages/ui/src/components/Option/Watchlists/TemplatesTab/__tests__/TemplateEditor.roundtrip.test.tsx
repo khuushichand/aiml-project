@@ -1,5 +1,5 @@
 import React from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { TemplateEditor } from "../TemplateEditor"
@@ -164,7 +164,7 @@ vi.mock("antd", () => {
     Divider: () => <hr />,
     Form,
     Input,
-    Modal: ({ open, children, title }: any) => (open ? <div>{title}{children}</div> : null),
+    Modal: ({ open, children, title, footer }: any) => (open ? <div>{title}{children}{footer}</div> : null),
     Radio,
     Select,
     Space: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -231,5 +231,26 @@ describe("TemplateEditor visual/code roundtrip", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Visual" }))
     expect(await screen.findByText("RawCodeBlock")).toBeInTheDocument()
+  })
+
+  it("saves composer metadata derived from current editor content", async () => {
+    render(<TemplateEditor open template={null} onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("tab", { name: "Editor" }))
+    const editorTextArea = screen.getByPlaceholderText(
+      "Start with plain text or Markdown. Advanced users can add Jinja2 tags later."
+    )
+    fireEvent.change(editorTextArea, {
+      target: {
+        value: "{% macro card(x) %}{{ x }}{% endmacro %}\n{{ card(title) }}"
+      }
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => expect(serviceMocks.createWatchlistTemplate).toHaveBeenCalledTimes(1))
+    const payload = serviceMocks.createWatchlistTemplate.mock.calls[0]?.[0]
+    expect(payload?.composer_ast?.nodes?.[0]?.type).toBe("RawCodeBlock")
+    expect(String(payload?.composer_ast?.nodes?.[0]?.source || "")).toContain("{% macro card(x) %}")
   })
 })

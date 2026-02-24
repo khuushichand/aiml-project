@@ -250,3 +250,64 @@ class TestTemplateComposerAuthoringEndpoints:
         assert body["mode"] == "suggest_only"
         assert isinstance(body["issues"], list)
         assert "diff" in body
+
+    def test_compose_section_rejects_whitespace_prompt(self, client_with_user: TestClient):
+        run_id = _create_run(client_with_user)
+        payload = {
+            "run_id": run_id,
+            "block_id": "intro-summary",
+            "prompt": "   ",
+            "input_scope": "all_items",
+            "length_target": "short",
+        }
+        r = client_with_user.post("/api/v1/watchlists/templates/compose/section", json=payload)
+        assert r.status_code == 422, r.text
+
+    def test_flow_check_rejects_whitespace_section_id(self, client_with_user: TestClient):
+        run_id = _create_run(client_with_user)
+        payload = {
+            "run_id": run_id,
+            "mode": "suggest_only",
+            "sections": [
+                {"id": "   ", "content": "Intro paragraph."},
+                {"id": "body", "content": "Body paragraph."},
+            ],
+        }
+        r = client_with_user.post("/api/v1/watchlists/templates/compose/flow-check", json=payload)
+        assert r.status_code == 422, r.text
+
+    def test_flow_check_does_not_add_period_to_markdown_header(self, client_with_user: TestClient):
+        run_id = _create_run(client_with_user)
+        payload = {
+            "run_id": run_id,
+            "mode": "auto_apply",
+            "sections": [
+                {"id": "header", "content": "# Section Title"},
+                {"id": "body", "content": "Body paragraph"},
+            ],
+        }
+        r = client_with_user.post("/api/v1/watchlists/templates/compose/flow-check", json=payload)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["sections"][0]["content"] == "# Section Title"
+        assert body["sections"][1]["content"] == "Body paragraph."
+        punctuation_issues = [
+            issue
+            for issue in body["issues"]
+            if issue.get("section_id") == "header" and "terminal punctuation" in issue.get("message", "")
+        ]
+        assert punctuation_issues == []
+
+    def test_flow_check_rejects_oversized_total_content(self, client_with_user: TestClient):
+        run_id = _create_run(client_with_user)
+        oversized_section = ("x" * 19999) + "."
+        payload = {
+            "run_id": run_id,
+            "mode": "suggest_only",
+            "sections": [
+                {"id": f"sec-{index}", "content": oversized_section}
+                for index in range(1, 8)
+            ],
+        }
+        r = client_with_user.post("/api/v1/watchlists/templates/compose/flow-check", json=payload)
+        assert r.status_code == 422, r.text

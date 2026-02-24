@@ -526,22 +526,43 @@ def save_template(
         existing_composer_sync_status,
     ) = _load_composer_metadata(existing_meta)
 
-    effective_composer_ast = composer_ast if composer_ast is not None else existing_composer_ast
-    effective_composer_schema_version = (
-        composer_schema_version
-        if composer_schema_version is not None
-        else existing_composer_schema_version
+    composer_metadata_omitted = (
+        composer_ast is None
+        and composer_schema_version is None
+        and composer_sync_hash is None
+        and composer_sync_status is None
     )
-    effective_composer_sync_hash = (
-        composer_sync_hash
-        if composer_sync_hash is not None
-        else existing_composer_sync_hash
-    )
-    effective_composer_sync_status = (
-        composer_sync_status
-        if composer_sync_status in _VALID_COMPOSER_SYNC_STATUSES
-        else existing_composer_sync_status
-    )
+    if composer_metadata_omitted:
+        had_existing_composer_metadata = any(
+            value is not None
+            for value in (
+                existing_composer_ast,
+                existing_composer_schema_version,
+                existing_composer_sync_hash,
+                existing_composer_sync_status,
+            )
+        )
+        effective_composer_ast = None
+        effective_composer_schema_version = None
+        effective_composer_sync_hash = None
+        effective_composer_sync_status = "needs_repair" if had_existing_composer_metadata else None
+    else:
+        effective_composer_ast = composer_ast if composer_ast is not None else existing_composer_ast
+        effective_composer_schema_version = (
+            composer_schema_version
+            if composer_schema_version is not None
+            else existing_composer_schema_version
+        )
+        effective_composer_sync_hash = (
+            composer_sync_hash
+            if composer_sync_hash is not None
+            else existing_composer_sync_hash
+        )
+        effective_composer_sync_status = (
+            composer_sync_status
+            if composer_sync_status in _VALID_COMPOSER_SYNC_STATUSES
+            else existing_composer_sync_status
+        )
 
     if existing_variants:
         current_file = existing_variants[0]

@@ -68,9 +68,10 @@ export const VisualComposerPane: React.FC<VisualComposerPaneProps> = ({
   const nodes = Array.isArray(ast?.nodes) ? ast.nodes : []
 
   const pushNode = (type: ComposerNodeType) => {
+    const existingIds = new Set(nodes.map((node) => node.id))
     onChange({
       ...ast,
-      nodes: [...nodes, createComposerNode(type)]
+      nodes: [...nodes, createComposerNode(type, undefined, existingIds)]
     })
   }
 

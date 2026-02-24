@@ -48,18 +48,41 @@ export const DEFAULT_BLOCK_SOURCE: Record<ComposerNodeType, string> = {
   RawCodeBlock: ""
 }
 
-let composerNodeSeed = 0
+const normalizeIdPrefix = (prefix: string): string => {
+  const cleaned = String(prefix || "block")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+  return cleaned || "block"
+}
 
-export const createComposerNodeId = (prefix = "block"): string => {
-  composerNodeSeed += 1
-  return `${prefix}-${composerNodeSeed}`
+let fallbackNodeSeed = 0
+
+const createRandomNodeSuffix = (): string => {
+  const cryptoApi = globalThis.crypto
+  if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+    return cryptoApi.randomUUID().replace(/-/g, "").slice(0, 12)
+  }
+  fallbackNodeSeed += 1
+  return `${Date.now().toString(36)}${fallbackNodeSeed.toString(36)}`
+}
+
+export const createComposerNodeId = (prefix = "block", existingIds?: Iterable<string>): string => {
+  const normalizedPrefix = normalizeIdPrefix(prefix)
+  const existing = new Set(existingIds ?? [])
+  let candidate = `${normalizedPrefix}-${createRandomNodeSuffix()}`
+  while (existing.has(candidate)) {
+    candidate = `${normalizedPrefix}-${createRandomNodeSuffix()}`
+  }
+  return candidate
 }
 
 export const createComposerNode = (
   type: ComposerNodeType,
-  source?: string
+  source?: string,
+  existingIds?: Iterable<string>
 ): ComposerNode => ({
-  id: createComposerNodeId(type.replace(/Block$/, "").toLowerCase()),
+  id: createComposerNodeId(type.replace(/Block$/, "").toLowerCase(), existingIds),
   type,
   source: typeof source === "string" ? source : DEFAULT_BLOCK_SOURCE[type],
   enabled: true

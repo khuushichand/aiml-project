@@ -215,6 +215,9 @@ router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 DEFAULT_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS", "0") or 0)
 TEMP_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_TEMP_TTL_SECONDS", "86400") or 86400)
 DEFAULT_TTS_BRIEF_MAX_ITEMS = int(os.getenv("WATCHLIST_OUTPUT_TTS_BRIEF_MAX_ITEMS", "10") or 10)
+TEMPLATE_COMPOSER_FLOW_MAX_DIFF_CHARS = max(
+    1024, int(os.getenv("WATCHLIST_TEMPLATE_FLOW_CHECK_MAX_DIFF_CHARS", "50000") or 50000)
+)
 WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS = max(
     1, int(os.getenv("WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS", "10") or 10)
 )
@@ -5168,7 +5171,7 @@ async def preview_template(
 async def compose_template_section(
     payload: TemplateComposerSectionRequest,
     current_user: User = Depends(get_request_user),
-    db=Depends(get_watchlists_db_for_user),
+    db: WatchlistsDatabase = Depends(get_watchlists_db_for_user),
 ) -> TemplateComposerSectionResponse:
     """Build deterministic section draft text from run context for manual authoring."""
     try:
@@ -5195,6 +5198,8 @@ async def compose_template_section(
 
     style = (payload.style or "").strip()
     prompt = payload.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="invalid_prompt")
     lines: list[str] = []
     if style:
         lines.append(f"Style: {style}")
@@ -5243,7 +5248,7 @@ async def compose_template_section(
 async def compose_template_flow_check(
     payload: TemplateComposerFlowCheckRequest,
     current_user: User = Depends(get_request_user),
-    db=Depends(get_watchlists_db_for_user),
+    db: WatchlistsDatabase = Depends(get_watchlists_db_for_user),
 ) -> TemplateComposerFlowCheckResponse:
     """Return flow issues and suggested revisions without persisting changes."""
     try:
@@ -5257,6 +5262,8 @@ async def compose_template_flow_check(
 
     for index, section in enumerate(payload.sections):
         section_id = section.id.strip()
+        if not section_id:
+            raise HTTPException(status_code=422, detail="invalid_section_id")
         text = section.content.strip()
         original_sections.append(TemplateComposerFlowSection(id=section_id, content=text))
 
@@ -5272,7 +5279,8 @@ async def compose_template_flow_check(
             continue
 
         revised_text = text
-        if text[-1] not in ".!?":
+        is_markdown_header = bool(re.match(r"^\s{0,3}#{1,6}\s", text))
+        if text[-1] not in ".!?" and not is_markdown_header:
             revised_text = f"{text}."
             issues.append(
                 TemplateComposerFlowIssue(
@@ -5316,6 +5324,18 @@ async def compose_template_flow_check(
             lineterm="",
         )
     )
+    if len(diff) > TEMPLATE_COMPOSER_FLOW_MAX_DIFF_CHARS:
+        diff = (
+            f"{diff[:TEMPLATE_COMPOSER_FLOW_MAX_DIFF_CHARS].rstrip()}\n"
+            "... [flow-check diff truncated due to size]"
+        )
+        issues.append(
+            TemplateComposerFlowIssue(
+                section_id=None,
+                severity="info",
+                message="Flow-check diff was truncated due to size limits",
+            )
+        )
 
     return TemplateComposerFlowCheckResponse(
         mode=payload.mode,

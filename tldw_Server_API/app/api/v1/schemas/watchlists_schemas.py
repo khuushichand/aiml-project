@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AnyUrl, BaseModel, Field
+from pydantic import AnyUrl, BaseModel, Field, field_validator
 
 SourceType = Literal["rss", "site", "forum"]  # forums are feature-flagged for Phase 3
 
@@ -684,6 +684,9 @@ class TemplateValidationResult(BaseModel):
 # --------------------
 # Template Composer Authoring (Manual Preview)
 # --------------------
+_TEMPLATE_COMPOSER_FLOW_MAX_TOTAL_CHARS = 120_000
+
+
 class TemplateComposerSectionRequest(BaseModel):
     run_id: int = Field(..., ge=1)
     block_id: str = Field(..., min_length=1, max_length=128)
@@ -691,6 +694,22 @@ class TemplateComposerSectionRequest(BaseModel):
     input_scope: Literal["all_items", "top_items", "selected_items"] = "all_items"
     style: str | None = Field(default=None, max_length=128)
     length_target: Literal["short", "medium", "long"] = "medium"
+
+    @field_validator("block_id", "prompt")
+    @classmethod
+    def _validate_non_blank_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+    @field_validator("style")
+    @classmethod
+    def _normalize_optional_style(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class TemplateComposerSectionResponse(BaseModel):
@@ -704,11 +723,31 @@ class TemplateComposerFlowSection(BaseModel):
     id: str = Field(..., min_length=1, max_length=128)
     content: str = Field(default="", max_length=20000)
 
+    @field_validator("id")
+    @classmethod
+    def _validate_non_blank_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
 
 class TemplateComposerFlowCheckRequest(BaseModel):
     run_id: int = Field(..., ge=1)
     mode: Literal["suggest_only", "auto_apply"] = "suggest_only"
     sections: list[TemplateComposerFlowSection] = Field(default_factory=list, max_length=128)
+
+    @field_validator("sections")
+    @classmethod
+    def _validate_total_content_size(
+        cls, value: list[TemplateComposerFlowSection]
+    ) -> list[TemplateComposerFlowSection]:
+        total_chars = sum(len(section.content) for section in value)
+        if total_chars > _TEMPLATE_COMPOSER_FLOW_MAX_TOTAL_CHARS:
+            raise ValueError(
+                f"total section content exceeds maximum of {_TEMPLATE_COMPOSER_FLOW_MAX_TOTAL_CHARS} characters"
+            )
+        return value
 
 
 class TemplateComposerFlowIssue(BaseModel):
