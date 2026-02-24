@@ -16,11 +16,17 @@ const REQUIRED_PLAIN_LANGUAGE_KEYS = [
   "schedule.beginnerHint",
   "schedule.advancedOptionalHint",
   "schedule.cronBeginnerHint",
+  "jobs.form.audioPracticalHint",
+  "jobs.form.audioTestHint",
+  "outputs.deliveryIssuesBannerDescription",
   "templates.modeHelpBasic",
   "templates.modeHelpAdvanced",
   "templates.modeBasicEditorHint",
   "templates.contentPlaceholder",
-  "templates.syntaxErrorBeforeSave"
+  "templates.syntaxErrorBeforeSave",
+  "sources.deleteConfirmDescription",
+  "sources.deleteConfirmUndoWindow",
+  "sources.bulkDeleteConfirmDescription"
 ] as const
 
 describe("Watchlists plain-language copy contract", () => {
@@ -32,5 +38,15 @@ describe("Watchlists plain-language copy contract", () => {
       expect(typeof value, `Missing or non-string locale key: ${keyPath}`).toBe("string")
       expect(String(value).trim().length).toBeGreaterThan(0)
     }
+  })
+
+  it("keeps source delete confirmations aligned with reversible undo behavior", () => {
+    const labels = watchlistsLocale as JsonObject
+    const singleDeleteCopy = String(getNestedValue(labels, "sources.deleteConfirmDescription") || "")
+    const bulkDeleteCopy = String(getNestedValue(labels, "sources.bulkDeleteConfirmDescription") || "")
+
+    expect(singleDeleteCopy.toLowerCase()).toContain("undo")
+    expect(singleDeleteCopy.toLowerCase()).not.toContain("cannot be undone")
+    expect(bulkDeleteCopy.toLowerCase()).toContain("undo")
   })
 })

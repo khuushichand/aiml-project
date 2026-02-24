@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react"
 import { Alert, Radio, Select, Spin } from "antd"
 import DOMPurify from "dompurify"
 import { marked } from "marked"
+import { useTranslation } from "react-i18next"
 import { previewWatchlistTemplate } from "@/services/watchlists"
+import { trackWatchlistsPreventionTelemetry } from "@/utils/watchlists-prevention-telemetry"
 
 interface TemplatePreviewPaneProps {
   content: string
@@ -16,6 +18,7 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
   format,
   runs,
 }) => {
+  const { t } = useTranslation(["watchlists"])
   const [mode, setMode] = useState<"static" | "live">("static")
   const [selectedRunId, setSelectedRunId] = useState<number | undefined>(undefined)
   const [liveRendered, setLiveRendered] = useState("")
@@ -24,6 +27,15 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
   const [warnings, setWarnings] = useState<string[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleModeChange = (nextMode: "static" | "live") => {
+    setMode(nextMode)
+    void trackWatchlistsPreventionTelemetry({
+      type: "watchlists_template_preview_mode_changed",
+      surface: "template_editor",
+      mode: nextMode
+    })
+  }
 
   // Static preview: render markup locally (no Jinja2 evaluation)
   const staticHtml = React.useMemo(() => {
@@ -39,6 +51,8 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
   const fetchLivePreview = useCallback(async () => {
     if (!selectedRunId || !content.trim()) {
       setLiveRendered("")
+      setWarnings([])
+      setError(null)
       return
     }
     // Cancel previous request
@@ -53,10 +67,28 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
       const result = await previewWatchlistTemplate(content, selectedRunId, format, abortRef.current.signal)
       setLiveRendered(result.rendered)
       setWarnings(result.warnings || [])
+      setError(null)
+      void trackWatchlistsPreventionTelemetry({
+        type: "watchlists_template_preview_rendered",
+        surface: "template_editor",
+        mode: "live",
+        status: "success",
+        warning_count: Array.isArray(result.warnings) ? result.warnings.length : 0,
+        run_id: selectedRunId
+      })
     } catch (err: any) {
       if (err?.name === "AbortError") return
       setError(err?.message || "Preview failed")
       setLiveRendered("")
+      setWarnings([])
+      void trackWatchlistsPreventionTelemetry({
+        type: "watchlists_template_preview_rendered",
+        surface: "template_editor",
+        mode: "live",
+        status: "error",
+        warning_count: 0,
+        run_id: selectedRunId
+      })
     } finally {
       setLoading(false)
     }
@@ -91,19 +123,29 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
     return DOMPurify.sanitize(liveRendered, { USE_PROFILES: { html: true } })
   }, [liveRendered, format])
 
+  const hasRuns = Array.isArray(runs) && runs.length > 0
+
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-4">
-        <Radio.Group value={mode} onChange={(e) => setMode(e.target.value)} size="small">
-          <Radio.Button value="static">Static markup</Radio.Button>
-          <Radio.Button value="live">Live (render with run data)</Radio.Button>
+        <Radio.Group
+          value={mode}
+          onChange={(e) => handleModeChange(e.target.value as "static" | "live")}
+          size="small"
+        >
+          <Radio.Button value="static">
+            {t("watchlists:templates.preview.mode.static", "Static markup")}
+          </Radio.Button>
+          <Radio.Button value="live">
+            {t("watchlists:templates.preview.mode.live", "Live (render with run data)")}
+          </Radio.Button>
         </Radio.Group>
 
         {mode === "live" && (
           <Select
             value={selectedRunId}
             onChange={setSelectedRunId}
-            placeholder="Select a run…"
+            placeholder={t("watchlists:templates.preview.runPlaceholder", "Select a run…")}
             size="small"
             className="min-w-[200px]"
             allowClear
@@ -117,24 +159,75 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
         {loading && <Spin size="small" />}
       </div>
 
-      {mode === "live" && !selectedRunId && (
+      <div className="text-xs text-text-muted" data-testid="template-preview-mode-note">
+        {mode === "static"
+          ? t(
+              "watchlists:templates.preview.staticNote",
+              "Static preview renders markdown/html locally and does not evaluate Jinja2 control flow."
+            )
+          : t(
+              "watchlists:templates.preview.liveNote",
+              "Live preview renders with data from a completed run to validate loops, variables, and conditionals."
+            )}
+      </div>
+
+      {mode === "live" && !hasRuns && (
+        <Alert
+          type="warning"
+          showIcon
+          title={t(
+            "watchlists:templates.preview.noRunsTitle",
+            "No completed runs available for live preview."
+          )}
+          description={t(
+            "watchlists:templates.preview.noRunsDescription",
+            "Run a monitor once from Activity, then return here to preview templates with real data."
+          )}
+        />
+      )}
+
+      {mode === "live" && hasRuns && !selectedRunId && (
         <Alert
           type="info"
           showIcon
-          title="Select a run to preview the template with real data."
+          title={t(
+            "watchlists:templates.preview.selectRunTitle",
+            "Select a run to preview the template with real data."
+          )}
         />
       )}
 
       {error && (
-        <Alert type="error" showIcon title={error} />
+        <Alert
+          type="error"
+          showIcon
+          title={t("watchlists:templates.preview.renderErrorTitle", "Live preview failed")}
+          description={
+            <div>
+              <div>
+                {t(
+                  "watchlists:templates.preview.renderErrorHint",
+                  "Check template syntax or choose another run, then try live preview again."
+                )}
+              </div>
+              <div className="mt-1 text-xs text-text-muted">{error}</div>
+            </div>
+          }
+        />
       )}
 
       {warnings.length > 0 && (
         <Alert
           type="warning"
           showIcon
-          title="Render warnings"
-          description={warnings.join("; ")}
+          title={t("watchlists:templates.preview.renderWarningsTitle", "Render warnings")}
+          description={
+            <ul className="mb-0 pl-4">
+              {warnings.map((warning, index) => (
+                <li key={`${warning}-${index}`}>{warning}</li>
+              ))}
+            </ul>
+          }
         />
       )}
 
@@ -146,7 +239,7 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
           />
         ) : (
           <div className="text-sm text-text-muted p-4">
-            Nothing to preview yet.
+            {t("watchlists:templates.preview.empty", "Nothing to preview yet.")}
           </div>
         )
       ) : (
@@ -157,7 +250,10 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
           />
         ) : !loading && selectedRunId ? (
           <div className="text-sm text-text-muted p-4">
-            No preview content yet. The template will render after a short delay.
+            {t(
+              "watchlists:templates.preview.liveEmpty",
+              "No preview content yet. The template will render after a short delay."
+            )}
           </div>
         ) : null
       )}

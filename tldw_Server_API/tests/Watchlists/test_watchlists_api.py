@@ -1409,3 +1409,118 @@ def test_outputs_generate_audio_false_does_not_trigger_workflow(client_with_user
     assert "audio_briefing_requested" not in metadata
     assert "audio_briefing_task_id" not in metadata
     assert mock_trigger.await_count == 0
+
+
+def test_outputs_generate_audio_trigger_returns_none_marks_skipped_metadata(client_with_user, monkeypatch):
+
+
+    c = client_with_user
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    src_body = {
+        "name": "Audio Skip Feed",
+        "url": "https://example.com/audio-skip.xml",
+        "source_type": "rss",
+        "tags": ["audio-skip"],
+    }
+    r = c.post("/api/v1/watchlists/sources", json=src_body)
+    assert r.status_code == 200, r.text
+
+    job_body = {
+        "name": "Audio Skip Digest",
+        "scope": {"tags": ["audio-skip"]},
+        "schedule_expr": None,
+        "timezone": "UTC",
+        "active": True,
+    }
+    r = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{job_id}/run")
+    assert r.status_code == 200, r.text
+    run_id = r.json()["id"]
+
+    with patch(
+        "tldw_Server_API.app.core.Watchlists.audio_briefing_workflow.trigger_audio_briefing",
+        new=AsyncMock(return_value=None),
+    ) as mock_trigger:
+        r = c.post(
+            "/api/v1/watchlists/outputs",
+            json={
+                "run_id": run_id,
+                "title": "Audio Skipped Output",
+                "generate_audio": True,
+            },
+        )
+
+    assert r.status_code == 200, r.text
+    output = r.json()
+    metadata = output.get("metadata", {})
+    assert metadata.get("audio_briefing_requested") is True
+    assert metadata.get("audio_briefing_status") == "skipped"
+    assert "audio_briefing_task_id" not in metadata
+    assert mock_trigger.await_count == 1
+
+    r = c.get(f"/api/v1/watchlists/runs/{run_id}")
+    assert r.status_code == 200, r.text
+    run_payload = r.json()
+    assert run_payload.get("stats", {}).get("audio_briefing_task_id") is None
+
+
+def test_outputs_generate_audio_trigger_failure_marks_enqueue_failed_metadata(client_with_user, monkeypatch):
+
+
+    c = client_with_user
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    src_body = {
+        "name": "Audio Failure Feed",
+        "url": "https://example.com/audio-failure.xml",
+        "source_type": "rss",
+        "tags": ["audio-failure"],
+    }
+    r = c.post("/api/v1/watchlists/sources", json=src_body)
+    assert r.status_code == 200, r.text
+
+    job_body = {
+        "name": "Audio Failure Digest",
+        "scope": {"tags": ["audio-failure"]},
+        "schedule_expr": None,
+        "timezone": "UTC",
+        "active": True,
+    }
+    r = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{job_id}/run")
+    assert r.status_code == 200, r.text
+    run_id = r.json()["id"]
+
+    with patch(
+        "tldw_Server_API.app.core.Watchlists.audio_briefing_workflow.trigger_audio_briefing",
+        new=AsyncMock(side_effect=RuntimeError("scheduler unavailable")),
+    ) as mock_trigger:
+        r = c.post(
+            "/api/v1/watchlists/outputs",
+            json={
+                "run_id": run_id,
+                "title": "Audio Failure Output",
+                "generate_audio": True,
+            },
+        )
+
+    assert r.status_code == 200, r.text
+    output = r.json()
+    metadata = output.get("metadata", {})
+    assert metadata.get("audio_briefing_requested") is True
+    assert metadata.get("audio_briefing_status") == "enqueue_failed"
+    assert "scheduler unavailable" in str(metadata.get("audio_briefing_error", ""))
+    assert "audio_briefing_task_id" not in metadata
+    assert mock_trigger.await_count == 1
+
+    r = c.get(f"/api/v1/watchlists/runs/{run_id}")
+    assert r.status_code == 200, r.text
+    run_payload = r.json()
+    assert run_payload.get("stats", {}).get("audio_briefing_task_id") is None

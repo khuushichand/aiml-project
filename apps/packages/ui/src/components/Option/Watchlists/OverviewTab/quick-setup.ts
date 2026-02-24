@@ -10,21 +10,25 @@ export type QuickSetupGoal = "briefing" | "triage"
 export interface QuickSetupValues {
   sourceName: string
   sourceUrl: string
+  extraSourceUrls: string
   sourceType: SourceType
   monitorName: string
   schedulePreset: QuickSetupSchedulePreset
   runNow: boolean
   setupGoal: QuickSetupGoal
+  includeAudioBriefing: boolean
 }
 
 export const QUICK_SETUP_DEFAULT_VALUES: QuickSetupValues = {
   sourceName: "",
   sourceUrl: "",
+  extraSourceUrls: "",
   sourceType: "rss",
   monitorName: "",
   schedulePreset: "daily",
   runNow: true,
-  setupGoal: "briefing"
+  setupGoal: "briefing",
+  includeAudioBriefing: true
 }
 
 const presetToCron: Record<Exclude<QuickSetupSchedulePreset, "none">, string> = {
@@ -58,21 +62,43 @@ export const toQuickSetupSourcePayload = (
 })
 
 export const toQuickSetupJobPayload = (
-  values: Pick<QuickSetupValues, "monitorName" | "schedulePreset" | "setupGoal">,
-  sourceId: number
+  values: Pick<QuickSetupValues, "monitorName" | "schedulePreset" | "setupGoal" | "includeAudioBriefing">,
+  sourceIds: number[]
 ): WatchlistJobCreate => {
+  const uniqueSourceIds = Array.from(
+    new Set((Array.isArray(sourceIds) ? sourceIds : []).filter((id) => Number.isFinite(id) && id > 0))
+  )
   const payload: WatchlistJobCreate = {
     name: String(values.monitorName || "").trim(),
-    scope: { sources: [sourceId] },
+    scope: { sources: uniqueSourceIds },
     active: true,
     ...resolveQuickSetupSchedule(values.schedulePreset || "daily")
   }
 
   if ((values.setupGoal || "briefing") === "briefing") {
     payload.output_prefs = {
-      template_name: "briefing_md"
+      template_name: "briefing_md",
+      generate_audio: Boolean(values.includeAudioBriefing)
     }
   }
 
   return payload
+}
+
+export const parseQuickSetupExtraSourceUrls = (value: string): string[] => {
+  const entries = String(value || "")
+    .split(/\r?\n|,/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+
+  const normalized = entries.filter((entry) => {
+    try {
+      const parsed = new URL(entry)
+      return parsed.protocol === "http:" || parsed.protocol === "https:"
+    } catch {
+      return false
+    }
+  })
+
+  return Array.from(new Set(normalized))
 }

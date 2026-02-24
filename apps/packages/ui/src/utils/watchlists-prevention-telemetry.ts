@@ -22,6 +22,8 @@ export type WatchlistsAuthoringMode = "basic" | "advanced"
 export type WatchlistsAuthoringContext = "create" | "edit"
 export type WatchlistsBasicStep = "scope" | "schedule" | "output" | "review"
 export type WatchlistsTemplateRecipe = "briefing_md" | "newsletter_html" | "mece_md"
+export type WatchlistsTemplatePreviewMode = "static" | "live"
+export type WatchlistsTemplatePreviewStatus = "success" | "error"
 
 type EventDetails = Record<string, string | number | boolean | null>
 
@@ -69,6 +71,21 @@ type WatchlistsTemplateRecipeAppliedEvent = {
   mode: WatchlistsAuthoringMode
 }
 
+type WatchlistsTemplatePreviewModeChangedEvent = {
+  type: "watchlists_template_preview_mode_changed"
+  surface: "template_editor"
+  mode: WatchlistsTemplatePreviewMode
+}
+
+type WatchlistsTemplatePreviewRenderedEvent = {
+  type: "watchlists_template_preview_rendered"
+  surface: "template_editor"
+  mode: "live"
+  status: WatchlistsTemplatePreviewStatus
+  warning_count: number
+  run_id?: number | null
+}
+
 export type WatchlistsPreventionTelemetryEvent =
   | WatchlistsValidationBlockedEvent
   | WatchlistsAuthoringStartedEvent
@@ -76,6 +93,8 @@ export type WatchlistsPreventionTelemetryEvent =
   | WatchlistsAuthoringSavedEvent
   | WatchlistsBasicStepCompletedEvent
   | WatchlistsTemplateRecipeAppliedEvent
+  | WatchlistsTemplatePreviewModeChangedEvent
+  | WatchlistsTemplatePreviewRenderedEvent
 
 type WatchlistsPreventionRecentEvent = {
   type: WatchlistsPreventionTelemetryEvent["type"]
@@ -89,6 +108,8 @@ type WatchlistsAuthoringModeCountersBySurface = Record<
   WatchlistsAuthoringSurface,
   WatchlistsModeCounters
 >
+type WatchlistsTemplatePreviewModeCounters = Record<WatchlistsTemplatePreviewMode, number>
+type WatchlistsTemplatePreviewRenderCounters = Record<WatchlistsTemplatePreviewStatus, number>
 
 type WatchlistsModeSwitchCounters = {
   basic_to_advanced: number
@@ -114,6 +135,11 @@ export type WatchlistsPreventionTelemetryState = {
     saved_by_context: Record<WatchlistsAuthoringContext, number>
     basic_step_completed: Record<WatchlistsBasicStep, number>
     template_recipe_applied: Record<WatchlistsTemplateRecipe, number>
+    template_preview: {
+      mode_selected: WatchlistsTemplatePreviewModeCounters
+      live_rendered: WatchlistsTemplatePreviewRenderCounters
+      live_warning_total: number
+    }
   }
   last_event_at: number | null
   recent_events: WatchlistsPreventionRecentEvent[]
@@ -132,6 +158,16 @@ const DEFAULT_MODE_COUNTERS: WatchlistsModeCounters = {
 const DEFAULT_MODE_SWITCH_COUNTERS: WatchlistsModeSwitchCounters = {
   basic_to_advanced: 0,
   advanced_to_basic: 0
+}
+
+const DEFAULT_TEMPLATE_PREVIEW_MODE_COUNTERS: WatchlistsTemplatePreviewModeCounters = {
+  static: 0,
+  live: 0
+}
+
+const DEFAULT_TEMPLATE_PREVIEW_RENDER_COUNTERS: WatchlistsTemplatePreviewRenderCounters = {
+  success: 0,
+  error: 0
 }
 
 const DEFAULT_AUTHORING_BY_MODE: WatchlistsAuthoringModeCountersBySurface = {
@@ -187,6 +223,11 @@ const DEFAULT_STATE: WatchlistsPreventionTelemetryState = {
       briefing_md: 0,
       newsletter_html: 0,
       mece_md: 0
+    },
+    template_preview: {
+      mode_selected: { ...DEFAULT_TEMPLATE_PREVIEW_MODE_COUNTERS },
+      live_rendered: { ...DEFAULT_TEMPLATE_PREVIEW_RENDER_COUNTERS },
+      live_warning_total: 0
     }
   },
   last_event_at: null,
@@ -291,6 +332,20 @@ const readTelemetryState =
           newsletter_html: 0,
           mece_md: 0,
           ...(state.authoring?.template_recipe_applied || {})
+        },
+        template_preview: {
+          mode_selected: {
+            ...DEFAULT_TEMPLATE_PREVIEW_MODE_COUNTERS,
+            ...(state.authoring?.template_preview?.mode_selected || {})
+          },
+          live_rendered: {
+            ...DEFAULT_TEMPLATE_PREVIEW_RENDER_COUNTERS,
+            ...(state.authoring?.template_preview?.live_rendered || {})
+          },
+          live_warning_total:
+            typeof state.authoring?.template_preview?.live_warning_total === "number"
+              ? state.authoring.template_preview.live_warning_total
+              : 0
         }
       },
       recent_events: Array.isArray(state.recent_events)
@@ -346,6 +401,17 @@ export const trackWatchlistsPreventionTelemetry = async (
       }
       case "watchlists_template_recipe_applied": {
         state.authoring.template_recipe_applied[event.recipe] += 1
+        break
+      }
+      case "watchlists_template_preview_mode_changed": {
+        state.authoring.template_preview.mode_selected[event.mode] += 1
+        break
+      }
+      case "watchlists_template_preview_rendered": {
+        state.authoring.template_preview.live_rendered[event.status] += 1
+        state.authoring.template_preview.live_warning_total += Number(
+          event.warning_count || 0
+        )
         break
       }
       default:

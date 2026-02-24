@@ -53,6 +53,7 @@ const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
 
 type GuidedTourTab = "sources" | "jobs" | "runs" | "items" | "outputs"
 type GuidedTourStatus = "idle" | "in_progress" | "dismissed" | "completed"
+type TaskViewKey = "collect" | "review" | "briefings"
 interface GuidedTourState {
   status: GuidedTourStatus
   step: number
@@ -60,6 +61,18 @@ interface GuidedTourState {
 
 const GUIDED_TOUR_TABS: GuidedTourTab[] = ["sources", "jobs", "runs", "items", "outputs"]
 const GUIDED_TOUR_LAST_STEP = GUIDED_TOUR_TABS.length - 1
+const TASK_VIEW_PRIMARY_TAB: Record<TaskViewKey, "sources" | "items" | "outputs"> = {
+  collect: "sources",
+  review: "items",
+  briefings: "outputs"
+}
+
+const resolveTaskViewForTab = (tab: string): TaskViewKey | null => {
+  if (tab === "sources" || tab === "jobs") return "collect"
+  if (tab === "runs" || tab === "items") return "review"
+  if (tab === "outputs" || tab === "templates") return "briefings"
+  return null
+}
 
 const clampTourStep = (step: number): number => {
   if (!Number.isFinite(step)) return 0
@@ -176,6 +189,24 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       label: t("watchlists:quickActions.outputs", "View reports")
     }
   ]
+  const taskViews = [
+    {
+      key: "collect" as const,
+      label: t("watchlists:taskViews.collect", "Collect"),
+      hint: t("watchlists:taskViews.collectHint", "Feeds and monitors")
+    },
+    {
+      key: "review" as const,
+      label: t("watchlists:taskViews.review", "Review"),
+      hint: t("watchlists:taskViews.reviewHint", "Activity and articles")
+    },
+    {
+      key: "briefings" as const,
+      label: t("watchlists:taskViews.briefings", "Briefings"),
+      hint: t("watchlists:taskViews.briefingsHint", "Reports and templates")
+    }
+  ]
+  const activeTaskView = resolveTaskViewForTab(activeTab)
 
   const activeTabHelpHref = WATCHLISTS_TAB_HELP_DOCS[activeTab] || WATCHLISTS_MAIN_DOCS_URL
   const activeTabHelpLabel = tabHelpLabels[activeTab] || t("watchlists:help.docs", "Watchlists docs")
@@ -623,15 +654,15 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       children: <SettingsTab />
     }
   ]
-  const reducedIaPrimaryTabKeys = ["overview", "sources", "runs", "outputs", "settings"] as const
-  const reducedIaSecondaryTabKeys = ["jobs", "items", "templates"] as const
+  const reducedIaPrimaryTabKeys = ["overview", "sources", "items", "outputs", "settings"] as const
+  const reducedIaSecondaryTabKeys = ["jobs", "runs", "templates"] as const
   const reducedIaSecondaryButtons = reducedIaSecondaryTabKeys.map((key) => ({
     key,
     label:
       key === "jobs"
         ? t("watchlists:tabs.jobs", "Monitors")
-        : key === "items"
-          ? t("watchlists:tabs.items", "Articles")
+        : key === "runs"
+          ? t("watchlists:tabs.runs", "Activity")
           : t("watchlists:tabs.templates", "Templates")
   }))
   const renderedTabItems: TabsProps["items"] = iaExperimentEnabled
@@ -742,22 +773,43 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
             </div>
           )}
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-text-muted">
-            {t("watchlists:quickActions.label", "Jump to")}
-          </span>
-          {taskShortcuts.map((shortcut) => (
-            <Button
-              key={shortcut.key}
-              size="small"
-              type={activeTab === shortcut.key ? "primary" : "default"}
-              onClick={() => setActiveTab(shortcut.key)}
-              data-testid={`watchlists-task-open-${shortcut.key}`}
-            >
-              {shortcut.label}
-            </Button>
-          ))}
-        </div>
+        {iaExperimentEnabled ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-text-muted">
+              {t("watchlists:taskViews.label", "Task views")}
+            </span>
+            {taskViews.map((taskView) => (
+              <Button
+                key={taskView.key}
+                size="small"
+                type={activeTaskView === taskView.key ? "primary" : "default"}
+                aria-pressed={activeTaskView === taskView.key}
+                onClick={() => setActiveTab(TASK_VIEW_PRIMARY_TAB[taskView.key])}
+                data-testid={`watchlists-task-view-${taskView.key}`}
+              >
+                {taskView.label}
+                <span className="ml-1 text-xs text-text-muted">{taskView.hint}</span>
+              </Button>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-text-muted">
+              {t("watchlists:quickActions.label", "Jump to")}
+            </span>
+            {taskShortcuts.map((shortcut) => (
+              <Button
+                key={shortcut.key}
+                size="small"
+                type={activeTab === shortcut.key ? "primary" : "default"}
+                onClick={() => setActiveTab(shortcut.key)}
+                data-testid={`watchlists-task-open-${shortcut.key}`}
+              >
+                {shortcut.label}
+              </Button>
+            ))}
+          </div>
+        )}
       </div>
 
       {showGuidedTourCompletion && (

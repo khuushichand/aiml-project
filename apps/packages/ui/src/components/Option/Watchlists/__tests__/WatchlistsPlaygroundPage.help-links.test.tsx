@@ -187,6 +187,22 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     expect(screen.getByTestId("watchlists-beta-report-link")).toHaveAttribute("href", WATCHLISTS_ISSUE_REPORT_URL)
   })
 
+  it("renders canonical tab and quick-action labels for the primary workflow", () => {
+    render(<WatchlistsPlaygroundPage />)
+
+    expect(screen.getByTestId("watchlists-tab-sources")).toHaveTextContent("Feeds")
+    expect(screen.getByTestId("watchlists-tab-jobs")).toHaveTextContent("Monitors")
+    expect(screen.getByTestId("watchlists-tab-runs")).toHaveTextContent("Activity")
+    expect(screen.getByTestId("watchlists-tab-items")).toHaveTextContent("Articles")
+    expect(screen.getByTestId("watchlists-tab-outputs")).toHaveTextContent("Reports")
+
+    expect(screen.getByTestId("watchlists-task-open-sources")).toHaveTextContent("Set up feeds")
+    expect(screen.getByTestId("watchlists-task-open-jobs")).toHaveTextContent("Configure monitors")
+    expect(screen.getByTestId("watchlists-task-open-runs")).toHaveTextContent("Check activity")
+    expect(screen.getByTestId("watchlists-task-open-items")).toHaveTextContent("Review articles")
+    expect(screen.getByTestId("watchlists-task-open-outputs")).toHaveTextContent("View reports")
+  })
+
   it("keeps beta banner dismissible and persisted by storage key", () => {
     const { rerender } = render(<WatchlistsPlaygroundPage />)
 

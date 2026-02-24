@@ -5,6 +5,26 @@
   "betaNotice": "Beta Feature",
   "betaDescription": "Watchlists is currently in beta. Some features may be incomplete or change.",
   "comingSoon": "Coming soon...",
+  "terminology": {
+    "canonical": {
+      "feed": "Feed",
+      "feeds": "Feeds",
+      "monitor": "Monitor",
+      "monitors": "Monitors",
+      "activity": "Activity",
+      "article": "Article",
+      "articles": "Articles",
+      "report": "Report",
+      "reports": "Reports"
+    },
+    "aliases": {
+      "sources": "Feeds",
+      "jobs": "Monitors",
+      "runs": "Activity",
+      "items": "Articles",
+      "outputs": "Reports"
+    }
+  },
   "tabs": {
     "overview": "Overview",
     "sources": "Feeds",
@@ -24,6 +44,15 @@
     "runs": "Check activity",
     "items": "Review articles",
     "outputs": "View reports"
+  },
+  "taskViews": {
+    "label": "Task views",
+    "collect": "Collect",
+    "collectHint": "Feeds and monitors",
+    "review": "Review",
+    "reviewHint": "Activity and articles",
+    "briefings": "Briefings",
+    "briefingsHint": "Reports and templates"
   },
   "overview": {
     "description": "At-a-glance watchlist health, activity, and failure signals.",
@@ -50,6 +79,13 @@
     "onboarding": {
       "title": "Quick setup",
       "pipeline": "Add Feed -> Configure Monitor -> Check Activity -> Review Articles -> View Reports",
+      "path": {
+        "label": "Onboarding mode",
+        "beginner": "Beginner (guided)",
+        "advanced": "Advanced (direct forms)",
+        "beginnerHint": "Guided setup keeps the flow simple and avoids cron/template setup first.",
+        "advancedHint": "Advanced mode prioritizes direct Feed and Monitor forms."
+      },
       "steps": {
         "addFeed": {
           "title": "Add your first feed",
@@ -243,6 +279,7 @@
       "auth": "Verify your login/API key permissions for {{context}}, then retry.",
       "rateLimit": "Reduce monitor frequency or wait briefly before retrying.",
       "timeout": "Retry now. If this continues, reduce scope or schedule intensity.",
+      "validation": "Review highlighted values for {{context}}, then retry.",
       "dns": "Verify the source host resolves correctly and retry.",
       "tls": "Verify TLS certificate settings for the endpoint and retry.",
       "network": "Check server connection and try again.",
@@ -320,10 +357,11 @@
     "enabled": "Feed enabled",
     "disabled": "Feed disabled",
     "deleteConfirm": "Delete this feed?",
-    "deleteConfirmDescription": "This action cannot be undone.",
+    "deleteConfirmDescription": "You can undo this deletion for {{seconds}} seconds.",
     "deleteConfirmForce": "Delete anyway",
     "deleteConfirmInUseTitle": "Feed is used by active monitors",
     "deleteConfirmInUseDescription": "This feed is referenced by {{count}} active monitor{{plural}}. Deleting it may break scheduled runs.",
+    "deleteConfirmUndoWindow": "You can undo this deletion for {{seconds}} seconds.",
     "deleteConfirmInUseMore": "+{{count}} more active monitor{{plural}}",
     "deleteUsageLookupError": "Could not verify active monitor usage before deletion.",
     "never": "Never",
@@ -389,7 +427,7 @@
     "bulkDelete": "Delete",
     "bulkDeleteConfirm": "Delete selected sources?",
     "bulkDeleteConfirmTitle": "Delete {{count}} selected feeds?",
-    "bulkDeleteConfirmDescription": "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive).",
+    "bulkDeleteConfirmDescription": "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive). Undo is available for {{seconds}} seconds.",
     "bulkDeleteConfirmInUseSummary": "{{sources}} selected feed{{sourcesPlural}} are referenced by {{jobs}} active monitor{{jobsPlural}}.",
     "bulkDeleteConfirmInUseMore": "+{{count}} more active monitor{{plural}}",
     "bulkUpdated": "{{count}} sources updated",
@@ -503,6 +541,7 @@
     "hideAdvancedDetails": "Hide advanced details",
     "metricsHint": "Showing core columns. Use advanced mode for scope, filters, and run timing.",
     "compactSummary": "{{scope}} • {{filters}} filters",
+    "audioEnabledChip": "Audio on",
     "never": "Never",
     "pending": "Pending",
     "notScheduled": "Not scheduled",
@@ -544,14 +583,23 @@
       "audioSpeed": "Speed",
       "audioTargetMinutes": "Target duration (minutes)",
       "audioHint": "Enable spoken briefings alongside text outputs. Keep defaults for fastest setup.",
+      "audioPracticalHint": "Practical default: Alloy voice at 1.0 speed and 8-minute target, then tune after your first run.",
       "showAudioAdvanced": "Show advanced audio options",
       "hideAudioAdvanced": "Hide advanced audio options",
       "audioBackgroundTrack": "Background track URI",
       "audioBackgroundTrackPlaceholder": "file:///path/to/bed.mp3",
+      "audioBackgroundTrackInvalid": "Background track must start with https://, http://, or file://.",
       "audioVoiceMap": "Voice map (JSON)",
       "audioVoiceMapPlaceholder": "{ \"HOST\": \"af_heart\", \"REPORTER\": \"am_adam\" }",
       "audioVoiceMapInvalid": "Voice map must be valid JSON with marker-to-voice string pairs.",
       "audioAdvancedHint": "Use advanced options only if you need soundtrack mixing or custom speaker-to-voice assignments.",
+      "audioTestButton": "Test audio settings",
+      "audioTestHint": "Generate a short sample so you can confirm voice and speed before saving.",
+      "audioTestLoading": "Generating sample audio...",
+      "audioTestReady": "Sample ready. Listen before saving.",
+      "audioTestError": "Could not generate audio sample. Check voice/speed settings and try again.",
+      "audioTestSampleText": "Top stories briefing sample. This is a quick audio check before saving your monitor.",
+      "audioTestContext": "audio sample",
       "filters": "Filters",
       "presetMeceMd": "Structured review (Markdown)",
       "retentionDefault": "Default retention",
@@ -859,6 +907,7 @@
     "allFeeds": "All Feeds",
     "allFeedsHint": "Browse items from every source",
     "noFeeds": "No feeds found",
+    "sourceWindowHint": "Showing {{visible}} of {{total}} feeds. Scroll to load more.",
     "searchPlaceholder": "Search feed items...",
     "filters": {
       "all": "All",
@@ -891,6 +940,12 @@
     "updateError": "Failed to update item",
     "noUrlHint": "This item does not include an original URL.",
     "pageSizeLabel": "Items per page",
+    "sort": {
+      "label": "Sort",
+      "newest": "Newest first",
+      "oldest": "Oldest first",
+      "unreadFirst": "Unread first"
+    },
     "batch": {
       "selectPage": "Select page",
       "selectedCount": "{{count}} selected",
@@ -968,12 +1023,18 @@
     "download": "Download",
     "filterByJob": "Filter by monitor",
     "filterByRun": "Filter by run ID",
+    "filterByDelivery": "Filter by delivery status",
     "showAdvancedFilters": "Show advanced filters",
     "hideAdvancedFilters": "Hide advanced filters",
     "activeFilters": "Active filters",
     "activeFiltersJob": "Monitor: {{name}}",
     "activeFiltersRun": "Run: #{{id}}",
+    "activeFiltersDelivery": "Delivery: {{status}}",
     "metricsHint": "Showing core columns. Use advanced mode for format/run details.",
+    "deliveryIssuesBannerTitle": "Delivery issues detected in {{count}} report{{plural}}.",
+    "deliveryIssuesBannerDescription": "Review failed or partial deliveries and open Activity to investigate monitor/run failures.",
+    "deliveryIssuesShowFailed": "Show failed only",
+    "deliveryIssuesOpenRuns": "Open failed runs",
     "tableAria": "Reports table",
     "live": {
       "loadError": "Reports refresh failed.",
@@ -987,6 +1048,13 @@
     "deliveryOverflowTitle": "Additional delivery statuses",
     "deliveryOverflowAria": "Show additional delivery statuses",
     "deliveryOverflowCount": "+{{count}} more",
+    "deliveryStatus": {
+      "failed": "Failed",
+      "partial": "Partial",
+      "pending": "Pending",
+      "sent": "Sent",
+      "stored": "Stored"
+    },
     "noContent": "No content available",
     "openInNewTab": "Open in new tab",
     "storagePath": "Stored file",
@@ -999,6 +1067,13 @@
     "regenerateError": "Failed to regenerate output",
     "regenerateTitle": "Regenerate Output",
     "templateLabel": "Template",
+    "templateVersionLabel": "Template version",
+    "templateVersionPlaceholder": "Latest/default",
+    "templateUnknown": "Unknown",
+    "deliveryStatusLabel": "Delivery status",
+    "provenanceLabel": "Provenance",
+    "provenanceDescription": "Monitor #{{job}} • Run #{{run}} • Artifact: {{artifact}}",
+    "regenerateAudioTemplateHint": "Audio outputs regenerate using run audio settings. Template overrides are unavailable.",
     "templatePlaceholder": "Select a template",
     "titleLabel": "Title",
     "titlePlaceholder": "Optional title override",
@@ -1093,7 +1168,21 @@
     "preview": {
       "tab": "Preview",
       "note": "Preview shows rendered markup only; Jinja2 logic is not evaluated.",
-      "empty": "Nothing to preview yet."
+      "empty": "Nothing to preview yet.",
+      "mode": {
+        "static": "Static markup",
+        "live": "Live (render with run data)"
+      },
+      "runPlaceholder": "Select a run…",
+      "staticNote": "Static preview renders markdown/html locally and does not evaluate Jinja2 control flow.",
+      "liveNote": "Live preview renders with data from a completed run to validate loops, variables, and conditionals.",
+      "noRunsTitle": "No completed runs available for live preview.",
+      "noRunsDescription": "Run a monitor once from Activity, then return here to preview templates with real data.",
+      "selectRunTitle": "Select a run to preview the template with real data.",
+      "renderWarningsTitle": "Render warnings",
+      "renderErrorTitle": "Live preview failed",
+      "renderErrorHint": "Check template syntax or choose another run, then try live preview again.",
+      "liveEmpty": "No preview content yet. The template will render after a short delay."
     },
     "docs": {
       "tab": "Variables",
@@ -1109,6 +1198,16 @@
     "fetchError": "Failed to load settings",
     "unavailable": "Settings unavailable",
     "unavailableDesc": "Could not load server settings. Make sure the server is running.",
+    "onboarding": {
+      "title": "Onboarding",
+      "description": "Choose the default onboarding path shown in Overview.",
+      "modeLabel": "Default onboarding mode",
+      "modeBeginner": "Beginner (guided)",
+      "modeAdvanced": "Advanced (direct forms)",
+      "saved": "Onboarding mode saved.",
+      "beginnerHint": "Beginner keeps setup guided and avoids cron/template details at first.",
+      "advancedHint": "Advanced skips guided setup and prioritizes direct Feed and Monitor forms."
+    },
     "ttl": {
       "title": "Output Retention",
       "defaultOutput": "Default Output TTL",
