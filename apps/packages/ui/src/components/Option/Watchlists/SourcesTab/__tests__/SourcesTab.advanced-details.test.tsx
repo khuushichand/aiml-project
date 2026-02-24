@@ -315,4 +315,43 @@ describe("SourcesTab advanced details disclosure", () => {
       expect(localStorage.getItem(ADVANCED_COLUMNS_STORAGE_KEY)).toBe("1")
     }
   )
+
+  it("reuses cached group OPML URLs across refreshes while cache is fresh", async () => {
+    const sourceA = buildSource(301)
+    const sourceB = {
+      ...buildSource(302),
+      url: "https://example.com/other-feed.xml"
+    }
+    const sources = [sourceA, sourceB]
+
+    mocks.storeStateRef.current = baseState({
+      selectedGroupId: 7,
+      groups: [{ id: 7, name: "Priority", description: null, parent_group_id: null }],
+      sources,
+      sourcesTotal: 2
+    })
+    mocks.fetchWatchlistSourcesMock.mockResolvedValue({
+      items: sources,
+      total: 2,
+      page: 1,
+      size: 200,
+      has_more: false
+    })
+    mocks.exportOpmlMock.mockResolvedValue(
+      `<opml><body><outline text="Priority"><outline xmlUrl="${sourceA.url}" /></outline></body></opml>`
+    )
+
+    render(<SourcesTab />)
+
+    await waitFor(() => {
+      expect(mocks.exportOpmlMock).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.click(screen.getByText("Refresh"))
+
+    await waitFor(() => {
+      expect(mocks.fetchWatchlistSourcesMock).toHaveBeenCalledTimes(2)
+    })
+    expect(mocks.exportOpmlMock).toHaveBeenCalledTimes(1)
+  })
 })

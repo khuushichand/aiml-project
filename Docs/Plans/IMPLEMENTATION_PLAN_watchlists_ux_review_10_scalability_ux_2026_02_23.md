@@ -45,7 +45,7 @@
 **Tests**:
 - Add tests for pagination/scroll behavior under large mocked datasets.
 - Add performance regression checks for items selection and filter changes.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Bulk Action and Background Operation Model
 **Goal**: Ensure large operations are transparent, recoverable, and non-blocking.
@@ -94,4 +94,24 @@
 - Published Stage 1 baseline timing artifact with documented bottlenecks and constraints:
   - `Docs/Plans/WATCHLISTS_SCALE_BASELINE_BUDGETS_2026_02_24.md`
 - Stage 1 validation evidence:
+  - `cd apps/packages/ui && bun run test:watchlists:scale`
+
+### 2026-02-24 - Stage 2 completion (high-volume list + reader optimization)
+
+- Added high-volume client filtering helper for Activity (runs) to avoid a 200-row hard cliff when both monitor and status filters are active:
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/runs-filter-fetch.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/RunsTab.tsx`
+- Added OPML group URL cache (TTL-based) in Feeds filtering path to reduce repeated OPML export overfetch on repeated refreshes:
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/SourcesTab.tsx`
+- Added Items reader smart-count cache (TTL-based) with mutation-triggered invalidation to reduce repeated 5-request fan-out on unchanged filter state:
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx`
+- Added Stage 2 regression/performance coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/runs-filter-fetch.test.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.performance.test.ts`
+  - `apps/packages/ui/package.json` (`test:watchlists:scale`)
+- Stage 2 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/runs-filter-fetch.test.ts src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/shared/__tests__/scale-benchmark.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.performance.test.ts --maxWorkers=1 --no-file-parallelism`
   - `cd apps/packages/ui && bun run test:watchlists:scale`

@@ -254,4 +254,34 @@ describe("ItemsTab scale and responsive behavior", () => {
     fireEvent.click(screen.getByTestId("watchlists-item-row-101"))
     expect(screen.getByTestId("watchlists-item-include-briefing")).toBeInTheDocument()
   })
+
+  it("reuses smart-count cache on immediate refresh to avoid repeated count fan-out", async () => {
+    serviceMocks.fetchWatchlistSources.mockResolvedValue({
+      items: makeSources(50),
+      total: 50,
+      page: 1,
+      size: 200,
+      has_more: false
+    })
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    const initialFetchCallCount = (serviceMocks.fetchScrapedItems as Mock).mock.calls.length
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
+
+    await waitFor(() => {
+      expect((serviceMocks.fetchScrapedItems as Mock).mock.calls.length).toBeGreaterThan(
+        initialFetchCallCount
+      )
+    })
+
+    const additionalCalls =
+      (serviceMocks.fetchScrapedItems as Mock).mock.calls.length - initialFetchCallCount
+    expect(additionalCalls).toBeLessThanOrEqual(2)
+  })
 })

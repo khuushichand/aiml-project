@@ -151,4 +151,62 @@ describe("RunsTab advanced filters disclosure", () => {
 
     expect(screen.getByTestId("watchlists-runs-job-filter")).toBeInTheDocument()
   })
+
+  it("loads additional job-run pages when status filtering needs more than the first page", async () => {
+    const firstPageRuns = Array.from({ length: 200 }, (_unused, index) => ({
+      id: index + 1,
+      job_id: 1,
+      status: "completed",
+      started_at: "2026-02-24T08:00:00Z",
+      finished_at: "2026-02-24T08:05:00Z",
+      stats: {},
+      error_msg: null,
+      log_path: null
+    }))
+    const secondPageRuns = [
+      ...Array.from({ length: 30 }, (_unused, index) => ({
+        id: 1001 + index,
+        job_id: 1,
+        status: "failed",
+        started_at: "2026-02-24T08:00:00Z",
+        finished_at: "2026-02-24T08:05:00Z",
+        stats: {},
+        error_msg: "Timeout",
+        log_path: null
+      })),
+      ...Array.from({ length: 170 }, (_unused, index) => ({
+        id: 2001 + index,
+        job_id: 1,
+        status: "completed",
+        started_at: "2026-02-24T08:00:00Z",
+        finished_at: "2026-02-24T08:05:00Z",
+        stats: {},
+        error_msg: null,
+        log_path: null
+      }))
+    ]
+
+    const setRuns = vi.fn()
+    mocks.storeStateRef.current = baseState({
+      runsJobFilter: 1,
+      runsStatusFilter: "failed",
+      setRuns
+    })
+    mocks.fetchJobRunsMock
+      .mockResolvedValueOnce({ items: firstPageRuns, total: 500, has_more: true })
+      .mockResolvedValueOnce({ items: secondPageRuns, total: 500, has_more: true })
+
+    render(<RunsTab />)
+
+    await waitFor(() => {
+      expect(mocks.fetchJobRunsMock.mock.calls.length).toBeGreaterThanOrEqual(2)
+    })
+    expect(mocks.fetchJobRunsMock).toHaveBeenNthCalledWith(1, 1, { page: 1, size: 200 })
+    expect(mocks.fetchJobRunsMock).toHaveBeenNthCalledWith(2, 1, { page: 2, size: 200 })
+    expect(
+      setRuns.mock.calls.some(
+        ([rows, total]) => Array.isArray(rows) && rows.length === 20 && total === 30
+      )
+    ).toBe(true)
+  })
 })

@@ -72,6 +72,12 @@ type ItemsViewPreset = Omit<PersistedItemsViewPreset, "smartFilter" | "statusFil
   sortMode: ReaderSortMode
 }
 const SHORTCUTS_HINT_DISMISSED_STORAGE_KEY = "watchlists:items:shortcuts-hint-dismissed"
+const SMART_COUNTS_CACHE_TTL_MS = 15_000
+
+interface SmartCountsCacheEntry {
+  counts: Record<SmartFeedFilter, number>
+  cachedAt: number
+}
 
 const normalizeSmartFilter = (value: string): SmartFeedFilter => {
   if (
@@ -323,6 +329,7 @@ export const ItemsTab: React.FC = () => {
   const [effectiveSearchQuery, setEffectiveSearchQuery] = useState(searchQuery)
   const itemsRequestTokenRef = useRef(0)
   const smartCountsRequestTokenRef = useRef(0)
+  const smartCountsCacheRef = useRef<Record<string, SmartCountsCacheEntry>>({})
   const sourceListRef = useRef<HTMLDivElement | null>(null)
   const shortcutsTriggerRef = useRef<HTMLElement | null>(null)
   const shortcutsHelpButtonRef = useRef<HTMLButtonElement | null>(null)
@@ -447,6 +454,16 @@ export const ItemsTab: React.FC = () => {
   const loadSmartCounts = useCallback(async () => {
     const requestToken = smartCountsRequestTokenRef.current + 1
     smartCountsRequestTokenRef.current = requestToken
+    const cacheKey = [
+      selectedSourceId ?? "all",
+      statusFilter,
+      effectiveSearchQuery.trim().toLowerCase()
+    ].join("|")
+    const cached = smartCountsCacheRef.current[cacheKey]
+    if (cached && Date.now() - cached.cachedAt < SMART_COUNTS_CACHE_TTL_MS) {
+      setSmartCounts(cached.counts)
+      return
+    }
     try {
       const base: FetchItemsParams = {
         source_id: selectedSourceId ?? undefined,
@@ -465,18 +482,27 @@ export const ItemsTab: React.FC = () => {
       ])
 
       if (requestToken !== smartCountsRequestTokenRef.current) return
-      setSmartCounts({
+      const nextCounts = {
         all: allRes.total || 0,
         today: todayRes.total || 0,
         todayUnread: todayUnreadRes.total || 0,
         unread: unreadRes.total || 0,
         reviewed: reviewedRes.total || 0
-      })
+      }
+      setSmartCounts(nextCounts)
+      smartCountsCacheRef.current[cacheKey] = {
+        counts: nextCounts,
+        cachedAt: Date.now()
+      }
     } catch (error) {
       if (requestToken !== smartCountsRequestTokenRef.current) return
       console.error("Failed to load smart feed counts:", error)
     }
   }, [effectiveSearchQuery, selectedSourceId, statusFilter])
+
+  const invalidateSmartCountsCache = useCallback(() => {
+    smartCountsCacheRef.current = {}
+  }, [])
 
   const refreshItemsView = useCallback(() => {
     void loadSources()
@@ -619,7 +645,7 @@ export const ItemsTab: React.FC = () => {
     setItemsPage(1)
   }
 
-  const handleToggleReviewed = async (item: ScrapedItem) => {
+  const handleToggleReviewed = useCallback(async (item: ScrapedItem) => {
     setUpdatingItemId(item.id)
     try {
       const updated = await updateScrapedItem(item.id, { reviewed: !item.reviewed })
@@ -634,6 +660,7 @@ export const ItemsTab: React.FC = () => {
       if (requiresReviewedRefresh) {
         void loadItems()
       }
+      invalidateSmartCountsCache()
       void loadSmartCounts()
     } catch (error) {
       console.error("Failed to update watchlist item:", error)
@@ -641,7 +668,7 @@ export const ItemsTab: React.FC = () => {
     } finally {
       setUpdatingItemId(null)
     }
-  }
+  }, [invalidateSmartCountsCache, loadItems, loadSmartCounts, requiresReviewedRefresh, t])
 
   const handleIncludeInNextBriefing = useCallback(async (item: ScrapedItem) => {
     if (item.status === "ingested") {
@@ -669,6 +696,7 @@ export const ItemsTab: React.FC = () => {
       if (statusFilter !== "all") {
         await loadItems()
       }
+      invalidateSmartCountsCache()
       await loadSmartCounts()
     } catch (error) {
       console.error("Failed to include watchlist item in briefing:", error)
@@ -681,7 +709,7 @@ export const ItemsTab: React.FC = () => {
     } finally {
       setUpdatingItemId(null)
     }
-  }, [loadItems, loadSmartCounts, statusFilter, t])
+  }, [invalidateSmartCountsCache, loadItems, loadSmartCounts, statusFilter, t])
 
   const pageItemIds = useMemo(() => sortedItems.map((item) => item.id), [sortedItems])
 
@@ -857,8 +885,10 @@ export const ItemsTab: React.FC = () => {
       }
 
       if (requiresReviewedRefresh) {
+        invalidateSmartCountsCache()
         await Promise.all([loadItems(), loadSmartCounts()])
       } else {
+        invalidateSmartCountsCache()
         await loadSmartCounts()
       }
     } catch (error) {
@@ -872,7 +902,7 @@ export const ItemsTab: React.FC = () => {
     } finally {
       setBatchReviewScope(null)
     }
-  }, [getBatchScopeLabel, loadItems, loadSmartCounts, requiresReviewedRefresh, t])
+  }, [getBatchScopeLabel, invalidateSmartCountsCache, loadItems, loadSmartCounts, requiresReviewedRefresh, t])
 
   const openBatchConfirm = useCallback((
     scope: BatchReviewScope,

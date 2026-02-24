@@ -31,10 +31,11 @@ import {
   getRunFailureHint,
   resolveStalledRunNotification
 } from "./run-notifications"
+import { fetchFilteredJobRuns, RUNS_CLIENT_FILTER_PAGE_SIZE } from "./runs-filter-fetch"
 
 const POLL_INTERVAL_MS = 5000
 const DEFAULT_RUNS_CSV_SERVER_THRESHOLD = 2000
-const RUNS_API_PAGE_SIZE = 200
+const RUNS_API_PAGE_SIZE = RUNS_CLIENT_FILTER_PAGE_SIZE
 const RUNS_CSV_SERVER_PAGE_SIZE = 1000
 const RUNS_ADVANCED_FILTERS_STORAGE_KEY = "watchlists:runs:advanced-filters:v1"
 const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
@@ -148,30 +149,44 @@ export const RunsTab: React.FC = () => {
   const loadRuns = useCallback(async (showLoading = true) => {
     if (showLoading) setRunsLoading(true)
     try {
-      const useClientFilter = Boolean(runsJobFilter && runsStatusFilter)
-      let result
-      if (runsJobFilter) {
-        result = await fetchJobRuns(runsJobFilter, {
-          page: useClientFilter ? 1 : runsPage,
-          size: useClientFilter ? 200 : runsPageSize
+      let items: WatchlistRun[] = []
+      let total = 0
+      let pagedItems: WatchlistRun[] = []
+
+      if (runsJobFilter && runsStatusFilter) {
+        const filtered = await fetchFilteredJobRuns({
+          jobId: runsJobFilter,
+          statusFilter: runsStatusFilter,
+          currentPage: runsPage,
+          pageSize: runsPageSize,
+          fetchPage: fetchJobRuns
         })
+
+        const start = (runsPage - 1) * runsPageSize
+        const end = runsPage * runsPageSize
+        items = filtered.filteredItems
+        total = filtered.exactTotal
+          ? items.length
+          : Math.max(items.length, end + (filtered.hasMoreInSource ? 1 : 0))
+        pagedItems = items.slice(start, end)
+      } else if (runsJobFilter) {
+        const result = await fetchJobRuns(runsJobFilter, {
+          page: runsPage,
+          size: runsPageSize
+        })
+        items = result.items || []
+        total = result.total || items.length
+        pagedItems = items
       } else {
-        result = await fetchWatchlistRuns({
+        const result = await fetchWatchlistRuns({
           q: runsStatusFilter || undefined,
           page: runsPage,
           size: runsPageSize
         })
+        items = result.items || []
+        total = result.total || items.length
+        pagedItems = items
       }
-
-      let items = result.items || []
-      if (useClientFilter && runsStatusFilter) {
-        items = items.filter((run) => run.status === runsStatusFilter)
-      }
-
-      const total = useClientFilter ? items.length : result.total
-      const pagedItems = useClientFilter
-        ? items.slice((runsPage - 1) * runsPageSize, runsPage * runsPageSize)
-        : items
 
       setRuns(pagedItems, total)
       setRunsLoadError(null)

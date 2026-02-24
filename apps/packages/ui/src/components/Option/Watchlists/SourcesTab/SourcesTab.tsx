@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -86,6 +86,12 @@ const SOURCE_USAGE_LOOKUP_PAGE_SIZE = 200
 const SOURCE_USAGE_LOOKUP_MAX_PAGES = 10
 const BULK_MOVE_NO_GROUP_VALUE = "__none__"
 const SOURCES_ADVANCED_COLUMNS_STORAGE_KEY = "watchlists:sources:advanced-columns:v1"
+const GROUP_OPML_CACHE_TTL_MS = 30_000
+
+interface GroupOpmlCacheEntry {
+  urlSet: Set<string>
+  cachedAt: number
+}
 
 const readStoredDisclosureState = (key: string): boolean | null => {
   if (typeof window === "undefined") return null
@@ -178,6 +184,7 @@ export const SourcesTab: React.FC = () => {
     const stored = readStoredDisclosureState(SOURCES_ADVANCED_COLUMNS_STORAGE_KEY)
     return stored ?? false
   })
+  const groupOpmlCacheRef = useRef<Record<number, GroupOpmlCacheEntry>>({})
 
   const selectedSources = useMemo(
     () => sources.filter((source) => selectedRowKeys.includes(source.id)),
@@ -272,13 +279,25 @@ export const SourcesTab: React.FC = () => {
 
       if (selectedGroupId) {
         try {
-          const opml = await exportOpml({ group: [selectedGroupId] })
-          const parser = new DOMParser()
-          const doc = parser.parseFromString(opml, "text/xml")
-          const urls = Array.from(doc.querySelectorAll("outline[xmlUrl]"))
-            .map((node) => node.getAttribute("xmlUrl"))
-            .filter((url): url is string => Boolean(url))
-          const urlSet = new Set(urls)
+          const cached = groupOpmlCacheRef.current[selectedGroupId]
+          const cacheIsFresh =
+            Boolean(cached) && Date.now() - cached.cachedAt < GROUP_OPML_CACHE_TTL_MS
+          let urlSet = cacheIsFresh ? cached.urlSet : null
+
+          if (!urlSet) {
+            const opml = await exportOpml({ group: [selectedGroupId] })
+            const parser = new DOMParser()
+            const doc = parser.parseFromString(opml, "text/xml")
+            const urls = Array.from(doc.querySelectorAll("outline[xmlUrl]"))
+              .map((node) => node.getAttribute("xmlUrl"))
+              .filter((url): url is string => Boolean(url))
+            urlSet = new Set(urls)
+            groupOpmlCacheRef.current[selectedGroupId] = {
+              urlSet,
+              cachedAt: Date.now()
+            }
+          }
+
           items = items.filter((source) => urlSet.has(source.url))
         } catch (err) {
           console.error("Failed to load group OPML:", err)
