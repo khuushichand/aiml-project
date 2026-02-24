@@ -293,6 +293,26 @@ class RunsListResponse(BaseModel):
     has_more: bool | None = None
 
 
+class WatchlistOnboardingTelemetryIngestRequest(BaseModel):
+    session_id: str = Field(..., max_length=128)
+    event_type: str = Field(..., max_length=128)
+    event_at: str | None = None
+    details: dict[str, Any] | None = None
+
+
+class WatchlistOnboardingTelemetryIngestResponse(BaseModel):
+    accepted: bool = True
+    code: str | None = None
+
+
+class WatchlistOnboardingTelemetrySummaryResponse(BaseModel):
+    counters: dict[str, int] = Field(default_factory=dict)
+    rates: dict[str, float] = Field(default_factory=dict)
+    timings: dict[str, float] = Field(default_factory=dict)
+    since: str | None = None
+    until: str | None = None
+
+
 WatchlistIaExperimentVariant = Literal["baseline", "experimental"]
 
 
@@ -323,6 +343,27 @@ class WatchlistIaExperimentVariantSummary(BaseModel):
 
 class WatchlistIaExperimentTelemetrySummaryResponse(BaseModel):
     items: list[WatchlistIaExperimentVariantSummary]
+    since: str | None = None
+    until: str | None = None
+
+
+class WatchlistTelemetryThresholdSummary(BaseModel):
+    id: str
+    label: str
+    status: Literal["ok", "potential_breach"] = "ok"
+    reporting_only: bool = True
+    metric_value: float | None = None
+    baseline_value: float | None = None
+    delta: float | None = None
+    notes: str | None = None
+
+
+class WatchlistRcTelemetrySummaryResponse(BaseModel):
+    onboarding: WatchlistOnboardingTelemetrySummaryResponse
+    uc2_backend: dict[str, Any] = Field(default_factory=dict)
+    ia_experiment: dict[str, Any] = Field(default_factory=dict)
+    baseline: dict[str, float] = Field(default_factory=dict)
+    thresholds: list[WatchlistTelemetryThresholdSummary] = Field(default_factory=list)
     since: str | None = None
     until: str | None = None
 

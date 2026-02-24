@@ -665,6 +665,12 @@
   "mediaPage_copyAnalysisLabel": {
     "message": "Copy Analysis"
   },
+  "mediaPage_copyMenuLabel": {
+    "message": "Copy"
+  },
+  "mediaPage_copyBothLabel": {
+    "message": "Copy both"
+  },
   "mediaPage_copyContentTooltip": {
     "message": "Copy content to clipboard"
   },
@@ -778,6 +784,12 @@
   },
   "mediaPage_analysisCopied": {
     "message": "Analysis copied"
+  },
+  "mediaPage_copyBothCopied": {
+    "message": "Content and analysis copied"
+  },
+  "mediaPage_noAnalysisToCopy": {
+    "message": "No analysis available to copy"
   },
   "mediaPage_copyFailed": {
     "message": "Copy failed"
@@ -1482,7 +1494,7 @@
     "message": "Server offline"
   },
   "mediaPage_resultsHint": {
-    "message": "Click to stack, Shift+click for range"
+    "message": "Search/filter here, then click to stack. Shift+click for range."
   },
   "mediaPage_paginationHint": {
     "message": "Use pagination or open all visible items"
@@ -1506,16 +1518,46 @@
     "message": "{{k}}k chars"
   },
   "mediaPage_unstack": {
-    "message": "Unstack"
+    "message": "Remove from selection"
   },
   "mediaPage_unstackTooltip": {
-    "message": "Remove from current comparison view"
+    "message": "Remove this item from selection"
   },
   "mediaPage_analysis": {
     "message": "Analysis"
   },
   "mediaPage_noAnalysis": {
     "message": "No analysis available"
+  },
+  "mediaPage_analysisUnavailableCompact": {
+    "message": "Analysis not available"
+  },
+  "mediaPage_showEmptyAnalysisPanel": {
+    "message": "Show panel"
+  },
+  "mediaPage_hideEmptyAnalysisPanel": {
+    "message": "Hide empty panel"
+  },
+  "mediaPage_largeComparisonTitle": {
+    "message": "Large comparison detected"
+  },
+  "mediaPage_largeComparisonBody": {
+    "message": "These documents are very large. Generate a sampled diff to keep this responsive."
+  },
+  "mediaPage_generateSampledDiff": {
+    "message": "Generate sampled diff"
+  },
+  "mediaPage_largeComparisonComputing": {
+    "message": "Large comparison: computing diff in background…"
+  },
+  "mediaPage_largeComparisonReady": {
+    "message": "Large comparison finished."
+  },
+  "mediaPage_largeComparisonFallback": {
+    "message": "Diff worker failed; fell back to direct diff."
+  },
+  "mediaPage_largeComparisonPending": {
+    "message": "Generate sampled diff to continue."
   },
   "mediaPage_expandAllContent": {
     "message": "Expand all content"
@@ -1533,7 +1575,10 @@
     "message": "Collapse others on expand"
   },
   "mediaPage_openAll": {
-    "message": "Review all on page"
+    "message": "Add visible to selection"
+  },
+  "mediaPage_replaceWithVisible": {
+    "message": "Replace selection with visible"
   },
   "mediaPage_openAllCapped": {
     "message": "Showing first {{count}} items to keep things smooth"
@@ -1550,8 +1595,122 @@
   "mediaPage_openMiniMap": {
     "message": "Open items"
   },
+  "mediaPage_viewerFlowHint": {
+    "message": "Search/filter in sidebar, inspect in viewer, jump using Open items."
+  },
+  "mediaPage_viewSelectedItems": {
+    "message": "View selected items"
+  },
+  "mediaPage_selectedItemsTitle": {
+    "message": "Selected items ({{count}})"
+  },
+  "mediaPage_selectedItemsEmpty": {
+    "message": "No selected items yet."
+  },
   "mediaPage_selectionCount": {
     "message": "{{selected}} / {{limit}}"
+  },
+  "mediaPage_selectionStatus": {
+    "message": "Selection status: {{status}}"
+  },
+  "mediaPage_selectionStatusSafe": {
+    "message": "Safe"
+  },
+  "mediaPage_selectionStatusWarning": {
+    "message": "Warning"
+  },
+  "mediaPage_selectionStatusLimit": {
+    "message": "Limit reached"
+  },
+  "mediaPage_selectedAcrossPages": {
+    "message": "Selected across pages: {{count}}"
+  },
+  "mediaPage_batchToolbarSelected": {
+    "message": "{{count}} selected"
+  },
+  "mediaPage_batchKeywordsLabel": {
+    "message": "Batch keywords"
+  },
+  "mediaPage_batchKeywordsPlaceholder": {
+    "message": "Batch keywords (comma-separated)"
+  },
+  "mediaPage_batchAddTags": {
+    "message": "Add tags"
+  },
+  "mediaPage_batchTrashAction": {
+    "message": "Move to trash"
+  },
+  "mediaPage_batchExportFormat": {
+    "message": "Export format"
+  },
+  "mediaPage_batchExportJson": {
+    "message": "JSON"
+  },
+  "mediaPage_batchExportMarkdown": {
+    "message": "Markdown"
+  },
+  "mediaPage_batchExportText": {
+    "message": "Text"
+  },
+  "mediaPage_batchExportSelected": {
+    "message": "Export selected"
+  },
+  "mediaPage_batchReprocess": {
+    "message": "Reprocess"
+  },
+  "mediaPage_batchRequiresSelection": {
+    "message": "Select at least one item."
+  },
+  "mediaPage_batchKeywordsMissing": {
+    "message": "Enter one or more tags first."
+  },
+  "mediaPage_batchNoNumericMediaIds": {
+    "message": "Selected items are unavailable for this action."
+  },
+  "mediaPage_batchKeywordsSuccess": {
+    "message": "Updated keywords for {{count}} item(s)."
+  },
+  "mediaPage_batchKeywordsPartial": {
+    "message": "Updated keywords for {{updated}} item(s); {{failed}} failed."
+  },
+  "mediaPage_batchKeywordsFailed": {
+    "message": "Failed to update selected item tags."
+  },
+  "mediaPage_batchTrashConfirmTitle": {
+    "message": "Move selected items to trash?"
+  },
+  "mediaPage_batchTrashConfirmBody": {
+    "message": "You can restore them later from trash."
+  },
+  "mediaPage_batchTrashSuccess": {
+    "message": "Moved {{count}} item(s) to trash."
+  },
+  "mediaPage_batchTrashPartial": {
+    "message": "Moved {{deleted}} item(s) to trash; {{failed}} failed."
+  },
+  "mediaPage_batchTrashFailed": {
+    "message": "Failed to move selected items to trash."
+  },
+  "mediaPage_batchTrashHandoff": {
+    "message": "Batch delete complete. Review items in trash."
+  },
+  "mediaPage_dismiss": {
+    "message": "Dismiss"
+  },
+  "mediaPage_batchExportReady": {
+    "message": "Exported {{count}} selected item(s)."
+  },
+  "mediaPage_batchExportFailed": {
+    "message": "Failed to export selection."
+  },
+  "mediaPage_batchReprocessSuccess": {
+    "message": "Queued reprocess for {{count}} item(s)."
+  },
+  "mediaPage_batchReprocessPartial": {
+    "message": "Queued reprocess for {{success}} item(s); {{failed}} failed."
+  },
+  "mediaPage_batchReprocessFailed": {
+    "message": "Failed to queue reprocess for selected items."
   },
   "mediaPage_selectionLimitReached": {
     "message": "Selection limit reached ({{limit}} items)"
@@ -1568,6 +1727,66 @@
   "mediaPage_filters": {
     "message": "Filters"
   },
+  "mediaPage_sort": {
+    "message": "Sort"
+  },
+  "mediaPage_sortRelevance": {
+    "message": "Relevance"
+  },
+  "mediaPage_sortDateDesc": {
+    "message": "Date: newest first"
+  },
+  "mediaPage_sortDateAsc": {
+    "message": "Date: oldest first"
+  },
+  "mediaPage_sortTitleAsc": {
+    "message": "Title: A-Z"
+  },
+  "mediaPage_sortTitleDesc": {
+    "message": "Title: Z-A"
+  },
+  "mediaPage_dateRange": {
+    "message": "Date range"
+  },
+  "mediaPage_startDate": {
+    "message": "Start date"
+  },
+  "mediaPage_endDate": {
+    "message": "End date"
+  },
+  "mediaPage_to": {
+    "message": "to"
+  },
+  "mediaPage_contentSearchLabel": {
+    "message": "Search full content (slower)"
+  },
+  "mediaPage_contentSearchScope": {
+    "message": "Scans current page results."
+  },
+  "mediaPage_contentSearchProgressAria": {
+    "message": "Content filtering progress"
+  },
+  "mediaPage_contentSearchProgress": {
+    "message": "Content filtering {{progress}}"
+  },
+  "mediaPage_cancel": {
+    "message": "Cancel"
+  },
+  "mediaPage_removeFilter": {
+    "message": "Remove filter {{label}}"
+  },
+  "mediaPage_sortChipLabel": {
+    "message": "Sort: {{value}}"
+  },
+  "mediaPage_dateRangeChipLabel": {
+    "message": "Date: {{value}}"
+  },
+  "mediaPage_dateRangeAnyStart": {
+    "message": "Any start"
+  },
+  "mediaPage_dateRangeAnyEnd": {
+    "message": "Any end"
+  },
   "mediaPage_analysisPending": {
     "message": "Pending save"
   },
@@ -1576,6 +1795,9 @@
   },
   "mediaPage_selectionClearedCount": {
     "message": "Selection cleared ({{count}} items)."
+  },
+  "mediaPage_selectionReplaced": {
+    "message": "Selection replaced with current visible items."
   },
   "mediaPage_selectionRestored": {
     "message": "Selection restored"
@@ -1587,7 +1809,7 @@
     "message": "Press Escape again to clear {{count}} items"
   },
   "mediaPage_autoViewModeSwitched": {
-    "message": "Switched to {{mode}} view ({{count}} items)"
+    "message": "Auto-switched to {{mode}} view ({{count}} items)"
   },
   "mediaPage_showGuide": {
     "message": "Show getting started guide"

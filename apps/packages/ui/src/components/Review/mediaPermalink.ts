@@ -27,3 +27,24 @@ export const buildMediaPermalinkSearch = (
   const serialized = params.toString()
   return serialized ? `?${serialized}` : ''
 }
+
+export const buildMediaTrashHandoffSearch = (
+  selectedIds: Array<string | number>
+): string => {
+  const normalizedIds = Array.from(
+    new Set(
+      selectedIds
+        .map((id) => String(id).trim())
+        .filter((id) => id.length > 0)
+    )
+  )
+
+  const params = new URLSearchParams()
+  params.set("from", "media-multi")
+  if (normalizedIds.length > 0) {
+    params.set("ids", normalizedIds.join(","))
+  }
+
+  const serialized = params.toString()
+  return serialized ? `?${serialized}` : ""
+}

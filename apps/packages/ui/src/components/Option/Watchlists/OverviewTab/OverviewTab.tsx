@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -31,6 +31,7 @@ import { useWatchlistsStore } from "@/store/watchlists"
 import {
   createWatchlistJob,
   createWatchlistSource,
+  testWatchlistSourceDraft,
   triggerWatchlistRun
 } from "@/services/watchlists"
 import {
@@ -45,6 +46,7 @@ import {
   toQuickSetupJobPayload,
   toQuickSetupSourcePayload
 } from "./quick-setup"
+import type { JobPreviewResult } from "@/types/watchlists"
 import {
   trackWatchlistsOnboardingTelemetry,
   type WatchlistsQuickSetupStep
@@ -55,7 +57,7 @@ const QUICK_SETUP_MAX_STEP = 2
 const QUICK_SETUP_STEP_KEYS: WatchlistsQuickSetupStep[] = ["feed", "monitor", "review"]
 const QUICK_SETUP_STEP_FIELDS: Array<Array<keyof QuickSetupValues>> = [
   ["sourceName", "sourceUrl", "sourceType"],
-  ["monitorName", "schedulePreset", "setupGoal", "runNow"],
+  ["monitorName", "schedulePreset", "setupGoal", "audioBriefing", "runNow"],
   []
 ]
 
@@ -68,7 +70,11 @@ export const OverviewTab: React.FC = () => {
   const [quickSetupOpen, setQuickSetupOpen] = useState(false)
   const [quickSetupStep, setQuickSetupStep] = useState(0)
   const [quickSetupSubmitting, setQuickSetupSubmitting] = useState(false)
+  const [quickSetupCandidatePreview, setQuickSetupCandidatePreview] = useState<JobPreviewResult | null>(null)
+  const [quickSetupCandidatePreviewLoading, setQuickSetupCandidatePreviewLoading] = useState(false)
+  const [quickSetupCandidatePreviewError, setQuickSetupCandidatePreviewError] = useState<string | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const quickSetupPreviewRequestRef = useRef(0)
   const [quickSetupForm] = Form.useForm<QuickSetupValues>()
 
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
@@ -89,6 +95,16 @@ export const OverviewTab: React.FC = () => {
       setData(result)
       if (typeof setOverviewHealth === "function") {
         setOverviewHealth(result.health, result.fetchedAt)
+      }
+      if (result.outputs.total > 0) {
+        void trackWatchlistsOnboardingTelemetry({
+          type: "quick_setup_first_run_succeeded",
+          source: "overview"
+        })
+        void trackWatchlistsOnboardingTelemetry({
+          type: "quick_setup_first_output_succeeded",
+          source: "overview"
+        })
       }
       setError(null)
     } catch (err) {
@@ -166,10 +182,73 @@ export const OverviewTab: React.FC = () => {
   }, [quickSetupForm])
 
   const closeQuickSetup = useCallback(() => {
+    quickSetupPreviewRequestRef.current += 1
     setQuickSetupOpen(false)
     setQuickSetupStep(0)
+    setQuickSetupCandidatePreview(null)
+    setQuickSetupCandidatePreviewLoading(false)
+    setQuickSetupCandidatePreviewError(null)
     quickSetupForm.resetFields()
   }, [quickSetupForm])
+
+  const loadQuickSetupCandidatePreview = useCallback(async (draftValues?: Partial<QuickSetupValues>) => {
+    const mergedValues = {
+      ...QUICK_SETUP_DEFAULT_VALUES,
+      ...quickSetupForm.getFieldsValue(true),
+      ...(draftValues || {})
+    } as QuickSetupValues
+    const sourceUrl = String(mergedValues.sourceUrl || "").trim()
+    if (!sourceUrl) {
+      setQuickSetupCandidatePreview(null)
+      setQuickSetupCandidatePreviewError(null)
+      setQuickSetupCandidatePreviewLoading(false)
+      return
+    }
+
+    const requestId = quickSetupPreviewRequestRef.current + 1
+    quickSetupPreviewRequestRef.current = requestId
+    setQuickSetupCandidatePreviewLoading(true)
+    setQuickSetupCandidatePreviewError(null)
+
+    try {
+      const preview = await testWatchlistSourceDraft(
+        {
+          url: sourceUrl,
+          source_type: mergedValues.sourceType || "rss"
+        },
+        { limit: 6 }
+      )
+      if (quickSetupPreviewRequestRef.current !== requestId) return
+      setQuickSetupCandidatePreview(preview)
+      setQuickSetupCandidatePreviewError(null)
+      void trackWatchlistsOnboardingTelemetry({
+        type: "quick_setup_preview_loaded",
+        preview: "candidate",
+        total: preview.total || 0,
+        ingestable: preview.ingestable || 0,
+        filtered: preview.filtered || 0
+      })
+    } catch (err) {
+      console.error("Failed to load quick setup source preview:", err)
+      if (quickSetupPreviewRequestRef.current !== requestId) return
+      setQuickSetupCandidatePreview(null)
+      setQuickSetupCandidatePreviewError(
+        t(
+          "watchlists:overview.onboarding.quickSetup.candidatePreview.error",
+          "Could not load feed sample preview right now. You can still create setup and use a test run to verify results."
+        )
+      )
+      void trackWatchlistsOnboardingTelemetry({
+        type: "quick_setup_preview_failed",
+        preview: "candidate",
+        reason: "load_failed"
+      })
+    } finally {
+      if (quickSetupPreviewRequestRef.current === requestId) {
+        setQuickSetupCandidatePreviewLoading(false)
+      }
+    }
+  }, [quickSetupForm, t])
 
   const getQuickSetupStepKey = useCallback(
     (step: number): WatchlistsQuickSetupStep => {
@@ -205,6 +284,18 @@ export const OverviewTab: React.FC = () => {
         })
       }
     }
+    if (quickSetupStep === 1) {
+      const values = {
+        ...QUICK_SETUP_DEFAULT_VALUES,
+        ...quickSetupForm.getFieldsValue(true)
+      } as QuickSetupValues
+      void trackWatchlistsOnboardingTelemetry({
+        type: "quick_setup_preview_loaded",
+        preview: "template",
+        goal: values.setupGoal,
+        audioEnabled: values.audioBriefing
+      })
+    }
     setQuickSetupStep((prev) => Math.min(prev + 1, QUICK_SETUP_MAX_STEP))
   }, [getQuickSetupStepKey, quickSetupForm, quickSetupStep, t])
 
@@ -235,15 +326,26 @@ export const OverviewTab: React.FC = () => {
 
       let runId: number | null = null
       if (values.runNow) {
-        const run = await triggerWatchlistRun(job.id)
-        runId = run.id
+        try {
+          const run = await triggerWatchlistRun(job.id)
+          runId = run.id
+          void trackWatchlistsOnboardingTelemetry({
+            type: "quick_setup_test_run_triggered",
+            runId: run.id
+          })
+        } catch (runError) {
+          void trackWatchlistsOnboardingTelemetry({
+            type: "quick_setup_test_run_failed"
+          })
+          throw runError
+        }
       }
 
       message.success(
         values.runNow
           ? t(
-              "watchlists:overview.onboarding.quickSetup.createdAndRunning",
-              "Quick setup complete. Your first run has started."
+              "watchlists:overview.onboarding.quickSetup.testRunPending",
+              "Quick setup complete. Test run started. Open Activity for progress and Reports for generated briefings."
             )
           : values.setupGoal === "briefing"
             ? t(
@@ -312,7 +414,118 @@ export const OverviewTab: React.FC = () => {
   ])
 
   const quickSetupValues = Form.useWatch([], quickSetupForm) as Partial<QuickSetupValues> | undefined
+  const quickSetupSnapshot = useMemo(
+    () =>
+      ({
+        ...QUICK_SETUP_DEFAULT_VALUES,
+        ...quickSetupForm.getFieldsValue(true),
+        ...(quickSetupValues || {})
+      }) as QuickSetupValues,
+    [quickSetupForm, quickSetupValues]
+  )
+
+  useEffect(() => {
+    if (!quickSetupOpen || quickSetupStep !== QUICK_SETUP_MAX_STEP) return
+    void loadQuickSetupCandidatePreview(quickSetupSnapshot)
+  }, [
+    loadQuickSetupCandidatePreview,
+    quickSetupOpen,
+    quickSetupStep,
+    quickSetupSnapshot.sourceType,
+    quickSetupSnapshot.sourceUrl
+  ])
+
+  const quickSetupCandidateSummary = useMemo(() => {
+    if (quickSetupCandidatePreviewLoading) {
+      return t(
+        "watchlists:overview.onboarding.quickSetup.candidatePreview.loading",
+        "Loading sample candidates..."
+      )
+    }
+    if (quickSetupCandidatePreviewError) return quickSetupCandidatePreviewError
+    if (!quickSetupCandidatePreview) {
+      return t(
+        "watchlists:overview.onboarding.quickSetup.candidatePreview.empty",
+        "No sample candidates returned yet. You can still create setup and validate with a test run."
+      )
+    }
+    return t(
+      "watchlists:overview.onboarding.quickSetup.candidatePreview.summary",
+      "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items.",
+      {
+        ingestable: quickSetupCandidatePreview.ingestable,
+        filtered: quickSetupCandidatePreview.filtered,
+        total: quickSetupCandidatePreview.total
+      }
+    )
+  }, [
+    quickSetupCandidatePreview,
+    quickSetupCandidatePreviewError,
+    quickSetupCandidatePreviewLoading,
+    t
+  ])
+
+  const quickSetupTemplatePreview = useMemo(() => {
+    if (quickSetupSnapshot.setupGoal === "triage") {
+      return t(
+        "watchlists:overview.onboarding.quickSetup.templatePreview.none",
+        "No briefing output will be generated for feed-review-only setup."
+      )
+    }
+
+    const monitorName = String(quickSetupSnapshot.monitorName || "").trim() || "Briefing"
+    const sourceName = String(quickSetupSnapshot.sourceName || "").trim() || "Selected feed"
+    const topItems = (quickSetupCandidatePreview?.items || [])
+      .slice(0, 3)
+      .map((item) => item.title || item.url || `Source #${item.source_id}`)
+
+    return [
+      `# ${monitorName}`,
+      "",
+      `Source: ${sourceName}`,
+      "",
+      "Top candidate headlines:",
+      ...(topItems.length > 0
+        ? topItems.map((item, index) => `${index + 1}. ${item}`)
+        : ["1. Headlines will appear after the first run completes."]),
+      "",
+      `Audio briefing: ${quickSetupSnapshot.audioBriefing ? "Enabled" : "Disabled"}`
+    ].join("\n")
+  }, [
+    quickSetupCandidatePreview,
+    quickSetupSnapshot.audioBriefing,
+    quickSetupSnapshot.monitorName,
+    quickSetupSnapshot.setupGoal,
+    quickSetupSnapshot.sourceName,
+    t
+  ])
+
+  const quickSetupDestinationHint = useMemo(() => {
+    if (quickSetupSnapshot.runNow) {
+      return t(
+        "watchlists:overview.onboarding.quickSetup.destinationHint.runNow",
+        "Starts one test run immediately and opens Activity details."
+      )
+    }
+    if (quickSetupSnapshot.setupGoal === "briefing") {
+      return t(
+        "watchlists:overview.onboarding.quickSetup.destinationHint.briefing",
+        "Opens Reports after setup. Use Run now in Monitors if you want immediate output."
+      )
+    }
+    return t(
+      "watchlists:overview.onboarding.quickSetup.destinationHint.triage",
+      "Opens Monitors after setup so you can run checks when ready."
+    )
+  }, [quickSetupSnapshot.runNow, quickSetupSnapshot.setupGoal, t])
+
   const quickSetupIsLastStep = quickSetupStep >= QUICK_SETUP_MAX_STEP
+  const quickSetupFinishLabel = quickSetupSnapshot.runNow
+    ? t(
+        "watchlists:overview.onboarding.quickSetup.actions.finishWithTest",
+        "Create setup + run test"
+      )
+    : t("watchlists:overview.onboarding.quickSetup.actions.finish", "Create setup")
   const quickSetupStepHelp =
     quickSetupStep === 0
       ? t(
@@ -752,7 +965,7 @@ export const OverviewTab: React.FC = () => {
             }}
           >
             {quickSetupIsLastStep
-              ? t("watchlists:overview.onboarding.quickSetup.actions.finish", "Create setup")
+              ? quickSetupFinishLabel
               : t("common:next", "Next")}
           </Button>
         ]}
@@ -943,12 +1156,35 @@ export const OverviewTab: React.FC = () => {
                 </Form.Item>
 
                 <Form.Item
-                  label={t("watchlists:overview.onboarding.quickSetup.fields.runNow", "Run immediately")}
+                  label={t("watchlists:overview.onboarding.quickSetup.fields.audioBriefing", "Audio briefing")}
+                  name="audioBriefing"
+                  valuePropName="checked"
+                >
+                  <Switch />
+                </Form.Item>
+                <div className="-mt-3 mb-2 text-xs text-text-muted">
+                  {t(
+                    "watchlists:overview.onboarding.quickSetup.hints.audioBriefing",
+                    "Enable spoken briefings alongside text reports."
+                  )}
+                </div>
+
+                <Form.Item
+                  label={t(
+                    "watchlists:overview.onboarding.quickSetup.fields.runNow",
+                    "Run test generation immediately"
+                  )}
                   name="runNow"
                   valuePropName="checked"
                 >
                   <Switch />
                 </Form.Item>
+                <div className="-mt-3 text-xs text-text-muted">
+                  {t(
+                    "watchlists:overview.onboarding.quickSetup.hints.runNow",
+                    "Runs one test generation after setup so you can verify results before waiting for the next schedule."
+                  )}
+                </div>
               </div>
             )}
 
@@ -957,7 +1193,7 @@ export const OverviewTab: React.FC = () => {
                 <p className="text-text-muted">
                   {t(
                     "watchlists:overview.onboarding.quickSetup.reviewDescription",
-                    "Confirm your setup, then create your feed and monitor."
+                    "Preview sample candidates and expected briefing, then create your feed and monitor."
                   )}
                 </p>
                 <div className="rounded-md border border-border bg-surface p-3">
@@ -965,26 +1201,26 @@ export const OverviewTab: React.FC = () => {
                     <span className="font-medium">
                       {t("watchlists:overview.onboarding.quickSetup.review.feed", "Feed")}:
                     </span>{" "}
-                    {quickSetupValues?.sourceName || "—"}
+                    {quickSetupSnapshot.sourceName || "—"}
                   </p>
                   <p className="text-text-muted">
-                    {quickSetupValues?.sourceUrl || "—"}
+                    {quickSetupSnapshot.sourceUrl || "—"}
                   </p>
                   <p className="mt-2">
                     <span className="font-medium">
                       {t("watchlists:overview.onboarding.quickSetup.review.monitor", "Monitor")}:
                     </span>{" "}
-                    {quickSetupValues?.monitorName || "—"}
+                    {quickSetupSnapshot.monitorName || "—"}
                   </p>
                   <p>
                     <span className="font-medium">
                       {t("watchlists:overview.onboarding.quickSetup.review.schedule", "Schedule")}:
                     </span>{" "}
-                    {quickSetupValues?.schedulePreset === "hourly"
+                    {quickSetupSnapshot.schedulePreset === "hourly"
                       ? t("watchlists:overview.onboarding.quickSetup.schedule.hourly", "Hourly")
-                      : quickSetupValues?.schedulePreset === "daily"
+                      : quickSetupSnapshot.schedulePreset === "daily"
                         ? t("watchlists:overview.onboarding.quickSetup.schedule.daily", "Daily at 08:00")
-                        : quickSetupValues?.schedulePreset === "weekdays"
+                        : quickSetupSnapshot.schedulePreset === "weekdays"
                           ? t("watchlists:overview.onboarding.quickSetup.schedule.weekdays", "Weekdays at 08:00")
                           : t("watchlists:overview.onboarding.quickSetup.schedule.none", "Manual only")}
                   </p>
@@ -992,7 +1228,7 @@ export const OverviewTab: React.FC = () => {
                     <span className="font-medium">
                       {t("watchlists:overview.onboarding.quickSetup.review.goal", "Goal")}:
                     </span>{" "}
-                    {quickSetupValues?.setupGoal === "triage"
+                    {quickSetupSnapshot.setupGoal === "triage"
                       ? t("watchlists:overview.onboarding.quickSetup.goal.triage", "Feed review only")
                       : t(
                           "watchlists:overview.onboarding.quickSetup.goal.briefing",
@@ -1001,12 +1237,90 @@ export const OverviewTab: React.FC = () => {
                   </p>
                   <p>
                     <span className="font-medium">
-                      {t("watchlists:overview.onboarding.quickSetup.review.runNow", "Run now")}:
+                      {t("watchlists:overview.onboarding.quickSetup.review.audio", "Audio")}:
                     </span>{" "}
-                    {quickSetupValues?.runNow
+                    {quickSetupSnapshot.setupGoal === "triage"
+                      ? t("watchlists:overview.onboarding.quickSetup.outcome.triage", "Article triage only")
+                      : quickSetupSnapshot.audioBriefing
+                        ? t("watchlists:overview.onboarding.quickSetup.outcome.textAndAudio", "Text + audio briefing")
+                        : t("watchlists:overview.onboarding.quickSetup.outcome.textOnly", "Text briefing")}
+                  </p>
+                  <p>
+                    <span className="font-medium">
+                      {t("watchlists:overview.onboarding.quickSetup.review.runNow", "Run test now")}:
+                    </span>{" "}
+                    {quickSetupSnapshot.runNow
                       ? t("common:yes", "Yes")
                       : t("common:no", "No")}
                   </p>
+                  <p>
+                    <span className="font-medium">
+                      {t("watchlists:overview.onboarding.quickSetup.review.destination", "After create")}:
+                    </span>{" "}
+                    {quickSetupDestinationHint}
+                  </p>
+                </div>
+
+                <div className="rounded-md border border-border bg-surface p-3">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="font-medium">
+                      {t("watchlists:overview.onboarding.quickSetup.candidatePreview.title", "Feed sample preview")}
+                    </span>
+                    <Button
+                      type="link"
+                      size="small"
+                      onClick={() => void loadQuickSetupCandidatePreview(quickSetupSnapshot)}
+                    >
+                      {t("watchlists:overview.onboarding.quickSetup.actions.retryPreview", "Retry preview")}
+                    </Button>
+                  </div>
+                  <p
+                    className={quickSetupCandidatePreviewError ? "text-danger" : "text-text-muted"}
+                    data-testid={
+                      quickSetupCandidatePreviewError
+                        ? "watchlists-overview-quick-setup-candidate-error"
+                        : "watchlists-overview-quick-setup-candidate-summary"
+                    }
+                  >
+                    {quickSetupCandidateSummary}
+                  </p>
+                  {quickSetupCandidatePreviewLoading && (
+                    <div className="mt-2">
+                      <Spin size="small" />
+                    </div>
+                  )}
+                  {!quickSetupCandidatePreviewLoading &&
+                    !quickSetupCandidatePreviewError &&
+                    (quickSetupCandidatePreview?.items?.length || 0) > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {quickSetupCandidatePreview?.items.slice(0, 4).map((item, index) => (
+                          <li key={`${item.url || item.title || "candidate"}-${index}`} className="flex gap-2">
+                            <Tag className="m-0" color={item.decision === "ingest" ? "green" : "red"}>
+                              {item.decision}
+                            </Tag>
+                            <span className="text-text-muted">
+                              {item.title || item.url || t("watchlists:common.unknown", "Unknown")}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                </div>
+
+                <div className="rounded-md border border-border bg-surface p-3">
+                  <p className="mb-2 font-medium">
+                    {t(
+                      "watchlists:overview.onboarding.quickSetup.templatePreview.title",
+                      "Briefing preview (template: {{template}})",
+                      { template: "briefing_md" }
+                    )}
+                  </p>
+                  <pre
+                    className="max-h-52 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-bg p-3 text-xs leading-5 text-text"
+                    data-testid="watchlists-overview-quick-setup-template-preview"
+                  >
+                    {quickSetupTemplatePreview}
+                  </pre>
                 </div>
               </div>
             )}

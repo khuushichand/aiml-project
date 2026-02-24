@@ -31,6 +31,14 @@ def _patch_transcript_cache_root(monkeypatch, tmp_path) -> Path:
 
 
 @pytest.mark.unit
+def test_coerce_float_supports_default_fallback():
+    assert atlib._coerce_float("3.5", 0.0) == pytest.approx(3.5)
+    assert atlib._coerce_float("not-a-number", 1.25) == pytest.approx(1.25)
+    assert atlib._coerce_float(None, 2.5) == pytest.approx(2.5)
+    assert atlib._coerce_float("not-a-number") is None
+
+
+@pytest.mark.unit
 def test_convert_to_wav_includes_duration(monkeypatch, tmp_path):
     input_file = tmp_path / "input.mp3"
     input_file.write_bytes(b"\x00" * 2048)
@@ -504,6 +512,35 @@ def test_resolve_whisper_download_root_rejects_outside_base(monkeypatch, tmp_pat
     outside_root = tmp_path / "outside"
     with pytest.raises(ValueError):
         atlib._resolve_whisper_download_root(str(outside_root))
+
+
+@pytest.mark.unit
+def test_resolve_project_root_prefers_repo_root_over_nested_models_dir(monkeypatch, tmp_path):
+    """
+    Regression test: when both `<repo>/models` and
+    `<repo>/tldw_Server_API/models` exist, project root resolution must pick
+    the actual repo root so Whisper uses the shared top-level `./models`.
+    """
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True, exist_ok=True)
+    (repo_root / "models").mkdir(parents=True, exist_ok=True)
+    (repo_root / "tldw_Server_API" / "models").mkdir(parents=True, exist_ok=True)
+
+    fake_module = (
+        repo_root
+        / "tldw_Server_API"
+        / "app"
+        / "core"
+        / "Ingestion_Media_Processing"
+        / "Audio"
+        / "Audio_Transcription_Lib.py"
+    )
+    fake_module.parent.mkdir(parents=True, exist_ok=True)
+    fake_module.touch()
+
+    monkeypatch.setattr(atlib, "__file__", str(fake_module))
+
+    assert atlib._resolve_project_root() == repo_root.resolve()
 
 
 @pytest.mark.unit

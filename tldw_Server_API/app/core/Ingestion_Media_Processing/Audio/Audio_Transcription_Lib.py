@@ -182,7 +182,7 @@ def _coerce_int(val):
         return None
 
 
-def _coerce_float(val: Any, default: float | None = None) -> float | None:
+def _coerce_float(val, default=None):
     try:
         return float(val)
     except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
@@ -266,12 +266,30 @@ def _resample_audio_if_needed(audio: np.ndarray, sample_rate: int, target_sr: in
 
 
 def _resolve_project_root() -> Path:
-    """Return the repository root to anchor shared model directories."""
+    """
+    Return the repository root used to anchor shared model directories.
+
+    Preference order:
+    1. A parent containing `models/` and a repo marker (`.git` or
+       `pyproject.toml` with `tldw_Server_API/`).
+    2. Otherwise, the outermost parent containing `models/`.
+    3. Legacy depth-based fallback for unusual layouts.
+    """
     current = Path(__file__).resolve()
+    fallback_with_models: Path | None = None
+
     for parent in current.parents:
         models_dir = parent / "models"
-        if models_dir.is_dir():
+        if not models_dir.is_dir():
+            continue
+        if (parent / ".git").exists() or (
+            (parent / "pyproject.toml").exists() and (parent / "tldw_Server_API").is_dir()
+        ):
             return parent
+        fallback_with_models = parent
+
+    if fallback_with_models is not None:
+        return fallback_with_models
 
     parents = current.parents
     fallback_index = 5 if len(parents) > 5 else len(parents) - 1

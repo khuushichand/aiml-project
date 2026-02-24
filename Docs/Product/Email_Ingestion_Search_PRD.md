@@ -680,6 +680,8 @@ Must Tickets:
 Milestone Exit Gate:
 
 - [ ] M4 Gate approved and feature enabled for target rollout scope.
+  Blocker (2026-02-23): Live Gmail source validation is pending because no connected Gmail account is currently available for staging/demo testing.
+  Unblock Criteria: Execute the staging live-source sync checklist (`EMAIL-M4-003`) with a real Gmail connection and complete backend/SRE/product sign-offs (`EMAIL-M4-004`).
 
 ### Critical Path Summary
 

@@ -902,3 +902,12 @@ export const MEDIA_TEXT_SIZE_PRESET_SETTING = defineSetting(
     area: "local"
   }
 )
+
+export const MEDIA_HIDE_TRANSCRIPT_TIMINGS_SETTING = defineSetting(
+  "tldw:media:hideTranscriptTimings",
+  true,
+  (value) => coerceBoolean(value, true),
+  {
+    area: "local"
+  }
+)
