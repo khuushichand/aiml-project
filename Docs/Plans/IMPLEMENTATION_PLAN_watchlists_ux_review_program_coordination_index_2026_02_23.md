@@ -227,7 +227,25 @@
 **Tests**:
 - Run final integrated Watchlists UX regression gate.
 - Validate finding-to-fix coverage ledger for all 10 groups.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 5 Completion Notes (2026-02-24)
+
+- Executed final integrated Watchlists regression gate on the release-candidate branch:
+  - `bun run test:watchlists:help`
+  - `bun run test:watchlists:a11y`
+  - `bun run test:watchlists:scale`
+  - result: all suites passed (`help`: 10/10 tests, `a11y`: 67/67 tests, `scale`: 42/42 tests).
+- Completed cross-group finding-to-fix ledger validation:
+  - all 10 group rows are marked `Complete` with linked stage evidence in the tracking ledger below.
+- Finalized runbook coverage for operational handoff:
+  - onboarding: `Docs/Plans/WATCHLISTS_ONBOARDING_FIRST_VALUE_RUNBOOK_2026_02_24.md`
+  - recovery: `Docs/Plans/WATCHLISTS_RECOVERY_RUNBOOK_2026_02_23.md`
+  - scale: `Docs/Plans/WATCHLISTS_SCALE_READINESS_RUNBOOK_2026_02_24.md`
+  - accessibility: `Docs/Plans/WATCHLISTS_ASSISTIVE_TECH_AUDIT_2026_02_24.md`
+  - UC2 KPI/reporting: `Docs/Plans/WATCHLISTS_UC2_PIPELINE_KPI_RUNBOOK_2026_02_24.md`
+- Activated post-release monitoring ownership and threshold definitions:
+  - `Docs/Plans/WATCHLISTS_POST_RELEASE_MONITORING_PLAN_2026_02_24.md`
 
 ## Dependency Matrix
 
@@ -248,7 +266,7 @@
 | Group | Owner (Assignee) | Reviewer (Assignee) | Phase | Status | Validation Evidence | Notes |
 |---|---|---|---|---|---|---|
 | 01 | Robert | Mike | 5 | Complete | Stage 1 baseline artifact + telemetry exports + Group 01 Stage 1/2/3/4/5 completion notes + orientation guidance tests + rollout/telemetry contract coverage + IA rollout go/no-go doc + IA adoption validation checklist | IA/navigation |
-| 02 | Mike | Robert | 5 | Complete | Stage 1 baseline artifact + telemetry exports + Group 02 Stage 1/2/3/4/5 completion notes + guided-tour/teach-point/help-tooltip regressions + first-run terminology contract coverage + onboarding-first-value telemetry milestones (first run/output) + Stage 5 onboarding regression suite + Bandit stage artifact | onboarding/learnability |
+| 02 | Mike | Robert | 5 | Complete | Stage 1 baseline artifact + telemetry exports + Group 02 Stage 1/2/3/4/5 completion notes + guided-tour/teach-point/help-tooltip regressions + first-run terminology contract coverage + onboarding-first-value telemetry milestones (first run/output) + Stage 5 onboarding regression suite + onboarding first-value runbook + Bandit stage artifact | onboarding/learnability |
 | 03 | Robert | Mike | 5 | Complete | Stage 1 baseline artifact + telemetry exports + Group 03 Stage 1/2/3/4/5 completion notes + cross-tab relationship jump actions (Activity/Reports/Monitors) + pipeline preview/test-generation confidence flow + UC2 pipeline KPI dashboard snapshot helpers + UC2 pipeline KPI runbook + focused Overview/Runs/Outputs/Items linkage regressions + Bandit stage artifacts | UC2 workflow |
 | 04 | Mike | Robert | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 04 Stage 1/2 completion notes + Stage 3 cross-tab profile completion + Stage 4 summary/confirmation completion + Stage 5 1/10/50 scale validation + density QA checklist + focused Jobs/Sources/Runs/Outputs regressions + Bandit artifacts | density/cognitive load |
 | 05 | Robert | Mike | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 05 Stage 1 taxonomy/locale-contract completion + Stage 2 blocker coverage + Stage 3 undo/recovery consistency coverage + Stage 4 delivery-status filtering coverage + Group 05 runbook artifact + focused Sources/Jobs/Outputs/shared regressions + Bandit artifacts | prevention/recovery |
