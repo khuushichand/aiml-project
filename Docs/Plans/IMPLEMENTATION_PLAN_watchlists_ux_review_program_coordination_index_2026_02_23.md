@@ -204,7 +204,12 @@
   - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx --maxWorkers=1 --no-file-parallelism`
   - `bun run test:watchlists:scale`
   - `/tmp/bandit_watchlists_group10_stage3_2026_02_24.json`
-- Next execution focus: Group 10 Stage 4 polling, notifications, and refresh efficiency.
+- Group 10 Stage 4 completed: run notification polling now adapts by active tab/visibility and suppresses low-signal completion noise in Activity-focused contexts, overlapping poll requests are deduped in-flight, and Runs auto-refresh is gated to active+visible Activity sessions.
+- Group 10 Stage 4 validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/run-notifications.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `bun run test:watchlists:scale`
+  - `/tmp/bandit_watchlists_group10_stage4_2026_02_24.json`
+- Next execution focus: Group 10 Stage 5 scale readiness validation and runbook closure.
 
 ## Stage 5: Program Closeout and Operationalization
 **Goal**: Complete evidence-led closure and handoff for sustained quality.
@@ -244,7 +249,7 @@
 | 07 | Robert | Mike | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 07 Stage 1 output/audio contract completion + Group 07 Stage 2 audio discoverability completion + Group 07 Stage 3 audio test/preview completion + Group 07 Stage 4 delivery/recovery visibility completion + Group 07 Stage 5 UC2 runbook + fallback integration coverage + focused Jobs/Outputs/backend regressions + Bandit artifacts | outputs/audio |
 | 08 | Mike | Robert | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 08 Stage 1/2/3/4/5 completion notes + template mode/preview/telemetry regressions + Bandit stage artifacts + template authoring runbook | templates |
 | 09 | Robert | Mike | 4 | Complete | Stage 1 baseline artifact + telemetry exports + Group 09 Stage 1 gap registry + Group 09 Stage 2 keyboard/focus restoration coverage + Group 09 Stage 3 semantics/live-region coverage + Group 09 Stage 4 visual/state-signaling coverage + Stage 5 Watchlists a11y CI gate + PR checklist criteria + assistive-tech audit notes + Sources/Runs/Items/Jobs/Overview/Outputs a11y regressions + Bandit stage artifacts | accessibility |
-| 10 | Mike | Robert | 4 | In Progress | Stage 1 baseline artifact + telemetry exports + Group 10 Stage 1 scale profile/performance budget contract + benchmark harness coverage + baseline timing artifact + Stage 2 runs/source/reader high-volume optimization + Stage 3 batch progress/recovery model + scale/performance regression suites | scalability |
+| 10 | Mike | Robert | 4 | In Progress | Stage 1 baseline artifact + telemetry exports + Group 10 Stage 1 scale profile/performance budget contract + benchmark harness coverage + baseline timing artifact + Stage 2 runs/source/reader high-volume optimization + Stage 3 batch progress/recovery model + Stage 4 adaptive polling/notification dedup model + scale/performance regression suites | scalability |
 
 ## Exit Criteria
 

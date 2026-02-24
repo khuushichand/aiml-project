@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => {
       | "outputs"
       | "templates"
       | "settings",
+    pollingActive: false,
     setActiveTab: vi.fn((next: string) => {
       state.activeTab = next as typeof state.activeTab
     })
@@ -96,6 +97,7 @@ vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: Record<string, unknown>) => unknown) =>
     selector({
       activeTab: mocks.state.activeTab,
+      pollingActive: mocks.state.pollingActive,
       setActiveTab: mocks.state.setActiveTab,
       openRunDetail: mocks.openRunDetailMock,
       resetStore: vi.fn()
@@ -139,6 +141,7 @@ describe("WatchlistsPlaygroundPage run notifications", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.state.activeTab = "sources"
+    mocks.state.pollingActive = false
     ;(window as { __TLDW_WATCHLISTS_RUN_NOTIFICATIONS_POLL_MS?: unknown })
       .__TLDW_WATCHLISTS_RUN_NOTIFICATIONS_POLL_MS = 100
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = false
@@ -218,5 +221,54 @@ describe("WatchlistsPlaygroundPage run notifications", () => {
     expect(mocks.state.setActiveTab).toHaveBeenCalledWith("runs")
     expect(mocks.openRunDetailMock).toHaveBeenCalledWith(12)
     expect(mocks.notificationDestroyMock).toHaveBeenCalledWith(config.key)
+  })
+
+  it("suppresses run-notification polling while Activity tab already auto-refreshes", async () => {
+    mocks.state.activeTab = "runs"
+    mocks.state.pollingActive = true
+    mocks.fetchWatchlistRunsMock.mockReset()
+
+    render(<WatchlistsPlaygroundPage />)
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250)
+    })
+
+    expect(mocks.fetchWatchlistRunsMock).not.toHaveBeenCalled()
+  })
+
+  it("dedupes overlapping polling requests when previous fetch is still in flight", async () => {
+    let resolveFirstPoll: ((value: unknown) => void) | null = null
+    mocks.fetchWatchlistRunsMock.mockReset()
+    mocks.fetchWatchlistRunsMock
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstPoll = resolve
+          })
+      )
+      .mockResolvedValue({
+        items: [],
+        total: 0,
+        has_more: false
+      })
+
+    render(<WatchlistsPlaygroundPage />)
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250)
+    })
+
+    expect(mocks.fetchWatchlistRunsMock).toHaveBeenCalledTimes(1)
+
+    resolveFirstPoll?.({
+      items: [],
+      total: 0,
+      has_more: false
+    })
+
+    await waitFor(() => {
+      expect(mocks.fetchWatchlistRunsMock).toHaveBeenCalledTimes(2)
+    }, { timeout: 3000 })
   })
 })

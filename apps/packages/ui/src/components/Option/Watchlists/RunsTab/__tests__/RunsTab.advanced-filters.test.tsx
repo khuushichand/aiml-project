@@ -98,6 +98,7 @@ vi.mock("../RunDetailDrawer", () => ({
 }))
 
 const baseState = (overrides: Record<string, unknown> = {}) => ({
+  activeTab: "runs",
   runs: [],
   runsLoading: false,
   runsTotal: 0,
@@ -208,5 +209,47 @@ describe("RunsTab advanced filters disclosure", () => {
         ([rows, total]) => Array.isArray(rows) && rows.length === 20 && total === 30
       )
     ).toBe(true)
+  })
+
+  it("skips auto-refresh polling when Activity tab is not active", async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.storeStateRef.current = baseState({
+        activeTab: "items",
+        pollingActive: true
+      })
+      mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
+
+      render(<RunsTab />)
+
+      await vi.advanceTimersByTimeAsync(0)
+      const initialCallCount = mocks.fetchWatchlistRunsMock.mock.calls.length
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(mocks.fetchWatchlistRunsMock).toHaveBeenCalledTimes(initialCallCount)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("polls while Activity tab is active and polling is enabled", async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.storeStateRef.current = baseState({
+        activeTab: "runs",
+        pollingActive: true
+      })
+      mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
+
+      render(<RunsTab />)
+
+      await vi.advanceTimersByTimeAsync(0)
+      const initialCallCount = mocks.fetchWatchlistRunsMock.mock.calls.length
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(mocks.fetchWatchlistRunsMock.mock.calls.length).toBeGreaterThan(initialCallCount)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

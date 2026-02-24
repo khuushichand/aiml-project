@@ -4,6 +4,7 @@ import {
   dedupeRunNotificationEvents,
   getRunFailureHint,
   groupRunNotificationEvents,
+  resolveRunNotificationsPollPlan,
   resolveStalledRunNotification,
   resolveRunTransitionNotification,
   shouldNotifyNewTerminalRun
@@ -173,6 +174,115 @@ describe("run notification helpers", () => {
         count: 1,
         runIds: [9],
         deepLinkRunId: 9
+      })
+    )
+  })
+
+  it("groups high-volume notification bursts without losing newest deep-link target", () => {
+    const seen = new Set<string>()
+    const events = Array.from({ length: 120 }, (_, index) => ({
+      eventKey: buildRunStateNotificationKey(index + 1, "failed"),
+      kind: "failed" as const,
+      runId: index + 1,
+      hint: index === 0 ? "first hint" : null
+    }))
+      .concat([
+        {
+          eventKey: buildRunStateNotificationKey(8, "completed"),
+          kind: "completed" as const,
+          runId: 8
+        },
+        {
+          eventKey: buildRunStateNotificationKey(8, "completed"),
+          kind: "completed" as const,
+          runId: 8
+        }
+      ])
+
+    const deduped = dedupeRunNotificationEvents(events, seen)
+    const grouped = groupRunNotificationEvents(deduped)
+
+    expect(deduped).toHaveLength(121)
+    expect(grouped[0]).toEqual(
+      expect.objectContaining({
+        kind: "failed",
+        count: 120,
+        deepLinkRunId: 120
+      })
+    )
+    expect(grouped[1]).toEqual(
+      expect.objectContaining({
+        kind: "completed",
+        count: 1,
+        deepLinkRunId: 8
+      })
+    )
+  })
+
+  it("resolves adaptive poll plans for active, hidden, and runs-focused states", () => {
+    expect(
+      resolveRunNotificationsPollPlan({
+        isOnline: false,
+        activeTab: "sources",
+        runsPollingActive: false,
+        documentVisible: true,
+        baseIntervalMs: 15000
+      })
+    ).toEqual(
+      expect.objectContaining({
+        enabled: false,
+        pageSize: 25,
+        suppressCompleted: false
+      })
+    )
+
+    expect(
+      resolveRunNotificationsPollPlan({
+        isOnline: true,
+        activeTab: "runs",
+        runsPollingActive: true,
+        documentVisible: true,
+        baseIntervalMs: 15000
+      })
+    ).toEqual(
+      expect.objectContaining({
+        enabled: false,
+        pageSize: 10,
+        suppressCompleted: true
+      })
+    )
+
+    expect(
+      resolveRunNotificationsPollPlan({
+        isOnline: true,
+        activeTab: "sources",
+        runsPollingActive: false,
+        documentVisible: false,
+        baseIntervalMs: 15000
+      })
+    ).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        intervalMs: 60000,
+        pageSize: 10,
+        suppressCompleted: true
+      })
+    )
+
+    expect(
+      resolveRunNotificationsPollPlan({
+        isOnline: true,
+        activeTab: "sources",
+        runsPollingActive: false,
+        documentVisible: true,
+        baseIntervalMs: 15000
+      })
+    ).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        intervalMs: 15000,
+        pageSize: 25,
+        suppressCompleted: false
       })
     )
   })

@@ -38,6 +38,7 @@ import {
   dedupeRunNotificationEvents,
   groupRunNotificationEvents,
   getRunFailureHint,
+  resolveRunNotificationsPollPlan,
   resolveStalledRunNotification,
   resolveRunTransitionNotification,
   shouldNotifyNewTerminalRun
@@ -47,7 +48,10 @@ import { trackWatchlistsOnboardingTelemetry } from "@/utils/watchlists-onboardin
 
 const RUN_NOTIFICATIONS_POLL_MS = 15_000
 const RUN_NOTIFICATIONS_PAGE_SIZE = 25
+const RUN_NOTIFICATIONS_REDUCED_PAGE_SIZE = 10
 const RUN_NOTIFICATIONS_MIN_POLL_MS = 100
+const RUN_NOTIFICATIONS_BACKGROUND_POLL_MS = 60_000
+const RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS = 30_000
 const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
 const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
 
@@ -141,6 +145,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
 
   const activeTab = useWatchlistsStore((s) => s.activeTab)
   const overviewHealth = useWatchlistsStore((s) => s.overviewHealth)
+  const runsPollingActive = useWatchlistsStore((s) => s.pollingActive)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const resetStore = useWatchlistsStore((s) => s.resetStore)
@@ -148,10 +153,15 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const notifiedRunStatesRef = useRef<Set<string>>(new Set())
   const initializedRunPollingRef = useRef(false)
   const runNotificationsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const runNotificationsPollingInFlightRef = useRef(false)
   const sessionStartedAtMsRef = useRef<number>(Date.now())
   const [guidedTourState, setGuidedTourState] = React.useState<GuidedTourState>(() => readGuidedTourState())
   const [guidedTourOpen, setGuidedTourOpen] = React.useState(false)
   const [showGuidedTourCompletion, setShowGuidedTourCompletion] = React.useState(false)
+  const [documentVisible, setDocumentVisible] = React.useState<boolean>(() => {
+    if (typeof document === "undefined") return true
+    return document.visibilityState !== "hidden"
+  })
   const iaExperimentEnabled = React.useMemo(() => resolveWatchlistsIaExperimentEnabled(), [])
   const iaExperimentVariant = iaExperimentEnabled ? "experimental" : "baseline"
   const previousActiveTabRef = useRef<typeof activeTab | null>(null)
@@ -259,6 +269,17 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     writeGuidedTourState(guidedTourState)
   }, [guidedTourState])
 
+  useEffect(() => {
+    if (typeof document === "undefined") return
+    const handleVisibilityChange = () => {
+      setDocumentVisible(document.visibilityState !== "hidden")
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [])
+
   const startGuidedTour = useCallback(() => {
     const nextState: GuidedTourState = { status: "in_progress", step: 0 }
     setGuidedTourState(nextState)
@@ -332,6 +353,22 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     notification.destroy(key)
     setActiveTab("runs")
   }, [notification, setActiveTab])
+
+  const runNotificationsPollPlan = React.useMemo(() => {
+    const basePollMs = resolveRunNotificationsPollMs()
+    return resolveRunNotificationsPollPlan({
+      isOnline,
+      activeTab,
+      runsPollingActive,
+      documentVisible,
+      baseIntervalMs: basePollMs,
+      minIntervalMs: RUN_NOTIFICATIONS_MIN_POLL_MS,
+      defaultPageSize: RUN_NOTIFICATIONS_PAGE_SIZE,
+      reducedPageSize: RUN_NOTIFICATIONS_REDUCED_PAGE_SIZE,
+      backgroundIntervalMs: RUN_NOTIFICATIONS_BACKGROUND_POLL_MS,
+      runsTabIntervalMs: RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS
+    })
+  }, [activeTab, documentVisible, isOnline, runsPollingActive])
 
   const showRunNotification = useCallback((run: WatchlistRun, kind: "completed" | "failed", hint?: string | null) => {
     const key = `watchlists-run-${run.id}-${run.status}`
@@ -453,10 +490,12 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   )
 
   const pollRunNotifications = useCallback(async () => {
+    if (runNotificationsPollingInFlightRef.current) return
+    runNotificationsPollingInFlightRef.current = true
     try {
       const response = await fetchWatchlistRuns({
         page: 1,
-        size: RUN_NOTIFICATIONS_PAGE_SIZE
+        size: runNotificationsPollPlan.pageSize
       })
       const nextRuns = Array.isArray(response.items) ? response.items : []
       const previousStatusMap = runStatusRef.current
@@ -519,7 +558,9 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         candidateEvents,
         notifiedRunStatesRef.current
       )
-      const groupedEvents = groupRunNotificationEvents(freshEvents)
+      const groupedEvents = groupRunNotificationEvents(freshEvents).filter((group) =>
+        runNotificationsPollPlan.suppressCompleted ? group.kind !== "completed" : true
+      )
 
       groupedEvents.forEach((group) => {
         if (group.count === 1 && group.kind !== "stalled") {
@@ -536,12 +577,20 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       initializedRunPollingRef.current = true
     } catch (err) {
       console.debug("Watchlists run notification polling failed:", err)
+    } finally {
+      runNotificationsPollingInFlightRef.current = false
     }
-  }, [showGroupedRunNotification, showRunNotification, t])
+  }, [runNotificationsPollPlan.pageSize, runNotificationsPollPlan.suppressCompleted, showGroupedRunNotification, showRunNotification, t])
 
   useEffect(() => {
-    if (!isOnline) return
-    const pollIntervalMs = resolveRunNotificationsPollMs()
+    if (!runNotificationsPollPlan.enabled) {
+      if (runNotificationsTimerRef.current) {
+        clearInterval(runNotificationsTimerRef.current)
+        runNotificationsTimerRef.current = null
+      }
+      return
+    }
+    const pollIntervalMs = runNotificationsPollPlan.intervalMs
     void pollRunNotifications()
     runNotificationsTimerRef.current = setInterval(() => {
       void pollRunNotifications()
@@ -552,7 +601,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         runNotificationsTimerRef.current = null
       }
     }
-  }, [isOnline, pollRunNotifications])
+  }, [pollRunNotifications, runNotificationsPollPlan.enabled, runNotificationsPollPlan.intervalMs])
 
   const overviewBadges = overviewHealth?.tabBadges || {
     sources: 0,

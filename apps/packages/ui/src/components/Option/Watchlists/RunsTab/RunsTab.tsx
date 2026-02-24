@@ -107,6 +107,7 @@ export const RunsTab: React.FC = () => {
   const runs = useWatchlistsStore((s) => s.runs)
   const runsLoading = useWatchlistsStore((s) => s.runsLoading)
   const runsTotal = useWatchlistsStore((s) => s.runsTotal)
+  const activeTab = useWatchlistsStore((s) => s.activeTab)
   const runsPage = useWatchlistsStore((s) => s.runsPage)
   const runsPageSize = useWatchlistsStore((s) => s.runsPageSize)
   const runsJobFilter = useWatchlistsStore((s) => s.runsJobFilter)
@@ -126,6 +127,10 @@ export const RunsTab: React.FC = () => {
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(() => {
     const stored = readStoredDisclosureState(RUNS_ADVANCED_FILTERS_STORAGE_KEY)
     return stored ?? hasActiveRunsFilters
+  })
+  const [documentVisible, setDocumentVisible] = useState<boolean>(() => {
+    if (typeof document === "undefined") return true
+    return document.visibilityState !== "hidden"
   })
 
   // Store actions
@@ -250,6 +255,17 @@ export const RunsTab: React.FC = () => {
     persistDisclosureState(RUNS_ADVANCED_FILTERS_STORAGE_KEY, showAdvancedFilters)
   }, [showAdvancedFilters])
 
+  useEffect(() => {
+    if (typeof document === "undefined") return
+    const handleVisibilityChange = () => {
+      setDocumentVisible(document.visibilityState !== "hidden")
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [])
+
   const getRunStatusLabel = useCallback((status: string) => {
     const normalized = normalizeRunStatus(status)
     if (!normalized) {
@@ -261,9 +277,11 @@ export const RunsTab: React.FC = () => {
     )
   }, [t])
 
+  const shouldAutoRefreshRuns = pollingActive && activeTab === "runs" && documentVisible
+
   // Polling for active runs
   useEffect(() => {
-    if (pollingActive) {
+    if (shouldAutoRefreshRuns) {
       pollIntervalRef.current = setInterval(() => {
         loadRuns(false)
       }, POLL_INTERVAL_MS)
@@ -277,7 +295,7 @@ export const RunsTab: React.FC = () => {
         clearInterval(pollIntervalRef.current)
       }
     }
-  }, [pollingActive, loadRuns])
+  }, [loadRuns, shouldAutoRefreshRuns])
 
   useEffect(() => {
     const visibleRuns = Array.isArray(runs) ? runs : []

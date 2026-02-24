@@ -67,7 +67,7 @@
 **Tests**:
 - Add tests for polling start/stop conditions and deduplication behavior.
 - Add tests for notification grouping under high event volumes.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Scale Readiness Validation and Runbook
 **Goal**: Certify Watchlists UX readiness for larger analyst deployments.
@@ -131,3 +131,23 @@
   - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx --maxWorkers=1 --no-file-parallelism`
   - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx --maxWorkers=1 --no-file-parallelism`
   - `/tmp/bandit_watchlists_group10_stage3_2026_02_24.json`
+
+### 2026-02-24 - Stage 4 completion (adaptive polling + notification dedup)
+
+- Added adaptive run-notification poll planning (online/offline, tab focus, visibility, and runs auto-refresh state) with reduced payload mode for lower-signal contexts:
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/run-notifications.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`
+- Added in-flight dedup guard for notification polling to prevent overlapping requests and redundant processing under aggressive poll intervals:
+  - `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
+- Reduced Activity-tab refresh waste by gating Runs auto-refresh to active+visible Activity contexts:
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/RunsTab.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx`
+- Added high-volume notification grouping and poll-plan contract coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/run-notifications.test.ts`
+- Expanded scale gate to include polling/notification efficiency regressions:
+  - `apps/packages/ui/package.json` (`test:watchlists:scale`)
+- Stage 4 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/run-notifications.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `cd apps/packages/ui && bun run test:watchlists:scale`
+  - `/tmp/bandit_watchlists_group10_stage4_2026_02_24.json`
