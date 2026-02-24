@@ -26,9 +26,13 @@ jobs:
       - name: Run pre-commit
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FROM_REF="${{ github.event.pull_request.base.sha }}"
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              FROM_REF="HEAD^"
+            fi
             pre-commit run --show-diff-on-failure \
-              --from-ref "${{ github.event.pull_request.base.sha }}" \
-              --to-ref "${{ github.event.pull_request.head.sha }}"
+              --from-ref "$FROM_REF" \
+              --to-ref "HEAD"
           else
             pre-commit run --all-files --show-diff-on-failure
           fi
