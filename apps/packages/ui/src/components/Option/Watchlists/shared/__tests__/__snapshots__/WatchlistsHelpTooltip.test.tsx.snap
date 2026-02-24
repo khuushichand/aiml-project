@@ -128,12 +128,12 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
           <div
             class="text-sm font-medium"
           >
-            How cron scheduling works
+            Set a reliable monitor schedule
           </div>
           <div
             class="text-xs text-text-muted"
           >
-            Cron uses five fields: minute, hour, day-of-month, month, and day-of-week.
+            Start with presets for daily or weekday runs. Use cron only when you need exact custom timing.
           </div>
           <a
             class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
@@ -294,12 +294,12 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
           <div
             class="text-sm font-medium"
           >
-            Using Jinja2 templates
+            Customize briefing format
           </div>
           <div
             class="text-xs text-text-muted"
           >
-            Jinja2 lets you loop, branch, and format monitor data into reusable report templates.
+            Start from a preset report template, then edit sections to shape briefing tone, structure, and audio script text.
           </div>
           <a
             class="inline-flex items-center gap-1 text-xs text-primary hover:underline"

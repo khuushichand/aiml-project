@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from "react"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WatchlistsPlaygroundPage } from "../WatchlistsPlaygroundPage"
 import {
@@ -45,10 +45,21 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("antd", () => {
-  const Alert = ({ title, description, closable, onClose }: any) => (
-    <div>
+  const Alert = ({
+    title,
+    description,
+    action,
+    closable,
+    onClose,
+    className,
+    type: _type,
+    showIcon: _showIcon,
+    ...rest
+  }: any) => (
+    <div className={className} data-testid={rest["data-testid"]}>
       <div>{title}</div>
       <div>{description}</div>
+      <div>{action}</div>
       {closable ? (
         <button type="button" onClick={() => onClose?.()}>
           Dismiss
@@ -164,6 +175,7 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = false
     localStorage.removeItem("beta-dismissed:watchlists")
     localStorage.removeItem("watchlists:guided-tour:v1")
+    localStorage.removeItem("watchlists:teach-points:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
   })
 
@@ -172,6 +184,7 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
     localStorage.removeItem("beta-dismissed:watchlists")
     localStorage.removeItem("watchlists:guided-tour:v1")
+    localStorage.removeItem("watchlists:teach-points:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
   })
 
@@ -256,7 +269,7 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     expect(screen.getByText("Step 2 of 5")).toBeInTheDocument()
     expect(
-      screen.getByText("Monitors turn feed inputs into scheduled runs and downstream outputs.")
+      screen.getByText("Monitors define schedule, filters, and template-driven briefing outputs, including optional audio.")
     ).toBeInTheDocument()
 
     const persisted = JSON.parse(localStorage.getItem("watchlists:guided-tour:v1") || "{}")
@@ -281,6 +294,34 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
       type: "guided_tour_resumed",
       step: 2
     })
+  })
+
+  it("shows first-time teach points for jobs/templates and persists dismissal", () => {
+    mocks.state.activeTab = "jobs"
+    const { rerender } = render(<WatchlistsPlaygroundPage />)
+
+    expect(screen.getByTestId("watchlists-teach-point-title")).toHaveTextContent("Monitor setup tip")
+    expect(screen.getByTestId("watchlists-teach-point-description")).toHaveTextContent(
+      "Start with schedule presets first. Use cron and advanced filters only after your first successful run."
+    )
+    fireEvent.click(
+      within(screen.getByTestId("watchlists-teach-point-alert")).getByRole("button", { name: "Dismiss" })
+    )
+
+    const persisted = JSON.parse(localStorage.getItem("watchlists:teach-points:v1") || "{}")
+    expect(persisted.jobsCronFilters).toBe(true)
+
+    rerender(<WatchlistsPlaygroundPage />)
+    expect(screen.queryByTestId("watchlists-teach-point-title")).not.toBeInTheDocument()
+
+    mocks.state.activeTab = "templates"
+    rerender(<WatchlistsPlaygroundPage />)
+    expect(screen.getByTestId("watchlists-teach-point-title")).toHaveTextContent("Template setup tip")
+    fireEvent.click(
+      within(screen.getByTestId("watchlists-teach-point-alert")).getByRole("button", { name: "Dismiss" })
+    )
+    const nextPersisted = JSON.parse(localStorage.getItem("watchlists:teach-points:v1") || "{}")
+    expect(nextPersisted.templatesAuthoring).toBe(true)
   })
 
   it("marks guided tour complete and shows completion notice", () => {

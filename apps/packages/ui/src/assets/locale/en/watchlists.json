@@ -267,7 +267,7 @@
       },
       "jobs": {
         "title": "2. Create monitors",
-        "description": "Monitors turn feed inputs into scheduled runs and downstream outputs."
+        "description": "Monitors define schedule, filters, and template-driven briefing outputs, including optional audio."
       },
       "runs": {
         "title": "3. Check activity",
@@ -279,8 +279,20 @@
       },
       "outputs": {
         "title": "5. Deliver reports",
-        "description": "Reports contain generated briefings and delivery outcomes."
+        "description": "Reports contain generated briefings from monitor templates; regenerate with different template or audio settings."
       }
+    }
+  },
+  "teachPoints": {
+    "jobs": {
+      "title": "Monitor setup tip",
+      "description": "Start with schedule presets first. Use cron and advanced filters only after your first successful run.",
+      "action": "Open Templates"
+    },
+    "templates": {
+      "title": "Template setup tip",
+      "description": "Start from a preset template, preview changes, then regenerate reports to compare text and audio output.",
+      "action": "Open Reports"
     }
   },
   "notifications": {
@@ -355,8 +367,8 @@
       },
       "cron": {
         "label": "cron scheduling",
-        "title": "How cron scheduling works",
-        "description": "Cron uses five fields: minute, hour, day-of-month, month, and day-of-week."
+        "title": "Set a reliable monitor schedule",
+        "description": "Start with presets for daily or weekday runs. Use cron only when you need exact custom timing."
       },
       "ttl": {
         "label": "retention TTL",
@@ -365,8 +377,8 @@
       },
       "jinja2": {
         "label": "Jinja2 templates",
-        "title": "Using Jinja2 templates",
-        "description": "Jinja2 lets you loop, branch, and format monitor data into reusable report templates."
+        "title": "Customize briefing format",
+        "description": "Start from a preset report template, then edit sections to shape briefing tone, structure, and audio script text."
       },
       "claimClusters": {
         "label": "claim clusters",

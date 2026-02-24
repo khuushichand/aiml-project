@@ -88,7 +88,26 @@
 **Tests**:
 - Add tests for guided tour step content and progression state.
 - Add tests for first-time teach-point visibility and dismissal persistence.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 3 Completion Notes (2026-02-24)
+
+- Expanded guided-tour concept coverage in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`:
+  - monitor step now explicitly covers schedule/filters/template-output relationship,
+  - reports step now includes template/audio regeneration discoverability.
+- Added first-time contextual teach points with dismissal persistence:
+  - storage key: `watchlists:teach-points:v1`,
+  - `jobs` teach point: cron + advanced filter progressive-disclosure guidance,
+  - `templates` teach point: preset-first + regenerate comparison guidance.
+- Updated help topic copy to task-oriented guidance in:
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`,
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/WatchlistsHelpTooltip.tsx`.
+- Added/updated tests:
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/__snapshots__/WatchlistsHelpTooltip.test.tsx.snap`
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
 
 ## Stage 4: Concept Burden Reduction in Copy
 **Goal**: Reduce jargon and improve actionability of onboarding/UI copy.

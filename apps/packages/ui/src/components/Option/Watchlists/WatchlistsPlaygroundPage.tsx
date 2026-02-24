@@ -34,7 +34,6 @@ import {
   WATCHLISTS_TAB_HELP_DOCS
 } from "./shared/help-docs"
 import {
-  flushWatchlistsIaExperimentSession,
   buildRunStateNotificationKey,
   dedupeRunNotificationEvents,
   groupRunNotificationEvents,
@@ -44,7 +43,10 @@ import {
   resolveRunTransitionNotification,
   shouldNotifyNewTerminalRun
 } from "./RunsTab/run-notifications"
-import { trackWatchlistsIaExperimentTransition } from "@/utils/watchlists-ia-experiment-telemetry"
+import {
+  flushWatchlistsIaExperimentSession,
+  trackWatchlistsIaExperimentTransition
+} from "@/utils/watchlists-ia-experiment-telemetry"
 import { trackWatchlistsOnboardingTelemetry } from "@/utils/watchlists-onboarding-telemetry"
 import { resolveWatchlistsIaExperimentRollout } from "@/utils/watchlists-ia-rollout"
 
@@ -56,6 +58,7 @@ const RUN_NOTIFICATIONS_BACKGROUND_POLL_MS = 60_000
 const RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS = 30_000
 const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
 const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
+const TEACH_POINTS_STORAGE_KEY = "watchlists:teach-points:v1"
 
 type GuidedTourTab = "sources" | "jobs" | "runs" | "items" | "outputs"
 type GuidedTourStatus = "idle" | "in_progress" | "dismissed" | "completed"
@@ -84,6 +87,12 @@ interface TabOrientation {
 interface GuidedTourState {
   status: GuidedTourStatus
   step: number
+}
+type TeachPointKey = "jobsCronFilters" | "templatesAuthoring"
+
+interface TeachPointState {
+  jobsCronFilters: boolean
+  templatesAuthoring: boolean
 }
 
 const GUIDED_TOUR_TABS: GuidedTourTab[] = ["sources", "jobs", "runs", "items", "outputs"]
@@ -136,6 +145,43 @@ const writeGuidedTourState = (state: GuidedTourState): void => {
   }
 }
 
+const readTeachPointState = (): TeachPointState => {
+  if (typeof window === "undefined") {
+    return {
+      jobsCronFilters: false,
+      templatesAuthoring: false
+    }
+  }
+  try {
+    const raw = localStorage.getItem(TEACH_POINTS_STORAGE_KEY)
+    if (!raw) {
+      return {
+        jobsCronFilters: false,
+        templatesAuthoring: false
+      }
+    }
+    const parsed = JSON.parse(raw) as Partial<TeachPointState>
+    return {
+      jobsCronFilters: Boolean(parsed.jobsCronFilters),
+      templatesAuthoring: Boolean(parsed.templatesAuthoring)
+    }
+  } catch {
+    return {
+      jobsCronFilters: false,
+      templatesAuthoring: false
+    }
+  }
+}
+
+const writeTeachPointState = (state: TeachPointState): void => {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(TEACH_POINTS_STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // localStorage may be unavailable.
+  }
+}
+
 const resolveRunNotificationsPollMs = (): number => {
   if (typeof window === "undefined") return RUN_NOTIFICATIONS_POLL_MS
   const override = Number(
@@ -172,6 +218,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const [guidedTourState, setGuidedTourState] = React.useState<GuidedTourState>(() => readGuidedTourState())
   const [guidedTourOpen, setGuidedTourOpen] = React.useState(false)
   const [showGuidedTourCompletion, setShowGuidedTourCompletion] = React.useState(false)
+  const [teachPointState, setTeachPointState] = React.useState<TeachPointState>(() => readTeachPointState())
   const [documentVisible, setDocumentVisible] = React.useState<boolean>(() => {
     if (typeof document === "undefined") return true
     return document.visibilityState !== "hidden"
@@ -405,7 +452,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.jobs.title", "2. Create monitors"),
       description: t(
         "watchlists:guide.steps.jobs.description",
-        "Monitors turn feed inputs into scheduled runs and downstream outputs."
+        "Monitors define schedule, filters, and template-driven briefing outputs, including optional audio."
       )
     },
     {
@@ -429,15 +476,53 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.outputs.title", "5. Deliver reports"),
       description: t(
         "watchlists:guide.steps.outputs.description",
-        "Reports contain generated briefings and delivery outcomes."
+        "Reports contain generated briefings from monitor templates; regenerate with different template or audio settings."
       )
     }
   ]
   const guidedTourStep = guidedTourSteps[clampTourStep(guidedTourState.step)]
+  const activeTeachPoint = React.useMemo(() => {
+    if (activeTab === "jobs" && !teachPointState.jobsCronFilters) {
+      return {
+        key: "jobsCronFilters" as TeachPointKey,
+        title: t("watchlists:teachPoints.jobs.title", "Monitor setup tip"),
+        description: t(
+          "watchlists:teachPoints.jobs.description",
+          "Start with schedule presets first. Use cron and advanced filters only after your first successful run."
+        ),
+        actionLabel: t("watchlists:teachPoints.jobs.action", "Open Templates"),
+        actionTarget: "templates" as WatchlistsTabKey
+      }
+    }
+    if (activeTab === "templates" && !teachPointState.templatesAuthoring) {
+      return {
+        key: "templatesAuthoring" as TeachPointKey,
+        title: t("watchlists:teachPoints.templates.title", "Template setup tip"),
+        description: t(
+          "watchlists:teachPoints.templates.description",
+          "Start from a preset template, preview changes, then regenerate reports to compare text and audio output."
+        ),
+        actionLabel: t("watchlists:teachPoints.templates.action", "Open Reports"),
+        actionTarget: "outputs" as WatchlistsTabKey
+      }
+    }
+    return null
+  }, [activeTab, t, teachPointState.jobsCronFilters, teachPointState.templatesAuthoring])
+
+  const dismissTeachPoint = useCallback((key: TeachPointKey) => {
+    setTeachPointState((previous) => ({
+      ...previous,
+      [key]: true
+    }))
+  }, [])
 
   useEffect(() => {
     writeGuidedTourState(guidedTourState)
   }, [guidedTourState])
+
+  useEffect(() => {
+    writeTeachPointState(teachPointState)
+  }, [teachPointState])
 
   useEffect(() => {
     if (typeof document === "undefined") return
@@ -1063,6 +1148,28 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           </div>
         )}
       />
+
+      {activeTeachPoint && (
+        <Alert
+          type="info"
+          showIcon
+          className="mb-4"
+          data-testid="watchlists-teach-point-alert"
+          title={<span data-testid="watchlists-teach-point-title">{activeTeachPoint.title}</span>}
+          description={<span data-testid="watchlists-teach-point-description">{activeTeachPoint.description}</span>}
+          action={(
+            <Button
+              size="small"
+              data-testid={`watchlists-teach-point-action-${activeTeachPoint.key}`}
+              onClick={() => setActiveTab(activeTeachPoint.actionTarget as typeof activeTab)}
+            >
+              {activeTeachPoint.actionLabel}
+            </Button>
+          )}
+          closable
+          onClose={() => dismissTeachPoint(activeTeachPoint.key)}
+        />
+      )}
 
       {showGuidedTourCompletion && (
         <Alert

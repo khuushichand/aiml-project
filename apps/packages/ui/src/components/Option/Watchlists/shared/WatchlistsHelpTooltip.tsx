@@ -22,9 +22,9 @@ const TOPIC_FALLBACKS: Record<
   },
   cron: {
     label: "cron scheduling",
-    title: "How cron scheduling works",
+    title: "Set a reliable monitor schedule",
     description:
-      "Cron uses five fields: minute, hour, day-of-month, month, and day-of-week."
+      "Start with presets for daily or weekday runs. Use cron only when you need exact custom timing."
   },
   ttl: {
     label: "retention TTL",
@@ -34,9 +34,9 @@ const TOPIC_FALLBACKS: Record<
   },
   jinja2: {
     label: "Jinja2 templates",
-    title: "Using Jinja2 templates",
+    title: "Customize briefing format",
     description:
-      "Jinja2 lets you loop, branch, and format monitor data into reusable report templates."
+      "Start from a preset report template, then edit sections to shape briefing tone, structure, and audio script text."
   },
   claimClusters: {
     label: "claim clusters",
