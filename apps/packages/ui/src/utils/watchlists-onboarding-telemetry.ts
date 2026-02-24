@@ -8,6 +8,20 @@ const MAX_RECENT_EVENTS = 200
 
 export type WatchlistsQuickSetupStep = "feed" | "monitor" | "review"
 export type WatchlistsGuidedTourStep = 1 | 2 | 3 | 4 | 5
+export type WatchlistsPipelineSetupStep = "scope" | "briefing" | "review"
+export type WatchlistsPipelineSetupMode = "create" | "test"
+export type WatchlistsPipelinePreviewStatus =
+  | "success"
+  | "empty"
+  | "no_run_context"
+  | "template_empty"
+  | "error"
+export type WatchlistsPipelineFailureStage =
+  | "validation"
+  | "job_create"
+  | "run_trigger"
+  | "output_create"
+  | "rollback"
 
 type EventDetails = Record<string, string | number | boolean | null>
 
@@ -27,10 +41,35 @@ export type WatchlistsOnboardingTelemetryEvent =
   | { type: "guided_tour_completed" }
   | { type: "guided_tour_dismissed"; step: WatchlistsGuidedTourStep }
   | { type: "guided_tour_resumed"; step: WatchlistsGuidedTourStep }
+  | { type: "pipeline_setup_opened" }
+  | { type: "pipeline_setup_step_completed"; step: WatchlistsPipelineSetupStep }
+  | {
+      type: "pipeline_setup_preview_generated"
+      status: WatchlistsPipelinePreviewStatus
+      warning_count?: number
+      run_id?: number | null
+    }
+  | {
+      type: "pipeline_setup_submitted"
+      mode: WatchlistsPipelineSetupMode
+      runNow: boolean
+    }
+  | {
+      type: "pipeline_setup_completed"
+      mode: WatchlistsPipelineSetupMode
+      runNow: boolean
+      destination: "jobs" | "outputs"
+    }
+  | {
+      type: "pipeline_setup_failed"
+      stage: WatchlistsPipelineFailureStage
+      mode: WatchlistsPipelineSetupMode
+      runNow: boolean
+    }
   | { type: "first_run_succeeded"; runId: number }
   | { type: "first_output_succeeded"; outputId: number; format: string | null }
 
-type WatchlistsOnboardingRecentEvent = {
+export type WatchlistsOnboardingRecentEvent = {
   type: WatchlistsOnboardingTelemetryEvent["type"]
   at: number
   details: EventDetails
@@ -38,6 +77,62 @@ type WatchlistsOnboardingRecentEvent = {
 
 type StepCounters = Record<WatchlistsQuickSetupStep, number>
 type GuidedStepCounters = Record<`${WatchlistsGuidedTourStep}`, number>
+type PipelineStepCounters = Record<WatchlistsPipelineSetupStep, number>
+type PipelineModeCounters = Record<WatchlistsPipelineSetupMode, number>
+type PipelinePreviewCounters = Record<WatchlistsPipelinePreviewStatus, number>
+type PipelineFailureCounters = Record<WatchlistsPipelineFailureStage, number>
+
+export type WatchlistsOnboardingTelemetryEventType =
+  WatchlistsOnboardingTelemetryEvent["type"]
+
+export type WatchlistsOnboardingTelemetryQuery = {
+  eventTypes?: WatchlistsOnboardingTelemetryEventType[]
+  sinceMs?: number
+}
+
+export type WatchlistsUc2PipelineDashboardSnapshot = {
+  funnel: {
+    opened: number
+    stepScopeCompleted: number
+    stepBriefingCompleted: number
+    stepReviewCompleted: number
+    submitted: number
+    completed: number
+    completedWithRunNow: number
+    completedWithoutRunNow: number
+  }
+  firstSuccess: {
+    firstRunSucceeded: number
+    firstOutputSucceeded: number
+  }
+  rates: {
+    completionPerOpened: number
+    completionPerSubmitted: number
+    firstRunPerCompleted: number
+    firstOutputPerCompleted: number
+  }
+  dropOff: {
+    openedToScope: number
+    scopeToBriefing: number
+    briefingToReview: number
+    reviewToSubmitted: number
+    submittedToCompleted: number
+  }
+  preview: PipelinePreviewCounters
+  failures: PipelineFailureCounters
+  windowed: {
+    last24h: {
+      opened: number
+      completed: number
+      completionPerOpened: number
+    }
+    last7d: {
+      opened: number
+      completed: number
+      completionPerOpened: number
+    }
+  }
+}
 
 export type WatchlistsOnboardingTelemetryState = {
   version: 1
@@ -56,6 +151,16 @@ export type WatchlistsOnboardingTelemetryState = {
     dismissed: number
     resumed: number
     step_views: GuidedStepCounters
+  }
+  uc2_pipeline: {
+    opened: number
+    step_completed: PipelineStepCounters
+    submitted_by_mode: PipelineModeCounters
+    completed_by_mode: PipelineModeCounters
+    completed_with_run_now: number
+    completed_without_run_now: number
+    preview_by_status: PipelinePreviewCounters
+    failed_by_stage: PipelineFailureCounters
   }
   value_milestones: {
     first_run_succeeded: number
@@ -81,6 +186,33 @@ const DEFAULT_GUIDED_STEP_COUNTERS: GuidedStepCounters = {
   "5": 0
 }
 
+const DEFAULT_PIPELINE_STEP_COUNTERS: PipelineStepCounters = {
+  scope: 0,
+  briefing: 0,
+  review: 0
+}
+
+const DEFAULT_PIPELINE_MODE_COUNTERS: PipelineModeCounters = {
+  create: 0,
+  test: 0
+}
+
+const DEFAULT_PIPELINE_PREVIEW_COUNTERS: PipelinePreviewCounters = {
+  success: 0,
+  empty: 0,
+  no_run_context: 0,
+  template_empty: 0,
+  error: 0
+}
+
+const DEFAULT_PIPELINE_FAILURE_COUNTERS: PipelineFailureCounters = {
+  validation: 0,
+  job_create: 0,
+  run_trigger: 0,
+  output_create: 0,
+  rollback: 0
+}
+
 const DEFAULT_STATE: WatchlistsOnboardingTelemetryState = {
   version: 1,
   counters: {},
@@ -101,6 +233,16 @@ const DEFAULT_STATE: WatchlistsOnboardingTelemetryState = {
     dismissed: 0,
     resumed: 0,
     step_views: { ...DEFAULT_GUIDED_STEP_COUNTERS }
+  },
+  uc2_pipeline: {
+    opened: 0,
+    step_completed: { ...DEFAULT_PIPELINE_STEP_COUNTERS },
+    submitted_by_mode: { ...DEFAULT_PIPELINE_MODE_COUNTERS },
+    completed_by_mode: { ...DEFAULT_PIPELINE_MODE_COUNTERS },
+    completed_with_run_now: 0,
+    completed_without_run_now: 0,
+    preview_by_status: { ...DEFAULT_PIPELINE_PREVIEW_COUNTERS },
+    failed_by_stage: { ...DEFAULT_PIPELINE_FAILURE_COUNTERS }
   },
   value_milestones: {
     first_run_succeeded: 0,
@@ -172,6 +314,30 @@ const readTelemetryState =
           ...(state.guided_tour?.step_views || {})
         }
       },
+      uc2_pipeline: {
+        ...DEFAULT_STATE.uc2_pipeline,
+        ...(state.uc2_pipeline || {}),
+        step_completed: {
+          ...DEFAULT_PIPELINE_STEP_COUNTERS,
+          ...(state.uc2_pipeline?.step_completed || {})
+        },
+        submitted_by_mode: {
+          ...DEFAULT_PIPELINE_MODE_COUNTERS,
+          ...(state.uc2_pipeline?.submitted_by_mode || {})
+        },
+        completed_by_mode: {
+          ...DEFAULT_PIPELINE_MODE_COUNTERS,
+          ...(state.uc2_pipeline?.completed_by_mode || {})
+        },
+        preview_by_status: {
+          ...DEFAULT_PIPELINE_PREVIEW_COUNTERS,
+          ...(state.uc2_pipeline?.preview_by_status || {})
+        },
+        failed_by_stage: {
+          ...DEFAULT_PIPELINE_FAILURE_COUNTERS,
+          ...(state.uc2_pipeline?.failed_by_stage || {})
+        }
+      },
       value_milestones: {
         ...DEFAULT_STATE.value_milestones,
         ...(state.value_milestones || {})
@@ -227,6 +393,29 @@ export const trackWatchlistsOnboardingTelemetry = async (
       case "guided_tour_step_viewed":
         state.guided_tour.step_views[String(event.step) as keyof GuidedStepCounters] += 1
         break
+      case "pipeline_setup_opened":
+        state.uc2_pipeline.opened += 1
+        break
+      case "pipeline_setup_step_completed":
+        state.uc2_pipeline.step_completed[event.step] += 1
+        break
+      case "pipeline_setup_preview_generated":
+        state.uc2_pipeline.preview_by_status[event.status] += 1
+        break
+      case "pipeline_setup_submitted":
+        state.uc2_pipeline.submitted_by_mode[event.mode] += 1
+        break
+      case "pipeline_setup_completed":
+        state.uc2_pipeline.completed_by_mode[event.mode] += 1
+        if (event.runNow) {
+          state.uc2_pipeline.completed_with_run_now += 1
+        } else {
+          state.uc2_pipeline.completed_without_run_now += 1
+        }
+        break
+      case "pipeline_setup_failed":
+        state.uc2_pipeline.failed_by_stage[event.stage] += 1
+        break
       case "first_run_succeeded":
         if (state.value_milestones.first_run_succeeded > 0) {
           shouldRecord = false
@@ -272,4 +461,136 @@ export const getWatchlistsOnboardingTelemetryState =
 
 export const resetWatchlistsOnboardingTelemetryState = async () => {
   await storage.set(WATCHLISTS_ONBOARDING_TELEMETRY_STORAGE_KEY, DEFAULT_STATE)
+}
+
+export const WATCHLISTS_UC2_PIPELINE_EVENT_TYPES: WatchlistsOnboardingTelemetryEventType[] = [
+  "pipeline_setup_opened",
+  "pipeline_setup_step_completed",
+  "pipeline_setup_preview_generated",
+  "pipeline_setup_submitted",
+  "pipeline_setup_completed",
+  "pipeline_setup_failed"
+]
+
+export const queryWatchlistsOnboardingTelemetryEvents = (
+  state: WatchlistsOnboardingTelemetryState | null | undefined,
+  query: WatchlistsOnboardingTelemetryQuery = {}
+): WatchlistsOnboardingRecentEvent[] => {
+  if (!state || !Array.isArray(state.recent_events)) return []
+
+  const eventTypeFilter =
+    Array.isArray(query.eventTypes) && query.eventTypes.length > 0
+      ? new Set(query.eventTypes)
+      : null
+  const sinceMs =
+    typeof query.sinceMs === "number" && Number.isFinite(query.sinceMs)
+      ? query.sinceMs
+      : null
+
+  return state.recent_events
+    .filter((event) => {
+      if (!event || typeof event !== "object") return false
+      if (eventTypeFilter && !eventTypeFilter.has(event.type)) return false
+      if (sinceMs !== null && event.at < sinceMs) return false
+      return true
+    })
+    .slice()
+    .sort((a, b) => b.at - a.at)
+}
+
+const toFiniteRate = (numerator: number, denominator: number): number => {
+  if (!Number.isFinite(numerator) || numerator <= 0) return 0
+  if (!Number.isFinite(denominator) || denominator <= 0) return 0
+  return numerator / denominator
+}
+
+const sumNumberRecord = (value: Record<string, number>): number =>
+  Object.values(value || {}).reduce((sum, entry) => {
+    const next = Number(entry)
+    return Number.isFinite(next) && next > 0 ? sum + next : sum
+  }, 0)
+
+export const buildWatchlistsUc2PipelineDashboardSnapshot = (
+  state: WatchlistsOnboardingTelemetryState | null | undefined,
+  now = Date.now()
+): WatchlistsUc2PipelineDashboardSnapshot => {
+  const pipeline = state?.uc2_pipeline || DEFAULT_STATE.uc2_pipeline
+  const opened = pipeline.opened || 0
+  const stepScopeCompleted = pipeline.step_completed.scope || 0
+  const stepBriefingCompleted = pipeline.step_completed.briefing || 0
+  const stepReviewCompleted = pipeline.step_completed.review || 0
+  const submitted = sumNumberRecord(pipeline.submitted_by_mode)
+  const completed = sumNumberRecord(pipeline.completed_by_mode)
+  const completedWithRunNow = pipeline.completed_with_run_now || 0
+  const completedWithoutRunNow = pipeline.completed_without_run_now || 0
+
+  const firstRunSucceeded = state?.value_milestones.first_run_succeeded || 0
+  const firstOutputSucceeded = state?.value_milestones.first_output_succeeded || 0
+
+  const openedLast24h = queryWatchlistsOnboardingTelemetryEvents(state, {
+    eventTypes: ["pipeline_setup_opened"],
+    sinceMs: now - 24 * 60 * 60 * 1000
+  }).length
+  const completedLast24h = queryWatchlistsOnboardingTelemetryEvents(state, {
+    eventTypes: ["pipeline_setup_completed"],
+    sinceMs: now - 24 * 60 * 60 * 1000
+  }).length
+  const openedLast7d = queryWatchlistsOnboardingTelemetryEvents(state, {
+    eventTypes: ["pipeline_setup_opened"],
+    sinceMs: now - 7 * 24 * 60 * 60 * 1000
+  }).length
+  const completedLast7d = queryWatchlistsOnboardingTelemetryEvents(state, {
+    eventTypes: ["pipeline_setup_completed"],
+    sinceMs: now - 7 * 24 * 60 * 60 * 1000
+  }).length
+
+  return {
+    funnel: {
+      opened,
+      stepScopeCompleted,
+      stepBriefingCompleted,
+      stepReviewCompleted,
+      submitted,
+      completed,
+      completedWithRunNow,
+      completedWithoutRunNow
+    },
+    firstSuccess: {
+      firstRunSucceeded,
+      firstOutputSucceeded
+    },
+    rates: {
+      completionPerOpened: toFiniteRate(completed, opened),
+      completionPerSubmitted: toFiniteRate(completed, submitted),
+      firstRunPerCompleted: toFiniteRate(firstRunSucceeded, completed),
+      firstOutputPerCompleted: toFiniteRate(firstOutputSucceeded, completed)
+    },
+    dropOff: {
+      openedToScope: Math.max(0, opened - stepScopeCompleted),
+      scopeToBriefing: Math.max(0, stepScopeCompleted - stepBriefingCompleted),
+      briefingToReview: Math.max(0, stepBriefingCompleted - stepReviewCompleted),
+      reviewToSubmitted: Math.max(0, stepReviewCompleted - submitted),
+      submittedToCompleted: Math.max(0, submitted - completed)
+    },
+    preview: {
+      ...DEFAULT_PIPELINE_PREVIEW_COUNTERS,
+      ...(pipeline.preview_by_status || {})
+    },
+    failures: {
+      ...DEFAULT_PIPELINE_FAILURE_COUNTERS,
+      ...(pipeline.failed_by_stage || {})
+    },
+    windowed: {
+      last24h: {
+        opened: openedLast24h,
+        completed: completedLast24h,
+        completionPerOpened: toFiniteRate(completedLast24h, openedLast24h)
+      },
+      last7d: {
+        opened: openedLast7d,
+        completed: completedLast7d,
+        completionPerOpened: toFiniteRate(completedLast7d, openedLast7d)
+      }
+    }
+  }
 }

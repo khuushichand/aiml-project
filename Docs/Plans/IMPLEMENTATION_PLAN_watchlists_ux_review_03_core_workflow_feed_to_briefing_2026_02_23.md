@@ -153,4 +153,26 @@
 **Tests**:
 - Add telemetry event contract tests for pipeline milestones.
 - Run end-to-end regression for pipeline setup on clean user state.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 5 Completion Notes (2026-02-24)
+
+- Extended the existing onboarding metrics module in `apps/packages/ui/src/utils/watchlists-onboarding-telemetry.ts` with UC2 pipeline funnel instrumentation:
+  - new pipeline milestone events (`opened`, `step_completed`, `preview_generated`, `submitted`, `completed`, `failed`),
+  - explicit failure-stage and preview-status counters,
+  - dashboard/report helpers (`queryWatchlistsOnboardingTelemetryEvents`, `buildWatchlistsUc2PipelineDashboardSnapshot`) to track completion and first-success rates.
+- Wired UC2 funnel event emitters into the pipeline builder flow in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`:
+  - modal open, step progression, preview outcomes, submit/completion, and failure/rollback stages.
+- Added Stage 5 telemetry contract and UI regression coverage:
+  - `apps/packages/ui/src/utils/__tests__/watchlists-onboarding-telemetry.test.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
+  - retained payload contract coverage in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts`
+  - validated first-success integration stability in:
+    - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
+    - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+- Published UC2 KPI + QA/demo runbook:
+  - `Docs/Plans/WATCHLISTS_UC2_PIPELINE_KPI_RUNBOOK_2026_02_24.md`
+- Verification evidence:
+  - `bunx vitest run src/utils/__tests__/watchlists-onboarding-telemetry.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts --maxWorkers=1 --no-file-parallelism`
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists/OverviewTab apps/packages/ui/src/utils -f json -o /tmp/bandit_watchlists_group03_stage5_2026_02_24.json`

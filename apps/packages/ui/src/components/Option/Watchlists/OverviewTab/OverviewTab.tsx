@@ -494,6 +494,7 @@ export const OverviewTab: React.FC = () => {
     setPipelinePreviewRunId(null)
     setPipelinePreviewWarnings([])
     setPipelineSetupOpen(true)
+    void trackWatchlistsOnboardingTelemetry({ type: "pipeline_setup_opened" })
     void loadPipelineSources()
   }, [loadPipelineSources, pipelineSetupForm])
 
@@ -515,8 +516,10 @@ export const OverviewTab: React.FC = () => {
 
   const handlePipelineSetupNext = useCallback(async () => {
     try {
+      let completedStep: "scope" | "briefing" | null = null
       if (pipelineSetupStep === 0) {
         await pipelineSetupForm.validateFields(["sourceIds"])
+        completedStep = "scope"
       } else if (pipelineSetupStep === 1) {
         const includeAudio = Boolean(pipelineSetupForm.getFieldValue("includeAudio"))
         const fields: Array<keyof PipelineBuilderValues> = [
@@ -528,6 +531,13 @@ export const OverviewTab: React.FC = () => {
           fields.push("audioVoice", "targetAudioMinutes")
         }
         await pipelineSetupForm.validateFields(fields)
+        completedStep = "briefing"
+      }
+      if (completedStep) {
+        void trackWatchlistsOnboardingTelemetry({
+          type: "pipeline_setup_step_completed",
+          step: completedStep
+        })
       }
       setPipelineSetupStep((prev) => Math.min(prev + 1, PIPELINE_SETUP_MAX_STEP))
     } catch {
@@ -556,6 +566,10 @@ export const OverviewTab: React.FC = () => {
             "Select a template before generating preview."
           )
         )
+        void trackWatchlistsOnboardingTelemetry({
+          type: "pipeline_setup_preview_generated",
+          status: "error"
+        })
         return
       }
 
@@ -570,6 +584,10 @@ export const OverviewTab: React.FC = () => {
             "Run any monitor once, then generate template preview."
           )
         )
+        void trackWatchlistsOnboardingTelemetry({
+          type: "pipeline_setup_preview_generated",
+          status: "no_run_context"
+        })
         return
       }
 
@@ -583,6 +601,11 @@ export const OverviewTab: React.FC = () => {
             "Template has no content. Save template content before previewing."
           )
         )
+        void trackWatchlistsOnboardingTelemetry({
+          type: "pipeline_setup_preview_generated",
+          status: "template_empty",
+          run_id: completedRun.id
+        })
         return
       }
 
@@ -591,8 +614,14 @@ export const OverviewTab: React.FC = () => {
         completedRun.id,
         templateFormat
       )
+      const rendered = String(previewResult.rendered || "")
+      const warningCount = Array.isArray(previewResult.warnings)
+        ? previewResult.warnings.filter(
+            (warning) => typeof warning === "string" && warning.trim().length > 0
+          ).length
+        : 0
       setPipelinePreviewRunId(completedRun.id)
-      setPipelinePreviewRendered(String(previewResult.rendered || ""))
+      setPipelinePreviewRendered(rendered)
       setPipelinePreviewWarnings(
         Array.isArray(previewResult.warnings)
           ? previewResult.warnings
@@ -600,13 +629,26 @@ export const OverviewTab: React.FC = () => {
             .map((warning) => warning.trim())
           : []
       )
-      if (!String(previewResult.rendered || "").trim()) {
+      if (!rendered.trim()) {
         setPipelinePreviewError(
           t(
             "watchlists:overview.pipelineSetup.preview.emptyResult",
             "Template preview returned no output for this run context."
           )
         )
+        void trackWatchlistsOnboardingTelemetry({
+          type: "pipeline_setup_preview_generated",
+          status: "empty",
+          run_id: completedRun.id,
+          warning_count: warningCount
+        })
+      } else {
+        void trackWatchlistsOnboardingTelemetry({
+          type: "pipeline_setup_preview_generated",
+          status: "success",
+          run_id: completedRun.id,
+          warning_count: warningCount
+        })
       }
     } catch (err) {
       console.error("Failed to generate pipeline template preview:", err)
@@ -616,6 +658,10 @@ export const OverviewTab: React.FC = () => {
           "Template preview failed. Verify template and run context, then retry."
         )
       )
+      void trackWatchlistsOnboardingTelemetry({
+        type: "pipeline_setup_preview_generated",
+        status: "error"
+      })
     } finally {
       setPipelinePreviewLoading(false)
     }
@@ -627,6 +673,9 @@ export const OverviewTab: React.FC = () => {
     let createdJobId: number | null = null
     let createdRunId: number | null = null
     const mode = options?.mode || "create"
+    let shouldRunNowForTelemetry = false
+    let pipelineFailureStage: "validation" | "job_create" | "run_trigger" | "output_create" | "rollback" =
+      "job_create"
 
     try {
       setPipelineSetupSubmitting(true)
@@ -635,6 +684,7 @@ export const OverviewTab: React.FC = () => {
         ...pipelineSetupForm.getFieldsValue(true)
       } as PipelineBuilderValues
       const shouldRunNow = Boolean(values.runNow || options?.forceRunNow)
+      shouldRunNowForTelemetry = shouldRunNow
 
       const draft = toPipelineDraft(values)
       const validation = validateBriefingPipelineDraft(draft)
@@ -660,9 +710,26 @@ export const OverviewTab: React.FC = () => {
             "Review the highlighted pipeline fields."
           )
         )
+        void trackWatchlistsOnboardingTelemetry({
+          type: "pipeline_setup_failed",
+          stage: "validation",
+          mode,
+          runNow: shouldRunNow
+        })
         return
       }
 
+      void trackWatchlistsOnboardingTelemetry({
+        type: "pipeline_setup_step_completed",
+        step: "review"
+      })
+      void trackWatchlistsOnboardingTelemetry({
+        type: "pipeline_setup_submitted",
+        mode,
+        runNow: shouldRunNow
+      })
+
+      pipelineFailureStage = "job_create"
       const job = await createWatchlistJob(toPipelineJobCreatePayload(draft))
       createdJobId = job.id
 
@@ -670,6 +737,12 @@ export const OverviewTab: React.FC = () => {
         closePipelineSetup()
         void loadOverview(false)
         setActiveTab("jobs")
+        void trackWatchlistsOnboardingTelemetry({
+          type: "pipeline_setup_completed",
+          mode,
+          runNow: false,
+          destination: "jobs"
+        })
         message.success(
           t(
             "watchlists:overview.pipelineSetup.created",
@@ -679,14 +752,22 @@ export const OverviewTab: React.FC = () => {
         return
       }
 
+      pipelineFailureStage = "run_trigger"
       const run = await triggerWatchlistRun(job.id)
       createdRunId = run.id
+      pipelineFailureStage = "output_create"
       const output = await createWatchlistOutput(
         toPipelineOutputCreatePayload(run.id, draft)
       )
 
       closePipelineSetup()
       void loadOverview(false)
+      void trackWatchlistsOnboardingTelemetry({
+        type: "pipeline_setup_completed",
+        mode,
+        runNow: true,
+        destination: "outputs"
+      })
       if (typeof setOutputsRunFilter === "function") {
         setOutputsRunFilter(run.id)
       }
@@ -705,6 +786,12 @@ export const OverviewTab: React.FC = () => {
       )
     } catch (err) {
       console.error("Failed to complete pipeline setup:", err)
+      void trackWatchlistsOnboardingTelemetry({
+        type: "pipeline_setup_failed",
+        stage: pipelineFailureStage,
+        mode,
+        runNow: shouldRunNowForTelemetry
+      })
       if (createdJobId != null && createdRunId == null) {
         try {
           await deleteWatchlistJob(createdJobId)
@@ -716,6 +803,12 @@ export const OverviewTab: React.FC = () => {
           )
         } catch (rollbackError) {
           console.error("Failed to rollback pipeline monitor creation:", rollbackError)
+          void trackWatchlistsOnboardingTelemetry({
+            type: "pipeline_setup_failed",
+            stage: "rollback",
+            mode,
+            runNow: shouldRunNowForTelemetry
+          })
           message.error(
             t(
               "watchlists:overview.pipelineSetup.rollbackFailed",

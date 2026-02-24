@@ -596,6 +596,32 @@ describe("OverviewTab quick setup flow", () => {
     expect(mockState.setOutputsRunFilterMock).toHaveBeenCalledWith(404)
     expect(mockState.setActiveTabMock).toHaveBeenLastCalledWith("outputs")
     expect(mockState.openOutputPreviewMock).toHaveBeenCalledWith(505)
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_opened"
+    })
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_step_completed",
+      step: "scope"
+    })
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_step_completed",
+      step: "briefing"
+    })
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_step_completed",
+      step: "review"
+    })
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_submitted",
+      mode: "create",
+      runNow: true
+    })
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_completed",
+      mode: "create",
+      runNow: true,
+      destination: "outputs"
+    })
   })
 
   it("rolls back monitor creation when pipeline creation fails before completion", async () => {
@@ -639,6 +665,12 @@ describe("OverviewTab quick setup flow", () => {
     })
     expect(mockState.openOutputPreviewMock).not.toHaveBeenCalled()
     expect(mockState.openRunDetailMock).not.toHaveBeenCalled()
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_failed",
+      stage: "run_trigger",
+      mode: "create",
+      runNow: true
+    })
     consoleErrorSpy.mockRestore()
   })
 
@@ -707,6 +739,12 @@ describe("OverviewTab quick setup flow", () => {
     expect(screen.getByTestId("watchlists-pipeline-preview-rendered")).toHaveTextContent(
       "Preview briefing output"
     )
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_preview_generated",
+      status: "success",
+      run_id: 777,
+      warning_count: 0
+    })
   })
 
   it("shows fallback guidance when template preview has no completed run context", async () => {
@@ -751,6 +789,10 @@ describe("OverviewTab quick setup flow", () => {
       expect(screen.getByTestId("watchlists-pipeline-preview-error")).toHaveTextContent(
         "Run any monitor once, then generate template preview."
       )
+    })
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_preview_generated",
+      status: "no_run_context"
     })
   })
 
@@ -802,6 +844,17 @@ describe("OverviewTab quick setup flow", () => {
     expect(mockState.setOutputsRunFilterMock).toHaveBeenCalledWith(404)
     expect(mockState.setActiveTabMock).toHaveBeenLastCalledWith("outputs")
     expect(mockState.openOutputPreviewMock).toHaveBeenCalledWith(505)
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_submitted",
+      mode: "test",
+      runNow: true
+    })
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "pipeline_setup_completed",
+      mode: "test",
+      runNow: true,
+      destination: "outputs"
+    })
   })
 
   it("restores focus to guided setup trigger after quick setup modal closes", async () => {
