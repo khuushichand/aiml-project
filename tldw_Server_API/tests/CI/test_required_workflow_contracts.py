@@ -17,3 +17,15 @@ def test_coverage_required_is_path_conditional() -> None:
     workflow = _load(".github/workflows/coverage-required.yml")
     jobs = workflow["jobs"]
     assert "coverage-required" in jobs
+
+
+def test_frontend_required_lane_exists() -> None:
+    workflow = _load(".github/workflows/frontend-required.yml")
+    jobs = workflow["jobs"]
+    assert "frontend-required" in jobs
+
+
+def test_e2e_required_lane_exists_and_is_conditional() -> None:
+    workflow = _load(".github/workflows/e2e-required.yml")
+    jobs = workflow["jobs"]
+    assert "e2e-required" in jobs
