@@ -131,4 +131,18 @@
 **Tests**:
 - Run focused regression suite for navigation and tab behavior.
 - Verify docs links and help topic routing against updated IA labels.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 5 Completion Notes (2026-02-24)
+
+- Added IA adoption validation artifact:
+  - `Docs/Plans/WATCHLISTS_IA_ADOPTION_VALIDATION_CHECKLIST_2026_02_24.md`
+- Documented:
+  - baseline and reduced IA navigation maps,
+  - system-to-user terminology matrix,
+  - QA checklist for primary transitions and terminology consistency,
+  - UC1/UC2 baseline funnel values and post-change comparison method.
+- Added docs-link routing regression coverage to ensure help routing stays aligned with canonical labels:
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/routes/__tests__/option-watchlists.route-state.test.tsx`

@@ -187,6 +187,33 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     expect(screen.getByTestId("watchlists-beta-report-link")).toHaveAttribute("href", WATCHLISTS_ISSUE_REPORT_URL)
   })
 
+  it("keeps context docs routing aligned with each canonical tab help label", () => {
+    const expectations: Array<{
+      tab: typeof mocks.state.activeTab
+      href: string
+      label: string
+    }> = [
+      { tab: "overview", href: WATCHLISTS_TAB_HELP_DOCS.overview, label: "Overview guidance" },
+      { tab: "sources", href: WATCHLISTS_TAB_HELP_DOCS.sources, label: "Feeds setup" },
+      { tab: "jobs", href: WATCHLISTS_TAB_HELP_DOCS.jobs, label: "Monitor scheduling" },
+      { tab: "runs", href: WATCHLISTS_TAB_HELP_DOCS.runs, label: "Activity guidance" },
+      { tab: "items", href: WATCHLISTS_TAB_HELP_DOCS.items, label: "Article review" },
+      { tab: "outputs", href: WATCHLISTS_TAB_HELP_DOCS.outputs, label: "Reports guidance" },
+      { tab: "templates", href: WATCHLISTS_TAB_HELP_DOCS.templates, label: "Template authoring" },
+      { tab: "settings", href: WATCHLISTS_TAB_HELP_DOCS.settings, label: "Workspace settings" }
+    ]
+
+    const { rerender } = render(<WatchlistsPlaygroundPage />)
+    const link = () => screen.getByTestId("watchlists-context-docs-link")
+
+    for (const expectation of expectations) {
+      mocks.state.activeTab = expectation.tab
+      rerender(<WatchlistsPlaygroundPage />)
+      expect(link()).toHaveAttribute("href", expectation.href)
+      expect(link()).toHaveTextContent(`Learn more: ${expectation.label}`)
+    }
+  })
+
   it("renders canonical tab and quick-action labels for the primary workflow", () => {
     render(<WatchlistsPlaygroundPage />)
 
