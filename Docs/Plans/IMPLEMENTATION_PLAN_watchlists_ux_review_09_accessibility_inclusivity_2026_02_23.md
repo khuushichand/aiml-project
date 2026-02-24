@@ -67,7 +67,7 @@
 **Tests**:
 - Add visual tests for status badge/icon combinations.
 - Add responsive behavior tests for small-screen interactions.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Accessibility Governance and Regression Gates
 **Goal**: Prevent accessibility regressions as Watchlists evolves.
@@ -124,3 +124,16 @@
 - Stage 3 validation evidence:
   - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx --maxWorkers=1 --no-file-parallelism`
   - `/tmp/bandit_watchlists_group09_stage3_2026_02_24.json`
+
+### 2026-02-24 - Stage 4 completion (visual + cognitive signaling hardening)
+
+- Added explicit text labels next to active-state toggles so monitor/feed state is never conveyed by switch color alone:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobsTab.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/SourcesTab.tsx`
+- Expanded accessibility regression coverage for state signaling and semantic discoverability:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx`
+- Stage 4 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage4_2026_02_24.json`

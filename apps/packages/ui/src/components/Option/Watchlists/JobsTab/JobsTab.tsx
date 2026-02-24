@@ -408,14 +408,26 @@ export const JobsTab: React.FC = () => {
       title: t("watchlists:jobs.columns.active", "Active"),
       dataIndex: "active",
       key: "active",
-      width: 80,
+      width: 140,
       align: "center",
       render: (active: boolean, record) => (
-        <Switch
-          checked={active}
-          size="small"
-          onChange={() => handleToggleActive(record)}
-        />
+        <span className="inline-flex items-center gap-2">
+          <Switch
+            checked={active}
+            size="small"
+            aria-label={
+              active
+                ? t("watchlists:jobs.disableMonitor", "Disable monitor")
+                : t("watchlists:jobs.enableMonitor", "Enable monitor")
+            }
+            onChange={() => handleToggleActive(record)}
+          />
+          <span className="text-xs text-text-muted">
+            {active
+              ? t("common:enabled", "Enabled")
+              : t("common:disabled", "Disabled")}
+          </span>
+        </span>
       )
     },
     {

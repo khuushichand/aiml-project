@@ -86,9 +86,26 @@ vi.mock("antd", () => {
     Modal: { confirm: vi.fn() },
     Select,
     Space: ({ children }: any) => <>{children}</>,
-    Switch: () => <button type="button">switch</button>,
-    Table: ({ "aria-label": ariaLabel }: any) => (
-      <div data-testid="sources-table" role="table" aria-label={ariaLabel} />
+    Switch: ({ "aria-label": ariaLabel }: any) => (
+      <button type="button" aria-label={ariaLabel}>
+        switch
+      </button>
+    ),
+    Table: ({ dataSource = [], columns = [], "aria-label": ariaLabel }: any) => (
+      <table data-testid="sources-table" role="table" aria-label={ariaLabel}>
+        <tbody>
+          {dataSource.map((record: any, rowIndex: number) => (
+            <tr key={record.id ?? rowIndex}>
+              {columns.map((column: any, columnIndex: number) => {
+                const key = String(column.key ?? column.dataIndex ?? columnIndex)
+                const value = column.dataIndex ? record[column.dataIndex] : undefined
+                const content = column.render ? column.render(value, record, rowIndex) : value
+                return <td key={key}>{content}</td>
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     ),
     Tag: ({ children }: any) => <span>{children}</span>,
     Tooltip: ({ children }: any) => <>{children}</>,
@@ -213,7 +230,7 @@ describe("SourcesTab load-error retry", () => {
     })
   })
 
-  it("labels the feeds table for screen reader navigation", async () => {
+  it("labels the feeds table and exposes explicit active-state text", async () => {
     const sourceRecord = {
       id: 44,
       name: "AI Feed",
@@ -242,5 +259,7 @@ describe("SourcesTab load-error retry", () => {
     await waitFor(() => {
       expect(screen.getByRole("table", { name: "Feeds table" })).toBeInTheDocument()
     })
+    expect(screen.getByText("Enabled")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Disable feed" })).toBeInTheDocument()
   })
 })

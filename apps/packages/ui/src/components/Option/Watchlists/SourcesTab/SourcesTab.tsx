@@ -1286,14 +1286,26 @@ export const SourcesTab: React.FC = () => {
       title: t("watchlists:sources.columns.active", "Active"),
       dataIndex: "active",
       key: "active",
-      width: 80,
+      width: 140,
       align: "center",
       render: (active: boolean, record) => (
-        <Switch
-          checked={active}
-          size="small"
-          onChange={() => handleToggleActive(record)}
-        />
+        <span className="inline-flex items-center gap-2">
+          <Switch
+            checked={active}
+            size="small"
+            aria-label={
+              active
+                ? t("watchlists:sources.disableSource", "Disable feed")
+                : t("watchlists:sources.enableSource", "Enable feed")
+            }
+            onChange={() => handleToggleActive(record)}
+          />
+          <span className="text-xs text-text-muted">
+            {active
+              ? t("common:enabled", "Enabled")
+              : t("common:disabled", "Disabled")}
+          </span>
+        </span>
       )
     },
     {
