@@ -21,6 +21,14 @@
 - [ ] For Flashcards drawer changes: use `FLASHCARDS_DRAWER_WIDTH_PX` and keep footer action order `Cancel -> secondary -> primary`
 - [ ] For Flashcards help/copy/import UX changes: update `Docs/User_Guides/Flashcards_Study_Guide.md` and keep in-app help links pointed at guide section anchors
 
+## Watchlists Accessibility Checklist (Group 09 Stage 5)
+
+- [ ] If Watchlists UI behavior changed: `cd apps/packages/ui && bun run test:watchlists:a11y` passes locally
+- [ ] If Watchlists UI behavior changed: keyboard-only path still works for Overview -> Feeds -> Monitors -> Activity -> Articles -> Reports
+- [ ] If Watchlists UI behavior changed: list/table labels and live-region copy remain localized (no new hardcoded assistive text)
+- [ ] If Watchlists UI behavior changed: monitor/feed active state is not color-only (explicit text or icon signal is present)
+- [ ] If Watchlists UI behavior changed: known assistive-tech constraints reviewed in `Docs/Plans/WATCHLISTS_ASSISTIVE_TECH_AUDIT_2026_02_24.md`
+
 ## Risk & Rollback
 
 - Risk level: Low / Medium / High
