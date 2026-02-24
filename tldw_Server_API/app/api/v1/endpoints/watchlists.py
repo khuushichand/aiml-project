@@ -239,10 +239,12 @@ _WATCHLISTS_UX_BASELINE = {
 
 
 def _utcnow_iso() -> str:
+    """Return the current UTC timestamp as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _safe_ratio(numerator: int | float, denominator: int | float) -> float:
+    """Return a defensive ratio, defaulting to ``0.0`` for invalid/zero denominators."""
     try:
         num = float(numerator)
         den = float(denominator)
@@ -254,16 +256,19 @@ def _safe_ratio(numerator: int | float, denominator: int | float) -> float:
 
 
 def _to_percent(value: int | float) -> float:
+    """Convert a decimal ratio to percentage points."""
     return float(value) * 100.0
 
 
 def _percent_delta(current_percent: float, baseline_percent: float) -> float:
+    """Return percentage-point delta from baseline."""
     return float(current_percent) - float(baseline_percent)
 
 
 def _normalize_ia_summary(
     items: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
+    """Normalize IA telemetry rows into a baseline/experimental summary payload."""
     baseline: dict[str, Any] = {
         "baseline": {},
         "experimental": {},
@@ -294,6 +299,7 @@ def _build_thresholds(
     onboarding_summary: dict[str, Any],
     uc2_backend: dict[str, Any],
 ) -> list[WatchlistTelemetryThresholdSummary]:
+    """Build reporting-only RC threshold evaluations from onboarding and backend telemetry."""
     rates = onboarding_summary.get("rates", {}) if isinstance(onboarding_summary, dict) else {}
     timings = onboarding_summary.get("timings", {}) if isinstance(onboarding_summary, dict) else {}
 
@@ -2436,7 +2442,8 @@ async def delete_group(
 async def get_watchlist_settings(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
-):
+) -> dict[str, Any]:
+    """Return watchlists runtime defaults and active backend type for the current user."""
     backend_label = "sqlite"
     backend_type = getattr(getattr(db, "backend", None), "backend_type", None)
     backend_name = str(getattr(backend_type, "name", "") or "").lower()
@@ -2461,6 +2468,8 @@ async def record_watchlists_onboarding_telemetry(
     payload: WatchlistOnboardingTelemetryIngestRequest,
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
+) -> WatchlistOnboardingTelemetryIngestResponse:
+    """Record a single onboarding telemetry event and return accept/reject outcome."""
 ):
     _ = current_user
     try:
@@ -2493,6 +2502,8 @@ async def get_watchlists_onboarding_telemetry_summary(
     until: str | None = Query(default=None),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
+) -> WatchlistOnboardingTelemetrySummaryResponse:
+    """Summarize onboarding telemetry counters/rates/timings for an optional time window."""
 ):
     started = time.perf_counter()
     status_label = "ok"
@@ -2531,6 +2542,8 @@ async def get_watchlists_rc_telemetry_summary(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
     collections_db = Depends(get_collections_db_for_user),
+) -> WatchlistRcTelemetrySummaryResponse:
+    """Return combined onboarding, IA, and UC2 backend telemetry for RC reporting."""
 ):
     started = time.perf_counter()
     status_label = "ok"

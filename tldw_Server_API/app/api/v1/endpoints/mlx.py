@@ -20,10 +20,12 @@ router = APIRouter()
 
 
 def _resolve_mlx_registry() -> MLXSessionRegistry:
+    """Resolve the shared MLX session registry instance."""
     return get_mlx_registry()
 
 
 def _normalize_mlx_response(payload: Any) -> dict[str, Any]:
+    """Normalize provider payloads into a dict that always includes backend metadata."""
     if isinstance(payload, dict):
         normalized = dict(payload)
     else:
@@ -33,6 +35,7 @@ def _normalize_mlx_response(payload: Any) -> dict[str, Any]:
 
 
 def _normalize_model_path(value: Any) -> str | None:
+    """Normalize optional model path strings by trimming and coercing empties to ``None``."""
     if isinstance(value, str):
         trimmed = value.strip()
         return trimmed or None
@@ -47,7 +50,8 @@ def _normalize_model_path(value: Any) -> str | None:
 async def load_mlx_model(
     payload: MLXLoadRequest = Body(default_factory=MLXLoadRequest),
     registry: MLXSessionRegistry = Depends(_resolve_mlx_registry),
-):
+) -> dict[str, Any]:
+    """Load or swap the active MLX model and return normalized provider status."""
     overrides = payload.model_dump(exclude_none=True)
     model_path = _normalize_model_path(overrides.pop("model_path", None))
     if model_path is None:
@@ -72,7 +76,8 @@ async def load_mlx_model(
 async def unload_mlx_model(
     payload: MLXUnloadRequest = Body(default_factory=MLXUnloadRequest),
     registry: MLXSessionRegistry = Depends(_resolve_mlx_registry),
-):
+) -> dict[str, Any]:
+    """Unload the currently active MLX model and return normalized provider status."""
     try:
         _ = payload
         return _normalize_mlx_response(registry.unload())
@@ -88,7 +93,8 @@ async def unload_mlx_model(
 )
 async def get_mlx_status(
     registry: MLXSessionRegistry = Depends(_resolve_mlx_registry),
-):
+) -> dict[str, Any]:
+    """Return normalized runtime status for the MLX provider registry."""
     try:
         return _normalize_mlx_response(registry.status())
     except Exception as e:

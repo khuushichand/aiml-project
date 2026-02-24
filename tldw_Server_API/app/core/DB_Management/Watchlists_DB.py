@@ -2441,6 +2441,7 @@ class WatchlistsDatabase:
         event_at: str | None,
         details: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        """Validate and persist a single onboarding telemetry event for the current user."""
         normalized_session = str(session_id or "").strip()
         if not normalized_session:
             return {"accepted": False, "code": "session_id_required"}
@@ -2492,6 +2493,7 @@ class WatchlistsDatabase:
         since: str | None = None,
         until: str | None = None,
     ) -> dict[str, Any]:
+        """Aggregate onboarding telemetry counters, rates, and timing metrics for a window."""
         parsed_since = self._parse_iso_utc(since)
         parsed_until = self._parse_iso_utc(until)
         since_iso = parsed_since.isoformat() if parsed_since else None
