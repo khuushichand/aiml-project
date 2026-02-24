@@ -879,6 +879,7 @@ qwen_max_tokens = 4096
 qwen_api_timeout = 90
 qwen_api_retry = 3
 qwen_api_retry_delay = 1
+qwen_api_region = sg
 qwen_api_base_url = https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 google_model = gemini-2.5-flash
 google_streaming = True

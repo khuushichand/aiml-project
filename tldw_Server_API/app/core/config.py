@@ -2999,6 +2999,7 @@ def load_and_log_configs():
         qwen_api_timeout = config_parser_object.get('API', 'qwen_api_timeout', fallback='90')
         qwen_api_retries = config_parser_object.get('API', 'qwen_api_retry', fallback='3')
         qwen_api_retry_delay = config_parser_object.get('API', 'qwen_api_retry_delay', fallback='1')
+        qwen_api_region = config_parser_object.get('API', 'qwen_api_region', fallback='sg')
         qwen_api_base_url = config_parser_object.get(
             'API', 'qwen_api_base_url', fallback='https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
         )
@@ -3965,6 +3966,7 @@ def load_and_log_configs():
                 'api_timeout': qwen_api_timeout,
                 'api_retries': qwen_api_retries,
                 'api_retry_delay': qwen_api_retry_delay,
+                'region': qwen_api_region,
                 'api_base_url': qwen_api_base_url
             },
             'google_api': {

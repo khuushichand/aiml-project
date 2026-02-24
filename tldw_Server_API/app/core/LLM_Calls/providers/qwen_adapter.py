@@ -5,6 +5,8 @@ import os
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
 
+from loguru import logger
+
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
@@ -22,6 +24,14 @@ from .base import ChatProvider
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
+
+_QWEN_REGION_BASE_URLS: dict[str, str] = {
+    "sg": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "us": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+    "cn": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+}
+_QWEN_DEFAULT_REGION = "sg"
+_QWEN_DEFAULT_BASE_URL = _QWEN_REGION_BASE_URLS[_QWEN_DEFAULT_REGION]
 
 
 class QwenAdapter(ChatProvider):
@@ -109,11 +119,27 @@ class QwenAdapter(ChatProvider):
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
             return override.strip().rstrip("/")
-        default_base = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-        api_base = None
+        env_base = os.getenv("QWEN_BASE_URL")
+        if isinstance(env_base, str) and env_base.strip():
+            return env_base.strip().rstrip("/")
+
+        api_base: str | None = None
+        region = _QWEN_DEFAULT_REGION
         if cfg:
-            api_base = ((cfg.get("qwen_api") or {}).get("api_base_url"))
-        return (os.getenv("QWEN_BASE_URL") or api_base or default_base).rstrip("/")
+            qwen_cfg = cfg.get("qwen_api") or {}
+            api_base = qwen_cfg.get("api_base_url")
+            cfg_region = qwen_cfg.get("region")
+            if isinstance(cfg_region, str) and cfg_region.strip():
+                region = cfg_region.strip().lower()
+
+        env_region = os.getenv("QWEN_REGION")
+        if isinstance(env_region, str) and env_region.strip():
+            region = env_region.strip().lower()
+
+        if isinstance(api_base, str) and api_base.strip():
+            return api_base.strip().rstrip("/")
+
+        return _QWEN_REGION_BASE_URLS.get(region, _QWEN_DEFAULT_BASE_URL).rstrip("/")
 
     def _resolve_timeout(self, request: dict[str, Any], fallback: float | None) -> float:
         try:
