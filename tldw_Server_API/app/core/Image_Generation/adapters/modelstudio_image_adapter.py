@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 from tldw_Server_API.app.core.http_client import fetch_json
@@ -28,6 +29,8 @@ from tldw_Server_API.app.core.Image_Generation.exceptions import ImageBackendUna
 class ModelStudioImageAdapter:
     name = "modelstudio"
     supported_formats = {"png", "jpg", "webp"}
+    _DONE_STATES = {"success", "succeeded", "done", "finished", "completed"}
+    _FAILED_STATES = {"failed", "error", "cancelled", "canceled"}
 
     def __init__(self) -> None:
         self._config = get_image_generation_config()
@@ -39,7 +42,10 @@ class ModelStudioImageAdapter:
 
         mode = self._resolve_mode(request)
         if mode == "async":
-            raise ImageGenerationError("Model Studio async mode not yet implemented")
+            content, content_type = self._generate_async(request)
+            actual_format = format_from_content_type(content_type) or format_from_bytes(content)
+            content, content_type = maybe_convert_format(content, content_type, actual_format, output_format)
+            return ImageGenResult(content=content, content_type=content_type, bytes_len=len(content))
         content, content_type = self._generate_sync(request)
         actual_format = format_from_content_type(content_type) or format_from_bytes(content)
         content, content_type = maybe_convert_format(content, content_type, actual_format, output_format)
@@ -62,6 +68,59 @@ class ModelStudioImageAdapter:
         except Exception as exc:
             raise ImageGenerationError(f"Model Studio sync request failed: {exc}") from exc
         return self._extract_image_content(data)
+
+    def _generate_async(self, request: ImageGenRequest) -> tuple[bytes, str]:
+        api_key = self._resolve_api_key()
+        base_url = self._resolve_base_url()
+        submit_url = self._async_submit_url(base_url)
+        payload = self._build_async_payload(request)
+
+        try:
+            submit_data = fetch_json(
+                method="POST",
+                url=submit_url,
+                headers=self._headers(api_key),
+                json=payload,
+                timeout=self._config.modelstudio_image_timeout_seconds or DEFAULT_MODELSTUDIO_IMAGE_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            raise ImageGenerationError(f"Model Studio async submit failed: {exc}") from exc
+
+        task_id = self._extract_task_id(submit_data)
+        if not task_id:
+            raise ImageGenerationError("Model Studio submit response did not include task id")
+
+        timeout_seconds = float(
+            self._config.modelstudio_image_timeout_seconds or DEFAULT_MODELSTUDIO_IMAGE_TIMEOUT_SECONDS
+        )
+        poll_interval = max(0.1, float(self._config.modelstudio_image_poll_interval_seconds or 2))
+        deadline = time.monotonic() + timeout_seconds
+        poll_url = self._task_status_url(base_url, task_id)
+        last_payload: dict[str, Any] = {}
+
+        while time.monotonic() < deadline:
+            try:
+                poll_data = fetch_json(
+                    method="GET",
+                    url=poll_url,
+                    headers=self._headers(api_key),
+                    timeout=self._config.modelstudio_image_timeout_seconds or DEFAULT_MODELSTUDIO_IMAGE_TIMEOUT_SECONDS,
+                )
+            except Exception as exc:
+                raise ImageGenerationError(f"Model Studio async polling failed: {exc}") from exc
+
+            if isinstance(poll_data, dict):
+                last_payload = poll_data
+            state = self._extract_task_status(poll_data)
+            if state in self._DONE_STATES:
+                return self._extract_image_content(poll_data)
+            if state in self._FAILED_STATES:
+                detail = self._extract_error_message(poll_data) or state
+                raise ImageGenerationError(f"Model Studio task failed: {detail}")
+            time.sleep(poll_interval)
+
+        detail = self._extract_error_message(last_payload) or "timed out waiting for Model Studio image task result"
+        raise ImageGenerationError(detail)
 
     def _resolve_mode(self, request: ImageGenRequest) -> str:
         extra_mode = (request.extra_params or {}).get("mode") if isinstance(request.extra_params, dict) else None
@@ -109,6 +168,18 @@ class ModelStudioImageAdapter:
             return base_url
         return f"{base_url}{suffix}"
 
+    @staticmethod
+    def _async_submit_url(base_url: str) -> str:
+        suffix = "/services/aigc/text2image/image-synthesis"
+        if base_url.endswith(suffix):
+            return base_url
+        return f"{base_url}{suffix}"
+
+    @staticmethod
+    def _task_status_url(base_url: str, task_id: str) -> str:
+        base = base_url.rstrip("/")
+        return f"{base}/tasks/{task_id}"
+
     def _build_sync_payload(self, request: ImageGenRequest) -> dict[str, Any]:
         prompt = request.prompt.strip()
         if request.negative_prompt:
@@ -133,6 +204,45 @@ class ModelStudioImageAdapter:
         parameters: dict[str, Any] = {}
         if request.width and request.height:
             parameters["size"] = f"{request.width}*{request.height}"
+        if request.seed is not None:
+            parameters["seed"] = request.seed
+        if request.steps is not None:
+            parameters["steps"] = request.steps
+        if request.cfg_scale is not None:
+            parameters["guidance_scale"] = request.cfg_scale
+        if request.sampler:
+            parameters["sampler"] = request.sampler
+        if parameters:
+            payload["parameters"] = parameters
+
+        extra_params = request.extra_params or {}
+        if isinstance(extra_params, dict):
+            for key, value in extra_params.items():
+                if key in {"prompt", "negative_prompt", "mode"}:
+                    continue
+                payload[key] = value
+        return payload
+
+    def _build_async_payload(self, request: ImageGenRequest) -> dict[str, Any]:
+        prompt = request.prompt.strip()
+        if request.negative_prompt:
+            prompt = f"{prompt}\n\nNegative prompt: {request.negative_prompt.strip()}"
+
+        payload: dict[str, Any] = {
+            "model": (
+                request.model
+                or os.getenv("MODELSTUDIO_IMAGE_MODEL")
+                or self._config.modelstudio_image_default_model
+                or DEFAULT_MODELSTUDIO_IMAGE_MODEL
+            ),
+            "input": {"prompt": prompt},
+        }
+
+        parameters: dict[str, Any] = {}
+        if request.width is not None:
+            parameters["width"] = request.width
+        if request.height is not None:
+            parameters["height"] = request.height
         if request.seed is not None:
             parameters["seed"] = request.seed
         if request.steps is not None:
@@ -212,4 +322,43 @@ class ModelStudioImageAdapter:
         decoded = maybe_decode_base64_image(raw)
         if decoded is not None:
             return decoded, "image/png"
+        return None
+
+    def _extract_task_id(self, data: Any) -> str | None:
+        if isinstance(data, dict):
+            for key in ("task_id", "taskId", "id"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            for key in ("output", "data", "result"):
+                nested = data.get(key)
+                task_id = self._extract_task_id(nested)
+                if task_id:
+                    return task_id
+        return None
+
+    def _extract_task_status(self, data: Any) -> str:
+        if isinstance(data, dict):
+            for key in ("task_status", "status", "state", "task_state"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip().lower()
+            for key in ("output", "data", "result"):
+                nested = data.get(key)
+                nested_state = self._extract_task_status(nested)
+                if nested_state:
+                    return nested_state
+        return ""
+
+    def _extract_error_message(self, data: Any) -> str | None:
+        if isinstance(data, dict):
+            for key in ("message", "error", "error_message", "detail"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            for key in ("output", "data", "result"):
+                nested = data.get(key)
+                nested_message = self._extract_error_message(nested)
+                if nested_message:
+                    return nested_message
         return None

@@ -1,6 +1,9 @@
+import pytest
+
 from tldw_Server_API.app.core.Image_Generation.adapters.base import ImageGenRequest
 from tldw_Server_API.app.core.Image_Generation.adapters import modelstudio_image_adapter as modelstudio_module
 from tldw_Server_API.app.core.Image_Generation.config import ImageGenerationConfig
+from tldw_Server_API.app.core.Image_Generation.exceptions import ImageGenerationError
 
 
 def _make_config(**overrides) -> ImageGenerationConfig:
@@ -113,3 +116,57 @@ def test_modelstudio_generate_sync_data_url(monkeypatch):
     assert result.bytes_len == 5
     assert captured["method"] == "POST"
     assert captured["url"].endswith("/services/aigc/multimodal-generation/generation")
+
+
+def test_modelstudio_generate_async_submit_and_poll_success(monkeypatch):
+    cfg = _make_config(modelstudio_image_mode="async")
+    monkeypatch.setattr(modelstudio_module, "get_image_generation_config", lambda: cfg)
+
+    calls = []
+
+    def fake_fetch_json(method, url, headers, timeout, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "POST" and url.endswith("/services/aigc/text2image/image-synthesis"):
+            return {"output": {"task_id": "task-123", "task_status": "PENDING"}}
+        if method == "GET" and url.endswith("/tasks/task-123"):
+            return {
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "results": [{"url": "https://cdn.example.com/out.png"}],
+                }
+            }
+        raise AssertionError("unexpected request")
+
+    monkeypatch.setattr(modelstudio_module, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(
+        modelstudio_module,
+        "fetch_image_bytes",
+        lambda *_args, **_kwargs: (b"\x89PNG\r\n\x1a\nabc", "image/png"),
+    )
+    monkeypatch.setattr(modelstudio_module.time, "sleep", lambda *_args, **_kwargs: None)
+
+    adapter = modelstudio_module.ModelStudioImageAdapter()
+    result = adapter.generate(_make_request())
+    assert result.content.startswith(b"\x89PNG")
+    assert result.content_type == "image/png"
+    assert any(url.endswith("/services/aigc/text2image/image-synthesis") for _, url, _ in calls)
+    assert any(url.endswith("/tasks/task-123") for _, url, _ in calls)
+
+
+def test_modelstudio_generate_async_terminal_failure(monkeypatch):
+    cfg = _make_config(modelstudio_image_mode="async")
+    monkeypatch.setattr(modelstudio_module, "get_image_generation_config", lambda: cfg)
+
+    def fake_fetch_json(method, url, headers, timeout, **kwargs):
+        if method == "POST" and url.endswith("/services/aigc/text2image/image-synthesis"):
+            return {"output": {"task_id": "task-456", "task_status": "PENDING"}}
+        if method == "GET" and url.endswith("/tasks/task-456"):
+            return {"output": {"task_status": "FAILED", "message": "safety check failed"}}
+        raise AssertionError("unexpected request")
+
+    monkeypatch.setattr(modelstudio_module, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(modelstudio_module.time, "sleep", lambda *_args, **_kwargs: None)
+
+    adapter = modelstudio_module.ModelStudioImageAdapter()
+    with pytest.raises(ImageGenerationError, match="Model Studio task failed"):
+        adapter.generate(_make_request())
