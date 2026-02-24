@@ -34,7 +34,7 @@
 **Tests**:
 - Add benchmark harness for representative data volumes in key Watchlists views.
 - Capture baseline timings for render and mutation flows.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: High-Volume List and Reader Optimization
 **Goal**: Improve rendering and interaction efficiency for large datasets.
@@ -79,3 +79,19 @@
 - Run scale scenario suite and record timings/evidence.
 - Validate that core UC1/UC2 workflows remain functional under load.
 **Status**: Not Started
+
+## Execution Notes
+
+### 2026-02-24 - Stage 1 completion (scale profiles + baseline harness)
+
+- Added explicit scale profile and per-surface performance budget contracts:
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/scale-profiles.ts`
+- Added a benchmark harness covering render/mutation preparation paths for feeds, monitors, activity, and articles:
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/scale-benchmark.ts`
+- Added scale benchmark regression coverage and execution script:
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/scale-benchmark.test.ts`
+  - `apps/packages/ui/package.json` (`test:watchlists:scale`)
+- Published Stage 1 baseline timing artifact with documented bottlenecks and constraints:
+  - `Docs/Plans/WATCHLISTS_SCALE_BASELINE_BUDGETS_2026_02_24.md`
+- Stage 1 validation evidence:
+  - `cd apps/packages/ui && bun run test:watchlists:scale`
