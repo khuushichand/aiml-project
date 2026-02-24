@@ -66,6 +66,14 @@ def _make_config(**overrides) -> ImageGenerationConfig:
         together_image_default_model=None,
         together_image_allowed_extra_params=[],
         together_image_timeout_seconds=120,
+        modelstudio_image_base_url=None,
+        modelstudio_image_api_key=None,
+        modelstudio_image_default_model=None,
+        modelstudio_image_region="sg",
+        modelstudio_image_mode="auto",
+        modelstudio_image_poll_interval_seconds=2,
+        modelstudio_image_timeout_seconds=180,
+        modelstudio_image_allowed_extra_params=[],
     )
     base.update(overrides)
     return ImageGenerationConfig(**base)
@@ -133,11 +141,12 @@ def test_list_image_models_swarmui_unconfigured(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("backend", "key_field", "env_var"),
+    ("backend", "key_field", "env_var", "fallback_env_var"),
     [
-        ("openrouter", "openrouter_image_api_key", "OPENROUTER_API_KEY"),
-        ("novita", "novita_image_api_key", "NOVITA_API_KEY"),
-        ("together", "together_image_api_key", "TOGETHER_API_KEY"),
+        ("openrouter", "openrouter_image_api_key", "OPENROUTER_API_KEY", None),
+        ("novita", "novita_image_api_key", "NOVITA_API_KEY", None),
+        ("together", "together_image_api_key", "TOGETHER_API_KEY", None),
+        ("modelstudio", "modelstudio_image_api_key", "DASHSCOPE_API_KEY", "QWEN_API_KEY"),
     ],
 )
 def test_list_image_models_remote_backend_configured_via_api_key(
@@ -145,8 +154,11 @@ def test_list_image_models_remote_backend_configured_via_api_key(
     backend: str,
     key_field: str,
     env_var: str,
+    fallback_env_var: str | None,
 ):
     monkeypatch.delenv(env_var, raising=False)
+    if fallback_env_var:
+        monkeypatch.delenv(fallback_env_var, raising=False)
     cfg = _make_config(enabled_backends=[backend], **{key_field: "sk-test"})
 
     monkeypatch.setattr(listing, "get_image_generation_config", lambda: cfg)
@@ -160,11 +172,12 @@ def test_list_image_models_remote_backend_configured_via_api_key(
 
 
 @pytest.mark.parametrize(
-    ("backend", "key_field", "env_var"),
+    ("backend", "key_field", "env_var", "fallback_env_var"),
     [
-        ("openrouter", "openrouter_image_api_key", "OPENROUTER_API_KEY"),
-        ("novita", "novita_image_api_key", "NOVITA_API_KEY"),
-        ("together", "together_image_api_key", "TOGETHER_API_KEY"),
+        ("openrouter", "openrouter_image_api_key", "OPENROUTER_API_KEY", None),
+        ("novita", "novita_image_api_key", "NOVITA_API_KEY", None),
+        ("together", "together_image_api_key", "TOGETHER_API_KEY", None),
+        ("modelstudio", "modelstudio_image_api_key", "DASHSCOPE_API_KEY", "QWEN_API_KEY"),
     ],
 )
 def test_list_image_models_remote_backend_unconfigured_without_api_key(
@@ -172,8 +185,11 @@ def test_list_image_models_remote_backend_unconfigured_without_api_key(
     backend: str,
     key_field: str,
     env_var: str,
+    fallback_env_var: str | None,
 ):
     monkeypatch.delenv(env_var, raising=False)
+    if fallback_env_var:
+        monkeypatch.delenv(fallback_env_var, raising=False)
     cfg = _make_config(enabled_backends=[backend], **{key_field: None})
 
     monkeypatch.setattr(listing, "get_image_generation_config", lambda: cfg)
@@ -184,3 +200,18 @@ def test_list_image_models_remote_backend_unconfigured_without_api_key(
     entry = models[0]
     assert entry["id"] == f"image/{backend}"
     assert entry["is_configured"] is False
+
+
+def test_list_image_models_modelstudio_configured_via_qwen_env(monkeypatch):
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setenv("QWEN_API_KEY", "sk-qwen")
+    cfg = _make_config(enabled_backends=["modelstudio"], modelstudio_image_api_key=None)
+
+    monkeypatch.setattr(listing, "get_image_generation_config", lambda: cfg)
+    monkeypatch.setattr(listing, "get_registry", lambda: _FakeRegistry(["modelstudio"]))
+
+    models = listing.list_image_models_for_catalog()
+    assert len(models) == 1
+    entry = models[0]
+    assert entry["id"] == "image/modelstudio"
+    assert entry["is_configured"] is True
