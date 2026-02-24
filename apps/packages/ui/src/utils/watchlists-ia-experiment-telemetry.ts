@@ -143,3 +143,9 @@ export const trackWatchlistsIaExperimentTransition = (
 
   return nextState
 }
+
+export const flushWatchlistsIaExperimentSession = (
+  currentTab: string,
+  variant: WatchlistsIaExperimentVariant
+): WatchlistsIaExperimentTelemetryState | null =>
+  trackWatchlistsIaExperimentTransition(currentTab, currentTab, variant)

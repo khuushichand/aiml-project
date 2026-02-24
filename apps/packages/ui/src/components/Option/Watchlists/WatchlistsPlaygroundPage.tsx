@@ -34,6 +34,7 @@ import {
   WATCHLISTS_TAB_HELP_DOCS
 } from "./shared/help-docs"
 import {
+  flushWatchlistsIaExperimentSession,
   buildRunStateNotificationKey,
   dedupeRunNotificationEvents,
   groupRunNotificationEvents,
@@ -45,6 +46,7 @@ import {
 } from "./RunsTab/run-notifications"
 import { trackWatchlistsIaExperimentTransition } from "@/utils/watchlists-ia-experiment-telemetry"
 import { trackWatchlistsOnboardingTelemetry } from "@/utils/watchlists-onboarding-telemetry"
+import { resolveWatchlistsIaExperimentRollout } from "@/utils/watchlists-ia-rollout"
 
 const RUN_NOTIFICATIONS_POLL_MS = 15_000
 const RUN_NOTIFICATIONS_PAGE_SIZE = 25
@@ -144,15 +146,6 @@ const resolveRunNotificationsPollMs = (): number => {
   return Math.max(RUN_NOTIFICATIONS_MIN_POLL_MS, Math.floor(override))
 }
 
-const resolveWatchlistsIaExperimentEnabled = (): boolean => {
-  if (typeof window !== "undefined") {
-    const override = (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown })
-      .__TLDW_WATCHLISTS_IA_EXPERIMENT__
-    if (typeof override === "boolean") return override
-  }
-  return process.env.NEXT_PUBLIC_WATCHLISTS_EXPERIMENTAL_IA === "true"
-}
-
 /**
  * WatchlistsPlaygroundPage
  *
@@ -183,8 +176,9 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     if (typeof document === "undefined") return true
     return document.visibilityState !== "hidden"
   })
-  const iaExperimentEnabled = React.useMemo(() => resolveWatchlistsIaExperimentEnabled(), [])
-  const iaExperimentVariant = iaExperimentEnabled ? "experimental" : "baseline"
+  const iaRollout = React.useMemo(() => resolveWatchlistsIaExperimentRollout(), [])
+  const iaExperimentVariant = iaRollout.variant
+  const iaExperimentEnabled = iaExperimentVariant === "experimental"
   const previousActiveTabRef = useRef<typeof activeTab | null>(null)
 
   const tabHelpLabels = {
@@ -908,6 +902,17 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       iaExperimentVariant
     )
     previousActiveTabRef.current = activeTab
+  }, [activeTab, iaExperimentVariant])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const handlePageHide = () => {
+      flushWatchlistsIaExperimentSession(activeTab, iaExperimentVariant)
+    }
+    window.addEventListener("pagehide", handlePageHide)
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide)
+    }
   }, [activeTab, iaExperimentVariant])
 
   if (!isOnline) {

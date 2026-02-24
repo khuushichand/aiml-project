@@ -101,7 +101,26 @@
 **Tests**:
 - Add tests for both flag states and secondary tab access.
 - Add telemetry payload contract tests for IA transition events.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 4 Completion Notes (2026-02-24)
+
+- Replaced ad hoc IA enablement with controlled rollout resolution in `apps/packages/ui/src/utils/watchlists-ia-rollout.ts`.
+- Wired Watchlists IA rollout to shared rollout infrastructure from `apps/packages/ui/src/utils/feature-rollout.ts`:
+  - flag key: `watchlists_ia_reduced_nav_v1`
+  - sticky subject assignment + percentage-gated variant resolution
+  - explicit fallback precedence for runtime override, legacy env, forced mode, and rollout mode
+- Updated `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx` to consume rollout resolution and preserve baseline/experimental behavior contract.
+- Added telemetry heartbeat flush on `pagehide` to improve session/drop-off fidelity across variants via `flushWatchlistsIaExperimentSession`.
+- Added product rollout gates doc:
+  - `Docs/Product/Watchlists_IA_Reduced_Navigation_Rollout_Gates_2026_02_24.md`
+- Added/updated tests:
+  - `apps/packages/ui/src/utils/__tests__/watchlists-ia-rollout.test.ts`
+  - `apps/packages/ui/src/utils/__tests__/watchlists-ia-experiment-telemetry.test.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx`
+- Verification evidence:
+  - `bunx vitest run src/utils/__tests__/watchlists-ia-rollout.test.ts src/utils/__tests__/watchlists-ia-experiment-telemetry.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx`
 
 ## Stage 5: Documentation and Adoption Validation
 **Goal**: Ensure IA changes are operable by engineering, QA, and product stakeholders.

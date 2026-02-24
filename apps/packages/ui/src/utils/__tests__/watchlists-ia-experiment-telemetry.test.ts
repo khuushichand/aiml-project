@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  flushWatchlistsIaExperimentSession,
   WATCHLISTS_IA_EXPERIMENT_STORAGE_KEY,
   readWatchlistsIaExperimentTelemetryState,
   trackWatchlistsIaExperimentTransition
@@ -56,5 +57,23 @@ describe("watchlists-ia-experiment-telemetry", () => {
     expect(persisted).not.toBeNull()
     expect(persisted?.variant).toBe("baseline")
     expect(persisted?.visited_tabs).toContain("sources")
+  })
+
+  it("flushes session heartbeat without incrementing transitions", () => {
+    const initial = trackWatchlistsIaExperimentTransition(null, "sources", "experimental")
+    const flushed = flushWatchlistsIaExperimentSession("sources", "experimental")
+
+    expect(initial).not.toBeNull()
+    expect(flushed).not.toBeNull()
+    expect(flushed?.transitions).toBe(initial?.transitions)
+    expect(mocks.recordWatchlistsIaExperimentTelemetryMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        variant: "experimental",
+        previous_tab: "sources",
+        current_tab: "sources",
+        transitions: initial?.transitions
+      })
+    )
+    expect(flushed?.last_seen_at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
 })

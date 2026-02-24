@@ -247,7 +247,7 @@
 
 | Group | Owner (Assignee) | Reviewer (Assignee) | Phase | Status | Validation Evidence | Notes |
 |---|---|---|---|---|---|---|
-| 01 | Robert | Mike | 3 | In Progress | Stage 1 baseline artifact + telemetry exports + Group 01 Stage 1/2/3 completion notes + orientation guidance tests + navigation journey regression evidence | IA/navigation |
+| 01 | Robert | Mike | 4 | In Progress | Stage 1 baseline artifact + telemetry exports + Group 01 Stage 1/2/3/4 completion notes + orientation guidance tests + rollout/telemetry contract coverage + IA rollout go/no-go doc | IA/navigation |
 | 02 | Mike | Robert | 2 | In Progress | Stage 1 baseline artifact + telemetry exports + Group 02 Stage 1 and Stage 2 completion notes | onboarding/learnability |
 | 03 | Robert | Mike | 2 | In Progress | Stage 1 baseline artifact + telemetry exports + Group 03 Stage 1 and Stage 2 completion notes | UC2 workflow |
 | 04 | Mike | Robert | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 04 Stage 1/2 completion notes + Stage 3 cross-tab profile completion + Stage 4 summary/confirmation completion + Stage 5 1/10/50 scale validation + density QA checklist + focused Jobs/Sources/Runs/Outputs regressions + Bandit artifacts | density/cognitive load |
