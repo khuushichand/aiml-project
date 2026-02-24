@@ -123,7 +123,26 @@
 **Tests**:
 - Add tests for preview generation, preview failures, and fallback messaging.
 - Add tests for test-run completion routing.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 4 Completion Notes (2026-02-24)
+
+- Extended pipeline review-step confidence tooling in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`:
+  - added explicit text/audio outcome expectation copy in the Review step,
+  - added template preview generation against latest completed run context (`fetchWatchlistRuns` + `getWatchlistTemplate` + `previewWatchlistTemplate`),
+  - added fallback/error handling for missing run context, empty template content, and preview failures.
+- Added explicit `Run test generation` entrypoint in pipeline review footer:
+  - forces one immediate run + output creation without requiring `Run immediately` toggle,
+  - routes to Reports preview (`setOutputsRunFilter` + `openOutputPreview`) with test-generation completion messaging.
+- Updated modal state lifecycle to reset preview/loading/error artifacts across open/close cycles.
+- Added Stage 4 coverage in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`:
+  - preview generation success path,
+  - no-run-context fallback path,
+  - test-generation routing path to report preview.
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists/OverviewTab -f json -o /tmp/bandit_watchlists_group03_stage4_2026_02_24.json`
 
 ## Stage 5: Workflow KPI and Reliability Validation
 **Goal**: Validate UC2 completion quality and reduce setup abandonment.

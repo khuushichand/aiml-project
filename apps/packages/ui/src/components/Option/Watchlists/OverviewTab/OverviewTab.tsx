@@ -35,7 +35,10 @@ import {
   createWatchlistJob,
   createWatchlistSource,
   deleteWatchlistJob,
+  fetchWatchlistRuns,
   fetchWatchlistSources,
+  getWatchlistTemplate,
+  previewWatchlistTemplate,
   triggerWatchlistRun
 } from "@/services/watchlists"
 import {
@@ -129,6 +132,11 @@ export const OverviewTab: React.FC = () => {
   const [pipelineSetupSubmitting, setPipelineSetupSubmitting] = useState(false)
   const [pipelineSourcesLoading, setPipelineSourcesLoading] = useState(false)
   const [pipelineSources, setPipelineSources] = useState<WatchlistSource[]>([])
+  const [pipelinePreviewLoading, setPipelinePreviewLoading] = useState(false)
+  const [pipelinePreviewError, setPipelinePreviewError] = useState<string | null>(null)
+  const [pipelinePreviewRendered, setPipelinePreviewRendered] = useState<string | null>(null)
+  const [pipelinePreviewRunId, setPipelinePreviewRunId] = useState<number | null>(null)
+  const [pipelinePreviewWarnings, setPipelinePreviewWarnings] = useState<string[]>([])
   const [onboardingPath, setOnboardingPath] = useState<WatchlistsOnboardingPath>(() =>
     readWatchlistsOnboardingPath()
   )
@@ -481,6 +489,10 @@ export const OverviewTab: React.FC = () => {
   const openPipelineSetup = useCallback(() => {
     pipelineSetupForm.setFieldsValue(PIPELINE_DEFAULT_VALUES)
     setPipelineSetupStep(0)
+    setPipelinePreviewError(null)
+    setPipelinePreviewRendered(null)
+    setPipelinePreviewRunId(null)
+    setPipelinePreviewWarnings([])
     setPipelineSetupOpen(true)
     void loadPipelineSources()
   }, [loadPipelineSources, pipelineSetupForm])
@@ -489,6 +501,11 @@ export const OverviewTab: React.FC = () => {
     if (pipelineSetupSubmitting) return
     setPipelineSetupOpen(false)
     setPipelineSetupStep(0)
+    setPipelinePreviewLoading(false)
+    setPipelinePreviewError(null)
+    setPipelinePreviewRendered(null)
+    setPipelinePreviewRunId(null)
+    setPipelinePreviewWarnings([])
     pipelineSetupForm.resetFields()
   }, [pipelineSetupForm, pipelineSetupSubmitting])
 
@@ -518,9 +535,98 @@ export const OverviewTab: React.FC = () => {
     }
   }, [pipelineSetupForm, pipelineSetupStep])
 
-  const completePipelineSetup = useCallback(async () => {
+  const generatePipelineTemplatePreview = useCallback(async () => {
+    setPipelinePreviewLoading(true)
+    setPipelinePreviewError(null)
+    setPipelinePreviewRendered(null)
+    setPipelinePreviewRunId(null)
+    setPipelinePreviewWarnings([])
+
+    try {
+      const values = {
+        ...PIPELINE_DEFAULT_VALUES,
+        ...pipelineSetupForm.getFieldsValue(true)
+      } as PipelineBuilderValues
+      const draft = toPipelineDraft(values)
+      const templateName = String(draft.templateName || "").trim()
+      if (!templateName) {
+        setPipelinePreviewError(
+          t(
+            "watchlists:overview.pipelineSetup.preview.templateRequired",
+            "Select a template before generating preview."
+          )
+        )
+        return
+      }
+
+      const runResult = await fetchWatchlistRuns({ page: 1, size: 50 })
+      const completedRun = (Array.isArray(runResult.items) ? runResult.items : []).find(
+        (run) => String(run.status || "").trim().toLowerCase() === "completed"
+      )
+      if (!completedRun) {
+        setPipelinePreviewError(
+          t(
+            "watchlists:overview.pipelineSetup.preview.noRunContext",
+            "Run any monitor once, then generate template preview."
+          )
+        )
+        return
+      }
+
+      const template = await getWatchlistTemplate(templateName)
+      const templateContent = String(template.content || "")
+      const templateFormat = template.format === "html" ? "html" : "md"
+      if (!templateContent.trim()) {
+        setPipelinePreviewError(
+          t(
+            "watchlists:overview.pipelineSetup.preview.templateEmpty",
+            "Template has no content. Save template content before previewing."
+          )
+        )
+        return
+      }
+
+      const previewResult = await previewWatchlistTemplate(
+        templateContent,
+        completedRun.id,
+        templateFormat
+      )
+      setPipelinePreviewRunId(completedRun.id)
+      setPipelinePreviewRendered(String(previewResult.rendered || ""))
+      setPipelinePreviewWarnings(
+        Array.isArray(previewResult.warnings)
+          ? previewResult.warnings
+            .filter((warning) => typeof warning === "string" && warning.trim().length > 0)
+            .map((warning) => warning.trim())
+          : []
+      )
+      if (!String(previewResult.rendered || "").trim()) {
+        setPipelinePreviewError(
+          t(
+            "watchlists:overview.pipelineSetup.preview.emptyResult",
+            "Template preview returned no output for this run context."
+          )
+        )
+      }
+    } catch (err) {
+      console.error("Failed to generate pipeline template preview:", err)
+      setPipelinePreviewError(
+        t(
+          "watchlists:overview.pipelineSetup.preview.error",
+          "Template preview failed. Verify template and run context, then retry."
+        )
+      )
+    } finally {
+      setPipelinePreviewLoading(false)
+    }
+  }, [pipelineSetupForm, t])
+
+  const completePipelineSetup = useCallback(async (
+    options?: { mode?: "create" | "test"; forceRunNow?: boolean }
+  ) => {
     let createdJobId: number | null = null
     let createdRunId: number | null = null
+    const mode = options?.mode || "create"
 
     try {
       setPipelineSetupSubmitting(true)
@@ -528,6 +634,7 @@ export const OverviewTab: React.FC = () => {
         ...PIPELINE_DEFAULT_VALUES,
         ...pipelineSetupForm.getFieldsValue(true)
       } as PipelineBuilderValues
+      const shouldRunNow = Boolean(values.runNow || options?.forceRunNow)
 
       const draft = toPipelineDraft(values)
       const validation = validateBriefingPipelineDraft(draft)
@@ -559,7 +666,7 @@ export const OverviewTab: React.FC = () => {
       const job = await createWatchlistJob(toPipelineJobCreatePayload(draft))
       createdJobId = job.id
 
-      if (!values.runNow) {
+      if (!shouldRunNow) {
         closePipelineSetup()
         void loadOverview(false)
         setActiveTab("jobs")
@@ -586,10 +693,15 @@ export const OverviewTab: React.FC = () => {
       setActiveTab("outputs")
       openOutputPreview(output.id)
       message.success(
-        t(
-          "watchlists:overview.pipelineSetup.createdAndRunning",
-          "Pipeline created. First run started and report is ready for review."
-        )
+        mode === "test"
+          ? t(
+              "watchlists:overview.pipelineSetup.testGenerationReady",
+              "Test generation complete. Monitor, run, and sample report are ready for review."
+            )
+          : t(
+              "watchlists:overview.pipelineSetup.createdAndRunning",
+              "Pipeline created. First run started and report is ready for review."
+            )
       )
     } catch (err) {
       console.error("Failed to complete pipeline setup:", err)
@@ -1519,13 +1631,25 @@ export const OverviewTab: React.FC = () => {
           >
             {t("common:back", "Back")}
           </Button>,
+          pipelineSetupIsLastStep ? (
+            <Button
+              key="test-generation"
+              data-testid="watchlists-pipeline-test-generation"
+              onClick={() => {
+                void completePipelineSetup({ mode: "test", forceRunNow: true })
+              }}
+              loading={pipelineSetupSubmitting}
+            >
+              {t("watchlists:overview.pipelineSetup.actions.testGeneration", "Run test generation")}
+            </Button>
+          ) : null,
           <Button
             key="next"
             type="primary"
             loading={pipelineSetupSubmitting}
             onClick={() => {
               if (pipelineSetupIsLastStep) {
-                void completePipelineSetup()
+                void completePipelineSetup({ mode: "create" })
               } else {
                 void handlePipelineSetupNext()
               }
@@ -1761,6 +1885,84 @@ export const OverviewTab: React.FC = () => {
                     </span>{" "}
                     {pipelineSetupValues?.runNow ? t("common:yes", "Yes") : t("common:no", "No")}
                   </p>
+                </div>
+                <div className="rounded-md border border-border bg-surface p-3 text-xs text-text-muted space-y-1">
+                  <p data-testid="watchlists-pipeline-review-outcome-text">
+                    {t(
+                      "watchlists:overview.pipelineSetup.review.textOutcome",
+                      "Text outcome: {{template}} template will generate a written report artifact.",
+                      {
+                        template: String(pipelineSetupValues?.templateName || "briefing_md")
+                      }
+                    )}
+                  </p>
+                  <p data-testid="watchlists-pipeline-review-outcome-audio">
+                    {pipelineSetupValues?.includeAudio
+                      ? t(
+                          "watchlists:overview.pipelineSetup.review.audioOutcomeEnabled",
+                          "Audio outcome: voice {{voice}} targeting about {{minutes}} minutes.",
+                          {
+                            voice: String(pipelineSetupValues?.audioVoice || "alloy"),
+                            minutes: Number(pipelineSetupValues?.targetAudioMinutes || 8)
+                          }
+                        )
+                      : t(
+                          "watchlists:overview.pipelineSetup.review.audioOutcomeDisabled",
+                          "Audio outcome: disabled. Reports will be text-only."
+                        )}
+                  </p>
+                </div>
+                <div className="rounded-md border border-border bg-surface p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-text-muted">
+                      {t(
+                        "watchlists:overview.pipelineSetup.preview.description",
+                        "Preview template output using the latest completed run context before creating the pipeline."
+                      )}
+                    </p>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        void generatePipelineTemplatePreview()
+                      }}
+                      loading={pipelinePreviewLoading}
+                      data-testid="watchlists-pipeline-preview-generate"
+                    >
+                      {t("watchlists:overview.pipelineSetup.preview.generate", "Generate preview")}
+                    </Button>
+                  </div>
+                  {pipelinePreviewError && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      data-testid="watchlists-pipeline-preview-error"
+                      title={pipelinePreviewError}
+                    />
+                  )}
+                  {pipelinePreviewRunId != null && !pipelinePreviewError && (
+                    <p className="text-xs text-text-muted">
+                      {t(
+                        "watchlists:overview.pipelineSetup.preview.context",
+                        "Preview context run: #{{runId}}",
+                        { runId: pipelinePreviewRunId }
+                      )}
+                    </p>
+                  )}
+                  {pipelinePreviewWarnings.length > 0 && (
+                    <ul className="list-disc pl-5 text-xs text-text-muted">
+                      {pipelinePreviewWarnings.map((warning, index) => (
+                        <li key={`${warning}-${index}`}>{warning}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {pipelinePreviewRendered && (
+                    <pre
+                      className="max-h-48 overflow-auto rounded border border-border bg-background p-2 text-xs"
+                      data-testid="watchlists-pipeline-preview-rendered"
+                    >
+                      {pipelinePreviewRendered}
+                    </pre>
+                  )}
                 </div>
               </div>
             )}
