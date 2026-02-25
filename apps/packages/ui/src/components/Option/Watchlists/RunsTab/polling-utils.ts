@@ -1,19 +1,9 @@
-type RunLike = {
-  status?: unknown
-} | null | undefined
+import type { WatchlistRun } from "@/types/watchlists"
 
 const normalizeStatus = (status: unknown): string =>
   String(status ?? "")
     .trim()
     .toLowerCase()
-
-export const hasActiveWatchlistRuns = (runs: readonly RunLike[]): boolean =>
-  runs.some((run) => {
-    const status = normalizeStatus(run?.status)
-    return status === "running" || status === "pending"
-  })
-
-import type { WatchlistRun } from "@/types/watchlists"
 
 const MIN_POLL_INTERVAL_MS = 100
 const IDLE_POLL_MIN_MS = 30_000
@@ -34,7 +24,7 @@ export const hasActiveWatchlistRuns = (
   runs: Array<Pick<WatchlistRun, "status">> | null | undefined
 ): boolean => {
   if (!Array.isArray(runs) || runs.length === 0) return false
-  return runs.some((run) => ACTIVE_RUN_STATUSES.has(String(run.status || "").toLowerCase()))
+  return runs.some((run) => ACTIVE_RUN_STATUSES.has(normalizeStatus(run.status)))
 }
 
 export const resolveAdaptiveRunNotificationsPollMs = (
