@@ -8,3 +8,13 @@ def test_load_and_log_configs_includes_section_dicts():
     assert isinstance(data, dict)
     assert isinstance(data.get("Redis"), dict)
     assert isinstance(data.get("Web-Scraping"), dict)
+
+
+def test_load_and_log_configs_exposes_stt_default_model_keys():
+    data = load_and_log_configs()
+    stt = data.get("STT-Settings") or {}
+    assert isinstance(stt, dict)
+    assert "default_batch_transcription_model" in stt
+    assert "default_streaming_transcription_model" in stt
+    assert "parakeet_onnx_model_id" in stt
+    assert "parakeet_onnx_revision" in stt

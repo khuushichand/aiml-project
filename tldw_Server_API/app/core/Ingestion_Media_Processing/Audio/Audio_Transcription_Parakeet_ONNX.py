@@ -24,6 +24,8 @@ import numpy as np
 import soundfile as sf
 from loguru import logger
 
+from tldw_Server_API.app.core.config import get_stt_config
+
 try:
     import onnxruntime as ort
 except ImportError:
@@ -300,11 +302,20 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
         logger.error("ONNX Runtime not available")
         return None, None
 
+    try:
+        stt_cfg = get_stt_config() or {}
+    except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError):
+        stt_cfg = {}
+
     # Default model
     if model_path is None:
-        model_path = "istupakov/parakeet-tdt-0.6b-v3-onnx"
+        configured_model_id = str(stt_cfg.get("parakeet_onnx_model_id", "")).strip()
+        model_path = configured_model_id or "istupakov/parakeet-tdt-0.6b-v3-onnx"
 
-    cache_key = f"{model_path}_{device}"
+    configured_revision = str(stt_cfg.get("parakeet_onnx_revision", "")).strip()
+    revision = configured_revision or os.getenv("PARAKEET_ONNX_REVISION")
+
+    cache_key = f"{model_path}_{revision or ''}_{device}"
     if cache_key in _onnx_model_cache:
         logger.debug(f"Using cached ONNX model: {model_path}")
         return _onnx_model_cache[cache_key]
@@ -317,11 +328,15 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
             # Download from HuggingFace
             logger.info(f"Downloading ONNX model from HuggingFace: {model_path}")
             cache_dir = Path.home() / '.cache' / 'parakeet_onnx'
-            model_dir = cache_dir / model_path.replace('/', '_')
+            revision_token = (
+                str(revision).replace("/", "_").replace(":", "_")
+                if revision
+                else "default"
+            )
+            model_dir = cache_dir / f"{model_path.replace('/', '_')}_{revision_token}"
 
             if not model_dir.exists():
                 # Limit download to ONNX files only to avoid fetching entire repositories
-                revision = os.getenv("PARAKEET_ONNX_REVISION")
                 snapshot_download(
                     repo_id=model_path,
                     local_dir=str(model_dir),

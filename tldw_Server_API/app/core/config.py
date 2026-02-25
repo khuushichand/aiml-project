@@ -3546,6 +3546,22 @@ def load_and_log_configs():
         tmp_default_transcriber = _normalize_stt_provider_name(raw_default_transcriber)
         # If default_transcriber is not set explicitly, fall back to default_stt_provider
         default_transcriber = tmp_default_transcriber or default_stt_provider
+        default_batch_transcription_model = (
+            config_parser_object.get(
+                'STT-Settings',
+                'default_batch_transcription_model',
+                fallback='parakeet-onnx',
+            ).strip()
+            or 'parakeet-onnx'
+        )
+        default_streaming_transcription_model = (
+            config_parser_object.get(
+                'STT-Settings',
+                'default_streaming_transcription_model',
+                fallback='parakeet-onnx',
+            ).strip()
+            or 'parakeet-onnx'
+        )
         nemo_model_variant = config_parser_object.get('STT-Settings', 'nemo_model_variant', fallback='standard')
         nemo_device = config_parser_object.get('STT-Settings', 'nemo_device', fallback='cuda')
         nemo_cache_dir = config_parser_object.get('STT-Settings', 'nemo_cache_dir', fallback='./models/nemo')
@@ -3627,6 +3643,11 @@ def load_and_log_configs():
         # Parakeet MLX settings
         mlx_model_id = _get_str('STT-Settings', 'mlx_model_id', 'mlx-community/parakeet-tdt-0.6b-v3')
         mlx_cache_dir = _get_str('STT-Settings', 'mlx_cache_dir', '') or ''
+        parakeet_onnx_model_id = (
+            _get_str('STT-Settings', 'parakeet_onnx_model_id', 'istupakov/parakeet-tdt-0.6b-v3-onnx')
+            or 'istupakov/parakeet-tdt-0.6b-v3-onnx'
+        )
+        parakeet_onnx_revision = _get_str('STT-Settings', 'parakeet_onnx_revision', None)
         mlx_chunk_duration = _get_float('STT-Settings', 'mlx_chunk_duration', 30.0)
         mlx_overlap_duration = _get_float('STT-Settings', 'mlx_overlap_duration', 5.0)
         buffered_chunk_duration = _get_float('STT-Settings', 'buffered_chunk_duration', mlx_chunk_duration)
@@ -3635,7 +3656,7 @@ def load_and_log_configs():
         streaming_fallback_to_whisper = _get_bool(
             'STT-Settings',
             'streaming_fallback_to_whisper',
-            default=True,
+            default=False,
         )
 
         mlx_decoding_mode = _get_str('STT-Settings', 'mlx_decoding_mode', '') or ''
@@ -4372,10 +4393,14 @@ def load_and_log_configs():
             'STT_Settings': {
                 'default_stt_provider': default_stt_provider,
                 'default_transcriber': default_transcriber,
+                'default_batch_transcription_model': default_batch_transcription_model,
+                'default_streaming_transcription_model': default_streaming_transcription_model,
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
                 'streaming_fallback_to_whisper': streaming_fallback_to_whisper,
+                'parakeet_onnx_model_id': parakeet_onnx_model_id,
+                'parakeet_onnx_revision': parakeet_onnx_revision,
                 'mlx_model_id': mlx_model_id,
                 'mlx_cache_dir': mlx_cache_dir,
                 'mlx_chunk_duration': mlx_chunk_duration,
@@ -4420,10 +4445,14 @@ def load_and_log_configs():
             'STT-Settings': {
                 'default_stt_provider': default_stt_provider,
                 'default_transcriber': default_transcriber,
+                'default_batch_transcription_model': default_batch_transcription_model,
+                'default_streaming_transcription_model': default_streaming_transcription_model,
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
                 'streaming_fallback_to_whisper': streaming_fallback_to_whisper,
+                'parakeet_onnx_model_id': parakeet_onnx_model_id,
+                'parakeet_onnx_revision': parakeet_onnx_revision,
                 'mlx_model_id': mlx_model_id,
                 'mlx_cache_dir': mlx_cache_dir,
                 'mlx_chunk_duration': mlx_chunk_duration,
