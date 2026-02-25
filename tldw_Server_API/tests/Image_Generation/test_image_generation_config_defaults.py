@@ -16,3 +16,7 @@ def test_image_generation_config_sane_defaults(monkeypatch):
     assert cfg.novita_image_default_model == image_config.DEFAULT_NOVITA_IMAGE_MODEL
     assert cfg.together_image_base_url == image_config.DEFAULT_TOGETHER_IMAGE_BASE_URL
     assert cfg.together_image_default_model == image_config.DEFAULT_TOGETHER_IMAGE_MODEL
+    assert cfg.modelstudio_image_base_url == image_config.DEFAULT_MODELSTUDIO_IMAGE_BASE_URL
+    assert cfg.modelstudio_image_default_model == image_config.DEFAULT_MODELSTUDIO_IMAGE_MODEL
+    assert cfg.modelstudio_image_region == image_config.DEFAULT_MODELSTUDIO_IMAGE_REGION
+    assert cfg.modelstudio_image_mode == image_config.DEFAULT_MODELSTUDIO_IMAGE_MODE

@@ -67,6 +67,9 @@ and this project adheres to Some kind of Versioning
 - Watchlists coordinated UX program closeout:
   - Added cross-stream closeout report with verification summary and owned deferred backlog:
     - `Docs/Plans/WATCHLISTS_UX_PROGRAM_CLOSEOUT_2026_02_22.md`
+- Chat rich-text regression coverage additions:
+  - Added `st_compat` LaTeX rendering regression test for inline and block math in:
+    - `apps/packages/ui/src/utils/__tests__/chat-rich-text.test.ts`
 
 ### Changed
 
@@ -77,6 +80,8 @@ and this project adheres to Some kind of Versioning
   - Updated API key manager test doubles to align with current auth validation call signature (`required_scope` support).
 - Persona persistent-memory retrieval behavior:
   - Retrieval path now performs legacy namespace reconciliation/backfill for persistent mode when runtime scope is missing, while preserving explicit scope/session namespace behavior.
+- Chat rich-text rendering pipeline:
+  - Updated `st_compat` rendering to use a dedicated `Marked` instance with KaTeX extension wiring (matching existing markdown math support expectations).
 
 ### Removed
 
@@ -91,6 +96,7 @@ and this project adheres to Some kind of Versioning
 - Fixed Watchlists OPML bulk import preflight handling for wrapped upload objects (`originFileObj`), restoring `SourcesBulkImport.preflight-commit` test coverage.
 - Fixed Watchlists admin runs wrapper route contract by restoring redirect behavior to `/admin/server`.
 - Fixed Watchlists suite runtime abort path in constrained environments by stubbing heavy STT imports (`torch`/`faster_whisper`/`transformers`) in Watchlists test setup.
+- Fixed missing LaTeX rendering in `st_compat` chat rich-text mode by enabling KaTeX processing for the `marked`-based render path.
 
 ## [0.1.23] 2026-02-22
 

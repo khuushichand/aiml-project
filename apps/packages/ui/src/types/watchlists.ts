@@ -370,6 +370,26 @@ export interface WatchlistSettings {
   watchlists_backend?: "sqlite" | "postgres" | string
 }
 
+export interface WatchlistsOnboardingTelemetryPayload {
+  session_id: string
+  event_type: string
+  event_at?: string | null
+  details?: Record<string, string | number | boolean | null> | null
+}
+
+export interface WatchlistsOnboardingTelemetryResponse {
+  accepted: boolean
+  code?: string | null
+}
+
+export interface WatchlistsOnboardingTelemetrySummaryResponse {
+  counters: Record<string, number>
+  rates: Record<string, number>
+  timings: Record<string, number>
+  since?: string | null
+  until?: string | null
+}
+
 export type WatchlistsIaExperimentVariant = "baseline" | "experimental"
 
 export interface WatchlistsIaExperimentTelemetryPayload {
@@ -403,38 +423,31 @@ export interface WatchlistsIaExperimentTelemetrySummaryResponse {
   until?: string | null
 }
 
-export type WatchlistsIaExperimentVariant = "baseline" | "experimental"
-
-export interface WatchlistsIaExperimentTelemetryIngestRequest {
-  variant: WatchlistsIaExperimentVariant
-  session_id: string
-  previous_tab?: string | null
-  current_tab: string
-  transitions: number
-  visited_tabs: string[]
-  first_seen_at?: string | null
-  last_seen_at?: string | null
+export interface WatchlistsRcTelemetryThresholdSummary {
+  id: string
+  label: string
+  status: "ok" | "potential_breach"
+  reporting_only: boolean
+  metric_value?: number | null
+  baseline_value?: number | null
+  delta?: number | null
+  notes?: string | null
 }
 
-export interface WatchlistsIaExperimentTelemetryIngestResponse {
-  accepted: boolean
-}
-
-export interface WatchlistsIaExperimentVariantSummary {
-  variant: WatchlistsIaExperimentVariant
-  events: number
-  sessions: number
-  reached_target_sessions: number
-  avg_transitions: number
-  avg_visited_tabs: number
-  avg_session_seconds: number
-}
-
-export interface WatchlistsIaExperimentTelemetrySummaryResponse {
-  items: WatchlistsIaExperimentVariantSummary[]
+export interface WatchlistsRcTelemetrySummaryResponse {
+  onboarding: WatchlistsOnboardingTelemetrySummaryResponse
+  uc2_backend: Record<string, number>
+  ia_experiment: Record<string, unknown>
+  baseline: Record<string, number>
+  thresholds: WatchlistsRcTelemetryThresholdSummary[]
   since?: string | null
   until?: string | null
 }
+
+export type WatchlistsIaExperimentTelemetryIngestRequest =
+  WatchlistsIaExperimentTelemetryPayload
+export type WatchlistsIaExperimentTelemetryIngestResponse =
+  WatchlistsIaExperimentTelemetryResponse
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Claim Cluster Types

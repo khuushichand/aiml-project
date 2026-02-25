@@ -54,10 +54,16 @@ import { useMediaReadingProgress } from '@/hooks/useMediaReadingProgress'
 import { downloadBlob } from '@/utils/download-blob'
 import {
   MEDIA_COLLAPSED_SECTIONS_SETTING,
+  MEDIA_HIDE_TRANSCRIPT_TIMINGS_SETTING,
   MEDIA_TEXT_SIZE_PRESET_SETTING,
   type MediaTextSizePreset
 } from '@/services/settings/ui-settings'
 import { estimateReadingTimeMinutes } from './mediaMetadataUtils'
+import {
+  hasLeadingTranscriptTimings,
+  parseLeadingTranscriptTiming,
+  stripLeadingTranscriptTimings
+} from '@/utils/media-transcript-display'
 
 // Lazy load ContentEditModal for code splitting
 const ContentEditModal = React.lazy(() =>
@@ -113,9 +119,6 @@ const TEXT_SIZE_CONTROL_OPTIONS: Array<{
     richClass: 'prose'
   }
 ]
-
-const LEADING_TRANSCRIPT_TIMESTAMP_PATTERN =
-  /^(\s*)(?:\[(\d{1,2}:\d{2}(?::\d{2})?)\]|(\d{1,2}:\d{2}(?::\d{2})?))(\s*[-–—:]?\s*)(.*)$/
 
 export const LARGE_PLAIN_CONTENT_THRESHOLD_CHARS = 120_000
 export const LARGE_PLAIN_CONTENT_CHUNK_CHARS = 32_000
@@ -777,6 +780,9 @@ export function ContentViewer({
   const [collapsedSections, setCollapsedSections] = useSetting(
     MEDIA_COLLAPSED_SECTIONS_SETTING
   )
+  const [hideTranscriptTimings, setHideTranscriptTimings] = useSetting(
+    MEDIA_HIDE_TRANSCRIPT_TIMINGS_SETTING
+  )
   const [textSizePreset, setTextSizePreset] = useSetting(
     MEDIA_TEXT_SIZE_PRESET_SETTING
   )
@@ -916,6 +922,14 @@ export function ContentViewer({
       return false
     }
   }, [])
+  const shouldHideTranscriptTimings = hideTranscriptTimings ?? true
+  const displayContent = useMemo(
+    () =>
+      shouldHideTranscriptTimings
+        ? stripLeadingTranscriptTimings(content)
+        : content,
+    [content, shouldHideTranscriptTimings]
+  )
 
   const mediaReadingProgress = useMediaReadingProgress({
     mediaId: selectedMedia?.id ?? null,
@@ -1054,16 +1068,17 @@ export function ContentViewer({
 
   // Content length threshold for collapse (2500 chars)
   const CONTENT_COLLAPSE_THRESHOLD = 2500
-  const shouldShowExpandToggle = content && content.length > CONTENT_COLLAPSE_THRESHOLD
+  const shouldShowExpandToggle =
+    displayContent && displayContent.length > CONTENT_COLLAPSE_THRESHOLD
   const contentForPreview = useMemo(() => {
-    if (!content) return ''
-    if (selectedMedia?.kind === 'note') return content
-    const normalized = content.replace(/\r\n/g, '\n')
+    if (!displayContent) return ''
+    if (selectedMedia?.kind === 'note') return displayContent
+    const normalized = displayContent.replace(/\r\n/g, '\n')
     if (!shouldForceHardBreaks(normalized, selectedMedia?.meta?.type)) {
       return normalized
     }
     return normalized.replace(/\n/g, '  \n')
-  }, [content, selectedMedia?.kind, selectedMedia?.meta?.type])
+  }, [displayContent, selectedMedia?.kind, selectedMedia?.meta?.type])
   const effectiveRenderMode = useMemo(
     () =>
       resolveMediaRenderMode({
@@ -1078,33 +1093,50 @@ export function ContentViewer({
     () => (content ? content.replace(/\r\n/g, '\n').split('\n') : []),
     [content]
   )
-  const hasClickableTranscriptTimestamps = useMemo(
-    () =>
-      shouldShowEmbeddedPlayer &&
-      transcriptLines.some((line) => LEADING_TRANSCRIPT_TIMESTAMP_PATTERN.test(line)),
-    [shouldShowEmbeddedPlayer, transcriptLines]
+  const hasTranscriptTimingLines = useMemo(
+    () => hasLeadingTranscriptTimings(content),
+    [content]
   )
+  const hasClickableTranscriptTimestamps = useMemo(
+    () => shouldShowEmbeddedPlayer && hasTranscriptTimingLines,
+    [hasTranscriptTimingLines, shouldShowEmbeddedPlayer]
+  )
+  const shouldRenderTranscriptTimestampChips =
+    hasClickableTranscriptTimestamps &&
+    !shouldHideTranscriptTimings &&
+    !normalizedFindQuery
   const shouldUseChunkedPlainRendering = useMemo(
     () =>
       effectiveRenderMode === 'plain' &&
-      !hasClickableTranscriptTimestamps &&
+      !shouldRenderTranscriptTimestampChips &&
       !normalizedFindQuery &&
-      content.length > LARGE_PLAIN_CONTENT_THRESHOLD_CHARS,
-    [content.length, effectiveRenderMode, hasClickableTranscriptTimestamps, normalizedFindQuery]
+      displayContent.length > LARGE_PLAIN_CONTENT_THRESHOLD_CHARS,
+    [
+      displayContent.length,
+      effectiveRenderMode,
+      normalizedFindQuery,
+      shouldRenderTranscriptTimestampChips
+    ]
   )
   const visiblePlainContent = useMemo(() => {
-    if (!content) return ''
-    if (!shouldUseChunkedPlainRendering) return content
-    return content.slice(0, Math.max(0, Math.min(content.length, visiblePlainContentChars)))
-  }, [content, shouldUseChunkedPlainRendering, visiblePlainContentChars])
+    if (!displayContent) return ''
+    if (!shouldUseChunkedPlainRendering) return displayContent
+    return displayContent.slice(
+      0,
+      Math.max(0, Math.min(displayContent.length, visiblePlainContentChars))
+    )
+  }, [displayContent, shouldUseChunkedPlainRendering, visiblePlainContentChars])
   const hasUnrenderedPlainContent =
-    shouldUseChunkedPlainRendering && visiblePlainContentChars < content.length
+    shouldUseChunkedPlainRendering && visiblePlainContentChars < displayContent.length
   const loadMorePlainContent = useCallback(() => {
     if (!shouldUseChunkedPlainRendering) return
     setVisiblePlainContentChars((prev) =>
-      Math.min(content.length, Math.max(0, prev) + LARGE_PLAIN_CONTENT_CHUNK_CHARS)
+      Math.min(
+        displayContent.length,
+        Math.max(0, prev) + LARGE_PLAIN_CONTENT_CHUNK_CHARS
+      )
     )
-  }, [content.length, shouldUseChunkedPlainRendering])
+  }, [displayContent.length, shouldUseChunkedPlainRendering])
   const findMatchCount = findMatchOffsets.length
 
   const moveFindMatch = useCallback(
@@ -1126,13 +1158,13 @@ export function ContentViewer({
 
   const highlightedPlainContent = useMemo<React.ReactNode>(() => {
     findMatchElementRefs.current = []
-    if (!content) {
+    if (!displayContent) {
       return t('review:mediaPage.noContent', {
         defaultValue: 'No content available'
       })
     }
     if (!normalizedFindQuery || findMatchOffsets.length === 0) {
-      return shouldUseChunkedPlainRendering ? visiblePlainContent : content
+      return shouldUseChunkedPlainRendering ? visiblePlainContent : displayContent
     }
 
     const parts: React.ReactNode[] = []
@@ -1142,9 +1174,9 @@ export function ContentViewer({
     findMatchOffsets.forEach((start, index) => {
       if (start < cursor) return
       if (start > cursor) {
-        parts.push(content.slice(cursor, start))
+        parts.push(displayContent.slice(cursor, start))
       }
-      const end = Math.min(content.length, start + queryLength)
+      const end = Math.min(displayContent.length, start + queryLength)
       const isActive = index === activeFindMatchIndex
       parts.push(
         <mark
@@ -1159,20 +1191,20 @@ export function ContentViewer({
               : 'rounded bg-warn/20 text-text px-0.5'
           }
         >
-          {content.slice(start, end)}
+          {displayContent.slice(start, end)}
         </mark>
       )
       cursor = end
     })
 
-    if (cursor < content.length) {
-      parts.push(content.slice(cursor))
+    if (cursor < displayContent.length) {
+      parts.push(displayContent.slice(cursor))
     }
 
     return <>{parts}</>
   }, [
     activeFindMatchIndex,
-    content,
+    displayContent,
     findMatchOffsets,
     normalizedFindQuery,
     shouldUseChunkedPlainRendering,
@@ -1181,16 +1213,18 @@ export function ContentViewer({
   ])
 
   useEffect(() => {
-    if (!content) {
+    if (!displayContent) {
       setVisiblePlainContentChars(0)
       return
     }
     if (!shouldUseChunkedPlainRendering) {
-      setVisiblePlainContentChars(content.length)
+      setVisiblePlainContentChars(displayContent.length)
       return
     }
-    setVisiblePlainContentChars(Math.min(content.length, LARGE_PLAIN_CONTENT_CHUNK_CHARS))
-  }, [content.length, selectedMedia?.id, shouldUseChunkedPlainRendering])
+    setVisiblePlainContentChars(
+      Math.min(displayContent.length, LARGE_PLAIN_CONTENT_CHUNK_CHARS)
+    )
+  }, [displayContent.length, selectedMedia?.id, shouldUseChunkedPlainRendering])
 
   useEffect(() => {
     if (!hasUnrenderedPlainContent) return
@@ -1208,7 +1242,10 @@ export function ContentViewer({
         return
       }
       setVisiblePlainContentChars((prev) =>
-        Math.min(content.length, Math.max(0, prev) + LARGE_PLAIN_CONTENT_CHUNK_CHARS)
+        Math.min(
+          displayContent.length,
+          Math.max(0, prev) + LARGE_PLAIN_CONTENT_CHUNK_CHARS
+        )
       )
     }
 
@@ -1222,13 +1259,13 @@ export function ContentViewer({
     return () => {
       container.removeEventListener('scroll', maybeLoadMore)
     }
-  }, [content.length, hasUnrenderedPlainContent, visiblePlainContentChars])
+  }, [displayContent.length, hasUnrenderedPlainContent, visiblePlainContentChars])
 
   useEffect(() => {
-    const offsets = findInContentOffsets(content, findQuery)
+    const offsets = findInContentOffsets(displayContent, findQuery)
     setFindMatchOffsets(offsets)
     setActiveFindMatchIndex(offsets.length > 0 ? 0 : -1)
-  }, [content, findQuery])
+  }, [displayContent, findQuery])
 
   useEffect(() => {
     setFindBarOpen(false)
@@ -1258,10 +1295,10 @@ export function ContentViewer({
 
     const container = contentScrollContainerRef.current
     const offset = findMatchOffsets[activeFindMatchIndex]
-    if (container && Number.isFinite(offset) && content.length > 0) {
-      scrollToCharOffset(container, offset, content.length)
+    if (container && Number.isFinite(offset) && displayContent.length > 0) {
+      scrollToCharOffset(container, offset, displayContent.length)
     }
-  }, [activeFindMatchIndex, content.length, findMatchOffsets])
+  }, [activeFindMatchIndex, displayContent.length, findMatchOffsets])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1294,7 +1331,7 @@ export function ContentViewer({
   }, [])
 
   const richSanitization = useMemo(() => {
-    if (effectiveRenderMode !== 'html' || !content) {
+    if (effectiveRenderMode !== 'html' || !displayContent) {
       return {
         html: '',
         removed_node_count: 0,
@@ -1302,8 +1339,8 @@ export function ContentViewer({
         blocked_url_schemes: [] as string[]
       }
     }
-    return sanitizeMediaRichHtmlWithStats(content)
-  }, [content, effectiveRenderMode])
+    return sanitizeMediaRichHtmlWithStats(displayContent)
+  }, [displayContent, effectiveRenderMode])
   const sanitizedRichContent = richSanitization.html
   const navigationTargetDescription = useMemo(
     () => describeMediaNavigationTarget(navigationTarget),
@@ -1889,8 +1926,12 @@ export function ContentViewer({
   }
 
   const handleCopyContent = () => {
-    if (!content) return
-    copyTextWithToasts(content, 'mediaPage.contentCopied', 'Content copied')
+    if (!displayContent) return
+    copyTextWithToasts(
+      displayContent,
+      'mediaPage.contentCopied',
+      'Content copied'
+    )
   }
 
   const handleCopyMetadata = () => {
@@ -3690,6 +3731,41 @@ export function ContentViewer({
                     )
                   })}
                 </div>
+                {hasTranscriptTimingLines ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void setHideTranscriptTimings((prev) => !(prev ?? true))
+                    }}
+                    className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text-muted hover:bg-surface2 hover:text-text"
+                    aria-label={
+                      shouldHideTranscriptTimings
+                        ? t('review:mediaPage.showTimings', {
+                            defaultValue: 'Show timings'
+                          })
+                        : t('review:mediaPage.hideTimings', {
+                            defaultValue: 'Hide timings'
+                          })
+                    }
+                    title={
+                      shouldHideTranscriptTimings
+                        ? t('review:mediaPage.showTimings', {
+                            defaultValue: 'Show timings'
+                          })
+                        : t('review:mediaPage.hideTimings', {
+                            defaultValue: 'Hide timings'
+                          })
+                    }
+                  >
+                    {shouldHideTranscriptTimings
+                      ? t('review:mediaPage.showTimings', {
+                          defaultValue: 'Show timings'
+                        })
+                      : t('review:mediaPage.hideTimings', {
+                          defaultValue: 'Hide timings'
+                        })}
+                  </button>
+                ) : null}
                 {!isNote && content && (
                   <button
                     onClick={() => {
@@ -3882,21 +3958,21 @@ export function ContentViewer({
                   onKeyUp={handleCaptureAnnotationSelection}
                 >
                   {effectiveRenderMode === 'plain' ? (
-                    hasClickableTranscriptTimestamps && !normalizedFindQuery ? (
+                    shouldRenderTranscriptTimestampChips ? (
                       <div
                         className={`m-0 space-y-1 whitespace-pre-wrap text-text font-mono ${contentBodyTypographyClass}`}
                       >
                         {transcriptLines.map((line, lineIndex) => {
-                          const match = line.match(LEADING_TRANSCRIPT_TIMESTAMP_PATTERN)
-                          if (!match) {
+                          const parsed = parseLeadingTranscriptTiming(line)
+                          if (!parsed) {
                             return (
                               <div key={`line-${lineIndex}`}>
                                 {line.length > 0 ? line : '\u00A0'}
                               </div>
                             )
                           }
-                          const timestamp = match[2] || match[3] || ''
-                          const tail = `${match[1] || ''}${match[4] || ''}${match[5] || ''}`
+                          const timestamp = parsed.timestamp
+                          const tail = `${parsed.leadingWhitespace}${parsed.separator}${parsed.text}`
                           return (
                             <div key={`line-${lineIndex}`} className="flex flex-wrap items-start gap-2">
                               <button
@@ -3927,11 +4003,11 @@ export function ContentViewer({
                             className="flex flex-wrap items-center justify-between gap-2 rounded border border-border bg-surface2 px-2 py-1 text-[11px] text-text-muted"
                             data-testid="large-content-window-status"
                             data-visible-chars={visiblePlainContentChars}
-                            data-total-chars={content.length}
+                            data-total-chars={displayContent.length}
                           >
                             <span data-testid="large-content-window-progress">
                               {t('review:mediaPage.largeContentProgress', {
-                                defaultValue: `Showing ${visiblePlainContentChars}/${content.length} characters`
+                                defaultValue: `Showing ${visiblePlainContentChars}/${displayContent.length} characters`
                               })}
                             </span>
                             <button
@@ -3949,7 +4025,7 @@ export function ContentViewer({
                       </div>
                     )
                   ) : effectiveRenderMode === 'html' ? (
-                    content ? (
+                    displayContent ? (
                       <div
                         className={`${richTextTypographyClass} break-words dark:prose-invert max-w-none prose-p:leading-relaxed`}
                         dangerouslySetInnerHTML={{
@@ -3988,14 +4064,14 @@ export function ContentViewer({
                       contentExpanded
                         ? t('review:mediaPage.showLess', { defaultValue: 'Show less' })
                         : t('review:mediaPage.showMore', {
-                            defaultValue: `Show more (${Math.round(content.length / 1000)}k chars)`
+                            defaultValue: `Show more (${Math.round(displayContent.length / 1000)}k chars)`
                           })
                     }
                   >
                     {contentExpanded
                       ? t('review:mediaPage.showLess', { defaultValue: 'Show less' })
                       : t('review:mediaPage.showMore', {
-                          defaultValue: `Show more (${Math.round(content.length / 1000)}k chars)`
+                          defaultValue: `Show more (${Math.round(displayContent.length / 1000)}k chars)`
                         })}
                   </button>
                 )}

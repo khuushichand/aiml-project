@@ -15,34 +15,34 @@ const TOPIC_FALLBACKS: Record<
   { label: string; title: string; description: string }
 > = {
   opml: {
-    label: "OPML imports",
-    title: "What is OPML?",
+    label: "OPML feed import",
+    title: "Import many feeds quickly",
     description:
-      "OPML is a portable feed-list format. Import one file to add many RSS or site feeds at once."
+      "Use OPML when moving feed lists from another reader so setup takes minutes instead of manual entry."
   },
   cron: {
-    label: "cron scheduling",
-    title: "How cron scheduling works",
+    label: "advanced schedule timing",
+    title: "Choose preset schedules first",
     description:
-      "Cron uses five fields: minute, hour, day-of-month, month, and day-of-week."
+      "Use preset timing for most monitors. Switch to custom cron only for uncommon timing windows."
   },
   ttl: {
-    label: "retention TTL",
-    title: "What retention TTL means",
+    label: "retention window",
+    title: "Control how long outputs stay available",
     description:
-      "TTL controls how long generated outputs are kept before they expire automatically."
+      "Set retention to keep briefings only as long as your review workflow needs before automatic cleanup."
   },
   jinja2: {
-    label: "Jinja2 templates",
-    title: "Using Jinja2 templates",
+    label: "briefing templates",
+    title: "Shape briefing format with templates",
     description:
-      "Jinja2 lets you loop, branch, and format monitor data into reusable report templates."
+      "Start with a preset template to control sections and tone, then customize only if you need advanced formatting."
   },
   claimClusters: {
-    label: "claim clusters",
-    title: "What claim clusters are",
+    label: "claim tracking",
+    title: "Track repeating claims across sources",
     description:
-      "Claim clusters group similar claims across feeds so monitors can subscribe to related topic updates."
+      "Subscribe to claim clusters to follow how the same claim evolves across feeds without manual tagging."
   }
 }
 

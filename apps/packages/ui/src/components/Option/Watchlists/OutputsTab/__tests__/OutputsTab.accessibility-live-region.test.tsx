@@ -160,6 +160,9 @@ describe("OutputsTab accessibility live-region behavior", () => {
   it("announces delivery status changes in the SR live region", async () => {
     const { rerender } = render(<OutputsTab />)
     expect(screen.getByTestId("watchlists-outputs-live-region")).toHaveTextContent("")
+    expect(screen.getByTestId("watchlists-outputs-live-region")).toHaveAttribute("role", "status")
+    expect(screen.getByTestId("watchlists-outputs-live-region")).toHaveAttribute("aria-live", "polite")
+    expect(screen.getByTestId("watchlists-outputs-live-region")).toHaveAttribute("aria-atomic", "true")
 
     mocks.storeStateRef.current = baseState({
       outputs: [buildOutput("sent")],

@@ -80,6 +80,13 @@ Notes:
 - OCR: Backends managed via `OCR/registry.py` with auto-detection; page rendering via PyMuPDF. Optional env/config: `OCR_PAGE_CONCURRENCY` and `OCR.backend_priority`.
 - Config: size limits are defined as `media_processing.max_pdf_file_size_mb` and enforced at upload validation (`Upload_Sink`). `pdf_conversion_timeout_seconds` is loaded but not currently applied within the PDF processing function.
 
+## Ingest-Time Text Normalization
+
+- Newly ingested PDFs are normalized before chunking and persistence using a paragraph-safe text reflow pass.
+- The normalizer joins soft-wrapped single newlines inside paragraph text while preserving structural blocks (headings, lists, tables, code fences, and page markers/separators).
+- Normalization runs on the final extracted content for all supported parser paths (`pymupdf4llm`, `pymupdf`, and `docling`), including OCR-merged content.
+- Existing stored media rows are not retroactively changed by this behavior.
+
 ## Error Handling & Notes
 
 - Missing optional parsers fallback to alternatives; errors are recorded in `warnings`/`error`.

@@ -203,6 +203,8 @@ class MLXSessionRegistry:
 
     def load(self, *, model_path: str | None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         """Load or swap the active model. Keeps previous model on failure."""
+        if isinstance(model_path, str):
+            model_path = model_path.strip() or None
         if not model_path:
             raise ChatBadRequestError(provider="mlx", message="model_path is required")
         self._ensure_metrics()
@@ -363,6 +365,21 @@ class MLXSessionRegistry:
                     "max_concurrent": self._max_concurrent,
                 }
             s = self._session
+            unapplied_overrides: dict[str, Any] = {}
+            for key in ("quantization", "max_kv_cache_size"):
+                value = s.config.get(key)
+                if value is not None:
+                    unapplied_overrides[key] = value
+            config = {
+                "device": s.config.get("device"),
+                "dtype": s.config.get("dtype"),
+                "compile": bool(s.config.get("compile", True)),
+                "warmup": bool(s.config.get("warmup", True)),
+                "max_seq_len": s.config.get("max_seq_len"),
+                "max_batch_size": s.config.get("max_batch_size"),
+            }
+            if unapplied_overrides:
+                config["unapplied_runtime_overrides"] = unapplied_overrides
             return {
                 "active": True,
                 "model": s.model_id,
@@ -370,14 +387,7 @@ class MLXSessionRegistry:
                 "supports_embeddings": s.supports_embeddings,
                 "warmup_completed": s.warmup_completed,
                 "max_concurrent": self._max_concurrent,
-                "config": {
-                    "device": s.config.get("device"),
-                    "dtype": s.config.get("dtype"),
-                    "compile": bool(s.config.get("compile", True)),
-                    "warmup": bool(s.config.get("warmup", True)),
-                    "max_seq_len": s.config.get("max_seq_len"),
-                    "max_batch_size": s.config.get("max_batch_size"),
-                },
+                "config": config,
             }
 
 
@@ -640,7 +650,7 @@ class MLXEmbeddingsAdapter(EmbeddingsProvider):
             data = [{"index": i, "embedding": vec} for i, vec in enumerate(vectors)]  # type: ignore[arg-type]
         else:
             data = [{"index": 0, "embedding": vectors}]  # type: ignore[list-item]
-        return {"data": data, "object": "list", "model": request.get("model")}
+        return {"data": data, "object": "list", "model": session.model_id}
 
 
 __all__ = ["MLXChatAdapter", "MLXEmbeddingsAdapter", "MLXSessionRegistry", "get_mlx_registry"]

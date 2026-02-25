@@ -1,0 +1,69 @@
+name: UI Watchlists RC Gate
+
+on:
+  push:
+    branches:
+      - "release/**"
+      - "rc/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-watchlists-rc-gate-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  watchlists-rc-gate:
+    name: Watchlists RC Go/No-Go
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install workspace dependencies
+        working-directory: apps
+        run: bun install --frozen-lockfile
+
+      - name: Run Watchlists RC gate orchestration
+        id: watchlists_rc_gate
+        shell: bash
+        run: |
+          set +e
+          python3 Helper_Scripts/ci/watchlists_rc_gate.py \
+            --summary-output /tmp/watchlists_rc_gate_summary.md \
+            --json-output /tmp/watchlists_rc_gate_results.json
+          rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publish Watchlists RC summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/watchlists_rc_gate_summary.md ]; then
+            cat /tmp/watchlists_rc_gate_summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Watchlists RC Gate Summary"
+              echo
+              echo "Summary file missing; inspect prior steps for setup or script failures."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Enforce hard release blocker
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.watchlists_rc_gate.outputs.exit_code }}" != "0" ]; then
+            echo "::error::Watchlists RC gate decision is NO-GO."
+            exit 1
+          fi

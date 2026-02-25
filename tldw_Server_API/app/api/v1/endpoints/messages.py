@@ -143,7 +143,17 @@ def _normalize_llamacpp_base_url(base_url: str) -> str:
     """Strip known completion suffixes from a llama.cpp base URL."""
     normalized = base_url.strip().rstrip("/")
     lowered = normalized.lower()
-    for suffix in ("/v1/chat/completions", "/v1/completions", "/chat/completions", "/completions", "/completion"):
+    for suffix in (
+        "/v1/messages/count_tokens",
+        "/v1/messages",
+        "/messages/count_tokens",
+        "/messages",
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/chat/completions",
+        "/completions",
+        "/completion",
+    ):
         if lowered.endswith(suffix):
             normalized = normalized[: -len(suffix)]
             break

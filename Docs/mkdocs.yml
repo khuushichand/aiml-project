@@ -151,6 +151,7 @@ nav:
           - Chat Developer Guide: Code_Documentation/Chat_Developer_Guide.md
           - Character Chat: Code_Documentation/Character_Chat.md
           - Chatbook Developer Guide: Code_Documentation/Chatbook_Developer_Guide.md
+          - Meetings Developer Guide: Code_Documentation/Meetings_Developer_Guide.md
       - RAG & Embeddings:
           - RAG Developer Guide: Code_Documentation/RAG-Developer-Guide.md
           - RAG Functional Pipeline: Code_Documentation/RAG-Functional-Pipeline-Guide.md
@@ -260,6 +261,7 @@ nav:
               - Evaluations End User Guide: User_Guides/Server/Evaluations_End_User_Guide.md
               - Evaluations Production Deployment: User_Guides/Server/Evaluations_Production_Deployment_Guide.md
               - Email Operator Search Guide: User_Guides/Server/Email_Operator_Search_Guide.md
+              - Meeting Intelligence User Guide: User_Guides/Server/Meeting_Intelligence_User_Guide.md
       - WebUI & Extension:
           - Core Chat Experience:
               - User Guide: User_Guides/WebUI_Extension/User_Guide.md

@@ -276,8 +276,10 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       await authedPage
         .getByTestId("onboarding-success-ingest")
         .evaluate((el: HTMLElement) => el.click())
-      const quickIngestModal = authedPage.locator(".quick-ingest-modal .ant-modal-content")
-      await expect(quickIngestModal).toBeVisible({ timeout: 15_000 })
+      const quickIngestDialog = authedPage
+        .getByRole("dialog", { name: /quick ingest/i })
+        .first()
+      await expect(quickIngestDialog).toBeVisible({ timeout: 15_000 })
       await captureStep(
         authedPage,
         evidenceRows,
@@ -286,15 +288,15 @@ test.describe("Onboarding Ingestion-First Journey", () => {
         "Quick Ingest modal reachable from onboarding ingest CTA."
       )
 
-      const quickIngestClose = authedPage
-        .locator(".quick-ingest-modal .ant-modal-close")
+      const quickIngestClose = quickIngestDialog
+        .locator(".ant-modal-close")
         .first()
       if (await quickIngestClose.isVisible().catch(() => false)) {
         await quickIngestClose.evaluate((el: HTMLElement) => el.click())
       } else {
         await authedPage.keyboard.press("Escape")
       }
-      await expect(quickIngestModal).toBeHidden({ timeout: 10_000 })
+      await expect(quickIngestDialog).toBeHidden({ timeout: 10_000 })
 
       await authedPage.goto("/setup", { waitUntil: "domcontentloaded" })
       await authedPage

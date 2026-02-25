@@ -1,6 +1,15 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, type RefObject } from 'react'
 import { Modal, Radio } from 'antd'
 import { useTranslation } from 'react-i18next'
+import {
+  DIFF_HARD_CHAR_THRESHOLD,
+  computeDiffSync,
+  computeDiffWithWorker,
+  sampleTextForDiff,
+  shouldRequireSampling,
+  shouldUseWorkerDiff,
+  type DiffLine
+} from './diff-worker-client'
 
 interface DiffViewModalProps {
   open: boolean
@@ -9,54 +18,12 @@ interface DiffViewModalProps {
   rightText: string
   leftLabel?: string
   rightLabel?: string
+  fallbackFocusRef?: RefObject<HTMLElement | null>
   metadataDiff?: {
     left?: string[]
     right?: string[]
     changed?: string[]
   }
-}
-
-type DiffLine = { type: 'same' | 'add' | 'del'; text: string }
-
-// Compute line-by-line diff using LCS algorithm
-function computeDiff(oldStr: string, newStr: string): DiffLine[] {
-  const a = String(oldStr || '').split('\n')
-  const b = String(newStr || '').split('\n')
-  const n = a.length
-  const m = b.length
-
-  // Build LCS length table
-  const dp: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0))
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
-    }
-  }
-
-  // Trace back to build diff
-  const out: DiffLine[] = []
-  let i = 0
-  let j = 0
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      out.push({ type: 'same', text: a[i] })
-      i++
-      j++
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      out.push({ type: 'del', text: a[i] })
-      i++
-    } else {
-      out.push({ type: 'add', text: b[j] })
-      j++
-    }
-  }
-  while (i < n) {
-    out.push({ type: 'del', text: a[i++] })
-  }
-  while (j < m) {
-    out.push({ type: 'add', text: b[j++] })
-  }
-  return out
 }
 
 export function DiffViewModal({
@@ -66,10 +33,15 @@ export function DiffViewModal({
   rightText,
   leftLabel = 'Left',
   rightLabel = 'Right',
+  fallbackFocusRef,
   metadataDiff
 }: DiffViewModalProps) {
   const { t } = useTranslation(['review'])
   const [viewMode, setViewMode] = useState<'unified' | 'sideBySide'>('unified')
+  const [workerDiffLines, setWorkerDiffLines] = useState<DiffLine[] | null>(null)
+  const [diffError, setDiffError] = useState<string | null>(null)
+  const [diffLoading, setDiffLoading] = useState(false)
+  const [samplingAccepted, setSamplingAccepted] = useState(false)
   const triggerRef = useRef<HTMLElement | null>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
@@ -85,12 +57,106 @@ export function DiffViewModal({
       // Focus the diff content for keyboard scrolling
       setTimeout(() => contentRef.current?.focus(), 0)
     } else {
-      // Restore focus to trigger element when modal closes
-      triggerRef.current?.focus()
+      const canFocus = (candidate: HTMLElement | null): candidate is HTMLElement =>
+        Boolean(
+          candidate &&
+            candidate.isConnected &&
+            typeof candidate.focus === 'function' &&
+            !(candidate as HTMLButtonElement).disabled
+        )
+
+      // Restore focus to trigger element when modal closes, then fallback to compare trigger.
+      if (canFocus(triggerRef.current)) {
+        triggerRef.current.focus()
+        return
+      }
+      const explicitFallback = fallbackFocusRef?.current ?? null
+      if (canFocus(explicitFallback)) {
+        explicitFallback.focus()
+        return
+      }
+      const compareFallback = document.querySelector<HTMLElement>(
+        "[data-compare-content-trigger='true']"
+      )
+      if (canFocus(compareFallback)) {
+        compareFallback.focus()
+      }
     }
   }
 
-  const diffLines = useMemo(() => computeDiff(leftText, rightText), [leftText, rightText])
+  const requiresSampling = useMemo(
+    () => shouldRequireSampling(leftText, rightText, DIFF_HARD_CHAR_THRESHOLD),
+    [leftText, rightText]
+  )
+  const canComputeDiff = !requiresSampling || samplingAccepted
+
+  useEffect(() => {
+    if (!open) return
+    setSamplingAccepted(false)
+  }, [open, leftText, rightText])
+
+  const effectiveLeftText = useMemo(
+    () => (requiresSampling && samplingAccepted ? sampleTextForDiff(leftText) : leftText),
+    [leftText, requiresSampling, samplingAccepted]
+  )
+  const effectiveRightText = useMemo(
+    () => (requiresSampling && samplingAccepted ? sampleTextForDiff(rightText) : rightText),
+    [rightText, requiresSampling, samplingAccepted]
+  )
+
+  const useWorker = useMemo(
+    () => canComputeDiff && shouldUseWorkerDiff(effectiveLeftText, effectiveRightText),
+    [canComputeDiff, effectiveLeftText, effectiveRightText]
+  )
+
+  const syncDiffLines = useMemo(
+    () => (canComputeDiff && !useWorker ? computeDiffSync(effectiveLeftText, effectiveRightText) : []),
+    [canComputeDiff, useWorker, effectiveLeftText, effectiveRightText]
+  )
+
+  useEffect(() => {
+    if (!open) return
+    if (!canComputeDiff) {
+      setWorkerDiffLines(null)
+      setDiffError(null)
+      setDiffLoading(false)
+      return
+    }
+    if (!useWorker) {
+      setWorkerDiffLines(null)
+      setDiffError(null)
+      setDiffLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setDiffLoading(true)
+    setDiffError(null)
+    setWorkerDiffLines(null)
+
+    void computeDiffWithWorker(effectiveLeftText, effectiveRightText)
+      .then((lines) => {
+        if (cancelled) return
+        setWorkerDiffLines(lines)
+        setDiffLoading(false)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setDiffError(error instanceof Error ? error.message : 'Diff computation failed')
+        setWorkerDiffLines(computeDiffSync(effectiveLeftText, effectiveRightText))
+        setDiffLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [open, canComputeDiff, useWorker, effectiveLeftText, effectiveRightText])
+
+  const diffLines = useMemo(() => {
+    if (!canComputeDiff) return []
+    if (!useWorker) return syncDiffLines
+    return workerDiffLines || []
+  }, [canComputeDiff, useWorker, syncDiffLines, workerDiffLines])
 
   // Build side-by-side view data
   const sideBySideData = useMemo(() => {
@@ -218,6 +284,48 @@ export function DiffViewModal({
         </div>
       )}
 
+      {requiresSampling && !samplingAccepted && (
+        <div className="mb-3 rounded-lg border border-warn/50 bg-warn/10 p-3 text-sm text-text">
+          <div className="font-medium">
+            {t(
+              'mediaPage.largeComparisonTitle',
+              'Large comparison detected'
+            )}
+          </div>
+          <div className="mt-1 text-xs text-text-muted">
+            {t(
+              'mediaPage.largeComparisonBody',
+              'These documents are very large. Generate a sampled diff to keep this responsive.'
+            )}
+          </div>
+          <button
+            type="button"
+            className="mt-2 rounded border border-border bg-surface px-2 py-1 text-xs hover:bg-surface2"
+            onClick={() => setSamplingAccepted(true)}
+          >
+            {t('mediaPage.generateSampledDiff', 'Generate sampled diff')}
+          </button>
+        </div>
+      )}
+
+      {useWorker && canComputeDiff && (
+        <div
+          className="mb-3 rounded border border-primary/40 bg-primary/10 px-2 py-1 text-xs text-primary"
+          role="status"
+          aria-live="polite"
+        >
+          {diffLoading
+            ? t('mediaPage.largeComparisonComputing', 'Large comparison: computing diff in background…')
+            : t('mediaPage.largeComparisonReady', 'Large comparison finished.')}
+        </div>
+      )}
+
+      {diffError && (
+        <div className="mb-3 rounded border border-danger/40 bg-danger/10 px-2 py-1 text-xs text-danger">
+          {t('mediaPage.largeComparisonFallback', 'Diff worker failed; fell back to direct diff.')}
+        </div>
+      )}
+
       <div
         ref={contentRef}
         tabIndex={0}
@@ -249,7 +357,11 @@ export function DiffViewModal({
         role="region"
         aria-label={t('mediaPage.diffContentRegion', 'Diff content - use arrow keys to scroll')}
       >
-        {viewMode === 'unified' ? (
+        {!canComputeDiff ? (
+          <div className="p-4 text-center text-text-muted">
+            {t('mediaPage.largeComparisonPending', 'Generate sampled diff to continue.')}
+          </div>
+        ) : viewMode === 'unified' ? (
           <div className="font-mono text-xs">
             {diffLines.length === 0 ? (
               <div className="p-4 text-center text-text-muted">

@@ -201,6 +201,18 @@ export const SettingsTab: React.FC = () => {
           onChange={(checked) => handleToggleCluster(record, checked)}
           disabled={!selectedJobId}
           loading={clusterUpdates.includes(record.id)}
+          aria-label={t(
+            "watchlists:settings.clusters.toggleAria",
+            "Toggle subscription for {{cluster}}",
+            {
+              cluster:
+                record.summary ||
+                record.canonical_claim_text ||
+                `#${record.id}`
+            }
+          )}
+          checkedChildren={t("common:yes", "Yes")}
+          unCheckedChildren={t("common:no", "No")}
         />
       )
     }

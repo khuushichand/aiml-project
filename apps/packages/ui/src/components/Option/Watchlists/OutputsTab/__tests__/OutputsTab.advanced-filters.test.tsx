@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   fetchWatchlistOutputsMock: vi.fn(),
   fetchWatchlistTemplatesMock: vi.fn(),
   downloadWatchlistOutputMock: vi.fn(),
+  trackWatchlistsOnboardingTelemetryMock: vi.fn(),
   storeStateRef: { current: {} as Record<string, any> }
 }))
 
@@ -49,7 +50,17 @@ vi.mock("antd", () => {
     </button>
   )
 
-  const Table = () => <div data-testid="outputs-table" />
+  const Table = ({ dataSource = [] }: any) => (
+    <table data-testid="outputs-table">
+      <tbody>
+        {dataSource.map((record: any) => (
+          <tr key={String(record.id)}>
+            <td>{String(record.id)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
   const Space = ({ children }: any) => <>{children}</>
   const Tag = ({ children }: any) => <span>{children}</span>
   const Tooltip = ({ children }: any) => <>{children}</>
@@ -99,6 +110,11 @@ vi.mock("@/services/watchlists", () => ({
   downloadWatchlistOutput: (...args: any[]) => mocks.downloadWatchlistOutputMock(...args)
 }))
 
+vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
+  trackWatchlistsOnboardingTelemetry: (...args: any[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
+}))
+
 vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: any) => unknown) => selector(mocks.storeStateRef.current)
 }))
@@ -126,6 +142,18 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   openOutputPreview: vi.fn(),
   closeOutputPreview: vi.fn(),
   ...overrides
+})
+
+const buildOutput = (id: number) => ({
+  id,
+  job_id: id % 3 ? 8 : 9,
+  run_id: 1000 + id,
+  title: `Report ${id}`,
+  format: "markdown",
+  created_at: "2026-02-18T00:00:00Z",
+  expires_at: null,
+  expired: false,
+  metadata: {}
 })
 
 describe("OutputsTab advanced filters disclosure", () => {
@@ -170,5 +198,41 @@ describe("OutputsTab advanced filters disclosure", () => {
 
     expect(screen.getByTestId("watchlists-outputs-job-filter")).toBeInTheDocument()
     expect(screen.getByTestId("watchlists-outputs-run-filter")).toBeInTheDocument()
+  })
+
+  it("renders high-density reports tables while preserving filter access", () => {
+    const outputs = Array.from({ length: 500 }, (_value, index) =>
+      buildOutput(index + 1)
+    )
+    mocks.storeStateRef.current = baseState({
+      outputs,
+      outputsTotal: outputs.length
+    })
+
+    const { container } = render(<OutputsTab />)
+
+    expect(screen.getByTestId("watchlists-outputs-advanced-toggle")).toBeInTheDocument()
+    expect(container.querySelectorAll("tr").length).toBe(500)
+  })
+
+  it("records onboarding success milestones when unfiltered reports exist", async () => {
+    mocks.fetchWatchlistOutputsMock.mockResolvedValue({
+      items: [buildOutput(1)],
+      total: 1,
+      has_more: false
+    })
+
+    render(<OutputsTab />)
+
+    await waitFor(() => {
+      expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+        type: "quick_setup_first_run_succeeded",
+        source: "outputs"
+      })
+    })
+    expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "quick_setup_first_output_succeeded",
+      source: "outputs"
+    })
   })
 })

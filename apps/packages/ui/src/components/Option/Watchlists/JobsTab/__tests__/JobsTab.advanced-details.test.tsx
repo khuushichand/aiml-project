@@ -146,38 +146,41 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   ...overrides
 })
 
+const buildJob = (id: number, overrides: Record<string, unknown> = {}) => ({
+  id,
+  name: `Monitor ${id}`,
+  description: "Daily scan",
+  active: true,
+  scope: {
+    sources: [1, 2],
+    groups: [7],
+    tags: ["tech"]
+  },
+  job_filters: {
+    filters: [
+      {
+        type: "keyword",
+        action: "include",
+        value: { keywords: ["ai"] }
+      }
+    ]
+  },
+  schedule_expr: "0 9 * * *",
+  timezone: "UTC",
+  output_prefs: {},
+  created_at: "2026-02-18T00:00:00Z",
+  updated_at: "2026-02-18T00:00:00Z",
+  last_run_at: null,
+  next_run_at: null,
+  ...overrides
+})
+
 describe("JobsTab advanced details disclosure", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.removeItem(ADVANCED_COLUMNS_STORAGE_KEY)
 
-    const job = {
-      id: 77,
-      name: "Morning Monitor",
-      description: "Daily scan",
-      active: true,
-      scope: {
-        sources: [1, 2],
-        groups: [7],
-        tags: ["tech"]
-      },
-      job_filters: {
-        filters: [
-          {
-            type: "keyword",
-            action: "include",
-            value: { keywords: ["ai"] }
-          }
-        ]
-      },
-      schedule_expr: "0 9 * * *",
-      timezone: "UTC",
-      output_prefs: {},
-      created_at: "2026-02-18T00:00:00Z",
-      updated_at: "2026-02-18T00:00:00Z",
-      last_run_at: null,
-      next_run_at: null
-    }
+    const job = buildJob(77, { name: "Morning Monitor" })
 
     mocks.storeStateRef.current = baseState({
       jobs: [job],
@@ -216,5 +219,33 @@ describe("JobsTab advanced details disclosure", () => {
       expect(screen.getByText("2 feeds, 1 group, 1 tag")).toBeInTheDocument()
     })
     expect(localStorage.getItem(ADVANCED_COLUMNS_STORAGE_KEY)).toBe("1")
+  })
+
+  it("renders a high-density monitor table without dropping compact summaries", async () => {
+    const jobs = Array.from({ length: 200 }, (_value, index) =>
+      buildJob(index + 1)
+    )
+    mocks.storeStateRef.current = baseState({
+      jobs,
+      jobsTotal: jobs.length
+    })
+    mocks.fetchWatchlistJobsMock.mockResolvedValue({
+      items: jobs,
+      total: jobs.length,
+      page: 1,
+      size: 200,
+      has_more: false
+    })
+
+    const startedAt = performance.now()
+    const { container } = render(<JobsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("job-compact-summary-200")).toBeInTheDocument()
+    })
+
+    const renderedRows = container.querySelectorAll("tr")
+    expect(renderedRows.length).toBe(200)
+    expect(performance.now() - startedAt).toBeLessThan(10000)
   })
 })

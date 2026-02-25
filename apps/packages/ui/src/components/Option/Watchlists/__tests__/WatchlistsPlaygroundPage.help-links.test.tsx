@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import React from "react"
+import axe from "axe-core"
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WatchlistsPlaygroundPage } from "../WatchlistsPlaygroundPage"
@@ -21,6 +22,13 @@ const mocks = vi.hoisted(() => {
       | "outputs"
       | "templates"
       | "settings",
+    overviewHealth: {
+      tabBadges: {
+        sources: 0,
+        runs: 0,
+        outputs: 0
+      }
+    },
     setActiveTab: vi.fn((next: string) => {
       state.activeTab = next as typeof state.activeTab
     })
@@ -33,6 +41,40 @@ const mocks = vi.hoisted(() => {
     state
   }
 })
+
+const runA11yBaselineRules = async (context: Element) =>
+  axe.run(context, {
+    runOnly: {
+      type: "rule",
+      values: [
+        "button-name",
+        "link-name",
+        "label",
+        "aria-valid-attr",
+        "aria-valid-attr-value",
+        "aria-required-attr"
+      ]
+    },
+    resultTypes: ["violations"]
+  })
+
+const expectNoInvalidAriaViolations = (
+  violations: Array<{
+    id: string
+  }>
+) => {
+  const disallowedIds = new Set([
+    "aria-valid-attr",
+    "aria-valid-attr-value",
+    "aria-required-attr"
+  ])
+
+  const disallowedViolations = violations.filter((violation) =>
+    disallowedIds.has(violation.id)
+  )
+
+  expect(disallowedViolations).toEqual([])
+}
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -123,6 +165,7 @@ vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: Record<string, unknown>) => unknown) =>
     selector({
       activeTab: mocks.state.activeTab,
+      overviewHealth: mocks.state.overviewHealth,
       setActiveTab: mocks.state.setActiveTab,
       openRunDetail: vi.fn(),
       resetStore: vi.fn()
@@ -158,12 +201,20 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.state.activeTab = "sources"
+    mocks.state.overviewHealth = {
+      tabBadges: {
+        sources: 0,
+        runs: 0,
+        outputs: 0
+      }
+    }
     mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.recordWatchlistsIaExperimentTelemetryMock.mockResolvedValue({ accepted: true })
     mocks.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = false
     localStorage.removeItem("beta-dismissed:watchlists")
     localStorage.removeItem("watchlists:guided-tour:v1")
+    localStorage.removeItem("watchlists:teach-points:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
   })
 
@@ -172,6 +223,7 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
     localStorage.removeItem("beta-dismissed:watchlists")
     localStorage.removeItem("watchlists:guided-tour:v1")
+    localStorage.removeItem("watchlists:teach-points:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
   })
 
@@ -185,6 +237,33 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     )
     expect(screen.getByTestId("watchlists-beta-docs-link")).toHaveAttribute("href", WATCHLISTS_MAIN_DOCS_URL)
     expect(screen.getByTestId("watchlists-beta-report-link")).toHaveAttribute("href", WATCHLISTS_ISSUE_REPORT_URL)
+  })
+
+  it("routes tab-context help link to the matching docs section and IA label for each tab", () => {
+    const tabExpectations: Array<{
+      tab: typeof mocks.state.activeTab
+      helpLabel: string
+    }> = [
+      { tab: "overview", helpLabel: "Overview guidance" },
+      { tab: "sources", helpLabel: "Feeds setup" },
+      { tab: "jobs", helpLabel: "Monitor scheduling" },
+      { tab: "runs", helpLabel: "Activity guidance" },
+      { tab: "items", helpLabel: "Article review" },
+      { tab: "outputs", helpLabel: "Reports guidance" },
+      { tab: "templates", helpLabel: "Template authoring" },
+      { tab: "settings", helpLabel: "Workspace settings" }
+    ]
+
+    for (const expectation of tabExpectations) {
+      mocks.state.activeTab = expectation.tab
+      const { unmount } = render(<WatchlistsPlaygroundPage />)
+
+      const contextLink = screen.getByTestId("watchlists-context-docs-link")
+      expect(contextLink).toHaveAttribute("href", WATCHLISTS_TAB_HELP_DOCS[expectation.tab])
+      expect(contextLink).toHaveTextContent(`Learn more: ${expectation.helpLabel}`)
+
+      unmount()
+    }
   })
 
   it("keeps beta banner dismissible and persisted by storage key", () => {
@@ -213,7 +292,9 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     expect(screen.getByText("Step 2 of 5")).toBeInTheDocument()
     expect(
-      screen.getByText("Monitors turn feed inputs into scheduled runs and downstream outputs.")
+      screen.getByText(
+        "Monitors connect feeds to schedule, output template, and optional audio briefing delivery."
+      )
     ).toBeInTheDocument()
 
     const persisted = JSON.parse(localStorage.getItem("watchlists:guided-tour:v1") || "{}")
@@ -240,6 +321,49 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     })
   })
 
+  it("shows first-time teach points for cron, filters, and templates with dismissal persistence", () => {
+    mocks.state.activeTab = "jobs"
+    const { rerender, unmount } = render(<WatchlistsPlaygroundPage />)
+
+    expect(screen.getByTestId("watchlists-teach-point")).toBeInTheDocument()
+    expect(screen.getByText("First-time tip")).toBeInTheDocument()
+    expect(screen.getByText("Use schedule presets before custom cron")).toBeInTheDocument()
+    expect(
+      screen.getByText("Start with a preset schedule. Use custom cron only for uncommon timing.")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("watchlists-teach-point-dismiss"))
+    expect(screen.getByText("Use filters to reduce noisy items")).toBeInTheDocument()
+    expect(
+      screen.getByText("Add include/exclude filters when monitors collect too much or irrelevant content.")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("watchlists-teach-point-dismiss"))
+    expect(screen.queryByTestId("watchlists-teach-point")).not.toBeInTheDocument()
+
+    const jobsPersisted = JSON.parse(localStorage.getItem("watchlists:teach-points:v1") || "{}")
+    expect(jobsPersisted.dismissed?.cron).toBe(true)
+    expect(jobsPersisted.dismissed?.filters).toBe(true)
+
+    mocks.state.activeTab = "templates"
+    rerender(<WatchlistsPlaygroundPage />)
+    expect(screen.getByTestId("watchlists-teach-point")).toBeInTheDocument()
+    expect(screen.getByText("Start from a briefing template preset")).toBeInTheDocument()
+    expect(
+      screen.getByText("Pick a preset template first, then edit only the sections you need to customize.")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("watchlists-teach-point-dismiss"))
+    const templatesPersisted = JSON.parse(localStorage.getItem("watchlists:teach-points:v1") || "{}")
+    expect(templatesPersisted.dismissed?.templates).toBe(true)
+    expect(screen.queryByTestId("watchlists-teach-point")).not.toBeInTheDocument()
+
+    unmount()
+    mocks.state.activeTab = "jobs"
+    render(<WatchlistsPlaygroundPage />)
+    expect(screen.queryByTestId("watchlists-teach-point")).not.toBeInTheDocument()
+  })
+
   it("marks guided tour complete and shows completion notice", () => {
     render(<WatchlistsPlaygroundPage />)
 
@@ -257,4 +381,25 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
       type: "guided_tour_completed"
     })
   })
+
+  it("exposes attention badge labels and passes aria-name baseline checks", async () => {
+    mocks.state.overviewHealth = {
+      tabBadges: {
+        sources: 3,
+        runs: 2,
+        outputs: 1
+      }
+    }
+
+    const { container } = render(<WatchlistsPlaygroundPage />)
+
+    expect(screen.getByLabelText("3 attention items")).toBeInTheDocument()
+    expect(screen.getByLabelText("2 attention items")).toBeInTheDocument()
+    expect(screen.getByLabelText("1 attention items")).toBeInTheDocument()
+
+    const results = await runA11yBaselineRules(container)
+    expectNoInvalidAriaViolations(results.violations)
+    expect(results.violations.map((violation) => violation.id)).not.toContain("button-name")
+    expect(results.violations.map((violation) => violation.id)).not.toContain("link-name")
+  }, 15000)
 })

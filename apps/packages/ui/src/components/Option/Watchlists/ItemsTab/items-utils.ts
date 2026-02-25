@@ -2,10 +2,16 @@ import type { ScrapedItem, WatchlistSource } from "@/types/watchlists"
 
 export const SOURCE_LOAD_PAGE_SIZE = 200
 export const SOURCE_LOAD_MAX_ITEMS = 1000
+export const SOURCE_LIST_INITIAL_RENDER_COUNT = 120
+export const SOURCE_LIST_RENDER_CHUNK = 120
+export const SOURCE_LIST_SCROLL_EXPAND_THRESHOLD_PX = 180
 export const ITEM_PAGE_SIZE = 25
 export const ITEM_PAGE_SIZE_OPTIONS = [20, 25, 50, 100] as const
 export const ITEMS_PAGE_SIZE_STORAGE_KEY = "watchlists:items:page-size"
 export const ITEMS_VIEW_PRESETS_STORAGE_KEY = "watchlists:items:view-presets"
+export const DEFAULT_ITEMS_SORT_MODE = "newest"
+
+export type ItemsSortMode = "newest" | "oldest" | "unreadFirst" | "reviewedFirst"
 
 export const SYSTEM_ITEMS_VIEW_PRESET_IDS = {
   unreadToday: "system-unread-today",
@@ -23,6 +29,7 @@ export interface PersistedItemsViewPreset {
   smartFilter: string
   statusFilter: string
   searchQuery: string
+  sortMode?: string
 }
 
 export const buildDefaultItemsViewPresets = (
@@ -34,7 +41,8 @@ export const buildDefaultItemsViewPresets = (
     sourceId: null,
     smartFilter: "todayUnread",
     statusFilter: "ingested",
-    searchQuery: ""
+    searchQuery: "",
+    sortMode: DEFAULT_ITEMS_SORT_MODE
   },
   {
     id: SYSTEM_ITEMS_VIEW_PRESET_IDS.highPriority,
@@ -42,7 +50,8 @@ export const buildDefaultItemsViewPresets = (
     sourceId: null,
     smartFilter: "todayUnread",
     statusFilter: "ingested",
-    searchQuery: "urgent"
+    searchQuery: "urgent",
+    sortMode: DEFAULT_ITEMS_SORT_MODE
   },
   {
     id: SYSTEM_ITEMS_VIEW_PRESET_IDS.needsReview,
@@ -50,9 +59,22 @@ export const buildDefaultItemsViewPresets = (
     sourceId: null,
     smartFilter: "unread",
     statusFilter: "all",
-    searchQuery: ""
+    searchQuery: "",
+    sortMode: DEFAULT_ITEMS_SORT_MODE
   }
 ]
+
+export const normalizeItemsSortMode = (value: unknown): ItemsSortMode => {
+  if (
+    value === "newest" ||
+    value === "oldest" ||
+    value === "unreadFirst" ||
+    value === "reviewedFirst"
+  ) {
+    return value
+  }
+  return DEFAULT_ITEMS_SORT_MODE
+}
 
 const uniquePresetsById = (
   presets: PersistedItemsViewPreset[]
@@ -85,6 +107,10 @@ export const provisionItemsViewPresets = (
 
   const customPresets = normalizedPersisted
     .filter((preset) => !defaultIds.has(preset.id))
+    .map((preset) => ({
+      ...preset,
+      sortMode: normalizeItemsSortMode(preset.sortMode)
+    }))
     .sort((left, right) => {
       const byName = left.name.localeCompare(right.name)
       if (byName !== 0) return byName
@@ -142,6 +168,7 @@ const isPersistedItemsViewPreset = (value: unknown): value is PersistedItemsView
   if (typeof candidate.smartFilter !== "string") return false
   if (typeof candidate.statusFilter !== "string") return false
   if (typeof candidate.searchQuery !== "string") return false
+  if (candidate.sortMode !== undefined && typeof candidate.sortMode !== "string") return false
   return true
 }
 
@@ -185,6 +212,41 @@ export const filterSourcesForReader = (
     if (source.url.toLowerCase().includes(trimmed)) return true
     return source.tags.some((tag) => tag.toLowerCase().includes(trimmed))
   })
+}
+
+export const getInitialSourceRenderCount = (
+  totalSources: number,
+  searchQuery: string
+): number => {
+  const normalizedTotal = Number.isFinite(totalSources) ? Math.max(0, Math.floor(totalSources)) : 0
+  if (normalizedTotal === 0) return 0
+  if (searchQuery.trim().length > 0) return normalizedTotal
+  return Math.min(normalizedTotal, SOURCE_LIST_INITIAL_RENDER_COUNT)
+}
+
+export const getNextSourceRenderCount = (
+  currentCount: number,
+  totalSources: number
+): number => {
+  const normalizedTotal = Number.isFinite(totalSources) ? Math.max(0, Math.floor(totalSources)) : 0
+  const normalizedCurrent = Number.isFinite(currentCount)
+    ? Math.max(0, Math.floor(currentCount))
+    : 0
+  if (normalizedCurrent >= normalizedTotal) return normalizedTotal
+  return Math.min(normalizedTotal, normalizedCurrent + SOURCE_LIST_RENDER_CHUNK)
+}
+
+export const shouldExpandSourceRenderWindow = (
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number
+): boolean => {
+  if (!Number.isFinite(scrollTop) || !Number.isFinite(scrollHeight) || !Number.isFinite(clientHeight)) {
+    return false
+  }
+  if (scrollHeight <= 0 || clientHeight <= 0) return false
+  const remaining = scrollHeight - (scrollTop + clientHeight)
+  return remaining <= SOURCE_LIST_SCROLL_EXPAND_THRESHOLD_PX
 }
 
 const sourcePriorityTimestamp = (source: WatchlistSource): number => {
@@ -235,6 +297,46 @@ export const resolveSelectedItemId = (
   if (items.length === 0) return null
   if (currentId && items.some((item) => item.id === currentId)) return currentId
   return items[0].id
+}
+
+const getSortTimestamp = (item: ScrapedItem): number => {
+  const raw = item.published_at || item.created_at
+  const parsed = new Date(raw).getTime()
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+export const sortItemsForReader = (
+  items: ScrapedItem[],
+  sortMode: ItemsSortMode
+): ScrapedItem[] => {
+  const toSortedByDateDesc = (list: ScrapedItem[]) =>
+    [...list].sort((left, right) => {
+      const diff = getSortTimestamp(right) - getSortTimestamp(left)
+      if (diff !== 0) return diff
+      return right.id - left.id
+    })
+
+  const base = toSortedByDateDesc(items)
+
+  if (sortMode === "oldest") {
+    return [...base].reverse()
+  }
+
+  if (sortMode === "unreadFirst") {
+    return [...base].sort((left, right) => {
+      if (left.reviewed === right.reviewed) return 0
+      return left.reviewed ? 1 : -1
+    })
+  }
+
+  if (sortMode === "reviewedFirst") {
+    return [...base].sort((left, right) => {
+      if (left.reviewed === right.reviewed) return 0
+      return left.reviewed ? -1 : 1
+    })
+  }
+
+  return base
 }
 
 export const stripHtmlToText = (value: string): string => {

@@ -315,6 +315,9 @@ errors.log
 /redis_data/
 /Databases/ChromaDB/
 uv.lock
+/Databases/
+
+# Models
 /models/*
 !/models/embedding_models_data/
 !/models/embedding_models_data/.gitkeep
@@ -331,6 +334,9 @@ models/flashrank/__MACOSX/
 models/flashrank/**/__MACOSX/
 models/flashrank/**/._*
 models/flashrank/**/.DS_Store
+/tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/models
+
+# Detritus
 /cache
 /.tmp
 /tldw_Server_API/Test_Cache
@@ -338,7 +344,6 @@ models/flashrank/**/.DS_Store
 /.pytest_tmp
 /.pytest_cache_local/
 /logs/
-/Databases/
 /tldw_Server_API/Logs
 /tmp
 Config_Files/session_encryption.key
@@ -349,7 +354,6 @@ Config_Files/session_encryption.key
 /node_modules
 /.mkdocs-venv
 /tmp_dir
-/tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/models
 /tmp_chroma_test
 IMPLEMENTATION_PLAN.md
 wizard.log
@@ -372,3 +376,7 @@ Dockerfiles/Monitoring/secrets/
 /ux-audit
 /apps/tldw-frontend/ux-audit-v3
 /.worktrees/
+
+# I'm an idiot
+!apps/tldw-frontend/lib/
+!apps/tldw-frontend/lib/**

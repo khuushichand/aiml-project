@@ -31,6 +31,7 @@ import {
   getRunFailureHint,
   resolveStalledRunNotification
 } from "./run-notifications"
+import { hasActiveWatchlistRuns } from "./polling-utils"
 
 const POLL_INTERVAL_MS = 5000
 const DEFAULT_RUNS_CSV_SERVER_THRESHOLD = 2000
@@ -135,6 +136,9 @@ export const RunsTab: React.FC = () => {
   const setRunsJobFilter = useWatchlistsStore((s) => s.setRunsJobFilter)
   const setRunsStatusFilter = useWatchlistsStore((s) => s.setRunsStatusFilter)
   const setPollingActive = useWatchlistsStore((s) => s.setPollingActive)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
+  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const closeRunDetail = useWatchlistsStore((s) => s.closeRunDetail)
   const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
@@ -177,8 +181,7 @@ export const RunsTab: React.FC = () => {
       setRunsLoadError(null)
 
       // Check if any runs are still running
-      const hasRunning = items.some((r) => r.status === "running" || r.status === "pending")
-      setPollingActive(hasRunning)
+      setPollingActive(hasActiveWatchlistRuns(items))
       setLastRefreshedAt(new Date().toISOString())
     } catch (err) {
       console.error("Failed to fetch runs:", err)
@@ -653,6 +656,16 @@ export const RunsTab: React.FC = () => {
               onClick={() => openRunDetail(record.id)}
             />
           </Tooltip>
+            <Tooltip title={t("watchlists:runs.openRunOutputs", "View reports for this run")}>
+              <Button
+                type="text"
+                size="small"
+                onClick={() => openRunOutputs(record.id, record.job_id)}
+                data-testid={`watchlists-run-open-outputs-${record.id}`}
+              >
+                {t("watchlists:runs.openOutputsShort", "Reports")}
+              </Button>
+            </Tooltip>
             {isCancellable && (
               <Tooltip
                 title={
@@ -796,6 +809,12 @@ export const RunsTab: React.FC = () => {
       hint: failedHint || fallbackHint
     }
   }, [runs, t])
+
+  const openRunOutputs = useCallback((runId: number, jobId: number) => {
+    setOutputsJobFilter(jobId)
+    setOutputsRunFilter(runId)
+    setActiveTab("outputs")
+  }, [setActiveTab, setOutputsJobFilter, setOutputsRunFilter])
 
   return (
     <div className="space-y-4">
