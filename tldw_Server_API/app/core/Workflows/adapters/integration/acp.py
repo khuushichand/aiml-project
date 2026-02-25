@@ -34,6 +34,25 @@ _ACP_STAGE_NONCRITICAL_EXCEPTIONS = (
     ValueError,
 )
 
+_ACP_OUTPUT_SCHEMA_VERSION = "1.0"
+
+
+def _validate_acp_output_contract(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize ACP stage outputs to a stable, versioned contract."""
+    payload["acp_output_schema_version"] = _ACP_OUTPUT_SCHEMA_VERSION
+    payload.setdefault("status", "error")
+    payload.setdefault("stage", "")
+    payload.setdefault("session_id", None)
+    payload.setdefault("workspace_id", None)
+    payload.setdefault("workspace_group_id", None)
+    if not isinstance(payload.get("response"), dict):
+        payload["response"] = {}
+    if not isinstance(payload.get("usage"), dict):
+        payload["usage"] = {}
+    if not isinstance(payload.get("governance"), dict):
+        payload["governance"] = {}
+    return payload
+
 
 def _render_optional_template(value: Any, context: dict[str, Any]) -> str | None:
     """Render an optional templated value and return a stripped string.
@@ -90,6 +109,7 @@ def _normalize_error_payload(
 
 def _maybe_raise_if_configured(result: dict[str, Any], fail_on_error: bool) -> dict[str, Any]:
     """Raise AdapterError for error/blocked states when fail_on_error is enabled."""
+    result = _validate_acp_output_contract(result)
     if not fail_on_error:
         return result
     status = str(result.get("status") or "").strip().lower()
@@ -483,4 +503,4 @@ async def run_acp_stage_adapter(config: dict[str, Any], context: dict[str, Any])
     extracted = extract_openai_content(response)
     if extracted:
         result["text"] = extracted
-    return result
+    return _validate_acp_output_contract(result)

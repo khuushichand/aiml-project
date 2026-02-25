@@ -1,4 +1,5 @@
 import importlib.machinery
+import json
 import sys
 import time
 import types
@@ -280,3 +281,24 @@ def test_l2_acp_pipeline_reject_uses_on_failure(client_with_wf: TestClient, monk
 
     resumed = _wait_for_status(client, run_id, {"waiting_approval", "succeeded", "failed"})
     assert resumed.get("status") in {"waiting_approval", "succeeded"}
+
+
+def test_l1_acp_pipeline_persists_schema_version_on_acp_steps(client_with_wf: TestClient, monkeypatch):
+    _patch_acp_runner(monkeypatch)
+    client = client_with_wf
+
+    template = client.get("/api/v1/workflows/templates/pipeline_l1_acp").json()
+    workflow_id = client.post("/api/v1/workflows", json=template).json()["id"]
+    run_id = client.post(
+        f"/api/v1/workflows/{workflow_id}/run",
+        json={"inputs": {"task": "domain-only task", "workspace_id": "ws-1", "workspace_group_id": "wg-1"}},
+    ).json()["run_id"]
+
+    terminal = _wait_for_status(client, run_id, {"succeeded", "failed"})
+    assert terminal.get("status") == "succeeded"
+
+    db: WorkflowsDatabase = app.dependency_overrides[wf_mod._get_db]()
+    impl_step_run = db.get_latest_step_run(run_id=run_id, step_id="impl")
+    assert impl_step_run is not None
+    impl_outputs = json.loads(impl_step_run.get("outputs_json") or "{}")
+    assert impl_outputs.get("acp_output_schema_version") == "1.0"
