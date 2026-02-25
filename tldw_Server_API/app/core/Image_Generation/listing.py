@@ -66,6 +66,18 @@ def _is_together_configured(cfg, enabled: bool) -> bool:
     return bool(api_key)
 
 
+def _is_modelstudio_configured(cfg, enabled: bool) -> bool:
+    if not enabled:
+        return False
+    api_key = (
+        getattr(cfg, "modelstudio_image_api_key", None)
+        or os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("QWEN_API_KEY")
+        or ""
+    ).strip()
+    return bool(api_key)
+
+
 def _resolve_supported_formats(name: str) -> list[str] | None:
     registry = get_registry()
     try:
@@ -123,6 +135,12 @@ def list_image_models_for_catalog() -> list[dict[str, Any]]:
         if name == "together":
             try:
                 is_configured = _is_together_configured(cfg, enabled)
+            except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("Image backend config check failed for {}: {}", name, exc)
+                is_configured = False
+        if name == "modelstudio":
+            try:
+                is_configured = _is_modelstudio_configured(cfg, enabled)
             except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Image backend config check failed for {}: {}", name, exc)
                 is_configured = False

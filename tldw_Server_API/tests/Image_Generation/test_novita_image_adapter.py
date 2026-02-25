@@ -49,6 +49,14 @@ def _make_config(**overrides) -> ImageGenerationConfig:
         together_image_default_model=None,
         together_image_allowed_extra_params=[],
         together_image_timeout_seconds=120,
+        modelstudio_image_base_url=None,
+        modelstudio_image_api_key=None,
+        modelstudio_image_default_model=None,
+        modelstudio_image_region="sg",
+        modelstudio_image_mode="auto",
+        modelstudio_image_poll_interval_seconds=2,
+        modelstudio_image_timeout_seconds=180,
+        modelstudio_image_allowed_extra_params=[],
     )
     base.update(overrides)
     return ImageGenerationConfig(**base)
