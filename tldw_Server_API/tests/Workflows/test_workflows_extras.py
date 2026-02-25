@@ -183,6 +183,9 @@ def _patch_acp_runner(monkeypatch):
         async def create_session(self, **kwargs):
             return "acp-session-1"
 
+        async def verify_session_access(self, session_id, user_id):
+            return True
+
         async def prompt(self, session_id, prompt):
             return {
                 "stopReason": "end_turn",

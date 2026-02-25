@@ -504,6 +504,49 @@ def test_validate_whisper_model_identifier_allows_hf_id():
 
 
 @pytest.mark.unit
+def test_validate_qwen2audio_model_identifier_allows_hf_id():
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        validate_qwen2audio_model_identifier,
+    )
+
+    assert (
+        validate_qwen2audio_model_identifier("Qwen/Qwen2-Audio-7B-Instruct")
+        == "Qwen/Qwen2-Audio-7B-Instruct"
+    )
+
+
+@pytest.mark.unit
+def test_validate_qwen2audio_model_identifier_rejects_path_outside_base(monkeypatch, tmp_path):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        validate_qwen2audio_model_identifier,
+    )
+
+    base_root = tmp_path / "models" / "Whisper"
+    base_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(atlib, "WHISPER_MODEL_BASE_DIR", base_root)
+
+    outside_root = tmp_path / "outside" / "qwen"
+    outside_root.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(ValueError):
+        validate_qwen2audio_model_identifier(str(outside_root))
+
+
+@pytest.mark.unit
+def test_validate_qwen2audio_model_identifier_allows_local_path_under_base(monkeypatch, tmp_path):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        validate_qwen2audio_model_identifier,
+    )
+
+    base_root = tmp_path / "models" / "Whisper"
+    model_path = base_root / "qwen-local"
+    model_path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(atlib, "WHISPER_MODEL_BASE_DIR", base_root)
+
+    assert validate_qwen2audio_model_identifier(str(model_path)) == str(model_path.resolve(strict=False))
+
+
+@pytest.mark.unit
 def test_resolve_whisper_download_root_rejects_outside_base(monkeypatch, tmp_path):
     base_root = tmp_path / "models" / "Whisper"
     base_root.mkdir(parents=True, exist_ok=True)

@@ -369,6 +369,7 @@ async def test_acp_stage_adapter_creates_session_and_prompts(monkeypatch):
                     "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
                 }
             )
+            self.verify_session_access = AsyncMock(return_value=True)
 
     stub = _StubRunner()
 
@@ -400,6 +401,7 @@ async def test_acp_stage_adapter_reuses_session_from_context(monkeypatch):
         def __init__(self) -> None:
             self.create_session = AsyncMock(return_value="acp-session-created")
             self.prompt = AsyncMock(return_value={"stopReason": "end", "detail": "ok"})
+            self.verify_session_access = AsyncMock(return_value=True)
 
     stub = _StubRunner()
 
@@ -422,6 +424,7 @@ async def test_acp_stage_adapter_reuses_session_from_context(monkeypatch):
     assert result.get("status") == "ok"
     assert result.get("session_id") == "existing-session-9"
     stub.create_session.assert_not_called()
+    stub.verify_session_access.assert_awaited_once_with("existing-session-9", 2)
     stub.prompt.assert_awaited_once()
 
 
@@ -437,6 +440,7 @@ async def test_acp_stage_adapter_normalizes_governance_block(monkeypatch):
             self.prompt = AsyncMock(
                 side_effect=ACPGovernanceDeniedError(governance={"action": "deny", "reason": "policy"})
             )
+            self.verify_session_access = AsyncMock(return_value=True)
 
     stub = _StubRunner()
 
@@ -454,6 +458,7 @@ async def test_acp_stage_adapter_normalizes_governance_block(monkeypatch):
     )
     assert result.get("status") == "blocked"
     assert result.get("error_type") == "acp_governance_blocked"
+    assert result.get("error") == "acp_governance_blocked"
     assert result.get("governance", {}).get("action") == "deny"
 
 
@@ -466,6 +471,7 @@ async def test_acp_stage_adapter_normalizes_timeout(monkeypatch):
         def __init__(self) -> None:
             self.create_session = AsyncMock(return_value="acp-session-3")
             self.prompt = AsyncMock(side_effect=asyncio.TimeoutError())
+            self.verify_session_access = AsyncMock(return_value=True)
 
     stub = _StubRunner()
 
@@ -506,6 +512,7 @@ async def test_acp_stage_adapter_review_loop_limit(monkeypatch):
         def __init__(self) -> None:
             self.create_session = AsyncMock(return_value="acp-session-4")
             self.prompt = AsyncMock(return_value={"stopReason": "end", "detail": "ok"})
+            self.verify_session_access = AsyncMock(return_value=True)
 
     stub = _StubRunner()
 
@@ -540,6 +547,7 @@ async def test_acp_stage_adapter_fail_on_error_raises_adapter_error(monkeypatch)
         def __init__(self) -> None:
             self.create_session = AsyncMock(return_value="acp-session-5")
             self.prompt = AsyncMock(side_effect=asyncio.TimeoutError())
+            self.verify_session_access = AsyncMock(return_value=True)
 
     stub = _StubRunner()
 
@@ -560,6 +568,68 @@ async def test_acp_stage_adapter_fail_on_error_raises_adapter_error(monkeypatch)
             },
             {"user_id": "11"},
         )
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_reused_session_denied_when_unowned(monkeypatch):
+    """Test ACP stage adapter blocks reused sessions not owned by workflow user."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="unused-session")
+            self.prompt = AsyncMock(return_value={"stopReason": "end", "content": "ok"})
+            self.verify_session_access = AsyncMock(return_value=False)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    result = await run_acp_stage_adapter(
+        {"stage": "impl", "prompt_template": "Implement {{ inputs.task }}"},
+        {"inputs": {"task": "domain task"}, "user_id": "7", "acp_session_id": "foreign-session"},
+    )
+    assert result.get("status") == "error"
+    assert result.get("error_type") == "acp_session_error"
+    assert result.get("error") == "session_access_denied"
+    stub.prompt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_sanitizes_internal_prompt_exception(monkeypatch):
+    """Test ACP stage adapter does not expose raw internal exception text."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-6")
+            self.prompt = AsyncMock(side_effect=RuntimeError("private internal error detail"))
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    result = await run_acp_stage_adapter(
+        {"stage": "impl", "prompt_template": "Implement {{ inputs.task }}"},
+        {"inputs": {"task": "domain task"}, "user_id": "7"},
+    )
+    assert result.get("status") == "error"
+    assert result.get("error_type") == "acp_prompt_error"
+    assert result.get("error") == "acp_prompt_failed"
+    assert "private internal error detail" not in str(result)
 
 
 # ==============================================================================
