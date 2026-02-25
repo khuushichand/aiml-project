@@ -56,6 +56,17 @@ class MetricsCollector:
     Supports both Prometheus and internal metrics collection.
     """
 
+    _ALLOWED_GOVERNANCE_SURFACES = frozenset(
+        {"mcp_tool", "acp_prompt", "acp_permission", "other"}
+    )
+    _ALLOWED_GOVERNANCE_CATEGORIES = frozenset(
+        {"security", "compliance", "privacy", "safety", "operations", "other"}
+    )
+    _ALLOWED_GOVERNANCE_STATUSES = frozenset(
+        {"allow", "warn", "require_approval", "deny", "error", "unknown"}
+    )
+    _ALLOWED_GOVERNANCE_ROLLOUT_MODES = frozenset({"off", "shadow", "enforce"})
+
     def __init__(self, enable_prometheus: bool = True):
         self.enable_prometheus = enable_prometheus and PROMETHEUS_AVAILABLE
 
@@ -207,6 +218,14 @@ class MetricsCollector:
             'mcp_idempotency_misses_total',
             'Total idempotent cache misses for write tools',
             ['module', 'tool'],
+            registry=self.registry
+        )
+
+        # Governance checks
+        self.governance_checks = Counter(
+            'mcp_governance_checks_total',
+            'Total governance checks',
+            ['surface', 'category', 'status', 'rollout_mode'],
             registry=self.registry
         )
 
@@ -399,6 +418,67 @@ class MetricsCollector:
         self._metrics["idempotency_miss"].append(metric)
         if self.enable_prometheus:
             self.idempotency_misses.labels(module=module, tool=tool).inc()
+
+    @staticmethod
+    def _normalize_governance_label(
+        value: str,
+        *,
+        allowed: frozenset[str],
+        default: str,
+    ) -> str:
+        normalized = str(value or "").strip().lower()
+        return normalized if normalized in allowed else default
+
+    def record_governance_check(
+        self,
+        *,
+        surface: str,
+        category: str,
+        status: str,
+        rollout_mode: str,
+    ):
+        """Record a governance decision with low-cardinality label normalization."""
+        normalized_surface = self._normalize_governance_label(
+            surface,
+            allowed=self._ALLOWED_GOVERNANCE_SURFACES,
+            default="other",
+        )
+        normalized_category = self._normalize_governance_label(
+            category,
+            allowed=self._ALLOWED_GOVERNANCE_CATEGORIES,
+            default="other",
+        )
+        normalized_status = self._normalize_governance_label(
+            status,
+            allowed=self._ALLOWED_GOVERNANCE_STATUSES,
+            default="unknown",
+        )
+        normalized_rollout_mode = self._normalize_governance_label(
+            rollout_mode,
+            allowed=self._ALLOWED_GOVERNANCE_ROLLOUT_MODES,
+            default="off",
+        )
+
+        metric = MetricData(
+            name="governance_check",
+            type=MetricType.COUNTER,
+            value=1,
+            labels={
+                "surface": normalized_surface,
+                "category": normalized_category,
+                "status": normalized_status,
+                "rollout_mode": normalized_rollout_mode,
+            },
+        )
+        self._metrics["governance_check"].append(metric)
+
+        if self.enable_prometheus:
+            self.governance_checks.labels(
+                surface=normalized_surface,
+                category=normalized_category,
+                status=normalized_status,
+                rollout_mode=normalized_rollout_mode,
+            ).inc()
 
     def record_cache_access(self, cache_name: str, hit: bool):
         """Record cache access"""

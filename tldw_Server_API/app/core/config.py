@@ -1237,6 +1237,7 @@ def load_settings():
         )(
             str(os.getenv("EMAIL_MEDIA_SEARCH_DELEGATION_MODE", "opt_in")).strip().lower()
         ),
+        "GOVERNANCE_ROLLOUT_MODE": resolve_governance_rollout_mode(),
         "EMAIL_GMAIL_CONNECTOR_ENABLED": is_truthy(
             os.getenv("EMAIL_GMAIL_CONNECTOR_ENABLED", "false")
         ),
@@ -2471,6 +2472,49 @@ def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
     except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
         _log_warning(f"llama.cpp handler config invalid; disabling handler: {exc}")
         return None
+
+
+_GOVERNANCE_ROLLOUT_MODES = {"off", "shadow", "enforce"}
+
+
+def resolve_governance_rollout_mode(
+    raw_mode: Optional[str] = None,
+    *,
+    default: str = "off",
+) -> str:
+    """
+    Resolve governance rollout mode with deterministic fallback.
+
+    Precedence:
+    1) explicit `raw_mode` argument
+    2) `GOVERNANCE_ROLLOUT_MODE` environment variable
+    3) config.txt `[Governance] rollout_mode`
+    4) provided default (fallbacks to `off` if invalid)
+    """
+
+    safe_default = str(default or "off").strip().lower()
+    if safe_default not in _GOVERNANCE_ROLLOUT_MODES:
+        safe_default = "off"
+
+    if raw_mode is not None:
+        candidate = str(raw_mode).strip().lower()
+        return candidate if candidate in _GOVERNANCE_ROLLOUT_MODES else safe_default
+
+    env_mode = os.getenv("GOVERNANCE_ROLLOUT_MODE")
+    if env_mode is not None:
+        candidate = str(env_mode).strip().lower()
+        return candidate if candidate in _GOVERNANCE_ROLLOUT_MODES else safe_default
+
+    try:
+        cp = load_comprehensive_config()
+        if cp and cp.has_section("Governance"):
+            candidate = cp.get("Governance", "rollout_mode", fallback="").strip().lower()
+            if candidate in _GOVERNANCE_ROLLOUT_MODES:
+                return candidate
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    return safe_default
 
 
 def rg_policy_store(default: str = "file") -> str:
