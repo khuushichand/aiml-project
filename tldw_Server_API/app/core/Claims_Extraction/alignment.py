@@ -6,6 +6,7 @@ from collections import Counter, deque
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from functools import lru_cache
+from math import ceil
 
 _HYPHEN_RE = re.compile(r"[\u2010\u2011\u2012\u2013\u2014\u2015\-]+")
 _SPACE_RE = re.compile(r"\s+")
@@ -205,10 +206,11 @@ def _fuzzy_token_span(source_text: str, claim_text: str, threshold: float) -> Al
     query_counter = Counter(query_norm)
     clamped_threshold = max(0.0, min(1.0, float(threshold)))
     min_overlap = int(query_len * clamped_threshold)
+    min_window = max(1, ceil(query_len * clamped_threshold))
     matcher = SequenceMatcher(None, [], query_norm, autojunk=False)
 
     best: AlignmentResult | None = None
-    for window_size in range(query_len, max_window + 1):
+    for window_size in range(min_window, max_window + 1):
         window_norm = deque(source_norm[0:window_size])
         window_counts = Counter(window_norm)
 

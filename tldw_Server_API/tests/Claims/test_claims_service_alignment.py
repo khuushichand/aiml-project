@@ -129,3 +129,19 @@ def test_corrected_span_handles_mixed_script_token_boundaries(monkeypatch, tmp_p
         assert span == (10, 27)
     finally:
         db.close_connection()
+
+
+def test_corrected_span_prefers_tight_partial_overlap_window(monkeypatch, tmp_path):
+    content = "Findings consistent with degenerative disc disease at L5-S1."
+    db, media_id = _seed_alignment_db_with_content(tmp_path, content)
+    try:
+        monkeypatch.setitem(settings, "CLAIMS_ALIGNMENT_MODE", "fuzzy")
+        monkeypatch.setitem(settings, "CLAIMS_ALIGNMENT_THRESHOLD", 0.75)
+        span = claims_service._resolve_corrected_claim_span(
+            target_db=db,
+            claim_row={"media_id": media_id, "chunk_index": 0},
+            corrected_text="mild degenerative disc disease",
+        )
+        assert span == (35, 60)
+    finally:
+        db.close_connection()
