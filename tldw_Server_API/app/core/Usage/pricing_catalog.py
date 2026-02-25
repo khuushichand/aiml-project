@@ -126,6 +126,24 @@ DEFAULT_PRICING: dict[str, dict[str, dict[str, float]]] = {
         "embed-multilingual-v3.0": {"prompt": 0.08e-3, "completion": 0.08e-3},
     },
     "qwen": {
+        "qwen-max": {
+            "prompt": 0.0,
+            "completion": 0.0,
+            "placeholder": True,
+            "note": "Verify latest Model Studio pricing before billing use.",
+        },
+        "qwen-plus": {
+            "prompt": 0.0,
+            "completion": 0.0,
+            "placeholder": True,
+            "note": "Verify latest Model Studio pricing before billing use.",
+        },
+        "qwen-turbo": {
+            "prompt": 0.0,
+            "completion": 0.0,
+            "placeholder": True,
+            "note": "Verify latest Model Studio pricing before billing use.",
+        },
         "qwen2.5-7b": {"prompt": 0.2e-3, "completion": 0.2e-3},
         "qwen2.5-72b": {"prompt": 0.5e-3, "completion": 0.5e-3},
     },

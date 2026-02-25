@@ -84,6 +84,19 @@ together_image_default_model = black-forest-labs/FLUX.1-schnell-Free
 together_image_allowed_extra_params = []
 together_image_timeout_seconds = 120
 
+# Alibaba Model Studio image backend settings
+# Optional explicit endpoint override (leave blank to use region preset)
+modelstudio_image_base_url =
+modelstudio_image_api_key =
+modelstudio_image_default_model = qwen-image
+# Region preset for adapter routing (sg, cn, us)
+modelstudio_image_region = sg
+# Mode can be sync, async, or auto
+modelstudio_image_mode = auto
+modelstudio_image_poll_interval_seconds = 2
+modelstudio_image_timeout_seconds = 180
+modelstudio_image_allowed_extra_params = []
+
 [ACP]
 # Command used to launch the ACP runner (tldw-agent-acp).
 runner_command = go
@@ -867,6 +880,7 @@ qwen_max_tokens = 4096
 qwen_api_timeout = 90
 qwen_api_retry = 3
 qwen_api_retry_delay = 1
+qwen_api_region = sg
 qwen_api_base_url = https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 google_model = gemini-2.5-flash
 google_streaming = True

@@ -186,6 +186,8 @@ class ImageAdapter:
             return set(config.novita_image_allowed_extra_params or [])
         if backend == "together":
             return set(config.together_image_allowed_extra_params or [])
+        if backend == "modelstudio":
+            return set(config.modelstudio_image_allowed_extra_params or [])
         return set()
 
     def _validate_extra_params(
@@ -199,8 +201,15 @@ class ImageAdapter:
             return
         backend = str(structured.get("backend") or "").strip()
         allowlist = self._allowed_extra_params(backend, config)
+        exempt_control_keys: set[str] = set()
+        if backend == "modelstudio":
+            # `mode` is a local backend control knob, not a passthrough upstream parameter.
+            exempt_control_keys.add("mode")
+        keys_to_validate = [key for key in extra_params if key not in exempt_control_keys]
+        if not keys_to_validate:
+            return
         if not allowlist:
-            for key in extra_params:
+            for key in keys_to_validate:
                 issues.append(
                     ValidationIssue(
                         code="image_params_invalid",
@@ -209,7 +218,7 @@ class ImageAdapter:
                     )
                 )
             return
-        for key in extra_params:
+        for key in keys_to_validate:
             if key not in allowlist:
                 issues.append(
                     ValidationIssue(
