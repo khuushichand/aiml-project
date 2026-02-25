@@ -18,9 +18,21 @@ and this project adheres to Some kind of Versioning
 - Curated Qwen model entries (`qwen-max`, `qwen-plus`, `qwen-turbo`) in model pricing/catalog metadata.
 - Qwen provider mapping in LLM provider metadata endpoint wiring so Qwen models appear correctly.
 - Regression coverage for Model Studio adapter behavior, config defaults, image allowlist behavior, image model listing, and Qwen base URL precedence/region routing.
+- Workspace banners
+  - Per-workspace custom header banner support in Research Workspace (`/workspace-playground`) with title, subtitle, and image.
+  - New banner rendering surface in Workspace UI (`WorkspaceBanner`) with graceful no-image fallback styling.
+  - “Customize banner” modal in Workspace header menu with upload, preview, save, remove-image, and reset flows.
+  - Banner image normalization utility for local uploads (JPEG/PNG/WebP validation, resize, encoding, and byte-cap enforcement).
+  - Extension parity route support for `/workspace-playground`.
+  - Regression coverage for banner defaults, lifecycle persistence, bundle round-trip, header modal behavior, quota eviction, conflict labeling, and extension route parity.
 
 ### Changed
-
+- Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
+- Workspace bundle schema now includes `workspaceBanner` and preserves banner state on zip/json import/export.
+- Cross-tab conflict detection now tracks `workspaceBanner` as an explicit conflict field.
+- Storage recovery logic now evicts archived banner images before more destructive workspace eviction steps.
+- Persistence diagnostics now surface a dedicated `workspaceBanner` byte section.
+- ZIP import parsing now supports environments without `File.arrayBuffer()` via a safe fallback reader path.
 - Qwen base URL resolution precedence is now explicitly ordered as:
   request `base_url` -> `QWEN_BASE_URL` -> config `qwen_api.api_base_url` -> region preset.
 - Model Studio base URL resolution now uses region presets when explicit base URL overrides are unset.
@@ -28,7 +40,6 @@ and this project adheres to Some kind of Versioning
 - Env-var and image setup docs were updated for Model Studio and Qwen routing, including grouped readability improvements for `[Image-Generation]` key listings.
 
 ### Removed
-
 - No removals in this session.
 
 ### Fixed
@@ -39,7 +50,8 @@ and this project adheres to Some kind of Versioning
 - Fixed potential SSRF path by validating response-provided remote image URLs against egress policy/allowlist before fetch.
 - Fixed `modelstudio_image_region` no-op behavior by wiring it into endpoint selection.
 - Fixed missing docstring on `_coerce_choice` in image generation config helpers.
-
+- Fixed bundle import compatibility in environments lacking `File.arrayBuffer()`.
+- Fixed invalid imported banner image payload handling to fail soft (drop bad image, preserve banner text fields).
 
 ## [0.1.24] 2026-02-22
 
