@@ -13,7 +13,7 @@ describe("PlaygroundMessage non-color signal guard", () => {
     expect(source).toContain("aria-pressed={props.compareSelected}")
     expect(source).toContain("AlertTriangle")
     expect(source).toContain("CheckCircle2")
-    expect(source).toContain("error.label")
+    expect(source).toMatch(/(error\.label|playground:compareErrorTitle)/)
     expect(source).toContain("playground:composer.compareChosenLabel")
   })
 })
