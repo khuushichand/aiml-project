@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "У вас є незбережені зміни в документі стану. Відхилити локальні чернетки?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "У вас є незбережені зміни в документі стану. Підключитися та відхилити локальні чернетки?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "У вас є незбережені зміни в документі стану. Відключитися та відхилити локальні чернетки?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "У вас є незбережені зміни в документі стану. Завантажити стан та відхилити локальні чернетки?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "У вас є незбережені зміни в документі стану. Змінити персону та відхилити локальні чернетки?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "У вас є незбережені зміни в документі стану. Змінити сесію та відхилити локальні чернетки?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "У вас є незбережені зміни в документі стану. Відновити цю версію стану та відхилити локальні чернетки?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "У вас є незбережені зміни в документі стану. Залишити цю сторінку та відхилити локальні чернетки?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "У вас є незбережені зміни в документі стану. Залишити цю сторінку без збереження?"
   }
 }

@@ -3306,7 +3306,7 @@
     "message": "Compatível com SillyTavern"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "Linha um\\nLinha dois com ||spoiler em linha||\\n\\n[spoiler]Conteúdo do spoiler em bloco[/spoiler]"
+    "message": "Linha um\nLinha dois com ||spoiler em linha||\n\n[spoiler]Conteúdo do spoiler em bloco[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "Estilos de elementos de texto rico"

@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "Du har ulagrede endringer i tilstandsdokumentet. Vil du forkaste lokale utkast?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "Du har ulagrede endringer i tilstandsdokumentet. Vil du koble til og forkaste lokale utkast?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "Du har ulagrede endringer i tilstandsdokumentet. Vil du koble fra og forkaste lokale utkast?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "Du har ulagrede endringer i tilstandsdokumentet. Vil du laste inn tilstand og forkaste lokale utkast?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "Du har ulagrede endringer i tilstandsdokumentet. Vil du bytte persona og forkaste lokale utkast?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "Du har ulagrede endringer i tilstandsdokumentet. Vil du bytte økt og forkaste lokale utkast?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "Du har ulagrede endringer i tilstandsdokumentet. Vil du gjenopprette denne tilstandsversjonen og forkaste lokale utkast?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "Du har ulagrede endringer i tilstandsdokumentet. Vil du forlate denne siden og forkaste lokale utkast?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "Du har ulagrede endringer i tilstandsdokumentet. Vil du forlate denne siden uten å lagre?"
   }
 }

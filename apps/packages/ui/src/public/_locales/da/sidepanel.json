@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "Du har ikke-gemte ændringer i statusdokumentet. Vil du kassere lokale kladder?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "Du har ikke-gemte ændringer i statusdokumentet. Vil du oprette forbindelse og kassere lokale kladder?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "Du har ikke-gemte ændringer i statusdokumentet. Vil du afbryde forbindelsen og kassere lokale kladder?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "Du har ikke-gemte ændringer i statusdokumentet. Vil du indlæse status og kassere lokale kladder?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "Du har ikke-gemte ændringer i statusdokumentet. Vil du skifte persona og kassere lokale kladder?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "Du har ikke-gemte ændringer i statusdokumentet. Vil du skifte session og kassere lokale kladder?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "Du har ikke-gemte ændringer i statusdokumentet. Vil du gendanne denne statusversion og kassere lokale kladder?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "Du har ikke-gemte ændringer i statusdokumentet. Vil du forlade denne side og kassere lokale kladder?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "Du har ikke-gemte ændringer i statusdokumentet. Vil du forlade denne side uden at gemme?"
   }
 }

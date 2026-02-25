@@ -3282,7 +3282,7 @@
     "message": "Kompatibel med SillyTavern"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "Linje et\\nLinje to med ||inline-spoiler||\\n\\n[spoiler]Indhold i blokspoiler[/spoiler]"
+    "message": "Linje et\nLinje to med ||inline-spoiler||\n\n[spoiler]Indhold i blokspoiler[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "Typografi for rich text-elementer"

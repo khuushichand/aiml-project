@@ -23,7 +23,8 @@ import {
   Upload as UploadIcon,
   Play,
   FileDown,
-  FileText
+  FileText,
+  Database
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
@@ -109,6 +110,27 @@ export const SkillsManager: React.FC = () => {
     onError: (err: any) => {
       notification.error({
         message: t("option:skills.importError", { defaultValue: "Failed to import skill" }),
+        description: err?.message
+      })
+    }
+  })
+
+  const seedBuiltinsMutation = useMutation({
+    mutationFn: (overwrite: boolean = false) => tldwClient.seedSkills({ overwrite }),
+    onSuccess: (result: { count?: number } | undefined) => {
+      queryClient.invalidateQueries({ queryKey: ["skills"] })
+      const count = Number(result?.count ?? 0)
+      notification.success({
+        message: t("option:skills.seedSuccess", { defaultValue: "Built-in skills seeded" }),
+        description: t("option:skills.seedSuccessDesc", {
+          defaultValue: `${count} built-in skill(s) seeded.`,
+          count
+        })
+      })
+    },
+    onError: (err: any) => {
+      notification.error({
+        message: t("option:skills.seedError", { defaultValue: "Failed to seed built-in skills" }),
         description: err?.message
       })
     }
@@ -337,6 +359,13 @@ export const SkillsManager: React.FC = () => {
               {t("option:skills.import", { defaultValue: "Import" })}
             </Button>
           </Dropdown>
+          <Button
+            icon={<Database size={14} />}
+            onClick={() => seedBuiltinsMutation.mutate(false)}
+            loading={seedBuiltinsMutation.isPending}
+          >
+            {t("option:skills.seedBuiltins", { defaultValue: "Seed Built-ins" })}
+          </Button>
           <Button type="primary" icon={<Plus size={14} />} onClick={handleNew}>
             {t("option:skills.newSkill", { defaultValue: "New Skill" })}
           </Button>

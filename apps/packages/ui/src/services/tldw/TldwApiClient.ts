@@ -6416,6 +6416,20 @@ export class TldwApiClient {
     })
   }
 
+  async seedSkills(params?: {
+    overwrite?: boolean
+  }): Promise<any> {
+    const query = this.buildQuery(params)
+    const base = await this.resolveApiPath("skills.seed", [
+      "/api/v1/skills/seed",
+      "/api/v1/skills/seed/"
+    ])
+    return await bgRequest<any>({
+      path: appendPathQuery(base, query),
+      method: "POST"
+    })
+  }
+
   async exportSkill(name: string): Promise<Blob> {
     await this.ensureConfigForRequest(true)
     const res = await bgRequest<ArrayBuffer, AllowedPath>({

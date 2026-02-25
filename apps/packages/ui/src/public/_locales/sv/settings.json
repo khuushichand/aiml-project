@@ -3279,7 +3279,7 @@
     "message": "Kompatibel med SillyTavern"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "Rad ett\\nRad två med ||inline-spoiler||\\n\\n[spoiler]Innehåll i blockspoiler[/spoiler]"
+    "message": "Rad ett\nRad två med ||inline-spoiler||\n\n[spoiler]Innehåll i blockspoiler[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "Stilar för rich text-element"

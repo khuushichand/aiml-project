@@ -3294,7 +3294,7 @@
     "message": "相容 SillyTavern"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "第一行\\n第二行，含有 ||行內劇透||\\n\\n[spoiler]區塊劇透內容[/spoiler]"
+    "message": "第一行\n第二行，含有 ||行內劇透||\n\n[spoiler]區塊劇透內容[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "富文字元素樣式"

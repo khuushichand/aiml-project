@@ -10,7 +10,8 @@ const tldwClientMock = vi.hoisted(() => ({
   deleteSkill: vi.fn(),
   exportSkill: vi.fn(),
   importSkill: vi.fn(),
-  importSkillFile: vi.fn()
+  importSkillFile: vi.fn(),
+  seedSkills: vi.fn()
 }))
 
 const notificationMock = vi.hoisted(() => ({
@@ -69,6 +70,10 @@ describe("SkillsManager imports", () => {
     })
     tldwClientMock.importSkill.mockResolvedValue({ name: "imported-skill" })
     tldwClientMock.importSkillFile.mockResolvedValue({ name: "imported-file-skill" })
+    tldwClientMock.seedSkills.mockResolvedValue({
+      seeded: ["summarize", "code-review", "feynman-technique"],
+      count: 3
+    })
 
     if (!window.matchMedia) {
       Object.defineProperty(window, "matchMedia", {
@@ -156,6 +161,20 @@ describe("SkillsManager imports", () => {
 
     await waitFor(() => {
       expect(tldwClientMock.importSkillFile).toHaveBeenCalledWith(file)
+    })
+  })
+
+  it("seeds built-in skills via seedSkills action", async () => {
+    renderManager()
+
+    await waitFor(() => {
+      expect(tldwClientMock.listSkills).toHaveBeenCalled()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Seed Built-ins" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.seedSkills).toHaveBeenCalledWith({ overwrite: false })
     })
   })
 })

@@ -1240,5 +1240,32 @@
   },
   "contextMenu_status": {
     "message": "وضعیت"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. پیش نویس های محلی حذف شوند؟"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. اتصال انجام شود و پیش نویس های محلی حذف شوند؟"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. اتصال قطع شود و پیش نویس های محلی حذف شوند؟"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. وضعیت بارگذاری شود و پیش نویس های محلی حذف شوند؟"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. پرسونا عوض شود و پیش نویس های محلی حذف شوند؟"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. نشست عوض شود و پیش نویس های محلی حذف شوند؟"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. این نسخهٔ وضعیت بازیابی شود و پیش نویس های محلی حذف شوند؟"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. این صفحه ترک شود و پیش نویس های محلی حذف شوند؟"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "تغییرات ذخیره نشده‌ای در سند وضعیت دارید. بدون ذخیره از این صفحه خارج شوید؟"
   }
 }

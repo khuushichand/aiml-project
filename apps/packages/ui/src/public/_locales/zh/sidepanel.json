@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "你有未保存的状态文档更改。要丢弃本地草稿吗？"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "你有未保存的状态文档更改。要连接并丢弃本地草稿吗？"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "你有未保存的状态文档更改。要断开连接并丢弃本地草稿吗？"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "你有未保存的状态文档更改。要加载状态并丢弃本地草稿吗？"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "你有未保存的状态文档更改。要切换人设并丢弃本地草稿吗？"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "你有未保存的状态文档更改。要切换会话并丢弃本地草稿吗？"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "你有未保存的状态文档更改。要恢复此状态版本并丢弃本地草稿吗？"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "你有未保存的状态文档更改。要离开此页面并丢弃本地草稿吗？"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "你有未保存的状态文档更改。要在不保存的情况下离开此页面吗？"
   }
 }

@@ -3282,7 +3282,7 @@
     "message": "SillyTavern 호환"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "첫 번째 줄\\n두 번째 줄 ||인라인 스포일러|| 포함\\n\\n[spoiler]블록 스포일러 내용[/spoiler]"
+    "message": "첫 번째 줄\n두 번째 줄 ||인라인 스포일러|| 포함\n\n[spoiler]블록 스포일러 내용[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "리치 텍스트 요소 스타일"

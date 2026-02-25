@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "Você tem alterações não salvas no documento de estado. Descartar rascunhos locais?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "Você tem alterações não salvas no documento de estado. Conectar e descartar rascunhos locais?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "Você tem alterações não salvas no documento de estado. Desconectar e descartar rascunhos locais?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "Você tem alterações não salvas no documento de estado. Carregar estado e descartar rascunhos locais?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "Você tem alterações não salvas no documento de estado. Trocar de persona e descartar rascunhos locais?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "Você tem alterações não salvas no documento de estado. Trocar de sessão e descartar rascunhos locais?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "Você tem alterações não salvas no documento de estado. Restaurar esta versão do estado e descartar rascunhos locais?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "Você tem alterações não salvas no documento de estado. Sair desta página e descartar rascunhos locais?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "Você tem alterações não salvas no documento de estado. Sair desta página sem salvar?"
   }
 }

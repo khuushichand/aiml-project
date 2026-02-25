@@ -729,7 +729,7 @@
     "message": "Selected {{current}} / {{limit}}"
   },
   "composer_compareSelectedLabel": {
-    "message": "Selected as answer:"
+    "message": "Chosen answer:"
   },
   "composer_compareContinueHint": {
     "message": "Continue this chat with the selected model."
@@ -780,13 +780,13 @@
     "message": "Open split chat"
   },
   "composer_compareCanonicalOn": {
-    "message": "Canonical"
+    "message": "Chosen"
   },
   "composer_compareCanonicalOff": {
-    "message": "Pin as canonical"
+    "message": "Choose as answer"
   },
   "composer_compareCanonicalLabel": {
-    "message": "Canonical answer"
+    "message": "Chosen answer"
   },
   "composer_compareFilterLabel": {
     "message": "Filter models"
@@ -2248,5 +2248,23 @@
   },
   "acp_workspace_title": {
     "message": "Workspace Terminal"
+  },
+  "composer_compareDisabledNotice": {
+    "message": "Compare mode was turned off"
+  },
+  "composer_compareDisabledNoticeDesc": {
+    "message": "The compare feature was disabled. Your model selections are saved."
+  },
+  "composer_compareErrorTitle": {
+    "message": "Response failed"
+  },
+  "composer_compareRetry": {
+    "message": "Retry"
+  },
+  "composer_compareNoticesCollapse": {
+    "message": "Show fewer"
+  },
+  "composer_compareNoticesExpand": {
+    "message": "{{count}} more notes"
   }
 }

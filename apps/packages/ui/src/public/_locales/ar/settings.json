@@ -3279,7 +3279,7 @@
     "message": "متوافق مع SillyTavern"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "السطر الأول\\nالسطر الثاني مع ||مفسد مضمن||\\n\\n[spoiler]محتوى مفسد كتلي[/spoiler]"
+    "message": "السطر الأول\nالسطر الثاني مع ||مفسد مضمن||\n\n[spoiler]محتوى مفسد كتلي[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "أنماط عناصر النص المنسق"

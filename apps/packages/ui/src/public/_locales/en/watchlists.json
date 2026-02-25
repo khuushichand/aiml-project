@@ -90,16 +90,16 @@
     "message": "Feed deleted"
   },
   "sources_undoDeleteDescription": {
-    "message": "Undo restores this feed for {{seconds}} seconds."
+    "message": "Undo restores this feed's tags, groups, and active state for {{seconds}} seconds."
   },
   "sources_undoBulkDeleteTitle": {
     "message": "{{count}} feeds deleted"
   },
   "sources_undoBulkDeleteDescription": {
-    "message": "Undo restores deleted feeds for {{seconds}} seconds."
+    "message": "Undo restores deleted feeds, tags, groups, and active states for {{seconds}} seconds."
   },
   "sources_undoBulkRestorePartialError": {
-    "message": "{{restored}} restored, {{failed}} failed to restore"
+    "message": "{{restored}} restored, {{failed}} failed to restore. Refresh Feeds and retry while the undo timer is active."
   },
   "sources_enabled": {
     "message": "Feed enabled"
@@ -228,7 +228,7 @@
     "message": "Test Feed"
   },
   "sources_form_testSourceHint": {
-    "message": "Runs a quick fetch preview for this saved feed."
+    "message": "Runs a quick fetch preview for this feed. Unsaved URL/type edits are tested."
   },
   "sources_form_testSourceDisabledHint": {
     "message": "Save this feed before running a connectivity test."
@@ -312,7 +312,7 @@
     "message": "Monitor deleted"
   },
   "jobs_undoDeleteDescription": {
-    "message": "Undo restores this monitor for {{seconds}} seconds."
+    "message": "Undo restores this monitor's schedule, feed scope, and delivery settings for {{seconds}} seconds."
   },
   "jobs_enabled": {
     "message": "Monitor enabled"
@@ -588,7 +588,7 @@
     "message": "Custom Schedule"
   },
   "schedule_cronPlaceholder": {
-    "message": "Advanced schedule expression (cron, e.g., 0 9 * * MON)"
+    "message": "Cron expression (advanced), e.g., 0 9 * * MON"
   },
   "schedule_apply": {
     "message": "Apply"
@@ -657,7 +657,7 @@
     "message": "Runs once a week on the selected weekday and time."
   },
   "schedule_advancedLabel": {
-    "message": "Advanced cron expression"
+    "message": "Use custom cron (advanced)"
   },
   "schedule_advancedHint": {
     "message": "Enable only if presets cannot express the cadence you need."
@@ -669,7 +669,7 @@
     "message": "Increase schedule interval to meet the minimum cadence."
   },
   "schedule_helpSimple": {
-    "message": "Pick a schedule preset above. You can switch to Advanced cron for uncommon timing patterns."
+    "message": "Use a preset above for most schedules. Turn on Advanced cron only if you need uncommon timing patterns."
   },
   "schedule_helpAdvanced": {
     "message": "Cron format: minute hour day-of-month month day-of-week. Example: 0 9 * * MON runs every Monday at 09:00."
@@ -1074,7 +1074,7 @@
     "message": "Open this shortcuts help panel."
   },
   "outputs_title": {
-    "message": "Outputs"
+    "message": "Reports"
   },
   "templates_title": {
     "message": "Templates"
@@ -1301,9 +1301,6 @@
   "sources_columns_url": {
     "message": "URL"
   },
-  "sources_columns_status": {
-    "message": "Status"
-  },
   "sources_columns_error": {
     "message": "Error"
   },
@@ -1311,7 +1308,7 @@
     "message": "Groups"
   },
   "groups_all": {
-    "message": "All Sources"
+    "message": "All Feeds"
   },
   "groups_create": {
     "message": "Create Group"
@@ -1653,7 +1650,7 @@
     "message": "Template content is required"
   },
   "templates_contentPlaceholder": {
-    "message": "Enter Jinja2 template..."
+    "message": "Start with plain text or Markdown. Advanced users can add Jinja2 tags later."
   },
   "templates_namePlaceholder": {
     "message": "my-briefing-template"
@@ -1767,13 +1764,13 @@
     "message": "Quick setup"
   },
   "overview_onboarding_pipeline": {
-    "message": "Add Feed -> Create Monitor -> Review Results"
+    "message": "Add Feed -> Configure Monitor -> Check Activity -> Review Articles -> View Reports"
   },
   "overview_onboarding_steps_addFeed_title": {
     "message": "Add your first feed"
   },
   "overview_onboarding_steps_addFeed_description": {
-    "message": "Start by adding an RSS/site source in Feeds."
+    "message": "Start by adding an RSS/site feed in Feeds."
   },
   "overview_onboarding_steps_createMonitor_title": {
     "message": "Create your first monitor"
@@ -1785,7 +1782,7 @@
     "message": "Review results"
   },
   "overview_onboarding_steps_reviewResults_description": {
-    "message": "Open Articles for content and Activity for run diagnostics."
+    "message": "Open Activity for run health, Articles for captured content, and Reports for generated briefings."
   },
   "overview_onboarding_cta_addFeed": {
     "message": "Add first feed"
@@ -1827,7 +1824,7 @@
     "message": "Schedule"
   },
   "overview_onboarding_quickSetup_fields_runNow": {
-    "message": "Run immediately"
+    "message": "Run test generation immediately"
   },
   "overview_onboarding_quickSetup_placeholders_sourceName": {
     "message": "e.g., Daily Tech Feed"
@@ -1875,10 +1872,10 @@
     "message": "Schedule"
   },
   "overview_onboarding_quickSetup_review_runNow": {
-    "message": "Run now"
+    "message": "Run test now"
   },
   "overview_onboarding_quickSetup_reviewDescription": {
-    "message": "Confirm your setup, then create your feed and monitor."
+    "message": "Preview sample candidates and expected briefing, then create your feed and monitor."
   },
   "overview_onboarding_quickSetup_actions_finish": {
     "message": "Create setup"
@@ -1938,7 +1935,7 @@
     "message": "Unread"
   },
   "overview_cards_runs_title": {
-    "message": "Run Queue"
+    "message": "Activity"
   },
   "overview_cards_runs_running": {
     "message": "Running"
@@ -1989,7 +1986,7 @@
     "message": "Guided tour complete"
   },
   "guide_completedDescription": {
-    "message": "Next: monitor Activity for run health and Articles for review triage."
+    "message": "Next: monitor Activity for run health, review Articles for captured content, and open Reports for generated briefings."
   },
   "guide_openActivity": {
     "message": "Open Activity"
@@ -2001,31 +1998,31 @@
     "message": "1. Add feeds"
   },
   "guide_steps_sources_description": {
-    "message": "Add RSS/site sources so monitors have content to fetch."
+    "message": "Feeds are inputs for monitors. Add RSS/site feeds before scheduling checks."
   },
   "guide_steps_jobs_title": {
     "message": "2. Create monitors"
   },
   "guide_steps_jobs_description": {
-    "message": "Define monitor schedules and scopes for your feeds."
+    "message": "Monitors connect feeds to schedule, briefing format, and optional audio briefing delivery."
   },
   "guide_steps_runs_title": {
     "message": "3. Check activity"
   },
   "guide_steps_runs_description": {
-    "message": "Use Activity to inspect run status, logs, and failures."
+    "message": "Activity shows run status, logs, and failures for each monitor."
   },
   "guide_steps_items_title": {
     "message": "4. Review articles"
   },
   "guide_steps_items_description": {
-    "message": "Triaging article output keeps your feed review queue clean."
+    "message": "Articles are captured content from successful runs, ready for triage."
   },
   "guide_steps_outputs_title": {
     "message": "5. Deliver reports"
   },
   "guide_steps_outputs_description": {
-    "message": "Use Reports for generated briefings and output verification."
+    "message": "Reports show text and audio briefings generated from monitor runs and template choices."
   },
   "notifications_viewRun": {
     "message": "View run"
@@ -2124,13 +2121,13 @@
     "message": "Monitor scheduling"
   },
   "help_tabs_runs": {
-    "message": "Activity diagnostics"
+    "message": "Activity guidance"
   },
   "help_tabs_items": {
     "message": "Article review"
   },
   "help_tabs_outputs": {
-    "message": "Report outputs"
+    "message": "Reports guidance"
   },
   "help_tabs_templates": {
     "message": "Template authoring"
@@ -2139,49 +2136,49 @@
     "message": "Workspace settings"
   },
   "help_topics_opml_label": {
-    "message": "OPML imports"
+    "message": "OPML feed import"
   },
   "help_topics_opml_title": {
-    "message": "What is OPML?"
+    "message": "Import many feeds quickly"
   },
   "help_topics_opml_description": {
-    "message": "OPML is a portable feed-list format. Import one file to add many RSS or site feeds at once."
+    "message": "Use OPML when moving feed lists from another reader so setup takes minutes instead of manual entry."
   },
   "help_topics_cron_label": {
-    "message": "cron scheduling"
+    "message": "advanced schedule timing"
   },
   "help_topics_cron_title": {
-    "message": "How cron scheduling works"
+    "message": "Choose preset schedules first"
   },
   "help_topics_cron_description": {
-    "message": "Cron uses five fields: minute, hour, day-of-month, month, and day-of-week."
+    "message": "Use preset timing for most monitors. Switch to custom cron only for uncommon timing windows."
   },
   "help_topics_ttl_label": {
-    "message": "retention TTL"
+    "message": "retention window"
   },
   "help_topics_ttl_title": {
-    "message": "What retention TTL means"
+    "message": "Control how long outputs stay available"
   },
   "help_topics_ttl_description": {
-    "message": "TTL controls how long generated outputs are kept before they expire automatically."
+    "message": "Set retention to keep briefings only as long as your review workflow needs before automatic cleanup."
   },
   "help_topics_jinja2_label": {
-    "message": "Jinja2 templates"
+    "message": "briefing templates"
   },
   "help_topics_jinja2_title": {
-    "message": "Using Jinja2 templates"
+    "message": "Shape briefing format with templates"
   },
   "help_topics_jinja2_description": {
-    "message": "Jinja2 lets you loop, branch, and format monitor data into reusable report templates."
+    "message": "Start with a preset template to control sections and tone, then customize only if you need advanced formatting."
   },
   "help_topics_claimClusters_label": {
-    "message": "claim clusters"
+    "message": "claim tracking"
   },
   "help_topics_claimClusters_title": {
-    "message": "What claim clusters are"
+    "message": "Track repeating claims across sources"
   },
   "help_topics_claimClusters_description": {
-    "message": "Claim clusters group similar claims across feeds so monitors can subscribe to related topic updates."
+    "message": "Subscribe to claim clusters to follow how the same claim evolves across feeds without manual tagging."
   },
   "settings_description": {
     "message": "Manage retention and related topic subscriptions for this watchlist workspace."
@@ -2266,5 +2263,812 @@
   },
   "settings_clusters_columns_subscribed": {
     "message": "Subscribed"
+  },
+  "tabs_attentionBadgeAria": {
+    "message": "{{count}} attention items"
+  },
+  "quickActions_label": {
+    "message": "Jump to"
+  },
+  "quickActions_sources": {
+    "message": "Set up feeds"
+  },
+  "quickActions_jobs": {
+    "message": "Configure monitors"
+  },
+  "quickActions_runs": {
+    "message": "Check activity"
+  },
+  "quickActions_items": {
+    "message": "Review articles"
+  },
+  "quickActions_outputs": {
+    "message": "View reports"
+  },
+  "orientation_label": {
+    "message": "Current view guide"
+  },
+  "orientation_actions_openSources": {
+    "message": "Open Feeds"
+  },
+  "orientation_actions_openJobs": {
+    "message": "Open Monitors"
+  },
+  "orientation_actions_openRuns": {
+    "message": "Open Activity"
+  },
+  "orientation_actions_openItems": {
+    "message": "Open Articles"
+  },
+  "orientation_actions_openOutputs": {
+    "message": "Open Reports"
+  },
+  "orientation_actions_openTemplates": {
+    "message": "Open Templates"
+  },
+  "orientation_actions_openReportsFromRuns": {
+    "message": "Open Reports (generated briefings)"
+  },
+  "orientation_actions_openMonitorsFromItems": {
+    "message": "Open Monitors (tune collection)"
+  },
+  "orientation_tabs_overview_what": {
+    "message": "Overview summarizes watchlist health, setup progress, and attention signals."
+  },
+  "orientation_tabs_overview_next": {
+    "message": "Next: open Feeds to add sources, then create Monitors."
+  },
+  "orientation_tabs_sources_what": {
+    "message": "Feeds are your input sources for monitor runs."
+  },
+  "orientation_tabs_sources_next": {
+    "message": "Next: create Monitors to schedule collection from selected feeds."
+  },
+  "orientation_tabs_jobs_what": {
+    "message": "Monitors combine feed scope, schedules, filters, and output settings."
+  },
+  "orientation_tabs_jobs_next": {
+    "message": "Next: check Activity after runs to confirm collection health."
+  },
+  "orientation_tabs_runs_what": {
+    "message": "Activity shows monitor run status, logs, and failures."
+  },
+  "orientation_tabs_runs_next": {
+    "message": "Next: open Reports to verify generated briefing outputs."
+  },
+  "orientation_tabs_items_what": {
+    "message": "Articles are captured content for daily triage and briefing input."
+  },
+  "orientation_tabs_items_next": {
+    "message": "Next: adjust Monitors when article quality or volume needs tuning."
+  },
+  "orientation_tabs_outputs_what": {
+    "message": "Reports contains generated briefings, including delivery outcomes."
+  },
+  "orientation_tabs_outputs_next": {
+    "message": "Next: refine Templates or Monitors to improve future briefings."
+  },
+  "orientation_tabs_templates_what": {
+    "message": "Templates define formatting for generated report and briefing content."
+  },
+  "orientation_tabs_templates_next": {
+    "message": "Next: apply template changes in Monitors, then rerun Activity."
+  },
+  "orientation_tabs_settings_what": {
+    "message": "Settings controls workspace defaults, retention, and integration options."
+  },
+  "orientation_tabs_settings_next": {
+    "message": "Next: return to Feeds or Monitors to apply workspace changes."
+  },
+  "overview_attention_title": {
+    "message": "Attention needed"
+  },
+  "overview_attention_description": {
+    "message": "Open the highest-risk surfaces directly from here."
+  },
+  "overview_attention_sources": {
+    "message": "Feeds need review ({{count}})"
+  },
+  "overview_attention_runs": {
+    "message": "Failed activity runs ({{count}})"
+  },
+  "overview_attention_outputs": {
+    "message": "Reports with delivery issues ({{count}})"
+  },
+  "overview_attention_jobs": {
+    "message": "Monitors need schedule fixes ({{count}})"
+  },
+  "overview_onboarding_quickSetup_help_feed": {
+    "message": "Tip: paste a feed URL now. You can adjust feed settings later."
+  },
+  "overview_onboarding_quickSetup_help_monitor": {
+    "message": "No cron needed: choose a preset schedule for now."
+  },
+  "overview_onboarding_quickSetup_help_review": {
+    "message": "You can change any of these settings later from Feeds and Monitors."
+  },
+  "overview_onboarding_quickSetup_fields_setupGoal": {
+    "message": "Setup goal"
+  },
+  "overview_onboarding_quickSetup_fields_audioBriefing": {
+    "message": "Audio briefing"
+  },
+  "overview_onboarding_quickSetup_hints_audioBriefing": {
+    "message": "Enable spoken briefings alongside text reports."
+  },
+  "overview_onboarding_quickSetup_hints_runNow": {
+    "message": "Runs one test generation after setup so you can verify results before waiting for the next schedule."
+  },
+  "overview_onboarding_quickSetup_goal_briefing": {
+    "message": "Generate briefing reports"
+  },
+  "overview_onboarding_quickSetup_goal_triage": {
+    "message": "Feed review only"
+  },
+  "overview_onboarding_quickSetup_review_goal": {
+    "message": "Goal"
+  },
+  "overview_onboarding_quickSetup_review_audio": {
+    "message": "Audio"
+  },
+  "overview_onboarding_quickSetup_review_destination": {
+    "message": "After create"
+  },
+  "overview_onboarding_quickSetup_candidatePreview_title": {
+    "message": "Feed sample preview"
+  },
+  "overview_onboarding_quickSetup_candidatePreview_loading": {
+    "message": "Loading sample candidates..."
+  },
+  "overview_onboarding_quickSetup_candidatePreview_summary": {
+    "message": "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items."
+  },
+  "overview_onboarding_quickSetup_candidatePreview_empty": {
+    "message": "No sample candidates returned yet. You can still create setup and validate with a test run."
+  },
+  "overview_onboarding_quickSetup_candidatePreview_error": {
+    "message": "Could not load feed sample preview right now. You can still create setup and use a test run to verify results."
+  },
+  "overview_onboarding_quickSetup_templatePreview_title": {
+    "message": "Briefing preview (template: {{template}})"
+  },
+  "overview_onboarding_quickSetup_templatePreview_none": {
+    "message": "No briefing output will be generated for feed-review-only setup."
+  },
+  "overview_onboarding_quickSetup_outcome_textOnly": {
+    "message": "Text briefing"
+  },
+  "overview_onboarding_quickSetup_outcome_textAndAudio": {
+    "message": "Text + audio briefing"
+  },
+  "overview_onboarding_quickSetup_outcome_triage": {
+    "message": "Article triage only"
+  },
+  "overview_onboarding_quickSetup_destinationHint_runNow": {
+    "message": "Starts one test run immediately and opens Activity details."
+  },
+  "overview_onboarding_quickSetup_destinationHint_briefing": {
+    "message": "Opens Reports after setup. Use Run now in Monitors if you want an immediate briefing."
+  },
+  "overview_onboarding_quickSetup_destinationHint_triage": {
+    "message": "Opens Monitors after setup so you can run checks when ready."
+  },
+  "overview_onboarding_quickSetup_actions_finishWithTest": {
+    "message": "Create setup + run test"
+  },
+  "overview_onboarding_quickSetup_actions_retryPreview": {
+    "message": "Retry preview"
+  },
+  "overview_onboarding_quickSetup_createdBriefing": {
+    "message": "Quick setup complete. Feed and monitor created for briefing reports."
+  },
+  "overview_onboarding_quickSetup_testRunPending": {
+    "message": "Quick setup complete. Test run started. Open Activity for progress and Reports for generated briefings."
+  },
+  "teachPoints_label": {
+    "message": "First-time tip"
+  },
+  "teachPoints_dismiss": {
+    "message": "Got it"
+  },
+  "teachPoints_cron_title": {
+    "message": "Use schedule presets before custom cron"
+  },
+  "teachPoints_cron_description": {
+    "message": "Start with a preset schedule. Use custom cron only for uncommon timing."
+  },
+  "teachPoints_filters_title": {
+    "message": "Use filters to reduce noisy items"
+  },
+  "teachPoints_filters_description": {
+    "message": "Add include/exclude filters when monitors collect too much or irrelevant content."
+  },
+  "teachPoints_templates_title": {
+    "message": "Start from a briefing template preset"
+  },
+  "teachPoints_templates_description": {
+    "message": "Pick a preset template first, then edit only the sections you need to customize."
+  },
+  "notifications_openActivity": {
+    "message": "Open Activity"
+  },
+  "notifications_runCompletedGroupedTitle": {
+    "message": "Runs completed"
+  },
+  "notifications_runCompletedGroupedDescription": {
+    "message": "{{count}} runs completed successfully."
+  },
+  "notifications_runFailedGroupedTitle": {
+    "message": "Multiple runs failed"
+  },
+  "notifications_runFailedGroupedDescription": {
+    "message": "{{count}} runs failed. {{hint}}"
+  },
+  "notifications_runStalledTitle": {
+    "message": "Run appears stalled"
+  },
+  "notifications_runStalledDescription": {
+    "message": "{{count}} runs appear stalled. {{hint}}"
+  },
+  "notifications_failureHints_stalled": {
+    "message": "Run appears stalled after {{minutes}} minutes. Open Activity to inspect logs, then cancel or retry."
+  },
+  "errors_operation_save": {
+    "message": "save"
+  },
+  "errors_operation_test": {
+    "message": "test"
+  },
+  "errors_operation_retry": {
+    "message": "retry"
+  },
+  "errors_next_dns": {
+    "message": "Verify the source host resolves correctly and retry."
+  },
+  "errors_next_tls": {
+    "message": "Verify TLS certificate settings for the endpoint and retry."
+  },
+  "sources_undoBulkDeleteVariableWindowHint": {
+    "message": "Some feeds expire sooner; use Undo before this timer ends."
+  },
+  "sources_undoRestoreError": {
+    "message": "Could not restore this feed. Refresh Feeds and retry while the undo timer is active."
+  },
+  "sources_form_testSourceDraftHint": {
+    "message": "Run Test Feed to validate URL/type connectivity before saving."
+  },
+  "sources_form_testSourceErrorHintForumDisabled": {
+    "message": "Forum feeds are not enabled yet. Switch type to RSS Feed or Website."
+  },
+  "sources_form_testSourceErrorHintYoutube": {
+    "message": "Use a canonical YouTube feed URL (channel_id or playlist_id) and retry."
+  },
+  "sources_form_testSourceErrorHintNotFound": {
+    "message": "This saved feed no longer exists. Refresh feeds and open it again."
+  },
+  "sources_form_testSourceErrorHintNetwork": {
+    "message": "Check server connectivity, then run Test Feed again."
+  },
+  "sources_form_testSourceErrorHintGeneric": {
+    "message": "Review URL and feed type, then retry. If this persists, check server logs."
+  },
+  "jobs_undoRestoreError": {
+    "message": "Could not restore this monitor. Refresh Monitors and retry while the undo timer is active."
+  },
+  "jobs_outputLinkage_label": {
+    "message": "Output linkage"
+  },
+  "jobs_outputLinkage_templateNamed": {
+    "message": "Template: {{name}}"
+  },
+  "jobs_outputLinkage_templateDefault": {
+    "message": "Template: default"
+  },
+  "jobs_outputLinkage_audioEnabled": {
+    "message": "Audio: enabled"
+  },
+  "jobs_outputLinkage_audioDisabled": {
+    "message": "Audio: text only"
+  },
+  "jobs_form_modeLabel": {
+    "message": "Setup mode"
+  },
+  "jobs_form_modeBasic": {
+    "message": "Basic"
+  },
+  "jobs_form_modeAdvanced": {
+    "message": "Advanced"
+  },
+  "jobs_form_modeHelpBasic": {
+    "message": "Basic mode hides optional filters and delivery fine-tuning so you can set up a monitor faster."
+  },
+  "jobs_form_modeHelpAdvanced": {
+    "message": "Advanced mode exposes all scheduling, filtering, retention, and delivery controls."
+  },
+  "jobs_form_modeHiddenSettingsNotice": {
+    "message": "Advanced settings are preserved and will still apply, but they are hidden in Basic mode."
+  },
+  "jobs_form_scheduleRequiredForBasic": {
+    "message": "Set a schedule before continuing to review."
+  },
+  "jobs_form_audioBriefing": {
+    "message": "Audio briefing"
+  },
+  "jobs_form_audioVoice": {
+    "message": "Voice"
+  },
+  "jobs_form_audioSpeed": {
+    "message": "Speed"
+  },
+  "jobs_form_audioTargetMinutes": {
+    "message": "Target duration (minutes)"
+  },
+  "jobs_form_audioHint": {
+    "message": "Enable spoken briefings alongside text outputs. Keep defaults for fastest setup."
+  },
+  "jobs_form_showAudioAdvanced": {
+    "message": "Show advanced audio options"
+  },
+  "jobs_form_hideAudioAdvanced": {
+    "message": "Hide advanced audio options"
+  },
+  "jobs_form_audioBackgroundTrack": {
+    "message": "Background track URI"
+  },
+  "jobs_form_audioBackgroundTrackPlaceholder": {
+    "message": "file:///path/to/bed.mp3"
+  },
+  "jobs_form_audioVoiceMap": {
+    "message": "Voice map (JSON)"
+  },
+  "jobs_form_audioVoiceMapPlaceholder": {
+    "message": "{ \"HOST\": \"af_heart\", \"REPORTER\": \"am_adam\" }"
+  },
+  "jobs_form_audioVoiceMapInvalid": {
+    "message": "Voice map must be valid JSON with marker-to-voice string pairs."
+  },
+  "jobs_form_audioAdvancedHint": {
+    "message": "Use advanced options only if you need soundtrack mixing or custom speaker-to-voice assignments."
+  },
+  "jobs_form_presetMeceMd": {
+    "message": "Structured review (Markdown)"
+  },
+  "jobs_form_steps_scope": {
+    "message": "Scope"
+  },
+  "jobs_form_steps_schedule": {
+    "message": "Schedule"
+  },
+  "jobs_form_steps_output": {
+    "message": "Output"
+  },
+  "jobs_form_steps_review": {
+    "message": "Review"
+  },
+  "jobs_form_steps_back": {
+    "message": "Back"
+  },
+  "jobs_form_steps_next": {
+    "message": "Next"
+  },
+  "jobs_form_steps_reviewTitle": {
+    "message": "Review monitor setup"
+  },
+  "jobs_form_steps_reviewScope": {
+    "message": "Scope"
+  },
+  "jobs_form_steps_reviewSchedule": {
+    "message": "Schedule"
+  },
+  "jobs_form_steps_reviewOutput": {
+    "message": "Output template"
+  },
+  "jobs_form_steps_reviewAudio": {
+    "message": "Audio briefing"
+  },
+  "jobs_form_steps_reviewHint": {
+    "message": "Use Create/Save to finalize this monitor."
+  },
+  "jobs_noFeeds": {
+    "message": "No feeds selected"
+  },
+  "filters_previewImpact": {
+    "message": "Preview impact"
+  },
+  "filters_regexFlags": {
+    "message": "Flags"
+  },
+  "filters_regexExamples": {
+    "message": "Examples: sponsored|promo, (?i)breaking, \\bAI\\b"
+  },
+  "filters_regexInvalid": {
+    "message": "Regex pattern is invalid: {{error}}"
+  },
+  "filters_summary_matchAny": {
+    "message": "any term"
+  },
+  "filters_summary_matchAll": {
+    "message": "all terms"
+  },
+  "filters_summary_keyword": {
+    "message": "{{action}} items containing {{keywords}} ({{matchLabel}})."
+  },
+  "filters_summary_keywordEmpty": {
+    "message": "{{action}} items with no keyword terms yet."
+  },
+  "filters_summary_author": {
+    "message": "{{action}} items by {{authors}}."
+  },
+  "filters_summary_authorEmpty": {
+    "message": "{{action}} items with no author list yet."
+  },
+  "filters_summary_regex": {
+    "message": "{{action}} when {{field}} matches {{pattern}}."
+  },
+  "filters_summary_regexMissingPattern": {
+    "message": "(missing pattern)"
+  },
+  "filters_summary_dateRange": {
+    "message": "{{action}} items published from {{since}} to {{until}}."
+  },
+  "filters_summary_anyDate": {
+    "message": "any date"
+  },
+  "filters_summary_fallback": {
+    "message": "{{action}} using {{type}} filter."
+  },
+  "schedule_beginnerHint": {
+    "message": "Most users should use presets. Turn on cron only for uncommon timing."
+  },
+  "schedule_advancedOptionalHint": {
+    "message": "Most users should use presets. Turn on cron only for uncommon timing."
+  },
+  "schedule_cronFieldOrderHint": {
+    "message": "Field order: minute hour day-of-month month day-of-week."
+  },
+  "schedule_cronBeginnerHint": {
+    "message": "If cron is new, start with a quick example below and edit one field at a time."
+  },
+  "schedule_cronFieldCountError": {
+    "message": "Use exactly 5 cron fields: minute hour day-of-month month day-of-week."
+  },
+  "schedule_cronInvalidTokenError": {
+    "message": "Cron tokens can only include letters, numbers, *, /, -, ?, and comma."
+  },
+  "schedule_examplesTitle": {
+    "message": "Quick examples"
+  },
+  "schedule_examplesHint": {
+    "message": "Choose one, then adjust values if you need a different cadence."
+  },
+  "schedule_examples_daily0900": {
+    "message": "Daily 09:00"
+  },
+  "schedule_examples_weekdays0800": {
+    "message": "Weekdays 08:00"
+  },
+  "schedule_examples_every6hours": {
+    "message": "Every 6 hours"
+  },
+  "runs_openRunOutputs": {
+    "message": "View reports for this run"
+  },
+  "runs_openOutputsShort": {
+    "message": "Reports"
+  },
+  "runs_attention_title": {
+    "message": "Reliability attention required"
+  },
+  "runs_attention_description": {
+    "message": "{{failed}} failed run{{failedPlural}} and {{stalled}} stalled run{{stalledPlural}} need review."
+  },
+  "runs_attention_viewFailedRun": {
+    "message": "View newest failed run"
+  },
+  "runs_attention_filterFailed": {
+    "message": "Show failed runs"
+  },
+  "runs_tableAria": {
+    "message": "Activity runs table"
+  },
+  "runs_statusLabels_pending": {
+    "message": "Pending"
+  },
+  "runs_statusLabels_running": {
+    "message": "Running"
+  },
+  "runs_statusLabels_completed": {
+    "message": "Completed"
+  },
+  "runs_statusLabels_failed": {
+    "message": "Failed"
+  },
+  "runs_statusLabels_cancelled": {
+    "message": "Cancelled"
+  },
+  "runs_statusLabels_unknown": {
+    "message": "Unknown"
+  },
+  "runs_statusAria": {
+    "message": "Run status: {{status}}"
+  },
+  "runs_progressAria": {
+    "message": "Run ingestion progress {{percent}} percent"
+  },
+  "runs_live_loadError": {
+    "message": "Activity refresh failed."
+  },
+  "runs_live_statusChangedSingle": {
+    "message": "Run #{{id}} status changed to {{status}}."
+  },
+  "runs_live_statusChangedMultiple": {
+    "message": "{{count}} runs changed status."
+  },
+  "runs_live_cancelRunSuccess": {
+    "message": "Run #{{id}} cancelled."
+  },
+  "runs_live_cancelRunError": {
+    "message": "Failed to cancel run #{{id}}."
+  },
+  "runs_detail_linkageTitle": {
+    "message": "Run linkage"
+  },
+  "runs_detail_linkageDescription": {
+    "message": "Monitor #{{jobId}} produced {{count}} report{{plural}} for this run."
+  },
+  "runs_detail_openMonitor": {
+    "message": "Open monitor"
+  },
+  "runs_detail_openRunOutputs": {
+    "message": "Open reports for this run"
+  },
+  "runs_detail_itemsStatusInBriefing": {
+    "message": "Included in briefing"
+  },
+  "runs_detail_itemsStatusFilteredOut": {
+    "message": "Excluded from briefing"
+  },
+  "items_unreadToday": {
+    "message": "Unread today"
+  },
+  "items_sourceCatalogCapHint": {
+    "message": "Showing first {{count}} feeds. Use Feeds tab filters to narrow your source list."
+  },
+  "items_sourceWindowHint": {
+    "message": "Showing {{visible}} of {{total}} feeds. Scroll to load more."
+  },
+  "items_sort_label": {
+    "message": "Sort"
+  },
+  "items_sort_options_newest": {
+    "message": "Newest first"
+  },
+  "items_sort_options_oldest": {
+    "message": "Oldest first"
+  },
+  "items_sort_options_unreadFirst": {
+    "message": "Unread first"
+  },
+  "items_sort_options_reviewedFirst": {
+    "message": "Reviewed first"
+  },
+  "items_rowStatusUnread": {
+    "message": "Unread"
+  },
+  "items_rowStatusReviewed": {
+    "message": "Reviewed"
+  },
+  "items_rowAriaLabel": {
+    "message": "{{title}}. {{state}}. Source: {{source}}."
+  },
+  "items_openMonitor": {
+    "message": "Open Monitor"
+  },
+  "items_openRunActivity": {
+    "message": "Open Run"
+  },
+  "items_openRunOutputs": {
+    "message": "View Reports"
+  },
+  "items_includeInNextBriefing": {
+    "message": "Include in next briefing"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "This item is already included in briefing outputs."
+  },
+  "items_briefingIncluded": {
+    "message": "Added to the next briefing queue."
+  },
+  "items_briefingIncludeError": {
+    "message": "Failed to include item in briefing."
+  },
+  "items_batch_scopeSummary": {
+    "message": "Selected: {{selected}} unread • This page: {{page}} unread • All filtered: {{allFiltered}} unread."
+  },
+  "items_batch_scope_selected": {
+    "message": "selected item{{plural}}"
+  },
+  "items_batch_scope_page": {
+    "message": "items on this page"
+  },
+  "items_batch_scope_allFiltered": {
+    "message": "all filtered items"
+  },
+  "items_batch_confirmDescriptionScoped": {
+    "message": "Scope: {{scope}}. This will mark {{count}} item{{plural}} as reviewed."
+  },
+  "items_batch_completedScoped": {
+    "message": "Marked {{count}} {{scope}} as reviewed."
+  },
+  "items_batch_partialScoped": {
+    "message": "Marked {{success}} {{scope}} as reviewed; {{failed}} failed."
+  },
+  "items_batch_failedScoped": {
+    "message": "Failed to mark {{scope}} as reviewed."
+  },
+  "items_batch_progress_label": {
+    "message": "Batch progress"
+  },
+  "items_batch_progress_count": {
+    "message": "{{processed}} / {{total}}"
+  },
+  "items_batch_progress_running": {
+    "message": "Running {{scope}}..."
+  },
+  "items_batch_progress_completed": {
+    "message": "Completed {{success}} of {{total}}. {{failed}} failed."
+  },
+  "items_batch_progress_retryFailed": {
+    "message": "Retry failed"
+  },
+  "items_savedViews_defaultsHint": {
+    "message": "Default triage views are pinned. Save changes as a custom view."
+  },
+  "items_savedViews_defaults_unreadToday": {
+    "message": "Unread today"
+  },
+  "items_savedViews_defaults_highPriority": {
+    "message": "High-priority"
+  },
+  "items_savedViews_defaults_needsReview": {
+    "message": "Needs review"
+  },
+  "items_shortcuts_hintStrip": {
+    "message": "Shortcuts: j/k navigate, space toggles reviewed, o opens original, ? shows help."
+  },
+  "items_shortcuts_openPanel": {
+    "message": "View all"
+  },
+  "items_shortcuts_dismissHint": {
+    "message": "Dismiss"
+  },
+  "items_shortcuts_restoreHint": {
+    "message": "Show shortcut hints"
+  },
+  "items_live_selectionChanged": {
+    "message": "Selected {{title}} from {{source}} ({{state}})."
+  },
+  "items_live_selectionCleared": {
+    "message": "No article selected."
+  },
+  "outputs_filterByRun": {
+    "message": "Filter by run ID"
+  },
+  "outputs_activeFiltersJob": {
+    "message": "Monitor: {{name}}"
+  },
+  "outputs_activeFiltersRun": {
+    "message": "Run: #{{id}}"
+  },
+  "outputs_jumpMonitor": {
+    "message": "Open monitor"
+  },
+  "outputs_jumpRun": {
+    "message": "Open run"
+  },
+  "outputs_tableAria": {
+    "message": "Reports table"
+  },
+  "outputs_live_loadError": {
+    "message": "Reports refresh failed."
+  },
+  "outputs_live_downloaded": {
+    "message": "Downloaded {{title}}."
+  },
+  "outputs_live_downloadError": {
+    "message": "Failed to download {{title}}."
+  },
+  "outputs_live_regenerated": {
+    "message": "Regenerated {{title}}."
+  },
+  "outputs_live_regenerateError": {
+    "message": "Failed to regenerate {{title}}."
+  },
+  "outputs_live_deliveryChangedSingle": {
+    "message": "Delivery status updated for {{title}}."
+  },
+  "outputs_live_deliveryChangedMultiple": {
+    "message": "Delivery status updated for {{count}} reports."
+  },
+  "outputs_storagePath": {
+    "message": "Stored file"
+  },
+  "outputs_audioPlayerLabel": {
+    "message": "Audio playback"
+  },
+  "outputs_audioPlayerUnsupported": {
+    "message": "Your browser does not support audio playback."
+  },
+  "templates_modeLabel": {
+    "message": "Editing mode"
+  },
+  "templates_modeBasic": {
+    "message": "Basic"
+  },
+  "templates_modeAdvanced": {
+    "message": "Advanced"
+  },
+  "templates_modeHelpBasic": {
+    "message": "Basic mode is no-code: pick a recipe, edit text, and preview your output."
+  },
+  "templates_modeHelpAdvanced": {
+    "message": "Advanced mode adds Jinja2 snippets, variable docs, and version tools."
+  },
+  "templates_modeHiddenToolsNotice": {
+    "message": "Advanced template tools are hidden in Basic mode. Your content and version context are preserved."
+  },
+  "templates_modeVersionToolsHidden": {
+    "message": "Version tools are available in Advanced mode."
+  },
+  "templates_modeBasicEditorHint": {
+    "message": "Start in Basic mode with plain text or Markdown. Switch to Advanced only if you need variables, loops, or version tools."
+  },
+  "templates_syntaxErrorBeforeSave": {
+    "message": "Could not save template. Fix syntax errors, then try again."
+  },
+  "templates_recipe_title": {
+    "message": "Recipe builder"
+  },
+  "templates_recipe_recipeType": {
+    "message": "Template recipe"
+  },
+  "templates_recipe_apply": {
+    "message": "Apply recipe"
+  },
+  "templates_recipe_applied": {
+    "message": "Template recipe applied."
+  },
+  "templates_recipe_briefingMd": {
+    "message": "Briefing (Markdown)"
+  },
+  "templates_recipe_briefingMdDescription": {
+    "message": "Daily digest layout with summary and per-item entries."
+  },
+  "templates_recipe_newsletterHtml": {
+    "message": "Newsletter (HTML)"
+  },
+  "templates_recipe_newsletterHtmlDescription": {
+    "message": "Email-friendly HTML brief with linked story sections."
+  },
+  "templates_recipe_meceMd": {
+    "message": "MECE analysis (Markdown)"
+  },
+  "templates_recipe_meceMdDescription": {
+    "message": "Groups developments into distinct categories for analysis."
+  },
+  "templates_recipe_options_includeExecutiveSummary": {
+    "message": "Include executive summary section"
+  },
+  "templates_recipe_options_includeLinks": {
+    "message": "Include source links"
+  },
+  "templates_recipe_options_includePublishedAt": {
+    "message": "Include published timestamp"
+  },
+  "templates_recipe_options_includeTags": {
+    "message": "Include item tags"
+  },
+  "settings_clusters_toggleAria": {
+    "message": "Toggle subscription for {{cluster}}"
   }
 }

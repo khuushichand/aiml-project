@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "状態ドキュメントに未保存の変更があります。ローカル下書きを破棄しますか？"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "状態ドキュメントに未保存の変更があります。接続してローカル下書きを破棄しますか？"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "状態ドキュメントに未保存の変更があります。切断してローカル下書きを破棄しますか？"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "状態ドキュメントに未保存の変更があります。状態を読み込んでローカル下書きを破棄しますか？"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "状態ドキュメントに未保存の変更があります。ペルソナを切り替えてローカル下書きを破棄しますか？"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "状態ドキュメントに未保存の変更があります。セッションを切り替えてローカル下書きを破棄しますか？"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "状態ドキュメントに未保存の変更があります。この状態バージョンを復元してローカル下書きを破棄しますか？"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "状態ドキュメントに未保存の変更があります。このページを離れてローカル下書きを破棄しますか？"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "状態ドキュメントに未保存の変更があります。保存せずにこのページを離れますか？"
   }
 }
