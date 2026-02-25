@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -62,7 +63,7 @@ def test_security_required_includes_dependency_review_gate() -> None:
     steps = workflow["jobs"]["security-required"]["steps"]
     dep_review_steps = [step for step in steps if step.get("name") == "Dependency review (high/critical)"]
     assert dep_review_steps, "Dependency review step missing"
-    assert dep_review_steps[0]["uses"].startswith("actions/dependency-review-action@")
+    assert re.match(r"^actions/dependency-review-action@[0-9a-f]{40}$", dep_review_steps[0]["uses"])
 
 
 def test_legacy_ci_workflow_name_remains_stable_for_branch_protection() -> None:
