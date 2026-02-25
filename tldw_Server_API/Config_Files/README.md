@@ -256,10 +256,14 @@ Local service backends (Kobold, LLaMA, Oobabooga, Tabby, vLLM, Ollama, Aphrodite
 Common: `max_tokens`, `local_api_timeout`, `local_api_retries`, `local_api_retry_delay`, `streaming`, `temperature`, `top_p`, `min_p`.
 
 ## [STT-Settings]
-- `default_transcriber` (str): `faster-whisper|nemo-...|mlx`.
+- `default_batch_transcription_model` (str): explicit batch/offline default model id when requests omit `model` (default: `parakeet-onnx`).
+- `default_streaming_transcription_model` (str): explicit WebSocket streaming default model id when clients omit `model` (default: `parakeet-onnx`).
+- `default_transcriber` (str): legacy provider default (`faster-whisper|parakeet|canary|...`) used for compatibility when explicit model defaults are absent.
 - `nemo_model_variant` (str), `nemo_device` (str), `nemo_cache_dir` (path)
 - `nemo_chunk_duration|nemo_overlap_duration` (sec)
-- `streaming_fallback_to_whisper` (bool)
+- `parakeet_onnx_model_id` (str): Hugging Face repository id used by Parakeet ONNX loader (default: `istupakov/parakeet-tdt-0.6b-v3-onnx`).
+- `parakeet_onnx_revision` (str|empty): optional pinned revision/commit for deterministic ONNX downloads.
+- `streaming_fallback_to_whisper` (bool): opt-in fallback when streaming model init fails (default: `false`, fail-fast).
 - `mlx_model_id` (str): default `mlx-community/parakeet-tdt-0.6b-v3`
 - `mlx_cache_dir` (path): optional local cache override for model artifacts
 - `mlx_chunk_duration|mlx_overlap_duration|buffered_chunk_duration|buffered_total_buffer` (sec)

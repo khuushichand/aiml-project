@@ -332,6 +332,10 @@ export interface WatchlistTemplate {
   version?: number
   history_count?: number
   available_versions?: number[]
+  composer_ast?: Record<string, unknown> | null
+  composer_schema_version?: string | null
+  composer_sync_hash?: string | null
+  composer_sync_status?: "in_sync" | "needs_repair" | "recovered_from_code" | null
 }
 
 export interface WatchlistTemplateCreate {
@@ -340,6 +344,10 @@ export interface WatchlistTemplateCreate {
   content: string
   format?: "md" | "html"
   overwrite?: boolean
+  composer_ast?: Record<string, unknown> | null
+  composer_schema_version?: string | null
+  composer_sync_hash?: string | null
+  composer_sync_status?: "in_sync" | "needs_repair" | "recovered_from_code" | null
 }
 
 export interface WatchlistTemplateVersionSummary {

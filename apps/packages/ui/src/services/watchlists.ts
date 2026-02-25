@@ -793,6 +793,42 @@ export interface TemplatePreviewResult {
   warnings: string[]
 }
 
+export interface TemplateComposerSectionRequest {
+  run_id: number
+  block_id: string
+  prompt: string
+  input_scope?: "all_items" | "top_items" | "selected_items"
+  style?: string
+  length_target?: "short" | "medium" | "long"
+}
+
+export interface TemplateComposerSectionResult {
+  block_id: string
+  content: string
+  warnings: string[]
+  diagnostics: Record<string, unknown>
+}
+
+export interface TemplateComposerFlowSection {
+  id: string
+  content: string
+}
+
+export type TemplateComposerFlowCheckMode = "suggest_only" | "auto_apply"
+
+export interface TemplateComposerFlowIssue {
+  section_id?: string | null
+  severity: "info" | "warning"
+  message: string
+}
+
+export interface TemplateComposerFlowCheckResult {
+  mode: TemplateComposerFlowCheckMode
+  issues: TemplateComposerFlowIssue[]
+  diff: string
+  sections: TemplateComposerFlowSection[]
+}
+
 export const validateWatchlistTemplate = async (
   content: string,
   format: "md" | "html" = "md"
@@ -815,5 +851,27 @@ export const previewWatchlistTemplate = async (
     method: "POST",
     body: { content, format, run_id: runId },
     abortSignal: signal
+  })
+}
+
+export const composeWatchlistTemplateSection = async (
+  payload: TemplateComposerSectionRequest
+): Promise<TemplateComposerSectionResult> => {
+  return bgRequest<TemplateComposerSectionResult>({
+    path: "/api/v1/watchlists/templates/compose/section" as any,
+    method: "POST",
+    body: payload
+  })
+}
+
+export const flowCheckWatchlistTemplateSections = async (payload: {
+  run_id: number
+  mode: TemplateComposerFlowCheckMode
+  sections: TemplateComposerFlowSection[]
+}): Promise<TemplateComposerFlowCheckResult> => {
+  return bgRequest<TemplateComposerFlowCheckResult>({
+    path: "/api/v1/watchlists/templates/compose/flow-check" as any,
+    method: "POST",
+    body: payload
   })
 }

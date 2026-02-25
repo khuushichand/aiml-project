@@ -8,8 +8,10 @@ import asyncio
 import json
 import secrets
 import uuid
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from enum import IntEnum
+from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -74,6 +76,14 @@ class ErrorCode(IntEnum):
 class InvalidParamsException(Exception):
     """Raised when tool parameters fail validation or validators are missing for write tools."""
     pass
+
+
+class GovernanceDeniedError(PermissionError):
+    """Permission error carrying structured governance decision details."""
+
+    def __init__(self, message: str, governance: Optional[dict[str, Any]] = None):
+        super().__init__(message)
+        self.governance = governance or {}
 
 
 _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS = (
@@ -501,6 +511,10 @@ class MCPProtocol:
         self._tool_name_re = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
         # Idempotency manager for write-capable tools
         self._idempotency = IdempotencyManager()
+        # Governance preflight state
+        self._governance_service: Any | None = None
+        self._governance_store: Any | None = None
+        self._governance_lock = asyncio.Lock()
 
         # Method handlers
         self.handlers: dict[str, Callable] = {
@@ -705,6 +719,215 @@ class MCPProtocol:
                 log.info("MCP tool executed")
         except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             pass
+
+    @staticmethod
+    def _governance_preflight_bypassed(tool_name: str, context: RequestContext) -> bool:
+        if str(tool_name or "").startswith("governance."):
+            return True
+
+        metadata = getattr(context, "metadata", None)
+        if not isinstance(metadata, dict):
+            return False
+
+        raw = metadata.get("governance_bypass")
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return bool(raw)
+        if isinstance(raw, str):
+            return is_truthy(raw)
+        return False
+
+    @staticmethod
+    def _governance_summary(tool_name: str, tool_args: dict[str, Any]) -> str:
+        rendered_args = ""
+        try:
+            rendered_args = json.dumps(tool_args or {}, sort_keys=True, default=str)
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+            rendered_args = str(tool_args)
+        if len(rendered_args) > 1200:
+            rendered_args = rendered_args[:1200]
+        return f"tool={tool_name}; args={rendered_args}"
+
+    @staticmethod
+    def _resolve_governance_category(tool_name: str, tool_def: Optional[dict[str, Any]]) -> str:
+        try:
+            if isinstance(tool_def, dict):
+                meta = tool_def.get("metadata")
+                if isinstance(meta, dict):
+                    category = str(meta.get("category") or "").strip().lower()
+                    if category:
+                        return category
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+            pass
+
+        if isinstance(tool_name, str) and "." in tool_name:
+            prefix = tool_name.split(".", 1)[0].strip().lower()
+            if prefix:
+                return prefix
+        return "general"
+
+    @staticmethod
+    def _resolve_governance_rollout_mode(metadata: Optional[dict[str, Any]] = None) -> str:
+        """Resolve governance rollout mode from metadata override and server config."""
+        raw_mode = None
+        if isinstance(metadata, dict):
+            raw_mode = metadata.get("governance_rollout_mode")
+
+        try:
+            from tldw_Server_API.app.core import config as app_config
+
+            return app_config.resolve_governance_rollout_mode(
+                str(raw_mode) if raw_mode is not None else None
+            )
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"Unable to resolve governance rollout mode from config: {exc}")
+            candidate = str(raw_mode or "").strip().lower()
+            return candidate if candidate in {"off", "shadow", "enforce"} else "off"
+
+    def _record_governance_check(
+        self,
+        *,
+        surface: str,
+        category: str,
+        status: str,
+        rollout_mode: str,
+    ) -> None:
+        """Emit one governance check metric entry, failing open on metric errors."""
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+            self.metrics.record_governance_check(
+                surface=surface,
+                category=category,
+                status=status,
+                rollout_mode=rollout_mode,
+            )
+
+    @classmethod
+    def _serialize_governance_decision(cls, decision: Any) -> dict[str, Any]:
+        if decision is None:
+            return {}
+        if isinstance(decision, dict):
+            return {str(k): v for k, v in decision.items()}
+        if is_dataclass(decision):
+            return cls._serialize_governance_decision(asdict(decision))
+        dump = getattr(decision, "model_dump", None)
+        if callable(dump):
+            try:
+                dumped = dump()
+                if isinstance(dumped, dict):
+                    return {str(k): v for k, v in dumped.items()}
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                pass
+        payload: dict[str, Any] = {}
+        for key in ("action", "status", "category", "category_source", "fallback_reason", "matched_rules"):
+            value = getattr(decision, key, None)
+            if value is not None:
+                payload[key] = value
+        return payload
+
+    async def _ensure_governance_service(self) -> Any | None:
+        if self._governance_service is not None:
+            return self._governance_service
+
+        async with self._governance_lock:
+            if self._governance_service is not None:
+                return self._governance_service
+            try:
+                from tldw_Server_API.app.core.Governance.service import GovernanceService
+                from tldw_Server_API.app.core.Governance.store import GovernanceStore
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"MCP governance preflight unavailable (import failure): {exc}")
+                return None
+
+            try:
+                cfg = get_config()
+                configured_path = getattr(cfg, "governance_db_path", None)
+                sqlite_path = str(configured_path or "Databases/governance.db")
+                db_path = Path(sqlite_path).expanduser()
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+
+                self._governance_store = GovernanceStore(sqlite_path=str(db_path))
+                await self._governance_store.ensure_schema()
+                self._governance_service = GovernanceService(store=self._governance_store)
+                return self._governance_service
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"MCP governance preflight disabled (service init failure): {exc}")
+                self._governance_service = None
+                self._governance_store = None
+                return None
+
+    async def _run_governance_preflight(
+        self,
+        *,
+        tool_name: str,
+        tool_args: dict[str, Any],
+        tool_def: Optional[dict[str, Any]],
+        context: RequestContext,
+    ) -> Optional[dict[str, Any]]:
+        if self._governance_preflight_bypassed(tool_name, context):
+            return None
+
+        metadata = context.metadata if isinstance(getattr(context, "metadata", None), dict) else {}
+        rollout_mode = self._resolve_governance_rollout_mode(metadata)
+        category = self._resolve_governance_category(tool_name, tool_def)
+
+        if rollout_mode == "off":
+            self._record_governance_check(
+                surface="mcp_tool",
+                category=category,
+                status="unknown",
+                rollout_mode=rollout_mode,
+            )
+            return {"status": "unknown", "rollout_mode": rollout_mode}
+
+        service = await self._ensure_governance_service()
+        if service is None:
+            self._record_governance_check(
+                surface="mcp_tool",
+                category=category,
+                status="error",
+                rollout_mode=rollout_mode,
+            )
+            return None
+
+        try:
+            decision = await service.validate_change(
+                surface="mcp_tool",
+                summary=self._governance_summary(tool_name, tool_args),
+                category=category,
+                metadata=metadata,
+            )
+            payload = self._serialize_governance_decision(decision)
+            payload.setdefault("rollout_mode", rollout_mode)
+            if isinstance(context.metadata, dict):
+                context.metadata["governance_preflight"] = payload
+            action = str(payload.get("action") or payload.get("status") or "").strip().lower() or "unknown"
+            self._record_governance_check(
+                surface="mcp_tool",
+                category=category,
+                status=action,
+                rollout_mode=rollout_mode,
+            )
+            if action == "deny" and rollout_mode == "enforce":
+                raise GovernanceDeniedError(
+                    "Permission denied by governance policy",
+                    governance=payload,
+                )
+            return payload
+        except GovernanceDeniedError:
+            raise
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+            self._record_governance_check(
+                surface="mcp_tool",
+                category=category,
+                status="error",
+                rollout_mode=rollout_mode,
+            )
+            try:
+                context.logger.debug(f"Governance preflight failed open: {exc}")
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                pass
+            return None
 
     async def process_request(
         self,
@@ -920,7 +1143,15 @@ class MCPProtocol:
                 return None
             # Redact any secrets in message (defensive)
             msg = self._mask_secrets(str(perr))
-            return self._error_response(ErrorCode.AUTHORIZATION_ERROR, msg, request.id if isinstance(request, MCPRequest) else None)
+            error_data = None
+            if isinstance(perr, GovernanceDeniedError):
+                error_data = {"governance": dict(perr.governance or {})}
+            return self._error_response(
+                ErrorCode.AUTHORIZATION_ERROR,
+                msg,
+                request.id if isinstance(request, MCPRequest) else None,
+                data=error_data,
+            )
         except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
             # Log error
             log.exception(
@@ -1541,6 +1772,12 @@ class MCPProtocol:
             raise InvalidParamsException(str(ve)) from ve
 
         args_hash = self._hash_arguments(tool_args if isinstance(tool_args, dict) else {})
+        await self._run_governance_preflight(
+            tool_name=tool_name,
+            tool_args=tool_args if isinstance(tool_args, dict) else {},
+            tool_def=tool_def if isinstance(tool_def, dict) else None,
+            context=context,
+        )
 
         async def _execute_tool_call() -> dict[str, Any]:
             # Optional per-tool/category rate limits (ingestion vs read)

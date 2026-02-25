@@ -31,7 +31,8 @@
 - Legacy templates without composer fields continue to load/save.
 **Tests**:
 - New schema/endpoint tests for optional fields and backward compatibility.
-**Status**: Not Started
+
+**Status**: Complete
 
 ### Task 1: Extend schema contracts for composer metadata
 
@@ -135,7 +136,7 @@ git commit -m "feat(watchlists): persist composer metadata in template store"
 - Unsupported constructs become preserved raw blocks.
 **Tests**:
 - Unit + property-style round-trip tests.
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 3: Create composer AST model and round-trip helpers
 
@@ -226,7 +227,7 @@ git commit -m "feat(watchlists): preserve unsupported jinja in raw code blocks"
 - No scheduled path integration.
 **Tests**:
 - New endpoint tests for happy/failure paths and mode handling.
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 5: Add section composition endpoint
 
@@ -323,7 +324,7 @@ git commit -m "feat(watchlists): add manual flow-check endpoint with dual modes"
 - Code and preview modes remain functional.
 **Tests**:
 - New component tests for block CRUD, mode switching, and manual orchestration actions.
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 7: Introduce composer types/state and Visual mode scaffolding
 
@@ -507,7 +508,8 @@ git commit -m "feat(watchlists-ui): add final flow-check diff workflow"
 - Docs updated for manual-only orchestration semantics.
 **Tests**:
 - Pytest/Vitest targeted suites + Bandit command.
-**Status**: Not Started
+
+**Status**: Complete
 
 ### Task 11: Run verification suite and Bandit
 
@@ -588,4 +590,3 @@ git commit -m "docs(watchlists): document visual composer and manual flow-check 
 - Use `RawCodeBlock` fallback rather than dropping unsupported syntax.
 - Never enable scheduled orchestration in this plan.
 - If round-trip parser issues repeat 3 times, stop and apply `@systematic-debugging`.
-
