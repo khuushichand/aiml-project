@@ -18,6 +18,7 @@ export interface WorkspaceStorageQuotaEventDetail {
 
 export type WorkspaceStorageRecoveryAction =
   | "archived_workspace_removed"
+  | "banner_image_removed"
   | "chat_session_removed"
   | "artifact_removed"
   | "retry_success"

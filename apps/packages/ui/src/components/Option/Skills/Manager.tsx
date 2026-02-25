@@ -23,7 +23,8 @@ import {
   Upload as UploadIcon,
   Play,
   FileDown,
-  FileText
+  FileText,
+  Database
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
@@ -109,6 +110,27 @@ export const SkillsManager: React.FC = () => {
     onError: (err: any) => {
       notification.error({
         message: t("option:skills.importError", { defaultValue: "Failed to import skill" }),
+        description: err?.message
+      })
+    }
+  })
+
+  const seedBuiltinsMutation = useMutation({
+    mutationFn: (overwrite: boolean = false) => tldwClient.seedSkills({ overwrite }),
+    onSuccess: (result: { count?: number } | undefined) => {
+      queryClient.invalidateQueries({ queryKey: ["skills"] })
+      const count = Number(result?.count ?? 0)
+      notification.success({
+        message: t("option:skills.seedSuccess", { defaultValue: "Built-in skills seeded" }),
+        description: t("option:skills.seedSuccessDesc", {
+          defaultValue: `${count} built-in skill(s) seeded.`,
+          count
+        })
+      })
+    },
+    onError: (err: any) => {
+      notification.error({
+        message: t("option:skills.seedError", { defaultValue: "Failed to seed built-in skills" }),
         description: err?.message
       })
     }
@@ -319,6 +341,23 @@ export const SkillsManager: React.FC = () => {
     }
   ]
 
+  const seedMenuItems = [
+    {
+      key: "seed-missing-only",
+      label: t("option:skills.seedBuiltinsMissingOnly", {
+        defaultValue: "Seed Missing Only"
+      }),
+      onClick: () => seedBuiltinsMutation.mutate(false)
+    },
+    {
+      key: "seed-overwrite-existing",
+      label: t("option:skills.seedBuiltinsOverwrite", {
+        defaultValue: "Seed and Overwrite Existing"
+      }),
+      onClick: () => seedBuiltinsMutation.mutate(true)
+    }
+  ]
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
@@ -335,6 +374,14 @@ export const SkillsManager: React.FC = () => {
           <Dropdown menu={{ items: importMenuItems }} trigger={["click"]}>
             <Button icon={<UploadIcon size={14} />}>
               {t("option:skills.import", { defaultValue: "Import" })}
+            </Button>
+          </Dropdown>
+          <Dropdown menu={{ items: seedMenuItems }} trigger={["click"]}>
+            <Button
+              icon={<Database size={14} />}
+              loading={seedBuiltinsMutation.isPending}
+            >
+              {t("option:skills.seedBuiltins", { defaultValue: "Seed Built-ins" })}
             </Button>
           </Dropdown>
           <Button type="primary" icon={<Plus size={14} />} onClick={handleNew}>

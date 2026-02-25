@@ -84,6 +84,19 @@ together_image_default_model = black-forest-labs/FLUX.1-schnell-Free
 together_image_allowed_extra_params = []
 together_image_timeout_seconds = 120
 
+# Alibaba Model Studio image backend settings
+# Optional explicit endpoint override (leave blank to use region preset)
+modelstudio_image_base_url =
+modelstudio_image_api_key =
+modelstudio_image_default_model = qwen-image
+# Region preset for adapter routing (sg, cn, us)
+modelstudio_image_region = sg
+# Mode can be sync, async, or auto
+modelstudio_image_mode = auto
+modelstudio_image_poll_interval_seconds = 2
+modelstudio_image_timeout_seconds = 180
+modelstudio_image_allowed_extra_params = []
+
 [ACP]
 # Command used to launch the ACP runner (tldw-agent-acp).
 runner_command = go
@@ -867,6 +880,7 @@ qwen_max_tokens = 4096
 qwen_api_timeout = 90
 qwen_api_retry = 3
 qwen_api_retry_delay = 1
+qwen_api_region = sg
 qwen_api_base_url = https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 google_model = gemini-2.5-flash
 google_streaming = True
@@ -1081,12 +1095,17 @@ log_output_file =
 [STT-Settings]
 default_transcriber = parakeet
 default_stt_provider = parakeet
+default_batch_transcription_model = parakeet-onnx
+default_streaming_transcription_model = parakeet-onnx
 nemo_model_variant = mlx
 nemo_device = cpu
 nemo_cache_dir = ./models/nemo
 nemo_chunk_duration = 120
 nemo_overlap_duration = 15
 streaming_fallback_to_whisper = false
+parakeet_onnx_model_id = istupakov/parakeet-tdt-0.6b-v3-onnx
+# Pin a specific snapshot/commit for reproducibility; leave empty for repo default branch.
+parakeet_onnx_revision =
 # Optional: faster-whisper compute type override. When unset or set to "auto",
 # the server uses float16 on CUDA and int8 on CPU. Examples of explicit
 # overrides: float16, int8, int8_float16.

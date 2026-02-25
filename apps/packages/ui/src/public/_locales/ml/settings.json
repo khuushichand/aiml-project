@@ -3282,7 +3282,7 @@
     "message": "SillyTavern-നോട് അനുയോജ്യം"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "ഒന്നാം വരി\\n||ഇൻലൈൻ സ്പോയിലർ|| ഉൾപ്പെട്ട രണ്ടാം വരി\\n\\n[spoiler]ബ്ലോക്ക് സ്പോയിലർ ഉള്ളടക്കം[/spoiler]"
+    "message": "ഒന്നാം വരി\n||ഇൻലൈൻ സ്പോയിലർ|| ഉൾപ്പെട്ട രണ്ടാം വരി\n\n[spoiler]ബ്ലോക്ക് സ്പോയിലർ ഉള്ളടക്കം[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "റിച്ച് ടെക്സ്റ്റ് ഘടകങ്ങളുടെ സ്റ്റൈലുകൾ"

@@ -1494,7 +1494,7 @@
     "message": "Server offline"
   },
   "mediaPage_resultsHint": {
-    "message": "Search/filter here, then click to stack. Shift+click for range."
+    "message": "Click to stack, Shift+click for range"
   },
   "mediaPage_paginationHint": {
     "message": "Use pagination or open all visible items"
@@ -1518,10 +1518,10 @@
     "message": "{{k}}k chars"
   },
   "mediaPage_unstack": {
-    "message": "Remove from selection"
+    "message": "Unstack"
   },
   "mediaPage_unstackTooltip": {
-    "message": "Remove this item from selection"
+    "message": "Remove from current comparison view"
   },
   "mediaPage_analysis": {
     "message": "Analysis"
@@ -1575,7 +1575,7 @@
     "message": "Collapse others on expand"
   },
   "mediaPage_openAll": {
-    "message": "Add visible to selection"
+    "message": "Review all on page"
   },
   "mediaPage_replaceWithVisible": {
     "message": "Replace selection with visible"
@@ -1809,7 +1809,7 @@
     "message": "Press Escape again to clear {{count}} items"
   },
   "mediaPage_autoViewModeSwitched": {
-    "message": "Auto-switched to {{mode}} view ({{count}} items)"
+    "message": "Switched to {{mode}} view ({{count}} items)"
   },
   "mediaPage_showGuide": {
     "message": "Show getting started guide"

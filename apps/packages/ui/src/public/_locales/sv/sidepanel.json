@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "Du har osparade ändringar i tillståndsdokumentet. Vill du kassera lokala utkast?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "Du har osparade ändringar i tillståndsdokumentet. Vill du ansluta och kassera lokala utkast?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "Du har osparade ändringar i tillståndsdokumentet. Vill du koppla från och kassera lokala utkast?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "Du har osparade ändringar i tillståndsdokumentet. Vill du läsa in tillstånd och kassera lokala utkast?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "Du har osparade ändringar i tillståndsdokumentet. Vill du byta persona och kassera lokala utkast?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "Du har osparade ändringar i tillståndsdokumentet. Vill du byta session och kassera lokala utkast?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "Du har osparade ändringar i tillståndsdokumentet. Vill du återställa den här tillståndsversionen och kassera lokala utkast?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "Du har osparade ändringar i tillståndsdokumentet. Vill du lämna den här sidan och kassera lokala utkast?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "Du har osparade ändringar i tillståndsdokumentet. Vill du lämna den här sidan utan att spara?"
   }
 }

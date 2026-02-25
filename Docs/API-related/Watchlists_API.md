@@ -75,6 +75,10 @@ Templates:
 - `GET /templates`
 - `GET /templates/{template_name}`
 - `POST /templates` (create or update)
+- `POST /templates/validate` (syntax check only)
+- `POST /templates/preview` (render against run context)
+- `POST /templates/compose/section` (manual inline section generation)
+- `POST /templates/compose/flow-check` (manual final flow-check diff)
 - `DELETE /templates/{template_name}`
 
 ## Minimal payloads
@@ -139,6 +143,50 @@ Preview candidates without ingestion:
 {}
 ```
 
+Create/update a template with visual composer metadata (dual storage):
+```json
+{
+  "name": "newsletter_template",
+  "format": "md",
+  "content": "# {{ title }}\n{% for item in items %}\n- {{ item.title }}\n{% endfor %}",
+  "overwrite": true,
+  "composer_ast": {
+    "schema_version": "1.0.0",
+    "nodes": [
+      {"id": "header-1", "type": "HeaderBlock", "source": "# {{ title }}"},
+      {"id": "loop-1", "type": "ItemLoopBlock", "source": "{% for item in items %}\n- {{ item.title }}\n{% endfor %}"}
+    ]
+  },
+  "composer_schema_version": "1.0.0",
+  "composer_sync_hash": "abc123",
+  "composer_sync_status": "in_sync"
+}
+```
+
+Manually generate a section draft (preview only):
+```json
+{
+  "run_id": 42,
+  "block_id": "intro-1",
+  "prompt": "Write a concise introduction in 2 sentences.",
+  "input_scope": "all_items",
+  "style": "neutral",
+  "length_target": "short"
+}
+```
+
+Run final flow-check (manual suggest/auto modes):
+```json
+{
+  "run_id": 42,
+  "mode": "suggest_only",
+  "sections": [
+    {"id": "intro-1", "content": "Intro paragraph"},
+    {"id": "body-1", "content": "Body paragraph"}
+  ]
+}
+```
+
 ## Filters (job-level)
 
 Payload shape:
@@ -175,6 +223,14 @@ Decision summary:
 Notes:
 - Exclude rules still win when they match.
 - Invalid regex filters fail safely (no crash); include-only mode can still filter all items when no include matches.
+
+## Template Composer Notes
+
+- Runtime rendering still uses `content` as source of truth.
+- Visual composer metadata is persisted in parallel (`composer_ast`, schema, sync status/hash).
+- Unsupported Jinja syntax is preserved as `RawCodeBlock` in visual mode; it is never dropped.
+- Inline section generation and final flow-check are manual-only authoring/preview helpers in v1.
+- `compose/flow-check` does not schedule jobs or auto-run future outputs; it only returns suggestions/patches.
 
 ## OPML import/export examples
 

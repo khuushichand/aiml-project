@@ -34,6 +34,7 @@ import {
 import { FEATURE_FLAGS, useFeatureFlag } from "@/hooks/useFeatureFlags"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import { WorkspaceHeader } from "./WorkspaceHeader"
+import { WorkspaceBanner } from "./WorkspaceBanner"
 import { SourcesPane } from "./SourcesPane"
 import { ChatPane } from "./ChatPane"
 import { StudioPane } from "./StudioPane"
@@ -69,6 +70,7 @@ const WORKSPACE_REFRESH_LOOP_WINDOW_MS = 45_000
 const WORKSPACE_REFRESH_LOOP_THRESHOLD = 3
 const WORKSPACE_CONFLICT_TRACKED_FIELDS = [
   "workspaceName",
+  "workspaceBanner",
   "sources",
   "selectedSourceIds",
   "generatedArtifacts",
@@ -78,6 +80,7 @@ const WORKSPACE_CONFLICT_TRACKED_FIELDS = [
 ] as const
 const WORKSPACE_CONFLICT_FIELD_LABELS: Record<string, string> = {
   workspaceName: "workspace name",
+  workspaceBanner: "workspace banner",
   sources: "sources",
   selectedSourceIds: "source selection",
   generatedArtifacts: "generated outputs",
@@ -404,6 +407,8 @@ const parsePersistedWorkspaceState = (
       ...baseState,
       workspaceName:
         baseState.workspaceName ?? activeSnapshot.workspaceName ?? null,
+      workspaceBanner:
+        baseState.workspaceBanner ?? activeSnapshot.workspaceBanner ?? null,
       sources: baseState.sources ?? activeSnapshot.sources ?? null,
       selectedSourceIds:
         baseState.selectedSourceIds ?? activeSnapshot.selectedSourceIds ?? null,
@@ -644,6 +649,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
   // Workspace store
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
+  const workspaceName = useWorkspaceStore((s) => s.workspaceName) || ""
+  const workspaceBanner = useWorkspaceStore((s) => s.workspaceBanner) || {
+    title: "",
+    subtitle: "",
+    image: null
+  }
   const initializeWorkspace = useWorkspaceStore((s) => s.initializeWorkspace)
   const createNewWorkspace = useWorkspaceStore((s) => s.createNewWorkspace)
   const addSources = useWorkspaceStore((s) => s.addSources)
@@ -1978,6 +1989,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
             statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
 
+          <WorkspaceBanner
+            banner={workspaceBanner}
+            workspaceName={workspaceName}
+            isMobile
+          />
+
           <div
             data-testid="workspace-session-status-strip"
             className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-[linear-gradient(120deg,var(--surface)_0%,var(--surface-2)_100%)] px-3 py-2 shadow-card"
@@ -2035,6 +2052,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
             storageAccountQuotaBytes={workspaceStorageUsage.accountQuotaBytes ?? undefined}
             provenanceEnabled={provenanceEnabled}
             statusGuardrailsEnabled={statusGuardrailsEnabled}
+          />
+
+          <WorkspaceBanner
+            banner={workspaceBanner}
+            workspaceName={workspaceName}
+            isMobile={false}
           />
 
           <div

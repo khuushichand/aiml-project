@@ -278,6 +278,77 @@ def _stream_model_label(config: UnifiedStreamingConfig) -> str:
     return f"stream:{model}:{variant}"
 
 
+def _resolve_default_streaming_model() -> tuple[str, str, str]:
+    """
+    Resolve server-side streaming defaults from STT config.
+
+    Returns:
+        tuple[str, str, str]: (model, variant, whisper_model_size)
+    """
+    default_model_id = "parakeet-onnx"
+    default_variant = "standard"
+    default_whisper_model_size = "distil-large-v3"
+
+    try:
+        cfg = load_comprehensive_config()
+        if cfg is not None and cfg.has_section("STT-Settings"):
+            configured_default = cfg.get(
+                "STT-Settings",
+                "default_streaming_transcription_model",
+                fallback=default_model_id,
+            )
+            default_model_id = str(configured_default).strip() or default_model_id
+            configured_variant = cfg.get(
+                "STT-Settings",
+                "nemo_model_variant",
+                fallback=default_variant,
+            )
+            default_variant = str(configured_variant).strip().lower() or default_variant
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Could not read streaming STT defaults from config: {exc}")
+
+    model = "parakeet"
+    variant = default_variant
+    whisper_model_size = default_whisper_model_size
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            get_stt_provider_registry,
+        )
+
+        registry = get_stt_provider_registry()
+        provider, resolved_model_id, resolved_variant = registry.resolve_provider_for_model(default_model_id)
+        provider_name = str(provider or "").strip().lower()
+
+        if provider_name in {"faster-whisper", "whisper"}:
+            model = "whisper"
+            candidate_model = str(resolved_model_id or "").strip()
+            if candidate_model:
+                whisper_model_size = candidate_model
+        elif provider_name in {"parakeet", "canary", "qwen3-asr"}:
+            model = provider_name
+        else:
+            logger.warning(
+                "Unsupported streaming default model '{}'; falling back to parakeet-onnx".format(default_model_id)
+            )
+            model = "parakeet"
+            resolved_variant = "onnx"
+
+        if model == "parakeet":
+            candidate_variant = str(resolved_variant or variant or "standard").strip().lower()
+            if candidate_variant not in {"standard", "onnx", "mlx", "cuda"}:
+                candidate_variant = "standard"
+            variant = candidate_variant
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Could not resolve configured streaming model '{}'; falling back to parakeet-onnx. Error: {}"
+            .format(default_model_id, exc)
+        )
+        model = "parakeet"
+        variant = "onnx"
+
+    return model, variant, whisper_model_size
+
+
 def _compose_transcript_snapshot(full_text: str, latest_text: str) -> str:
     full = str(full_text or "").strip()
     latest = str(latest_text or "").strip()
@@ -602,39 +673,9 @@ async def websocket_transcribe(
         return
 
     try:
-        # Default configuration - prefer server config for variant/model
-        # This ensures alignment with configured STT defaults even if the
-        # client configuration message arrives late.
-        default_model = "parakeet"
-        default_variant = "standard"
-        try:
-            cfg = load_comprehensive_config()
-            if cfg.has_section("STT-Settings"):
-                # Nemo model variant (standard|onnx|mlx)
-                default_variant = cfg.get("STT-Settings", "nemo_model_variant", fallback="standard").strip().lower()
-        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
-            logger.warning(f"Could not read STT-Settings from config: {e}")
-
-        # If Nemo toolkit is unavailable in this environment, prefer Whisper
-        # as the initial streaming model so we avoid repeated initialization
-        # failures before falling back.
-        nemo_ok = False
-        _is_nemo_available = None
-        try:
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (  # type: ignore
-                is_nemo_available as _is_nemo_available,
-            )
-        except ImportError as exc:
-            logger.debug(f"Nemo availability probe import failed; defaulting to Whisper: {exc}")
-        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-            _is_nemo_available = None
-        if callable(_is_nemo_available):
-            try:
-                nemo_ok = bool(_is_nemo_available())
-            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-                nemo_ok = False
-        if not nemo_ok:
-            default_model = "whisper"
+        # Default configuration prefers explicit streaming model selection from
+        # [STT-Settings].default_streaming_transcription_model.
+        default_model, default_variant, default_whisper_model_size = _resolve_default_streaming_model()
 
         config = UnifiedStreamingConfig(
             model=default_model,
@@ -645,6 +686,7 @@ async def websocket_transcribe(
             enable_partial=True,
             partial_interval=0.5,
             language="en",  # Default language for Canary
+            whisper_model_size=default_whisper_model_size,
         )
 
         logger.info(

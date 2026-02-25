@@ -1,7 +1,7 @@
 import type { WatchlistTemplateCreate } from "@/types/watchlists"
 
 export type TemplateAuthoringMode = "basic" | "advanced"
-export type TemplateEditorActiveTab = "editor" | "preview" | "docs"
+export type TemplateEditorActiveTab = "visual" | "editor" | "preview" | "docs"
 
 interface TemplateAdvancedContextInput {
   isEditing: boolean

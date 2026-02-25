@@ -5664,7 +5664,7 @@
     "message": "SillyTavern-compatible"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "Line one\\nLine two with ||inline spoiler||\\n\\n[spoiler]Block spoiler content[/spoiler]"
+    "message": "Line one\nLine two with ||inline spoiler||\n\n[spoiler]Block spoiler content[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "Rich text element styles"

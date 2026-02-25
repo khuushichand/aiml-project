@@ -48,3 +48,40 @@ Operational Tips
 - Permissions: grant workflows.runs.read to users who need visibility into runs beyond ownership; workflows.runs.control for operators.
 - Events polling: clients should poll with since=last_seq and a reasonable limit (e.g., 200-500).
 - Webhooks: set allowlist/denylist and keep DLQ enabled to ensure reliable delivery; monitor attempts and errors via DB queries.
+
+ACP Stage Adapter (`acp_stage`)
+- Purpose: execute a named ACP-backed stage (`req`, `plan`, `impl`, `test`, etc.) inside workflow runs, using ACP session lifecycle through the existing runner client.
+- Scope: current templates and defaults are domain-only. Sandbox/workspace instance orchestration is a planned follow-on integration with ACP + sandbox modules.
+
+Config Contract (selected fields)
+- `stage` (required): logical stage name.
+- `prompt_template` or `prompt` (required by schema `anyOf`): ACP prompt payload.
+- Session fields: `session_id`, `session_context_key` (default `acp_session_id`), `create_session` (default `true`), `cwd`, `agent_type`.
+- Workspace/persona fields: `workspace_id`, `workspace_group_id`, `persona_id`, `scope_snapshot_id`.
+- Runtime controls: `timeout_seconds`, `review_counter_key`, `max_review_loops`, `fail_on_error`.
+
+Normalized Output Contract
+- Stable keys returned by `acp_stage`:
+  - `status`: `ok`, `blocked`, or `error`
+  - `stage`
+  - `session_id`
+  - `workspace_id`
+  - `workspace_group_id`
+  - `response`
+  - `usage`
+  - `governance`
+- Optional `text` is populated when content extraction succeeds from ACP response payloads.
+
+Error/Block Semantics
+- Governance denial: `status=blocked`, `error_type=acp_governance_blocked`
+- Session setup failure: `status=error`, `error_type=acp_session_error`
+- Prompt payload/dispatch failure: `status=error`, `error_type=acp_prompt_error`
+- Timeout: `status=error`, `error_type=acp_timeout`
+- Review loop guard hit: `status=blocked`, `error_type=review_loop_exceeded`
+- If `fail_on_error=true`, blocked/error outcomes raise `AdapterError` to hard-fail the workflow step.
+
+Bundled ACP Pipeline Templates
+- `pipeline_l1_acp`: `req -> impl -> done`
+- `pipeline_l2_acp`: `req -> plan -> impl -> impl_review -> done`
+- `pipeline_l3_acp`: `req -> plan -> plan_review -> impl -> impl_review -> test -> done`
+- All templates are tagged with `acp`, `pipeline`, and `domain`; L2/L3 include `wait_for_approval` checkpoints for human review.
