@@ -20,6 +20,9 @@ from tldw_Server_API.app.core.Workflows.adapters.integration.email import (
 from tldw_Server_API.app.core.Workflows.adapters.integration.github import (
     run_github_create_issue_adapter,
 )
+from tldw_Server_API.app.core.Workflows.adapters.integration.acp import (
+    run_acp_stage_adapter,
+)
 from tldw_Server_API.app.core.Workflows.adapters.integration.mcp import (
     run_mcp_tool_adapter,
 )
@@ -41,6 +44,7 @@ from tldw_Server_API.app.core.Workflows.adapters.integration.webhook import (
 )
 
 __all__ = [
+    "run_acp_stage_adapter",
     "run_webhook_adapter",
     "run_notify_adapter",
     "run_mcp_tool_adapter",
