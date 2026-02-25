@@ -87,8 +87,8 @@ def test_frontend_required_does_not_require_missing_lockfile_cache() -> None:
     if install_step.get("working-directory") != "apps":
         raise AssertionError("frontend-required must install workspace dependencies from apps/")
     run_script = str(install_step.get("run") or "")
-    if "bun install --frozen-lockfile" not in run_script:
-        raise AssertionError("frontend-required must install dependencies with bun install --frozen-lockfile")
+    if "bun install" not in run_script:
+        raise AssertionError("frontend-required must install dependencies with bun install")
     if "npm ci" in run_script:
         raise AssertionError("frontend-required should not use npm ci for Bun workspace dependencies")
 

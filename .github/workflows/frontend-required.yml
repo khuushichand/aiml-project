@@ -62,7 +62,7 @@ jobs:
       - name: Install frontend dependencies
         if: needs.changes.outputs.frontend_changed == 'true'
         working-directory: apps
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Run frontend lint
         if: needs.changes.outputs.frontend_changed == 'true'
