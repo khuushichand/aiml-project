@@ -92,6 +92,13 @@ def test_frontend_required_does_not_require_missing_lockfile_cache() -> None:
     if "npm ci" in run_script:
         raise AssertionError("frontend-required should not use npm ci for Bun workspace dependencies")
 
+    test_step = _get_step(steps, "Run frontend unit tests")
+    test_run_script = str(test_step.get("run") or "")
+    if "bunx vitest run --changed=" not in test_run_script:
+        raise AssertionError("frontend-required unit tests must use changed-only vitest execution in PRs")
+    if "bun run test:run" not in test_run_script:
+        raise AssertionError("frontend-required must keep full-suite fallback when base SHA is unavailable")
+
 
 def test_e2e_required_lane_exists_and_is_conditional() -> None:
     workflow = _load(".github/workflows/e2e-required.yml")
