@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter, deque
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 _HYPHEN_RE = re.compile(r"[\u2010\u2011\u2012\u2013\u2014\u2015\-]+")
 _SPACE_RE = re.compile(r"\s+")
@@ -72,6 +74,30 @@ def _is_non_spaced_script_char(ch: str) -> bool:
     return bool(ch and _NON_SPACED_SCRIPT_RE.match(ch))
 
 
+@lru_cache(maxsize=4096)
+def _script_group(ch: str) -> str:
+    if not ch:
+        return "unknown"
+
+    if ord(ch) < 128:
+        return "latin"
+
+    name = unicodedata.name(ch, "")
+    if name.startswith("LATIN"):
+        return "latin"
+    if name.startswith("CYRILLIC"):
+        return "cyrillic"
+    if name.startswith("GREEK"):
+        return "greek"
+    if name.startswith("ARABIC"):
+        return "arabic"
+    if name.startswith("HEBREW"):
+        return "hebrew"
+    if name.startswith("DEVANAGARI"):
+        return "devanagari"
+    return "unknown"
+
+
 def _extract_tokens_with_offsets(
     text: str,
     *,
@@ -84,9 +110,10 @@ def _extract_tokens_with_offsets(
 
     current_chars: list[str] = []
     current_start = 0
+    current_script: str | None = None
 
     def _flush(end_idx: int) -> None:
-        nonlocal current_chars, current_start
+        nonlocal current_chars, current_start, current_script
         if not current_chars:
             return
         token_text = "".join(current_chars)
@@ -94,6 +121,7 @@ def _extract_tokens_with_offsets(
         if token:
             tokens.append((token, current_start, end_idx))
         current_chars = []
+        current_script = None
 
     for idx, ch in enumerate(working_text):
         if not _is_word_char(ch):
@@ -107,8 +135,20 @@ def _extract_tokens_with_offsets(
                 tokens.append((token, idx, idx + 1))
             continue
 
+        ch_script = _script_group(ch)
+        if ch_script == "unknown":
+            _flush(idx)
+            token = ch if normalize_input else _normalize_for_tokens(ch)
+            if token:
+                tokens.append((token, idx, idx + 1))
+            continue
+
+        if current_chars and current_script != ch_script:
+            _flush(idx)
+
         if not current_chars:
             current_start = idx
+            current_script = ch_script
         current_chars.append(ch)
 
     _flush(len(working_text))

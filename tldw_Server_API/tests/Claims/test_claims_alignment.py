@@ -104,3 +104,11 @@ def test_align_claim_fuzzy_handles_large_intervening_token_window():
     span = align_claim_span(text, "alpha beta", mode="fuzzy", threshold=0.75)
     assert span is not None
     assert text[span[0] : span[1]] == "alpha one two three beta"
+
+
+@pytest.mark.unit
+def test_align_claim_fuzzy_handles_mixed_script_token_boundaries():
+    text = "AcmeБета launched today."
+    span = align_claim_span(text, "Acme Бета launched", mode="fuzzy", threshold=0.75)
+    assert span is not None
+    assert text[span[0] : span[1]] == "AcmeБета launched"

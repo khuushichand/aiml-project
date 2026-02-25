@@ -114,3 +114,18 @@ def test_corrected_span_rejects_character_level_near_match_without_token_overlap
         assert span == (None, None)
     finally:
         db.close_connection()
+
+
+def test_corrected_span_handles_mixed_script_token_boundaries(monkeypatch, tmp_path):
+    db, media_id = _seed_alignment_db_with_content(tmp_path, "AcmeБета launched today.")
+    try:
+        monkeypatch.setitem(settings, "CLAIMS_ALIGNMENT_MODE", "fuzzy")
+        monkeypatch.setitem(settings, "CLAIMS_ALIGNMENT_THRESHOLD", 0.75)
+        span = claims_service._resolve_corrected_claim_span(
+            target_db=db,
+            claim_row={"media_id": media_id, "chunk_index": 0},
+            corrected_text="Acme Бета launched",
+        )
+        assert span == (10, 27)
+    finally:
+        db.close_connection()
