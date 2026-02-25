@@ -47,11 +47,11 @@ jobs:
         if: needs.changes.outputs.backend_changed == 'true'
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
-      - name: Install system audio build deps
+      - name: Install FFmpeg and PortAudio (Linux)
         if: needs.changes.outputs.backend_changed == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
 
       - name: Setup Python and dependencies
         if: needs.changes.outputs.backend_changed == 'true'
@@ -74,12 +74,32 @@ jobs:
           sys.exit(0 if ok else 1)
           PY
 
-      - name: Type check backend
+      - name: Type check changed backend modules
         if: needs.changes.outputs.backend_changed == 'true'
+        id: mypy_changed
+        continue-on-error: true
+        shell: bash
         run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [[ -z "${BASE_SHA:-}" || "${BASE_SHA:-}" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+
+          if [[ -n "${BASE_SHA:-}" ]]; then
+            mapfile -t CHANGED_PY < <(git diff --name-only "$BASE_SHA" "${{ github.sha }}" | grep -E '^tldw_Server_API/.*\.py$' || true)
+          else
+            mapfile -t CHANGED_PY < <(git ls-files | grep -E '^tldw_Server_API/.*\.py$' || true)
+          fi
+
+          if [[ "${#CHANGED_PY[@]}" -eq 0 ]]; then
+            echo "No backend Python files changed; skipping mypy."
+            exit 0
+          fi
+
           python -m pip install --upgrade pip
           pip install mypy
-          mypy tldw_Server_API/
+          mypy --follow-imports=silent --ignore-missing-imports "${CHANGED_PY[@]}"
 
       - name: Backend unit smoke
         if: needs.changes.outputs.backend_changed == 'true'

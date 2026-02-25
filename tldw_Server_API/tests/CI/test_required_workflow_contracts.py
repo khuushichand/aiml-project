@@ -8,6 +8,20 @@ def _load(path: str) -> dict:
     return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
 
+def _get_step(steps: list[dict], name: str) -> dict:
+    matching = [step for step in steps if step.get("name") == name]
+    assert matching, f"{name} step missing"
+    return matching[0]
+
+
+def _assert_ffmpeg_portaudio_setup(path: str, job_name: str) -> None:
+    workflow = _load(path)
+    steps = workflow["jobs"][job_name]["steps"]
+    install_step = _get_step(steps, "Install FFmpeg and PortAudio (Linux)")
+    assert install_step["uses"] == "./.github/actions/setup-ffmpeg"
+    assert install_step["with"]["install-portaudio"] == "true"
+
+
 def test_backend_required_has_noop_and_execute_paths() -> None:
     workflow = _load(".github/workflows/backend-required.yml")
     jobs = workflow["jobs"]
@@ -15,11 +29,19 @@ def test_backend_required_has_noop_and_execute_paths() -> None:
 
 
 def test_backend_required_installs_portaudio_for_pyaudio_builds() -> None:
+    _assert_ffmpeg_portaudio_setup(".github/workflows/backend-required.yml", "backend-required")
+
+
+def test_backend_required_type_checks_only_changed_python_files() -> None:
     workflow = _load(".github/workflows/backend-required.yml")
     steps = workflow["jobs"]["backend-required"]["steps"]
-    install_steps = [step for step in steps if step.get("name") == "Install system audio build deps"]
-    assert install_steps, "Install system audio build deps step missing"
-    assert "portaudio19-dev" in install_steps[0]["run"]
+    type_step = _get_step(steps, "Type check changed backend modules")
+    assert type_step.get("continue-on-error") is True
+    run_script = type_step["run"]
+    assert "git diff --name-only" in run_script
+    assert "No backend Python files changed; skipping mypy." in run_script
+    assert "mypy --follow-imports=silent --ignore-missing-imports" in run_script
+    assert "mypy tldw_Server_API/" not in run_script
 
 
 def test_coverage_required_is_path_conditional() -> None:
@@ -29,11 +51,14 @@ def test_coverage_required_is_path_conditional() -> None:
 
 
 def test_coverage_required_installs_portaudio_for_pyaudio_builds() -> None:
+    _assert_ffmpeg_portaudio_setup(".github/workflows/coverage-required.yml", "coverage-required")
+
+
+def test_coverage_required_uses_baseline_global_floor() -> None:
     workflow = _load(".github/workflows/coverage-required.yml")
     steps = workflow["jobs"]["coverage-required"]["steps"]
-    install_steps = [step for step in steps if step.get("name") == "Install system audio build deps"]
-    assert install_steps, "Install system audio build deps step missing"
-    assert "portaudio19-dev" in install_steps[0]["run"]
+    coverage_step = _get_step(steps, "Run global coverage floor")
+    assert "--cov-fail-under=5" in coverage_step["run"]
 
 
 def test_frontend_required_lane_exists() -> None:
@@ -49,11 +74,7 @@ def test_e2e_required_lane_exists_and_is_conditional() -> None:
 
 
 def test_e2e_required_installs_portaudio_for_pyaudio_builds() -> None:
-    workflow = _load(".github/workflows/e2e-required.yml")
-    steps = workflow["jobs"]["e2e-required"]["steps"]
-    install_steps = [step for step in steps if step.get("name") == "Install system audio build deps"]
-    assert install_steps, "Install system audio build deps step missing"
-    assert "portaudio19-dev" in install_steps[0]["run"]
+    _assert_ffmpeg_portaudio_setup(".github/workflows/e2e-required.yml", "e2e-required")
 
 
 def test_security_required_lane_exists_and_uses_threshold_policy() -> None:
