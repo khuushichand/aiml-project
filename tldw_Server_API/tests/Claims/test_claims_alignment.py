@@ -115,6 +115,19 @@ def test_align_claim_fuzzy_prefers_tight_partial_overlap_span():
 
 
 @pytest.mark.unit
+def test_align_claim_fuzzy_splits_letter_digit_boundaries():
+    text = "Findings consistent with degenerative disc disease at L5-S1."
+    span = align_claim_span(
+        text,
+        "degenerative disc disease at L 5 S 1",
+        mode="fuzzy",
+        threshold=0.75,
+    )
+    assert span is not None
+    assert text[span[0] : span[1]] == "degenerative disc disease at L5-S1"
+
+
+@pytest.mark.unit
 def test_align_claim_fuzzy_handles_mixed_script_token_boundaries():
     text = "AcmeБета launched today."
     span = align_claim_span(text, "Acme Бета launched", mode="fuzzy", threshold=0.75)

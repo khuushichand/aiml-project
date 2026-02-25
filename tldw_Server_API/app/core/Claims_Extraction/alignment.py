@@ -112,9 +112,10 @@ def _extract_tokens_with_offsets(
     current_chars: list[str] = []
     current_start = 0
     current_script: str | None = None
+    current_kind: str | None = None
 
     def _flush(end_idx: int) -> None:
-        nonlocal current_chars, current_start, current_script
+        nonlocal current_chars, current_start, current_script, current_kind
         if not current_chars:
             return
         token_text = "".join(current_chars)
@@ -123,10 +124,20 @@ def _extract_tokens_with_offsets(
             tokens.append((token, current_start, end_idx))
         current_chars = []
         current_script = None
+        current_kind = None
 
     for idx, ch in enumerate(working_text):
         if not _is_word_char(ch):
             _flush(idx)
+            continue
+
+        if ch.isdigit():
+            if current_chars and current_kind != "number":
+                _flush(idx)
+            if not current_chars:
+                current_start = idx
+                current_kind = "number"
+            current_chars.append(ch)
             continue
 
         if _is_non_spaced_script_char(ch):
@@ -144,12 +155,13 @@ def _extract_tokens_with_offsets(
                 tokens.append((token, idx, idx + 1))
             continue
 
-        if current_chars and current_script != ch_script:
+        if current_chars and (current_kind != "word" or current_script != ch_script):
             _flush(idx)
 
         if not current_chars:
             current_start = idx
             current_script = ch_script
+            current_kind = "word"
         current_chars.append(ch)
 
     _flush(len(working_text))
