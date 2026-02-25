@@ -38,12 +38,24 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     timeout-minutes: 40
+    services:
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       E2E_INPROCESS: "1"
       AUTH_MODE: single_user
       TEST_MODE: "1"
       SINGLE_USER_API_KEY: test-api-key-for-e2e-testing-12345
       SINGLE_USER_TEST_API_KEY: test-api-key-for-e2e-testing-12345
+      REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports[6379] }}/0
+      EMBEDDINGS_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports[6379] }}/0
       WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
     steps:
       - name: No-op pass (e2e unchanged)
