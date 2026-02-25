@@ -18,11 +18,12 @@ import {
   seedAuth,
   getCriticalIssues,
   classifySmokeIssues,
+  SMOKE_LOAD_TIMEOUT,
 } from './smoke.setup';
 import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from './page-inventory';
 
 // Test configuration
-const LOAD_TIMEOUT = 30_000; // 30s max for page load
+const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT;
 const ELEMENT_TIMEOUT = 15_000; // 15s max for element visibility
 const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === '1';
 const ALLOWLIST_LOG_LIMIT = Number(process.env.TLDW_SMOKE_ALLOWLIST_LOG_LIMIT || 10);

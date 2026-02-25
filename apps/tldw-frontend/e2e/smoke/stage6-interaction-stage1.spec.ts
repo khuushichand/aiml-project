@@ -1,6 +1,6 @@
-import { test, expect, seedAuth } from "./smoke.setup"
+import { test, expect, seedAuth, SMOKE_LOAD_TIMEOUT } from "./smoke.setup"
 
-const LOAD_TIMEOUT = 30_000
+const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT
 const UNRESOLVED_TEMPLATE_PATTERN = /\{\{[^{}\n]{1,120}\}\}/g
 
 test.describe("Stage 6 interaction stage 1 defect closures", () => {
