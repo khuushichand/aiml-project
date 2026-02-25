@@ -131,14 +131,9 @@ class QwenAdapter(ChatProvider):
         if isinstance(api_base, str) and api_base.strip():
             return api_base.strip().rstrip("/")
 
-        region = _QWEN_DEFAULT_REGION
-        cfg_region = qwen_cfg.get("region")
-        if isinstance(cfg_region, str) and cfg_region.strip():
-            region = cfg_region.strip().lower()
-
-        env_region = os.getenv("QWEN_REGION")
-        if isinstance(env_region, str) and env_region.strip():
-            region = env_region.strip().lower()
+        env_region = str(os.getenv("QWEN_REGION") or "").strip().lower()
+        cfg_region = str(qwen_cfg.get("region") or "").strip().lower()
+        region = env_region or cfg_region or _QWEN_DEFAULT_REGION
 
         return _QWEN_REGION_BASE_URLS.get(region, _QWEN_DEFAULT_BASE_URL).rstrip("/")
 
