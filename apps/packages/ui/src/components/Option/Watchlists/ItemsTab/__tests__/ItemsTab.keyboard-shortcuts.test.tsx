@@ -81,8 +81,8 @@ const itemsFixture = [
     tags: ["tech"],
     status: "ingested",
     reviewed: false,
-    created_at: "2026-02-18T08:00:00Z",
-    published_at: "2026-02-18T08:00:00Z"
+    created_at: "2026-02-18T08:20:00Z",
+    published_at: "2026-02-18T08:20:00Z"
   },
   {
     id: 102,
@@ -197,6 +197,54 @@ describe("ItemsTab keyboard shortcuts", () => {
     expect(useWatchlistsStore.getState().sourceFormOpen).toBe(true)
   })
 
+  it("ignores navigation shortcuts when focus is inside contenteditable regions", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    const editable = document.createElement("div")
+    editable.setAttribute("contenteditable", "true")
+    editable.textContent = "Draft note"
+    document.body.appendChild(editable)
+    editable.focus()
+
+    fireEvent.keyDown(editable, { key: "j" })
+    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
+
+    editable.remove()
+  })
+
+  it("announces reader selection changes in a screen-reader live region", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    const liveRegion = screen.getByTestId("watchlists-items-live-region")
+    expect(liveRegion).toHaveTextContent("")
+
+    fireEvent.keyDown(document, { key: "j" })
+    await waitFor(() => {
+      expect(liveRegion).toHaveTextContent("Selected Item Two from Tech Daily (Unread).")
+    })
+  })
+
+  it("provides row-level aria labels for list navigation context", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId("watchlists-item-row-101")).toHaveAttribute(
+      "aria-label",
+      "Item One. Unread. Source: Tech Daily."
+    )
+  })
+
   it("opens shortcut help panel from keyboard", async () => {
     render(<ItemsTab />)
 
@@ -262,5 +310,41 @@ describe("ItemsTab keyboard shortcuts", () => {
     await waitFor(() => {
       expect(shortcutsButton).toHaveFocus()
     })
+  })
+
+  it("blocks navigation shortcuts while help is open", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    const shortcutsButton = screen.getByTestId("watchlists-items-shortcuts-help")
+    fireEvent.click(shortcutsButton)
+    expect(await screen.findByTestId("watchlists-items-shortcuts-modal")).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: "j" })
+    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
+  })
+
+  it("keeps reader panes and triage controls available in narrow viewport", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 390
+    })
+    window.dispatchEvent(new Event("resize"))
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId("watchlists-items-left-pane")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-list-pane")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-reader-pane")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-shortcuts-help")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-mark-page")).toBeInTheDocument()
   })
 })

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Button,
   Drawer,
@@ -23,6 +23,10 @@ import {
   getOutputTemplateVersion,
   isAudioOutput
 } from "./outputMetadata"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 
 interface OutputPreviewDrawerProps {
   output: WatchlistOutput | null | undefined
@@ -43,6 +47,23 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<"rendered" | "source">("rendered")
   const outputIsAudio = useMemo(() => isAudioOutput(output), [output])
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
 
   const updateAudioObjectUrl = useCallback((nextUrl: string | null) => {
     if (audioObjectUrlRef.current && audioObjectUrlRef.current !== nextUrl) {

@@ -1,8 +1,50 @@
 import types
 import importlib
+import importlib.machinery
 import sys
 
 import pytest
+
+
+# Stub heavyweight audio deps before adapter imports to avoid local
+# ctranslate2/torch dynamic-load aborts in constrained test environments.
+if "torch" not in sys.modules:
+    _fake_torch = types.ModuleType("torch")
+    _fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
+    _fake_torch.Tensor = object
+    _fake_torch.nn = types.SimpleNamespace(Module=object)
+    _fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    sys.modules["torch"] = _fake_torch
+
+if "faster_whisper" not in sys.modules:
+    _fake_fw = types.ModuleType("faster_whisper")
+    _fake_fw.__spec__ = importlib.machinery.ModuleSpec("faster_whisper", loader=None)
+
+    class _StubWhisperModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    _fake_fw.WhisperModel = _StubWhisperModel
+    _fake_fw.BatchedInferencePipeline = _StubWhisperModel
+    sys.modules["faster_whisper"] = _fake_fw
+
+if "transformers" not in sys.modules:
+    _fake_tf = types.ModuleType("transformers")
+    _fake_tf.__spec__ = importlib.machinery.ModuleSpec("transformers", loader=None)
+
+    class _StubProcessor:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            return cls()
+
+    class _StubModel:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            return cls()
+
+    _fake_tf.AutoProcessor = _StubProcessor
+    _fake_tf.Qwen2AudioForConditionalGeneration = _StubModel
+    sys.modules["transformers"] = _fake_tf
 
 
 _EXCEPTIONS_MODULE = "tldw_Server_API.app.core.exceptions"
@@ -220,6 +262,23 @@ def test_resolve_default_transcription_model_uses_whisper_fallback(monkeypatch):
 
     default_model = spa.resolve_default_transcription_model("whisper-1")
     assert default_model == "whisper-1"
+
+
+@pytest.mark.unit
+def test_resolve_default_transcription_model_prefers_batch_default(monkeypatch):
+    spa = _import_module()
+
+    def fake_get_stt_config():
+        return {
+            "default_batch_transcription_model": "parakeet-onnx",
+            "default_transcriber": "faster-whisper",
+            "default_stt_provider": "faster-whisper",
+        }
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+
+    default_model = spa.resolve_default_transcription_model("whisper-1")
+    assert default_model == "parakeet-onnx"
 
 
 @pytest.mark.unit
@@ -457,9 +516,11 @@ def test_transcribe_batch_canary_normalizes_artifact(monkeypatch, tmp_path):
         return "canary transcript"
 
     fake_nemo_mod.transcribe_with_canary = fake_transcribe_with_canary
-    sys.modules[
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo"
-    ] = fake_nemo_mod
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo",
+        fake_nemo_mod,
+    )
 
     adapter = spa.CanaryAdapter()
     artifact = adapter.transcribe_batch(
@@ -602,9 +663,11 @@ def test_transcribe_batch_qwen3_asr_normalizes_artifact(monkeypatch, tmp_path):
         }
 
     fake_qwen3_mod.transcribe_with_qwen3_asr = fake_transcribe_with_qwen3_asr
-    sys.modules[
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR"
-    ] = fake_qwen3_mod
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR",
+        fake_qwen3_mod,
+    )
 
     def fake_get_stt_config():
         return {
@@ -676,9 +739,11 @@ def test_transcribe_batch_qwen3_asr_with_word_timestamps(monkeypatch, tmp_path):
         return artifact
 
     fake_qwen3_mod.transcribe_with_qwen3_asr = fake_transcribe_with_qwen3_asr
-    sys.modules[
-        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR"
-    ] = fake_qwen3_mod
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR",
+        fake_qwen3_mod,
+    )
 
     def fake_get_stt_config():
         return {

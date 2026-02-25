@@ -31,6 +31,7 @@
 - Legacy templates without composer fields continue to load/save.
 **Tests**:
 - New schema/endpoint tests for optional fields and backward compatibility.
+
 **Status**: Complete
 
 ### Task 1: Extend schema contracts for composer metadata
@@ -416,7 +417,7 @@ git commit -m "feat(watchlists-ui): implement visual code roundtrip with raw blo
 - User can run flow-check in suggest-only or auto-apply mode and review diffs.
 **Tests**:
 - Component tests for action states, diff acceptance/revert.
-**Status**: Complete
+**Status**: Not Started
 
 ### Task 9: Add manual section generation controls
 
@@ -507,6 +508,7 @@ git commit -m "feat(watchlists-ui): add final flow-check diff workflow"
 - Docs updated for manual-only orchestration semantics.
 **Tests**:
 - Pytest/Vitest targeted suites + Bandit command.
+
 **Status**: Complete
 
 ### Task 11: Run verification suite and Bandit

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getRunDetailsMock: vi.fn(),
   fetchScrapedItemsMock: vi.fn(),
   fetchWatchlistSourcesMock: vi.fn(),
+  fetchWatchlistOutputsMock: vi.fn(),
   updateScrapedItemMock: vi.fn(),
   exportRunTalliesCsvMock: vi.fn(),
   triggerWatchlistRunMock: vi.fn(),
@@ -18,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   updateRunInListMock: vi.fn(),
   addRunMock: vi.fn(),
   setActiveTabMock: vi.fn(),
+  setOutputsJobFilterMock: vi.fn(),
+  setOutputsRunFilterMock: vi.fn(),
   openJobFormMock: vi.fn(),
   translateMock: vi.fn(
     (key: string, defaultValue?: unknown, options?: Record<string, unknown>) => {
@@ -128,6 +131,8 @@ vi.mock("@/store/watchlists", () => ({
       updateRunInList: mocks.updateRunInListMock,
       addRun: mocks.addRunMock,
       setActiveTab: mocks.setActiveTabMock,
+      setOutputsJobFilter: mocks.setOutputsJobFilterMock,
+      setOutputsRunFilter: mocks.setOutputsRunFilterMock,
       openJobForm: mocks.openJobFormMock
     })
 }))
@@ -136,6 +141,7 @@ vi.mock("@/services/watchlists", () => ({
   cancelWatchlistRun: (...args: any[]) => mocks.cancelWatchlistRunMock(...args),
   exportRunTalliesCsv: (...args: any[]) => mocks.exportRunTalliesCsvMock(...args),
   fetchScrapedItems: (...args: any[]) => mocks.fetchScrapedItemsMock(...args),
+  fetchWatchlistOutputs: (...args: any[]) => mocks.fetchWatchlistOutputsMock(...args),
   fetchWatchlistSources: (...args: any[]) => mocks.fetchWatchlistSourcesMock(...args),
   getRunDetails: (...args: any[]) => mocks.getRunDetailsMock(...args),
   triggerWatchlistRun: (...args: any[]) => mocks.triggerWatchlistRunMock(...args),
@@ -216,6 +222,13 @@ describe("RunDetailDrawer source column", () => {
     )
     mocks.getRunDetailsMock.mockResolvedValue(baseRunDetails)
     mocks.fetchScrapedItemsMock.mockResolvedValue(baseItemsResponse)
+    mocks.fetchWatchlistOutputsMock.mockResolvedValue({
+      items: [{ id: 9001, run_id: 10, job_id: 1 }],
+      total: 1,
+      page: 1,
+      size: 1,
+      has_more: false
+    })
     mocks.updateScrapedItemMock.mockResolvedValue({ reviewed: true })
     mocks.exportRunTalliesCsvMock.mockResolvedValue("")
     mocks.triggerWatchlistRunMock.mockResolvedValue({
@@ -239,6 +252,8 @@ describe("RunDetailDrawer source column", () => {
 
     await waitFor(() => {
       expect(screen.getByText("TechCrunch")).toBeInTheDocument()
+      expect(screen.getByText("Included in briefing")).toBeInTheDocument()
+      expect(screen.getByText("Monitor #1 produced 1 report for this run.")).toBeInTheDocument()
     })
   })
 
@@ -430,5 +445,35 @@ describe("RunDetailDrawer source column", () => {
       expect(mocks.setActiveTabMock).toHaveBeenCalledWith("runs")
       expect(onClose).toHaveBeenCalled()
     })
+  })
+
+  it("opens run-scoped reports from linkage panel", async () => {
+    const onClose = vi.fn()
+    mocks.fetchWatchlistSourcesMock.mockResolvedValue({
+      items: [{ id: 5, name: "TechCrunch" }],
+      total: 1,
+      page: 1,
+      size: 1000,
+      has_more: false
+    })
+    mocks.fetchWatchlistOutputsMock.mockResolvedValue({
+      items: [{ id: 9010, run_id: 10, job_id: 1 }],
+      total: 3,
+      page: 1,
+      size: 1,
+      has_more: false
+    })
+
+    render(<RunDetailDrawer open runId={10} onClose={onClose} />)
+
+    await waitFor(() => {
+      expect(screen.getByText("Monitor #1 produced 3 reports for this run.")).toBeInTheDocument()
+    })
+
+    screen.getByText("Open reports for this run").click()
+    expect(mocks.setOutputsJobFilterMock).toHaveBeenCalledWith(1)
+    expect(mocks.setOutputsRunFilterMock).toHaveBeenCalledWith(10)
+    expect(mocks.setActiveTabMock).toHaveBeenCalledWith("outputs")
+    expect(onClose).toHaveBeenCalled()
   })
 })

@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
@@ -72,6 +73,10 @@ from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters as _eva
 from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _normalize_job_filters
 from tldw_Server_API.app.core.Watchlists.opml import generate_opml, parse_opml
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
+from tldw_Server_API.app.core.Watchlists.watchlists_telemetry_metrics import (
+    record_onboarding_ingest_result,
+    record_summary_request,
+)
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseError as _DatabaseError
 from tldw_Server_API.app.services.outputs_service import (
     _build_output_filename,
@@ -162,9 +167,14 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     TagsListResponse,
     WatchlistFilter,
     WatchlistFiltersPayload,
+    WatchlistOnboardingTelemetryIngestRequest,
+    WatchlistOnboardingTelemetryIngestResponse,
+    WatchlistOnboardingTelemetrySummaryResponse,
     WatchlistIaExperimentTelemetryIngestRequest,
     WatchlistIaExperimentTelemetryIngestResponse,
     WatchlistIaExperimentTelemetrySummaryResponse,
+    WatchlistRcTelemetrySummaryResponse,
+    WatchlistTelemetryThresholdSummary,
     WatchlistOutput,
     WatchlistOutputCreateRequest,
     WatchlistOutputsListResponse,
@@ -228,9 +238,139 @@ _WATCHLIST_MIN_SCHEDULE_INTERVAL_MINUTES = max(
 )
 _EMAIL_RECIPIENT_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
+_WATCHLISTS_UX_BASELINE = {
+    "uc1_f1_first_source_setup_percent": 92.96,
+    "uc1_f2_time_to_first_review_seconds": 567.49,
+    "uc1_f3_triage_completion_percent": 0.0,
+    "uc2_f1_pipeline_completion_percent": 56.72,
+    "uc2_f2_text_output_success_percent": 0.06,
+    "uc2_f3_audio_output_success_percent": 0.03,
+}
+
 
 def _utcnow_iso() -> str:
+    """Return the current UTC timestamp as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _safe_ratio(numerator: int | float, denominator: int | float) -> float:
+    """Return a defensive ratio, defaulting to ``0.0`` for invalid/zero denominators."""
+    try:
+        num = float(numerator)
+        den = float(denominator)
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        return 0.0
+    if den <= 0:
+        return 0.0
+    return num / den
+
+
+def _to_percent(value: int | float) -> float:
+    """Convert a decimal ratio to percentage points."""
+    return float(value) * 100.0
+
+
+def _percent_delta(current_percent: float, baseline_percent: float) -> float:
+    """Return percentage-point delta from baseline."""
+    return float(current_percent) - float(baseline_percent)
+
+
+def _normalize_ia_summary(
+    items: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Normalize IA telemetry rows into a baseline/experimental summary payload."""
+    baseline: dict[str, Any] = {
+        "baseline": {},
+        "experimental": {},
+        "sessions_total": 0,
+        "events_total": 0,
+    }
+    if not items:
+        return baseline
+    sessions_total = 0
+    events_total = 0
+    by_variant: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        variant = "experimental" if str(item.get("variant", "")).strip().lower() == "experimental" else "baseline"
+        by_variant[variant] = item
+        sessions_total += int(item.get("sessions") or 0)
+        events_total += int(item.get("events") or 0)
+    baseline["baseline"] = by_variant.get("baseline", {})
+    baseline["experimental"] = by_variant.get("experimental", {})
+    baseline["sessions_total"] = sessions_total
+    baseline["events_total"] = events_total
+    return baseline
+
+
+def _build_thresholds(
+    *,
+    onboarding_summary: dict[str, Any],
+    uc2_backend: dict[str, Any],
+) -> list[WatchlistTelemetryThresholdSummary]:
+    """Build reporting-only RC threshold evaluations from onboarding and backend telemetry."""
+    rates = onboarding_summary.get("rates", {}) if isinstance(onboarding_summary, dict) else {}
+    timings = onboarding_summary.get("timings", {}) if isinstance(onboarding_summary, dict) else {}
+
+    setup_completion_percent = _to_percent(float(rates.get("setup_completion_rate") or 0.0))
+    setup_delta = _percent_delta(
+        setup_completion_percent,
+        float(_WATCHLISTS_UX_BASELINE["uc1_f1_first_source_setup_percent"]),
+    )
+    setup_status: Literal["ok", "potential_breach"] = (
+        "potential_breach" if setup_delta <= -10.0 else "ok"
+    )
+
+    backend_first_output_percent = _to_percent(float(uc2_backend.get("first_output_success_rate") or 0.0))
+    first_output_delta = _percent_delta(
+        backend_first_output_percent,
+        float(_WATCHLISTS_UX_BASELINE["uc2_f2_text_output_success_percent"]),
+    )
+    first_output_status: Literal["ok", "potential_breach"] = (
+        "potential_breach" if first_output_delta <= -10.0 else "ok"
+    )
+
+    onboarding_first_output_median = float(timings.get("median_seconds_to_first_output_success") or 0.0)
+    baseline_seconds = float(_WATCHLISTS_UX_BASELINE["uc1_f2_time_to_first_review_seconds"])
+    timing_ratio = (
+        onboarding_first_output_median / baseline_seconds
+        if baseline_seconds > 0 and onboarding_first_output_median > 0
+        else 0.0
+    )
+    timing_status: Literal["ok", "potential_breach"] = (
+        "potential_breach" if timing_ratio >= 1.25 else "ok"
+    )
+
+    return [
+        WatchlistTelemetryThresholdSummary(
+            id="setup_completion_drop_10pp",
+            label="Setup completion drop >= 10pp vs baseline",
+            status=setup_status,
+            reporting_only=True,
+            metric_value=setup_completion_percent,
+            baseline_value=float(_WATCHLISTS_UX_BASELINE["uc1_f1_first_source_setup_percent"]),
+            delta=setup_delta,
+        ),
+        WatchlistTelemetryThresholdSummary(
+            id="first_output_success_drop_10pp",
+            label="First output success drop >= 10pp vs baseline",
+            status=first_output_status,
+            reporting_only=True,
+            metric_value=backend_first_output_percent,
+            baseline_value=float(_WATCHLISTS_UX_BASELINE["uc2_f2_text_output_success_percent"]),
+            delta=first_output_delta,
+        ),
+        WatchlistTelemetryThresholdSummary(
+            id="median_first_output_regression_25pct",
+            label="Median first-output time regresses >= 25% vs baseline",
+            status=timing_status,
+            reporting_only=True,
+            metric_value=onboarding_first_output_median,
+            baseline_value=baseline_seconds,
+            delta=(onboarding_first_output_median - baseline_seconds),
+        ),
+    ]
 
 
 def _is_expired(expires_at: str | None) -> bool:
@@ -1133,7 +1273,7 @@ async def _resolve_watchlists_ws_user_id(
             from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 
             jwt_service = get_jwt_service()
-            payload = await jwt_service.verify_token_async(token, token_type="access")
+            payload = await jwt_service.verify_token_async(token, token_type="access")  # nosec B106
             session_manager = await get_session_manager()
             if await session_manager.is_token_blacklisted(token, payload.get("jti")):
                 raise HTTPException(status_code=401, detail="invalid_token")
@@ -2312,7 +2452,8 @@ async def delete_group(
 async def get_watchlist_settings(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
-):
+) -> dict[str, Any]:
+    """Return watchlists runtime defaults and active backend type for the current user."""
     backend_label = "sqlite"
     backend_type = getattr(getattr(db, "backend", None), "backend_type", None)
     backend_name = str(getattr(backend_type, "name", "") or "").lower()
@@ -2326,6 +2467,164 @@ async def get_watchlist_settings(
         "sharing_mode": _watchlists_sharing_mode(),
         "watchlists_backend": backend_label,
     }
+
+
+@router.post(
+    "/telemetry/onboarding",
+    response_model=WatchlistOnboardingTelemetryIngestResponse,
+    summary="Record watchlists onboarding telemetry event",
+)
+async def record_watchlists_onboarding_telemetry(
+    payload: WatchlistOnboardingTelemetryIngestRequest,
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+) -> WatchlistOnboardingTelemetryIngestResponse:
+    """Record a single onboarding telemetry event and return accept/reject outcome."""
+):
+    _ = current_user
+    try:
+        result = db.record_onboarding_event(
+            session_id=payload.session_id,
+            event_type=payload.event_type,
+            event_at=payload.event_at,
+            details=payload.details,
+        )
+        accepted = bool(result.get("accepted"))
+        code = result.get("code")
+        record_onboarding_ingest_result("accepted" if accepted else "rejected")
+        return WatchlistOnboardingTelemetryIngestResponse(accepted=accepted, code=code)
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("watchlists onboarding telemetry ingest failed for user {}: {}", current_user.id, exc)
+        record_onboarding_ingest_result("error")
+        return WatchlistOnboardingTelemetryIngestResponse(
+            accepted=False,
+            code="onboarding_telemetry_ingest_failed",
+        )
+
+
+@router.get(
+    "/telemetry/onboarding/summary",
+    response_model=WatchlistOnboardingTelemetrySummaryResponse,
+    summary="Summarize watchlists onboarding telemetry",
+)
+async def get_watchlists_onboarding_telemetry_summary(
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+) -> WatchlistOnboardingTelemetrySummaryResponse:
+    """Summarize onboarding telemetry counters/rates/timings for an optional time window."""
+):
+    started = time.perf_counter()
+    status_label = "ok"
+    try:
+        summary = db.summarize_onboarding_events(since=since, until=until)
+        return WatchlistOnboardingTelemetrySummaryResponse(
+            counters=summary.get("counters", {}),
+            rates=summary.get("rates", {}),
+            timings=summary.get("timings", {}),
+            since=since,
+            until=until,
+        )
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        status_label = "error"
+        logger.error("watchlists onboarding telemetry summary failed for user {}: {}", current_user.id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="watchlists_onboarding_telemetry_summary_failed",
+        ) from exc
+    finally:
+        record_summary_request(
+            "onboarding_summary",
+            status_label,
+            time.perf_counter() - started,
+        )
+
+
+@router.get(
+    "/telemetry/rc-summary",
+    response_model=WatchlistRcTelemetrySummaryResponse,
+    summary="Get combined watchlists RC telemetry summary",
+)
+async def get_watchlists_rc_telemetry_summary(
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+    collections_db = Depends(get_collections_db_for_user),
+) -> WatchlistRcTelemetrySummaryResponse:
+    """Return combined onboarding, IA, and UC2 backend telemetry for RC reporting."""
+):
+    started = time.perf_counter()
+    status_label = "ok"
+    try:
+        onboarding = db.summarize_onboarding_events(since=since, until=until)
+        ia_items = db.summarize_ia_experiment_events(since=since, until=until)
+        ia_summary = _normalize_ia_summary(ia_items)
+
+        completed_run_ids = db.list_completed_run_ids(since=since, until=until)
+        completed_runs = len(completed_run_ids)
+        text_output_success_runs = 0
+        audio_output_success_runs = 0
+
+        for run_id in completed_run_ids:
+            run_outputs, _ = collections_db.list_output_artifacts(
+                run_id=run_id,
+                limit=200,
+                offset=0,
+                metadata_origin="watchlists",
+            )
+            has_text_output = False
+            has_audio_output = False
+            for output in run_outputs:
+                output_type = str(getattr(output, "type", "") or "").strip().lower()
+                output_format = str(getattr(output, "format", "") or "").strip().lower()
+                is_audio = output_format == "mp3" or output_type in {"tts_audio", "audio_briefing"}
+                if is_audio:
+                    has_audio_output = True
+                else:
+                    has_text_output = True
+            if has_text_output:
+                text_output_success_runs += 1
+            if has_audio_output:
+                audio_output_success_runs += 1
+
+        uc2_backend = {
+            "completed_runs": int(completed_runs),
+            "text_output_success_runs": int(text_output_success_runs),
+            "audio_output_success_runs": int(audio_output_success_runs),
+            "first_output_success_rate": _safe_ratio(text_output_success_runs, completed_runs),
+            "audio_output_success_rate": _safe_ratio(audio_output_success_runs, completed_runs),
+        }
+
+        onboarding_summary = WatchlistOnboardingTelemetrySummaryResponse(
+            counters=onboarding.get("counters", {}),
+            rates=onboarding.get("rates", {}),
+            timings=onboarding.get("timings", {}),
+            since=since,
+            until=until,
+        )
+        thresholds = _build_thresholds(onboarding_summary=onboarding, uc2_backend=uc2_backend)
+
+        return WatchlistRcTelemetrySummaryResponse(
+            onboarding=onboarding_summary,
+            uc2_backend=uc2_backend,
+            ia_experiment=ia_summary,
+            baseline=dict(_WATCHLISTS_UX_BASELINE),
+            thresholds=thresholds,
+            since=since,
+            until=until,
+        )
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        status_label = "error"
+        logger.error("watchlists RC telemetry summary failed for user {}: {}", current_user.id, exc)
+        raise HTTPException(status_code=500, detail="watchlists_rc_telemetry_summary_failed") from exc
+    finally:
+        record_summary_request(
+            "rc_summary",
+            status_label,
+            time.perf_counter() - started,
+        )
 
 
 @router.post(

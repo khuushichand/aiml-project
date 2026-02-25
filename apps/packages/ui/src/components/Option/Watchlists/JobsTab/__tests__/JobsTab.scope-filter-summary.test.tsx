@@ -24,9 +24,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (_key: string, defaultValue?: unknown) => {
-      if (typeof defaultValue === "string") return defaultValue
-      return _key
+    t: (_key: string, defaultValue?: unknown, options?: Record<string, unknown>) => {
+      if (typeof defaultValue !== "string") return _key
+      if (!options) return defaultValue
+      return defaultValue.replace(/\{\{(\w+)\}\}/g, (_, token) => String(options[token] ?? ""))
     }
   })
 }))
@@ -169,7 +170,10 @@ describe("JobsTab scope/filter summaries", () => {
       },
       schedule_expr: "0 9 * * *",
       timezone: "UTC",
-      output_prefs: {},
+      output_prefs: {
+        template: { default_name: "briefing_markdown" },
+        generate_audio: true
+      },
       created_at: "2026-02-18T00:00:00Z",
       updated_at: "2026-02-18T00:00:00Z",
       last_run_at: null,
@@ -224,6 +228,9 @@ describe("JobsTab scope/filter summaries", () => {
       expect(screen.getByText("Groups: Daily News")).toBeInTheDocument()
       expect(screen.getByText("Tags: tech")).toBeInTheDocument()
       expect(screen.getByText("Exclude author: spam-bot")).toBeInTheDocument()
+      expect(screen.getByTestId("job-output-linkage-77")).toHaveTextContent(
+        "Output linkage: Template: briefing_markdown • Audio: enabled"
+      )
     })
   })
 })

@@ -32,6 +32,7 @@ from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPTokenUsage,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
+    ACPGovernanceDeniedError,
     get_runner_client,
 )
 from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
@@ -168,6 +169,70 @@ async def _resolve_acp_session_persona_id(client: Any, session_id: str, user_id:
     if persona_id is None:
         return None
     return str(persona_id)
+
+
+def _governance_action(decision: dict[str, Any] | None) -> str:
+    if not isinstance(decision, dict):
+        return ""
+    return str(decision.get("action") or decision.get("status") or "").strip().lower()
+
+
+def _governance_blocked_detail(
+    decision: dict[str, Any] | None,
+    *,
+    message: str = "Prompt blocked by governance policy",
+) -> dict[str, Any]:
+    payload = dict(decision or {}) if isinstance(decision, dict) else {}
+    return {
+        "code": "governance_blocked",
+        "message": message,
+        "governance": payload,
+    }
+
+
+async def _check_prompt_governance(
+    client: Any,
+    *,
+    session_id: str,
+    prompt: list[dict[str, Any]],
+    user_id: int,
+) -> dict[str, Any] | None:
+    checker = getattr(client, "check_prompt_governance", None)
+    if not callable(checker):
+        return None
+
+    decision: Any | None = None
+    try:
+        decision = checker(
+            session_id,
+            prompt,
+            user_id=int(user_id),
+            metadata={"session_id": session_id, "user_id": int(user_id)},
+        )
+        if inspect.isawaitable(decision):
+            decision = await decision
+    except TypeError:
+        try:
+            decision = checker(
+                session_id,
+                prompt,
+                user_id=int(user_id),
+            )
+            if inspect.isawaitable(decision):
+                decision = await decision
+        except TypeError:
+            try:
+                decision = checker(session_id, prompt)
+                if inspect.isawaitable(decision):
+                    decision = await decision
+            except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                return None
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return None
+
+    if isinstance(decision, dict):
+        return decision
+    return None
 
 
 # -----------------------------------------------------------------------------
@@ -386,7 +451,13 @@ async def acp_session_stream(
         while True:
             try:
                 data = await stream.receive_json()
-                await _handle_client_message(client, session_id, data, stream)
+                await _handle_client_message(
+                    client,
+                    session_id,
+                    data,
+                    stream,
+                    user_id=int(user_id),
+                )
             except WebSocketDisconnect:
                 logger.info("WebSocket disconnected for ACP session {}", session_id)
                 break
@@ -613,6 +684,7 @@ async def _handle_client_message(
     session_id: str,
     data: dict[str, Any],
     stream: WebSocketStream,
+    user_id: int | None = None,
 ) -> None:
     """Handle a message from the WebSocket client."""
     msg_type = data.get("type")
@@ -690,6 +762,24 @@ async def _handle_client_message(
             })
             return
 
+        governance_decision = None
+        if user_id is not None:
+            governance_decision = await _check_prompt_governance(
+                client,
+                session_id=session_id,
+                prompt=prompt,
+                user_id=int(user_id),
+            )
+            if _governance_action(governance_decision) == "deny":
+                await stream.send_json({
+                    "type": "error",
+                    "code": "governance_blocked",
+                    "message": "Prompt blocked by governance policy",
+                    "session_id": session_id,
+                    "data": {"governance": governance_decision},
+                })
+                return
+
         try:
             result = await client.prompt(session_id, prompt)
             await stream.send_json({
@@ -697,6 +787,15 @@ async def _handle_client_message(
                 "session_id": session_id,
                 "stop_reason": result.get("stopReason"),
                 "raw_result": result,
+            })
+        except ACPGovernanceDeniedError as e:
+            payload = dict(getattr(e, "governance", {}) or governance_decision or {})
+            await stream.send_json({
+                "type": "error",
+                "code": "governance_blocked",
+                "message": str(e),
+                "session_id": session_id,
+                "data": {"governance": payload},
             })
         except ACPResponseError as e:
             await stream.send_json({
@@ -963,7 +1062,29 @@ async def acp_session_prompt(
     try:
         client = await get_runner_client()
         await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
+        governance_decision = await _check_prompt_governance(
+            client,
+            session_id=payload.session_id,
+            prompt=payload.prompt,
+            user_id=int(user.id),
+        )
+        if _governance_action(governance_decision) == "deny":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=_governance_blocked_detail(governance_decision),
+            )
         result = await client.prompt(payload.session_id, payload.prompt)
+    except ACPGovernanceDeniedError as exc:
+        logger.warning("ACP session/prompt blocked by governance for user {}: {}", user.id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_governance_blocked_detail(
+                getattr(exc, "governance", None),
+                message=str(exc) or "Prompt blocked by governance policy",
+            ),
+        ) from exc
+    except HTTPException:
+        raise
     except ACPResponseError as exc:
         logger.error("ACP session/prompt failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

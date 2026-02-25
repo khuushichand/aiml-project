@@ -135,6 +135,40 @@ class TestParakeetONNX:
                     # Be tolerant to patch interactions; ensure it was invoked
                     assert mock_ort_session.called
 
+    @patch('onnxruntime.InferenceSession')
+    @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.snapshot_download')
+    def test_loader_uses_configured_model_id_and_revision(
+        self,
+        mock_download,
+        mock_ort_session,
+        mock_onnx_session,
+        monkeypatch,
+    ):
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Parakeet_ONNX as onnx_mod
+
+        monkeypatch.setattr(
+            onnx_mod,
+            "get_stt_config",
+            lambda: {
+                "parakeet_onnx_model_id": "org/custom-parakeet-onnx",
+                "parakeet_onnx_revision": "rev-123",
+            },
+            raising=True,
+        )
+
+        mock_ort_session.return_value = mock_onnx_session
+        onnx_mod.unload_onnx_models()
+
+        with patch('pathlib.Path.exists', return_value=False):
+            session, tokenizer = onnx_mod.load_parakeet_onnx_model(model_path=None, device='cpu')
+
+        assert session is not None
+        assert tokenizer is not None
+        assert mock_download.called
+        kwargs = mock_download.call_args.kwargs
+        assert kwargs.get("repo_id") == "org/custom-parakeet-onnx"
+        assert kwargs.get("revision") == "rev-123"
+
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.load_parakeet_onnx_model')
     def test_transcribe_simple(self, mock_load_model, sample_audio_data, mock_onnx_session, mock_tokenizer):
         """Test simple transcription without chunking."""

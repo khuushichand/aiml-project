@@ -167,6 +167,21 @@ The server automatically determines the permission tier based on the tool name u
 
 Pattern matching is case-insensitive and checks if the tool name contains any of the patterns.
 
+## Governance Integration
+
+ACP now uses a shared governance coordinator for both prompt and permission flows.
+
+Contract details:
+- Prompt checks and permission checks go through `ACPGovernanceCoordinator`.
+- Permission outcome is unified to one path: `approve`, `deny`, or `prompt`.
+- Governance `require_approval` is merged into the same approval prompt path as tiered ACP approvals, preventing duplicate prompts.
+- Governance deny decisions raise `ACPGovernanceDeniedError` with structured governance metadata.
+
+Compatibility and migration notes:
+- MCP wire compatibility is unchanged; governance metadata is additive on MCP errors.
+- ACP moves toward the unified governance contract and deprecates legacy split approval behavior.
+- Rollout configuration is shared via `GOVERNANCE_ROLLOUT_MODE` (`off`, `shadow`, `enforce`).
+
 ## Configuration
 
 ### Server config.txt

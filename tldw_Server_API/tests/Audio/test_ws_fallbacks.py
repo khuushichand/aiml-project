@@ -1,8 +1,50 @@
 import asyncio
+import importlib.machinery
 import json
 from configparser import ConfigParser
+import sys
+import types
 import numpy as np
 import pytest
+
+# Stub heavyweight audio deps before importing unified streaming modules.
+if "torch" not in sys.modules:
+    _fake_torch = types.ModuleType("torch")
+    _fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
+    _fake_torch.Tensor = object
+    _fake_torch.nn = types.SimpleNamespace(Module=object)
+    _fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    sys.modules["torch"] = _fake_torch
+
+if "faster_whisper" not in sys.modules:
+    _fake_fw = types.ModuleType("faster_whisper")
+    _fake_fw.__spec__ = importlib.machinery.ModuleSpec("faster_whisper", loader=None)
+
+    class _StubWhisperModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    _fake_fw.WhisperModel = _StubWhisperModel
+    _fake_fw.BatchedInferencePipeline = _StubWhisperModel
+    sys.modules["faster_whisper"] = _fake_fw
+
+if "transformers" not in sys.modules:
+    _fake_tf = types.ModuleType("transformers")
+    _fake_tf.__spec__ = importlib.machinery.ModuleSpec("transformers", loader=None)
+
+    class _StubProcessor:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            return cls()
+
+    class _StubModel:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            return cls()
+
+    _fake_tf.AutoProcessor = _StubProcessor
+    _fake_tf.Qwen2AudioForConditionalGeneration = _StubModel
+    sys.modules["transformers"] = _fake_tf
 
 
 class _DummyWebSocket:
@@ -71,6 +113,11 @@ def _make_cfg(fallback: bool) -> ConfigParser:
     cfg.add_section('STT-Settings')
     cfg.set('STT-Settings', 'streaming_fallback_to_whisper', 'true' if fallback else 'false')
     return cfg
+
+
+def _cfg_without_stt_section() -> ConfigParser:
+    """Return an empty config parser (no STT-Settings section)."""
+    return ConfigParser()
 
 
 class _FakeWhisperModel:
@@ -166,3 +213,34 @@ async def test_model_unavailable_without_fallback_emits_error(monkeypatch):
     errors = [m for m in ws.sent if m.get("type") == "error"]
     assert errors, "Expected an error frame when fallback disabled"
     assert any(e.get("error_type") == "model_unavailable" for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_model_unavailable_defaults_to_no_fallback_when_stt_section_missing(monkeypatch):
+    """Missing STT-Settings should default to fail-fast (no Whisper fallback)."""
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.transcriber as core_tx
+    monkeypatch.setattr(core_tx, "_variant_decode_fn", lambda m, v: None)
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
+    monkeypatch.setattr(unified, "load_comprehensive_config", _cfg_without_stt_section)
+    monkeypatch.setattr(
+        unified,
+        "get_whisper_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Whisper fallback should be disabled by default")),
+    )
+
+    cfg = json.dumps({"type": "config", "model": "parakeet-onnx", "sample_rate": 16000})
+    stop = json.dumps({"type": "stop"})
+    ws = _DummyWebSocket([cfg, stop])
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+        UnifiedStreamingConfig,
+        handle_unified_websocket,
+    )
+
+    await handle_unified_websocket(ws, UnifiedStreamingConfig())
+
+    errors = [m for m in ws.sent if m.get("type") == "error"]
+    assert errors, "Expected fail-fast error when STT fallback key is absent"
+    assert any(e.get("error_type") == "model_unavailable" for e in errors)
+    assert not any(m.get("fallback") is True for m in ws.sent)

@@ -20,9 +20,13 @@ import type {
   WatchlistFilter,
   WatchlistGroup,
   WatchlistGroupCreate,
+  WatchlistsOnboardingTelemetryPayload,
+  WatchlistsOnboardingTelemetryResponse,
+  WatchlistsOnboardingTelemetrySummaryResponse,
   WatchlistsIaExperimentTelemetryPayload,
   WatchlistsIaExperimentTelemetryResponse,
   WatchlistsIaExperimentTelemetrySummaryResponse,
+  WatchlistsRcTelemetrySummaryResponse,
   WatchlistJob,
   WatchlistJobCreate,
   WatchlistJobUpdate,
@@ -661,6 +665,38 @@ export const deleteWatchlistTemplate = async (templateName: string): Promise<voi
 export const getWatchlistSettings = async (): Promise<WatchlistSettings> => {
   return bgRequest<WatchlistSettings>({
     path: "/api/v1/watchlists/settings",
+    method: "GET"
+  })
+}
+
+export const recordWatchlistsOnboardingTelemetry = async (
+  payload: WatchlistsOnboardingTelemetryPayload
+): Promise<WatchlistsOnboardingTelemetryResponse> => {
+  return bgRequest<WatchlistsOnboardingTelemetryResponse>({
+    path: "/api/v1/watchlists/telemetry/onboarding" as any,
+    method: "POST",
+    body: payload
+  })
+}
+
+export const fetchWatchlistsOnboardingTelemetrySummary = async (params?: {
+  since?: string
+  until?: string
+}): Promise<WatchlistsOnboardingTelemetrySummaryResponse> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<WatchlistsOnboardingTelemetrySummaryResponse>({
+    path: `/api/v1/watchlists/telemetry/onboarding/summary${qs}` as any,
+    method: "GET"
+  })
+}
+
+export const fetchWatchlistsRcTelemetrySummary = async (params?: {
+  since?: string
+  until?: string
+}): Promise<WatchlistsRcTelemetrySummaryResponse> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<WatchlistsRcTelemetrySummaryResponse>({
+    path: `/api/v1/watchlists/telemetry/rc-summary${qs}` as any,
     method: "GET"
   })
 }

@@ -127,6 +127,69 @@ export class MediaReviewPage {
     return Number.parseInt(match[1], 10)
   }
 
+  async selectFirstNItems(count: number): Promise<void> {
+    const items = await this.getMediaItems()
+    const total = await items.count()
+    const limit = Math.min(Math.max(0, count), total)
+    for (let idx = 0; idx < limit; idx += 1) {
+      const row = items.nth(idx)
+      const selected = (await row.getAttribute("aria-selected")) === "true"
+      if (!selected) {
+        await row.click()
+      }
+    }
+  }
+
+  getBatchToolbar(): Locator {
+    return this.page.getByTestId("media-multi-batch-toolbar")
+  }
+
+  async setBatchExportFormat(format: "json" | "markdown" | "text"): Promise<void> {
+    const select = this.page.getByRole("combobox", { name: /export format/i }).first()
+    if ((await select.count()) === 0 || !(await select.isVisible().catch(() => false))) return
+    await select.selectOption(format)
+  }
+
+  async clickBatchExportSelected(): Promise<void> {
+    await this.page.getByRole("button", { name: /export selected/i }).first().click()
+  }
+
+  async clickBatchMoveToTrash(): Promise<void> {
+    await this.page.getByRole("button", { name: /^move to trash$/i }).first().click()
+  }
+
+  async confirmBatchMoveToTrashIfPrompted(): Promise<void> {
+    const duplicateButtons = this.page
+      .getByRole("button", { name: /^move to trash$/i })
+    const duplicateCount = await duplicateButtons.count()
+    if (duplicateCount > 1) {
+      await duplicateButtons.nth(duplicateCount - 1).click()
+      return
+    }
+
+    const modal = this.page.locator(".ant-modal, [role='dialog']").first()
+    const visible = await modal.isVisible().catch(() => false)
+    if (!visible) return
+
+    const confirmButton = modal.getByRole("button", { name: /^move to trash$/i }).first()
+    if (await confirmButton.isVisible().catch(() => false)) {
+      await confirmButton.click()
+      return
+    }
+
+    const fallback = modal
+      .getByRole("button", { name: /ok|confirm|yes|delete/i })
+      .first()
+    if (await fallback.isVisible().catch(() => false)) {
+      await fallback.click()
+    }
+  }
+
+  async clickOpenTrashCta(): Promise<void> {
+    const button = this.page.getByRole("button", { name: /open trash/i }).first()
+    await button.click({ timeout: 10_000 })
+  }
+
   // ── View Modes ──────────────────────────────────────────────────────
 
   async setViewMode(mode: "spread" | "list" | "all"): Promise<void> {
@@ -152,7 +215,11 @@ export class MediaReviewPage {
   }
 
   async getCurrentViewMode(): Promise<string> {
-    const checked = this.page.locator(".ant-radio-button-wrapper-checked")
+    const checked = this.page
+      .locator(".ant-radio-group")
+      .filter({ hasText: /compare|focus|stack/i })
+      .locator(".ant-radio-button-wrapper-checked")
+      .first()
     const text = await checked.textContent()
     if (text?.match(/compare/i)) return "spread"
     if (text?.match(/focus/i)) return "list"

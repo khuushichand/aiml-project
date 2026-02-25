@@ -20,6 +20,7 @@ import { useWatchlistsStore } from "@/store/watchlists"
 import {
   cancelWatchlistRun,
   exportRunTalliesCsv,
+  fetchWatchlistOutputs,
   fetchWatchlistSources,
   fetchScrapedItems,
   getRunDetails,
@@ -79,6 +80,8 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const [cancelState, setCancelState] = useState<"idle" | "cancelling" | "failed-to-cancel">("idle")
   const [retryingRun, setRetryingRun] = useState(false)
   const [sourceNamesById, setSourceNamesById] = useState<Record<number, string>>({})
+  const [linkedOutputCount, setLinkedOutputCount] = useState<number | null>(null)
+  const [linkedOutputsLoading, setLinkedOutputsLoading] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const translationRef = useRef(t)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -90,6 +93,8 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
   const addRun = useWatchlistsStore((s) => s.addRun)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
+  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const openJobForm = useWatchlistsStore((s) => s.openJobForm)
 
   const downloadCsv = (content: string, filename: string): void => {
@@ -270,6 +275,44 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       })
       .catch((err) => {
         console.warn("Failed to resolve source names for run detail:", err)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [open, runId])
+
+  useEffect(() => {
+    let active = true
+
+    if (!open || !runId) {
+      setLinkedOutputCount(null)
+      setLinkedOutputsLoading(false)
+      return () => {
+        active = false
+      }
+    }
+
+    setLinkedOutputsLoading(true)
+    fetchWatchlistOutputs({ run_id: runId, page: 1, size: 1 })
+      .then((result) => {
+        if (!active) return
+        const total =
+          typeof result.total === "number"
+            ? result.total
+            : Array.isArray(result.items)
+              ? result.items.length
+              : 0
+        setLinkedOutputCount(Math.max(0, total))
+      })
+      .catch((err) => {
+        console.warn("Failed to resolve linked outputs for run detail:", err)
+        if (!active) return
+        setLinkedOutputCount(null)
+      })
+      .finally(() => {
+        if (!active) return
+        setLinkedOutputsLoading(false)
       })
 
     return () => {
@@ -599,11 +642,20 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       dataIndex: "status",
       key: "status",
       width: 110,
-      render: (status: string) => (
-        <Tag color={status === "ingested" ? "green" : "default"}>
-          {status}
-        </Tag>
-      )
+      render: (status: string) => {
+        const normalized = String(status || "").toLowerCase()
+        const label =
+          normalized === "ingested"
+            ? t("watchlists:runs.detail.itemsStatusInBriefing", "Included in briefing")
+            : normalized === "filtered"
+              ? t("watchlists:runs.detail.itemsStatusFilteredOut", "Excluded from briefing")
+              : status
+        return (
+          <Tag color={normalized === "ingested" ? "green" : "default"}>
+            {label}
+          </Tag>
+        )
+      }
     },
     {
       title: t("watchlists:runs.detail.itemsColumns.reviewed", "Reviewed"),
@@ -732,12 +784,52 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     onClose()
   }
 
+  const handleOpenRunOutputs = () => {
+    if (!data?.id) return
+    setOutputsJobFilter(data.job_id)
+    setOutputsRunFilter(data.id)
+    setActiveTab("outputs")
+    onClose()
+  }
+
   const tabItems = [
     {
       key: "stats",
       label: t("watchlists:runs.detail.stats", "Statistics"),
       children: (
         <div className="space-y-4">
+          {data && (
+            <Alert
+              type="info"
+              showIcon
+              title={t("watchlists:runs.detail.linkageTitle", "Run linkage")}
+              description={t(
+                "watchlists:runs.detail.linkageDescription",
+                "Monitor #{{jobId}} produced {{count}} report{{plural}} for this run.",
+                {
+                  jobId: data.job_id,
+                  count: linkedOutputCount ?? 0,
+                  plural: linkedOutputCount === 1 ? "" : "s"
+                }
+              )}
+              action={(
+                <div className="flex flex-wrap gap-2">
+                  <Button size="small" onClick={handleEditMonitor}>
+                    {t("watchlists:runs.detail.openMonitor", "Open monitor")}
+                  </Button>
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={linkedOutputsLoading}
+                    onClick={handleOpenRunOutputs}
+                  >
+                    {t("watchlists:runs.detail.openRunOutputs", "Open reports for this run")}
+                  </Button>
+                </div>
+              )}
+            />
+          )}
+
           {data && (
             <Descriptions column={2} size="small" bordered>
               <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.status", "Status")}>

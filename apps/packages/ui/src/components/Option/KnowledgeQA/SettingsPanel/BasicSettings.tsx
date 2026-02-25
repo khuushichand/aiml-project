@@ -7,7 +7,7 @@ import { Tooltip } from "antd"
 import { HelpCircle } from "lucide-react"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 
 export function BasicSettings() {
   const { settings, updateSetting } = useKnowledgeQA()

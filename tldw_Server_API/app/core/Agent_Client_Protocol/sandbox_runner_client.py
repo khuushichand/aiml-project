@@ -18,6 +18,8 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.endpoints import sandbox as sandbox_ep
 from tldw_Server_API.app.core.Agent_Client_Protocol.config import ACPSandboxConfig, load_acp_sandbox_config
 from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
+    ACPGovernanceCoordinator,
+    ACPGovernanceDeniedError,
     PERMISSION_TIMEOUT_SECONDS,
     PendingPermission,
     SessionWebSocketRegistry,
@@ -88,6 +90,7 @@ class ACPSandboxRunnerManager:
         self._ws_registry_lock = asyncio.Lock()
         self._ssh_ports_in_use: set[int] = set()
         self._ssh_ports_lock = asyncio.Lock()
+        self._governance = ACPGovernanceCoordinator()
 
     def _control_record_from_handle(self, sess: SandboxSessionHandle) -> dict[str, Any]:
         return {
@@ -178,6 +181,181 @@ class ACPSandboxRunnerManager:
     @property
     def is_running(self) -> bool:
         return True
+
+    @staticmethod
+    def _safe_json_summary(payload: Any, *, max_chars: int = 1200) -> str:
+        try:
+            rendered = json.dumps(payload or {}, sort_keys=True, default=str)
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            rendered = str(payload)
+        if len(rendered) > max_chars:
+            return rendered[:max_chars]
+        return rendered
+
+    @staticmethod
+    def _resolve_tool_category(tool_name: str) -> str:
+        if isinstance(tool_name, str) and "." in tool_name:
+            prefix = tool_name.split(".", 1)[0].strip().lower()
+            if prefix:
+                return prefix
+        return "acp"
+
+    @staticmethod
+    def _resolve_governance_rollout_mode(metadata: dict[str, Any] | None = None) -> str:
+        """Resolve ACP sandbox rollout mode with optional per-request override."""
+        raw_mode = None
+        if isinstance(metadata, dict):
+            raw_mode = metadata.get("governance_rollout_mode")
+        try:
+            from tldw_Server_API.app.core import config as app_config
+
+            return app_config.resolve_governance_rollout_mode(
+                str(raw_mode) if raw_mode is not None else None
+            )
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("ACP sandbox rollout mode resolution failed; defaulting to off: {}", exc)
+            candidate = str(raw_mode or "").strip().lower()
+            return candidate if candidate in {"off", "shadow", "enforce"} else "off"
+
+    @staticmethod
+    def _record_governance_check(
+        *,
+        surface: str,
+        category: str,
+        status: str,
+        rollout_mode: str,
+    ) -> None:
+        """Emit ACP sandbox governance metrics using shared MCP collector."""
+        try:
+            from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
+
+            get_metrics_collector().record_governance_check(
+                surface=surface,
+                category=category,
+                status=status,
+                rollout_mode=rollout_mode,
+            )
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("ACP sandbox governance metric emit failed open: {}", exc)
+
+    async def _build_governance_metadata(
+        self,
+        session_id: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+        user_id: int | None = None,
+    ) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        if isinstance(metadata, dict):
+            merged.update(metadata)
+        merged.setdefault("session_id", str(session_id))
+        control = await self._get_session_control_record(session_id)
+        if isinstance(control, dict):
+            owner = control.get("user_id")
+            if owner is not None:
+                try:
+                    merged.setdefault("user_id", int(owner))
+                except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+                    pass
+        if user_id is not None:
+            merged.setdefault("user_id", int(user_id))
+        return merged
+
+    async def check_prompt_governance(
+        self,
+        session_id: str,
+        prompt: list[dict[str, Any]],
+        *,
+        user_id: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        merged_metadata = await self._build_governance_metadata(
+            session_id,
+            metadata=metadata,
+            user_id=user_id,
+        )
+        rollout_mode = self._resolve_governance_rollout_mode(merged_metadata)
+        if rollout_mode == "off":
+            self._record_governance_check(
+                surface="acp_prompt",
+                category="acp",
+                status="unknown",
+                rollout_mode=rollout_mode,
+            )
+            return {
+                "action": "allow",
+                "status": "allow",
+                "category": "acp",
+                "rollout_mode": rollout_mode,
+            }
+
+        decision = await self._governance.validate_change(
+            surface="acp_prompt",
+            summary=f"session={session_id}; prompt={self._safe_json_summary(prompt)}",
+            category="acp",
+            metadata=merged_metadata,
+        )
+        payload = dict(decision or {})
+        payload.setdefault("rollout_mode", rollout_mode)
+        status = str(payload.get("action") or payload.get("status") or "unknown").strip().lower() or "unknown"
+        self._record_governance_check(
+            surface="acp_prompt",
+            category="acp",
+            status=status,
+            rollout_mode=rollout_mode,
+        )
+        return payload
+
+    async def check_permission_governance(
+        self,
+        session_id: str,
+        tool_name: str,
+        tool_arguments: dict[str, Any],
+        *,
+        tier: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        merged_metadata = await self._build_governance_metadata(
+            session_id,
+            metadata=metadata,
+        )
+        merged_metadata.setdefault("permission_tier", tier)
+        merged_metadata.setdefault("tool_name", tool_name)
+        category = self._resolve_tool_category(tool_name)
+        rollout_mode = self._resolve_governance_rollout_mode(merged_metadata)
+        if rollout_mode == "off":
+            self._record_governance_check(
+                surface="acp_permission",
+                category=category,
+                status="unknown",
+                rollout_mode=rollout_mode,
+            )
+            return {
+                "action": "allow",
+                "status": "allow",
+                "category": category,
+                "rollout_mode": rollout_mode,
+            }
+
+        decision = await self._governance.validate_change(
+            surface="acp_permission",
+            summary=(
+                f"session={session_id}; tier={tier}; tool={tool_name}; "
+                f"input={self._safe_json_summary(tool_arguments)}"
+            ),
+            category=category,
+            metadata=merged_metadata,
+        )
+        payload = dict(decision or {})
+        payload.setdefault("rollout_mode", rollout_mode)
+        status = str(payload.get("action") or payload.get("status") or "unknown").strip().lower() or "unknown"
+        self._record_governance_check(
+            surface="acp_permission",
+            category=category,
+            status=status,
+            rollout_mode=rollout_mode,
+        )
+        return payload
 
     async def start(self) -> None:
         return
@@ -433,6 +611,10 @@ class ACPSandboxRunnerManager:
                     await self._release_ssh_port(ssh_port)
 
     async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
+        governance = await self.check_prompt_governance(session_id, prompt)
+        if self._governance.is_denied_with_enforcement(governance):
+            raise ACPGovernanceDeniedError(governance=governance or {})
+
         sess = await self._get_session(session_id)
         response = await sess.client.call(
             "session/prompt",
@@ -668,16 +850,34 @@ class ACPSandboxRunnerManager:
         tier = self._determine_permission_tier(tool_name)
 
         registry = self._ws_registry.get(session_id)
-        if registry and tier in registry.batch_approved_tiers:
-            logger.info("Auto-approving {} (tier {} is batch-approved)", tool_name, tier)
+        batch_tier_approved = bool(registry and tier in registry.batch_approved_tiers)
+        governance = await self.check_permission_governance(
+            session_id,
+            tool_name,
+            tool_arguments,
+            tier=tier,
+        )
+        approval_outcome = self._governance.resolve_permission_outcome(
+            tier=tier,
+            batch_tier_approved=batch_tier_approved,
+            governance=governance,
+        )
+
+        if approval_outcome == "deny":
+            outcome_payload: dict[str, Any] = {"outcome": "denied"}
+            if isinstance(governance, dict) and governance:
+                outcome_payload["governance"] = governance
             return ACPMessage(
                 jsonrpc="2.0",
                 id=msg.id,
-                result={"outcome": {"outcome": "approved"}},
+                result={"outcome": outcome_payload},
             )
 
-        if tier == "auto":
-            logger.debug("Auto-approving {} (auto tier)", tool_name)
+        if approval_outcome == "approve":
+            if batch_tier_approved:
+                logger.info("Auto-approving {} (tier {} is batch-approved)", tool_name, tier)
+            else:
+                logger.debug("Auto-approving {} (auto tier)", tool_name)
             return ACPMessage(
                 jsonrpc="2.0",
                 id=msg.id,
@@ -716,6 +916,8 @@ class ACPSandboxRunnerManager:
             "tier": tier,
             "timeout_seconds": PERMISSION_TIMEOUT_SECONDS,
         }
+        if isinstance(governance, dict) and governance:
+            permission_message["governance"] = governance
         await self._broadcast_to_session(session_id, permission_message)
 
         if not self.has_websocket_connections(session_id):

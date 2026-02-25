@@ -2,10 +2,53 @@
 
 from __future__ import annotations
 
+from configparser import ConfigParser
+import importlib.machinery
+import sys
 from types import SimpleNamespace
+import types
 from typing import Any
 
 import pytest
+
+# Stub heavyweight audio deps before importing endpoint modules.
+if "torch" not in sys.modules:
+    _fake_torch = types.ModuleType("torch")
+    _fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
+    _fake_torch.Tensor = object
+    _fake_torch.nn = types.SimpleNamespace(Module=object)
+    _fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    sys.modules["torch"] = _fake_torch
+
+if "faster_whisper" not in sys.modules:
+    _fake_fw = types.ModuleType("faster_whisper")
+    _fake_fw.__spec__ = importlib.machinery.ModuleSpec("faster_whisper", loader=None)
+
+    class _StubWhisperModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    _fake_fw.WhisperModel = _StubWhisperModel
+    _fake_fw.BatchedInferencePipeline = _StubWhisperModel
+    sys.modules["faster_whisper"] = _fake_fw
+
+if "transformers" not in sys.modules:
+    _fake_tf = types.ModuleType("transformers")
+    _fake_tf.__spec__ = importlib.machinery.ModuleSpec("transformers", loader=None)
+
+    class _StubProcessor:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            return cls()
+
+    class _StubModel:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            return cls()
+
+    _fake_tf.AutoProcessor = _StubProcessor
+    _fake_tf.Qwen2AudioForConditionalGeneration = _StubModel
+    sys.modules["transformers"] = _fake_tf
 
 from tldw_Server_API.app.api.v1.endpoints import audio
 from tldw_Server_API.app.api.v1.endpoints.audio import audio_streaming
@@ -240,3 +283,36 @@ async def test_stream_transcribe_persistence_fail_open(monkeypatch: pytest.Monke
         for msg in ws.sent_json
     )
     assert db.release_count == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_transcribe_uses_default_streaming_model_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = DummyWebSocket()
+
+    cfg = ConfigParser()
+    cfg.add_section("STT-Settings")
+    cfg.set("STT-Settings", "default_streaming_transcription_model", "parakeet-onnx")
+    cfg.set("STT-Settings", "nemo_model_variant", "standard")
+    monkeypatch.setattr(audio_streaming, "load_comprehensive_config", lambda: cfg)
+
+    captured: dict[str, str] = {}
+
+    async def _mock_handle(
+        _websocket,
+        config,
+        *,
+        on_audio_seconds=None,  # noqa: ARG001
+        on_heartbeat=None,  # noqa: ARG001
+        on_stream_config_resolved=None,  # noqa: ARG001
+        on_transcript_result=None,  # noqa: ARG001
+        on_full_transcript=None,  # noqa: ARG001
+    ):
+        captured["model"] = str(getattr(config, "model", ""))
+        captured["variant"] = str(getattr(config, "model_variant", ""))
+
+    monkeypatch.setattr(audio_streaming, "handle_unified_websocket", _mock_handle)
+
+    await audio_streaming.websocket_transcribe(ws, token=None)
+
+    assert captured.get("model") == "parakeet"
+    assert captured.get("variant") == "onnx"

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getRunDetailsMock: vi.fn(),
   fetchScrapedItemsMock: vi.fn(),
   fetchWatchlistSourcesMock: vi.fn(),
+  fetchWatchlistOutputsMock: vi.fn(),
   updateScrapedItemMock: vi.fn(),
   exportRunTalliesCsvMock: vi.fn(),
   triggerWatchlistRunMock: vi.fn(),
@@ -16,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   updateRunInListMock: vi.fn(),
   addRunMock: vi.fn(),
   setActiveTabMock: vi.fn(),
+  setOutputsJobFilterMock: vi.fn(),
+  setOutputsRunFilterMock: vi.fn(),
   openJobFormMock: vi.fn(),
   messageErrorMock: vi.fn(),
   messageSuccessMock: vi.fn(),
@@ -145,6 +148,8 @@ vi.mock("@/store/watchlists", () => ({
       updateRunInList: mocks.updateRunInListMock,
       addRun: mocks.addRunMock,
       setActiveTab: mocks.setActiveTabMock,
+      setOutputsJobFilter: mocks.setOutputsJobFilterMock,
+      setOutputsRunFilter: mocks.setOutputsRunFilterMock,
       openJobForm: mocks.openJobFormMock
     })
 }))
@@ -153,6 +158,7 @@ vi.mock("@/services/watchlists", () => ({
   cancelWatchlistRun: (...args: any[]) => mocks.cancelWatchlistRunMock(...args),
   exportRunTalliesCsv: (...args: any[]) => mocks.exportRunTalliesCsvMock(...args),
   fetchScrapedItems: (...args: any[]) => mocks.fetchScrapedItemsMock(...args),
+  fetchWatchlistOutputs: (...args: any[]) => mocks.fetchWatchlistOutputsMock(...args),
   fetchWatchlistSources: (...args: any[]) => mocks.fetchWatchlistSourcesMock(...args),
   getRunDetails: (...args: any[]) => mocks.getRunDetailsMock(...args),
   triggerWatchlistRun: (...args: any[]) => mocks.triggerWatchlistRunMock(...args),
@@ -271,6 +277,13 @@ describe("RunDetailDrawer stream lifecycle", () => {
       total: 0,
       page: 1,
       size: 1000,
+      has_more: false
+    })
+    mocks.fetchWatchlistOutputsMock.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      size: 1,
       has_more: false
     })
     mocks.updateScrapedItemMock.mockResolvedValue({})

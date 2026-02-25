@@ -76,13 +76,37 @@ vi.mock("@/utils/watchlists-prevention-telemetry", () => ({
 
 vi.mock("../ScopeSelector", () => ({
   ScopeSelector: ({ onChange }: { onChange: (value: unknown) => void }) => (
-    <button
-      type="button"
-      data-testid="scope-setter"
-      onClick={() => onChange({ sources: [1], tags: ["tech"] })}
-    >
-      Set scope
-    </button>
+    <div>
+      <button
+        type="button"
+        data-testid="scope-setter"
+        onClick={() => onChange({ sources: [1], tags: ["tech"] })}
+      >
+        Set scope
+      </button>
+      <button
+        type="button"
+        data-testid="scope-setter-10"
+        onClick={() =>
+          onChange({
+            sources: Array.from({ length: 10 }, (_value, index) => index + 1),
+            tags: ["tech"]
+          })}
+      >
+        Set scope 10
+      </button>
+      <button
+        type="button"
+        data-testid="scope-setter-50"
+        onClick={() =>
+          onChange({
+            sources: Array.from({ length: 50 }, (_value, index) => index + 1),
+            tags: ["tech"]
+          })}
+      >
+        Set scope 50
+      </button>
+    </div>
   )
 }))
 
@@ -382,6 +406,51 @@ describe("JobFormModal live summary", () => {
     messageErrorSpy.mockRestore()
   })
 
+  it.each([
+    {
+      scenario: "1-feed baseline",
+      scopeButton: "scope-setter",
+      expectedScopeSummary: "1 feed, 1 tag"
+    },
+    {
+      scenario: "10-feed mid-density",
+      scopeButton: "scope-setter-10",
+      expectedScopeSummary: "10 feeds, 1 tag"
+    },
+    {
+      scenario: "50-feed high-density",
+      scopeButton: "scope-setter-50",
+      expectedScopeSummary: "50 feeds, 1 tag"
+    }
+  ])(
+    "maintains readable basic review summary for $scenario monitor setup",
+    async ({ scopeButton, expectedScopeSummary }) => {
+      render(<JobFormModal open onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+      await waitFor(() => {
+        expect(servicesMock.fetchWatchlistSources).toHaveBeenCalled()
+        expect(servicesMock.fetchWatchlistGroups).toHaveBeenCalled()
+      })
+
+      fireEvent.change(screen.getByPlaceholderText("e.g., Daily Tech News"), {
+        target: { value: "Scaled Monitor" }
+      })
+      fireEvent.click(screen.getByTestId(scopeButton))
+      expect(screen.getByTestId("job-form-summary-scope")).toHaveTextContent(
+        expectedScopeSummary
+      )
+
+      fireEvent.click(screen.getByTestId("job-form-basic-next"))
+      fireEvent.click(screen.getByTestId("schedule-setter"))
+      fireEvent.click(screen.getByTestId("job-form-basic-next"))
+      fireEvent.click(screen.getByTestId("job-form-basic-next"))
+
+      expect(screen.getByTestId("job-form-basic-review")).toHaveTextContent(
+        expectedScopeSummary
+      )
+    }
+  )
+
   it("hydrates audio preferences for edits and clears audio fields when disabled", async () => {
     servicesMock.updateWatchlistJob.mockResolvedValueOnce({
       id: 77
@@ -572,5 +641,29 @@ describe("JobFormModal live summary", () => {
     )
 
     messageInfoSpy.mockRestore()
+  })
+
+  it("restores focus to the launch control when the monitor modal closes", async () => {
+    const trigger = document.createElement("button")
+    trigger.type = "button"
+    trigger.textContent = "Open monitor form"
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    const { rerender } = render(
+      <JobFormModal open onClose={vi.fn()} onSuccess={vi.fn()} />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument()
+    })
+
+    rerender(<JobFormModal open={false} onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(trigger).toHaveFocus()
+    })
+
+    trigger.remove()
   })
 })

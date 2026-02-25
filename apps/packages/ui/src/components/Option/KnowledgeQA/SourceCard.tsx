@@ -14,7 +14,7 @@ import {
   ThumbsUp,
   ThumbsDown,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import type { RagResult } from "./types"
 import {
   formatChunkPosition,

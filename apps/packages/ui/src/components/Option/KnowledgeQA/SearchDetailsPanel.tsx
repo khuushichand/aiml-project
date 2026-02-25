@@ -5,7 +5,7 @@
 import React from "react"
 import { BarChart3 } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import type { RagResult } from "./types"
 
 type SearchDetailsPanelProps = {

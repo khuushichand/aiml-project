@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo } from "react"
 import { Download } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { isKnowledgeQaHistoryItem, sortHistoryNewestFirst } from "../historyUtils"
 import { HistoryPane } from "../history/HistoryPane"
