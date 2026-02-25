@@ -77,6 +77,20 @@ def test_validate_claims_prompt_template_strict_mode_flags_non_exact_alignment()
         sample_claim_texts=["state of the art methods are common"],
     )
     codes = [issue.code for issue in report.issues]
+    assert "sample_alignment_non_exact" in codes
+
+
+@pytest.mark.unit
+def test_validate_claims_prompt_template_strict_mode_still_flags_unaligned_samples() -> None:
+    """Verify strict mode reports true failures for completely unaligned samples."""
+    report = validate_claims_prompt_template(
+        "Extract from {answer} and return up to {max_claims} claims.",
+        mode="warning",
+        strict=True,
+        sample_source_text="alpha beta gamma",
+        sample_claim_texts=["totally unrelated tokens"],
+    )
+    codes = [issue.code for issue in report.issues]
     assert "sample_alignment_failed" in codes
 
 

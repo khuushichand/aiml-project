@@ -254,8 +254,8 @@ def validate_claims_prompt_template(
                 )
             )
 
-    alignment_mode = "exact" if strict else "fuzzy"
-    alignment_threshold = 0.99 if strict else 0.75
+    alignment_mode = "fuzzy"
+    alignment_threshold = 0.75
     for claim_text in sample_claim_texts:
         result = align_claim(
             sample_source_text,
