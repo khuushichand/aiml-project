@@ -67,6 +67,26 @@ def test_frontend_required_lane_exists() -> None:
     assert "frontend-required" in jobs
 
 
+def test_frontend_required_does_not_require_missing_lockfile_cache() -> None:
+    workflow = _load(".github/workflows/frontend-required.yml")
+    steps = workflow["jobs"]["frontend-required"]["steps"]
+    setup_node = _get_step(steps, "Setup Node.js")
+    setup_with = setup_node.get("with") or {}
+
+    cache_dependency_path = setup_with.get("cache-dependency-path")
+    if cache_dependency_path and not Path(str(cache_dependency_path)).exists():
+        raise AssertionError(
+            f"frontend-required references missing cache dependency path: {cache_dependency_path}"
+        )
+
+    install_step = _get_step(steps, "Install frontend dependencies")
+    run_script = str(install_step.get("run") or "")
+    if "npm install" not in run_script:
+        raise AssertionError("frontend-required must install dependencies with npm install when no lockfile exists")
+    if "npm ci" in run_script:
+        raise AssertionError("frontend-required should not use npm ci without a committed lockfile")
+
+
 def test_e2e_required_lane_exists_and_is_conditional() -> None:
     workflow = _load(".github/workflows/e2e-required.yml")
     jobs = workflow["jobs"]
