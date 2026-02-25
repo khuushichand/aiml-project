@@ -14,10 +14,26 @@ def test_backend_required_has_noop_and_execute_paths() -> None:
     assert "backend-required" in jobs
 
 
+def test_backend_required_installs_portaudio_for_pyaudio_builds() -> None:
+    workflow = _load(".github/workflows/backend-required.yml")
+    steps = workflow["jobs"]["backend-required"]["steps"]
+    install_steps = [step for step in steps if step.get("name") == "Install system audio build deps"]
+    assert install_steps, "Install system audio build deps step missing"
+    assert "portaudio19-dev" in install_steps[0]["run"]
+
+
 def test_coverage_required_is_path_conditional() -> None:
     workflow = _load(".github/workflows/coverage-required.yml")
     jobs = workflow["jobs"]
     assert "coverage-required" in jobs
+
+
+def test_coverage_required_installs_portaudio_for_pyaudio_builds() -> None:
+    workflow = _load(".github/workflows/coverage-required.yml")
+    steps = workflow["jobs"]["coverage-required"]["steps"]
+    install_steps = [step for step in steps if step.get("name") == "Install system audio build deps"]
+    assert install_steps, "Install system audio build deps step missing"
+    assert "portaudio19-dev" in install_steps[0]["run"]
 
 
 def test_frontend_required_lane_exists() -> None:

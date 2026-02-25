@@ -47,6 +47,12 @@ jobs:
         if: needs.changes.outputs.coverage_required == 'true'
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
+      - name: Install system audio build deps
+        if: needs.changes.outputs.coverage_required == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
       - name: Setup Python and dependencies
         if: needs.changes.outputs.coverage_required == 'true'
         uses: ./.github/actions/setup-python-deps
