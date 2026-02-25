@@ -85,7 +85,8 @@ together_image_allowed_extra_params = []
 together_image_timeout_seconds = 120
 
 # Alibaba Model Studio image backend settings
-modelstudio_image_base_url = https://dashscope-intl.aliyuncs.com/api/v1
+# Optional explicit endpoint override (leave blank to use region preset)
+modelstudio_image_base_url =
 modelstudio_image_api_key =
 modelstudio_image_default_model = qwen-image
 # Region preset for adapter routing (sg, cn, us)

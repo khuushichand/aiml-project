@@ -123,21 +123,22 @@ class QwenAdapter(ChatProvider):
         if isinstance(env_base, str) and env_base.strip():
             return env_base.strip().rstrip("/")
 
-        api_base: str | None = None
-        region = _QWEN_DEFAULT_REGION
+        qwen_cfg: dict[str, Any] = {}
         if cfg:
             qwen_cfg = cfg.get("qwen_api") or {}
-            api_base = qwen_cfg.get("api_base_url")
-            cfg_region = qwen_cfg.get("region")
-            if isinstance(cfg_region, str) and cfg_region.strip():
-                region = cfg_region.strip().lower()
+
+        api_base = qwen_cfg.get("api_base_url")
+        if isinstance(api_base, str) and api_base.strip():
+            return api_base.strip().rstrip("/")
+
+        region = _QWEN_DEFAULT_REGION
+        cfg_region = qwen_cfg.get("region")
+        if isinstance(cfg_region, str) and cfg_region.strip():
+            region = cfg_region.strip().lower()
 
         env_region = os.getenv("QWEN_REGION")
         if isinstance(env_region, str) and env_region.strip():
             region = env_region.strip().lower()
-
-        if isinstance(api_base, str) and api_base.strip():
-            return api_base.strip().rstrip("/")
 
         return _QWEN_REGION_BASE_URLS.get(region, _QWEN_DEFAULT_BASE_URL).rstrip("/")
 

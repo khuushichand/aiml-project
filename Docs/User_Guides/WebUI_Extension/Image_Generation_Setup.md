@@ -120,7 +120,8 @@ together_image_allowed_extra_params = []
 together_image_timeout_seconds = 120
 
 # Alibaba Model Studio image defaults
-modelstudio_image_base_url = https://dashscope-intl.aliyuncs.com/api/v1
+# Optional explicit endpoint override (leave blank to use region preset)
+modelstudio_image_base_url =
 modelstudio_image_api_key =
 modelstudio_image_default_model = qwen-image
 # Region presets for base URL routing: sg | cn | us
@@ -137,7 +138,7 @@ Notes:
 - **For full SD models** (single combined model), set `sd_cpp_model_path` instead of `sd_cpp_diffusion_model_path`.
 - `inline_max_bytes` controls the max inline payload size; larger images will fail with `export_size_exceeded`.
 - `sd_cpp_allowed_extra_params` controls which `extra_params` keys are accepted (default: deny all).
-- For Model Studio, set `modelstudio_image_region` to `sg`, `cn`, or `us` and provide `modelstudio_image_api_key` (or env `DASHSCOPE_API_KEY` / `QWEN_API_KEY`).
+- For Model Studio, set `modelstudio_image_region` to `sg`, `cn`, or `us` and provide `modelstudio_image_api_key` (or env `DASHSCOPE_API_KEY` / `QWEN_API_KEY`). Leave `modelstudio_image_base_url` blank unless you need a custom endpoint override.
 - For Model Studio mode control, set `modelstudio_image_mode` globally or pass `payload.extra_params.mode` (`sync` or `async`) per request.
 
 ## Security Considerations (Binary Execution)

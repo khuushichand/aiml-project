@@ -117,6 +117,7 @@ def _coerce_choice(
     default: str,
     allowed: set[str],
 ) -> str:
+    """Normalize a string choice to lowercase and return `default` when invalid."""
     raw = str(value or "").strip().lower()
     if raw in allowed:
         return raw
@@ -228,8 +229,7 @@ def get_image_generation_config(*, reload: bool = False) -> ImageGenerationConfi
             section.get("together_image_timeout_seconds"),
             DEFAULT_TOGETHER_IMAGE_TIMEOUT_SECONDS,
         ),
-        modelstudio_image_base_url=_get_config_value(section, "modelstudio_image_base_url")
-        or DEFAULT_MODELSTUDIO_IMAGE_BASE_URL,
+        modelstudio_image_base_url=_get_config_value(section, "modelstudio_image_base_url"),
         modelstudio_image_api_key=_get_config_value(section, "modelstudio_image_api_key"),
         modelstudio_image_default_model=_get_config_value(section, "modelstudio_image_default_model")
         or DEFAULT_MODELSTUDIO_IMAGE_MODEL,

@@ -5,7 +5,10 @@ from __future__ import annotations
 import os
 import time
 from typing import Any
+from urllib.parse import urlparse
 
+from loguru import logger
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 from tldw_Server_API.app.core.http_client import fetch_json
 from tldw_Server_API.app.core.Image_Generation.adapters.base import ImageGenRequest, ImageGenResult
 from tldw_Server_API.app.core.Image_Generation.adapters.image_format_utils import (
@@ -31,6 +34,12 @@ class ModelStudioImageAdapter:
     supported_formats = {"png", "jpg", "webp"}
     _DONE_STATES = {"success", "succeeded", "done", "finished", "completed"}
     _FAILED_STATES = {"failed", "error", "cancelled", "canceled"}
+    _REGION_BASE_URLS = {
+        "sg": "https://dashscope-intl.aliyuncs.com/api/v1",
+        "us": "https://dashscope-us.aliyuncs.com/api/v1",
+        "cn": "https://dashscope.aliyuncs.com/api/v1",
+    }
+    _ALLOWED_IMAGE_HOST_ALLOWLIST = ("aliyuncs.com",)
 
     def __init__(self) -> None:
         self._config = get_image_generation_config()
@@ -41,12 +50,30 @@ class ModelStudioImageAdapter:
             raise ImageGenerationError(f"unsupported output format: {output_format}")
 
         mode = self._resolve_mode(request)
+        if mode == "sync":
+            content, content_type = self._generate_sync(request)
+            return self._finalize_result(content, content_type, output_format)
         if mode == "async":
             content, content_type = self._generate_async(request)
-            actual_format = format_from_content_type(content_type) or format_from_bytes(content)
-            content, content_type = maybe_convert_format(content, content_type, actual_format, output_format)
-            return ImageGenResult(content=content, content_type=content_type, bytes_len=len(content))
-        content, content_type = self._generate_sync(request)
+            return self._finalize_result(content, content_type, output_format)
+
+        try:
+            content, content_type = self._generate_sync(request)
+        except ImageGenerationError as sync_exc:
+            logger.info("Model Studio auto mode sync path failed; falling back to async")
+            try:
+                content, content_type = self._generate_async(request)
+            except ImageGenerationError as async_exc:
+                logger.warning(
+                    "Model Studio auto mode failed on both paths: sync_error={} async_error={}",
+                    sync_exc,
+                    async_exc,
+                )
+                raise ImageGenerationError("Model Studio generation failed in auto mode") from async_exc
+        return self._finalize_result(content, content_type, output_format)
+
+    @staticmethod
+    def _finalize_result(content: bytes, content_type: str, output_format: str) -> ImageGenResult:
         actual_format = format_from_content_type(content_type) or format_from_bytes(content)
         content, content_type = maybe_convert_format(content, content_type, actual_format, output_format)
         return ImageGenResult(content=content, content_type=content_type, bytes_len=len(content))
@@ -66,7 +93,8 @@ class ModelStudioImageAdapter:
                 timeout=self._config.modelstudio_image_timeout_seconds or DEFAULT_MODELSTUDIO_IMAGE_TIMEOUT_SECONDS,
             )
         except Exception as exc:
-            raise ImageGenerationError(f"Model Studio sync request failed: {exc}") from exc
+            logger.warning("Model Studio sync request failed: {}", exc)
+            raise ImageGenerationError("Model Studio sync request failed") from exc
         return self._extract_image_content(data)
 
     def _generate_async(self, request: ImageGenRequest) -> tuple[bytes, str]:
@@ -84,7 +112,8 @@ class ModelStudioImageAdapter:
                 timeout=self._config.modelstudio_image_timeout_seconds or DEFAULT_MODELSTUDIO_IMAGE_TIMEOUT_SECONDS,
             )
         except Exception as exc:
-            raise ImageGenerationError(f"Model Studio async submit failed: {exc}") from exc
+            logger.warning("Model Studio async submit failed: {}", exc)
+            raise ImageGenerationError("Model Studio async submit failed") from exc
 
         task_id = self._extract_task_id(submit_data)
         if not task_id:
@@ -107,7 +136,8 @@ class ModelStudioImageAdapter:
                     timeout=self._config.modelstudio_image_timeout_seconds or DEFAULT_MODELSTUDIO_IMAGE_TIMEOUT_SECONDS,
                 )
             except Exception as exc:
-                raise ImageGenerationError(f"Model Studio async polling failed: {exc}") from exc
+                logger.warning("Model Studio async polling failed: {}", exc)
+                raise ImageGenerationError("Model Studio async polling failed") from exc
 
             if isinstance(poll_data, dict):
                 last_payload = poll_data
@@ -139,13 +169,21 @@ class ModelStudioImageAdapter:
             raise ImageBackendUnavailableError("modelstudio image api key is not configured")
         return api_key
 
+    def _resolve_region(self) -> str:
+        env_region = (os.getenv("MODELSTUDIO_IMAGE_REGION") or "").strip().lower()
+        if env_region in self._REGION_BASE_URLS:
+            return env_region
+        cfg_region = (self._config.modelstudio_image_region or "").strip().lower()
+        if cfg_region in self._REGION_BASE_URLS:
+            return cfg_region
+        return "sg"
+
     def _resolve_base_url(self) -> str:
-        raw = (
-            os.getenv("MODELSTUDIO_IMAGE_BASE_URL")
-            or os.getenv("DASHSCOPE_BASE_URL")
-            or self._config.modelstudio_image_base_url
-            or DEFAULT_MODELSTUDIO_IMAGE_BASE_URL
-        )
+        raw = os.getenv("MODELSTUDIO_IMAGE_BASE_URL") or os.getenv("DASHSCOPE_BASE_URL")
+        if not raw:
+            raw = self._config.modelstudio_image_base_url
+        if not raw:
+            raw = self._REGION_BASE_URLS.get(self._resolve_region(), DEFAULT_MODELSTUDIO_IMAGE_BASE_URL)
         cleaned = str(raw).strip()
         if not cleaned:
             raise ImageBackendUnavailableError("modelstudio image base URL is not configured")
@@ -180,18 +218,30 @@ class ModelStudioImageAdapter:
         base = base_url.rstrip("/")
         return f"{base}/tasks/{task_id}"
 
+    def _resolve_model(self, request: ImageGenRequest) -> str:
+        return (
+            request.model
+            or os.getenv("MODELSTUDIO_IMAGE_MODEL")
+            or self._config.modelstudio_image_default_model
+            or DEFAULT_MODELSTUDIO_IMAGE_MODEL
+        )
+
+    @staticmethod
+    def _apply_extra_payload_fields(payload: dict[str, Any], extra_params: Any) -> None:
+        if not isinstance(extra_params, dict):
+            return
+        for key, value in extra_params.items():
+            if key in {"prompt", "negative_prompt", "mode"}:
+                continue
+            payload[key] = value
+
     def _build_sync_payload(self, request: ImageGenRequest) -> dict[str, Any]:
         prompt = request.prompt.strip()
         if request.negative_prompt:
             prompt = f"{prompt}\n\nNegative prompt: {request.negative_prompt.strip()}"
 
         payload: dict[str, Any] = {
-            "model": (
-                request.model
-                or os.getenv("MODELSTUDIO_IMAGE_MODEL")
-                or self._config.modelstudio_image_default_model
-                or DEFAULT_MODELSTUDIO_IMAGE_MODEL
-            ),
+            "model": self._resolve_model(request),
             "input": {
                 "messages": [
                     {
@@ -215,12 +265,7 @@ class ModelStudioImageAdapter:
         if parameters:
             payload["parameters"] = parameters
 
-        extra_params = request.extra_params or {}
-        if isinstance(extra_params, dict):
-            for key, value in extra_params.items():
-                if key in {"prompt", "negative_prompt", "mode"}:
-                    continue
-                payload[key] = value
+        self._apply_extra_payload_fields(payload, request.extra_params or {})
         return payload
 
     def _build_async_payload(self, request: ImageGenRequest) -> dict[str, Any]:
@@ -229,12 +274,7 @@ class ModelStudioImageAdapter:
             prompt = f"{prompt}\n\nNegative prompt: {request.negative_prompt.strip()}"
 
         payload: dict[str, Any] = {
-            "model": (
-                request.model
-                or os.getenv("MODELSTUDIO_IMAGE_MODEL")
-                or self._config.modelstudio_image_default_model
-                or DEFAULT_MODELSTUDIO_IMAGE_MODEL
-            ),
+            "model": self._resolve_model(request),
             "input": {"prompt": prompt},
         }
 
@@ -254,12 +294,7 @@ class ModelStudioImageAdapter:
         if parameters:
             payload["parameters"] = parameters
 
-        extra_params = request.extra_params or {}
-        if isinstance(extra_params, dict):
-            for key, value in extra_params.items():
-                if key in {"prompt", "negative_prompt", "mode"}:
-                    continue
-                payload[key] = value
+        self._apply_extra_payload_fields(payload, request.extra_params or {})
         return payload
 
     def _extract_image_content(self, data: Any) -> tuple[bytes, str]:
@@ -315,6 +350,8 @@ class ModelStudioImageAdapter:
         if raw.startswith("data:"):
             return decode_data_url(raw)
         if raw.startswith("http://") or raw.startswith("https://"):
+            if not self._is_allowed_remote_image_url(raw):
+                raise ImageGenerationError("Model Studio returned unsupported image URL host")
             return fetch_image_bytes(
                 raw,
                 timeout=self._config.modelstudio_image_timeout_seconds or DEFAULT_MODELSTUDIO_IMAGE_TIMEOUT_SECONDS,
@@ -323,6 +360,21 @@ class ModelStudioImageAdapter:
         if decoded is not None:
             return decoded, "image/png"
         return None
+
+    def _is_allowed_remote_image_url(self, raw_url: str) -> bool:
+        base_host = (urlparse(self._resolve_base_url()).hostname or "").strip().lower()
+        allowlist = list(self._ALLOWED_IMAGE_HOST_ALLOWLIST)
+        if base_host:
+            allowlist.append(base_host)
+        policy_result = evaluate_url_policy(raw_url, allowlist=allowlist)
+        if policy_result.allowed:
+            return True
+        logger.warning(
+            "Model Studio blocked remote image URL fetch url={} reason={}",
+            raw_url,
+            policy_result.reason or "policy_denied",
+        )
+        return False
 
     def _extract_task_id(self, data: Any) -> str | None:
         if isinstance(data, dict):

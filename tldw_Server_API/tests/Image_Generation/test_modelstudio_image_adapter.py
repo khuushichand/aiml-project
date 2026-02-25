@@ -132,7 +132,7 @@ def test_modelstudio_generate_async_submit_and_poll_success(monkeypatch):
             return {
                 "output": {
                     "task_status": "SUCCEEDED",
-                    "results": [{"url": "https://cdn.example.com/out.png"}],
+                    "results": [{"url": "https://dashscope-result-us.oss-us.aliyuncs.com/out.png"}],
                 }
             }
         raise AssertionError("unexpected request")
@@ -170,3 +170,88 @@ def test_modelstudio_generate_async_terminal_failure(monkeypatch):
     adapter = modelstudio_module.ModelStudioImageAdapter()
     with pytest.raises(ImageGenerationError, match="Model Studio task failed"):
         adapter.generate(_make_request())
+
+
+def test_modelstudio_generate_auto_falls_back_to_async(monkeypatch):
+    cfg = _make_config(modelstudio_image_mode="auto")
+    monkeypatch.setattr(modelstudio_module, "get_image_generation_config", lambda: cfg)
+
+    calls = []
+
+    def fake_fetch_json(method, url, headers, timeout, **kwargs):
+        calls.append((method, url))
+        if method == "POST" and url.endswith("/services/aigc/multimodal-generation/generation"):
+            raise RuntimeError("sync endpoint unavailable")
+        if method == "POST" and url.endswith("/services/aigc/text2image/image-synthesis"):
+            return {"output": {"task_id": "task-789", "task_status": "PENDING"}}
+        if method == "GET" and url.endswith("/tasks/task-789"):
+            return {
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "results": [{"url": "https://dashscope-result-us.oss-us.aliyuncs.com/out.png"}],
+                }
+            }
+        raise AssertionError("unexpected request")
+
+    monkeypatch.setattr(modelstudio_module, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(
+        modelstudio_module,
+        "fetch_image_bytes",
+        lambda *_args, **_kwargs: (b"\x89PNG\r\n\x1a\nabc", "image/png"),
+    )
+    monkeypatch.setattr(modelstudio_module.time, "sleep", lambda *_args, **_kwargs: None)
+
+    adapter = modelstudio_module.ModelStudioImageAdapter()
+    result = adapter.generate(_make_request())
+    assert result.content.startswith(b"\x89PNG")
+    assert any(url.endswith("/services/aigc/multimodal-generation/generation") for _, url in calls)
+    assert any(url.endswith("/services/aigc/text2image/image-synthesis") for _, url in calls)
+
+
+def test_modelstudio_generate_sync_sanitizes_transport_error(monkeypatch):
+    cfg = _make_config(modelstudio_image_mode="sync")
+    monkeypatch.setattr(modelstudio_module, "get_image_generation_config", lambda: cfg)
+
+    def fake_fetch_json(method, url, headers, json, timeout, **kwargs):
+        raise RuntimeError("socket exploded")
+
+    monkeypatch.setattr(modelstudio_module, "fetch_json", fake_fetch_json)
+
+    adapter = modelstudio_module.ModelStudioImageAdapter()
+    with pytest.raises(ImageGenerationError) as exc_info:
+        adapter.generate(_make_request())
+    assert str(exc_info.value) == "Model Studio sync request failed"
+    assert "exploded" not in str(exc_info.value)
+
+
+def test_modelstudio_resolve_base_url_uses_region_preset_when_base_unset(monkeypatch):
+    cfg = _make_config(modelstudio_image_base_url=None, modelstudio_image_region="us")
+    monkeypatch.setattr(modelstudio_module, "get_image_generation_config", lambda: cfg)
+    monkeypatch.delenv("MODELSTUDIO_IMAGE_BASE_URL", raising=False)
+    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+
+    adapter = modelstudio_module.ModelStudioImageAdapter()
+    assert adapter._resolve_base_url() == "https://dashscope-us.aliyuncs.com/api/v1"
+
+
+def test_modelstudio_resolve_base_url_env_override_precedes_region(monkeypatch):
+    cfg = _make_config(modelstudio_image_base_url=None, modelstudio_image_region="cn")
+    monkeypatch.setattr(modelstudio_module, "get_image_generation_config", lambda: cfg)
+    monkeypatch.setenv("MODELSTUDIO_IMAGE_BASE_URL", "https://custom.example.com/v1")
+
+    adapter = modelstudio_module.ModelStudioImageAdapter()
+    assert adapter._resolve_base_url() == "https://custom.example.com/v1"
+
+
+def test_modelstudio_rejects_non_dashscope_image_url(monkeypatch):
+    cfg = _make_config()
+    monkeypatch.setattr(modelstudio_module, "get_image_generation_config", lambda: cfg)
+    monkeypatch.setattr(
+        modelstudio_module,
+        "fetch_image_bytes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("fetch should not be called")),
+    )
+
+    adapter = modelstudio_module.ModelStudioImageAdapter()
+    with pytest.raises(ImageGenerationError, match="unsupported image URL host"):
+        adapter._extract_from_link_value("https://example.com/malicious.png")

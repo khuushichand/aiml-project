@@ -20,6 +20,7 @@ Model Studio / Qwen routing:
 - `DASHSCOPE_API_KEY`: Optional fallback API key for `modelstudio` image backend when `modelstudio_image_api_key` is unset.
 - `DASHSCOPE_BASE_URL`: Optional fallback base URL for `modelstudio` image backend.
 - `MODELSTUDIO_IMAGE_BASE_URL`: Env override for Model Studio image base URL.
+- `MODELSTUDIO_IMAGE_REGION`: Region preset for Model Studio image backend when no explicit base URL override is set (`sg|cn|us`).
 - `MODELSTUDIO_IMAGE_MODEL`: Env override for Model Studio default image model.
 
 ## Core Server

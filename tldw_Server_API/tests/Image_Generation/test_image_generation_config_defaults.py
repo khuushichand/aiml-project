@@ -24,7 +24,7 @@ def test_image_generation_config_modelstudio_defaults(monkeypatch):
 
     cfg = image_config.get_image_generation_config(reload=True)
 
-    assert cfg.modelstudio_image_base_url == image_config.DEFAULT_MODELSTUDIO_IMAGE_BASE_URL
+    assert cfg.modelstudio_image_base_url is None
     assert cfg.modelstudio_image_default_model == image_config.DEFAULT_MODELSTUDIO_IMAGE_MODEL
     assert cfg.modelstudio_image_region == image_config.DEFAULT_MODELSTUDIO_IMAGE_REGION
     assert cfg.modelstudio_image_mode == image_config.DEFAULT_MODELSTUDIO_IMAGE_MODE
