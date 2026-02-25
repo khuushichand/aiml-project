@@ -1411,9 +1411,11 @@ def test_outputs_generate_audio_false_does_not_trigger_workflow(client_with_user
     assert mock_trigger.await_count == 0
 
 
-def test_outputs_generate_audio_trigger_returns_none_marks_skipped_metadata(client_with_user, monkeypatch):
-
-
+def test_outputs_generate_audio_trigger_returns_none_marks_skipped_metadata(
+    client_with_user: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mark audio briefing metadata as skipped when enqueue returns no task id."""
     c = client_with_user
     monkeypatch.setenv("TEST_MODE", "1")
 
@@ -1468,9 +1470,11 @@ def test_outputs_generate_audio_trigger_returns_none_marks_skipped_metadata(clie
     assert run_payload.get("stats", {}).get("audio_briefing_task_id") is None
 
 
-def test_outputs_generate_audio_trigger_failure_marks_enqueue_failed_metadata(client_with_user, monkeypatch):
-
-
+def test_outputs_generate_audio_trigger_failure_marks_enqueue_failed_metadata(
+    client_with_user: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persist enqueue failure metadata when workflow trigger raises an exception."""
     c = client_with_user
     monkeypatch.setenv("TEST_MODE", "1")
 

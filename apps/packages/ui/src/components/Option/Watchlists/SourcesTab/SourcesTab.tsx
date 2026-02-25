@@ -509,7 +509,7 @@ export const SourcesTab: React.FC = () => {
           </p>
           <p className="text-sm text-text-muted">
             {t(
-              "watchlists:sources.deleteConfirmUndoWindow",
+              "watchlists:sources.deleteConfirmDescription",
               "You can undo this deletion for {{seconds}} seconds.",
               { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
             )}

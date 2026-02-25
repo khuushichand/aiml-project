@@ -13,6 +13,7 @@ describe("watchlists pipeline contract", () => {
     sourceIds: [10, 11],
     schedulePreset: "daily",
     templateName: "briefing_md",
+    templateFormat: "md",
     templateVersion: 2,
     includeAudio: true,
     audioVoice: "alloy",
@@ -99,6 +100,30 @@ describe("watchlists pipeline contract", () => {
     })
 
     timezoneSpy.mockRestore()
+  })
+
+  it("propagates html template format into job and output payloads", () => {
+    const htmlDraft: BriefingPipelineDraft = {
+      ...baseDraft,
+      templateFormat: "html"
+    }
+
+    expect(toPipelineJobCreatePayload(htmlDraft)).toEqual(
+      expect.objectContaining({
+        output_prefs: expect.objectContaining({
+          template: expect.objectContaining({
+            default_format: "html"
+          })
+        })
+      })
+    )
+
+    expect(toPipelineOutputCreatePayload(9002, htmlDraft)).toEqual(
+      expect.objectContaining({
+        run_id: 9002,
+        format: "html"
+      })
+    )
   })
 
   it("builds review summary with expected schedule, artifacts, and delivery channels", () => {

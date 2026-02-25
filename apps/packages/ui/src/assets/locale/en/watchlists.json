@@ -416,7 +416,6 @@
     "deleteConfirmForce": "Delete anyway",
     "deleteConfirmInUseTitle": "Feed is used by active monitors",
     "deleteConfirmInUseDescription": "This feed is referenced by {{count}} active monitor{{plural}}. Deleting it may break scheduled runs.",
-    "deleteConfirmUndoWindow": "You can undo this deletion for {{seconds}} seconds.",
     "deleteConfirmInUseMore": "+{{count}} more active monitor{{plural}}",
     "deleteUsageLookupError": "Could not verify active monitor usage before deletion.",
     "never": "Never",

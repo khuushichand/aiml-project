@@ -25,7 +25,6 @@ const REQUIRED_PLAIN_LANGUAGE_KEYS = [
   "templates.contentPlaceholder",
   "templates.syntaxErrorBeforeSave",
   "sources.deleteConfirmDescription",
-  "sources.deleteConfirmUndoWindow",
   "sources.bulkDeleteConfirmDescription"
 ] as const
 

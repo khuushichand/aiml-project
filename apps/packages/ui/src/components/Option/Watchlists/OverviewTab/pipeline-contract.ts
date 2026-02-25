@@ -9,6 +9,7 @@ export interface BriefingPipelineDraft {
   sourceIds: number[]
   schedulePreset: QuickSetupSchedulePreset
   templateName: string
+  templateFormat?: "md" | "html"
   templateVersion?: number
   includeAudio: boolean
   audioVoice?: string
@@ -76,6 +77,10 @@ export const toPipelineJobCreatePayload = (
 ): WatchlistJobCreate => {
   const schedule = resolveQuickSetupSchedule(draft.schedulePreset)
   const recipients = normalizeRecipients(draft.emailRecipients)
+  const templateFormat =
+    draft.templateFormat === "html" || draft.templateFormat === "md"
+      ? draft.templateFormat
+      : undefined
 
   return {
     name: String(draft.monitorName || "").trim(),
@@ -86,7 +91,7 @@ export const toPipelineJobCreatePayload = (
       template_name: String(draft.templateName || "").trim(),
       template: {
         default_name: String(draft.templateName || "").trim(),
-        default_format: "md",
+        ...(templateFormat ? { default_format: templateFormat } : {}),
         default_version:
           Number.isFinite(Number(draft.templateVersion)) && Number(draft.templateVersion) > 0
             ? Number(draft.templateVersion)
@@ -124,11 +129,15 @@ export const toPipelineOutputCreatePayload = (
   itemIds?: number[]
 ): WatchlistOutputCreate => {
   const recipients = normalizeRecipients(draft.emailRecipients)
+  const templateFormat =
+    draft.templateFormat === "html" || draft.templateFormat === "md"
+      ? draft.templateFormat
+      : undefined
   const payload: WatchlistOutputCreate = {
     run_id: runId,
     item_ids: itemIds,
     type: "briefing_markdown",
-    format: "md",
+    ...(templateFormat ? { format: templateFormat } : {}),
     template_name: String(draft.templateName || "").trim()
   }
 
