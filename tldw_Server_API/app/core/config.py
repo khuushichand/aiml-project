@@ -1237,6 +1237,7 @@ def load_settings():
         )(
             str(os.getenv("EMAIL_MEDIA_SEARCH_DELEGATION_MODE", "opt_in")).strip().lower()
         ),
+        "GOVERNANCE_ROLLOUT_MODE": resolve_governance_rollout_mode(),
         "EMAIL_GMAIL_CONNECTOR_ENABLED": is_truthy(
             os.getenv("EMAIL_GMAIL_CONNECTOR_ENABLED", "false")
         ),
@@ -2473,6 +2474,52 @@ def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
         return None
 
 
+_GOVERNANCE_ROLLOUT_MODES = {"off", "shadow", "enforce"}
+
+
+def resolve_governance_rollout_mode(
+    raw_mode: Optional[str] = None,
+    *,
+    default: str = "off",
+) -> str:
+    """
+    Resolve governance rollout mode with deterministic fallback.
+
+    Precedence:
+    1) explicit `raw_mode` argument
+    2) `GOVERNANCE_ROLLOUT_MODE` environment variable
+    3) config.txt `[Governance] rollout_mode`
+    4) provided default (fallbacks to `off` if invalid)
+    """
+
+    safe_default = str(default or "off").strip().lower()
+    if safe_default not in _GOVERNANCE_ROLLOUT_MODES:
+        safe_default = "off"
+
+    if raw_mode is not None:
+        candidate = str(raw_mode).strip().lower()
+        return candidate if candidate in _GOVERNANCE_ROLLOUT_MODES else safe_default
+
+    env_mode = os.getenv("GOVERNANCE_ROLLOUT_MODE")
+    if env_mode is not None:
+        candidate = str(env_mode).strip().lower()
+        return candidate if candidate in _GOVERNANCE_ROLLOUT_MODES else safe_default
+
+    try:
+        cp = load_comprehensive_config()
+        if cp and cp.has_section("Governance"):
+            candidate = cp.get("Governance", "rollout_mode", fallback="").strip().lower()
+            if candidate in _GOVERNANCE_ROLLOUT_MODES:
+                return candidate
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+        _log_warning(
+            f"resolve_governance_rollout_mode: unable to read [Governance] rollout_mode; "
+            f"falling back to '{safe_default}': {exc}"
+        )
+
+    return safe_default
+
+
 def rg_policy_store(default: str = "file") -> str:
     v = os.getenv("RG_POLICY_STORE")
     if v is None:
@@ -3502,6 +3549,22 @@ def load_and_log_configs():
         tmp_default_transcriber = _normalize_stt_provider_name(raw_default_transcriber)
         # If default_transcriber is not set explicitly, fall back to default_stt_provider
         default_transcriber = tmp_default_transcriber or default_stt_provider
+        default_batch_transcription_model = (
+            config_parser_object.get(
+                'STT-Settings',
+                'default_batch_transcription_model',
+                fallback='parakeet-onnx',
+            ).strip()
+            or 'parakeet-onnx'
+        )
+        default_streaming_transcription_model = (
+            config_parser_object.get(
+                'STT-Settings',
+                'default_streaming_transcription_model',
+                fallback='parakeet-onnx',
+            ).strip()
+            or 'parakeet-onnx'
+        )
         nemo_model_variant = config_parser_object.get('STT-Settings', 'nemo_model_variant', fallback='standard')
         nemo_device = config_parser_object.get('STT-Settings', 'nemo_device', fallback='cuda')
         nemo_cache_dir = config_parser_object.get('STT-Settings', 'nemo_cache_dir', fallback='./models/nemo')
@@ -3583,6 +3646,11 @@ def load_and_log_configs():
         # Parakeet MLX settings
         mlx_model_id = _get_str('STT-Settings', 'mlx_model_id', 'mlx-community/parakeet-tdt-0.6b-v3')
         mlx_cache_dir = _get_str('STT-Settings', 'mlx_cache_dir', '') or ''
+        parakeet_onnx_model_id = (
+            _get_str('STT-Settings', 'parakeet_onnx_model_id', 'istupakov/parakeet-tdt-0.6b-v3-onnx')
+            or 'istupakov/parakeet-tdt-0.6b-v3-onnx'
+        )
+        parakeet_onnx_revision = _get_str('STT-Settings', 'parakeet_onnx_revision', None)
         mlx_chunk_duration = _get_float('STT-Settings', 'mlx_chunk_duration', 30.0)
         mlx_overlap_duration = _get_float('STT-Settings', 'mlx_overlap_duration', 5.0)
         buffered_chunk_duration = _get_float('STT-Settings', 'buffered_chunk_duration', mlx_chunk_duration)
@@ -3591,7 +3659,7 @@ def load_and_log_configs():
         streaming_fallback_to_whisper = _get_bool(
             'STT-Settings',
             'streaming_fallback_to_whisper',
-            default=True,
+            default=False,
         )
 
         mlx_decoding_mode = _get_str('STT-Settings', 'mlx_decoding_mode', '') or ''
@@ -4328,10 +4396,14 @@ def load_and_log_configs():
             'STT_Settings': {
                 'default_stt_provider': default_stt_provider,
                 'default_transcriber': default_transcriber,
+                'default_batch_transcription_model': default_batch_transcription_model,
+                'default_streaming_transcription_model': default_streaming_transcription_model,
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
                 'streaming_fallback_to_whisper': streaming_fallback_to_whisper,
+                'parakeet_onnx_model_id': parakeet_onnx_model_id,
+                'parakeet_onnx_revision': parakeet_onnx_revision,
                 'mlx_model_id': mlx_model_id,
                 'mlx_cache_dir': mlx_cache_dir,
                 'mlx_chunk_duration': mlx_chunk_duration,
@@ -4376,10 +4448,14 @@ def load_and_log_configs():
             'STT-Settings': {
                 'default_stt_provider': default_stt_provider,
                 'default_transcriber': default_transcriber,
+                'default_batch_transcription_model': default_batch_transcription_model,
+                'default_streaming_transcription_model': default_streaming_transcription_model,
                 'nemo_model_variant': nemo_model_variant,
                 'nemo_device': nemo_device,
                 'nemo_cache_dir': nemo_cache_dir,
                 'streaming_fallback_to_whisper': streaming_fallback_to_whisper,
+                'parakeet_onnx_model_id': parakeet_onnx_model_id,
+                'parakeet_onnx_revision': parakeet_onnx_revision,
                 'mlx_model_id': mlx_model_id,
                 'mlx_cache_dir': mlx_cache_dir,
                 'mlx_chunk_duration': mlx_chunk_duration,

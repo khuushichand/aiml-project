@@ -200,6 +200,44 @@ class ACPSandboxRunnerManager:
                 return prefix
         return "acp"
 
+    @staticmethod
+    def _resolve_governance_rollout_mode(metadata: dict[str, Any] | None = None) -> str:
+        """Resolve ACP sandbox rollout mode with optional per-request override."""
+        raw_mode = None
+        if isinstance(metadata, dict):
+            raw_mode = metadata.get("governance_rollout_mode")
+        try:
+            from tldw_Server_API.app.core import config as app_config
+
+            return app_config.resolve_governance_rollout_mode(
+                str(raw_mode) if raw_mode is not None else None
+            )
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("ACP sandbox rollout mode resolution failed; defaulting to off: {}", exc)
+            candidate = str(raw_mode or "").strip().lower()
+            return candidate if candidate in {"off", "shadow", "enforce"} else "off"
+
+    @staticmethod
+    def _record_governance_check(
+        *,
+        surface: str,
+        category: str,
+        status: str,
+        rollout_mode: str,
+    ) -> None:
+        """Emit ACP sandbox governance metrics using shared MCP collector."""
+        try:
+            from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
+
+            get_metrics_collector().record_governance_check(
+                surface=surface,
+                category=category,
+                status=status,
+                rollout_mode=rollout_mode,
+            )
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("ACP sandbox governance metric emit failed open: {}", exc)
+
     async def _build_governance_metadata(
         self,
         session_id: str,
@@ -236,12 +274,37 @@ class ACPSandboxRunnerManager:
             metadata=metadata,
             user_id=user_id,
         )
-        return await self._governance.validate_change(
+        rollout_mode = self._resolve_governance_rollout_mode(merged_metadata)
+        if rollout_mode == "off":
+            self._record_governance_check(
+                surface="acp_prompt",
+                category="acp",
+                status="unknown",
+                rollout_mode=rollout_mode,
+            )
+            return {
+                "action": "allow",
+                "status": "allow",
+                "category": "acp",
+                "rollout_mode": rollout_mode,
+            }
+
+        decision = await self._governance.validate_change(
             surface="acp_prompt",
             summary=f"session={session_id}; prompt={self._safe_json_summary(prompt)}",
             category="acp",
             metadata=merged_metadata,
         )
+        payload = dict(decision or {})
+        payload.setdefault("rollout_mode", rollout_mode)
+        status = str(payload.get("action") or payload.get("status") or "unknown").strip().lower() or "unknown"
+        self._record_governance_check(
+            surface="acp_prompt",
+            category="acp",
+            status=status,
+            rollout_mode=rollout_mode,
+        )
+        return payload
 
     async def check_permission_governance(
         self,
@@ -258,15 +321,41 @@ class ACPSandboxRunnerManager:
         )
         merged_metadata.setdefault("permission_tier", tier)
         merged_metadata.setdefault("tool_name", tool_name)
-        return await self._governance.validate_change(
+        category = self._resolve_tool_category(tool_name)
+        rollout_mode = self._resolve_governance_rollout_mode(merged_metadata)
+        if rollout_mode == "off":
+            self._record_governance_check(
+                surface="acp_permission",
+                category=category,
+                status="unknown",
+                rollout_mode=rollout_mode,
+            )
+            return {
+                "action": "allow",
+                "status": "allow",
+                "category": category,
+                "rollout_mode": rollout_mode,
+            }
+
+        decision = await self._governance.validate_change(
             surface="acp_permission",
             summary=(
                 f"session={session_id}; tier={tier}; tool={tool_name}; "
                 f"input={self._safe_json_summary(tool_arguments)}"
             ),
-            category=self._resolve_tool_category(tool_name),
+            category=category,
             metadata=merged_metadata,
         )
+        payload = dict(decision or {})
+        payload.setdefault("rollout_mode", rollout_mode)
+        status = str(payload.get("action") or payload.get("status") or "unknown").strip().lower() or "unknown"
+        self._record_governance_check(
+            surface="acp_permission",
+            category=category,
+            status=status,
+            rollout_mode=rollout_mode,
+        )
+        return payload
 
     async def start(self) -> None:
         return
@@ -523,7 +612,7 @@ class ACPSandboxRunnerManager:
 
     async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
         governance = await self.check_prompt_governance(session_id, prompt)
-        if self._governance.is_denied(governance):
+        if self._governance.is_denied_with_enforcement(governance):
             raise ACPGovernanceDeniedError(governance=governance or {})
 
         sess = await self._get_session(session_id)

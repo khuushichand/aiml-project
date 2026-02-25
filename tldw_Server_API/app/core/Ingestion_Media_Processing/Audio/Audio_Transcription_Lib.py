@@ -3208,6 +3208,10 @@ def speech_to_text(
                 return segments_parakeet, selected_source_lang
             return segments_parakeet
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
+            normalized_variant = str(variant or "").strip().lower()
+            if normalized_variant == "onnx":
+                logging.error(f"Parakeet ONNX transcription failed (fail-fast): {e}")
+                raise STTTranscriptionError(f"Parakeet ONNX transcription failed: {e}") from e
             logging.error(f"Parakeet transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-large-v3"  # Default fallback model

@@ -2626,36 +2626,37 @@ async def handle_unified_websocket(
                     },
                 })
 
-            # Check if fallback to Whisper is enabled in config (module-level alias for test monkeypatching)
+            # Check if fallback to Whisper is enabled in config (module-level alias for test monkeypatching).
+            # Default behavior is fail-fast unless explicitly enabled.
             comprehensive_config = load_comprehensive_config()
-
-            # ConfigParser returns a ConfigParser object, not a dict.
-            # Default behavior: enable Whisper fallback when configuration is
-            # missing or unreadable so users with faster-whisper installed still
-            # get functional streaming without extra config.
-            fallback_enabled = True
+            fallback_enabled = False
             try:
-                if comprehensive_config.has_section('STT-Settings'):
-                    fallback_value = comprehensive_config.get(
-                        'STT-Settings',
-                        'streaming_fallback_to_whisper',
-                        fallback='true',
-                    )
-                    fallback_enabled = str(fallback_value).lower() == 'true'
-                else:
-                    logger.info(
-                        "No [STT-Settings] section found in config; "
-                        "defaulting streaming_fallback_to_whisper=true. "
-                        "To disable, add [STT-Settings].streaming_fallback_to_whisper=false to config.txt."
-                    )
+                if comprehensive_config is not None and hasattr(comprehensive_config, "has_section"):
+                    if comprehensive_config.has_section('STT-Settings'):
+                        fallback_value = comprehensive_config.get(
+                            'STT-Settings',
+                            'streaming_fallback_to_whisper',
+                            fallback='false',
+                        )
+                        fallback_enabled = is_truthy(str(fallback_value))
+                    else:
+                        logger.info(
+                            "No [STT-Settings] section found in config; "
+                            "defaulting streaming_fallback_to_whisper=false. "
+                            "Set [STT-Settings].streaming_fallback_to_whisper=true to opt in."
+                        )
+                elif isinstance(comprehensive_config, dict):
+                    stt_section = comprehensive_config.get("STT-Settings", {}) or {}
+                    fallback_value = stt_section.get("streaming_fallback_to_whisper", False)
+                    fallback_enabled = is_truthy(str(fallback_value))
                 logger.info(f"Streaming fallback to Whisper enabled: {fallback_enabled}")
             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as config_error:
                 logger.warning(
                     "Could not read streaming_fallback_to_whisper from config; "
-                    "defaulting to Whisper fallback enabled. "
-                    f"Error: {config_error}. To change, set [STT-Settings].streaming_fallback_to_whisper in config.txt."
+                    "defaulting to fail-fast (fallback disabled). "
+                    f"Error: {config_error}. To opt in, set [STT-Settings].streaming_fallback_to_whisper=true."
                 )
-                fallback_enabled = True
+                fallback_enabled = False
 
             # Try to fall back to Whisper if enabled and not already using Whisper
             if fallback_enabled and config.model.lower() != 'whisper':
