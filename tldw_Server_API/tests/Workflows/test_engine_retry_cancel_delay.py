@@ -68,6 +68,27 @@ def test_cancel_during_delay_step(client_with_wf: TestClient):
     assert any(e.get("event_type") == "run_cancelled" for e in ev)
 
 
+def test_cancel_records_ack_event(client_with_wf: TestClient):
+    client = client_with_wf
+    definition = {
+        "name": "cancel-ack",
+        "version": 1,
+        "steps": [
+            {"id": "d1", "type": "delay", "config": {"milliseconds": 1200}},
+        ],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {}}).json()["run_id"]
+
+    r = client.post(f"/api/v1/workflows/runs/{run_id}/cancel")
+    assert r.status_code == 200
+    terminal = _wait_terminal(client, run_id)
+    assert terminal["status"] == "cancelled"
+
+    events = client.get(f"/api/v1/workflows/runs/{run_id}/events").json()
+    assert any(e.get("event_type") == "cancel_acknowledged" for e in events)
+
+
 def test_retry_backoff_persists_attempts(client_with_wf: TestClient):
     client = client_with_wf
     # Configure a quick timeout and one retry; start async to avoid blocking

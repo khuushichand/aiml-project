@@ -34,6 +34,23 @@ def test_duplicate_cancel_request_is_already_applied(tmp_path):
     assert second == "already_applied"
 
 
+def test_cancel_records_acknowledged_event_once(tmp_path):
+    db = WorkflowsDatabase(str(tmp_path / "wf.db"))
+    run_id = "run-cancel-ack"
+    _create_run(db, run_id)
+
+    engine = WorkflowEngine(db)
+    first = engine.cancel(run_id)
+    second = engine.cancel(run_id)
+
+    assert first == "applied"
+    assert second == "already_applied"
+    ack_events = db.get_events(run_id, types=["cancel_acknowledged"])
+    assert len(ack_events) == 1
+    payload = ack_events[0].get("payload_json") or ack_events[0].get("payload") or {}
+    assert payload.get("reason") == "cancelled_by_user"
+
+
 def test_duplicate_pause_resume_requests_are_already_applied(tmp_path):
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
     run_id = "run-idem-pause-resume"

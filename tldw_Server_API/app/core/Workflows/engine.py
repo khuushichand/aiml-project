@@ -265,6 +265,24 @@ class WorkflowEngine:
             with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"WorkflowEngine: append_event failed run_id={run_id} type={event_type}: {e}")
 
+    def _append_cancel_acknowledged(
+        self,
+        run_id: str,
+        *,
+        reason: str = "cancelled_by_user",
+        step_id: str | None = None,
+        phase: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {"reason": reason}
+        if step_id:
+            payload["step_id"] = step_id
+        if phase:
+            payload["phase"] = phase
+        if source:
+            payload["source"] = source
+        self._append_event(run_id, "cancel_acknowledged", payload)
+
     def _update_run_status_guarded(
         self,
         run_id: str,
@@ -492,6 +510,12 @@ class WorkflowEngine:
 
                     # Cancel check before running
                     if self.db.is_cancel_requested(run_id):
+                        self._append_cancel_acknowledged(
+                            run_id,
+                            step_id=step_id,
+                            phase="before_step",
+                            source="start_run",
+                        )
                         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
                         self._append_event(run_id, "run_cancelled", {"by": "user", "before_step": step_id})
                         # Standardize webhook behavior on cancellation pre-execution
@@ -663,6 +687,12 @@ class WorkflowEngine:
                             self.db.complete_step_run(step_run_id=step_run_id, status="cancelled", outputs=last_outputs)
                         # Emit a step_cancelled event for observability
                         self._append_event(run_id, "step_cancelled", {"step_id": step_id})
+                        self._append_cancel_acknowledged(
+                            run_id,
+                            step_id=step_id,
+                            phase="during_step",
+                            source="start_run",
+                        )
                         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
                         self._append_event(run_id, "run_cancelled", {"by": "user", "during_step": step_id})
                         return
@@ -895,6 +925,12 @@ class WorkflowEngine:
 
             # Cancel before running
             if self.db.is_cancel_requested(run_id):
+                self._append_cancel_acknowledged(
+                    run_id,
+                    step_id=sid,
+                    phase="before_step",
+                    source="continue_run",
+                )
                 self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
                 self._append_event(run_id, "run_cancelled", {"by": "user", "before_step": sid})
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
@@ -998,6 +1034,12 @@ class WorkflowEngine:
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                     self.db.complete_step_run(step_run_id=step_run_id, status="cancelled", outputs=last)
                 self._append_event(run_id, "step_cancelled", {"step_id": sid})
+                self._append_cancel_acknowledged(
+                    run_id,
+                    step_id=sid,
+                    phase="during_step",
+                    source="continue_run",
+                )
                 self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
                 self._append_event(run_id, "run_cancelled", {"by": "user", "during_step": sid})
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
@@ -1134,6 +1176,7 @@ class WorkflowEngine:
             with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"WorkflowEngine: cancel subprocess cleanup failed for run_id={run_id}: {e}")
         # Ensure ended_at is set on cancel for lifecycle completeness
+        self._append_cancel_acknowledged(run_id, source="control_run")
         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
         self._append_event(run_id, "run_cancelled", {"by": "user"})
         self._clear_tenant_cache(run_id)
@@ -1467,6 +1510,7 @@ class WorkflowEngine:
                     continue
                 if self.db.is_cancel_requested(rid):
                     try:
+                        self._append_cancel_acknowledged(rid, source="orphan_reaper")
                         self.db.update_run_status(rid, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
                         self._append_event(rid, "run_cancelled", {"by": "user", "reason": "cancel_requested"})
                     except _WF_NONCRITICAL_EXCEPTIONS:
