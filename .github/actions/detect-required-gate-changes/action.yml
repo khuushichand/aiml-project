@@ -42,4 +42,4 @@ runs:
           mapfile -t CHANGED_FILES < <(git ls-files)
         fi
 
-        python Helper_Scripts/ci/emit_ci_gate_flags.py "${CHANGED_FILES[@]}"
+        python -m Helper_Scripts.ci.emit_ci_gate_flags "${CHANGED_FILES[@]}"
