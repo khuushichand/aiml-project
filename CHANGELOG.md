@@ -25,6 +25,12 @@ and this project adheres to Some kind of Versioning
   - Banner image normalization utility for local uploads (JPEG/PNG/WebP validation, resize, encoding, and byte-cap enforcement).
   - Extension parity route support for `/workspace-playground`.
   - Regression coverage for banner defaults, lifecycle persistence, bundle round-trip, header modal behavior, quota eviction, conflict labeling, and extension route parity.
+- Skills authoring + seed UX
+  - Added built-in `feynman-technique` skill under `tldw_Server_API/app/core/Skills/builtin/`.
+  - Added importable `feynman-technique-template` skill under `Docs/Prompts/Skills/`.
+  - Added Feynman prompt template at `Docs/Prompts/Academic-or-Studying/Feynman_Technique.md`.
+  - Added Skills Manager built-ins seeding dropdown actions for both `Seed Missing Only` (`overwrite=false`) and `Seed and Overwrite Existing` (`overwrite=true`).
+  - Added protocol-sync regression coverage for Feynman skill/prompt assets in `tldw_Server_API/tests/Skills/unit/test_feynman_assets_sync.py`.
 
 ### Changed
 - Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
@@ -38,6 +44,8 @@ and this project adheres to Some kind of Versioning
 - Model Studio base URL resolution now uses region presets when explicit base URL overrides are unset.
 - Model Studio payload construction was refactored to remove duplicate model/extra-parameter logic across sync and async builders.
 - Env-var and image setup docs were updated for Model Studio and Qwen routing, including grouped readability improvements for `[Image-Generation]` key listings.
+- Feynman skill/prompt assets now use a shared `protocol_version` marker key (replacing mixed legacy markers).
+- Importable `feynman-technique-template` now defaults to `disable-model-invocation: true` to avoid duplicate auto-invocable behavior after import.
 
 ### Removed
 - No removals in this session.
