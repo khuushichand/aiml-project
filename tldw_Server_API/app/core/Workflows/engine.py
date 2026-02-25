@@ -226,6 +226,59 @@ class WorkflowEngine:
             with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"WorkflowEngine: append_event failed run_id={run_id} type={event_type}: {e}")
 
+    def _update_run_status_guarded(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        status_reason: str | None = None,
+        outputs: dict[str, Any] | None = None,
+        error: str | None = None,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        duration_ms: int | None = None,
+        tokens_input: int | None = None,
+        tokens_output: int | None = None,
+        cost_usd: float | None = None,
+    ) -> bool:
+        """Update run status while enforcing the lifecycle transition contract."""
+        current_status: str | None = None
+        with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
+            run = self.db.get_run(run_id)
+            if run and run.status:
+                current_status = str(run.status)
+
+        if current_status and status != current_status and not _is_allowed_transition(current_status, status):
+            self._append_event(
+                run_id,
+                "transition_rejected",
+                {"from": current_status, "to": status},
+            )
+            self.db.update_run_status(
+                run_id,
+                status="failed",
+                status_reason="invariant_violation",
+                ended_at=ended_at or self._now_iso(),
+                error="invariant_violation",
+            )
+            self._append_event(run_id, "run_failed", {"error": "invariant_violation"})
+            return False
+
+        self.db.update_run_status(
+            run_id,
+            status=status,
+            status_reason=status_reason,
+            outputs=outputs,
+            error=error,
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_ms=duration_ms,
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            cost_usd=cost_usd,
+        )
+        return True
+
     @staticmethod
     def _resolve_database(db: WorkflowsDatabase | None) -> WorkflowsDatabase:
         if db is not None:
@@ -273,7 +326,10 @@ class WorkflowEngine:
         keep_secrets = False
         finalized = False
 
-        self.db.update_run_status(run_id, status="running", started_at=self._now_iso())
+        if not self._update_run_status_guarded(run_id, status="running", started_at=self._now_iso()):
+            _finalize(False)
+            finalized = True
+            return
         self._append_event(run_id, "run_started", {"mode": mode})
         with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
             increment_counter("workflows_runs_started", labels={"tenant": self._tenant_for_run(run_id), "mode": str(mode)})
@@ -743,7 +799,10 @@ class WorkflowEngine:
         if last_outputs:
             context["last"] = last_outputs
         # Mark running
-        self.db.update_run_status(run_id, status="running", status_reason=None)
+        if not self._update_run_status_guarded(run_id, status="running", status_reason=None):
+            _finalize(False)
+            finalized = True
+            return
         self._append_event(run_id, "run_resumed", {"after": after_step_id})
 
         # Execute with branching support
