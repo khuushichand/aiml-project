@@ -1399,12 +1399,13 @@ async def lifespan(app: FastAPI):
     try:
         from tldw_Server_API.app.core.Claims_Extraction.prompt_validation import (
             ClaimsPromptValidationError,
+            claims_prompt_report_has_issues,
             validate_claims_prompt_preflight,
         )
         from tldw_Server_API.app.core.config import settings as _claims_settings
 
         _claims_prompt_report = validate_claims_prompt_preflight(_claims_settings)
-        if _claims_prompt_report.has_issues() and _claims_prompt_report.mode != "off":
+        if claims_prompt_report_has_issues(_claims_prompt_report) and _claims_prompt_report.mode != "off":
             logger.warning(
                 "App Startup: Claims prompt validation found {} issue(s) (mode={}, strict={})",
                 len(_claims_prompt_report.issues),

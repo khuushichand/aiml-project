@@ -82,6 +82,18 @@ class ClaimsPromptValidationError(ValidationError):
     """Raised when prompt preflight validation is configured to fail-fast."""
 
 
+def claims_prompt_report_has_issues(report: Any) -> bool:
+    """Return whether a prompt-validation report contains issues.
+
+    Supports both property-style reports (``report.has_issues``) and
+    callable-style reports (``report.has_issues()``) for defensive compatibility.
+    """
+    marker = getattr(report, "has_issues", False)
+    if callable(marker):
+        marker = marker()
+    return bool(marker)
+
+
 def _normalize_mode(mode: str | None, *, default: str = "warning") -> str:
     """Normalize and validate the configured prompt-validation mode.
 
@@ -306,7 +318,7 @@ def handle_claims_prompt_validation_report(report: ClaimsPromptValidationReport)
             f" ({issue.detail})" if issue.detail else "",
         )
 
-    if mode == "error" and report.has_issues:
+    if mode == "error" and claims_prompt_report_has_issues(report):
         first_issue = report.issues[0]
         raise ClaimsPromptValidationError(
             f"Claims prompt validation failed: {first_issue.code}: {first_issue.message}"
@@ -371,6 +383,7 @@ __all__ = [
     "ClaimsPromptValidationError",
     "ClaimsPromptValidationIssue",
     "ClaimsPromptValidationReport",
+    "claims_prompt_report_has_issues",
     "handle_claims_prompt_validation_report",
     "validate_claims_prompt_preflight",
     "validate_claims_prompt_template",

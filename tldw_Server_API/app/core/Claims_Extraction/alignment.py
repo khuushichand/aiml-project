@@ -7,7 +7,11 @@ from difflib import SequenceMatcher
 
 _HYPHEN_RE = re.compile(r"[\u2010\u2011\u2012\u2013\u2014\u2015\-]+")
 _SPACE_RE = re.compile(r"\s+")
-_WORD_RE = re.compile(r"[A-Za-z0-9]+")
+# Unicode-aware "word" matcher (letters/digits across scripts), excluding "_".
+_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_NON_SPACED_SCRIPT_RE = re.compile(
+    r"[\u3400-\u4DBF\u4E00-\u9FFF\u3040-\u30FF\u31F0-\u31FF\uAC00-\uD7AF\u0E00-\u0E7F\u0E80-\u0EFF\u1780-\u17FF\u1000-\u109F]"
+)
 
 
 @dataclass(frozen=True)
@@ -32,8 +36,10 @@ def _normalize_text_with_map(text: str) -> tuple[str, list[int]]:
             prev_space = True
             continue
         prev_space = False
-        normalized.append(ch.lower())
-        index_map.append(idx)
+        folded = ch.casefold()
+        for folded_char in folded:
+            normalized.append(folded_char)
+            index_map.append(idx)
     start = 0
     end = len(normalized)
     while start < end and normalized[start] == " ":
@@ -52,32 +58,76 @@ def _map_span(index_map: list[int], start: int, end: int) -> tuple[int, int] | N
 
 
 def _normalize_for_tokens(text: str) -> str:
-    lowered = (text or "").lower()
-    lowered = _HYPHEN_RE.sub(" ", lowered)
-    lowered = _SPACE_RE.sub(" ", lowered)
-    return lowered.strip()
+    folded = (text or "").casefold()
+    folded = _HYPHEN_RE.sub(" ", folded)
+    folded = _SPACE_RE.sub(" ", folded)
+    return folded.strip()
+
+
+def _is_word_char(ch: str) -> bool:
+    return bool(ch and _WORD_RE.fullmatch(ch))
+
+
+def _is_non_spaced_script_char(ch: str) -> bool:
+    return bool(ch and _NON_SPACED_SCRIPT_RE.match(ch))
+
+
+def _extract_tokens_with_offsets(
+    text: str,
+    *,
+    normalize_input: bool,
+) -> list[tuple[str, int, int]]:
+    tokens: list[tuple[str, int, int]] = []
+    working_text = _normalize_for_tokens(text) if normalize_input else str(text or "")
+    if not working_text:
+        return tokens
+
+    current_chars: list[str] = []
+    current_start = 0
+
+    def _flush(end_idx: int) -> None:
+        nonlocal current_chars, current_start
+        if not current_chars:
+            return
+        token_text = "".join(current_chars)
+        token = token_text if normalize_input else _normalize_for_tokens(token_text)
+        if token:
+            tokens.append((token, current_start, end_idx))
+        current_chars = []
+
+    for idx, ch in enumerate(working_text):
+        if not _is_word_char(ch):
+            _flush(idx)
+            continue
+
+        if _is_non_spaced_script_char(ch):
+            _flush(idx)
+            token = ch if normalize_input else _normalize_for_tokens(ch)
+            if token:
+                tokens.append((token, idx, idx + 1))
+            continue
+
+        if not current_chars:
+            current_start = idx
+        current_chars.append(ch)
+
+    _flush(len(working_text))
+    return tokens
 
 
 def _extract_word_tokens_with_offsets(text: str) -> list[tuple[str, int, int]]:
-    tokens: list[tuple[str, int, int]] = []
-    if not text:
-        return tokens
-    for match in _WORD_RE.finditer(_normalize_for_tokens(text)):
-        token = match.group(0).strip()
-        if token:
-            tokens.append((token, match.start(), match.end()))
-    return tokens
+    return _extract_tokens_with_offsets(text, normalize_input=True)
 
 
 def _extract_source_tokens_with_offsets(text: str) -> list[tuple[str, int, int]]:
-    tokens: list[tuple[str, int, int]] = []
-    if not text:
-        return tokens
-    for match in _WORD_RE.finditer(text):
-        token = _normalize_for_tokens(match.group(0))
-        if token:
-            tokens.append((token, match.start(), match.end()))
-    return tokens
+    return _extract_tokens_with_offsets(text, normalize_input=False)
+
+
+def _normalize_token(token: str) -> str:
+    normalized = str(token or "").casefold()
+    if len(normalized) > 3 and normalized.endswith("s") and not normalized.endswith("ss"):
+        normalized = normalized[:-1]
+    return normalized
 
 
 def _exact_or_normalized_span(source_text: str, claim_text: str) -> AlignmentResult | None:
@@ -108,22 +158,27 @@ def _fuzzy_token_span(source_text: str, claim_text: str, threshold: float) -> Al
         return None
 
     query = [tok for tok, _, _ in claim_tokens]
+    query_norm = [_normalize_token(tok) for tok in query]
+    source_norm = [_normalize_token(tok) for tok, _, _ in source_tokens]
     query_len = len(query)
     min_window = max(1, query_len - max(2, query_len // 3))
     max_window = min(len(source_tokens), query_len + max(2, query_len // 3))
-    query_text = " ".join(query)
-    query_counter = Counter(query)
+    query_counter = Counter(query_norm)
+    matcher = SequenceMatcher(None, [], query_norm, autojunk=False)
 
     best: AlignmentResult | None = None
     for window_size in range(min_window, max_window + 1):
         for start in range(0, len(source_tokens) - window_size + 1):
             segment = source_tokens[start : start + window_size]
-            seg_tokens = [tok for tok, _, _ in segment]
-            if not seg_tokens:
+            segment_norm = source_norm[start : start + window_size]
+            if not segment_norm:
                 continue
-            seg_text = " ".join(seg_tokens)
-            ratio = SequenceMatcher(None, query_text, seg_text).ratio()
-            overlap_counter = Counter(seg_tokens)
+
+            matcher.set_seq1(segment_norm)
+            matched_token_count = sum(size for _, _, size in matcher.get_matching_blocks())
+            ratio = matched_token_count / max(1, query_len)
+
+            overlap_counter = Counter(segment_norm)
             overlap = sum((query_counter & overlap_counter).values())
             overlap_ratio = overlap / max(1, query_len)
             score = max(ratio, overlap_ratio)

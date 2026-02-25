@@ -3,6 +3,7 @@ import pytest
 from tldw_Server_API.app.core.exceptions import ValidationError
 from tldw_Server_API.app.core.Claims_Extraction.prompt_validation import (
     ClaimsPromptValidationError,
+    claims_prompt_report_has_issues,
     validate_claims_prompt_preflight,
     validate_claims_prompt_template,
 )
@@ -77,3 +78,24 @@ def test_validate_claims_prompt_template_strict_mode_flags_non_exact_alignment()
     )
     codes = [issue.code for issue in report.issues]
     assert "sample_alignment_failed" in codes
+
+
+@pytest.mark.unit
+def test_claims_prompt_report_has_issues_handles_property_and_callable_shapes() -> None:
+    """Verify has_issues supports property-style and callable-style reports."""
+
+    class _PropertyStyleReport:
+        @property
+        def has_issues(self) -> bool:
+            return True
+
+    class _CallableStyleReport:
+        def has_issues(self) -> bool:
+            return True
+
+    class _FalseStyleReport:
+        has_issues = False
+
+    assert claims_prompt_report_has_issues(_PropertyStyleReport()) is True
+    assert claims_prompt_report_has_issues(_CallableStyleReport()) is True
+    assert claims_prompt_report_has_issues(_FalseStyleReport()) is False
