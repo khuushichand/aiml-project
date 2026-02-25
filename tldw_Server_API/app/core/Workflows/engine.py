@@ -63,6 +63,18 @@ except _WF_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - safety
 
 _TEMPLATE_EXPR_RE = re.compile(r'^\s*\{\{(.+?)\}\}\s*$', re.DOTALL)
 
+_ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+    "queued": {"running", "cancelled", "failed"},
+    "running": {"waiting_human", "waiting_approval", "succeeded", "failed", "cancelled"},
+    "waiting_human": {"running", "failed", "cancelled"},
+    "waiting_approval": {"running", "failed", "cancelled"},
+}
+
+
+def _is_allowed_transition(current: str, target: str) -> bool:
+    """Return True when a run status transition is allowed by the state contract."""
+    return target in _ALLOWED_TRANSITIONS.get(current, set())
+
 
 def _resolve_config_templates(cfg: Any, context: dict[str, Any]) -> Any:
     """Recursively resolve Jinja2 template expressions in step config values.
