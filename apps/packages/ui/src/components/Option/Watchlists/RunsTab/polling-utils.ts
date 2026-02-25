@@ -1,5 +1,10 @@
 import type { WatchlistRun } from "@/types/watchlists"
 
+const normalizeStatus = (status: unknown): string =>
+  String(status ?? "")
+    .trim()
+    .toLowerCase()
+
 const MIN_POLL_INTERVAL_MS = 100
 const IDLE_POLL_MIN_MS = 30_000
 const BACKGROUND_POLL_MIN_MS = 60_000
@@ -19,7 +24,7 @@ export const hasActiveWatchlistRuns = (
   runs: Array<Pick<WatchlistRun, "status">> | null | undefined
 ): boolean => {
   if (!Array.isArray(runs) || runs.length === 0) return false
-  return runs.some((run) => ACTIVE_RUN_STATUSES.has(String(run.status || "").toLowerCase()))
+  return runs.some((run) => ACTIVE_RUN_STATUSES.has(normalizeStatus(run.status)))
 }
 
 export const resolveAdaptiveRunNotificationsPollMs = (

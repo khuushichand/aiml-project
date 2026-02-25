@@ -1,0 +1,104 @@
+name: e2e-required
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-required-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect Gate Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend_changed: ${{ steps.detect.outputs.backend_changed }}
+      frontend_changed: ${{ steps.detect.outputs.frontend_changed }}
+      e2e_changed: ${{ steps.detect.outputs.e2e_changed }}
+      security_relevant_changed: ${{ steps.detect.outputs.security_relevant_changed }}
+      coverage_required: ${{ steps.detect.outputs.coverage_required }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          fetch-depth: 0
+      - id: detect
+        name: Classify changed files
+        uses: ./.github/actions/detect-required-gate-changes
+
+  e2e-required:
+    name: e2e-required
+    runs-on: ubuntu-latest
+    needs: [changes]
+    timeout-minutes: 40
+    services:
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      E2E_INPROCESS: "1"
+      AUTH_MODE: single_user
+      TEST_MODE: "1"
+      SINGLE_USER_API_KEY: test-api-key-for-e2e-testing-12345
+      SINGLE_USER_TEST_API_KEY: test-api-key-for-e2e-testing-12345
+      REDIS_URL: redis://127.0.0.1:6379/0
+      EMBEDDINGS_REDIS_URL: redis://127.0.0.1:6379/0
+      WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
+    steps:
+      - name: No-op pass (e2e unchanged)
+        if: needs.changes.outputs.e2e_changed != 'true'
+        run: echo "No e2e-triggering paths changed; e2e-required passed by policy."
+
+      - name: Checkout
+        if: needs.changes.outputs.e2e_changed == 'true'
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+      - name: Install FFmpeg and PortAudio (Linux)
+        if: needs.changes.outputs.e2e_changed == 'true'
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
+
+      - name: Setup Python and dependencies
+        if: needs.changes.outputs.e2e_changed == 'true'
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: "3.12"
+          use-uv: "true"
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev
+
+      - name: Run critical e2e suite (attempt 1)
+        if: needs.changes.outputs.e2e_changed == 'true'
+        id: e2e_primary
+        continue-on-error: true
+        run: |
+          python -m pytest -p pytest_asyncio.plugin tldw_Server_API/tests/e2e/ --critical-only -q
+
+      - name: Run critical e2e suite (retry)
+        if: needs.changes.outputs.e2e_changed == 'true' && steps.e2e_primary.outcome == 'failure'
+        id: e2e_retry
+        continue-on-error: true
+        run: |
+          python -m pytest -p pytest_asyncio.plugin tldw_Server_API/tests/e2e/ --critical-only -q
+
+      - name: Fail when both attempts fail
+        if: needs.changes.outputs.e2e_changed == 'true' && steps.e2e_primary.outcome == 'failure' && steps.e2e_retry.outcome == 'failure'
+        run: |
+          echo "e2e-required failed after retry."
+          exit 1
