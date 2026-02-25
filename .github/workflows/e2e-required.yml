@@ -76,14 +76,14 @@ jobs:
         id: e2e_primary
         continue-on-error: true
         run: |
-          python -m pytest tldw_Server_API/tests/e2e/ --critical-only -q
+          python -m pytest -p pytest_asyncio.plugin tldw_Server_API/tests/e2e/ --critical-only -q
 
       - name: Run critical e2e suite (retry)
         if: needs.changes.outputs.e2e_changed == 'true' && steps.e2e_primary.outcome == 'failure'
         id: e2e_retry
         continue-on-error: true
         run: |
-          python -m pytest tldw_Server_API/tests/e2e/ --critical-only -q
+          python -m pytest -p pytest_asyncio.plugin tldw_Server_API/tests/e2e/ --critical-only -q
 
       - name: Fail when both attempts fail
         if: needs.changes.outputs.e2e_changed == 'true' && steps.e2e_primary.outcome == 'failure' && steps.e2e_retry.outcome == 'failure'

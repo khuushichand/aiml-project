@@ -77,6 +77,15 @@ def test_e2e_required_installs_portaudio_for_pyaudio_builds() -> None:
     _assert_ffmpeg_portaudio_setup(".github/workflows/e2e-required.yml", "e2e-required")
 
 
+def test_e2e_required_explicitly_loads_pytest_asyncio_plugin() -> None:
+    workflow = _load(".github/workflows/e2e-required.yml")
+    steps = workflow["jobs"]["e2e-required"]["steps"]
+    primary = _get_step(steps, "Run critical e2e suite (attempt 1)")
+    retry = _get_step(steps, "Run critical e2e suite (retry)")
+    assert "-p pytest_asyncio.plugin" in primary["run"]
+    assert "-p pytest_asyncio.plugin" in retry["run"]
+
+
 def test_security_required_lane_exists_and_uses_threshold_policy() -> None:
     workflow = _load(".github/workflows/security-required.yml")
     jobs = workflow["jobs"]
