@@ -53,17 +53,23 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Setup Bun
+        if: needs.changes.outputs.frontend_changed == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
       - name: Install frontend dependencies
         if: needs.changes.outputs.frontend_changed == 'true'
-        working-directory: apps/tldw-frontend
-        run: npm install --no-audit --no-fund
+        working-directory: apps
+        run: bun install --frozen-lockfile
 
       - name: Run frontend lint
         if: needs.changes.outputs.frontend_changed == 'true'
         working-directory: apps/tldw-frontend
-        run: npm run lint
+        run: bun run lint
 
       - name: Run frontend unit tests
         if: needs.changes.outputs.frontend_changed == 'true'
         working-directory: apps/tldw-frontend
-        run: npm run test:run
+        run: bun run test:run
