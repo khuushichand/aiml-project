@@ -147,6 +147,13 @@ class WorkflowEngine:
         self.db = self._resolve_database(db)
         self.config = config or EngineConfig()
         self._tenant_cache: dict[str, str] = {}
+        self._op_cache: set[str] = set()
+
+    def _apply_once(self, op_key: str) -> bool:
+        if op_key in self._op_cache:
+            return False
+        self._op_cache.add(op_key)
+        return True
 
     @classmethod
     def set_run_secrets(cls, run_id: str, secrets: dict[str, str] | None) -> None:
@@ -1009,15 +1016,41 @@ class WorkflowEngine:
             WorkflowScheduler._spawn(self.start_run(run_id, mode))
         logger.debug(f"WorkflowEngine: submit run_id={run_id} mode={mode}")
 
-    def pause(self, run_id: str) -> None:
+    def pause(self, run_id: str) -> str:
+        run = self.db.get_run(run_id)
+        current_status = str(getattr(run, "status", "unknown"))
+        if current_status == "paused":
+            return "already_applied"
+        if not self._apply_once(f"{run_id}:pause:{current_status}"):
+            return "already_applied"
         self.db.update_run_status(run_id, status="paused", status_reason="paused_by_user")
         self._append_event(run_id, "run_paused", {"by": "user"})
+        return "applied"
 
-    def resume(self, run_id: str) -> None:
+    def resume(self, run_id: str) -> str:
+        run = self.db.get_run(run_id)
+        current_status = str(getattr(run, "status", "unknown"))
+        if current_status == "running":
+            return "already_applied"
+        if not self._apply_once(f"{run_id}:resume:{current_status}"):
+            return "already_applied"
         self.db.update_run_status(run_id, status="running", status_reason=None)
         self._append_event(run_id, "run_resumed", {"by": "user"})
+        return "applied"
 
-    def cancel(self, run_id: str) -> None:
+    def cancel(self, run_id: str) -> str:
+        run = self.db.get_run(run_id)
+        if run is None:
+            return "already_applied"
+        current_status = str(getattr(run, "status", "unknown"))
+        cancel_requested = False
+        with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
+            cancel_requested = bool(self.db.is_cancel_requested(run_id))
+        if current_status == "cancelled" or cancel_requested:
+            return "already_applied"
+        if not self._apply_once(f"{run_id}:cancel:{current_status}:{int(cancel_requested)}"):
+            return "already_applied"
+
         with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
             self.db.set_cancel_requested(run_id, True)
         # Attempt to terminate any recorded subprocesses for this run
@@ -1044,6 +1077,7 @@ class WorkflowEngine:
         self.db.update_run_status(run_id, status="cancelled", status_reason="cancelled_by_user", ended_at=self._now_iso())
         self._append_event(run_id, "run_cancelled", {"by": "user"})
         self._clear_tenant_cache(run_id)
+        return "applied"
 
     @staticmethod
     def _now_iso() -> str:

@@ -3036,15 +3036,13 @@ async def control_run(
             db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "admin_impersonation", {"actor": str(current_user.id), "target_user_id": imp, "action": action})
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
+    result = "applied"
     if action == "pause":
-        engine.pause(run_id)
+        result = engine.pause(run_id)
     elif action == "resume":
-        engine.resume(run_id)
+        result = engine.resume(run_id)
     elif action == "cancel":
-        # Mark cancel flag in DB and emit event via engine helper
-        with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
-            db.set_cancel_requested(run_id, True)
-        engine.cancel(run_id)
+        result = engine.cancel(run_id)
     elif action == "retry":
         run = db.get_run(run_id)
         if not run:
@@ -3057,7 +3055,7 @@ async def control_run(
             engine.submit(run_id, RunMode.ASYNC)
     else:
         raise HTTPException(status_code=400, detail="Unsupported action")
-    return {"ok": True}
+    return {"ok": True, "result": result}
 
 
 @router.get(
