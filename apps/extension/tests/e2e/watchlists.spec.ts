@@ -989,6 +989,10 @@ test.describe('Watchlists playground smoke', () => {
           return paginate([], page, size)
         }
 
+        if (pathname === '/api/v1/watchlists/outputs' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
         if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
           const q = params.get('q')
           if (q === 'running') return paginate([runningRun], page, size)
