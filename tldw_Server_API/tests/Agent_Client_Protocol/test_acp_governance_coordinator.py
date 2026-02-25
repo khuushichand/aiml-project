@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
+    ACPGovernanceCoordinator,
     ACPRunnerClient,
     SessionWebSocketRegistry,
 )
@@ -228,3 +229,96 @@ async def test_governance_require_approval_plus_batch_tier_creates_one_prompt(mo
 
     assert response.result == {"outcome": {"outcome": "approved"}}
     assert len(prompts) == 1
+
+
+def test_permission_outcome_shadow_deny_falls_back_to_tier_logic():
+    outcome = ACPGovernanceCoordinator.resolve_permission_outcome(
+        tier="auto",
+        batch_tier_approved=False,
+        governance={"action": "deny", "status": "deny", "rollout_mode": "shadow"},
+    )
+
+    assert outcome == "approve"
+
+
+def test_permission_outcome_off_mode_ignores_require_approval():
+    outcome = ACPGovernanceCoordinator.resolve_permission_outcome(
+        tier="auto",
+        batch_tier_approved=False,
+        governance={"action": "require_approval", "status": "require_approval", "rollout_mode": "off"},
+    )
+
+    assert outcome == "approve"
+
+
+@pytest.mark.asyncio
+async def test_prompt_shadow_rollout_deny_is_not_blocked(monkeypatch):
+    client = _new_runner_client_for_permissions()
+
+    async def _fake_check_prompt_governance(
+        session_id: str,
+        prompt: list[dict[str, Any]],
+        *,
+        user_id: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        return {
+            "action": "deny",
+            "status": "deny",
+            "category": "acp",
+            "rollout_mode": "shadow",
+        }
+
+    monkeypatch.setattr(client, "check_prompt_governance", _fake_check_prompt_governance, raising=False)
+
+    async def _fake_call(method: str, payload: dict[str, Any]) -> ACPMessage:
+        assert method == "session/prompt"
+        assert payload["sessionId"] == "session-shadow"
+        return ACPMessage(jsonrpc="2.0", id="acp-shadow", result={"stopReason": "end"})
+
+    client._client = SimpleNamespace(call=_fake_call)
+
+    response = await client.prompt(
+        "session-shadow",
+        [{"role": "user", "content": "continue"}],
+    )
+
+    assert response == {"stopReason": "end"}
+
+
+@pytest.mark.asyncio
+async def test_check_permission_governance_records_metrics(monkeypatch):
+    client = _new_runner_client_for_permissions()
+
+    class _GovernanceStub:
+        async def validate_change(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs["surface"] == "acp_permission"
+            return {
+                "action": "allow",
+                "status": "allow",
+                "category": "acp",
+            }
+
+    client._governance = _GovernanceStub()  # type: ignore[assignment]
+    monkeypatch.setattr(client, "_resolve_governance_rollout_mode", lambda _metadata=None: "enforce", raising=False)
+
+    metric_calls: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        client,
+        "_record_governance_check",
+        lambda **kwargs: metric_calls.append({k: str(v) for k, v in kwargs.items()}),
+        raising=False,
+    )
+
+    governance = await client.check_permission_governance(
+        "session-metric",
+        "fs.read",
+        {"path": "README.md"},
+        tier="auto",
+    )
+
+    assert isinstance(governance, dict)
+    assert metric_calls
+    assert metric_calls[-1]["surface"] == "acp_permission"
+    assert metric_calls[-1]["status"] == "allow"
+    assert metric_calls[-1]["rollout_mode"] == "enforce"

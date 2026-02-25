@@ -2511,8 +2511,11 @@ def resolve_governance_rollout_mode(
             candidate = cp.get("Governance", "rollout_mode", fallback="").strip().lower()
             if candidate in _GOVERNANCE_ROLLOUT_MODES:
                 return candidate
-    except _CONFIG_NONCRITICAL_EXCEPTIONS:
-        pass
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+        _log_warning(
+            f"resolve_governance_rollout_mode: unable to read [Governance] rollout_mode; "
+            f"falling back to '{safe_default}': {exc}"
+        )
 
     return safe_default
 

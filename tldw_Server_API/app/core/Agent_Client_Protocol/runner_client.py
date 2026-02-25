@@ -94,9 +94,22 @@ class ACPGovernanceCoordinator:
         action = str(decision.get("action") or decision.get("status") or "").strip().lower()
         return action
 
+    @staticmethod
+    def _decision_rollout_mode(decision: dict[str, Any] | None) -> str:
+        """Return normalized rollout mode from governance decision payload."""
+        if not isinstance(decision, dict):
+            return "enforce"
+        candidate = str(decision.get("rollout_mode") or "").strip().lower()
+        return candidate if candidate in {"off", "shadow", "enforce"} else "enforce"
+
     @classmethod
     def is_denied(cls, decision: dict[str, Any] | None) -> bool:
         return cls._decision_action(decision) == "deny"
+
+    @classmethod
+    def is_denied_with_enforcement(cls, decision: dict[str, Any] | None) -> bool:
+        """Return True only when governance denies and rollout mode is enforce."""
+        return cls.is_denied(decision) and cls._decision_rollout_mode(decision) == "enforce"
 
     @classmethod
     def resolve_permission_outcome(
@@ -108,9 +121,11 @@ class ACPGovernanceCoordinator:
     ) -> str:
         """Return one of: approve | deny | prompt."""
         action = cls._decision_action(governance)
-        if action == "deny":
+        rollout_mode = cls._decision_rollout_mode(governance)
+
+        if action == "deny" and rollout_mode == "enforce":
             return "deny"
-        if action == "require_approval":
+        if action == "require_approval" and rollout_mode in {"shadow", "enforce"}:
             return "prompt"
         if tier == "auto":
             return "approve"
@@ -298,6 +313,44 @@ class ACPRunnerClient:
                 return prefix
         return "acp"
 
+    @staticmethod
+    def _resolve_governance_rollout_mode(metadata: dict[str, Any] | None = None) -> str:
+        """Resolve ACP rollout mode with optional per-request metadata override."""
+        raw_mode = None
+        if isinstance(metadata, dict):
+            raw_mode = metadata.get("governance_rollout_mode")
+        try:
+            from tldw_Server_API.app.core import config as app_config
+
+            return app_config.resolve_governance_rollout_mode(
+                str(raw_mode) if raw_mode is not None else None
+            )
+        except _ACP_GOVERNANCE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("ACP governance rollout mode resolution failed; defaulting to off: {}", exc)
+            candidate = str(raw_mode or "").strip().lower()
+            return candidate if candidate in {"off", "shadow", "enforce"} else "off"
+
+    @staticmethod
+    def _record_governance_check(
+        *,
+        surface: str,
+        category: str,
+        status: str,
+        rollout_mode: str,
+    ) -> None:
+        """Emit ACP governance metric via the shared MCP metrics collector."""
+        try:
+            from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
+
+            get_metrics_collector().record_governance_check(
+                surface=surface,
+                category=category,
+                status=status,
+                rollout_mode=rollout_mode,
+            )
+        except _ACP_GOVERNANCE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("ACP governance metric emit failed open: {}", exc)
+
     def _build_governance_metadata(
         self,
         session_id: str,
@@ -329,12 +382,37 @@ class ACPRunnerClient:
             metadata=metadata,
             user_id=user_id,
         )
-        return await self._governance.validate_change(
+        rollout_mode = self._resolve_governance_rollout_mode(merged_metadata)
+        if rollout_mode == "off":
+            self._record_governance_check(
+                surface="acp_prompt",
+                category="acp",
+                status="unknown",
+                rollout_mode=rollout_mode,
+            )
+            return {
+                "action": "allow",
+                "status": "allow",
+                "category": "acp",
+                "rollout_mode": rollout_mode,
+            }
+
+        decision = await self._governance.validate_change(
             surface="acp_prompt",
             summary=f"session={session_id}; prompt={self._safe_json_summary(prompt)}",
             category="acp",
             metadata=merged_metadata,
         )
+        payload = dict(decision or {})
+        payload.setdefault("rollout_mode", rollout_mode)
+        status = str(payload.get("action") or payload.get("status") or "unknown").strip().lower() or "unknown"
+        self._record_governance_check(
+            surface="acp_prompt",
+            category="acp",
+            status=status,
+            rollout_mode=rollout_mode,
+        )
+        return payload
 
     async def check_permission_governance(
         self,
@@ -351,19 +429,45 @@ class ACPRunnerClient:
         )
         merged_metadata.setdefault("permission_tier", tier)
         merged_metadata.setdefault("tool_name", tool_name)
-        return await self._governance.validate_change(
+        category = self._resolve_tool_category(tool_name)
+        rollout_mode = self._resolve_governance_rollout_mode(merged_metadata)
+        if rollout_mode == "off":
+            self._record_governance_check(
+                surface="acp_permission",
+                category=category,
+                status="unknown",
+                rollout_mode=rollout_mode,
+            )
+            return {
+                "action": "allow",
+                "status": "allow",
+                "category": category,
+                "rollout_mode": rollout_mode,
+            }
+
+        decision = await self._governance.validate_change(
             surface="acp_permission",
             summary=(
                 f"session={session_id}; tier={tier}; tool={tool_name}; "
                 f"input={self._safe_json_summary(tool_arguments)}"
             ),
-            category=self._resolve_tool_category(tool_name),
+            category=category,
             metadata=merged_metadata,
         )
+        payload = dict(decision or {})
+        payload.setdefault("rollout_mode", rollout_mode)
+        status = str(payload.get("action") or payload.get("status") or "unknown").strip().lower() or "unknown"
+        self._record_governance_check(
+            surface="acp_permission",
+            category=category,
+            status=status,
+            rollout_mode=rollout_mode,
+        )
+        return payload
 
     async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
         governance = await self.check_prompt_governance(session_id, prompt)
-        if self._governance.is_denied(governance):
+        if self._governance.is_denied_with_enforcement(governance):
             raise ACPGovernanceDeniedError(governance=governance or {})
 
         response = await self._client.call(

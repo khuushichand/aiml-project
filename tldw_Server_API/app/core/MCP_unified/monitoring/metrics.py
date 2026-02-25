@@ -426,6 +426,7 @@ class MetricsCollector:
         allowed: frozenset[str],
         default: str,
     ) -> str:
+        """Normalize governance metric labels to a bounded allowlist."""
         normalized = str(value or "").strip().lower()
         return normalized if normalized in allowed else default
 
@@ -436,7 +437,7 @@ class MetricsCollector:
         category: str,
         status: str,
         rollout_mode: str,
-    ):
+    ) -> None:
         """Record a governance decision with low-cardinality label normalization."""
         normalized_surface = self._normalize_governance_label(
             surface,
