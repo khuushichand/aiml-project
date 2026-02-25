@@ -15,6 +15,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Workflows.adapters import get_adapter
 
@@ -28,6 +29,7 @@ _WF_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     TypeError,
     UnicodeDecodeError,
     ValueError,
+    AdapterError,
     asyncio.CancelledError,
 )
 
@@ -70,10 +72,40 @@ _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "waiting_approval": {"running", "failed", "cancelled"},
 }
 
+_NON_RETRIABLE_REASONS: set[str] = {
+    "validation_error",
+    "authz_error",
+    "acp_governance_blocked",
+    "session_access_denied",
+    "invariant_violation",
+}
+
 
 def _is_allowed_transition(current: str, target: str) -> bool:
     """Return True when a run status transition is allowed by the state contract."""
     return target in _ALLOWED_TRANSITIONS.get(current, set())
+
+
+def _reason_code_from_error(error: BaseException | str | None) -> str:
+    """Normalize an error payload into a reason code token used for retry policy."""
+    if error is None:
+        return ""
+    text = str(error).strip().lower()
+    if not text:
+        return ""
+    for sep in (":", ";", "|", "\n", "\t", " "):
+        if sep in text:
+            text = text.split(sep, 1)[0].strip()
+            break
+    return text
+
+
+def _is_retriable_error(reason_code: str | None) -> bool:
+    """Return True when a reason code should consume retry attempts."""
+    normalized = _reason_code_from_error(reason_code)
+    if not normalized:
+        return True
+    return normalized not in _NON_RETRIABLE_REASONS
 
 
 def _resolve_config_templates(cfg: Any, context: dict[str, Any]) -> Any:
@@ -474,6 +506,7 @@ class WorkflowEngine:
                     max_retries = self._compute_max_retries_for_step(step_type, step)
                     attempt = 0
                     err: Exception | None = None
+                    error_reason_code = ""
                     outputs: dict[str, Any] = {}
 
                     step_start_ts = time.time()
@@ -531,15 +564,28 @@ class WorkflowEngine:
                             break
                         except asyncio.TimeoutError as te:
                             err = te
+                            error_reason_code = _reason_code_from_error(te)
                             self._append_event(run_id, "step_timeout", {"step_id": step_id, "attempt": attempt})
                             with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                                 record_span_exception(te)
                         except _WF_NONCRITICAL_EXCEPTIONS as e:
                             err = e
+                            error_reason_code = _reason_code_from_error(e)
                             with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                                 record_span_exception(e)
 
                         if attempt <= max_retries:
+                            if not _is_retriable_error(error_reason_code):
+                                self._append_event(
+                                    run_id,
+                                    "step_retry_suppressed",
+                                    {
+                                        "step_id": step_id,
+                                        "attempt": attempt,
+                                        "reason_code": error_reason_code,
+                                    },
+                                )
+                                break
                             # Backoff with jitter; cap is configurable via WORKFLOWS_BACKOFF_CAP_SECONDS (default 8)
                             try:
                                 _cap = int(os.getenv("WORKFLOWS_BACKOFF_CAP_SECONDS", "8"))
@@ -861,6 +907,7 @@ class WorkflowEngine:
             max_retries = self._compute_max_retries_for_step(stype, step)
             attempt = 0
             err: Exception | None = None
+            error_reason_code = ""
             outputs: dict[str, Any] = {}
             while attempt <= max_retries:
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
@@ -878,10 +925,23 @@ class WorkflowEngine:
                     break
                 except asyncio.TimeoutError as te:
                     err = te
+                    error_reason_code = _reason_code_from_error(te)
                     self._append_event(run_id, "step_timeout", {"step_id": sid, "attempt": attempt})
                 except _WF_NONCRITICAL_EXCEPTIONS as e:
                     err = e
+                    error_reason_code = _reason_code_from_error(e)
                 if attempt <= max_retries:
+                    if not _is_retriable_error(error_reason_code):
+                        self._append_event(
+                            run_id,
+                            "step_retry_suppressed",
+                            {
+                                "step_id": sid,
+                                "attempt": attempt,
+                                "reason_code": error_reason_code,
+                            },
+                        )
+                        break
                     try:
                         _cap = int(os.getenv("WORKFLOWS_BACKOFF_CAP_SECONDS", "8"))
                     except _WF_NONCRITICAL_EXCEPTIONS:

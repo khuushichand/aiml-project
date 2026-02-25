@@ -10,6 +10,7 @@ from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.api.v1.endpoints import workflows as wf_mod
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.exceptions import AdapterError
 
 
 pytestmark = pytest.mark.integration
@@ -132,3 +133,37 @@ def test_backoff_cap_env_applied(monkeypatch, client_with_wf: TestClient):
     assert len(sleep_calls) >= 1
     # The first backoff should be <= cap(1) + jitter(~<=0.75). Assert sanity bound 2.0s
     assert sleep_calls[0] <= 2.0
+
+
+def test_non_retriable_error_skips_retry_attempts(monkeypatch, client_with_wf: TestClient):
+    client = client_with_wf
+
+    async def _blocked_adapter(_config, _context):
+        raise AdapterError("acp_governance_blocked")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.engine.get_adapter",
+        lambda _step_type: _blocked_adapter,
+    )
+
+    definition = {
+        "name": "retry-classifier-governance",
+        "version": 1,
+        "steps": [
+            {"id": "s1", "type": "prompt", "retry": 3, "config": {"template": "Y"}},
+        ],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run?mode=async", json={"inputs": {}}).json()["run_id"]
+
+    terminal = _wait_terminal(client, run_id, timeout_s=5.0)
+    assert terminal["status"] == "failed"
+    assert terminal.get("status_reason") == "acp_governance_blocked"
+
+    db: WorkflowsDatabase = app.dependency_overrides[wf_mod._get_db]()
+    row = db._conn.cursor().execute(
+        "SELECT MAX(attempt) FROM workflow_step_runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row is not None
+    assert int(row[0] or 0) == 1
