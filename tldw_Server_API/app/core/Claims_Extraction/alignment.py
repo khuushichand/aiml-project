@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
@@ -161,34 +161,42 @@ def _fuzzy_token_span(source_text: str, claim_text: str, threshold: float) -> Al
     query_norm = [_normalize_token(tok) for tok in query]
     source_norm = [_normalize_token(tok) for tok, _, _ in source_tokens]
     query_len = len(query)
-    min_window = max(1, query_len - max(2, query_len // 3))
-    max_window = min(len(source_tokens), query_len + max(2, query_len // 3))
+    max_window = len(source_tokens)
     query_counter = Counter(query_norm)
+    clamped_threshold = max(0.0, min(1.0, float(threshold)))
+    min_overlap = int(query_len * clamped_threshold)
     matcher = SequenceMatcher(None, [], query_norm, autojunk=False)
 
     best: AlignmentResult | None = None
-    for window_size in range(min_window, max_window + 1):
+    for window_size in range(query_len, max_window + 1):
+        window_norm = deque(source_norm[0:window_size])
+        window_counts = Counter(window_norm)
+
         for start in range(0, len(source_tokens) - window_size + 1):
-            segment = source_tokens[start : start + window_size]
-            segment_norm = source_norm[start : start + window_size]
-            if not segment_norm:
-                continue
+            overlap = sum((query_counter & window_counts).values())
+            if overlap >= min_overlap:
+                matcher.set_seq1(list(window_norm))
+                matched_token_count = sum(size for _, _, size in matcher.get_matching_blocks())
+                ratio = matched_token_count / max(1, query_len)
+                overlap_ratio = overlap / max(1, query_len)
+                score = max(ratio, overlap_ratio)
+                if best is None or score > best.score:
+                    span = (source_tokens[start][1], source_tokens[start + window_size - 1][2])
+                    best = AlignmentResult(span=span, method="fuzzy", score=float(score))
 
-            matcher.set_seq1(segment_norm)
-            matched_token_count = sum(size for _, _, size in matcher.get_matching_blocks())
-            ratio = matched_token_count / max(1, query_len)
+            if start + window_size < len(source_tokens):
+                old_token = window_norm.popleft()
+                window_counts[old_token] -= 1
+                if window_counts[old_token] <= 0:
+                    del window_counts[old_token]
 
-            overlap_counter = Counter(segment_norm)
-            overlap = sum((query_counter & overlap_counter).values())
-            overlap_ratio = overlap / max(1, query_len)
-            score = max(ratio, overlap_ratio)
-            if best is None or score > best.score:
-                span = (segment[0][1], segment[-1][2])
-                best = AlignmentResult(span=span, method="fuzzy", score=float(score))
+                new_token = source_norm[start + window_size]
+                window_norm.append(new_token)
+                window_counts[new_token] += 1
 
     if best is None:
         return None
-    if best.score < max(0.0, min(1.0, float(threshold))):
+    if best.score < clamped_threshold:
         return None
     return best
 

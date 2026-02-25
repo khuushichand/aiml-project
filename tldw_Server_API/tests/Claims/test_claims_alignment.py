@@ -96,3 +96,11 @@ def test_align_claim_fuzzy_handles_simple_plural_variants():
     assert result is not None
     assert result.method == "fuzzy"
     assert text[result.span[0] : result.span[1]].startswith("Cats chase mice quickly near houses")
+
+
+@pytest.mark.unit
+def test_align_claim_fuzzy_handles_large_intervening_token_window():
+    text = "alpha one two three beta"
+    span = align_claim_span(text, "alpha beta", mode="fuzzy", threshold=0.75)
+    assert span is not None
+    assert text[span[0] : span[1]] == "alpha one two three beta"
