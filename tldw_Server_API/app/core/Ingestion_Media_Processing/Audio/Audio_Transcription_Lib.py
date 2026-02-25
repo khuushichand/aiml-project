@@ -504,6 +504,41 @@ def validate_whisper_model_identifier(model_name: str) -> str:
     )
 
 
+def _normalize_qwen2audio_model_identifier(model_id: str) -> str:
+    """Validate and normalize a Qwen2Audio model identifier.
+
+    Accepts Hugging Face model ids and local filesystem paths that resolve
+    under `WHISPER_MODEL_BASE_DIR`. Paths outside the configured model root are
+    rejected to prevent path traversal or arbitrary filesystem access when the
+    identifier comes from configuration/user-controlled sources.
+    """
+    raw = str(model_id or "").strip()
+    if not raw:
+        raise ValueError("Qwen2Audio model identifier cannot be empty")
+
+    # Prefer canonical Hub identifiers when possible.
+    if _is_hf_model_id(raw):
+        return raw
+
+    # For local paths, require the resolved target to remain under model root.
+    safe_path = resolve_safe_local_path(Path(raw), WHISPER_MODEL_BASE_DIR)
+    if safe_path is None:
+        raise ValueError(
+            f"Qwen2Audio model path must resolve under {WHISPER_MODEL_BASE_DIR.resolve(strict=False)}"
+        )
+    if not safe_path.exists():
+        raise ValueError(f"Qwen2Audio model path does not exist: {safe_path}")
+    if not safe_path.is_dir():
+        raise ValueError(f"Qwen2Audio model path is not a directory: {safe_path}")
+    _assert_no_symlink(safe_path, label="Qwen2Audio model path")
+    return str(safe_path)
+
+
+def validate_qwen2audio_model_identifier(model_id: str) -> str:
+    """Public validator for Qwen2Audio model identifiers."""
+    return _normalize_qwen2audio_model_identifier(model_id)
+
+
 def _resolve_whisper_download_root(download_root: Optional[Union[str, Path]]) -> Path:
     base_root = WHISPER_MODEL_BASE_DIR
     root = Path(download_root).expanduser() if download_root else base_root
@@ -1910,7 +1945,12 @@ def load_qwen2audio():
             )
             raise RuntimeError("[Transcription error] Qwen2Audio is disabled or not configured")
 
-        model_id = stt_cfg.get("qwen2audio_model_id", "Qwen/Qwen2-Audio-7B-Instruct")
+        configured_model_id = stt_cfg.get("qwen2audio_model_id", "Qwen/Qwen2-Audio-7B-Instruct")
+        try:
+            model_id = _normalize_qwen2audio_model_identifier(str(configured_model_id))
+        except ValueError as exc:
+            logging.warning(f"Rejected unsafe Qwen2Audio model identifier '{configured_model_id}': {exc}")
+            raise RuntimeError("[Transcription error] Invalid Qwen2Audio model identifier") from exc
         revision = stt_cfg.get("qwen2audio_revision") or os.getenv("QWEN2AUDIO_REVISION")
         logging.info(f"Loading Qwen2Audio model: {model_id}")
 

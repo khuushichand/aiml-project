@@ -21,6 +21,7 @@ class StepTypeRegistry:
             "rag_search": StepType("rag_search", "Run a unified RAG search and return documents"),
             "kanban": StepType("kanban", "Read/write Kanban boards, lists, and cards"),
             "mcp_tool": StepType("mcp_tool", "Invoke an MCP tool with arguments"),
+            "acp_stage": StepType("acp_stage", "Execute an ACP-backed planning/implementation/testing stage"),
             "tts": StepType("tts", "Text-to-speech: synthesize audio from text and persist as artifact"),
             "webhook": StepType("webhook", "POST payload to a webhook with HMAC signing and SSRF protections"),
             "delay": StepType("delay", "Pause the workflow for a fixed time (ms)"),

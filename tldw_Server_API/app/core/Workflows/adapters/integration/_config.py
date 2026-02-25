@@ -47,6 +47,58 @@ class MCPToolConfig(BaseAdapterConfig):
     timeout_seconds: int = Field(60, ge=1, le=600, description="Execution timeout")
 
 
+class ACPStageConfig(BaseAdapterConfig):
+    """Config for ACP-backed workflow stage execution."""
+
+    stage: str = Field(..., description="Logical stage name (e.g., plan, impl, test)")
+    prompt_template: str | None = Field(
+        None,
+        description="Templated user prompt (rendered with workflow context)",
+    )
+    prompt: list[dict[str, Any]] | str | None = Field(
+        None,
+        description="ACP prompt payload. If string, treated as a user message.",
+    )
+    session_id: str | None = Field(
+        None,
+        description="Optional ACP session id override",
+    )
+    session_context_key: str = Field(
+        "acp_session_id",
+        description="Context key used to reuse/persist ACP session id",
+    )
+    create_session: bool = Field(
+        True,
+        description="Create ACP session when session id is not provided/resolved",
+    )
+    cwd: str = Field("/workspace", description="ACP session working directory")
+    agent_type: str | None = Field(None, description="Optional ACP agent type")
+    persona_id: str | None = Field(None, description="Optional ACP persona id")
+    workspace_id: str | None = Field(None, description="Optional ACP workspace id")
+    workspace_group_id: str | None = Field(None, description="Optional ACP workspace group id")
+    scope_snapshot_id: str | None = Field(None, description="Optional ACP scope snapshot id")
+    timeout_seconds: int = Field(
+        300,
+        ge=1,
+        le=3600,
+        description="Timeout in seconds for ACP prompt execution",
+    )
+    review_counter_key: str | None = Field(
+        None,
+        description="Context counter key used to guard review loops",
+    )
+    max_review_loops: int | None = Field(
+        None,
+        ge=1,
+        le=20,
+        description="Maximum allowed review iterations before blocking",
+    )
+    fail_on_error: bool = Field(
+        False,
+        description="Raise AdapterError when normalized stage outcome is error/blocked",
+    )
+
+
 class S3UploadConfig(BaseAdapterConfig):
     """Config for S3 upload adapter."""
 
