@@ -48,6 +48,14 @@ def test_e2e_required_lane_exists_and_is_conditional() -> None:
     assert "e2e-required" in jobs
 
 
+def test_e2e_required_installs_portaudio_for_pyaudio_builds() -> None:
+    workflow = _load(".github/workflows/e2e-required.yml")
+    steps = workflow["jobs"]["e2e-required"]["steps"]
+    install_steps = [step for step in steps if step.get("name") == "Install system audio build deps"]
+    assert install_steps, "Install system audio build deps step missing"
+    assert "portaudio19-dev" in install_steps[0]["run"]
+
+
 def test_security_required_lane_exists_and_uses_threshold_policy() -> None:
     workflow = _load(".github/workflows/security-required.yml")
     jobs = workflow["jobs"]
