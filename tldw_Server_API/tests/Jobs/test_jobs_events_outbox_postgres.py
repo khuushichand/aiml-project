@@ -2,6 +2,7 @@ import os
 import json
 import time
 import pytest
+from fastapi.routing import APIRoute
 
 # FIXME: These Postgres outbox tests intermittently time out in some envs.
 # Disable by default; set RUN_PG_JOBS_TESTS=1 to enable locally.
@@ -18,6 +19,22 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 pytestmark = pytest.mark.pg_jobs
 
 
+def _ensure_jobs_router_registered(app) -> None:
+    has_events_route = any(
+        isinstance(route, APIRoute)
+        and route.path == "/api/v1/jobs/events"
+        and "GET" in (route.methods or set())
+        for route in app.routes
+    )
+    if has_events_route:
+        return
+
+    from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
+    from tldw_Server_API.app.core.config import API_V1_PREFIX
+
+    app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
+
+
 
 
 
@@ -32,9 +49,7 @@ def test_outbox_list_and_sse_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
     from tldw_Server_API.app.main import app
     # Ensure jobs router is mounted even if route policy disabled it
     try:
-        from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
-        from tldw_Server_API.app.core.config import API_V1_PREFIX
-        app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])  # idempotent include for tests
+        _ensure_jobs_router_registered(app)
     except Exception:
         _ = None
 
@@ -125,9 +140,7 @@ def test_outbox_after_id_and_filters_postgres(monkeypatch, jobs_pg_dsn, route_de
     from tldw_Server_API.app.main import app
     # Ensure jobs router is mounted even if route policy disabled it
     try:
-        from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
-        from tldw_Server_API.app.core.config import API_V1_PREFIX
-        app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])  # idempotent include for tests
+        _ensure_jobs_router_registered(app)
     except Exception:
         _ = None
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
