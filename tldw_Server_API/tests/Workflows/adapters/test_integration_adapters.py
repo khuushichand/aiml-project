@@ -393,6 +393,35 @@ async def test_acp_stage_adapter_creates_session_and_prompts(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_acp_stage_output_includes_schema_version(monkeypatch):
+    """Test ACP stage adapter emits output schema version."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-schema")
+            self.prompt = AsyncMock(return_value={"stopReason": "end", "detail": "ok"})
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    result = await run_acp_stage_adapter(
+        {"stage": "impl", "prompt_template": "Implement {{ inputs.task }}"},
+        {"inputs": {"task": "schema-check"}, "user_id": "9"},
+    )
+
+    assert result.get("acp_output_schema_version") == "1.0"
+
+
+@pytest.mark.asyncio
 async def test_acp_stage_adapter_reuses_session_from_context(monkeypatch):
     """Test ACP stage adapter reuses session id from context key."""
     from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
