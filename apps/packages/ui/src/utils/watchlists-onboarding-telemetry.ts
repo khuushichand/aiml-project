@@ -1,3 +1,4 @@
+import { recordWatchlistsOnboardingTelemetry } from "@/services/watchlists"
 import { createSafeStorage } from "@/utils/safe-storage"
 
 const storage = createSafeStorage({ area: "local" })
@@ -33,9 +34,39 @@ export type WatchlistsOnboardingTelemetryEvent =
       type: "quick_setup_completed"
       goal: "briefing" | "triage"
       runNow: boolean
-      destination: "runs" | "outputs" | "jobs"
+      destination: WatchlistsQuickSetupDestination
     }
   | { type: "quick_setup_failed"; step: WatchlistsQuickSetupStep }
+  | {
+      type: "quick_setup_preview_loaded"
+      preview: WatchlistsQuickSetupPreview
+      total?: number
+      ingestable?: number
+      filtered?: number
+      goal?: "briefing" | "triage"
+      audioEnabled?: boolean
+    }
+  | {
+      type: "quick_setup_preview_failed"
+      preview: WatchlistsQuickSetupPreview
+      reason?: string
+    }
+  | {
+      type: "quick_setup_test_run_triggered"
+      runId: number
+    }
+  | { type: "quick_setup_test_run_failed" }
+  | {
+      type: "quick_setup_first_run_succeeded"
+      source?: WatchlistsOnboardingSuccessSource
+      runId?: number
+    }
+  | {
+      type: "quick_setup_first_output_succeeded"
+      source?: WatchlistsOnboardingSuccessSource
+      outputId?: number
+      format?: string
+    }
   | { type: "guided_tour_started" }
   | { type: "guided_tour_step_viewed"; step: WatchlistsGuidedTourStep }
   | { type: "guided_tour_completed" }
@@ -136,14 +167,28 @@ export type WatchlistsUc2PipelineDashboardSnapshot = {
 
 export type WatchlistsOnboardingTelemetryState = {
   version: 1
+  session_id: string
   counters: Record<string, number>
   quick_setup: {
     step_completed: StepCounters
     cancelled_at_step: StepCounters
     failed_at_step: StepCounters
     completed_by_goal: Record<"briefing" | "triage", number>
+    completed_by_destination: QuickSetupDestinationCounters
     completed_with_run_now: number
     completed_without_run_now: number
+    preview_loaded: QuickSetupPreviewCounters
+    preview_failed: QuickSetupPreviewCounters
+    test_run_triggered: number
+    test_run_failed: number
+    first_run_success: number
+    first_output_success: number
+    active_setup_started_at: number | null
+    pending_first_run_success_at: number[]
+    pending_first_output_success_at: number[]
+    seconds_to_setup_completion_samples: number[]
+    seconds_to_first_run_success_samples: number[]
+    seconds_to_first_output_success_samples: number[]
   }
   guided_tour: {
     started: number
@@ -215,6 +260,7 @@ const DEFAULT_PIPELINE_FAILURE_COUNTERS: PipelineFailureCounters = {
 
 const DEFAULT_STATE: WatchlistsOnboardingTelemetryState = {
   version: 1,
+  session_id: createOnboardingSessionId(),
   counters: {},
   quick_setup: {
     step_completed: { ...DEFAULT_STEP_COUNTERS },
@@ -224,8 +270,21 @@ const DEFAULT_STATE: WatchlistsOnboardingTelemetryState = {
       briefing: 0,
       triage: 0
     },
+    completed_by_destination: { ...DEFAULT_DESTINATION_COUNTERS },
     completed_with_run_now: 0,
-    completed_without_run_now: 0
+    completed_without_run_now: 0,
+    preview_loaded: { ...DEFAULT_PREVIEW_COUNTERS },
+    preview_failed: { ...DEFAULT_PREVIEW_COUNTERS },
+    test_run_triggered: 0,
+    test_run_failed: 0,
+    first_run_success: 0,
+    first_output_success: 0,
+    active_setup_started_at: null,
+    pending_first_run_success_at: [],
+    pending_first_output_success_at: [],
+    seconds_to_setup_completion_samples: [],
+    seconds_to_first_run_success_samples: [],
+    seconds_to_first_output_success_samples: []
   },
   guided_tour: {
     started: 0,
@@ -258,6 +317,47 @@ const incrementCounter = (counters: Record<string, number>, key: string) => {
   counters[key] = (counters[key] || 0) + 1
 }
 
+const toBoundedNumberList = (value: unknown, maxSize: number): number[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isFinite(entry) && entry >= 0)
+    .slice(-maxSize)
+}
+
+const pushDurationSample = (samples: number[], durationSeconds: number): number[] => {
+  if (!Number.isFinite(durationSeconds) || durationSeconds < 0) return samples.slice(-MAX_DURATION_SAMPLES)
+  const rounded = Math.round(durationSeconds * 100) / 100
+  return [...samples, rounded].slice(-MAX_DURATION_SAMPLES)
+}
+
+const consumePendingTimestamp = (pending: number[]): { next: number[]; consumedAt: number | null } => {
+  if (!Array.isArray(pending) || pending.length <= 0) {
+    return {
+      next: [],
+      consumedAt: null
+    }
+  }
+  const [consumedAt, ...rest] = pending
+  return {
+    next: rest.slice(-MAX_PENDING_COMPLETION_EVENTS),
+    consumedAt: Number.isFinite(consumedAt) ? Number(consumedAt) : null
+  }
+}
+
+const hasPendingOnboardingMilestone = (
+  state: WatchlistsOnboardingTelemetryState,
+  event: WatchlistsOnboardingTelemetryEvent
+): boolean => {
+  if (event.type === "quick_setup_first_run_succeeded") {
+    return state.quick_setup.pending_first_run_success_at.length > 0
+  }
+  if (event.type === "quick_setup_first_output_succeeded") {
+    return state.quick_setup.pending_first_output_success_at.length > 0
+  }
+  return true
+}
+
 const toEventDetails = (
   event: WatchlistsOnboardingTelemetryEvent
 ): EventDetails => {
@@ -285,6 +385,10 @@ const readTelemetryState =
     return {
       ...DEFAULT_STATE,
       ...state,
+      session_id:
+        typeof state.session_id === "string" && state.session_id.trim().length > 0
+          ? state.session_id
+          : createOnboardingSessionId(),
       counters: { ...DEFAULT_STATE.counters, ...(state.counters || {}) },
       quick_setup: {
         ...DEFAULT_STATE.quick_setup,
@@ -304,7 +408,42 @@ const readTelemetryState =
         completed_by_goal: {
           ...DEFAULT_STATE.quick_setup.completed_by_goal,
           ...(state.quick_setup?.completed_by_goal || {})
-        }
+        },
+        completed_by_destination: {
+          ...DEFAULT_STATE.quick_setup.completed_by_destination,
+          ...(state.quick_setup?.completed_by_destination || {})
+        },
+        preview_loaded: {
+          ...DEFAULT_STATE.quick_setup.preview_loaded,
+          ...(state.quick_setup?.preview_loaded || {})
+        },
+        preview_failed: {
+          ...DEFAULT_STATE.quick_setup.preview_failed,
+          ...(state.quick_setup?.preview_failed || {})
+        },
+        pending_first_run_success_at: toBoundedNumberList(
+          state.quick_setup?.pending_first_run_success_at,
+          MAX_PENDING_COMPLETION_EVENTS
+        ),
+        pending_first_output_success_at: toBoundedNumberList(
+          state.quick_setup?.pending_first_output_success_at,
+          MAX_PENDING_COMPLETION_EVENTS
+        ),
+        seconds_to_setup_completion_samples: toBoundedNumberList(
+          state.quick_setup?.seconds_to_setup_completion_samples,
+          MAX_DURATION_SAMPLES
+        ),
+        seconds_to_first_run_success_samples: toBoundedNumberList(
+          state.quick_setup?.seconds_to_first_run_success_samples,
+          MAX_DURATION_SAMPLES
+        ),
+        seconds_to_first_output_success_samples: toBoundedNumberList(
+          state.quick_setup?.seconds_to_first_output_success_samples,
+          MAX_DURATION_SAMPLES
+        ),
+        active_setup_started_at: Number.isFinite(state.quick_setup?.active_setup_started_at)
+          ? Number(state.quick_setup?.active_setup_started_at)
+          : null
       },
       guided_tour: {
         ...DEFAULT_STATE.guided_tour,
@@ -357,6 +496,9 @@ export const trackWatchlistsOnboardingTelemetry = async (
 ) => {
   try {
     const state = await readTelemetryState()
+    if (!hasPendingOnboardingMilestone(state, event)) {
+      return
+    }
     const now = Date.now()
     let shouldRecord = true
 
@@ -366,18 +508,80 @@ export const trackWatchlistsOnboardingTelemetry = async (
         break
       case "quick_setup_cancelled":
         state.quick_setup.cancelled_at_step[event.step] += 1
+        state.quick_setup.active_setup_started_at = null
         break
       case "quick_setup_failed":
         state.quick_setup.failed_at_step[event.step] += 1
+        state.quick_setup.active_setup_started_at = null
         break
       case "quick_setup_completed":
         state.quick_setup.completed_by_goal[event.goal] += 1
+        state.quick_setup.completed_by_destination[event.destination] += 1
+        if (Number.isFinite(state.quick_setup.active_setup_started_at)) {
+          const elapsedSeconds =
+            (now - Number(state.quick_setup.active_setup_started_at)) / 1000
+          state.quick_setup.seconds_to_setup_completion_samples = pushDurationSample(
+            state.quick_setup.seconds_to_setup_completion_samples,
+            elapsedSeconds
+          )
+        }
+        state.quick_setup.active_setup_started_at = null
         if (event.runNow) {
           state.quick_setup.completed_with_run_now += 1
         } else {
           state.quick_setup.completed_without_run_now += 1
         }
+        if (event.goal === "briefing") {
+          state.quick_setup.pending_first_run_success_at = [
+            ...state.quick_setup.pending_first_run_success_at,
+            now
+          ].slice(-MAX_PENDING_COMPLETION_EVENTS)
+          state.quick_setup.pending_first_output_success_at = [
+            ...state.quick_setup.pending_first_output_success_at,
+            now
+          ].slice(-MAX_PENDING_COMPLETION_EVENTS)
+        }
         break
+      case "quick_setup_preview_loaded":
+        state.quick_setup.preview_loaded[event.preview] += 1
+        break
+      case "quick_setup_preview_failed":
+        state.quick_setup.preview_failed[event.preview] += 1
+        break
+      case "quick_setup_test_run_triggered":
+        state.quick_setup.test_run_triggered += 1
+        break
+      case "quick_setup_test_run_failed":
+        state.quick_setup.test_run_failed += 1
+        break
+      case "quick_setup_first_run_succeeded": {
+        const runCompletion = consumePendingTimestamp(
+          state.quick_setup.pending_first_run_success_at
+        )
+        state.quick_setup.pending_first_run_success_at = runCompletion.next
+        state.quick_setup.first_run_success += 1
+        if (runCompletion.consumedAt != null) {
+          state.quick_setup.seconds_to_first_run_success_samples = pushDurationSample(
+            state.quick_setup.seconds_to_first_run_success_samples,
+            (now - runCompletion.consumedAt) / 1000
+          )
+        }
+        break
+      }
+      case "quick_setup_first_output_succeeded": {
+        const outputCompletion = consumePendingTimestamp(
+          state.quick_setup.pending_first_output_success_at
+        )
+        state.quick_setup.pending_first_output_success_at = outputCompletion.next
+        state.quick_setup.first_output_success += 1
+        if (outputCompletion.consumedAt != null) {
+          state.quick_setup.seconds_to_first_output_success_samples = pushDurationSample(
+            state.quick_setup.seconds_to_first_output_success_samples,
+            (now - outputCompletion.consumedAt) / 1000
+          )
+        }
+        break
+      }
       case "guided_tour_started":
         state.guided_tour.started += 1
         break
@@ -451,6 +655,15 @@ export const trackWatchlistsOnboardingTelemetry = async (
     }
 
     await writeTelemetryState(state)
+
+    void recordWatchlistsOnboardingTelemetry({
+      session_id: state.session_id,
+      event_type: event.type,
+      event_at: new Date(now).toISOString(),
+      details: toEventDetails(event)
+    }).catch(() => {
+      // Backend telemetry sink failures are non-blocking by design.
+    })
   } catch (error) {
     console.warn("[watchlists-onboarding-telemetry] Failed to record event", error)
   }

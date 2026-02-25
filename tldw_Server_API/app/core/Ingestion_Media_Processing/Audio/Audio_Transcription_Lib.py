@@ -182,11 +182,11 @@ def _coerce_int(val):
         return None
 
 
-def _coerce_float(val):
+def _coerce_float(val, default=None):
     try:
         return float(val)
     except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
-        return None
+        return default
 
 
 def _looks_like_error_text(text: Any) -> bool:
@@ -266,12 +266,30 @@ def _resample_audio_if_needed(audio: np.ndarray, sample_rate: int, target_sr: in
 
 
 def _resolve_project_root() -> Path:
-    """Return the repository root to anchor shared model directories."""
+    """
+    Return the repository root used to anchor shared model directories.
+
+    Preference order:
+    1. A parent containing `models/` and a repo marker (`.git` or
+       `pyproject.toml` with `tldw_Server_API/`).
+    2. Otherwise, the outermost parent containing `models/`.
+    3. Legacy depth-based fallback for unusual layouts.
+    """
     current = Path(__file__).resolve()
+    fallback_with_models: Path | None = None
+
     for parent in current.parents:
         models_dir = parent / "models"
-        if models_dir.is_dir():
+        if not models_dir.is_dir():
+            continue
+        if (parent / ".git").exists() or (
+            (parent / "pyproject.toml").exists() and (parent / "tldw_Server_API").is_dir()
+        ):
             return parent
+        fallback_with_models = parent
+
+    if fallback_with_models is not None:
+        return fallback_with_models
 
     parents = current.parents
     fallback_index = 5 if len(parents) > 5 else len(parents) - 1
@@ -484,6 +502,41 @@ def validate_whisper_model_identifier(model_name: str) -> str:
         model_name,
         base_dir=WHISPER_MODEL_BASE_DIR,
     )
+
+
+def _normalize_qwen2audio_model_identifier(model_id: str) -> str:
+    """Validate and normalize a Qwen2Audio model identifier.
+
+    Accepts Hugging Face model ids and local filesystem paths that resolve
+    under `WHISPER_MODEL_BASE_DIR`. Paths outside the configured model root are
+    rejected to prevent path traversal or arbitrary filesystem access when the
+    identifier comes from configuration/user-controlled sources.
+    """
+    raw = str(model_id or "").strip()
+    if not raw:
+        raise ValueError("Qwen2Audio model identifier cannot be empty")
+
+    # Prefer canonical Hub identifiers when possible.
+    if _is_hf_model_id(raw):
+        return raw
+
+    # For local paths, require the resolved target to remain under model root.
+    safe_path = resolve_safe_local_path(Path(raw), WHISPER_MODEL_BASE_DIR)
+    if safe_path is None:
+        raise ValueError(
+            f"Qwen2Audio model path must resolve under {WHISPER_MODEL_BASE_DIR.resolve(strict=False)}"
+        )
+    if not safe_path.exists():
+        raise ValueError(f"Qwen2Audio model path does not exist: {safe_path}")
+    if not safe_path.is_dir():
+        raise ValueError(f"Qwen2Audio model path is not a directory: {safe_path}")
+    _assert_no_symlink(safe_path, label="Qwen2Audio model path")
+    return str(safe_path)
+
+
+def validate_qwen2audio_model_identifier(model_id: str) -> str:
+    """Public validator for Qwen2Audio model identifiers."""
+    return _normalize_qwen2audio_model_identifier(model_id)
 
 
 def _resolve_whisper_download_root(download_root: Optional[Union[str, Path]]) -> Path:
@@ -1892,7 +1945,12 @@ def load_qwen2audio():
             )
             raise RuntimeError("[Transcription error] Qwen2Audio is disabled or not configured")
 
-        model_id = stt_cfg.get("qwen2audio_model_id", "Qwen/Qwen2-Audio-7B-Instruct")
+        configured_model_id = stt_cfg.get("qwen2audio_model_id", "Qwen/Qwen2-Audio-7B-Instruct")
+        try:
+            model_id = _normalize_qwen2audio_model_identifier(str(configured_model_id))
+        except ValueError as exc:
+            logging.warning(f"Rejected unsafe Qwen2Audio model identifier '{configured_model_id}': {exc}")
+            raise RuntimeError("[Transcription error] Invalid Qwen2Audio model identifier") from exc
         revision = stt_cfg.get("qwen2audio_revision") or os.getenv("QWEN2AUDIO_REVISION")
         logging.info(f"Loading Qwen2Audio model: {model_id}")
 
@@ -3190,6 +3248,10 @@ def speech_to_text(
                 return segments_parakeet, selected_source_lang
             return segments_parakeet
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
+            normalized_variant = str(variant or "").strip().lower()
+            if normalized_variant == "onnx":
+                logging.error(f"Parakeet ONNX transcription failed (fail-fast): {e}")
+                raise STTTranscriptionError(f"Parakeet ONNX transcription failed: {e}") from e
             logging.error(f"Parakeet transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-large-v3"  # Default fallback model

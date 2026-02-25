@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. കണക്റ്റ് ചെയ്ത് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. ഡിസ്കണക്റ്റ് ചെയ്ത് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. സ്റ്റേറ്റ് ലോഡ് ചെയ്ത് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. പെർസോണ മാറ്റി ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. സെഷൻ മാറ്റി ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. ഈ സ്റ്റേറ്റ് വേർഷൻ പുനഃസ്ഥാപിച്ച് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. ഈ പേജ് വിട്ട് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. സേവ് ചെയ്യാതെ ഈ പേജ് വിടണോ?"
   }
 }

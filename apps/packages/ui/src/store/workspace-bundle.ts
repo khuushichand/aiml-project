@@ -2,6 +2,7 @@ import type { ChatHistory, Message } from "@/store/option"
 import type {
   AudioGenerationSettings,
   GeneratedArtifact,
+  WorkspaceBanner,
   WorkspaceNote,
   WorkspaceSource
 } from "@/types/workspace"
@@ -23,6 +24,7 @@ export interface WorkspaceBundleSnapshot {
   generatedArtifacts: GeneratedArtifact[]
   notes: string
   currentNote: WorkspaceNote
+  workspaceBanner: WorkspaceBanner
   leftPaneCollapsed: boolean
   rightPaneCollapsed: boolean
   audioSettings: AudioGenerationSettings
@@ -185,6 +187,37 @@ export const createWorkspaceExportZipBlob = async (
   })
 }
 
+const readFileAsArrayBuffer = async (file: File): Promise<ArrayBuffer> => {
+  const fileCandidate = file as File & {
+    arrayBuffer?: () => Promise<ArrayBuffer>
+  }
+  if (typeof fileCandidate.arrayBuffer === "function") {
+    return fileCandidate.arrayBuffer()
+  }
+
+  if (typeof FileReader !== "undefined") {
+    return new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        if (reader.result instanceof ArrayBuffer) {
+          resolve(reader.result)
+          return
+        }
+        reject(new Error("invalid-zip-bundle"))
+      }
+      reader.onerror = () =>
+        reject(reader.error || new Error("invalid-zip-bundle"))
+      reader.readAsArrayBuffer(file)
+    })
+  }
+
+  if (typeof Response !== "undefined") {
+    return new Response(file).arrayBuffer()
+  }
+
+  throw new Error("invalid-zip-bundle")
+}
+
 export const parseWorkspaceImportFile = async (
   file: File
 ): Promise<WorkspaceExportBundle> => {
@@ -194,7 +227,7 @@ export const parseWorkspaceImportFile = async (
   }
 
   const { default: JSZip } = await import("jszip")
-  const zip = await JSZip.loadAsync(await file.arrayBuffer())
+  const zip = await JSZip.loadAsync(await readFileAsArrayBuffer(file))
   const manifestFile = zip.file(WORKSPACE_EXPORT_BUNDLE_MANIFEST_FILE)
   const payloadFile = zip.file(WORKSPACE_EXPORT_BUNDLE_PAYLOAD_FILE)
   if (!manifestFile || !payloadFile) {

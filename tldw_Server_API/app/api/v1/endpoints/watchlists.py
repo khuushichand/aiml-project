@@ -12,11 +12,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import csv
+import difflib
 import io
 import json
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
@@ -71,6 +73,10 @@ from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters as _eva
 from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _normalize_job_filters
 from tldw_Server_API.app.core.Watchlists.opml import generate_opml, parse_opml
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
+from tldw_Server_API.app.core.Watchlists.watchlists_telemetry_metrics import (
+    record_onboarding_ingest_result,
+    record_summary_request,
+)
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseError as _DatabaseError
 from tldw_Server_API.app.services.outputs_service import (
     _build_output_filename,
@@ -161,9 +167,14 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     TagsListResponse,
     WatchlistFilter,
     WatchlistFiltersPayload,
+    WatchlistOnboardingTelemetryIngestRequest,
+    WatchlistOnboardingTelemetryIngestResponse,
+    WatchlistOnboardingTelemetrySummaryResponse,
     WatchlistIaExperimentTelemetryIngestRequest,
     WatchlistIaExperimentTelemetryIngestResponse,
     WatchlistIaExperimentTelemetrySummaryResponse,
+    WatchlistRcTelemetrySummaryResponse,
+    WatchlistTelemetryThresholdSummary,
     WatchlistOutput,
     WatchlistOutputCreateRequest,
     WatchlistOutputsListResponse,
@@ -176,6 +187,12 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     WatchlistTemplateVersionSummary,
     TemplatePreviewRequest,
     TemplatePreviewResponse,
+    TemplateComposerFlowCheckRequest,
+    TemplateComposerFlowCheckResponse,
+    TemplateComposerFlowIssue,
+    TemplateComposerFlowSection,
+    TemplateComposerSectionRequest,
+    TemplateComposerSectionResponse,
     TemplateValidateRequest,
     TemplateValidationResult,
     TemplateValidationErrorItem,
@@ -208,6 +225,9 @@ router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 DEFAULT_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS", "0") or 0)
 TEMP_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_TEMP_TTL_SECONDS", "86400") or 86400)
 DEFAULT_TTS_BRIEF_MAX_ITEMS = int(os.getenv("WATCHLIST_OUTPUT_TTS_BRIEF_MAX_ITEMS", "10") or 10)
+TEMPLATE_COMPOSER_FLOW_MAX_DIFF_CHARS = max(
+    1024, int(os.getenv("WATCHLIST_TEMPLATE_FLOW_CHECK_MAX_DIFF_CHARS", "50000") or 50000)
+)
 WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS = max(
     1, int(os.getenv("WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS", "10") or 10)
 )
@@ -218,9 +238,139 @@ _WATCHLIST_MIN_SCHEDULE_INTERVAL_MINUTES = max(
 )
 _EMAIL_RECIPIENT_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
+_WATCHLISTS_UX_BASELINE = {
+    "uc1_f1_first_source_setup_percent": 92.96,
+    "uc1_f2_time_to_first_review_seconds": 567.49,
+    "uc1_f3_triage_completion_percent": 0.0,
+    "uc2_f1_pipeline_completion_percent": 56.72,
+    "uc2_f2_text_output_success_percent": 0.06,
+    "uc2_f3_audio_output_success_percent": 0.03,
+}
+
 
 def _utcnow_iso() -> str:
+    """Return the current UTC timestamp as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _safe_ratio(numerator: int | float, denominator: int | float) -> float:
+    """Return a defensive ratio, defaulting to ``0.0`` for invalid/zero denominators."""
+    try:
+        num = float(numerator)
+        den = float(denominator)
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        return 0.0
+    if den <= 0:
+        return 0.0
+    return num / den
+
+
+def _to_percent(value: int | float) -> float:
+    """Convert a decimal ratio to percentage points."""
+    return float(value) * 100.0
+
+
+def _percent_delta(current_percent: float, baseline_percent: float) -> float:
+    """Return percentage-point delta from baseline."""
+    return float(current_percent) - float(baseline_percent)
+
+
+def _normalize_ia_summary(
+    items: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Normalize IA telemetry rows into a baseline/experimental summary payload."""
+    baseline: dict[str, Any] = {
+        "baseline": {},
+        "experimental": {},
+        "sessions_total": 0,
+        "events_total": 0,
+    }
+    if not items:
+        return baseline
+    sessions_total = 0
+    events_total = 0
+    by_variant: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        variant = "experimental" if str(item.get("variant", "")).strip().lower() == "experimental" else "baseline"
+        by_variant[variant] = item
+        sessions_total += int(item.get("sessions") or 0)
+        events_total += int(item.get("events") or 0)
+    baseline["baseline"] = by_variant.get("baseline", {})
+    baseline["experimental"] = by_variant.get("experimental", {})
+    baseline["sessions_total"] = sessions_total
+    baseline["events_total"] = events_total
+    return baseline
+
+
+def _build_thresholds(
+    *,
+    onboarding_summary: dict[str, Any],
+    uc2_backend: dict[str, Any],
+) -> list[WatchlistTelemetryThresholdSummary]:
+    """Build reporting-only RC threshold evaluations from onboarding and backend telemetry."""
+    rates = onboarding_summary.get("rates", {}) if isinstance(onboarding_summary, dict) else {}
+    timings = onboarding_summary.get("timings", {}) if isinstance(onboarding_summary, dict) else {}
+
+    setup_completion_percent = _to_percent(float(rates.get("setup_completion_rate") or 0.0))
+    setup_delta = _percent_delta(
+        setup_completion_percent,
+        float(_WATCHLISTS_UX_BASELINE["uc1_f1_first_source_setup_percent"]),
+    )
+    setup_status: Literal["ok", "potential_breach"] = (
+        "potential_breach" if setup_delta <= -10.0 else "ok"
+    )
+
+    backend_first_output_percent = _to_percent(float(uc2_backend.get("first_output_success_rate") or 0.0))
+    first_output_delta = _percent_delta(
+        backend_first_output_percent,
+        float(_WATCHLISTS_UX_BASELINE["uc2_f2_text_output_success_percent"]),
+    )
+    first_output_status: Literal["ok", "potential_breach"] = (
+        "potential_breach" if first_output_delta <= -10.0 else "ok"
+    )
+
+    onboarding_first_output_median = float(timings.get("median_seconds_to_first_output_success") or 0.0)
+    baseline_seconds = float(_WATCHLISTS_UX_BASELINE["uc1_f2_time_to_first_review_seconds"])
+    timing_ratio = (
+        onboarding_first_output_median / baseline_seconds
+        if baseline_seconds > 0 and onboarding_first_output_median > 0
+        else 0.0
+    )
+    timing_status: Literal["ok", "potential_breach"] = (
+        "potential_breach" if timing_ratio >= 1.25 else "ok"
+    )
+
+    return [
+        WatchlistTelemetryThresholdSummary(
+            id="setup_completion_drop_10pp",
+            label="Setup completion drop >= 10pp vs baseline",
+            status=setup_status,
+            reporting_only=True,
+            metric_value=setup_completion_percent,
+            baseline_value=float(_WATCHLISTS_UX_BASELINE["uc1_f1_first_source_setup_percent"]),
+            delta=setup_delta,
+        ),
+        WatchlistTelemetryThresholdSummary(
+            id="first_output_success_drop_10pp",
+            label="First output success drop >= 10pp vs baseline",
+            status=first_output_status,
+            reporting_only=True,
+            metric_value=backend_first_output_percent,
+            baseline_value=float(_WATCHLISTS_UX_BASELINE["uc2_f2_text_output_success_percent"]),
+            delta=first_output_delta,
+        ),
+        WatchlistTelemetryThresholdSummary(
+            id="median_first_output_regression_25pct",
+            label="Median first-output time regresses >= 25% vs baseline",
+            status=timing_status,
+            reporting_only=True,
+            metric_value=onboarding_first_output_median,
+            baseline_value=baseline_seconds,
+            delta=(onboarding_first_output_median - baseline_seconds),
+        ),
+    ]
 
 
 def _is_expired(expires_at: str | None) -> bool:
@@ -1123,7 +1273,7 @@ async def _resolve_watchlists_ws_user_id(
             from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 
             jwt_service = get_jwt_service()
-            payload = await jwt_service.verify_token_async(token, token_type="access")
+            payload = await jwt_service.verify_token_async(token, token_type="access")  # nosec B106
             session_manager = await get_session_manager()
             if await session_manager.is_token_blacklisted(token, payload.get("jti")):
                 raise HTTPException(status_code=401, detail="invalid_token")
@@ -2302,7 +2452,8 @@ async def delete_group(
 async def get_watchlist_settings(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
-):
+) -> dict[str, Any]:
+    """Return watchlists runtime defaults and active backend type for the current user."""
     backend_label = "sqlite"
     backend_type = getattr(getattr(db, "backend", None), "backend_type", None)
     backend_name = str(getattr(backend_type, "name", "") or "").lower()
@@ -2316,6 +2467,161 @@ async def get_watchlist_settings(
         "sharing_mode": _watchlists_sharing_mode(),
         "watchlists_backend": backend_label,
     }
+
+
+@router.post(
+    "/telemetry/onboarding",
+    response_model=WatchlistOnboardingTelemetryIngestResponse,
+    summary="Record watchlists onboarding telemetry event",
+)
+async def record_watchlists_onboarding_telemetry(
+    payload: WatchlistOnboardingTelemetryIngestRequest,
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+) -> WatchlistOnboardingTelemetryIngestResponse:
+    """Record a single onboarding telemetry event and return accept/reject outcome."""
+    _ = current_user
+    try:
+        result = db.record_onboarding_event(
+            session_id=payload.session_id,
+            event_type=payload.event_type,
+            event_at=payload.event_at,
+            details=payload.details,
+        )
+        accepted = bool(result.get("accepted"))
+        code = result.get("code")
+        record_onboarding_ingest_result("accepted" if accepted else "rejected")
+        return WatchlistOnboardingTelemetryIngestResponse(accepted=accepted, code=code)
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("watchlists onboarding telemetry ingest failed for user {}: {}", current_user.id, exc)
+        record_onboarding_ingest_result("error")
+        return WatchlistOnboardingTelemetryIngestResponse(
+            accepted=False,
+            code="onboarding_telemetry_ingest_failed",
+        )
+
+
+@router.get(
+    "/telemetry/onboarding/summary",
+    response_model=WatchlistOnboardingTelemetrySummaryResponse,
+    summary="Summarize watchlists onboarding telemetry",
+)
+async def get_watchlists_onboarding_telemetry_summary(
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+) -> WatchlistOnboardingTelemetrySummaryResponse:
+    """Summarize onboarding telemetry counters/rates/timings for an optional time window."""
+    started = time.perf_counter()
+    status_label = "ok"
+    try:
+        summary = db.summarize_onboarding_events(since=since, until=until)
+        return WatchlistOnboardingTelemetrySummaryResponse(
+            counters=summary.get("counters", {}),
+            rates=summary.get("rates", {}),
+            timings=summary.get("timings", {}),
+            since=since,
+            until=until,
+        )
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        status_label = "error"
+        logger.error("watchlists onboarding telemetry summary failed for user {}: {}", current_user.id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="watchlists_onboarding_telemetry_summary_failed",
+        ) from exc
+    finally:
+        record_summary_request(
+            "onboarding_summary",
+            status_label,
+            time.perf_counter() - started,
+        )
+
+
+@router.get(
+    "/telemetry/rc-summary",
+    response_model=WatchlistRcTelemetrySummaryResponse,
+    summary="Get combined watchlists RC telemetry summary",
+)
+async def get_watchlists_rc_telemetry_summary(
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+    collections_db = Depends(get_collections_db_for_user),
+) -> WatchlistRcTelemetrySummaryResponse:
+    """Return combined onboarding, IA, and UC2 backend telemetry for RC reporting."""
+    started = time.perf_counter()
+    status_label = "ok"
+    try:
+        onboarding = db.summarize_onboarding_events(since=since, until=until)
+        ia_items = db.summarize_ia_experiment_events(since=since, until=until)
+        ia_summary = _normalize_ia_summary(ia_items)
+
+        completed_run_ids = db.list_completed_run_ids(since=since, until=until)
+        completed_runs = len(completed_run_ids)
+        text_output_success_runs = 0
+        audio_output_success_runs = 0
+
+        for run_id in completed_run_ids:
+            run_outputs, _ = collections_db.list_output_artifacts(
+                run_id=run_id,
+                limit=200,
+                offset=0,
+                metadata_origin="watchlists",
+            )
+            has_text_output = False
+            has_audio_output = False
+            for output in run_outputs:
+                output_type = str(getattr(output, "type", "") or "").strip().lower()
+                output_format = str(getattr(output, "format", "") or "").strip().lower()
+                is_audio = output_format == "mp3" or output_type in {"tts_audio", "audio_briefing"}
+                if is_audio:
+                    has_audio_output = True
+                else:
+                    has_text_output = True
+            if has_text_output:
+                text_output_success_runs += 1
+            if has_audio_output:
+                audio_output_success_runs += 1
+
+        uc2_backend = {
+            "completed_runs": int(completed_runs),
+            "text_output_success_runs": int(text_output_success_runs),
+            "audio_output_success_runs": int(audio_output_success_runs),
+            "first_output_success_rate": _safe_ratio(text_output_success_runs, completed_runs),
+            "audio_output_success_rate": _safe_ratio(audio_output_success_runs, completed_runs),
+        }
+
+        onboarding_summary = WatchlistOnboardingTelemetrySummaryResponse(
+            counters=onboarding.get("counters", {}),
+            rates=onboarding.get("rates", {}),
+            timings=onboarding.get("timings", {}),
+            since=since,
+            until=until,
+        )
+        thresholds = _build_thresholds(onboarding_summary=onboarding, uc2_backend=uc2_backend)
+
+        return WatchlistRcTelemetrySummaryResponse(
+            onboarding=onboarding_summary,
+            uc2_backend=uc2_backend,
+            ia_experiment=ia_summary,
+            baseline=dict(_WATCHLISTS_UX_BASELINE),
+            thresholds=thresholds,
+            since=since,
+            until=until,
+        )
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        status_label = "error"
+        logger.error("watchlists RC telemetry summary failed for user {}: {}", current_user.id, exc)
+        raise HTTPException(status_code=500, detail="watchlists_rc_telemetry_summary_failed") from exc
+    finally:
+        record_summary_request(
+            "rc_summary",
+            status_label,
+            time.perf_counter() - started,
+        )
 
 
 @router.post(
@@ -5057,6 +5363,10 @@ async def list_templates(
             updated_at=rec.updated_at,
             version=rec.version,
             history_count=rec.history_count,
+            composer_ast=rec.composer_ast,
+            composer_schema_version=rec.composer_schema_version,
+            composer_sync_hash=rec.composer_sync_hash,
+            composer_sync_status=rec.composer_sync_status,
         )
         for rec in records
     ]
@@ -5148,6 +5458,189 @@ async def preview_template(
     )
 
 
+@router.post(
+    "/templates/compose/section",
+    response_model=TemplateComposerSectionResponse,
+    summary="Generate draft content for a composer section (manual preview mode)",
+    dependencies=[Depends(rbac_rate_limit("watchlists.run"))],
+)
+async def compose_template_section(
+    payload: TemplateComposerSectionRequest,
+    current_user: User = Depends(get_request_user),
+    db: WatchlistsDatabase = Depends(get_watchlists_db_for_user),
+) -> TemplateComposerSectionResponse:
+    """Build deterministic section draft text from run context for manual authoring."""
+    try:
+        run = db.get_run(payload.run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found") from None
+    try:
+        job = db.get_job(run.job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job_not_found") from None
+
+    items_raw, _ = db.list_items(run_id=payload.run_id, status="ingested", limit=1000, offset=0)
+    item_models = [_row_to_scraped_item(it) for it in items_raw]
+    title = getattr(job, "name", None) or f"Job-{job.id}"
+    context = _build_output_context(title, job, run, item_models)
+    context_items = list(context.get("items") or [])
+
+    length_limits = {"short": 3, "medium": 5, "long": 8}
+    selected_items = context_items[: length_limits.get(payload.length_target, 5)]
+
+    warnings: list[str] = []
+    if not selected_items:
+        warnings.append("No ingested items available for this run")
+
+    style = (payload.style or "").strip()
+    prompt = payload.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="invalid_prompt")
+    lines: list[str] = []
+    if style:
+        lines.append(f"Style: {style}")
+        lines.append("")
+    lines.append(prompt)
+    lines.append("")
+    if selected_items:
+        for item in selected_items:
+            raw_title = str(item.get("title") or "Untitled")
+            raw_summary = str(item.get("summary") or "").strip()
+            if raw_summary:
+                snippet = re.sub(r"\s+", " ", raw_summary)[:240]
+                lines.append(f"- {raw_title}: {snippet}")
+            else:
+                lines.append(f"- {raw_title}")
+    else:
+        lines.append("No items were available to draft from.")
+
+    content = "\n".join(lines).strip()
+    diagnostics: dict[str, Any] = {
+        "run_id": payload.run_id,
+        "block_id": payload.block_id,
+        "input_scope": payload.input_scope,
+        "length_target": payload.length_target,
+        "item_count": len(context_items),
+        "selected_item_count": len(selected_items),
+        "generation_mode": "manual_preview_stub",
+    }
+    if style:
+        diagnostics["style"] = style
+
+    return TemplateComposerSectionResponse(
+        block_id=payload.block_id,
+        content=content,
+        warnings=warnings,
+        diagnostics=diagnostics,
+    )
+
+
+@router.post(
+    "/templates/compose/flow-check",
+    response_model=TemplateComposerFlowCheckResponse,
+    summary="Check section-to-section flow and return suggestions (manual preview mode)",
+    dependencies=[Depends(rbac_rate_limit("watchlists.run"))],
+)
+async def compose_template_flow_check(
+    payload: TemplateComposerFlowCheckRequest,
+    current_user: User = Depends(get_request_user),
+    db: WatchlistsDatabase = Depends(get_watchlists_db_for_user),
+) -> TemplateComposerFlowCheckResponse:
+    """Return flow issues and suggested revisions without persisting changes."""
+    try:
+        db.get_run(payload.run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found") from None
+
+    original_sections: list[TemplateComposerFlowSection] = []
+    revised_sections: list[TemplateComposerFlowSection] = []
+    issues: list[TemplateComposerFlowIssue] = []
+
+    for index, section in enumerate(payload.sections):
+        section_id = section.id.strip()
+        if not section_id:
+            raise HTTPException(status_code=422, detail="invalid_section_id")
+        text = section.content.strip()
+        original_sections.append(TemplateComposerFlowSection(id=section_id, content=text))
+
+        if not text:
+            issues.append(
+                TemplateComposerFlowIssue(
+                    section_id=section_id,
+                    severity="warning",
+                    message="Section is empty",
+                )
+            )
+            revised_sections.append(TemplateComposerFlowSection(id=section_id, content=text))
+            continue
+
+        revised_text = text
+        is_markdown_header = bool(re.match(r"^\s{0,3}#{1,6}\s", text))
+        if text[-1] not in ".!?" and not is_markdown_header:
+            revised_text = f"{text}."
+            issues.append(
+                TemplateComposerFlowIssue(
+                    section_id=section_id,
+                    severity="info",
+                    message="Consider ending the section with terminal punctuation for smoother transitions",
+                )
+            )
+
+        if index > 0:
+            prev = original_sections[index - 1].content.strip().lower()
+            curr = text.lower()
+            if prev and curr and prev == curr:
+                issues.append(
+                    TemplateComposerFlowIssue(
+                        section_id=section_id,
+                        severity="warning",
+                        message="Section content duplicates the previous section",
+                    )
+                )
+
+        revised_sections.append(TemplateComposerFlowSection(id=section_id, content=revised_text))
+
+    if len(original_sections) < 2:
+        issues.append(
+            TemplateComposerFlowIssue(
+                section_id=None,
+                severity="info",
+                message="Add at least two sections to evaluate cross-section flow",
+            )
+        )
+
+    original_text = "\n\n".join(f"[{sec.id}]\n{sec.content}" for sec in original_sections)
+    revised_text = "\n\n".join(f"[{sec.id}]\n{sec.content}" for sec in revised_sections)
+    diff = "\n".join(
+        difflib.unified_diff(
+            original_text.splitlines(),
+            revised_text.splitlines(),
+            fromfile="original",
+            tofile="suggested",
+            lineterm="",
+        )
+    )
+    if len(diff) > TEMPLATE_COMPOSER_FLOW_MAX_DIFF_CHARS:
+        diff = (
+            f"{diff[:TEMPLATE_COMPOSER_FLOW_MAX_DIFF_CHARS].rstrip()}\n"
+            "... [flow-check diff truncated due to size]"
+        )
+        issues.append(
+            TemplateComposerFlowIssue(
+                section_id=None,
+                severity="info",
+                message="Flow-check diff was truncated due to size limits",
+            )
+        )
+
+    return TemplateComposerFlowCheckResponse(
+        mode=payload.mode,
+        issues=issues,
+        diff=diff,
+        sections=revised_sections if payload.mode == "auto_apply" else original_sections,
+    )
+
+
 @router.get(
     "/templates/{template_name}/versions",
     response_model=WatchlistTemplateVersionsResponse,
@@ -5200,6 +5693,10 @@ async def get_template(
         version=record.version,
         history_count=record.history_count,
         available_versions=record.available_versions or [record.version],
+        composer_ast=record.composer_ast,
+        composer_schema_version=record.composer_schema_version,
+        composer_sync_hash=record.composer_sync_hash,
+        composer_sync_status=record.composer_sync_status,
     )
 
 
@@ -5220,6 +5717,10 @@ async def create_template(
             content=payload.content,
             description=payload.description,
             overwrite=payload.overwrite,
+            composer_ast=payload.composer_ast,
+            composer_schema_version=payload.composer_schema_version,
+            composer_sync_hash=payload.composer_sync_hash,
+            composer_sync_status=payload.composer_sync_status,
         )
     except TemplateValidationError as exc:
         raise HTTPException(
@@ -5237,6 +5738,10 @@ async def create_template(
         version=record.version,
         history_count=record.history_count,
         available_versions=record.available_versions or [record.version],
+        composer_ast=record.composer_ast,
+        composer_schema_version=record.composer_schema_version,
+        composer_sync_hash=record.composer_sync_hash,
+        composer_sync_status=record.composer_sync_status,
     )
 
 

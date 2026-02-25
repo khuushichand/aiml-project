@@ -21,6 +21,13 @@ const mocks = vi.hoisted(() => {
       | "outputs"
       | "templates"
       | "settings",
+    overviewHealth: {
+      tabBadges: {
+        sources: 0,
+        runs: 0,
+        outputs: 0
+      }
+    },
     setActiveTab: vi.fn((next: string) => {
       state.activeTab = next as typeof state.activeTab
     })
@@ -33,6 +40,40 @@ const mocks = vi.hoisted(() => {
     state
   }
 })
+
+const runA11yBaselineRules = async (context: Element) =>
+  axe.run(context, {
+    runOnly: {
+      type: "rule",
+      values: [
+        "button-name",
+        "link-name",
+        "label",
+        "aria-valid-attr",
+        "aria-valid-attr-value",
+        "aria-required-attr"
+      ]
+    },
+    resultTypes: ["violations"]
+  })
+
+const expectNoInvalidAriaViolations = (
+  violations: Array<{
+    id: string
+  }>
+) => {
+  const disallowedIds = new Set([
+    "aria-valid-attr",
+    "aria-valid-attr-value",
+    "aria-required-attr"
+  ])
+
+  const disallowedViolations = violations.filter((violation) =>
+    disallowedIds.has(violation.id)
+  )
+
+  expect(disallowedViolations).toEqual([])
+}
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -134,6 +175,7 @@ vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: Record<string, unknown>) => unknown) =>
     selector({
       activeTab: mocks.state.activeTab,
+      overviewHealth: mocks.state.overviewHealth,
       setActiveTab: mocks.state.setActiveTab,
       openRunDetail: vi.fn(),
       resetStore: vi.fn()
@@ -169,6 +211,13 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.state.activeTab = "sources"
+    mocks.state.overviewHealth = {
+      tabBadges: {
+        sources: 0,
+        runs: 0,
+        outputs: 0
+      }
+    }
     mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.recordWatchlistsIaExperimentTelemetryMock.mockResolvedValue({ accepted: true })
     mocks.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)
@@ -341,4 +390,25 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
       type: "guided_tour_completed"
     })
   })
+
+  it("exposes attention badge labels and passes aria-name baseline checks", async () => {
+    mocks.state.overviewHealth = {
+      tabBadges: {
+        sources: 3,
+        runs: 2,
+        outputs: 1
+      }
+    }
+
+    const { container } = render(<WatchlistsPlaygroundPage />)
+
+    expect(screen.getByLabelText("3 attention items")).toBeInTheDocument()
+    expect(screen.getByLabelText("2 attention items")).toBeInTheDocument()
+    expect(screen.getByLabelText("1 attention items")).toBeInTheDocument()
+
+    const results = await runA11yBaselineRules(container)
+    expectNoInvalidAriaViolations(results.violations)
+    expect(results.violations.map((violation) => violation.id)).not.toContain("button-name")
+    expect(results.violations.map((violation) => violation.id)).not.toContain("link-name")
+  }, 15000)
 })

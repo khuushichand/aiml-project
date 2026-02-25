@@ -3282,7 +3282,7 @@
     "message": "SillyTavern互換"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "1行目\\n2行目（||インラインネタバレ|| を含む）\\n\\n[spoiler]ブロックネタバレの内容[/spoiler]"
+    "message": "1行目\n2行目（||インラインネタバレ|| を含む）\n\n[spoiler]ブロックネタバレの内容[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "リッチテキスト要素のスタイル"

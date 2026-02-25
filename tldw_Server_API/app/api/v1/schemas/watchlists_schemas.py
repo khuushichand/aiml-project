@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AnyUrl, BaseModel, Field
+from pydantic import AnyUrl, BaseModel, Field, field_validator
 
 SourceType = Literal["rss", "site", "forum"]  # forums are feature-flagged for Phase 3
 
@@ -293,6 +293,26 @@ class RunsListResponse(BaseModel):
     has_more: bool | None = None
 
 
+class WatchlistOnboardingTelemetryIngestRequest(BaseModel):
+    session_id: str = Field(..., max_length=128)
+    event_type: str = Field(..., max_length=128)
+    event_at: str | None = None
+    details: dict[str, Any] | None = None
+
+
+class WatchlistOnboardingTelemetryIngestResponse(BaseModel):
+    accepted: bool = True
+    code: str | None = None
+
+
+class WatchlistOnboardingTelemetrySummaryResponse(BaseModel):
+    counters: dict[str, int] = Field(default_factory=dict)
+    rates: dict[str, float] = Field(default_factory=dict)
+    timings: dict[str, float] = Field(default_factory=dict)
+    since: str | None = None
+    until: str | None = None
+
+
 WatchlistIaExperimentVariant = Literal["baseline", "experimental"]
 
 
@@ -323,6 +343,27 @@ class WatchlistIaExperimentVariantSummary(BaseModel):
 
 class WatchlistIaExperimentTelemetrySummaryResponse(BaseModel):
     items: list[WatchlistIaExperimentVariantSummary]
+    since: str | None = None
+    until: str | None = None
+
+
+class WatchlistTelemetryThresholdSummary(BaseModel):
+    id: str
+    label: str
+    status: Literal["ok", "potential_breach"] = "ok"
+    reporting_only: bool = True
+    metric_value: float | None = None
+    baseline_value: float | None = None
+    delta: float | None = None
+    notes: str | None = None
+
+
+class WatchlistRcTelemetrySummaryResponse(BaseModel):
+    onboarding: WatchlistOnboardingTelemetrySummaryResponse
+    uc2_backend: dict[str, Any] = Field(default_factory=dict)
+    ia_experiment: dict[str, Any] = Field(default_factory=dict)
+    baseline: dict[str, float] = Field(default_factory=dict)
+    thresholds: list[WatchlistTelemetryThresholdSummary] = Field(default_factory=list)
     since: str | None = None
     until: str | None = None
 
@@ -540,6 +581,10 @@ class WatchlistTemplateSummary(BaseModel):
     updated_at: str
     version: int = 1
     history_count: int = 0
+    composer_ast: dict[str, Any] | None = None
+    composer_schema_version: str | None = None
+    composer_sync_hash: str | None = None
+    composer_sync_status: Literal["in_sync", "needs_repair", "recovered_from_code"] | None = None
 
 
 class WatchlistTemplateDetail(WatchlistTemplateSummary):
@@ -569,6 +614,22 @@ class WatchlistTemplateCreateRequest(BaseModel):
     content: str = Field(..., description="Template content")
     description: str | None = Field(None, description="Optional human-readable description")
     overwrite: bool = Field(False, description="If false, creation fails when template already exists")
+    composer_ast: dict[str, Any] | None = Field(
+        None,
+        description="Optional visual composer AST representation for template editing.",
+    )
+    composer_schema_version: str | None = Field(
+        None,
+        description="Optional semantic version for the composer AST schema.",
+    )
+    composer_sync_hash: str | None = Field(
+        None,
+        description="Optional sync checksum for Jinja content and composer AST parity.",
+    )
+    composer_sync_status: Literal["in_sync", "needs_repair", "recovered_from_code"] | None = Field(
+        None,
+        description="Optional parity status between content and composer AST.",
+    )
 
 
 class WatchlistTemplateValidationErrorDetail(BaseModel):
@@ -659,3 +720,85 @@ class TemplateValidationErrorItem(BaseModel):
 class TemplateValidationResult(BaseModel):
     valid: bool
     errors: list[TemplateValidationErrorItem] = Field(default_factory=list)
+
+
+# --------------------
+# Template Composer Authoring (Manual Preview)
+# --------------------
+_TEMPLATE_COMPOSER_FLOW_MAX_TOTAL_CHARS = 120_000
+
+
+class TemplateComposerSectionRequest(BaseModel):
+    run_id: int = Field(..., ge=1)
+    block_id: str = Field(..., min_length=1, max_length=128)
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    input_scope: Literal["all_items", "top_items", "selected_items"] = "all_items"
+    style: str | None = Field(default=None, max_length=128)
+    length_target: Literal["short", "medium", "long"] = "medium"
+
+    @field_validator("block_id", "prompt")
+    @classmethod
+    def _validate_non_blank_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+    @field_validator("style")
+    @classmethod
+    def _normalize_optional_style(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class TemplateComposerSectionResponse(BaseModel):
+    block_id: str
+    content: str
+    warnings: list[str] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+
+class TemplateComposerFlowSection(BaseModel):
+    id: str = Field(..., min_length=1, max_length=128)
+    content: str = Field(default="", max_length=20000)
+
+    @field_validator("id")
+    @classmethod
+    def _validate_non_blank_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+
+class TemplateComposerFlowCheckRequest(BaseModel):
+    run_id: int = Field(..., ge=1)
+    mode: Literal["suggest_only", "auto_apply"] = "suggest_only"
+    sections: list[TemplateComposerFlowSection] = Field(default_factory=list, max_length=128)
+
+    @field_validator("sections")
+    @classmethod
+    def _validate_total_content_size(
+        cls, value: list[TemplateComposerFlowSection]
+    ) -> list[TemplateComposerFlowSection]:
+        total_chars = sum(len(section.content) for section in value)
+        if total_chars > _TEMPLATE_COMPOSER_FLOW_MAX_TOTAL_CHARS:
+            raise ValueError(
+                f"total section content exceeds maximum of {_TEMPLATE_COMPOSER_FLOW_MAX_TOTAL_CHARS} characters"
+            )
+        return value
+
+
+class TemplateComposerFlowIssue(BaseModel):
+    section_id: str | None = None
+    severity: Literal["info", "warning"] = "info"
+    message: str
+
+
+class TemplateComposerFlowCheckResponse(BaseModel):
+    mode: Literal["suggest_only", "auto_apply"]
+    issues: list[TemplateComposerFlowIssue] = Field(default_factory=list)
+    diff: str = ""
+    sections: list[TemplateComposerFlowSection] = Field(default_factory=list)

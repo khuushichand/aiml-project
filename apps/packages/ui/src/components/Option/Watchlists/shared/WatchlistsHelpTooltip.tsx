@@ -15,10 +15,10 @@ const TOPIC_FALLBACKS: Record<
   { label: string; title: string; description: string }
 > = {
   opml: {
-    label: "OPML imports",
-    title: "What is OPML?",
+    label: "OPML feed import",
+    title: "Import many feeds quickly",
     description:
-      "OPML is a portable feed-list format. Import one file to add many RSS or site feeds at once."
+      "Use OPML when moving feed lists from another reader so setup takes minutes instead of manual entry."
   },
   cron: {
     label: "cron scheduling",
@@ -27,10 +27,10 @@ const TOPIC_FALLBACKS: Record<
       "Start with presets for daily or weekday runs. Use cron only when you need exact custom timing."
   },
   ttl: {
-    label: "retention TTL",
-    title: "What retention TTL means",
+    label: "retention window",
+    title: "Control how long outputs stay available",
     description:
-      "TTL controls how long generated outputs are kept before they expire automatically."
+      "Set retention to keep briefings only as long as your review workflow needs before automatic cleanup."
   },
   jinja2: {
     label: "Jinja2 templates",
@@ -39,10 +39,10 @@ const TOPIC_FALLBACKS: Record<
       "Start from a preset report template, then edit sections to shape briefing tone, structure, and audio script text."
   },
   claimClusters: {
-    label: "claim clusters",
-    title: "What claim clusters are",
+    label: "claim tracking",
+    title: "Track repeating claims across sources",
     description:
-      "Claim clusters group similar claims across feeds so monitors can subscribe to related topic updates."
+      "Subscribe to claim clusters to follow how the same claim evolves across feeds without manual tagging."
   }
 }
 

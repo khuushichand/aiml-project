@@ -10,6 +10,9 @@ export const ITEM_PAGE_SIZE_OPTIONS = [20, 25, 50, 100] as const
 export const ITEMS_PAGE_SIZE_STORAGE_KEY = "watchlists:items:page-size"
 export const ITEMS_SORT_MODE_STORAGE_KEY = "watchlists:items:sort-mode"
 export const ITEMS_VIEW_PRESETS_STORAGE_KEY = "watchlists:items:view-presets"
+export const DEFAULT_ITEMS_SORT_MODE = "newest"
+
+export type ItemsSortMode = "newest" | "oldest" | "unreadFirst" | "reviewedFirst"
 
 export const READER_SORT_MODES = ["newest", "oldest", "unreadFirst"] as const
 export type ReaderSortMode = (typeof READER_SORT_MODES)[number]
@@ -31,6 +34,7 @@ export interface PersistedItemsViewPreset {
   statusFilter: string
   sortMode?: string
   searchQuery: string
+  sortMode?: string
 }
 
 export const buildDefaultItemsViewPresets = (
@@ -65,6 +69,18 @@ export const buildDefaultItemsViewPresets = (
   }
 ]
 
+export const normalizeItemsSortMode = (value: unknown): ItemsSortMode => {
+  if (
+    value === "newest" ||
+    value === "oldest" ||
+    value === "unreadFirst" ||
+    value === "reviewedFirst"
+  ) {
+    return value
+  }
+  return DEFAULT_ITEMS_SORT_MODE
+}
+
 const uniquePresetsById = (
   presets: PersistedItemsViewPreset[]
 ): PersistedItemsViewPreset[] => {
@@ -96,6 +112,10 @@ export const provisionItemsViewPresets = (
 
   const customPresets = normalizedPersisted
     .filter((preset) => !defaultIds.has(preset.id))
+    .map((preset) => ({
+      ...preset,
+      sortMode: normalizeItemsSortMode(preset.sortMode)
+    }))
     .sort((left, right) => {
       const byName = left.name.localeCompare(right.name)
       if (byName !== 0) return byName
@@ -189,6 +209,7 @@ const isPersistedItemsViewPreset = (value: unknown): value is PersistedItemsView
   if (typeof candidate.statusFilter !== "string") return false
   if (candidate.sortMode != null && typeof candidate.sortMode !== "string") return false
   if (typeof candidate.searchQuery !== "string") return false
+  if (candidate.sortMode !== undefined && typeof candidate.sortMode !== "string") return false
   return true
 }
 

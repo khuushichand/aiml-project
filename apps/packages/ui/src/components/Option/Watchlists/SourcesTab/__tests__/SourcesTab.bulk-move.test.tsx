@@ -315,4 +315,19 @@ describe("SourcesTab bulk move", () => {
       expect(mocks.updateWatchlistSourceMock).toHaveBeenCalledWith(101, { group_ids: [] })
     })
   })
+
+  it("renders high-density source tables for bulk operations", () => {
+    const manySources = Array.from({ length: 200 }, (_value, index) =>
+      buildSource(index + 1, index % 2 === 0 ? [1] : [])
+    )
+    mocks.storeStateRef.current = baseState({
+      sources: manySources,
+      sourcesTotal: manySources.length
+    })
+
+    const { container } = render(<SourcesTab />)
+
+    expect(screen.getByTestId("sources-table")).toBeInTheDocument()
+    expect(container.querySelectorAll("[data-testid^='select-source-']").length).toBe(200)
+  })
 })

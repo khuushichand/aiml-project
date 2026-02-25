@@ -1317,6 +1317,13 @@ def get_configured_providers(
                 'type': 'commercial',
                 'section': 'API'
             },
+            'qwen': {
+                'display_name': 'Qwen',
+                'api_key_field': 'qwen_api_key',
+                'model_field': 'qwen_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
             'google': {
                 'display_name': 'Google',
                 'api_key_field': 'google_api_key',

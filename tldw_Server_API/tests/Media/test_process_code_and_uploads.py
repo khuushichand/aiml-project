@@ -147,3 +147,118 @@ async def test_pdf_analysis_without_explicit_api_key(monkeypatch):
     assert out.get("status") in ("Success", "Warning"), out
     # Analysis should run using api_name only
     assert out.get("analysis") == "OK"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parser_name", "patch_attr"),
+    [
+        ("pymupdf4llm", "pymupdf4llm_parse_pdf"),
+        ("pymupdf", "extract_text_and_format_from_pdf"),
+        ("docling", "docling_parse_pdf"),
+    ],
+)
+async def test_pdf_text_normalization_applies_to_all_parser_paths(
+    monkeypatch,
+    parser_name,
+    patch_attr,
+):
+    import importlib.util
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as pdf_mod
+
+    wrapped_text = (
+        "We are not just interested in models that perform well on a\n"
+        "single physical task."
+    )
+    monkeypatch.setattr(pdf_mod, patch_attr, lambda path: wrapped_text)
+    if parser_name == "docling":
+        monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
+
+    out = await pdf_mod.process_pdf_task(
+        file_bytes=b"%PDF-fake",
+        filename=f"{parser_name}.pdf",
+        parser=parser_name,
+        perform_chunking=False,
+        perform_analysis=False,
+    )
+    assert out.get("status") in ("Success", "Warning"), out
+    assert "perform well on a single physical task." in (out.get("content") or "")
+
+
+@pytest.mark.asyncio
+async def test_pdf_text_normalization_applies_after_ocr_merge(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as pdf_mod
+
+    monkeypatch.setattr(pdf_mod, "pymupdf4llm_parse_pdf", lambda path: "Parser output")
+    monkeypatch.setattr(
+        pdf_mod,
+        "_ocr_pdf_pages",
+        lambda **kwargs: ("OCR line one\nline two", 1, [1], None),
+    )
+
+    class _FakeOcrBackend:
+        name = "fake-ocr"
+
+    monkeypatch.setattr(pdf_mod, "_get_ocr_backend", lambda _name=None: _FakeOcrBackend())
+
+    out = await pdf_mod.process_pdf_task(
+        file_bytes=b"%PDF-fake",
+        filename="ocr-path.pdf",
+        parser="pymupdf4llm",
+        perform_chunking=False,
+        perform_analysis=False,
+        enable_ocr=True,
+        ocr_mode="always",
+    )
+    assert out.get("status") in ("Success", "Warning"), out
+    assert out.get("content") == "OCR line one line two"
+
+
+@pytest.mark.asyncio
+async def test_pdf_text_normalization_records_analysis_details(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as pdf_mod
+
+    monkeypatch.setattr(
+        pdf_mod,
+        "pymupdf4llm_parse_pdf",
+        lambda path: "Paragraph starts here\nand continues there.",
+    )
+
+    out = await pdf_mod.process_pdf_task(
+        file_bytes=b"%PDF-fake",
+        filename="normalization-details.pdf",
+        parser="pymupdf4llm",
+        perform_chunking=False,
+        perform_analysis=False,
+    )
+    assert out.get("status") in ("Success", "Warning"), out
+    details = (out.get("analysis_details") or {}).get("text_normalization") or {}
+    assert details.get("applied") is True
+    assert details.get("mode") == "paragraph_safe"
+    assert details.get("chars_before", 0) >= details.get("chars_after", 0)
+    assert details.get("line_breaks_before", 0) >= details.get("line_breaks_after", 0)
+
+
+@pytest.mark.asyncio
+async def test_pdf_text_normalization_fails_softly(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as pdf_mod
+
+    raw_text = "Line one\nline two"
+    monkeypatch.setattr(pdf_mod, "pymupdf4llm_parse_pdf", lambda path: raw_text)
+    monkeypatch.setattr(
+        pdf_mod,
+        "normalize_pdf_text_for_storage",
+        lambda _text: (_ for _ in ()).throw(ValueError("normalize boom")),
+    )
+
+    out = await pdf_mod.process_pdf_task(
+        file_bytes=b"%PDF-fake",
+        filename="normalization-fail-soft.pdf",
+        parser="pymupdf4llm",
+        perform_chunking=False,
+        perform_analysis=False,
+    )
+    assert out.get("status") in ("Warning", "Success"), out
+    warnings = out.get("warnings") or []
+    assert any("Text normalization failed" in warning for warning in warnings)
+    assert out.get("content") == raw_text

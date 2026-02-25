@@ -144,6 +144,9 @@ export const RunsTab: React.FC = () => {
   const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const setPollingActive = useWatchlistsStore((s) => s.setPollingActive)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
+  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const closeRunDetail = useWatchlistsStore((s) => s.closeRunDetail)
   const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
@@ -200,8 +203,7 @@ export const RunsTab: React.FC = () => {
       setRunsLoadError(null)
 
       // Check if any runs are still running
-      const hasRunning = items.some((r) => r.status === "running" || r.status === "pending")
-      setPollingActive(hasRunning)
+      setPollingActive(hasActiveWatchlistRuns(items))
       setLastRefreshedAt(new Date().toISOString())
     } catch (err) {
       console.error("Failed to fetch runs:", err)
@@ -860,6 +862,12 @@ export const RunsTab: React.FC = () => {
       hint: failedHint || fallbackHint
     }
   }, [runs, t])
+
+  const openRunOutputs = useCallback((runId: number, jobId: number) => {
+    setOutputsJobFilter(jobId)
+    setOutputsRunFilter(runId)
+    setActiveTab("outputs")
+  }, [setActiveTab, setOutputsJobFilter, setOutputsRunFilter])
 
   return (
     <div className="space-y-4">

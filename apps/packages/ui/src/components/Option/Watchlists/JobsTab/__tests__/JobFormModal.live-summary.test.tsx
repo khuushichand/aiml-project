@@ -78,13 +78,37 @@ vi.mock("@/utils/watchlists-prevention-telemetry", () => ({
 
 vi.mock("../ScopeSelector", () => ({
   ScopeSelector: ({ onChange }: { onChange: (value: unknown) => void }) => (
-    <button
-      type="button"
-      data-testid="scope-setter"
-      onClick={() => onChange({ sources: [1], tags: ["tech"] })}
-    >
-      Set scope
-    </button>
+    <div>
+      <button
+        type="button"
+        data-testid="scope-setter"
+        onClick={() => onChange({ sources: [1], tags: ["tech"] })}
+      >
+        Set scope
+      </button>
+      <button
+        type="button"
+        data-testid="scope-setter-10"
+        onClick={() =>
+          onChange({
+            sources: Array.from({ length: 10 }, (_value, index) => index + 1),
+            tags: ["tech"]
+          })}
+      >
+        Set scope 10
+      </button>
+      <button
+        type="button"
+        data-testid="scope-setter-50"
+        onClick={() =>
+          onChange({
+            sources: Array.from({ length: 50 }, (_value, index) => index + 1),
+            tags: ["tech"]
+          })}
+      >
+        Set scope 50
+      </button>
+    </div>
   )
 }))
 

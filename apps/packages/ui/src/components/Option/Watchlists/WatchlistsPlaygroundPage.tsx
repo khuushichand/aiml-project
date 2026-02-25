@@ -20,6 +20,7 @@ import { PageShell } from "@/components/Common/PageShell"
 import { fetchWatchlistRuns } from "@/services/watchlists"
 import { useWatchlistsStore } from "@/store/watchlists"
 import type { WatchlistRun } from "@/types/watchlists"
+import type { WatchlistTab } from "@/types/watchlists"
 import { OverviewTab } from "./OverviewTab/OverviewTab"
 import { SourcesTab } from "./SourcesTab/SourcesTab"
 import { JobsTab } from "./JobsTab/JobsTab"
@@ -216,6 +217,10 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const runNotificationsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const runNotificationsPollingInFlightRef = useRef(false)
   const sessionStartedAtMsRef = useRef<number>(Date.now())
+  const [runNotificationsDocumentHidden, setRunNotificationsDocumentHidden] = React.useState(() =>
+    typeof document !== "undefined" ? document.visibilityState === "hidden" : false
+  )
+  const [notificationPollHasActiveRuns, setNotificationPollHasActiveRuns] = React.useState(true)
   const [guidedTourState, setGuidedTourState] = React.useState<GuidedTourState>(() => readGuidedTourState())
   const [guidedTourOpen, setGuidedTourOpen] = React.useState(false)
   const [showGuidedTourCompletion, setShowGuidedTourCompletion] = React.useState(false)
@@ -590,6 +595,15 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     })
   }, [guidedTourState.step, setActiveTab])
 
+  const dismissTeachPoint = useCallback((key: TeachPointKey) => {
+    setTeachPointState((previous) => ({
+      dismissed: {
+        ...previous.dismissed,
+        [key]: true
+      }
+    }))
+  }, [])
+
   // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
   const resetStoreRef = useRef(resetStore)
   resetStoreRef.current = resetStore
@@ -749,6 +763,10 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     if (runNotificationsPollingInFlightRef.current) return
     runNotificationsPollingInFlightRef.current = true
     try {
+      const pageSize = resolveRunNotificationsPageSize({
+        documentHidden: runNotificationsDocumentHidden,
+        hasActiveRuns: notificationPollHasActiveRuns
+      })
       const response = await fetchWatchlistRuns({
         page: 1,
         size: runNotificationsPollPlan.pageSize
@@ -859,12 +877,13 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     void pollRunNotifications()
     runNotificationsTimerRef.current = setInterval(() => {
       void pollRunNotifications()
-    }, pollIntervalMs)
+    }, runNotificationsPollMs)
     return () => {
       if (runNotificationsTimerRef.current) {
         clearInterval(runNotificationsTimerRef.current)
         runNotificationsTimerRef.current = null
       }
+      runNotificationsPollingInFlightRef.current = false
     }
   }, [pollRunNotifications, runNotificationsPollPlan.enabled, runNotificationsPollPlan.intervalMs])
 

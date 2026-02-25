@@ -30,6 +30,7 @@ import type { ScrapedItem, WatchlistSource } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import {
   buildDefaultItemsViewPresets,
+  DEFAULT_ITEMS_SORT_MODE,
   extractImageUrl,
   getInitialSourceRenderCount,
   getNextSourceRenderCount,
@@ -48,6 +49,9 @@ import {
   provisionItemsViewPresets,
   type ReaderSortMode,
   resolveSelectedItemId,
+  sortItemsForReader,
+  SOURCE_LIST_INITIAL_RENDER_COUNT,
+  shouldExpandSourceRenderWindow,
   shouldReloadItemsAfterReviewMutation,
   sortItemsForReader,
   SYSTEM_ITEMS_VIEW_PRESET_IDS,
@@ -184,12 +188,14 @@ export const ItemsTab: React.FC = () => {
 
   const [sources, setSources] = useState<WatchlistSource[]>([])
   const [sourcesLoading, setSourcesLoading] = useState(false)
+  const [sourcesCappedAtLimit, setSourcesCappedAtLimit] = useState(false)
   const [sourceSearch, setSourceSearch] = useState("")
   const [visibleSourceCount, setVisibleSourceCount] = useState(SOURCE_LIST_INITIAL_RENDER_COUNT)
   const [items, setItems] = useState<ScrapedItem[]>([])
   const [itemsLoading, setItemsLoading] = useState(false)
   const [itemsTotal, setItemsTotal] = useState(0)
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
+  const [sortMode, setSortMode] = useState<ItemsSortMode>(DEFAULT_ITEMS_SORT_MODE)
   const [itemsPage, setItemsPage] = useState(1)
   const [itemsPageSize, setItemsPageSize] = useState<number>(() =>
     loadPersistedItemPageSize(
@@ -350,6 +356,9 @@ export const ItemsTab: React.FC = () => {
   const saveViewTriggerRef = useRef<HTMLElement | null>(null)
   const wasShortcutsOpenRef = useRef(false)
   const wasSaveViewModalOpenRef = useRef(false)
+  const hasItemsAnnouncementBaselineRef = useRef(false)
+  const previousSelectedItemIdRef = useRef<number | null>(null)
+  const skippedInitialAutoSelectionRef = useRef(false)
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -357,6 +366,55 @@ export const ItemsTab: React.FC = () => {
     }, 180)
     return () => clearTimeout(timeout)
   }, [searchQuery])
+
+  useEffect(() => {
+    const currentSelectedId = selectedItem?.id ?? null
+
+    if (!hasItemsAnnouncementBaselineRef.current) {
+      hasItemsAnnouncementBaselineRef.current = true
+      previousSelectedItemIdRef.current = currentSelectedId
+      return
+    }
+
+    if (previousSelectedItemIdRef.current === currentSelectedId) return
+
+    if (
+      !skippedInitialAutoSelectionRef.current &&
+      previousSelectedItemIdRef.current == null &&
+      currentSelectedId != null
+    ) {
+      skippedInitialAutoSelectionRef.current = true
+      previousSelectedItemIdRef.current = currentSelectedId
+      return
+    }
+
+    if (!selectedItem) {
+      setItemsLiveAnnouncement(
+        t("watchlists:items.live.selectionCleared", "No article selected.")
+      )
+    } else {
+      const title = selectedItem.title || t("watchlists:items.untitled", "Untitled item")
+      const source =
+        sourceNameById.get(selectedItem.source_id) ||
+        t("watchlists:items.unknownSource", "Unknown source")
+      const reviewState = selectedItem.reviewed
+        ? t("watchlists:items.rowStatusReviewed", "Reviewed")
+        : t("watchlists:items.rowStatusUnread", "Unread")
+      setItemsLiveAnnouncement(
+        t(
+          "watchlists:items.live.selectionChanged",
+          "Selected {{title}} from {{source}} ({{state}}).",
+          {
+            title,
+            source,
+            state: reviewState
+          }
+        )
+      )
+    }
+
+    previousSelectedItemIdRef.current = currentSelectedId
+  }, [selectedItem, sourceNameById, t])
 
   const buildBaseFilterParams = useCallback(
     (
@@ -387,9 +445,12 @@ export const ItemsTab: React.FC = () => {
   )
 
   const loadSources = useCallback(async () => {
+    const requestToken = sourcesRequestTokenRef.current + 1
+    sourcesRequestTokenRef.current = requestToken
     setSourcesLoading(true)
     try {
       const loaded: WatchlistSource[] = []
+      let sourceTotal = 0
       let page = 1
 
       while (loaded.length < SOURCE_LOAD_MAX_ITEMS) {
@@ -397,7 +458,11 @@ export const ItemsTab: React.FC = () => {
           page,
           size: SOURCE_LOAD_PAGE_SIZE
         })
+        if (requestToken !== sourcesRequestTokenRef.current) return
         const batch = Array.isArray(response.items) ? response.items : []
+        if (page === 1) {
+          sourceTotal = Number(response.total || batch.length)
+        }
         loaded.push(...batch)
         if (
           batch.length < SOURCE_LOAD_PAGE_SIZE ||
@@ -408,11 +473,18 @@ export const ItemsTab: React.FC = () => {
         page += 1
       }
 
-      setSources(loaded)
+      if (requestToken !== sourcesRequestTokenRef.current) return
+      const capped = loaded.slice(0, SOURCE_LOAD_MAX_ITEMS)
+      setSources(capped)
+      const normalizedTotal = sourceTotal > 0 ? sourceTotal : capped.length
+      setSourcesCappedAtLimit(normalizedTotal > SOURCE_LOAD_MAX_ITEMS)
     } catch (error) {
+      if (requestToken !== sourcesRequestTokenRef.current) return
       console.error("Failed to load watchlist sources:", error)
       message.error(t("watchlists:items.sourcesError", "Failed to load sources"))
+      setSourcesCappedAtLimit(false)
     } finally {
+      if (requestToken !== sourcesRequestTokenRef.current) return
       setSourcesLoading(false)
     }
   }, [t])
@@ -845,6 +917,7 @@ export const ItemsTab: React.FC = () => {
       const successfulIds: number[] = []
       const failedItemIds: number[] = []
       let failedCount = 0
+      let processedCount = 0
       const chunkSize = 20
 
       for (let index = 0; index < uniqueIds.length; index += chunkSize) {
@@ -879,6 +952,17 @@ export const ItemsTab: React.FC = () => {
             failed: previous.failed + chunkFailedCount,
             failedItemIds
           }
+        })
+
+        processedCount += chunk.length
+        setBatchReviewProgress({
+          scope,
+          total: uniqueIds.length,
+          processed: processedCount,
+          succeeded: successfulIds.length,
+          failed: failedIds.length,
+          failedIds: [...failedIds],
+          isRunning: true
         })
       }
 
@@ -970,6 +1054,12 @@ export const ItemsTab: React.FC = () => {
       setBatchReviewScope(null)
     }
   }, [getBatchScopeLabel, invalidateSmartCountsCache, loadItems, loadSmartCounts, requiresReviewedRefresh, t])
+
+  const handleRetryFailedBatch = useCallback(() => {
+    if (!batchReviewProgress || batchReviewProgress.isRunning) return
+    if (batchReviewProgress.failedIds.length === 0) return
+    void markItemsReviewed(batchReviewProgress.failedIds, batchReviewProgress.scope)
+  }, [batchReviewProgress, markItemsReviewed])
 
   const openBatchConfirm = useCallback((
     scope: BatchReviewScope,
@@ -1141,6 +1231,7 @@ export const ItemsTab: React.FC = () => {
     setStoreStatusFilter(preset.statusFilter)
     setSortMode(normalizeReaderSortMode(preset.sortMode))
     setStoreItemsSearch(preset.searchQuery)
+    setSortMode(preset.sortMode)
     setItemsPage(1)
     setActivePresetId(preset.id)
   }, [
@@ -1476,6 +1567,16 @@ export const ItemsTab: React.FC = () => {
 
   return (
     <div className="space-y-3" data-testid="watchlists-items-tab">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid="watchlists-items-live-region"
+      >
+        {itemsLiveAnnouncement}
+      </div>
+
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-text-muted">
           {t(
@@ -1606,6 +1707,7 @@ export const ItemsTab: React.FC = () => {
                 >
                   <button
                     type="button"
+                    data-testid="watchlists-items-source-row-all"
                     className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm transition ${
                       selectedSourceId === null
                         ? "bg-primary/15 text-text"
@@ -1922,6 +2024,80 @@ export const ItemsTab: React.FC = () => {
                     }
                   )}
                 </p>
+
+                {batchReviewProgress && (
+                  <div
+                    className="mt-2 rounded-md border border-border bg-surface px-2.5 py-2"
+                    data-testid="watchlists-items-batch-progress-panel"
+                  >
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
+                        {t("watchlists:items.batch.progress.label", "Batch progress")}
+                      </span>
+                      <span
+                        className="text-xs font-mono text-text-subtle"
+                        data-testid="watchlists-items-batch-progress-count"
+                      >
+                        {t("watchlists:items.batch.progress.count", "{{processed}} / {{total}}", {
+                          processed: batchReviewProgress.processed,
+                          total: batchReviewProgress.total
+                        })}
+                      </span>
+                    </div>
+                    <Progress
+                      percent={
+                        batchReviewProgress.total === 0
+                          ? 0
+                          : Math.round(
+                              (batchReviewProgress.processed / batchReviewProgress.total) * 100
+                            )
+                      }
+                      size="small"
+                      showInfo={false}
+                      status={
+                        batchReviewProgress.isRunning
+                          ? "active"
+                          : batchReviewProgress.failed > 0
+                            ? "exception"
+                            : "success"
+                      }
+                    />
+                    <div className="mt-1.5 flex items-center justify-between gap-2">
+                      <p
+                        className="text-xs text-text-muted"
+                        data-testid="watchlists-items-batch-progress-summary"
+                      >
+                        {batchReviewProgress.isRunning
+                          ? t("watchlists:items.batch.progress.running", "Running {{scope}}...", {
+                              scope: getBatchScopeLabel(
+                                batchReviewProgress.scope,
+                                batchReviewProgress.total
+                              )
+                            })
+                          : t(
+                              "watchlists:items.batch.progress.completed",
+                              "Completed {{success}} of {{total}}. {{failed}} failed.",
+                              {
+                                success: batchReviewProgress.succeeded,
+                                total: batchReviewProgress.total,
+                                failed: batchReviewProgress.failed
+                              }
+                            )}
+                      </p>
+                      {!batchReviewProgress.isRunning &&
+                        batchReviewProgress.failedIds.length > 0 && (
+                          <Button
+                            size="small"
+                            onClick={handleRetryFailedBatch}
+                            loading={batchReviewScope !== null}
+                            data-testid="watchlists-items-batch-retry-failed"
+                          >
+                            {t("watchlists:items.batch.progress.retryFailed", "Retry failed")}
+                          </Button>
+                        )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2009,7 +2185,7 @@ export const ItemsTab: React.FC = () => {
                       <div className="min-w-0 flex-1 space-y-1">
                         <div className="flex items-start justify-between gap-2">
                           <h4 className="line-clamp-2 text-base font-semibold text-text">
-                            {item.title || t("watchlists:items.untitled", "Untitled item")}
+                            {rowTitle}
                           </h4>
                           <div className="flex shrink-0 flex-col items-end gap-1">
                             <span

@@ -20,9 +20,13 @@ import type {
   WatchlistFilter,
   WatchlistGroup,
   WatchlistGroupCreate,
+  WatchlistsOnboardingTelemetryPayload,
+  WatchlistsOnboardingTelemetryResponse,
+  WatchlistsOnboardingTelemetrySummaryResponse,
   WatchlistsIaExperimentTelemetryPayload,
   WatchlistsIaExperimentTelemetryResponse,
   WatchlistsIaExperimentTelemetrySummaryResponse,
+  WatchlistsRcTelemetrySummaryResponse,
   WatchlistJob,
   WatchlistJobCreate,
   WatchlistJobUpdate,
@@ -694,6 +698,38 @@ export const getWatchlistSettings = async (): Promise<WatchlistSettings> => {
   })
 }
 
+export const recordWatchlistsOnboardingTelemetry = async (
+  payload: WatchlistsOnboardingTelemetryPayload
+): Promise<WatchlistsOnboardingTelemetryResponse> => {
+  return bgRequest<WatchlistsOnboardingTelemetryResponse>({
+    path: "/api/v1/watchlists/telemetry/onboarding" as any,
+    method: "POST",
+    body: payload
+  })
+}
+
+export const fetchWatchlistsOnboardingTelemetrySummary = async (params?: {
+  since?: string
+  until?: string
+}): Promise<WatchlistsOnboardingTelemetrySummaryResponse> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<WatchlistsOnboardingTelemetrySummaryResponse>({
+    path: `/api/v1/watchlists/telemetry/onboarding/summary${qs}` as any,
+    method: "GET"
+  })
+}
+
+export const fetchWatchlistsRcTelemetrySummary = async (params?: {
+  since?: string
+  until?: string
+}): Promise<WatchlistsRcTelemetrySummaryResponse> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<WatchlistsRcTelemetrySummaryResponse>({
+    path: `/api/v1/watchlists/telemetry/rc-summary${qs}` as any,
+    method: "GET"
+  })
+}
+
 export const recordWatchlistsIaExperimentTelemetry = async (
   payload: WatchlistsIaExperimentTelemetryPayload
 ): Promise<WatchlistsIaExperimentTelemetryResponse> => {
@@ -786,6 +822,42 @@ export interface TemplatePreviewResult {
   warnings: string[]
 }
 
+export interface TemplateComposerSectionRequest {
+  run_id: number
+  block_id: string
+  prompt: string
+  input_scope?: "all_items" | "top_items" | "selected_items"
+  style?: string
+  length_target?: "short" | "medium" | "long"
+}
+
+export interface TemplateComposerSectionResult {
+  block_id: string
+  content: string
+  warnings: string[]
+  diagnostics: Record<string, unknown>
+}
+
+export interface TemplateComposerFlowSection {
+  id: string
+  content: string
+}
+
+export type TemplateComposerFlowCheckMode = "suggest_only" | "auto_apply"
+
+export interface TemplateComposerFlowIssue {
+  section_id?: string | null
+  severity: "info" | "warning"
+  message: string
+}
+
+export interface TemplateComposerFlowCheckResult {
+  mode: TemplateComposerFlowCheckMode
+  issues: TemplateComposerFlowIssue[]
+  diff: string
+  sections: TemplateComposerFlowSection[]
+}
+
 export const validateWatchlistTemplate = async (
   content: string,
   format: "md" | "html" = "md"
@@ -808,5 +880,27 @@ export const previewWatchlistTemplate = async (
     method: "POST",
     body: { content, format, run_id: runId },
     abortSignal: signal
+  })
+}
+
+export const composeWatchlistTemplateSection = async (
+  payload: TemplateComposerSectionRequest
+): Promise<TemplateComposerSectionResult> => {
+  return bgRequest<TemplateComposerSectionResult>({
+    path: "/api/v1/watchlists/templates/compose/section" as any,
+    method: "POST",
+    body: payload
+  })
+}
+
+export const flowCheckWatchlistTemplateSections = async (payload: {
+  run_id: number
+  mode: TemplateComposerFlowCheckMode
+  sections: TemplateComposerFlowSection[]
+}): Promise<TemplateComposerFlowCheckResult> => {
+  return bgRequest<TemplateComposerFlowCheckResult>({
+    path: "/api/v1/watchlists/templates/compose/flow-check" as any,
+    method: "POST",
+    body: payload
   })
 }

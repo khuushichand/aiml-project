@@ -14,6 +14,7 @@ export interface QuickSetupValues {
   sourceType: SourceType
   monitorName: string
   schedulePreset: QuickSetupSchedulePreset
+  audioBriefing: boolean
   runNow: boolean
   setupGoal: QuickSetupGoal
   includeAudioBriefing: boolean
@@ -26,6 +27,7 @@ export const QUICK_SETUP_DEFAULT_VALUES: QuickSetupValues = {
   sourceType: "rss",
   monitorName: "",
   schedulePreset: "daily",
+  audioBriefing: false,
   runNow: true,
   setupGoal: "briefing",
   includeAudioBriefing: true

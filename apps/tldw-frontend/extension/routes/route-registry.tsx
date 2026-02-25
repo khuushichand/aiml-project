@@ -177,6 +177,9 @@ const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
 const OptionWritingPlayground = lazy(() => import("./option-writing-playground"))
 const OptionModerationPlayground = lazy(() => import("./option-moderation-playground"))
+const OptionWorkspacePlayground = lazy(
+  () => import("./option-workspace-playground")
+)
 
 const ERROR_BOUNDARY_TEST_ENABLED = process.env.NODE_ENV !== "production"
 
@@ -441,6 +444,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     }
   },
   { kind: "options", path: "/review", element: <OptionMediaMulti /> },
+  {
+    kind: "options",
+    path: "/workspace-playground",
+    element: <OptionWorkspacePlayground />,
+    nav: {
+      group: "workspace",
+      labelToken: "settings:researchStudioNav",
+      icon: FlaskConical,
+      order: 0,
+      beta: true
+    }
+  },
   {
     kind: "options",
     path: "/flashcards",

@@ -110,6 +110,11 @@ vi.mock("@/services/watchlists", () => ({
   downloadWatchlistOutput: (...args: any[]) => mocks.downloadWatchlistOutputMock(...args)
 }))
 
+vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
+  trackWatchlistsOnboardingTelemetry: (...args: any[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
+}))
+
 vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: any) => unknown) => selector(mocks.storeStateRef.current)
 }))

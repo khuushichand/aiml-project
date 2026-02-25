@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { ScrapedItem, WatchlistSource } from "@/types/watchlists"
 import {
   buildDefaultItemsViewPresets,
+  DEFAULT_ITEMS_SORT_MODE,
   extractImageUrl,
   filterSourcesForReader,
   getInitialSourceRenderCount,
@@ -14,6 +15,7 @@ import {
   loadPersistedItemsSortMode,
   loadPersistedItemsViewPresets,
   loadPersistedItemPageSize,
+  normalizeItemsSortMode,
   normalizeItemPageSize,
   normalizeReaderSortMode,
   orderSourcesForReader,
@@ -135,6 +137,45 @@ describe("resolveSelectedItemId", () => {
   it("falls back to first item when current id is missing", () => {
     const items = [makeItem({ id: 5 }), makeItem({ id: 6 })]
     expect(resolveSelectedItemId(99, items)).toBe(5)
+  })
+})
+
+describe("sortItemsForReader", () => {
+  const fixture = [
+    makeItem({
+      id: 1,
+      published_at: "2026-01-02T00:00:00Z",
+      created_at: "2026-01-02T00:00:00Z",
+      reviewed: true
+    }),
+    makeItem({
+      id: 2,
+      published_at: "2026-01-03T00:00:00Z",
+      created_at: "2026-01-03T00:00:00Z",
+      reviewed: false
+    }),
+    makeItem({
+      id: 3,
+      published_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+      reviewed: false
+    })
+  ]
+
+  it("sorts newest first by default", () => {
+    expect(sortItemsForReader(fixture, "newest").map((item) => item.id)).toEqual([2, 1, 3])
+  })
+
+  it("sorts oldest first", () => {
+    expect(sortItemsForReader(fixture, "oldest").map((item) => item.id)).toEqual([3, 1, 2])
+  })
+
+  it("prioritizes unread items first while keeping recency within groups", () => {
+    expect(sortItemsForReader(fixture, "unreadFirst").map((item) => item.id)).toEqual([2, 3, 1])
+  })
+
+  it("prioritizes reviewed items first while keeping recency within groups", () => {
+    expect(sortItemsForReader(fixture, "reviewedFirst").map((item) => item.id)).toEqual([1, 2, 3])
   })
 })
 
@@ -368,6 +409,7 @@ describe("items view preset persistence helpers", () => {
       "system-high-priority",
       "system-needs-review"
     ])
+    expect(provisioned.every((preset) => preset.sortMode === DEFAULT_ITEMS_SORT_MODE)).toBe(true)
   })
 
   it("keeps custom presets sorted after system defaults", () => {
@@ -380,7 +422,8 @@ describe("items view preset persistence helpers", () => {
           sourceId: null,
           smartFilter: "all",
           statusFilter: "all",
-          searchQuery: ""
+          searchQuery: "",
+          sortMode: "oldest"
         },
         {
           id: "custom-a",
@@ -388,7 +431,8 @@ describe("items view preset persistence helpers", () => {
           sourceId: null,
           smartFilter: "all",
           statusFilter: "all",
-          searchQuery: ""
+          searchQuery: "",
+          sortMode: "unreadFirst"
         }
       ],
       defaults
@@ -401,12 +445,24 @@ describe("items view preset persistence helpers", () => {
       "custom-a",
       "custom-z"
     ])
+    expect(provisioned.find((preset) => preset.id === "custom-a")?.sortMode).toBe("unreadFirst")
+    expect(provisioned.find((preset) => preset.id === "custom-z")?.sortMode).toBe("oldest")
   })
 
   it("detects system preset ids", () => {
     expect(isSystemItemsViewPresetId("system-unread-today")).toBe(true)
     expect(isSystemItemsViewPresetId("custom-view")).toBe(false)
     expect(isSystemItemsViewPresetId(null)).toBe(false)
+  })
+})
+
+describe("normalizeItemsSortMode", () => {
+  it("normalizes supported and unsupported sort values", () => {
+    expect(normalizeItemsSortMode("newest")).toBe("newest")
+    expect(normalizeItemsSortMode("oldest")).toBe("oldest")
+    expect(normalizeItemsSortMode("unreadFirst")).toBe("unreadFirst")
+    expect(normalizeItemsSortMode("reviewedFirst")).toBe("reviewedFirst")
+    expect(normalizeItemsSortMode("unknown")).toBe(DEFAULT_ITEMS_SORT_MODE)
   })
 })
 

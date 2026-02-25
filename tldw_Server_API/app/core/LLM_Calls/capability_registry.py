@@ -153,6 +153,7 @@ ALIASES: dict[str, dict[str, str]] = {
 BLOCKED_FIELDS: dict[str, set[str]] = {
     "cohere": {"tool_choice"},
     "google": {"tool_choice"},
+    "llama.cpp": {"tools", "tool_choice"},
 }
 
 

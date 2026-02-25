@@ -4,9 +4,11 @@ const STORAGE_KEY = "tldw:watchlists:onboarding:telemetry"
 
 describe("watchlists-onboarding-telemetry", () => {
   let storageMap: Map<string, unknown>
+  let recordOnboardingTelemetryMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     storageMap = new Map<string, unknown>()
+    recordOnboardingTelemetryMock = vi.fn().mockResolvedValue({ accepted: true })
     vi.resetModules()
     vi.doMock("@/utils/safe-storage", () => ({
       createSafeStorage: () => ({
@@ -18,6 +20,10 @@ describe("watchlists-onboarding-telemetry", () => {
           storageMap.delete(key)
         }
       })
+    }))
+    vi.doMock("@/services/watchlists", () => ({
+      recordWatchlistsOnboardingTelemetry: (...args: unknown[]) =>
+        recordOnboardingTelemetryMock(...args)
     }))
   })
 
@@ -43,6 +49,37 @@ describe("watchlists-onboarding-telemetry", () => {
       goal: "briefing",
       runNow: false,
       destination: "outputs"
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "quick_setup_preview_loaded",
+      preview: "candidate",
+      total: 6,
+      ingestable: 4,
+      filtered: 2
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "quick_setup_preview_loaded",
+      preview: "template",
+      goal: "briefing",
+      audioEnabled: true
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "quick_setup_preview_failed",
+      preview: "candidate",
+      reason: "load_failed"
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "quick_setup_test_run_triggered",
+      runId: 777
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "quick_setup_first_run_succeeded",
+      source: "run_notifications",
+      runId: 777
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "quick_setup_first_output_succeeded",
+      source: "outputs"
     })
     await telemetry.trackWatchlistsOnboardingTelemetry({ type: "guided_tour_started" })
     await telemetry.trackWatchlistsOnboardingTelemetry({
@@ -74,7 +111,16 @@ describe("watchlists-onboarding-telemetry", () => {
     expect(state.quick_setup.step_completed.feed).toBe(1)
     expect(state.quick_setup.step_completed.monitor).toBe(1)
     expect(state.quick_setup.completed_by_goal.briefing).toBe(1)
+    expect(state.quick_setup.completed_by_destination.outputs).toBe(1)
     expect(state.quick_setup.completed_without_run_now).toBe(1)
+    expect(state.quick_setup.preview_loaded.candidate).toBe(1)
+    expect(state.quick_setup.preview_loaded.template).toBe(1)
+    expect(state.quick_setup.preview_failed.candidate).toBe(1)
+    expect(state.quick_setup.test_run_triggered).toBe(1)
+    expect(state.quick_setup.first_run_success).toBe(1)
+    expect(state.quick_setup.first_output_success).toBe(1)
+    expect(state.quick_setup.pending_first_run_success_at).toHaveLength(0)
+    expect(state.quick_setup.pending_first_output_success_at).toHaveLength(0)
     expect(state.guided_tour.started).toBe(1)
     expect(state.guided_tour.dismissed).toBe(1)
     expect(state.guided_tour.step_views["1"]).toBe(1)

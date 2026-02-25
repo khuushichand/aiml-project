@@ -596,6 +596,33 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
             "required": [],
             "additionalProperties": True,
         },
+        "acp_stage": {
+            "type": "object",
+            "properties": {
+                "stage": {"type": "string"},
+                "prompt_template": {"type": "string"},
+                "prompt": {"type": ["array", "string"]},
+                "session_id": {"type": "string"},
+                "session_context_key": {"type": "string", "default": "acp_session_id"},
+                "create_session": {"type": "boolean", "default": True},
+                "cwd": {"type": "string", "default": "/workspace"},
+                "agent_type": {"type": "string"},
+                "persona_id": {"type": "string"},
+                "workspace_id": {"type": "string"},
+                "workspace_group_id": {"type": "string"},
+                "scope_snapshot_id": {"type": "string"},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 300},
+                "review_counter_key": {"type": "string"},
+                "max_review_loops": {"type": "integer", "minimum": 1, "maximum": 20},
+                "fail_on_error": {"type": "boolean", "default": False},
+            },
+            "required": ["stage"],
+            "anyOf": [
+                {"required": ["prompt_template"]},
+                {"required": ["prompt"]},
+            ],
+            "additionalProperties": True,
+        },
         "tts": {
             "type": "object",
             "properties": {
@@ -3009,15 +3036,13 @@ async def control_run(
             db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "admin_impersonation", {"actor": str(current_user.id), "target_user_id": imp, "action": action})
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
+    result = "applied"
     if action == "pause":
-        engine.pause(run_id)
+        result = engine.pause(run_id)
     elif action == "resume":
-        engine.resume(run_id)
+        result = engine.resume(run_id)
     elif action == "cancel":
-        # Mark cancel flag in DB and emit event via engine helper
-        with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
-            db.set_cancel_requested(run_id, True)
-        engine.cancel(run_id)
+        result = engine.cancel(run_id)
     elif action == "retry":
         run = db.get_run(run_id)
         if not run:
@@ -3030,7 +3055,7 @@ async def control_run(
             engine.submit(run_id, RunMode.ASYNC)
     else:
         raise HTTPException(status_code=400, detail="Unsupported action")
-    return {"ok": True}
+    return {"ok": True, "result": result}
 
 
 @router.get(
@@ -3151,6 +3176,41 @@ async def list_step_types():
             "required": [],
             "additionalProperties": True,
             "example": {"url": "https://example.com/hooks/workflow", "follow_redirects": False, "max_bytes": 1048576},
+            "min_engine_version": "0.1.0",
+        },
+        "acp_stage": {
+            "type": "object",
+            "properties": {
+                "stage": {"type": "string"},
+                "prompt_template": {"type": "string"},
+                "prompt": {"type": ["array", "string"]},
+                "session_id": {"type": "string"},
+                "session_context_key": {"type": "string", "default": "acp_session_id"},
+                "create_session": {"type": "boolean", "default": True},
+                "cwd": {"type": "string", "default": "/workspace"},
+                "agent_type": {"type": "string"},
+                "persona_id": {"type": "string"},
+                "workspace_id": {"type": "string"},
+                "workspace_group_id": {"type": "string"},
+                "scope_snapshot_id": {"type": "string"},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 300},
+                "review_counter_key": {"type": "string"},
+                "max_review_loops": {"type": "integer", "minimum": 1, "maximum": 20},
+                "fail_on_error": {"type": "boolean", "default": False},
+            },
+            "required": ["stage"],
+            "anyOf": [
+                {"required": ["prompt_template"]},
+                {"required": ["prompt"]},
+            ],
+            "additionalProperties": True,
+            "example": {
+                "stage": "impl",
+                "prompt_template": "Implement {{ inputs.task }}",
+                "workspace_id": "{{ inputs.workspace_id }}",
+                "workspace_group_id": "{{ inputs.workspace_group_id }}",
+                "session_context_key": "pipeline_acp_session_id",
+            },
             "min_engine_version": "0.1.0",
         },
         "tts": {

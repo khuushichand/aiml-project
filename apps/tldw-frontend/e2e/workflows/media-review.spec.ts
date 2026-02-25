@@ -18,7 +18,184 @@ import {
   assertNoCriticalErrors
 } from "../utils/fixtures"
 import { MediaReviewPage } from "../utils/page-objects/MediaReviewPage"
-import { seedAuth, generateTestId, waitForConnection } from "../utils/helpers"
+import {
+  seedAuth,
+  generateTestId,
+  TEST_CONFIG,
+  fetchWithApiKey
+} from "../utils/helpers"
+
+const MIN_MEDIA_ITEMS_FOR_CROSS_PAGE_SELECTION = 22
+const MAX_MEDIA_COUNT_POLL_ATTEMPTS = 24
+const MEDIA_COUNT_POLL_INTERVAL_MS = 500
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const seedAppAuthWithApiKey = async (page: import("@playwright/test").Page) => {
+  await page.context().addInitScript((cfg) => {
+    try {
+      localStorage.setItem(
+        "tldwConfig",
+        JSON.stringify({
+          serverUrl: cfg.serverUrl,
+          apiKey: cfg.apiKey,
+          authMode: "single-user"
+        })
+      )
+      localStorage.setItem("__tldw_first_run_complete", "true")
+      localStorage.setItem("__tldw_allow_offline", "true")
+    } catch {
+      // Ignore localStorage failures in hardened browser contexts.
+    }
+  }, { serverUrl: TEST_CONFIG.serverUrl, apiKey: TEST_CONFIG.apiKey })
+}
+
+const getMediaTotalCount = async (): Promise<number> => {
+  const response = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/media/?page=1&results_per_page=1`,
+    TEST_CONFIG.apiKey
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to fetch media count: ${response.status} ${await response.text()}`)
+  }
+  const payload = await response.json().catch(() => ({}))
+  const totalCandidate =
+    payload?.pagination?.total_items ??
+    payload?.pagination?.total ??
+    payload?.total ??
+    payload?.count
+  const parsed = Number(totalCandidate)
+  if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  if (Array.isArray(payload?.items)) return payload.items.length
+  return 0
+}
+
+const seedMediaDocument = async (
+  seedLabel: string,
+  options?: {
+    title?: string
+    content?: string
+  }
+): Promise<void> => {
+  const body = new FormData()
+  body.append("media_type", "document")
+  body.append("title", options?.title || `Media review E2E ${seedLabel}`)
+  body.append("perform_analysis", "false")
+  body.append("perform_chunking", "false")
+  body.append(
+    "files",
+    new Blob([options?.content || `Seeded media review payload ${seedLabel}`], { type: "text/plain" }),
+    `media-review-${seedLabel}.txt`
+  )
+
+  const response = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/media/add`,
+    TEST_CONFIG.apiKey,
+    {
+      method: "POST",
+      body
+    }
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to seed media: ${response.status} ${await response.text()}`)
+  }
+}
+
+const seedSortFixtureDocuments = async (): Promise<{
+  query: string
+}> => {
+  const fixtureId = generateTestId("media-review-sort")
+  const prefix = `Media review sortable ${fixtureId}`
+  const titles = [
+    `${prefix} Zeta`,
+    `${prefix} Alpha`,
+    `${prefix} Mu`
+  ]
+
+  for (const title of titles) {
+    await seedMediaDocument(generateTestId("media-review-sort-doc"), {
+      title,
+      content: `${title} content body`
+    })
+  }
+
+  return { query: prefix }
+}
+
+const seedLongDiffFixtureDocuments = async (): Promise<{
+  query: string
+}> => {
+  const fixtureId = generateTestId("media-review-long-diff")
+  const prefix = `Media review long diff ${fixtureId}`
+  const leftTitle = `${prefix} Left`
+  const rightTitle = `${prefix} Right`
+  const leftContent = Array.from({ length: 2600 }, (_, idx) => `${prefix} left line ${idx}`).join("\n")
+  const rightContent = Array.from({ length: 2600 }, (_, idx) => `${prefix} right line ${idx}`).join("\n")
+
+  await seedMediaDocument(generateTestId("media-review-long-left"), {
+    title: leftTitle,
+    content: leftContent
+  })
+  await seedMediaDocument(generateTestId("media-review-long-right"), {
+    title: rightTitle,
+    content: rightContent
+  })
+
+  return { query: prefix }
+}
+
+const seedLiteratureTriageDocuments = async (
+  count: number = 12
+): Promise<{ query: string }> => {
+  const fixtureId = generateTestId("media-review-triage")
+  const prefix = `Media review triage ${fixtureId}`
+  for (let idx = 0; idx < count; idx += 1) {
+    const title = `${prefix} Paper ${String(idx + 1).padStart(2, "0")}`
+    await seedMediaDocument(generateTestId("media-review-triage-doc"), {
+      title,
+      content: `${title}\n\nTriage body for ${idx + 1}`
+    })
+  }
+  return { query: prefix }
+}
+
+const seedMediaAuditDocuments = async (
+  count: number = 4
+): Promise<{ query: string }> => {
+  const fixtureId = generateTestId("media-review-audit")
+  const prefix = `Media review audit ${fixtureId}`
+  for (let idx = 0; idx < count; idx += 1) {
+    const title = `${prefix} Item ${String(idx + 1).padStart(2, "0")}`
+    await seedMediaDocument(generateTestId("media-review-audit-doc"), {
+      title,
+      content: `${title}\n\nAudit payload ${idx + 1}`
+    })
+    await sleep(35)
+  }
+  return { query: prefix }
+}
+
+const ensureMediaCountForCrossPageReview = async (
+  minimumCount: number = MIN_MEDIA_ITEMS_FOR_CROSS_PAGE_SELECTION
+): Promise<number> => {
+  let currentCount = await getMediaTotalCount()
+  if (currentCount >= minimumCount) return currentCount
+
+  const needed = minimumCount - currentCount
+  for (let idx = 0; idx < needed; idx += 1) {
+    await seedMediaDocument(generateTestId(`media-review-cross-page-${idx}`))
+  }
+
+  for (let attempt = 0; attempt < MAX_MEDIA_COUNT_POLL_ATTEMPTS; attempt += 1) {
+    currentCount = await getMediaTotalCount()
+    if (currentCount >= minimumCount) return currentCount
+    await sleep(MEDIA_COUNT_POLL_INTERVAL_MS)
+  }
+
+  throw new Error(
+    `Timed out waiting for media count >= ${minimumCount}; current count=${currentCount}`
+  )
+}
 
 test.describe("Multi-Item Media Review Workflow", () => {
   let reviewPage: MediaReviewPage
@@ -188,6 +365,47 @@ test.describe("Multi-Item Media Review Workflow", () => {
       // Should have at least 3 selected (range)
       const selectedCount = await reviewPage.getSelectedCount()
       expect(selectedCount).toBeGreaterThanOrEqual(3)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("preserves cross-page selection when adding visible page items", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      await ensureMediaCountForCrossPageReview()
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      const itemCount = await reviewPage.getItemCount()
+      expect(itemCount).toBeGreaterThan(0)
+
+      const totalPages = await reviewPage.getTotalPages()
+      expect(totalPages).toBeGreaterThanOrEqual(2)
+
+      await reviewPage.clickItem(0)
+      await expect(
+        authedPage.getByText(/Selected across pages:\s*1/i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      const selectionBefore = await reviewPage.getSelectedAcrossPagesCount()
+      expect(selectionBefore).toBeGreaterThanOrEqual(1)
+
+      await reviewPage.goToPage(2)
+      await authedPage.waitForTimeout(800)
+
+      await reviewPage.clickAddVisibleToSelection()
+      await authedPage.waitForTimeout(800)
+
+      const selectionAfter = await reviewPage.getSelectedAcrossPagesCount()
+      expect(selectionAfter).toBeGreaterThan(selectionBefore)
+      await expect(
+        authedPage.getByText(/selected across pages:/i)
+      ).toBeVisible()
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -370,6 +588,76 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       await assertNoCriticalErrors(diagnostics)
     })
+
+    test("applies title sort and date range filters for focused search results", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      const fixture = await seedSortFixtureDocuments()
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      await reviewPage.fillSearchQuery(fixture.query)
+      await authedPage.waitForTimeout(800)
+      await reviewPage.setSort("title_asc")
+      await reviewPage.setDateRange("2026-01-01", "2026-12-31")
+      const searchRequestPromise = authedPage.waitForRequest((request) => (
+        request.url().includes("/api/v1/media/search") &&
+        request.method().toUpperCase() === "POST"
+      ))
+      await authedPage.getByRole("button", { name: /^search$/i }).click()
+      const searchRequest = await searchRequestPromise
+      const payload = searchRequest.postDataJSON() as Record<string, any>
+      expect(payload.sort_by).toBe("title_asc")
+      expect(payload.date_range?.start ?? payload.date_range?.start_date).toBe("2026-01-01")
+      expect(payload.date_range?.end ?? payload.date_range?.end_date).toBe("2026-12-31")
+
+      await expect
+        .poll(async () => await reviewPage.getItemCount(), { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(1)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("shows content-search scope copy and progress feedback", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      await ensureMediaCountForCrossPageReview(6)
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      const slowRoutePattern = "**/api/v1/media/*?include_content=true&include_versions=false"
+      await authedPage.route(slowRoutePattern, async (route) => {
+        await sleep(150)
+        await route.continue()
+      })
+
+      try {
+        await reviewPage.fillSearchQuery("Media review")
+        await reviewPage.toggleContentSearch(true)
+        await authedPage.getByRole("button", { name: /^search$/i }).click()
+
+        await expect(
+          authedPage.getByText(/scans current page results/i)
+        ).toBeVisible({ timeout: 10_000 })
+        await expect(
+          authedPage.getByRole("status", { name: /content filtering progress/i })
+        ).toBeVisible({ timeout: 10_000 })
+      } finally {
+        await authedPage.unroute(slowRoutePattern)
+      }
+
+      await assertNoCriticalErrors(diagnostics)
+    })
   })
 
   // ═════════════════════════════════════════════════════════════════════
@@ -493,6 +781,198 @@ test.describe("Multi-Item Media Review Workflow", () => {
   })
 
   // ═════════════════════════════════════════════════════════════════════
+  // 4.7  Performance & Scalability
+  // ═════════════════════════════════════════════════════════════════════
+
+  test.describe("Performance & Scalability", () => {
+    test("handles long compare diffs with non-blocking status feedback", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      const fixture = await seedLongDiffFixtureDocuments()
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      await reviewPage.fillSearchQuery(fixture.query)
+      await expect
+        .poll(async () => await reviewPage.getItemCount(), { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(2)
+
+      await reviewPage.clickItem(0)
+      await reviewPage.clickItem(1)
+
+      await expect(
+        authedPage.getByRole("button", { name: /compare content/i })
+      ).toBeVisible({ timeout: 10_000 })
+      await reviewPage.openCompareContentDiff()
+
+      await expect(
+        authedPage.getByText(/diff view/i)
+      ).toBeVisible({ timeout: 10_000 })
+      await expect(
+        authedPage.getByRole("region", { name: /diff content/i })
+      ).toBeVisible({ timeout: 10_000 })
+      await expect(
+        authedPage.getByText(/large comparison/i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("keeps 30-item stack mode interactive with virtualized rendering", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      await ensureMediaCountForCrossPageReview(35)
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+
+      await reviewPage.clickAddVisibleToSelection()
+      await authedPage.waitForTimeout(700)
+      await reviewPage.goToPage(2)
+      await authedPage.waitForTimeout(700)
+      await reviewPage.clickAddVisibleToSelection()
+      await authedPage.waitForTimeout(900)
+
+      await expect(
+        authedPage.getByText(/selected across pages:\s*30/i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      await reviewPage.setViewMode("all")
+      await expect(
+        authedPage.getByTestId("media-review-stack-virtualized")
+      ).toBeVisible({ timeout: 10_000 })
+
+      const renderedCardCount = await reviewPage.getStackRenderedCardCount()
+      expect(renderedCardCount).toBeGreaterThan(0)
+      expect(renderedCardCount).toBeLessThan(30)
+
+      const scrollTop = await reviewPage.scrollStackContainer(1200)
+      expect(scrollTop).toBeGreaterThan(0)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+
+  // ═════════════════════════════════════════════════════════════════════
+  // 4.8  Batch Operations Workflows
+  // ═════════════════════════════════════════════════════════════════════
+
+  test.describe("Batch Operations Workflows", () => {
+    test("triage: filters PDF set, reviews stack, compares two, and opens chat handoff", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      const fixture = await seedLiteratureTriageDocuments(12)
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+      await reviewPage.pressEscapeTwice()
+      await authedPage.waitForTimeout(250)
+
+      await reviewPage.fillSearchQuery(fixture.query)
+      await authedPage.getByRole("button", { name: /^search$/i }).click()
+      await expect
+        .poll(async () => await reviewPage.getItemCount(), { timeout: 20_000 })
+        .toBeGreaterThanOrEqual(2)
+
+      await reviewPage.filterByMediaType("pdf").catch(() => {})
+      const availableItems = await reviewPage.getItemCount()
+      const triageSelectionCount = Math.min(10, availableItems)
+      expect(triageSelectionCount).toBeGreaterThanOrEqual(2)
+      await reviewPage.selectFirstNItems(triageSelectionCount)
+      await expect
+        .poll(async () => await reviewPage.getSelectedCount(), { timeout: 10_000 })
+        .toBe(triageSelectionCount)
+
+      await reviewPage.setViewMode("all")
+      await expect
+        .poll(async () => await reviewPage.getCurrentViewMode(), { timeout: 10_000 })
+        .toBe("all")
+
+      // Keep two selected for compare/chat handoff.
+      for (let idx = 2; idx < triageSelectionCount; idx += 1) {
+        await reviewPage.clickItem(idx)
+      }
+      await expect(
+        authedPage.getByRole("button", { name: /compare content/i })
+      ).toBeVisible({ timeout: 10_000 })
+      await reviewPage.openCompareContentDiff()
+      await expect(
+        authedPage.getByText(/diff view/i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      const closeDiff = authedPage.getByRole("button", { name: /close/i }).first()
+      if (await closeDiff.isVisible().catch(() => false)) {
+        await closeDiff.click()
+      }
+
+      await authedPage
+        .getByRole("button", { name: /chat about selection/i })
+        .first()
+        .click()
+      await expect(authedPage).toHaveURL(/\/($|\?)/, { timeout: 10_000 })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("audit: sorts by date, batch moves stale items to trash, and opens trash", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      const fixture = await seedMediaAuditDocuments(4)
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+      await reviewPage.pressEscapeTwice()
+      await authedPage.waitForTimeout(250)
+
+      await reviewPage.fillSearchQuery(fixture.query)
+      await reviewPage.setSort("date_asc")
+      await authedPage.getByRole("button", { name: /^search$/i }).click()
+      await expect
+        .poll(async () => await reviewPage.getItemCount(), { timeout: 20_000 })
+        .toBeGreaterThanOrEqual(2)
+
+      await reviewPage.selectFirstNItems(2)
+      await expect
+        .poll(async () => await reviewPage.getSelectedCount(), { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(2)
+      await expect(
+        authedPage.getByTestId("media-multi-batch-toolbar")
+      ).toBeVisible({ timeout: 10_000 })
+
+      await reviewPage.clickBatchMoveToTrash()
+      await reviewPage.confirmBatchMoveToTrashIfPrompted()
+      const openTrashButton = authedPage
+        .getByRole("button", { name: /open trash/i })
+        .first()
+      if (await openTrashButton.isVisible().catch(() => false)) {
+        await reviewPage.clickOpenTrashCta()
+      } else {
+        await authedPage.goto("/media-trash", { waitUntil: "domcontentloaded" })
+      }
+
+      await expect(authedPage).toHaveURL(/\/media-trash/, { timeout: 10_000 })
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+
+  // ═════════════════════════════════════════════════════════════════════
   // Keyboard Shortcuts
   // ═════════════════════════════════════════════════════════════════════
 
@@ -556,6 +1036,101 @@ test.describe("Multi-Item Media Review Workflow", () => {
       // Press o to toggle expand
       await reviewPage.pressToggleExpand()
       await authedPage.waitForTimeout(500)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("keyboard accessibility flow scopes shortcuts in overlays and supports clear+undo recovery", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+      await seedAppAuthWithApiKey(authedPage)
+      await ensureMediaCountForCrossPageReview(8)
+      reviewPage = new MediaReviewPage(authedPage)
+      await reviewPage.goto()
+      await reviewPage.waitForReady()
+      await reviewPage.pressEscapeTwice()
+      await authedPage.waitForTimeout(250)
+
+      const rows = authedPage.locator(
+        "[data-testid='media-review-results-list'] [role='button'][aria-selected]"
+      )
+      await expect(rows.first()).toBeVisible({ timeout: 10_000 })
+
+      await rows.nth(0).focus()
+      await authedPage.keyboard.press("Enter")
+      await rows.nth(1).focus()
+      await authedPage.keyboard.press("Enter")
+      await expect(
+        authedPage.getByText(/selected across pages:\s*2/i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      const searchInput = authedPage
+        .getByRole("textbox", { name: /search media/i })
+        .first()
+
+      const optionsButton = authedPage.getByRole("button", { name: /options/i }).first()
+      await optionsButton.focus()
+      await optionsButton.press("Enter")
+      const addVisibleMenuItem = authedPage
+        .getByText(/add visible to selection|review all/i)
+        .first()
+      if (!(await addVisibleMenuItem.isVisible().catch(() => false))) {
+        await optionsButton.press("Space").catch(() => {})
+      }
+      if (!(await addVisibleMenuItem.isVisible().catch(() => false))) {
+        await optionsButton.press("ArrowDown").catch(() => {})
+      }
+      if (!(await addVisibleMenuItem.isVisible().catch(() => false))) {
+        await optionsButton.click()
+      }
+      await expect(
+        addVisibleMenuItem
+      ).toBeVisible({ timeout: 10_000 })
+
+      await authedPage.keyboard.press("/")
+      await expect(searchInput).not.toBeFocused()
+
+      await authedPage.keyboard.press("Escape")
+
+      const compareButton = authedPage.getByRole("button", { name: /compare content/i }).first()
+      await compareButton.focus()
+      await compareButton.press("Enter")
+      const diffDialog = authedPage.getByRole("dialog", { name: /diff view/i }).first()
+      await expect(diffDialog).toBeVisible({ timeout: 10_000 })
+
+      await authedPage.keyboard.press("/")
+      await expect(searchInput).not.toBeFocused()
+
+      const closeDiffButton = diffDialog.getByRole("button", { name: /close/i }).first()
+      if (await closeDiffButton.isVisible().catch(() => false)) {
+        await closeDiffButton.focus()
+        await closeDiffButton.press("Enter")
+      } else {
+        await authedPage.keyboard.press("Escape")
+      }
+      await expect(diffDialog).toBeHidden({ timeout: 10_000 })
+      await expect(
+        authedPage.getByText(/selected across pages:\s*2/i)
+      ).toBeVisible({ timeout: 10_000 })
+
+      await authedPage.keyboard.press("Escape")
+      await expect
+        .poll(async () => await reviewPage.getSelectedAcrossPagesCount(), {
+          timeout: 10_000
+        })
+        .toBe(0)
+
+      const undoButton = authedPage.getByRole("button", { name: /undo/i }).first()
+      await expect(undoButton).toBeVisible({ timeout: 10_000 })
+      await undoButton.focus()
+      await authedPage.keyboard.press("Enter")
+
+      await expect
+        .poll(async () => await reviewPage.getSelectedAcrossPagesCount(), { timeout: 10_000 })
+        .toBe(2)
 
       await assertNoCriticalErrors(diagnostics)
     })

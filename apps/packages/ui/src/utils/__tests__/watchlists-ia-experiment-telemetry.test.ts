@@ -44,6 +44,27 @@ describe("watchlists-ia-experiment-telemetry", () => {
     )
   })
 
+  it("emits telemetry payload contract fields required by backend schema", () => {
+    trackWatchlistsIaExperimentTransition(null, "overview", "baseline")
+    trackWatchlistsIaExperimentTransition("overview", "sources", "baseline")
+
+    const payload = mocks.recordWatchlistsIaExperimentTelemetryMock.mock.calls.at(-1)?.[0] as
+      | Record<string, unknown>
+      | undefined
+
+    expect(payload).toBeDefined()
+    expect(payload?.variant).toBe("baseline")
+    expect(typeof payload?.session_id).toBe("string")
+    expect(String(payload?.session_id || "").length).toBeGreaterThanOrEqual(8)
+    expect(payload?.previous_tab).toBe("overview")
+    expect(payload?.current_tab).toBe("sources")
+    expect(payload?.transitions).toBe(1)
+    expect(Array.isArray(payload?.visited_tabs)).toBe(true)
+    expect(payload?.visited_tabs).toEqual(expect.arrayContaining(["overview", "sources"]))
+    expect(typeof payload?.first_seen_at).toBe("string")
+    expect(typeof payload?.last_seen_at).toBe("string")
+  })
+
   it("keeps local telemetry state when sink emission fails", () => {
     mocks.recordWatchlistsIaExperimentTelemetryMock.mockRejectedValue(
       new Error("network down")

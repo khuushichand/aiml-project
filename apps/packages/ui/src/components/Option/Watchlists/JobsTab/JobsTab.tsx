@@ -36,6 +36,7 @@ import {
 import {
   buildScopeTooltipLines,
   summarizeFilters,
+  summarizeOutputLinkage,
   summarizeScopeCounts
 } from "./job-summaries"
 import { JobPreviewModal } from "./JobPreviewModal"
@@ -289,6 +290,13 @@ export const JobsTab: React.FC = () => {
               })}
             </div>
           )}
+          <div
+            className="text-xs text-text-muted mt-1"
+            data-testid={`job-output-linkage-${record.id}`}
+          >
+            {t("watchlists:jobs.outputLinkage.label", "Output linkage")}:{" "}
+            {summarizeOutputLinkage(record.output_prefs, t)}
+          </div>
         </div>
       )
     },

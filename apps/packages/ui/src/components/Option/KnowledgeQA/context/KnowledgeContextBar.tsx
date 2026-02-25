@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { RagPresetName } from "@/services/rag/unified-rag"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import {
   ChevronDown,
   Layers,

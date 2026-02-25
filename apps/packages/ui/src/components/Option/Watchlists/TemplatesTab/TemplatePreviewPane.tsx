@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
-import { Alert, Radio, Select, Spin } from "antd"
+import { Alert, Button, Radio, Select, Spin } from "antd"
 import DOMPurify from "dompurify"
 import { marked } from "marked"
 import { useTranslation } from "react-i18next"
@@ -11,12 +11,16 @@ interface TemplatePreviewPaneProps {
   format: "md" | "html"
   /** Available runs to preview against (id + label) */
   runs?: Array<{ id: number; label: string }>
+  sections?: TemplateComposerFlowSection[]
+  onApplyFlowSections?: (sections: TemplateComposerFlowSection[]) => void
 }
 
 export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
   content,
   format,
   runs,
+  sections,
+  onApplyFlowSections
 }) => {
   const { t } = useTranslation(["watchlists"])
   const [mode, setMode] = useState<"static" | "live">("static")
@@ -25,6 +29,12 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
+  const [flowMode, setFlowMode] = useState<TemplateComposerFlowCheckMode>("suggest_only")
+  const [flowIssues, setFlowIssues] = useState<TemplateComposerFlowIssue[]>([])
+  const [flowDiff, setFlowDiff] = useState("")
+  const [flowSections, setFlowSections] = useState<TemplateComposerFlowSection[]>([])
+  const [flowLoading, setFlowLoading] = useState(false)
+  const [flowError, setFlowError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -257,6 +267,43 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
           </div>
         ) : null
       )}
+
+      <div className="rounded-lg border border-border p-3 space-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="text-xs font-medium text-text-muted">Final flow-check</div>
+          <Radio.Group
+            value={flowMode}
+            onChange={(event) => setFlowMode(event.target.value)}
+            size="small"
+            optionType="button"
+          >
+            <Radio.Button value="suggest_only">Suggest only</Radio.Button>
+            <Radio.Button value="auto_apply">Auto apply</Radio.Button>
+          </Radio.Group>
+          <Button
+            size="small"
+            onClick={() => void runFlowCheck()}
+            loading={flowLoading}
+            disabled={!selectedRunId}
+          >
+            Run flow-check
+          </Button>
+        </div>
+
+        {flowError ? <Alert type="error" showIcon title={flowError} /> : null}
+
+        {(flowDiff || flowIssues.length > 0) ? (
+          <FlowCheckDiffPanel
+            diff={flowDiff}
+            mode={flowMode}
+            issues={flowIssues}
+            onModeChange={setFlowMode}
+            onAcceptChunk={() => acceptFlowDiff()}
+            onRejectChunk={() => rejectFlowDiff()}
+            onRevertAll={() => rejectFlowDiff()}
+          />
+        ) : null}
+      </div>
     </div>
   )
 }

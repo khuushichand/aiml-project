@@ -153,6 +153,7 @@ from tldw_Server_API.app.core.Workflows.adapters.evaluation import (
 
 # Integration adapters
 from tldw_Server_API.app.core.Workflows.adapters.integration import (
+    run_acp_stage_adapter,
     run_character_chat_adapter,
     run_chatbooks_adapter,
     run_email_send_adapter,
@@ -413,6 +414,7 @@ __all__ = [
     "run_webhook_adapter",
     "run_notify_adapter",
     "run_mcp_tool_adapter",
+    "run_acp_stage_adapter",
     "run_s3_upload_adapter",
     "run_s3_download_adapter",
     "run_podcast_rss_publish_adapter",

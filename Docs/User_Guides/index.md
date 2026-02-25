@@ -39,6 +39,7 @@ This section is organized by product surface so you can quickly find the right d
 - [Evaluations End User Guide](Server/Evaluations_End_User_Guide.md)
 - [Evaluations Production Deployment](Server/Evaluations_Production_Deployment_Guide.md)
 - [Email Operator Search Guide](Server/Email_Operator_Search_Guide.md)
+- [Meeting Intelligence User Guide](Server/Meeting_Intelligence_User_Guide.md)
 
 ## WebUI and Extension Guides
 

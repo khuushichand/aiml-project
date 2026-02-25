@@ -1,7 +1,9 @@
 import pytest
 from unittest.mock import patch
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 
 
 class DummyResponse:
@@ -69,3 +71,15 @@ def test_llamacpp_strict_filter_drops_top_k_from_payload_non_streaming():
     assert "top_k" not in captured_payload
     assert "messages" in captured_payload
     assert "stream" in captured_payload
+
+
+@pytest.mark.unit
+def test_llamacpp_tools_rejected_by_contract():
+    with pytest.raises(ChatBadRequestError):
+        validate_payload(
+            "llama.cpp",
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "function", "function": {"name": "x", "parameters": {}}}],
+            },
+        )

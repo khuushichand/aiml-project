@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WatchlistsPlaygroundPage } from "../WatchlistsPlaygroundPage"
 
 const IA_STORAGE_KEY = "watchlists:ia-experiment:v1"
+const IA_ROLLOUT_STORAGE_KEY = "watchlists:ia-rollout:v1"
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -150,12 +151,14 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     mocks.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)
     mocks.state.activeTab = "sources"
     localStorage.removeItem(IA_STORAGE_KEY)
+    localStorage.removeItem(IA_ROLLOUT_STORAGE_KEY)
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = true
   })
 
   afterEach(() => {
     cleanup()
     localStorage.removeItem(IA_STORAGE_KEY)
+    localStorage.removeItem(IA_ROLLOUT_STORAGE_KEY)
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
   })
 
@@ -240,5 +243,21 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     expect(mocks.recordWatchlistsIaExperimentTelemetryMock).toHaveBeenCalledWith(
       expect.objectContaining({ variant: "baseline" })
     )
+  })
+
+  it("honors persisted rollout assignment when runtime override is absent", () => {
+    delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
+    localStorage.setItem(
+      IA_ROLLOUT_STORAGE_KEY,
+      JSON.stringify({ version: 1, variant: "experimental" })
+    )
+
+    render(<WatchlistsPlaygroundPage />)
+
+    expect(screen.getByTestId("watchlists-experimental-tab-jobs")).toBeInTheDocument()
+    expect(screen.queryByTestId("watchlists-tab-jobs")).not.toBeInTheDocument()
+
+    const payload = JSON.parse(localStorage.getItem(IA_STORAGE_KEY) || "{}")
+    expect(payload.variant).toBe("experimental")
   })
 })

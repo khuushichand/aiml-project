@@ -8,7 +8,7 @@ import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { PresetSelector } from "./PresetSelector"
 import { BasicSettings } from "./BasicSettings"
 import { ExpertSettings } from "./ExpertSettings"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 
 type SettingsPanelProps = {
   open: boolean

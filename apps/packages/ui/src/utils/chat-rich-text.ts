@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify"
-import { marked } from "marked"
+import { Marked } from "marked"
+import markedKatexExtension from "./marked/katex"
 
 import type { ChatRichTextMode } from "@/types/chat-settings"
 
@@ -7,6 +8,12 @@ export const CHAT_RICH_TEXT_MODE_VALUES: readonly ChatRichTextMode[] = [
   "safe_markdown",
   "st_compat"
 ] as const
+
+const stCompatMarked = new Marked({
+  gfm: true,
+  breaks: true
+})
+stCompatMarked.use(markedKatexExtension({ throwOnError: false }))
 
 const FORBID_TAGS = [
   "script",
@@ -197,10 +204,7 @@ export const renderStCompatMarkdownToHtml = (
   allowExternalImages: boolean
 ): string => {
   const preprocessed = preprocessStCompatMarkdown(String(markdown || ""))
-  const rawRendered = marked.parse(preprocessed, {
-    gfm: true,
-    breaks: true
-  })
+  const rawRendered = stCompatMarked.parse(preprocessed)
   const renderedHtml =
     typeof rawRendered === "string" ? rawRendered : String(preprocessed)
   const safeHtml = sanitizeChatRichHtml(renderedHtml)

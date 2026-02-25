@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "У вас есть несохраненные изменения в документе состояния. Отменить локальные черновики?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "У вас есть несохраненные изменения в документе состояния. Подключиться и отменить локальные черновики?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "У вас есть несохраненные изменения в документе состояния. Отключиться и отменить локальные черновики?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "У вас есть несохраненные изменения в документе состояния. Загрузить состояние и отменить локальные черновики?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "У вас есть несохраненные изменения в документе состояния. Переключить персону и отменить локальные черновики?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "У вас есть несохраненные изменения в документе состояния. Переключить сессию и отменить локальные черновики?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "У вас есть несохраненные изменения в документе состояния. Восстановить эту версию состояния и отменить локальные черновики?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "У вас есть несохраненные изменения в документе состояния. Покинуть эту страницу и отменить локальные черновики?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "У вас есть несохраненные изменения в документе состояния. Покинуть эту страницу без сохранения?"
   }
 }

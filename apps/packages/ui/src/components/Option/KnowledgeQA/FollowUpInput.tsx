@@ -5,7 +5,7 @@
 import React, { useCallback, useState } from "react"
 import { SendHorizontal, Plus, Loader2 } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
-import { cn } from "@/lib/utils"
+import { cn } from "@/libs/utils"
 import { useMobile } from "@/hooks/useMediaQuery"
 
 type FollowUpInputProps = {

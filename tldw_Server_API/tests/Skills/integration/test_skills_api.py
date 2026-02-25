@@ -590,15 +590,16 @@ class TestSkillsEndToEndWorkflow:
         seed_resp = client.post(f"{SKILLS_PREFIX}/seed")
         assert seed_resp.status_code == 200, seed_resp.text
         seed_data = seed_resp.json()
-        assert seed_data["count"] >= 2
+        assert seed_data["count"] >= 3
         assert "summarize" in seed_data["seeded"]
         assert "code-review" in seed_data["seeded"]
+        assert "feynman-technique" in seed_data["seeded"]
 
     def test_e2e_seed_endpoint_idempotent_and_overwrite(self, client):
         first_seed = client.post(f"{SKILLS_PREFIX}/seed")
         assert first_seed.status_code == 200, first_seed.text
         first_data = first_seed.json()
-        assert first_data["count"] >= 2
+        assert first_data["count"] >= 3
 
         # idempotent without overwrite
         second_seed = client.post(f"{SKILLS_PREFIX}/seed")

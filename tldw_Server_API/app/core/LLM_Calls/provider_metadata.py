@@ -168,7 +168,7 @@ PROVIDER_CAPABILITIES: dict[str, dict[str, Any]] = {
     },
     "llama.cpp": {
         "supports_streaming": True,
-        "supports_tools": True,
+        "supports_tools": False,
         "default_timeout_seconds": 120,
         "max_output_tokens_default": 2048,
     },

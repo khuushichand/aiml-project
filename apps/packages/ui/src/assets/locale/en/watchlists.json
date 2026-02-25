@@ -168,7 +168,12 @@
           "monitorName": "Monitor name",
           "schedule": "Schedule",
           "setupGoal": "Setup goal",
-          "runNow": "Run immediately"
+          "audioBriefing": "Audio briefing",
+          "runNow": "Run test generation immediately"
+        },
+        "hints": {
+          "audioBriefing": "Enable spoken briefings alongside text reports.",
+          "runNow": "Runs one test generation after setup so you can verify results before waiting for the next schedule."
         },
         "goal": {
           "briefing": "Generate briefing reports",
@@ -197,15 +202,41 @@
           "monitor": "Monitor",
           "schedule": "Schedule",
           "goal": "Goal",
-          "runNow": "Run now"
+          "audio": "Audio",
+          "runNow": "Run test now",
+          "destination": "After create"
         },
-        "reviewDescription": "Confirm your setup, then create your feed and monitor.",
+        "reviewDescription": "Preview sample candidates and expected briefing, then create your feed and monitor.",
+        "candidatePreview": {
+          "title": "Feed sample preview",
+          "loading": "Loading sample candidates...",
+          "summary": "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items.",
+          "empty": "No sample candidates returned yet. You can still create setup and validate with a test run.",
+          "error": "Could not load feed sample preview right now. You can still create setup and use a test run to verify results."
+        },
+        "templatePreview": {
+          "title": "Briefing preview (template: {{template}})",
+          "none": "No briefing output will be generated for feed-review-only setup."
+        },
+        "outcome": {
+          "textOnly": "Text briefing",
+          "textAndAudio": "Text + audio briefing",
+          "triage": "Article triage only"
+        },
+        "destinationHint": {
+          "runNow": "Starts one test run immediately and opens Activity details.",
+          "briefing": "Opens Reports after setup. Use Run now in Monitors if you want an immediate briefing.",
+          "triage": "Opens Monitors after setup so you can run checks when ready."
+        },
         "actions": {
-          "finish": "Create setup"
+          "finish": "Create setup",
+          "finishWithTest": "Create setup + run test",
+          "retryPreview": "Retry preview"
         },
         "created": "Quick setup complete. Feed and monitor created.",
         "createdBriefing": "Quick setup complete. Feed and monitor created for briefing reports.",
         "createdAndRunning": "Quick setup complete. Your first run has started.",
+        "testRunPending": "Quick setup complete. Test run started. Open Activity for progress and Reports for generated briefings.",
         "error": "Failed to complete quick setup."
       }
     },
@@ -361,9 +392,9 @@
     },
     "topics": {
       "opml": {
-        "label": "OPML imports",
-        "title": "What is OPML?",
-        "description": "OPML is a portable feed-list format. Import one file to add many RSS or site feeds at once."
+        "label": "OPML feed import",
+        "title": "Import many feeds quickly",
+        "description": "Use OPML when moving feed lists from another reader so setup takes minutes instead of manual entry."
       },
       "cron": {
         "label": "cron scheduling",
@@ -371,9 +402,9 @@
         "description": "Start with presets for daily or weekday runs. Use cron only when you need exact custom timing."
       },
       "ttl": {
-        "label": "retention TTL",
-        "title": "What retention TTL means",
-        "description": "TTL controls how long generated outputs are kept before they expire automatically."
+        "label": "retention window",
+        "title": "Control how long outputs stay available",
+        "description": "Set retention to keep briefings only as long as your review workflow needs before automatic cleanup."
       },
       "jinja2": {
         "label": "Jinja2 templates",
@@ -381,9 +412,9 @@
         "description": "Start from a preset report template, then edit sections to shape briefing tone, structure, and audio script text."
       },
       "claimClusters": {
-        "label": "claim clusters",
-        "title": "What claim clusters are",
-        "description": "Claim clusters group similar claims across feeds so monitors can subscribe to related topic updates."
+        "label": "claim tracking",
+        "title": "Track repeating claims across sources",
+        "description": "Subscribe to claim clusters to follow how the same claim evolves across feeds without manual tagging."
       }
     }
   },
@@ -836,6 +867,8 @@
     "cancelFailedRetry": "Cancel failed. Retry.",
     "cancelRunSuccess": "Run cancelled",
     "cancelRunError": "Failed to cancel run",
+    "openRunOutputs": "View reports for this run",
+    "openOutputsShort": "Reports",
     "filterByJob": "Filter by monitor",
     "filterByStatus": "Filter by status",
     "showAdvancedFilters": "Show advanced filters",
@@ -883,6 +916,10 @@
     "detail": {
       "title": "Run Details",
       "loadError": "Failed to load details",
+      "linkageTitle": "Run linkage",
+      "linkageDescription": "Monitor #{{jobId}} produced {{count}} report{{plural}} for this run.",
+      "openMonitor": "Open monitor",
+      "openRunOutputs": "Open reports for this run",
       "stats": "Statistics",
       "statsLabels": {
         "status": "Status",
@@ -949,6 +986,8 @@
         "published": "Published",
         "created": "Ingested"
       },
+      "itemsStatusInBriefing": "Included in briefing",
+      "itemsStatusFilteredOut": "Excluded from briefing",
       "itemsSourceReference": "#{{id}}"
     }
   },
@@ -964,6 +1003,8 @@
     "reviewedOnly": "Reviewed",
     "unreadCount": "{{count}} unread",
     "sourceSearchPlaceholder": "Search feeds...",
+    "sourceCatalogCapHint": "Showing first {{count}} feeds. Use Feeds tab filters to narrow your source list.",
+    "sourceWindowHint": "Showing {{visible}} of {{total}} feeds. Scroll to load more.",
     "allFeeds": "All Feeds",
     "allFeedsHint": "Browse items from every source",
     "noFeeds": "No feeds found",
@@ -974,6 +1015,15 @@
       "ingested": "Ingested",
       "filtered": "Filtered"
     },
+    "sort": {
+      "label": "Sort",
+      "options": {
+        "newest": "Newest first",
+        "oldest": "Oldest first",
+        "unreadFirst": "Unread first",
+        "reviewedFirst": "Reviewed first"
+      }
+    },
     "empty": "No feed items found",
     "unknownSource": "Unknown source",
     "untitled": "Untitled item",
@@ -983,6 +1033,7 @@
     "reviewed": "Reviewed",
     "rowStatusUnread": "Unread",
     "rowStatusReviewed": "Reviewed",
+    "rowAriaLabel": "{{title}}. {{state}}. Source: {{source}}.",
     "published": "Published: {{date}}",
     "unknownDate": "Unknown",
     "openOriginal": "Open Original",
@@ -1039,7 +1090,14 @@
       "dismissProgress": "Dismiss",
       "completed": "Marked {{count}} item{{plural}} as reviewed.",
       "partial": "Marked {{success}} item{{successPlural}} as reviewed; {{failed}} failed.",
-      "failed": "Failed to mark items as reviewed."
+      "failed": "Failed to mark items as reviewed.",
+      "progress": {
+        "label": "Batch progress",
+        "count": "{{processed}} / {{total}}",
+        "running": "Running {{scope}}...",
+        "completed": "Completed {{success}} of {{total}}. {{failed}} failed.",
+        "retryFailed": "Retry failed"
+      }
     },
     "savedViews": {
       "label": "Saved views",
@@ -1078,6 +1136,10 @@
       "refresh": "Refresh feeds, article list, and smart counts.",
       "newFlow": "Start a new feed flow by opening Add Source.",
       "help": "Open this shortcuts help panel."
+    },
+    "live": {
+      "selectionChanged": "Selected {{title}} from {{source}} ({{state}}).",
+      "selectionCleared": "No article selected."
     }
   },
   "outputs": {
@@ -1297,6 +1359,7 @@
       "jobPlaceholder": "Select monitor",
       "searchPlaceholder": "Search clusters",
       "selectJob": "Select a monitor to manage cluster subscriptions.",
+      "toggleAria": "Toggle subscription for {{cluster}}",
       "fetchError": "Failed to load claim clusters",
       "updateError": "Failed to update cluster subscription",
       "empty": "No clusters found",

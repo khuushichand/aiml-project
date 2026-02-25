@@ -21,5 +21,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
-      - name: Run actionlint
-        uses: rhysd/actionlint@v1
+
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+
+      - name: Run actionlint on targeted workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./actionlint -color \
+            .github/workflows/actionlint.yml \
+            .github/workflows/codeql.yml \
+            .github/workflows/frontend-ux-gates.yml \
+            .github/workflows/sbom.yml

@@ -119,6 +119,10 @@ export const OutputsTab: React.FC = () => {
   const setOutputsPageSize = useWatchlistsStore((s) => s.setOutputsPageSize)
   const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
   const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
+  const setRunsJobFilter = useWatchlistsStore((s) => s.setRunsJobFilter)
+  const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const openJobForm = useWatchlistsStore((s) => s.openJobForm)
   const openOutputPreview = useWatchlistsStore((s) => s.openOutputPreview)
   const closeOutputPreview = useWatchlistsStore((s) => s.closeOutputPreview)
   const setRunsJobFilter = useWatchlistsStore((s) => s.setRunsJobFilter)
@@ -377,6 +381,17 @@ export const OutputsTab: React.FC = () => {
     ],
     [t]
   )
+
+  const handleJumpToMonitor = useCallback((jobId: number) => {
+    setActiveTab("jobs")
+    openJobForm(jobId)
+  }, [openJobForm, setActiveTab])
+
+  const handleJumpToRun = useCallback((runId: number, jobId: number) => {
+    setRunsJobFilter(jobId)
+    setActiveTab("runs")
+    openRunDetail(runId)
+  }, [openRunDetail, setActiveTab, setRunsJobFilter])
 
   // Handle download
   const handleDownload = async (output: WatchlistOutput) => {

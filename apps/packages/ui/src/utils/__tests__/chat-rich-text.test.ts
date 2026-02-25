@@ -70,6 +70,21 @@ describe("chat rich text utilities", () => {
     expect(html).not.toContain("<script")
   })
 
+  it("renders latex in st_compat mode", () => {
+    const markdown = [
+      "Inline math $x^2 + y^2$ appears here.",
+      "",
+      "$$",
+      "\\sum_{i=1}^{n} i",
+      "$$"
+    ].join("\n")
+
+    const html = renderStCompatMarkdownToHtml(markdown, false)
+
+    expect(html).toContain("katex")
+    expect(html).toContain("katex-display")
+  })
+
   it("normalizes unknown rich text mode values to safe_markdown", () => {
     expect(normalizeChatRichTextMode("st_compat")).toBe("st_compat")
     expect(normalizeChatRichTextMode("safe_markdown")).toBe("safe_markdown")

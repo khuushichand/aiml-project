@@ -210,6 +210,31 @@ describe("OverviewTab quick setup flow", () => {
     expect(mockState.openSourceFormMock).toHaveBeenCalledTimes(1)
   })
 
+  it("records onboarding success milestones when overview includes generated reports", async () => {
+    mockState.fetchOverviewMock.mockResolvedValue(
+      createOverviewPayload({
+        sources: { total: 1, healthy: 1 },
+        jobs: { total: 1, active: 1 },
+        outputs: { total: 2, expired: 0, deliveryIssues: 0, attention: 0 }
+      })
+    )
+
+    render(<OverviewTab />)
+
+    await waitFor(() => {
+      expect(screen.getByText("Setup complete")).toBeInTheDocument()
+    })
+
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "quick_setup_first_run_succeeded",
+      source: "overview"
+    })
+    expect(mockState.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "quick_setup_first_output_succeeded",
+      source: "overview"
+    })
+  })
+
   it("opens Monitor creation directly when feeds already exist", async () => {
     mockState.fetchOverviewMock.mockResolvedValue(
       createOverviewPayload({

@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
   }
   return {
     fetchWatchlistRunsMock: vi.fn(),
+    trackWatchlistsOnboardingTelemetryMock: vi.fn(),
     notificationDestroyMock: vi.fn(),
     notificationErrorMock: vi.fn(),
     notificationSuccessMock: vi.fn(),
@@ -199,6 +200,7 @@ describe("WatchlistsPlaygroundPage run notifications", () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     delete (window as { __TLDW_WATCHLISTS_RUN_NOTIFICATIONS_POLL_MS?: unknown })
       .__TLDW_WATCHLISTS_RUN_NOTIFICATIONS_POLL_MS
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__

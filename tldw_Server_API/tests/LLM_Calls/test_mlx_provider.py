@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import platform
 import types
 
 import pytest
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatRateLimitError, ChatBadRequestError
 from tldw_Server_API.app.core.LLM_Calls.providers import mlx_provider as mp
-
-
-IS_APPLE = platform.system() == "Darwin"
-pytestmark = pytest.mark.skipif(not IS_APPLE, reason="MLX targets Apple Silicon; skip on non-Apple hosts")
 
 
 def _fake_mlx_module():
@@ -60,6 +55,13 @@ def test_load_and_unload(monkeypatch):
     assert reg.status()["active"] is False
 
 
+def test_load_blank_model_path_raises(monkeypatch):
+    _patch_mlx(monkeypatch)
+    reg = mp.get_mlx_registry()
+    with pytest.raises(ChatBadRequestError):
+        reg.load(model_path="   ", overrides={"max_concurrent": 1})
+
+
 def test_overflow_raises_rate_limit(monkeypatch):
     _patch_mlx(monkeypatch)
     reg = mp.get_mlx_registry()
@@ -88,6 +90,33 @@ def test_chat_and_embeddings(monkeypatch):
 
     emb_resp = emb_adapter.embed({"input": "hello", "model": "fake-model"})
     assert emb_resp["data"][0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_load_reports_unapplied_runtime_overrides(monkeypatch):
+    _patch_mlx(monkeypatch)
+    reg = mp.get_mlx_registry()
+    status = reg.load(
+        model_path="fake-model",
+        overrides={
+            "max_concurrent": 1,
+            "quantization": "4bit",
+            "max_kv_cache_size": 4096,
+        },
+    )
+
+    unapplied = status.get("config", {}).get("unapplied_runtime_overrides", {})
+    assert unapplied.get("quantization") == "4bit"
+    assert unapplied.get("max_kv_cache_size") == 4096
+
+
+def test_embeddings_response_uses_active_session_model(monkeypatch):
+    _patch_mlx(monkeypatch)
+    reg = mp.get_mlx_registry()
+    reg.load(model_path="fake-model", overrides={"max_concurrent": 1})
+    emb_adapter = mp.MLXEmbeddingsAdapter()
+
+    resp = emb_adapter.embed({"input": "hello", "model": "wrong-model"})
+    assert resp["model"] == "fake-model"
 
 
 def test_session_scope_without_load_raises():
