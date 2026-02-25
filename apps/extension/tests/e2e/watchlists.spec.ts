@@ -660,7 +660,8 @@ test.describe('Watchlists playground smoke', () => {
 
     await page.getByTestId('watchlists-run-cancel-101').click()
 
-    await expect(page.getByText('Cancelled')).toBeVisible()
+    const runRow = page.locator('.ant-table-tbody tr[data-row-key="101"]')
+    await expect(runRow.getByLabel(/Run status:\s*Cancelled/i)).toBeVisible()
 
     await context.close()
   })
