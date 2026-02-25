@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+
+## [0.1.25] 2026-02-X
+
+### Added
+
+- Alibaba Model Studio image backend support for `/api/v1/files/create` image generation via the new `modelstudio` backend.
+- Model Studio adapter support for sync generation, async task submission/polling, and `auto` mode.
+- Model Studio image configuration fields in `[Image-Generation]`:
+  `modelstudio_image_base_url`, `modelstudio_image_api_key`, `modelstudio_image_default_model`, `modelstudio_image_region`, `modelstudio_image_mode`, `modelstudio_image_poll_interval_seconds`, `modelstudio_image_timeout_seconds`, `modelstudio_image_allowed_extra_params`.
+- Qwen region-based endpoint presets for native HTTP chat routing (`sg`, `us`, `cn`) plus `qwen_api_region` config support.
+- Curated Qwen model entries (`qwen-max`, `qwen-plus`, `qwen-turbo`) in model pricing/catalog metadata.
+- Qwen provider mapping in LLM provider metadata endpoint wiring so Qwen models appear correctly.
+- Regression coverage for Model Studio adapter behavior, config defaults, image allowlist behavior, image model listing, and Qwen base URL precedence/region routing.
+
+### Changed
+
+- Qwen base URL resolution precedence is now explicitly ordered as:
+  request `base_url` -> `QWEN_BASE_URL` -> config `qwen_api.api_base_url` -> region preset.
+- Model Studio base URL resolution now uses region presets when explicit base URL overrides are unset.
+- Model Studio payload construction was refactored to remove duplicate model/extra-parameter logic across sync and async builders.
+- Env-var and image setup docs were updated for Model Studio and Qwen routing, including grouped readability improvements for `[Image-Generation]` key listings.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed `modelstudio_image_mode=auto` to actually do sync-first fallback to async.
+- Fixed validation so `payload.extra_params.mode` is accepted for Model Studio control flow without requiring passthrough allowlisting.
+- Fixed user-facing error hygiene by sanitizing Model Studio transport exception details while logging internals.
+- Fixed potential SSRF path by validating response-provided remote image URLs against egress policy/allowlist before fetch.
+- Fixed `modelstudio_image_region` no-op behavior by wiring it into endpoint selection.
+- Fixed missing docstring on `_coerce_choice` in image generation config helpers.
+
+
 ## [0.1.24] 2026-02-22
 
 ### Added

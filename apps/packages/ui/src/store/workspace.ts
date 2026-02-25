@@ -32,13 +32,18 @@ import type {
   AudioGenerationSettings,
   GeneratedArtifact,
   SavedWorkspace,
+  WorkspaceBanner,
   WorkspaceConfig,
   WorkspaceNote,
   WorkspaceSource,
   WorkspaceSourceStatus,
   WorkspaceSourceType
 } from "@/types/workspace"
-import { DEFAULT_AUDIO_SETTINGS, DEFAULT_WORKSPACE_NOTE } from "@/types/workspace"
+import {
+  DEFAULT_AUDIO_SETTINGS,
+  DEFAULT_WORKSPACE_BANNER,
+  DEFAULT_WORKSPACE_NOTE
+} from "@/types/workspace"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -638,6 +643,22 @@ const attemptWorkspaceStorageRecovery = (
         (workspaceLastAccess.get(a) ?? Number.POSITIVE_INFINITY) -
         (workspaceLastAccess.get(b) ?? Number.POSITIVE_INFINITY)
     )
+
+  // Trim archived banner images before removing entire workspaces.
+  for (const archivedId of archivedIds) {
+    if (reachedTarget()) break
+    if (!isRecord(mutableState.workspaceSnapshots)) break
+
+    const snapshotsMap = mutableState.workspaceSnapshots as Record<string, unknown>
+    const snapshot = snapshotsMap[archivedId]
+    if (!isRecord(snapshot) || !isRecord(snapshot.workspaceBanner)) continue
+
+    const workspaceBanner = snapshot.workspaceBanner as Record<string, unknown>
+    if (!workspaceBanner.image) continue
+
+    workspaceBanner.image = null
+    applyMutation("banner_image_removed", archivedId)
+  }
 
   for (const archivedId of archivedIds) {
     if (reachedTarget()) break
@@ -1752,6 +1773,7 @@ interface StudioState {
   generatedArtifacts: GeneratedArtifact[]
   notes: string // Legacy simple notes field
   currentNote: WorkspaceNote // Full note with title, keywords, versioning
+  workspaceBanner: WorkspaceBanner
   isGeneratingOutput: boolean
   generatingOutputType: ArtifactType | null
 }
@@ -1788,6 +1810,7 @@ interface WorkspaceSnapshot {
   generatedArtifacts: GeneratedArtifact[]
   notes: string
   currentNote: WorkspaceNote
+  workspaceBanner: WorkspaceBanner
   leftPaneCollapsed: boolean
   rightPaneCollapsed: boolean
   audioSettings: AudioGenerationSettings
@@ -1827,6 +1850,7 @@ export interface WorkspaceUndoSnapshot {
   generatedArtifacts: GeneratedArtifact[]
   notes: string
   currentNote: WorkspaceNote
+  workspaceBanner: WorkspaceBanner
   leftPaneCollapsed: boolean
   rightPaneCollapsed: boolean
   audioSettings: AudioGenerationSettings
@@ -1908,6 +1932,9 @@ interface StudioActions {
   ) => void
   clearArtifacts: () => void
   setNotes: (notes: string) => void
+  setWorkspaceBanner: (banner: Partial<WorkspaceBanner>) => void
+  clearWorkspaceBannerImage: () => void
+  resetWorkspaceBanner: () => void
   setIsGeneratingOutput: (
     isGenerating: boolean,
     outputType?: ArtifactType | null
@@ -2042,6 +2069,7 @@ const initialStudioState: StudioState = {
   generatedArtifacts: [],
   notes: "",
   currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+  workspaceBanner: { ...DEFAULT_WORKSPACE_BANNER },
   isGeneratingOutput: false,
   generatingOutputType: null
 }
@@ -2122,6 +2150,7 @@ interface PersistedWorkspaceState {
 export type WorkspacePersistenceSectionKey =
   | "workspaceSnapshots"
   | "workspaceChatSessions"
+  | "workspaceBanner"
   | "generatedArtifacts"
   | "notes"
   | "sources"
@@ -2166,6 +2195,8 @@ const MAX_SAVED_WORKSPACES = 10
 const MAX_ARCHIVED_WORKSPACES = 50
 const INTERRUPTED_GENERATION_ERROR_MESSAGE =
   "Generation was interrupted. Click regenerate to try again."
+const WORKSPACE_BANNER_TITLE_MAX_CHARS = 80
+const WORKSPACE_BANNER_SUBTITLE_MAX_CHARS = 180
 let workspacePersistenceWriteCount = 0
 let workspacePersistenceMaxBytes = 0
 
@@ -2213,10 +2244,28 @@ export const estimateWorkspacePersistenceMetrics = (
 ): WorkspacePersistenceMetricsSnapshot => {
   const payload = unwrapPersistedWorkspaceCandidate(candidate)
   const totalBytes = estimateSerializedByteLength(payload)
+  const rawWorkspaceSnapshotsBytes = estimateSerializedByteLength(
+    payload.workspaceSnapshots
+  )
+  const workspaceBannerBytes = isRecord(payload.workspaceSnapshots)
+    ? Object.values(payload.workspaceSnapshots as Record<string, unknown>).reduce(
+        (accumulator, snapshot) => {
+          if (!isRecord(snapshot)) return accumulator
+          return (
+            accumulator + estimateSerializedByteLength(snapshot.workspaceBanner)
+          )
+        },
+        0
+      )
+    : 0
 
   const sections: WorkspacePersistenceSectionBytes = {
-    workspaceSnapshots: estimateSerializedByteLength(payload.workspaceSnapshots),
+    workspaceSnapshots: Math.max(
+      0,
+      rawWorkspaceSnapshotsBytes - workspaceBannerBytes
+    ),
     workspaceChatSessions: estimateSerializedByteLength(payload.workspaceChatSessions),
+    workspaceBanner: workspaceBannerBytes,
     generatedArtifacts: estimateSerializedByteLength(payload.generatedArtifacts),
     notes: estimateSerializedByteLength(payload.notes),
     sources: estimateSerializedByteLength(payload.sources),
@@ -2424,6 +2473,7 @@ const reviveWorkspaceSnapshot = (
     selectedSourceIds: snapshot.selectedSourceIds || [],
     generatedArtifacts: reviveArtifacts(snapshot.generatedArtifacts || []),
     currentNote: snapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
+    workspaceBanner: coerceWorkspaceBannerForRehydrate(snapshot.workspaceBanner),
     audioSettings: snapshot.audioSettings || { ...DEFAULT_AUDIO_SETTINGS }
   }
 }
@@ -2639,6 +2689,81 @@ const coerceAudioSettingsForRehydrate = (
   }
 }
 
+const coerceWorkspaceBannerForRehydrate = (
+  candidate: unknown
+): WorkspaceBanner => {
+  if (!isRecord(candidate)) {
+    return { ...DEFAULT_WORKSPACE_BANNER }
+  }
+
+  const imageCandidate = isRecord(candidate.image) ? candidate.image : null
+  const imageMimeType = imageCandidate?.mimeType
+  const isSupportedImageMimeType =
+    imageMimeType === "image/jpeg" ||
+    imageMimeType === "image/png" ||
+    imageMimeType === "image/webp"
+
+  const image =
+    imageCandidate &&
+    typeof imageCandidate.dataUrl === "string" &&
+    isSupportedImageMimeType &&
+    typeof imageCandidate.width === "number" &&
+    Number.isFinite(imageCandidate.width) &&
+    imageCandidate.width > 0 &&
+    typeof imageCandidate.height === "number" &&
+    Number.isFinite(imageCandidate.height) &&
+    imageCandidate.height > 0 &&
+    typeof imageCandidate.bytes === "number" &&
+    Number.isFinite(imageCandidate.bytes) &&
+    imageCandidate.bytes > 0
+      ? {
+          dataUrl: imageCandidate.dataUrl,
+          mimeType: imageMimeType,
+          width: imageCandidate.width,
+          height: imageCandidate.height,
+          bytes: imageCandidate.bytes,
+          updatedAt:
+            reviveDateOrNull(
+              imageCandidate.updatedAt as Date | string | null | undefined
+            ) || new Date()
+        }
+      : null
+
+  return {
+    title:
+      typeof candidate.title === "string"
+        ? candidate.title
+        : DEFAULT_WORKSPACE_BANNER.title,
+    subtitle:
+      typeof candidate.subtitle === "string"
+        ? candidate.subtitle
+        : DEFAULT_WORKSPACE_BANNER.subtitle,
+    image
+  }
+}
+
+const sanitizeWorkspaceBannerText = (
+  value: string,
+  maxChars: number
+): string => value.trim().slice(0, maxChars)
+
+const sanitizeWorkspaceBanner = (
+  candidate: WorkspaceBanner
+): WorkspaceBanner => {
+  const normalized = coerceWorkspaceBannerForRehydrate(candidate)
+  return {
+    title: sanitizeWorkspaceBannerText(
+      normalized.title,
+      WORKSPACE_BANNER_TITLE_MAX_CHARS
+    ),
+    subtitle: sanitizeWorkspaceBannerText(
+      normalized.subtitle,
+      WORKSPACE_BANNER_SUBTITLE_MAX_CHARS
+    ),
+    image: normalized.image
+  }
+}
+
 const buildLegacyTopLevelSnapshotForMigration = (
   workspaceId: string,
   persisted: Record<string, unknown>
@@ -2684,6 +2809,9 @@ const buildLegacyTopLevelSnapshotForMigration = (
     generatedArtifacts,
     notes: typeof persisted.notes === "string" ? persisted.notes : "",
     currentNote: coerceWorkspaceNoteForRehydrate(persisted.currentNote),
+    workspaceBanner: coerceWorkspaceBannerForRehydrate(
+      persisted.workspaceBanner
+    ),
     leftPaneCollapsed: Boolean(persisted.leftPaneCollapsed),
     rightPaneCollapsed: Boolean(persisted.rightPaneCollapsed),
     audioSettings: coerceAudioSettingsForRehydrate(persisted.audioSettings)
@@ -2755,6 +2883,7 @@ const createEmptyWorkspaceSnapshot = ({
   generatedArtifacts: [],
   notes: "",
   currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+  workspaceBanner: { ...DEFAULT_WORKSPACE_BANNER },
   leftPaneCollapsed: false,
   rightPaneCollapsed: false,
   audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
@@ -2774,6 +2903,7 @@ const applyWorkspaceSnapshot = (
   | "generatedArtifacts"
   | "notes"
   | "currentNote"
+  | "workspaceBanner"
   | "leftPaneCollapsed"
   | "rightPaneCollapsed"
   | "audioSettings"
@@ -2790,6 +2920,7 @@ const applyWorkspaceSnapshot = (
   })),
   notes: snapshot.notes,
   currentNote: { ...snapshot.currentNote },
+  workspaceBanner: cloneWorkspaceValue(snapshot.workspaceBanner),
   leftPaneCollapsed: snapshot.leftPaneCollapsed,
   rightPaneCollapsed: snapshot.rightPaneCollapsed,
   audioSettings: { ...snapshot.audioSettings }
@@ -2808,6 +2939,7 @@ const buildWorkspaceSnapshot = (state: WorkspaceState): WorkspaceSnapshot => ({
   })),
   notes: state.notes,
   currentNote: { ...state.currentNote },
+  workspaceBanner: cloneWorkspaceValue(state.workspaceBanner),
   leftPaneCollapsed: state.leftPaneCollapsed,
   rightPaneCollapsed: state.rightPaneCollapsed,
   audioSettings: { ...state.audioSettings }
@@ -2826,6 +2958,7 @@ const buildWorkspaceBundleSnapshot = (
   })),
   notes: snapshot.notes,
   currentNote: { ...snapshot.currentNote },
+  workspaceBanner: cloneWorkspaceValue(snapshot.workspaceBanner),
   leftPaneCollapsed: snapshot.leftPaneCollapsed,
   rightPaneCollapsed: snapshot.rightPaneCollapsed,
   audioSettings: { ...snapshot.audioSettings }
@@ -2868,6 +3001,9 @@ const hydrateWorkspaceBundleSnapshot = (
     generatedArtifacts: reviveArtifacts(snapshot.generatedArtifacts || []),
     notes: typeof snapshot.notes === "string" ? snapshot.notes : "",
     currentNote: snapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
+    workspaceBanner: coerceWorkspaceBannerForRehydrate(
+      snapshot.workspaceBanner
+    ),
     leftPaneCollapsed: Boolean(snapshot.leftPaneCollapsed),
     rightPaneCollapsed: Boolean(snapshot.rightPaneCollapsed),
     audioSettings: snapshot.audioSettings || { ...DEFAULT_AUDIO_SETTINGS }
@@ -2894,6 +3030,7 @@ const buildWorkspaceUndoSnapshot = (
     generatedArtifacts: state.generatedArtifacts,
     notes: state.notes,
     currentNote: state.currentNote,
+    workspaceBanner: state.workspaceBanner,
     leftPaneCollapsed: state.leftPaneCollapsed,
     rightPaneCollapsed: state.rightPaneCollapsed,
     audioSettings: state.audioSettings,
@@ -3033,6 +3170,7 @@ const duplicateWorkspaceSnapshot = (
       version: undefined,
       isDirty: false
     },
+    workspaceBanner: cloneWorkspaceValue(snapshot.workspaceBanner),
     leftPaneCollapsed: snapshot.leftPaneCollapsed,
     rightPaneCollapsed: snapshot.rightPaneCollapsed,
     audioSettings: { ...snapshot.audioSettings }
@@ -3460,6 +3598,41 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     clearArtifacts: () => set({ generatedArtifacts: [] }),
 
     setNotes: (notes) => set({ notes }),
+
+    setWorkspaceBanner: (bannerUpdate) =>
+      set((state) => {
+        const nextCandidate: WorkspaceBanner = {
+          title:
+            bannerUpdate.title !== undefined
+              ? bannerUpdate.title
+              : state.workspaceBanner.title,
+          subtitle:
+            bannerUpdate.subtitle !== undefined
+              ? bannerUpdate.subtitle
+              : state.workspaceBanner.subtitle,
+          image:
+            bannerUpdate.image !== undefined
+              ? bannerUpdate.image
+              : state.workspaceBanner.image
+        }
+
+        return {
+          workspaceBanner: sanitizeWorkspaceBanner(nextCandidate)
+        }
+      }),
+
+    clearWorkspaceBannerImage: () =>
+      set((state) => ({
+        workspaceBanner: {
+          ...state.workspaceBanner,
+          image: null
+        }
+      })),
+
+    resetWorkspaceBanner: () =>
+      set({
+        workspaceBanner: { ...DEFAULT_WORKSPACE_BANNER }
+      }),
 
     setIsGeneratingOutput: (isGenerating, outputType = null) =>
       set({
@@ -4145,6 +4318,9 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         generatedArtifacts: reviveArtifacts(clonedSnapshot.generatedArtifacts || []),
         notes: clonedSnapshot.notes || "",
         currentNote: clonedSnapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
+        workspaceBanner: coerceWorkspaceBannerForRehydrate(
+          clonedSnapshot.workspaceBanner
+        ),
         leftPaneCollapsed: Boolean(clonedSnapshot.leftPaneCollapsed),
         rightPaneCollapsed: Boolean(clonedSnapshot.rightPaneCollapsed),
         audioSettings:

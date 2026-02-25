@@ -172,9 +172,25 @@ describe("SkillsManager imports", () => {
     })
 
     fireEvent.click(screen.getByRole("button", { name: "Seed Built-ins" }))
+    fireEvent.click(await screen.findByText("Seed Missing Only"))
 
     await waitFor(() => {
       expect(tldwClientMock.seedSkills).toHaveBeenCalledWith({ overwrite: false })
+    })
+  })
+
+  it("seeds built-in skills with overwrite via seedSkills action", async () => {
+    renderManager()
+
+    await waitFor(() => {
+      expect(tldwClientMock.listSkills).toHaveBeenCalled()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Seed Built-ins" }))
+    fireEvent.click(await screen.findByText("Seed and Overwrite Existing"))
+
+    await waitFor(() => {
+      expect(tldwClientMock.seedSkills).toHaveBeenCalledWith({ overwrite: true })
     })
   })
 })

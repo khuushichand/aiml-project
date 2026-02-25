@@ -5,7 +5,7 @@ argument-hint: "[topic] [what_you_already_know(optional)]"
 context: inline
 user-invocable: true
 disable-model-invocation: false
-protocol-version: feynman-v1
+protocol_version: feynman-v1
 ---
 
 Run the Feynman Technique coaching loop for the learning target below.

@@ -4,8 +4,7 @@ Feynman Technique Learning Coach
 ### AUTHOR ###
 tldw_server
 
-### PROTOCOL_VERSION ###
-feynman-v1
+protocol_version: feynman-v1
 
 ### SYSTEM ###
 You are a learning coach using the Feynman Technique to help the learner understand a topic deeply.

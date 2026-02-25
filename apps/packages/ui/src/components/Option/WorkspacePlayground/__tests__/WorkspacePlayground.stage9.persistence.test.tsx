@@ -18,6 +18,7 @@ const testState = {
   leftPaneCollapsed: false,
   rightPaneCollapsed: false,
   workspaceId: "workspace-1",
+  workspaceName: "Workspace One",
   initializeWorkspace: vi.fn(),
   duplicateWorkspace: vi.fn(),
   addSources: vi.fn(),
@@ -47,6 +48,20 @@ const testState = {
     content: "",
     keywords: [] as string[],
     isDirty: false
+  },
+  workspaceBanner: {
+    title: "",
+    subtitle: "",
+    image: null as
+      | {
+          dataUrl: string
+          mimeType: "image/jpeg" | "image/png" | "image/webp"
+          width: number
+          height: number
+          bytes: number
+          updatedAt: Date
+        }
+      | null
   }
 }
 
@@ -160,6 +175,11 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
       keywords: [],
       isDirty: false
     }
+    testState.workspaceBanner = {
+      title: "",
+      subtitle: "",
+      image: null
+    }
     mockGetMediaDetails.mockResolvedValue({})
   })
 
@@ -257,6 +277,35 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
     })
   })
 
+  it("tracks workspaceBanner as cross-tab conflict field", async () => {
+    render(<WorkspacePlayground />)
+
+    dispatchWorkspaceStorageUpdate(
+      JSON.stringify({
+        state: {
+          workspaceBanner: {
+            title: "Old",
+            subtitle: "",
+            image: null
+          }
+        }
+      }),
+      JSON.stringify({
+        state: {
+          workspaceBanner: {
+            title: "New",
+            subtitle: "Updated",
+            image: null
+          }
+        }
+      })
+    )
+
+    expect(
+      await screen.findByText("Changed fields: workspace banner")
+    ).toBeInTheDocument()
+  })
+
   it("shows storage quota warning from persistence quota event", async () => {
     render(<WorkspacePlayground />)
 
@@ -278,5 +327,50 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
         screen.queryByTestId("workspace-storage-quota-banner")
       ).not.toBeInTheDocument()
     })
+  })
+
+  it("renders configured workspace banner title/subtitle", async () => {
+    testState.workspaceBanner = {
+      title: "Alpha Banner",
+      subtitle: "Alpha subtitle",
+      image: {
+        dataUrl: "data:image/webp;base64,alpha-banner",
+        mimeType: "image/webp",
+        width: 1400,
+        height: 420,
+        bytes: 18000,
+        updatedAt: new Date("2026-02-25T09:00:00.000Z")
+      }
+    }
+
+    render(<WorkspacePlayground />)
+
+    expect(await screen.findByTestId("workspace-banner")).toBeInTheDocument()
+    expect(screen.getByTestId("workspace-banner-title")).toHaveTextContent(
+      "Alpha Banner"
+    )
+    expect(screen.getByTestId("workspace-banner-subtitle")).toHaveTextContent(
+      "Alpha subtitle"
+    )
+  })
+
+  it("falls back gracefully when banner image is absent", async () => {
+    testState.workspaceBanner = {
+      title: "Imageless Banner",
+      subtitle: "No image present",
+      image: null
+    }
+
+    render(<WorkspacePlayground />)
+
+    const banner = await screen.findByTestId("workspace-banner")
+    expect(banner).toBeInTheDocument()
+    expect(screen.getByTestId("workspace-banner-title")).toHaveTextContent(
+      "Imageless Banner"
+    )
+    expect(screen.getByTestId("workspace-banner-subtitle")).toHaveTextContent(
+      "No image present"
+    )
+    expect(banner.getAttribute("style") || "").not.toContain("url(")
   })
 })

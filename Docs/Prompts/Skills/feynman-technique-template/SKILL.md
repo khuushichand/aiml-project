@@ -4,8 +4,8 @@ description: Editable Feynman Technique skill template for one-question-at-a-tim
 argument-hint: "[topic] [what_you_already_know(optional)]"
 context: inline
 user-invocable: true
-disable-model-invocation: false
-protocol-version: feynman-v1
+disable-model-invocation: true
+protocol_version: feynman-v1
 ---
 
 Use this template to coach a learner with the Feynman Technique.

@@ -30,7 +30,7 @@ import {
   Download,
   Upload
 } from "lucide-react"
-import type { SavedWorkspace } from "@/types/workspace"
+import type { SavedWorkspace, WorkspaceBannerImage } from "@/types/workspace"
 import { useWorkspaceStore } from "@/store/workspace"
 import { useConnectionStore } from "@/store/connection"
 import { deriveConnectionUxState } from "@/types/connection"
@@ -58,6 +58,10 @@ import {
   filterSavedWorkspaces,
   formatWorkspaceLastAccessed
 } from "./workspace-header.utils"
+import {
+  normalizeWorkspaceBannerImage,
+  WorkspaceBannerImageNormalizationError
+} from "./workspace-banner-image"
 import {
   WORKSPACE_UNDO_WINDOW_MS,
   scheduleWorkspaceUndoAction,
@@ -157,8 +161,18 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     research_studio_status_guardrails_v1: 100
   })
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = React.useState("")
+  const [bannerModalOpen, setBannerModalOpen] = React.useState(false)
+  const [bannerTitleDraft, setBannerTitleDraft] = React.useState("")
+  const [bannerSubtitleDraft, setBannerSubtitleDraft] = React.useState("")
+  const [bannerImageDraft, setBannerImageDraft] =
+    React.useState<WorkspaceBannerImage | null>(null)
+  const [bannerImageUploading, setBannerImageUploading] = React.useState(false)
+  const [bannerModalError, setBannerModalError] = React.useState<string | null>(
+    null
+  )
   const lastConnectivityStatusRef = React.useRef<string | null>(null)
   const importFileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const bannerFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const telemetrySummaryEnabled = provenanceEnabled || statusGuardrailsEnabled
   const shortcutModifierLabel = React.useMemo(() => {
     if (typeof navigator === "undefined") return "Cmd/Ctrl"
@@ -350,8 +364,19 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   const workspaceName = useWorkspaceStore((s) => s.workspaceName)
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
   const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
+  const workspaceBanner = useWorkspaceStore((s) => s.workspaceBanner) || {
+    title: "",
+    subtitle: "",
+    image: null
+  }
   const sources = useWorkspaceStore((s) => s.sources)
   const setWorkspaceName = useWorkspaceStore((s) => s.setWorkspaceName)
+  const setWorkspaceBanner =
+    useWorkspaceStore((s) => s.setWorkspaceBanner) || (() => undefined)
+  const clearWorkspaceBannerImage =
+    useWorkspaceStore((s) => s.clearWorkspaceBannerImage) || (() => undefined)
+  const resetWorkspaceBanner =
+    useWorkspaceStore((s) => s.resetWorkspaceBanner) || (() => undefined)
   const setCurrentNote = useWorkspaceStore((s) => s.setCurrentNote)
   const savedWorkspaces = useWorkspaceStore((s) => s.savedWorkspaces)
   const archivedWorkspaces = useWorkspaceStore((s) => s.archivedWorkspaces)
@@ -467,6 +492,118 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 
   const handleCloseShortcutsModal = () => {
     setShortcutsModalOpen(false)
+  }
+
+  const handleOpenCustomizeBannerModal = () => {
+    setBannerTitleDraft(workspaceBanner.title || "")
+    setBannerSubtitleDraft(workspaceBanner.subtitle || "")
+    setBannerImageDraft(workspaceBanner.image || null)
+    setBannerModalError(null)
+    setBannerModalOpen(true)
+  }
+
+  const handleCloseCustomizeBannerModal = () => {
+    setBannerModalOpen(false)
+    setBannerModalError(null)
+    setBannerImageUploading(false)
+  }
+
+  const handleSaveCustomizeBanner = () => {
+    if (workspaceBanner.image && !bannerImageDraft) {
+      clearWorkspaceBannerImage()
+    }
+    setWorkspaceBanner({
+      title: bannerTitleDraft,
+      subtitle: bannerSubtitleDraft,
+      image: bannerImageDraft
+    })
+    setBannerModalOpen(false)
+    setBannerModalError(null)
+    messageApi.success(
+      t("playground:workspace.customizeBannerSaved", "Banner updated")
+    )
+  }
+
+  const handleResetCustomizeBanner = () => {
+    Modal.confirm({
+      title: t("playground:workspace.customizeBannerResetTitle", "Reset banner?"),
+      content: t(
+        "playground:workspace.customizeBannerResetMessage",
+        "This clears title, subtitle, and image for this workspace banner."
+      ),
+      okText: t("playground:workspace.customizeBannerReset", "Reset banner"),
+      okButtonProps: { danger: true },
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => {
+        resetWorkspaceBanner()
+        setBannerTitleDraft("")
+        setBannerSubtitleDraft("")
+        setBannerImageDraft(null)
+        setBannerModalOpen(false)
+        setBannerModalError(null)
+      },
+      centered: true,
+      maskClosable: false
+    })
+  }
+
+  const handleBannerImageFileChange = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) return
+
+    setBannerImageUploading(true)
+    setBannerModalError(null)
+    try {
+      const normalizedImage = await normalizeWorkspaceBannerImage(file)
+      setBannerImageDraft(normalizedImage)
+    } catch (error) {
+      if (error instanceof WorkspaceBannerImageNormalizationError) {
+        if (error.code === "unsupported_mime_type") {
+          setBannerModalError(
+            t(
+              "playground:workspace.customizeBannerUnsupportedType",
+              "Upload a JPG, PNG, or WebP image."
+            )
+          )
+        } else if (error.code === "image_too_large") {
+          setBannerModalError(
+            t(
+              "playground:workspace.customizeBannerTooLarge",
+              "Image is too large after processing. Try a smaller image."
+            )
+          )
+        } else {
+          setBannerModalError(
+            t(
+              "playground:workspace.customizeBannerProcessingError",
+              "Could not process that image. Try another file."
+            )
+          )
+        }
+      } else {
+        setBannerModalError(
+          t(
+            "playground:workspace.customizeBannerProcessingError",
+            "Could not process that image. Try another file."
+          )
+        )
+      }
+      return
+    } finally {
+      setBannerImageUploading(false)
+    }
+  }
+
+  const handlePromptBannerImageUpload = () => {
+    bannerFileInputRef.current?.click()
+  }
+
+  const handleRemoveBannerImage = () => {
+    setBannerImageDraft(null)
+    setBannerModalError(null)
   }
 
   const loadTelemetrySummary = React.useCallback(async () => {
@@ -1074,6 +1211,15 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             ),
             onClick: handleArchiveCurrentWorkspace
           },
+          {
+            key: "customize-banner",
+            icon: <Pencil className="h-4 w-4" />,
+            label: t(
+              "playground:workspace.customizeBanner",
+              "Customize banner"
+            ),
+            onClick: handleOpenCustomizeBannerModal
+          },
           { type: "divider" as const, key: "divider-current-actions" }
         ]
       : []),
@@ -1359,6 +1505,116 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           void handleImportWorkspaceFile(event)
         }}
       />
+
+      <input
+        ref={bannerFileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        data-testid="workspace-banner-upload-input"
+        onChange={(event) => {
+          void handleBannerImageFileChange(event)
+        }}
+      />
+
+      <Modal
+        title={t("playground:workspace.customizeBanner", "Customize banner")}
+        open={bannerModalOpen}
+        onCancel={handleCloseCustomizeBannerModal}
+        onOk={handleSaveCustomizeBanner}
+        okText={t("common:save", "Save")}
+        cancelText={t("common:cancel", "Cancel")}
+        width={560}
+        destroyOnHidden
+        footer={[
+          <Button
+            key="reset-banner"
+            danger
+            type="default"
+            onClick={handleResetCustomizeBanner}
+          >
+            {t("playground:workspace.customizeBannerReset", "Reset banner")}
+          </Button>,
+          <Button key="cancel-banner" onClick={handleCloseCustomizeBannerModal}>
+            {t("common:cancel", "Cancel")}
+          </Button>,
+          <Button key="save-banner" type="primary" onClick={handleSaveCustomizeBanner}>
+            {t("common:save", "Save")}
+          </Button>
+        ]}
+      >
+        <div className="space-y-3">
+          <Input
+            value={bannerTitleDraft}
+            onChange={(event) => setBannerTitleDraft(event.target.value)}
+            placeholder={t(
+              "playground:workspace.customizeBannerTitlePlaceholder",
+              "Banner title"
+            )}
+            maxLength={80}
+            data-testid="workspace-banner-title-input"
+          />
+          <Input.TextArea
+            value={bannerSubtitleDraft}
+            onChange={(event) => setBannerSubtitleDraft(event.target.value)}
+            placeholder={t(
+              "playground:workspace.customizeBannerSubtitlePlaceholder",
+              "Banner subtitle"
+            )}
+            maxLength={180}
+            rows={3}
+            data-testid="workspace-banner-subtitle-input"
+          />
+          <div
+            data-testid="workspace-banner-preview"
+            className="overflow-hidden rounded-xl border border-border/70"
+            style={{
+              backgroundImage: bannerImageDraft?.dataUrl
+                ? `linear-gradient(125deg, rgba(8, 12, 18, 0.68) 0%, rgba(8, 12, 18, 0.2) 100%), url(${bannerImageDraft.dataUrl})`
+                : "linear-gradient(125deg, color-mix(in oklab, var(--primary) 24%, transparent) 0%, color-mix(in oklab, var(--surface-2) 76%, transparent) 100%)",
+              backgroundPosition: "center",
+              backgroundSize: "cover"
+            }}
+          >
+            <div className="min-h-[132px] space-y-1 px-4 py-3 text-white">
+              <p className="line-clamp-2 text-lg font-semibold">
+                {bannerTitleDraft.trim() || workspaceName || "Research Workspace"}
+              </p>
+              {bannerSubtitleDraft.trim().length > 0 && (
+                <p className="line-clamp-2 text-sm text-white/90">
+                  {bannerSubtitleDraft.trim()}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={handlePromptBannerImageUpload}
+              loading={bannerImageUploading}
+              data-testid="workspace-banner-upload-trigger"
+            >
+              {t("playground:workspace.customizeBannerUpload", "Upload image")}
+            </Button>
+            {bannerImageDraft && (
+              <Button
+                danger
+                onClick={handleRemoveBannerImage}
+                data-testid="workspace-banner-remove-image"
+              >
+                {t("playground:workspace.customizeBannerRemoveImage", "Remove image")}
+              </Button>
+            )}
+          </div>
+          {bannerModalError && (
+            <p
+              data-testid="workspace-banner-modal-error"
+              className="rounded border border-error/40 bg-error/10 px-3 py-2 text-sm text-error"
+            >
+              {bannerModalError}
+            </p>
+          )}
+        </div>
+      </Modal>
 
       <Modal
         title={t("playground:workspace.allWorkspaces", "All Workspaces")}

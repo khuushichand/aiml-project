@@ -341,6 +341,23 @@ export const SkillsManager: React.FC = () => {
     }
   ]
 
+  const seedMenuItems = [
+    {
+      key: "seed-missing-only",
+      label: t("option:skills.seedBuiltinsMissingOnly", {
+        defaultValue: "Seed Missing Only"
+      }),
+      onClick: () => seedBuiltinsMutation.mutate(false)
+    },
+    {
+      key: "seed-overwrite-existing",
+      label: t("option:skills.seedBuiltinsOverwrite", {
+        defaultValue: "Seed and Overwrite Existing"
+      }),
+      onClick: () => seedBuiltinsMutation.mutate(true)
+    }
+  ]
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
@@ -359,13 +376,14 @@ export const SkillsManager: React.FC = () => {
               {t("option:skills.import", { defaultValue: "Import" })}
             </Button>
           </Dropdown>
-          <Button
-            icon={<Database size={14} />}
-            onClick={() => seedBuiltinsMutation.mutate(false)}
-            loading={seedBuiltinsMutation.isPending}
-          >
-            {t("option:skills.seedBuiltins", { defaultValue: "Seed Built-ins" })}
-          </Button>
+          <Dropdown menu={{ items: seedMenuItems }} trigger={["click"]}>
+            <Button
+              icon={<Database size={14} />}
+              loading={seedBuiltinsMutation.isPending}
+            >
+              {t("option:skills.seedBuiltins", { defaultValue: "Seed Built-ins" })}
+            </Button>
+          </Dropdown>
           <Button type="primary" icon={<Plus size={14} />} onClick={handleNew}>
             {t("option:skills.newSkill", { defaultValue: "New Skill" })}
           </Button>

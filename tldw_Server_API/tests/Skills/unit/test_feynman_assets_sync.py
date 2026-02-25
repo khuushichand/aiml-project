@@ -8,8 +8,9 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-F_KEY = "protocol-version"
-PROMPT_KEY = "### PROTOCOL_VERSION ###"
+PROTOCOL_MARKER_KEY = "protocol_version"
+LEGACY_SKILL_MARKER = "protocol-version:"
+LEGACY_PROMPT_MARKER = "### PROTOCOL_VERSION ###"
 
 BUILTIN_SKILL_PATH = (
     _repo_root()
@@ -29,20 +30,19 @@ PROMPT_TEMPLATE_PATH = (
 )
 
 
-def _extract_skill_protocol_version(content: str) -> str:
-    match = re.search(r"(?mi)^protocol-version:\s*['\"]?([a-z0-9._-]+)['\"]?\s*$", content)
-    assert match is not None, f"Missing '{F_KEY}' marker in SKILL.md frontmatter"  # nosec B101
+def _extract_protocol_version(content: str, source_label: str) -> str:
+    match = re.search(r"(?mi)^protocol_version:\s*['\"]?([a-z0-9._-]+)['\"]?\s*$", content)
+    assert match is not None, f"Missing '{PROTOCOL_MARKER_KEY}' marker in {source_label}"  # nosec B101
     return match.group(1)
 
 
-def _extract_prompt_protocol_version(content: str) -> str:
-    marker = re.search(r"(?m)^### PROTOCOL_VERSION ###\s*$", content)
-    assert marker is not None, f"Missing '{PROMPT_KEY}' section in prompt template"  # nosec B101
-
-    following = content[marker.end() :].lstrip("\n")
-    first_line = following.splitlines()[0].strip() if following else ""
-    assert first_line, "Empty protocol version value in prompt template"  # nosec B101
-    return first_line
+def _assert_legacy_markers_absent(content: str, source_label: str) -> None:
+    assert LEGACY_SKILL_MARKER not in content, (  # nosec B101
+        f"Legacy marker '{LEGACY_SKILL_MARKER}' still present in {source_label}"
+    )
+    assert LEGACY_PROMPT_MARKER not in content, (  # nosec B101
+        f"Legacy marker '{LEGACY_PROMPT_MARKER}' still present in {source_label}"
+    )
 
 
 def _assert_supporting_files_flat(skill_file: Path) -> None:
@@ -62,9 +62,17 @@ def test_feynman_assets_exist() -> None:
 
 
 def test_feynman_protocol_version_synced_between_skill_and_prompt_assets() -> None:
-    built_in_version = _extract_skill_protocol_version(BUILTIN_SKILL_PATH.read_text(encoding="utf-8"))
-    importable_version = _extract_skill_protocol_version(IMPORTABLE_TEMPLATE_PATH.read_text(encoding="utf-8"))
-    prompt_version = _extract_prompt_protocol_version(PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8"))
+    built_in_content = BUILTIN_SKILL_PATH.read_text(encoding="utf-8")
+    importable_content = IMPORTABLE_TEMPLATE_PATH.read_text(encoding="utf-8")
+    prompt_content = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+    _assert_legacy_markers_absent(built_in_content, "built-in SKILL.md")
+    _assert_legacy_markers_absent(importable_content, "importable SKILL.md")
+    _assert_legacy_markers_absent(prompt_content, "prompt template")
+
+    built_in_version = _extract_protocol_version(built_in_content, "built-in SKILL.md")
+    importable_version = _extract_protocol_version(importable_content, "importable SKILL.md")
+    prompt_version = _extract_protocol_version(prompt_content, "prompt template")
 
     assert built_in_version == importable_version == prompt_version  # nosec B101
 

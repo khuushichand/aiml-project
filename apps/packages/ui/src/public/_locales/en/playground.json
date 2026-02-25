@@ -1883,6 +1883,42 @@
   "workspace_showSidebar": {
     "message": "Show sidebar"
   },
+  "workspace_customizeBanner": {
+    "message": "Customize banner"
+  },
+  "workspace_customizeBannerTitlePlaceholder": {
+    "message": "Banner title"
+  },
+  "workspace_customizeBannerSubtitlePlaceholder": {
+    "message": "Banner subtitle"
+  },
+  "workspace_customizeBannerUpload": {
+    "message": "Upload image"
+  },
+  "workspace_customizeBannerRemoveImage": {
+    "message": "Remove image"
+  },
+  "workspace_customizeBannerReset": {
+    "message": "Reset banner"
+  },
+  "workspace_customizeBannerResetTitle": {
+    "message": "Reset banner?"
+  },
+  "workspace_customizeBannerResetMessage": {
+    "message": "This clears title, subtitle, and image for this workspace banner."
+  },
+  "workspace_customizeBannerSaved": {
+    "message": "Banner updated"
+  },
+  "workspace_customizeBannerUnsupportedType": {
+    "message": "Upload a JPG, PNG, or WebP image."
+  },
+  "workspace_customizeBannerTooLarge": {
+    "message": "Image is too large after processing. Try a smaller image."
+  },
+  "workspace_customizeBannerProcessingError": {
+    "message": "Could not process that image. Try another file."
+  },
   "workspace_goToSimpleChat": {
     "message": "Simple Chat"
   },
