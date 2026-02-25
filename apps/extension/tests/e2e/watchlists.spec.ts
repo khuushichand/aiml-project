@@ -21,6 +21,29 @@ const installWatchlistsRuntimeBridge = async (context: BrowserContext) => {
     }
 
     ;(window as any).__watchlistsBindBridge = (handleRequest, handleUpload) => {
+      const resolveDefaultWatchlistsResponse = (payload: any) => {
+        const path = String(payload?.path || '')
+        const method = String(payload?.method || 'GET').toUpperCase()
+        if (method !== 'GET') return null
+
+        const [pathname, queryString] = path.split('?')
+        if (pathname !== '/api/v1/watchlists/outputs') {
+          return null
+        }
+
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        return {
+          items: [],
+          total: 0,
+          page,
+          size,
+          has_more: false
+        }
+      }
+
       const patchRuntime = (runtime) => {
         if (!runtime?.sendMessage) return
         const original = runtime.sendMessage.bind(runtime)
@@ -36,6 +59,10 @@ const installWatchlistsRuntimeBridge = async (context: BrowserContext) => {
             try {
               const data = await bridgeHandler(message.payload || {})
               if (data == null) {
+                const defaultResponse = resolveDefaultWatchlistsResponse(message.payload || {})
+                if (defaultResponse != null) {
+                  return { ok: true, status: 200, data: defaultResponse }
+                }
                 return { ok: false, status: 404, error: 'Not found' }
               }
               return { ok: true, status: 200, data }
