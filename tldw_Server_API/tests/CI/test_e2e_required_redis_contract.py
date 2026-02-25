@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 
-EXPECTED_REDIS_URL = "redis://127.0.0.1:${{ job.services.redis.ports[6379] }}/0"
+EXPECTED_REDIS_URL = "redis://127.0.0.1:6379/0"
 
 
 def _load_workflow() -> dict:
@@ -23,7 +23,10 @@ def test_e2e_required_declares_redis_service_and_environment_contract() -> None:
     redis_service = services.get("redis")
     _expect(isinstance(redis_service, dict), "e2e-required.redis service missing")
     _expect(redis_service.get("image") == "redis:8-alpine", "e2e-required redis image must be redis:8-alpine")
-    _expect("6379/tcp" in (redis_service.get("ports") or []), "e2e-required redis service must expose 6379/tcp")
+    _expect(
+        "6379:6379" in (redis_service.get("ports") or []),
+        "e2e-required redis service must map host/container port 6379:6379",
+    )
     _expect("redis-cli ping" in str(redis_service.get("options", "")), "e2e-required redis service must define a ping health check")
 
     env = job.get("env") or {}
