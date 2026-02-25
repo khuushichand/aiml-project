@@ -15,6 +15,8 @@ _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _NON_SPACED_SCRIPT_RE = re.compile(
     r"[\u3400-\u4DBF\u4E00-\u9FFF\u3040-\u30FF\u31F0-\u31FF\uAC00-\uD7AF\u0E00-\u0E7F\u0E80-\u0EFF\u1780-\u17FF\u1000-\u109F]"
 )
+_FUZZY_MAX_WINDOW_FACTOR = 8
+_FUZZY_MAX_WINDOW_MIN = 64
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,7 @@ def _map_span(index_map: list[int], start: int, end: int) -> tuple[int, int] | N
 
 
 def _normalize_for_tokens(text: str) -> str:
+    """Casefold and normalize hyphen/whitespace boundaries for token parsing."""
     folded = (text or "").casefold()
     folded = _HYPHEN_RE.sub(" ", folded)
     folded = _SPACE_RE.sub(" ", folded)
@@ -68,15 +71,18 @@ def _normalize_for_tokens(text: str) -> str:
 
 
 def _is_word_char(ch: str) -> bool:
+    """Return True when ``ch`` matches the Unicode word-token character class."""
     return bool(ch and _WORD_RE.fullmatch(ch))
 
 
 def _is_non_spaced_script_char(ch: str) -> bool:
+    """Return True when ``ch`` belongs to scripts tokenized at per-character granularity."""
     return bool(ch and _NON_SPACED_SCRIPT_RE.match(ch))
 
 
 @lru_cache(maxsize=4096)
 def _script_group(ch: str) -> str:
+    """Classify a character into a coarse script group used for token boundary splitting."""
     if not ch:
         return "unknown"
 
@@ -104,6 +110,7 @@ def _extract_tokens_with_offsets(
     *,
     normalize_input: bool,
 ) -> list[tuple[str, int, int]]:
+    """Tokenize text into ``(token, start, end)`` tuples with script-aware boundaries."""
     tokens: list[tuple[str, int, int]] = []
     working_text = _normalize_for_tokens(text) if normalize_input else str(text or "")
     if not working_text:
@@ -169,18 +176,40 @@ def _extract_tokens_with_offsets(
 
 
 def _extract_word_tokens_with_offsets(text: str) -> list[tuple[str, int, int]]:
+    """Tokenize claim text after normalization for fuzzy alignment queries."""
     return _extract_tokens_with_offsets(text, normalize_input=True)
 
 
 def _extract_source_tokens_with_offsets(text: str) -> list[tuple[str, int, int]]:
+    """Tokenize source text while preserving original character offsets."""
     return _extract_tokens_with_offsets(text, normalize_input=False)
 
 
-def _normalize_token(token: str) -> str:
+def _normalize_token(token: str, *, counterpart_tokens: set[str] | None = None) -> str:
+    """Normalize tokens for fuzzy matching with contextual plural handling.
+
+    Trailing ``s`` is only stripped when the singular form exists in the
+    opposite token set, which avoids mutating singular words like ``news``.
+    """
     normalized = str(token or "").casefold()
-    if len(normalized) > 3 and normalized.endswith("s") and not normalized.endswith("ss"):
-        normalized = normalized[:-1]
+    if (
+        counterpart_tokens
+        and len(normalized) > 3
+        and normalized.endswith("s")
+        and not normalized.endswith(("ss", "is", "us", "ws"))
+    ):
+        singular = normalized[:-1]
+        if singular in counterpart_tokens:
+            normalized = singular
     return normalized
+
+
+def _max_fuzzy_window_size(query_len: int, source_len: int) -> int:
+    """Return an upper bound for fuzzy window size to avoid quadratic blowups."""
+    if query_len <= 0 or source_len <= 0:
+        return 0
+    dynamic_cap = max(query_len * _FUZZY_MAX_WINDOW_FACTOR, _FUZZY_MAX_WINDOW_MIN)
+    return min(source_len, dynamic_cap)
 
 
 def _exact_or_normalized_span(source_text: str, claim_text: str) -> AlignmentResult | None:
@@ -205,20 +234,27 @@ def _exact_or_normalized_span(source_text: str, claim_text: str) -> AlignmentRes
 
 
 def _fuzzy_token_span(source_text: str, claim_text: str, threshold: float) -> AlignmentResult | None:
+    """Find a fuzzy token span using overlap-gated sliding windows."""
     claim_tokens = _extract_word_tokens_with_offsets(claim_text)
     source_tokens = _extract_source_tokens_with_offsets(source_text)
     if not claim_tokens or not source_tokens:
         return None
 
     query = [tok for tok, _, _ in claim_tokens]
-    query_norm = [_normalize_token(tok) for tok in query]
-    source_norm = [_normalize_token(tok) for tok, _, _ in source_tokens]
+    raw_query = [str(tok or "").casefold() for tok in query]
+    raw_source = [str(tok or "").casefold() for tok, _, _ in source_tokens]
+    query_set = set(raw_query)
+    source_set = set(raw_source)
+    query_norm = [_normalize_token(tok, counterpart_tokens=source_set) for tok in raw_query]
+    source_norm = [_normalize_token(tok, counterpart_tokens=query_set) for tok in raw_source]
     query_len = len(query)
-    max_window = len(source_tokens)
+    max_window = _max_fuzzy_window_size(query_len, len(source_tokens))
     query_counter = Counter(query_norm)
     clamped_threshold = max(0.0, min(1.0, float(threshold)))
     min_overlap = int(query_len * clamped_threshold)
     min_window = max(1, ceil(query_len * clamped_threshold))
+    if min_window > max_window:
+        return None
     matcher = SequenceMatcher(None, [], query_norm, autojunk=False)
 
     best: AlignmentResult | None = None

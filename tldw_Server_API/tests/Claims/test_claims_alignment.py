@@ -107,6 +107,13 @@ def test_align_claim_fuzzy_handles_large_intervening_token_window():
 
 
 @pytest.mark.unit
+def test_align_claim_fuzzy_rejects_extreme_intervening_token_window():
+    text = "alpha " + " ".join(f"tok{i}" for i in range(120)) + " beta"
+    span = align_claim_span(text, "alpha beta", mode="fuzzy", threshold=0.75)
+    assert span is None
+
+
+@pytest.mark.unit
 def test_align_claim_fuzzy_prefers_tight_partial_overlap_span():
     text = "Findings consistent with degenerative disc disease at L5-S1."
     span = align_claim_span(text, "mild degenerative disc disease", mode="fuzzy", threshold=0.75)
@@ -125,6 +132,13 @@ def test_align_claim_fuzzy_splits_letter_digit_boundaries():
     )
     assert span is not None
     assert text[span[0] : span[1]] == "degenerative disc disease at L5-S1"
+
+
+@pytest.mark.unit
+def test_align_claim_fuzzy_does_not_stem_singular_s_endings():
+    text = "news update today"
+    span = align_claim_span(text, "new update today", mode="fuzzy", threshold=1.0)
+    assert span is None
 
 
 @pytest.mark.unit

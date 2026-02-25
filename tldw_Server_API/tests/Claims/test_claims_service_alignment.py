@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from tldw_Server_API.app.core.Claims_Extraction import claims_service
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.config import settings
 
 
-def _seed_alignment_db(tmp_path):
+def _seed_alignment_db(tmp_path: Path) -> tuple[MediaDatabase, int]:
     db_path = str(tmp_path / "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
     db.initialize_db()
@@ -31,7 +33,7 @@ def _seed_alignment_db(tmp_path):
     return db, media_id
 
 
-def _seed_alignment_db_with_content(tmp_path, content: str):
+def _seed_alignment_db_with_content(tmp_path: Path, content: str) -> tuple[MediaDatabase, int]:
     db_path = str(tmp_path / "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
     db.initialize_db()
