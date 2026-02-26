@@ -520,6 +520,7 @@ export interface FetchItemsParams {
   source_id?: number
   status?: string
   reviewed?: boolean
+  queued_for_briefing?: boolean
   q?: string
   since?: string
   until?: string

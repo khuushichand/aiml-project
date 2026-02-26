@@ -41,6 +41,8 @@ export type HeaderShortcutItem = {
   icon: LucideIcon
   labelKey: string
   labelDefault: string
+  /** Optional 1-9 index for ⌘+number shortcut when the launcher is open */
+  shortcutIndex?: number
 }
 
 export type HeaderShortcutGroup = {
@@ -61,49 +63,56 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         to: "/",
         icon: MessageSquare,
         labelKey: "option:header.modePlayground",
-        labelDefault: "Chat"
+        labelDefault: "Chat",
+        shortcutIndex: 1
       },
       {
         id: "prompts",
         to: "/prompts",
         icon: NotebookPen,
         labelKey: "option:header.modePromptsPlayground",
-        labelDefault: "Prompts"
+        labelDefault: "Prompts",
+        shortcutIndex: 2
       },
       {
         id: "prompt-studio",
         to: "/prompt-studio",
         icon: NotebookPen,
         labelKey: "option:header.modePromptStudio",
-        labelDefault: "Prompt Studio"
+        labelDefault: "Prompt Studio",
+        shortcutIndex: 3
       },
       {
         id: "characters",
         to: "/characters",
         icon: UserCircle2,
         labelKey: "option:header.modeCharacters",
-        labelDefault: "Characters"
+        labelDefault: "Characters",
+        shortcutIndex: 4
       },
       {
         id: "chat-dictionaries",
         to: "/dictionaries",
         icon: BookMarked,
         labelKey: "option:header.modeDictionaries",
-        labelDefault: "Chat Dictionaries"
+        labelDefault: "Chat Dictionaries",
+        shortcutIndex: 5
       },
       {
         id: "world-books",
         to: "/world-books",
         icon: BookOpen,
         labelKey: "option:header.modeWorldBooks",
-        labelDefault: "World Books"
+        labelDefault: "World Books",
+        shortcutIndex: 6
       },
       {
         id: "workspace-playground",
         to: "/workspace-playground",
         icon: GitCompare,
         labelKey: "settings:researchStudioNav",
-        labelDefault: "Research Studio"
+        labelDefault: "Research Studio",
+        shortcutIndex: 7
       }
     ]
   },
@@ -117,14 +126,16 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         to: "/knowledge",
         icon: CombineIcon,
         labelKey: "option:header.modeKnowledge",
-        labelDefault: "Knowledge QA"
+        labelDefault: "Knowledge QA",
+        shortcutIndex: 8
       },
       {
         id: "media",
         to: "/media",
         icon: BookText,
         labelKey: "option:header.media",
-        labelDefault: "Media"
+        labelDefault: "Media",
+        shortcutIndex: 9
       },
       {
         id: "document-workspace",

@@ -7,7 +7,9 @@ import { ItemsTab } from "../ItemsTab"
 import { useWatchlistsStore } from "@/store/watchlists"
 
 const serviceMocks = vi.hoisted(() => ({
+  createWatchlistOutput: vi.fn(),
   fetchWatchlistSources: vi.fn(),
+  fetchWatchlistRuns: vi.fn(),
   fetchScrapedItems: vi.fn(),
   updateScrapedItem: vi.fn()
 }))
@@ -64,7 +66,9 @@ vi.mock("antd", async () => {
 })
 
 vi.mock("@/services/watchlists", () => ({
+  createWatchlistOutput: (...args: unknown[]) => serviceMocks.createWatchlistOutput(...args),
   fetchWatchlistSources: (...args: unknown[]) => serviceMocks.fetchWatchlistSources(...args),
+  fetchWatchlistRuns: (...args: unknown[]) => serviceMocks.fetchWatchlistRuns(...args),
   fetchScrapedItems: (...args: unknown[]) => serviceMocks.fetchScrapedItems(...args),
   updateScrapedItem: (...args: unknown[]) => serviceMocks.updateScrapedItem(...args)
 }))
@@ -81,6 +85,7 @@ const itemsFixture = [
     tags: ["tech"],
     status: "ingested",
     reviewed: false,
+    queued_for_briefing: false,
     created_at: "2026-02-18T08:20:00Z",
     published_at: "2026-02-18T08:20:00Z"
   },
@@ -95,6 +100,7 @@ const itemsFixture = [
     tags: ["tech"],
     status: "ingested",
     reviewed: false,
+    queued_for_briefing: false,
     created_at: "2026-02-18T08:10:00Z",
     published_at: "2026-02-18T08:10:00Z"
   }
@@ -126,6 +132,14 @@ describe("ItemsTab keyboard shortcuts", () => {
       size: 200,
       has_more: false
     })
+    serviceMocks.fetchWatchlistRuns.mockResolvedValue({
+      items: [{ id: 1, job_id: 1, status: "completed" }],
+      total: 1,
+      page: 1,
+      size: 200,
+      has_more: false
+    })
+    serviceMocks.createWatchlistOutput.mockResolvedValue({ id: 1, run_id: 1 })
 
     ;(serviceMocks.fetchScrapedItems as Mock).mockImplementation(async (params?: Record<string, unknown>) => {
       if (params?.size === 1) {

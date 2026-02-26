@@ -206,7 +206,7 @@ def _ensure_env_from_template(env_path: Path, env_template_path: Path) -> None:
 
     Args:
         env_path (Path): Destination .env file path.
-        env_template_path (Path): Source .env.template file path.
+        env_template_path (Path): Source .env.example file path.
 
     Returns:
         None
@@ -218,7 +218,7 @@ def _ensure_env_from_template(env_path: Path, env_template_path: Path) -> None:
         try:
             shutil.copy2(env_template_path, env_path)
         except OSError as exc:
-            logger.error(f"migrate_api_keys: failed to copy .env.template: {exc}")
+            logger.error(f"migrate_api_keys: failed to copy .env.example: {exc}")
             print(f"Error: failed to create .env from template at {env_template_path}")
             sys.exit(1)
         print("\n✓ Created .env from template")
@@ -341,7 +341,7 @@ def main() -> None:
     script_dir: Path = Path(__file__).parent
     config_path: Path = script_dir / "config.txt"
     env_path: Path = script_dir / ".env"
-    env_template_path: Path = script_dir / ".env.template"
+    env_template_path: Path = script_dir / ".env.example"
 
     # Check if config.txt exists
     if not config_path.exists():

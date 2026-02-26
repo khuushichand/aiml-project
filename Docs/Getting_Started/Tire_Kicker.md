@@ -101,7 +101,7 @@ PyAudio/PortAudio notes:
 
 ```bash
 # Copy the minimal config template
-cp tldw_Server_API/Config_Files/.env.quickstart tldw_Server_API/Config_Files/.env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 ```
 
 Now edit `tldw_Server_API/Config_Files/.env` and change the API key:

@@ -336,8 +336,6 @@ export function ChatHeader({
         </div>
       </div>
       <HeaderShortcuts
-        className="px-4 pb-2 pt-1"
-        showToggle={false}
         expanded={shortcutsExpanded}
         onExpandedChange={onToggleShortcuts}
       />

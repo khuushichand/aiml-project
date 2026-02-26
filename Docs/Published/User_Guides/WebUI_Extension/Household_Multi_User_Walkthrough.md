@@ -106,7 +106,7 @@ docker compose -f Dockerfiles/docker-compose.yml up -d --build
 Copy the template:
 
 ```bash
-cp tldw_Server_API/Config_Files/.env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 ```
 
 Now generate secrets. Run each command and paste the output into your `.env` file:

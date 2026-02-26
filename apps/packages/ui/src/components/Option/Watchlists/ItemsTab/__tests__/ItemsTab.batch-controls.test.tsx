@@ -12,7 +12,9 @@ import {
 } from "../items-utils"
 
 const serviceMocks = vi.hoisted(() => ({
+  createWatchlistOutput: vi.fn(),
   fetchWatchlistSources: vi.fn(),
+  fetchWatchlistRuns: vi.fn(),
   fetchScrapedItems: vi.fn(),
   updateScrapedItem: vi.fn()
 }))
@@ -74,7 +76,9 @@ vi.mock("antd", async () => {
 })
 
 vi.mock("@/services/watchlists", () => ({
+  createWatchlistOutput: (...args: unknown[]) => serviceMocks.createWatchlistOutput(...args),
   fetchWatchlistSources: (...args: unknown[]) => serviceMocks.fetchWatchlistSources(...args),
+  fetchWatchlistRuns: (...args: unknown[]) => serviceMocks.fetchWatchlistRuns(...args),
   fetchScrapedItems: (...args: unknown[]) => serviceMocks.fetchScrapedItems(...args),
   updateScrapedItem: (...args: unknown[]) => serviceMocks.updateScrapedItem(...args)
 }))
@@ -91,6 +95,7 @@ const makeItems = () => ([
     tags: ["tech"],
     status: "ingested",
     reviewed: false,
+    queued_for_briefing: false,
     created_at: "2026-02-18T08:00:00Z",
     published_at: "2026-02-18T08:00:00Z"
   },
@@ -105,6 +110,7 @@ const makeItems = () => ([
     tags: ["tech"],
     status: "ingested",
     reviewed: false,
+    queued_for_briefing: false,
     created_at: "2026-02-18T08:10:00Z",
     published_at: "2026-02-18T08:10:00Z"
   },
@@ -119,6 +125,7 @@ const makeItems = () => ([
     tags: ["tech"],
     status: "filtered",
     reviewed: true,
+    queued_for_briefing: false,
     created_at: "2026-02-18T08:20:00Z",
     published_at: "2026-02-18T08:20:00Z"
   }
@@ -134,29 +141,56 @@ const createDeferred = <TValue,>() => {
 
 const setupFetchScrapedItemsMock = (listItems = makeItems()) => {
   ;(serviceMocks.fetchScrapedItems as Mock).mockImplementation(async (params?: Record<string, unknown>) => {
-    if (params?.size === 1) {
-      if (params?.reviewed === false) return { items: [], total: 2, page: 1, size: 1, has_more: false }
-      if (params?.reviewed === true) return { items: [], total: 1, page: 1, size: 1, has_more: false }
-      return { items: [], total: 3, page: 1, size: 1, has_more: false }
-    }
+    const filteredItems = listItems.filter((item) => {
+      if (
+        typeof params?.run_id === "number" &&
+        Number.isInteger(params.run_id) &&
+        item.run_id !== Number(params.run_id)
+      ) {
+        return false
+      }
+      if (
+        typeof params?.reviewed === "boolean" &&
+        item.reviewed !== params.reviewed
+      ) {
+        return false
+      }
+      if (
+        typeof params?.status === "string" &&
+        params.status.length > 0 &&
+        item.status !== params.status
+      ) {
+        return false
+      }
+      if (
+        typeof params?.queued_for_briefing === "boolean" &&
+        Boolean(item.queued_for_briefing) !== params.queued_for_briefing
+      ) {
+        return false
+      }
+      return true
+    })
 
-    if (params?.reviewed === false && params?.size === 200) {
+    const page = Number(params?.page || 1)
+    const pageSize = Number(params?.size || 25)
+    if (pageSize === 1) {
       return {
-        items: listItems.filter((item) => !item.reviewed),
-        total: listItems.filter((item) => !item.reviewed).length,
-        page: Number(params?.page || 1),
-        size: 200,
+        items: [],
+        total: filteredItems.length,
+        page,
+        size: 1,
         has_more: false
       }
     }
 
-    const pageSize = Number(params?.size || 25)
+    const start = (page - 1) * pageSize
+    const pageItems = filteredItems.slice(start, start + pageSize)
     return {
-      items: listItems,
-      total: listItems.length,
-      page: Number(params?.page || 1),
+      items: pageItems,
+      total: filteredItems.length,
+      page,
       size: pageSize,
-      has_more: false
+      has_more: start + pageSize < filteredItems.length
     }
   })
 }
@@ -204,11 +238,29 @@ describe("ItemsTab batch throughput controls", () => {
       has_more: false
     })
 
+    serviceMocks.fetchWatchlistRuns.mockResolvedValue({
+      items: [
+        {
+          id: 1,
+          job_id: 1,
+          status: "completed",
+          started_at: "2026-02-18T08:00:00Z",
+          finished_at: "2026-02-18T08:10:00Z",
+          stats: { items_found: 3, items_ingested: 2, items_filtered: 1 }
+        }
+      ],
+      total: 1,
+      page: 1,
+      size: 200,
+      has_more: false
+    })
+
     setupFetchScrapedItemsMock()
     serviceMocks.updateScrapedItem.mockImplementation(async (itemId: number) => ({
       id: itemId,
       reviewed: true
     }))
+    serviceMocks.createWatchlistOutput.mockResolvedValue({ id: 9001, run_id: 1 })
 
     uiMocks.modalConfirm.mockImplementation((config: Record<string, unknown>) => {
       const onOk = config?.onOk
@@ -685,13 +737,17 @@ describe("ItemsTab batch throughput controls", () => {
     expect(uiMocks.messageSuccess).toHaveBeenCalledWith("Marked 1200 all filtered items as reviewed.")
   })
 
-  it("supports item handoff to monitor/run/reports and include-next-briefing action", async () => {
+  it("supports item handoff to monitor/run/reports and briefing queue action", async () => {
     serviceMocks.updateScrapedItem.mockImplementation(async (itemId: number, updates?: Record<string, unknown>) => {
       const item = makeItems().find((entry) => entry.id === itemId)
       return {
         ...(item || { id: itemId }),
         reviewed: Boolean(updates?.reviewed ?? item?.reviewed),
-        status: typeof updates?.status === "string" ? updates.status : item?.status
+        status: typeof updates?.status === "string" ? updates.status : item?.status,
+        queued_for_briefing:
+          typeof updates?.queued_for_briefing === "boolean"
+            ? updates.queued_for_briefing
+            : item?.queued_for_briefing
       }
     })
 
@@ -705,7 +761,7 @@ describe("ItemsTab batch throughput controls", () => {
     fireEvent.click(screen.getByTestId("watchlists-item-include-briefing"))
 
     await waitFor(() => {
-      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(103, { status: "ingested" })
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(103, { queued_for_briefing: true })
     })
     expect(uiMocks.messageSuccess).toHaveBeenCalledWith("Added to the next briefing queue.")
 
@@ -726,13 +782,17 @@ describe("ItemsTab batch throughput controls", () => {
     expect(useWatchlistsStore.getState().outputsRunFilter).toBe(1)
   })
 
-  it("keeps include-in-briefing action stateful as items transition to ingested", async () => {
+  it("keeps queue action stateful as items move in and out of briefing queue", async () => {
     serviceMocks.updateScrapedItem.mockImplementation(async (itemId: number, updates?: Record<string, unknown>) => {
       const item = makeItems().find((entry) => entry.id === itemId)
       return {
         ...(item || { id: itemId }),
         reviewed: Boolean(updates?.reviewed ?? item?.reviewed),
-        status: typeof updates?.status === "string" ? updates.status : item?.status
+        status: typeof updates?.status === "string" ? updates.status : item?.status,
+        queued_for_briefing:
+          typeof updates?.queued_for_briefing === "boolean"
+            ? updates.queued_for_briefing
+            : item?.queued_for_briefing
       }
     })
 
@@ -743,20 +803,97 @@ describe("ItemsTab batch throughput controls", () => {
     })
 
     fireEvent.click(screen.getByTestId("watchlists-item-row-101"))
-    expect(screen.getByTestId("watchlists-item-include-briefing")).toBeDisabled()
+    expect(screen.getByTestId("watchlists-item-include-briefing")).toHaveTextContent(
+      "Include in next briefing"
+    )
 
     fireEvent.click(screen.getByTestId("watchlists-item-row-103"))
     const includeButton = screen.getByTestId("watchlists-item-include-briefing")
-    expect(includeButton).not.toBeDisabled()
     fireEvent.click(includeButton)
 
     await waitFor(() => {
-      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(103, { status: "ingested" })
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(103, { queued_for_briefing: true })
     })
     expect(uiMocks.messageSuccess).toHaveBeenCalledWith("Added to the next briefing queue.")
     await waitFor(() => {
-      expect(screen.getByTestId("watchlists-item-include-briefing")).toBeDisabled()
+      expect(screen.getByTestId("watchlists-item-include-briefing")).toHaveTextContent(
+        "Remove from briefing queue"
+      )
     })
+
+    fireEvent.click(screen.getByTestId("watchlists-item-include-briefing"))
+    await waitFor(() => {
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(103, { queued_for_briefing: false })
+    })
+    expect(uiMocks.messageSuccess).toHaveBeenCalledWith("Removed from the briefing queue.")
+  })
+
+  it("supports explicit queued view and run-scoped report generation", async () => {
+    const queueItems = [
+      {
+        ...makeItems()[0],
+        id: 101,
+        run_id: 1,
+        queued_for_briefing: true
+      },
+      {
+        ...makeItems()[1],
+        id: 102,
+        run_id: 1,
+        queued_for_briefing: false
+      },
+      {
+        ...makeItems()[2],
+        id: 201,
+        run_id: 2,
+        queued_for_briefing: true
+      }
+    ]
+    setupFetchScrapedItemsMock(queueItems)
+    serviceMocks.fetchWatchlistRuns.mockResolvedValue({
+      items: [
+        { id: 1, job_id: 1, status: "completed" },
+        { id: 2, job_id: 1, status: "completed" }
+      ],
+      total: 2,
+      page: 1,
+      size: 200,
+      has_more: false
+    })
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-smart-feed-queued"))
+
+    await waitFor(() => {
+      const queuedRequests = (serviceMocks.fetchScrapedItems as Mock).mock.calls
+        .map((call) => call[0] as Record<string, unknown>)
+        .filter((params) => params?.queued_for_briefing === true && params?.size !== 1)
+      expect(
+        queuedRequests.some((params) => params.run_id === 1)
+      ).toBe(true)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId("watchlists-item-row-201")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("watchlists-items-queue-generate-report"))
+
+    await waitFor(() => {
+      expect(serviceMocks.createWatchlistOutput).toHaveBeenCalledWith({
+        run_id: 1,
+        item_ids: [101]
+      })
+    })
+    expect(uiMocks.messageSuccess).toHaveBeenCalledWith("Created report from 1 queued item.")
+    expect(useWatchlistsStore.getState().activeTab).toBe("outputs")
+    expect(useWatchlistsStore.getState().outputsRunFilter).toBe(1)
   })
 
   it("marks all filtered items as reviewed with scoped confirmation messaging", async () => {

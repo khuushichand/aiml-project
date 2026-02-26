@@ -48,7 +48,7 @@ git clone https://github.com/<your-org>/tldw_server.git
 cd tldw_server
 
 # Copy example env and edit (recommended for Compose)
-cp .env.example .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 
 # Required values (examples)
 export AUTH_MODE=multi_user
@@ -120,7 +120,7 @@ source /opt/tldw_server/venv/bin/activate
 pip install -U pip
 pip install -e .
 
-cp .env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 vi .env   # set AUTH_MODE, keys, DATABASE_URL, ALLOWED_ORIGINS, tldw_production=true
 
 # Initialize AuthNZ DB and seed admin (mode-aware)

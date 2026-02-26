@@ -1164,7 +1164,7 @@ export const SourcesTab: React.FC = () => {
       title: t("watchlists:sources.columns.name", "Name"),
       dataIndex: "name",
       key: "name",
-      ellipsis: true,
+      width: 260,
       render: (name: string, record) => (
         <div className="space-y-0.5">
           <div className="flex items-center gap-2">
@@ -1616,7 +1616,7 @@ export const SourcesTab: React.FC = () => {
                 }
               }}
               size="middle"
-              scroll={{ x: 800 }}
+              scroll={{ x: "max-content" }}
             />
           </div>
         </div>

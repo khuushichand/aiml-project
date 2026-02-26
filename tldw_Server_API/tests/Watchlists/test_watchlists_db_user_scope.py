@@ -113,9 +113,19 @@ def test_scraped_items_are_scoped_per_user_in_shared_backend(shared_watchlists_d
     with pytest.raises(KeyError):
         user2_db.update_item_flags(user1["item_id"], reviewed=True)
 
+    with pytest.raises(KeyError):
+        user2_db.update_item_flags(user1["item_id"], queued_for_briefing=True)
+
+    updated_owner_item = user1_db.update_item_flags(
+        user1["item_id"],
+        queued_for_briefing=True,
+    )
+    assert int(updated_owner_item.queued_for_briefing or 0) == 1
+
     # Verify foreign user could not mutate the owner's row.
     owner_item_after = user1_db.get_item(user1["item_id"])
     assert int(owner_item_after.reviewed or 0) == 0
+    assert int(owner_item_after.queued_for_briefing or 0) == 1
 
 
 def test_watchlist_clusters_are_scoped_per_user_in_shared_backend(shared_watchlists_dbs):

@@ -24,7 +24,7 @@ Ensure version numbers and release metadata are consistent and discoverable.
 Confirm that all user and developer documentation matches the current behavior of the system.
 
 - [ ] Walk through the Quickstart in `README.md` from a clean environment (install → run server → open `/docs`) and update any out-of-date steps.
-- [ ] Verify AuthNZ setup docs (`.env.authnz.template`, AuthNZ docs in `Docs/AuthNZ/`) match the actual initialization flow.
+- [ ] Verify AuthNZ setup docs (`.env.example`, AuthNZ docs in `Docs/AuthNZ/`) match the actual initialization flow.
 - [ ] Update media ingestion documentation for any new formats, providers, or configuration options.
 - [ ] Update RAG, embeddings, and evaluation docs for new models, providers, or configuration changes.
 - [ ] Update MCP Unified docs for any endpoint, schema, or behavior changes.
@@ -56,7 +56,7 @@ Verify that a new user can cleanly install and start the backend using the docum
 
 - [ ] In a fresh virtual environment, run `pip install -e .[dev]` and confirm it completes successfully.
 - [ ] Start the server (for example `python -m uvicorn tldw_Server_API.app.main:app --reload`) and verify there are no import or configuration errors.
-- [ ] Follow the minimal configuration flow: copy `.env.authnz.template` to `.env`, run the AuthNZ initialization script, and confirm it completes successfully.
+- [ ] Follow the minimal configuration flow: copy `.env.example` to `.env`, run the AuthNZ initialization script, and confirm it completes successfully.
 - [ ] Verify the server handles missing but optional configuration files gracefully (clear error messages, no crashes).
 - [ ] Build and run the main Docker image, confirming the container serves `/docs` and `/api/v1/config/quickstart` as expected.
 - [ ] Verify that `ffmpeg` is installed and available on `PATH` so that audio/video ingestion and STT features work as documented.

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ENV_FILE="${1:-tldw_Server_API/Config_Files/.env}"
-TEMPLATE_FILE="${2:-tldw_Server_API/Config_Files/.env.quickstart}"
+TEMPLATE_FILE="${2:-tldw_Server_API/Config_Files/.env.example}"
 
 generate_key() {
   if command -v openssl >/dev/null 2>&1; then

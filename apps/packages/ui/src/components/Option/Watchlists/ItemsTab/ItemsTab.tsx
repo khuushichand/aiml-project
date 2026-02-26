@@ -20,13 +20,15 @@ import { CheckCircle2, ExternalLink, HelpCircle, RefreshCw, Rss, Sun } from "luc
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
 import {
+  createWatchlistOutput,
   fetchScrapedItems,
+  fetchWatchlistRuns,
   fetchWatchlistSources,
   updateScrapedItem
 } from "@/services/watchlists"
 import type { FetchItemsParams } from "@/services/watchlists"
 import { useWatchlistsStore } from "@/store/watchlists"
-import type { ScrapedItem, WatchlistSource } from "@/types/watchlists"
+import type { ScrapedItem, WatchlistRun, WatchlistSource } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import {
   buildDefaultItemsViewPresets,
@@ -69,7 +71,7 @@ import {
 const { Search } = Input
 
 type ReaderStatusFilter = "all" | "ingested" | "filtered"
-type SmartFeedFilter = "all" | "today" | "todayUnread" | "unread" | "reviewed"
+type SmartFeedFilter = "all" | "today" | "todayUnread" | "unread" | "reviewed" | "queued"
 type BatchReviewScope = "selected" | "page" | "allFiltered"
 type BatchReviewPhase = "running" | "complete" | "partial" | "failed"
 type ItemsViewPreset = Omit<PersistedItemsViewPreset, "smartFilter" | "statusFilter" | "sortMode"> & {
@@ -100,7 +102,8 @@ const normalizeSmartFilter = (value: string): SmartFeedFilter => {
     value === "today" ||
     value === "todayUnread" ||
     value === "unread" ||
-    value === "reviewed"
+    value === "reviewed" ||
+    value === "queued"
   ) {
     return value
   }
@@ -177,6 +180,7 @@ export const ItemsTab: React.FC = () => {
   const setRunsStatusFilter = useWatchlistsStore((s) => s.setRunsStatusFilter)
   const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
   const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
+  const selectedRunId = useWatchlistsStore((s) => s.selectedRunId)
   const selectedSourceId = useWatchlistsStore((s) => s.itemsSelectedSourceId)
   const setStoreSelectedSourceId = useWatchlistsStore((s) => s.setItemsSelectedSourceId)
   const statusFilterState = useWatchlistsStore((s) => s.itemsStatusFilter)
@@ -190,6 +194,9 @@ export const ItemsTab: React.FC = () => {
   const [sourcesLoading, setSourcesLoading] = useState(false)
   const [sourcesCappedAtLimit, setSourcesCappedAtLimit] = useState(false)
   const [sourceSearch, setSourceSearch] = useState("")
+  const [runs, setRuns] = useState<WatchlistRun[]>([])
+  const [runsLoading, setRunsLoading] = useState(false)
+  const [queueRunFilter, setQueueRunFilter] = useState<number | null>(selectedRunId)
   const [visibleSourceCount, setVisibleSourceCount] = useState(SOURCE_LIST_INITIAL_RENDER_COUNT)
   const [items, setItems] = useState<ScrapedItem[]>([])
   const [itemsLoading, setItemsLoading] = useState(false)
@@ -208,6 +215,7 @@ export const ItemsTab: React.FC = () => {
     )
   )
   const [updatingItemId, setUpdatingItemId] = useState<number | null>(null)
+  const [queueGenerating, setQueueGenerating] = useState(false)
   const [selectedItemIds, setSelectedItemIds] = useState<number[]>([])
   const [batchReviewScope, setBatchReviewScope] = useState<BatchReviewScope | null>(null)
   const [batchReviewProgress, setBatchReviewProgress] = useState<BatchReviewProgress | null>(null)
@@ -263,7 +271,8 @@ export const ItemsTab: React.FC = () => {
     today: 0,
     todayUnread: 0,
     unread: 0,
-    reviewed: 0
+    reviewed: 0,
+    queued: 0
   })
 
   const sourceNameById = useMemo(
@@ -280,6 +289,17 @@ export const ItemsTab: React.FC = () => {
       t("watchlists:items.unknownSource", "Unknown source")
     )
   }, [selectedSourceId, sourceNameById, t])
+
+  const queueRunOptions = useMemo(
+    () =>
+      runs.map((run) => ({
+        value: run.id,
+        label: t("watchlists:items.queue.runOption", "Run #{{id}}", {
+          id: run.id
+        })
+      })),
+    [runs, t]
+  )
 
   const filteredSources = useMemo(
     () => filterSourcesForReader(sources, sourceSearch),
@@ -437,11 +457,14 @@ export const ItemsTab: React.FC = () => {
         params.reviewed = false
       } else if (smartFilter === "reviewed") {
         params.reviewed = true
+      } else if (smartFilter === "queued") {
+        params.queued_for_briefing = true
+        params.run_id = queueRunFilter ?? undefined
       }
 
       return params
     },
-    [effectiveSearchQuery, selectedSourceId, smartFilter, statusFilter]
+    [effectiveSearchQuery, queueRunFilter, selectedSourceId, smartFilter, statusFilter]
   )
 
   const loadSources = useCallback(async () => {
@@ -488,6 +511,19 @@ export const ItemsTab: React.FC = () => {
       setSourcesLoading(false)
     }
   }, [t])
+
+  const loadRuns = useCallback(async () => {
+    setRunsLoading(true)
+    try {
+      const response = await fetchWatchlistRuns({ page: 1, size: 200 })
+      setRuns(Array.isArray(response.items) ? response.items : [])
+    } catch (error) {
+      console.error("Failed to load watchlist runs:", error)
+      setRuns([])
+    } finally {
+      setRunsLoading(false)
+    }
+  }, [])
 
   const expandVisibleSourcesIfNeeded = useCallback(() => {
     const listElement = sourceListRef.current
@@ -559,12 +595,17 @@ export const ItemsTab: React.FC = () => {
         size: 1
       }
 
-      const [allRes, todayRes, todayUnreadRes, unreadRes, reviewedRes] = await Promise.all([
+      const [allRes, todayRes, todayUnreadRes, unreadRes, reviewedRes, queuedRes] = await Promise.all([
         fetchScrapedItems(base),
         fetchScrapedItems({ ...base, since: startOfTodayIso() }),
         fetchScrapedItems({ ...base, since: startOfTodayIso(), reviewed: false }),
         fetchScrapedItems({ ...base, reviewed: false }),
-        fetchScrapedItems({ ...base, reviewed: true })
+        fetchScrapedItems({ ...base, reviewed: true }),
+        fetchScrapedItems({
+          ...base,
+          queued_for_briefing: true,
+          run_id: queueRunFilter ?? undefined
+        })
       ])
 
       if (requestToken !== smartCountsRequestTokenRef.current) return
@@ -584,7 +625,7 @@ export const ItemsTab: React.FC = () => {
       if (requestToken !== smartCountsRequestTokenRef.current) return
       console.error("Failed to load smart feed counts:", error)
     }
-  }, [effectiveSearchQuery, selectedSourceId, statusFilter])
+  }, [effectiveSearchQuery, queueRunFilter, selectedSourceId, statusFilter])
 
   const invalidateSmartCountsCache = useCallback(() => {
     smartCountsCacheRef.current = {}
@@ -599,6 +640,10 @@ export const ItemsTab: React.FC = () => {
   useEffect(() => {
     void loadSources()
   }, [loadSources])
+
+  useEffect(() => {
+    void loadRuns()
+  }, [loadRuns])
 
   useEffect(() => {
     void loadItems()
@@ -699,6 +744,21 @@ export const ItemsTab: React.FC = () => {
   }, [selectedSourceId, smartFilter, statusFilter, searchQuery, itemsPage])
 
   useEffect(() => {
+    if (selectedRunId && queueRunFilter == null) {
+      setQueueRunFilter(selectedRunId)
+    }
+  }, [queueRunFilter, selectedRunId])
+
+  useEffect(() => {
+    if (smartFilter !== "queued") return
+    if (queueRunFilter != null) return
+    const firstRunId = runs[0]?.id
+    if (typeof firstRunId === "number") {
+      setQueueRunFilter(firstRunId)
+    }
+  }, [queueRunFilter, runs, smartFilter])
+
+  useEffect(() => {
     const matchingPreset = viewPresets.find(
       (preset) =>
         preset.sourceId === selectedSourceId &&
@@ -726,12 +786,12 @@ export const ItemsTab: React.FC = () => {
     setItemsPage(1)
   }
 
-  const handleSortModeChange = (nextSortMode: ReaderSortMode) => {
-    setSortMode(nextSortMode)
+  const handleQueueRunFilterChange = (runId: number | null) => {
+    setQueueRunFilter(runId)
     setItemsPage(1)
   }
 
-  const handleToggleReviewed = useCallback(async (item: ScrapedItem) => {
+  const handleToggleReviewed = async (item: ScrapedItem) => {
     setUpdatingItemId(item.id)
     try {
       const updated = await updateScrapedItem(item.id, { reviewed: !item.reviewed })
@@ -756,36 +816,34 @@ export const ItemsTab: React.FC = () => {
     }
   }, [invalidateSmartCountsCache, loadItems, loadSmartCounts, requiresReviewedRefresh, t])
 
-  const handleIncludeInNextBriefing = useCallback(async (item: ScrapedItem) => {
-    if (item.status === "ingested") {
-      message.info(
-        t(
-          "watchlists:items.briefingAlreadyIncluded",
-          "This item is already included in briefing outputs."
-        )
-      )
-      return
-    }
-
+  const handleToggleBriefingQueue = useCallback(async (item: ScrapedItem) => {
+    const isQueued = Boolean(item.queued_for_briefing)
     setUpdatingItemId(item.id)
     try {
-      const updated = await updateScrapedItem(item.id, { status: "ingested" })
+      const updated = await updateScrapedItem(item.id, {
+        queued_for_briefing: !isQueued
+      })
       setItems((prev) =>
         prev.map((entry) => (entry.id === updated.id ? updated : entry))
       )
       message.success(
-        t(
-          "watchlists:items.briefingIncluded",
-          "Added to the next briefing queue."
-        )
+        !isQueued
+          ? t(
+              "watchlists:items.briefingIncluded",
+              "Added to the next briefing queue."
+            )
+          : t(
+              "watchlists:items.briefingRemoved",
+              "Removed from the briefing queue."
+            )
       )
-      if (statusFilter !== "all") {
+      if (smartFilter === "queued") {
         await loadItems()
       }
       invalidateSmartCountsCache()
       await loadSmartCounts()
     } catch (error) {
-      console.error("Failed to include watchlist item in briefing:", error)
+      console.error("Failed to update watchlist item briefing queue:", error)
       message.error(
         t(
           "watchlists:items.briefingIncludeError",
@@ -795,7 +853,84 @@ export const ItemsTab: React.FC = () => {
     } finally {
       setUpdatingItemId(null)
     }
-  }, [invalidateSmartCountsCache, loadItems, loadSmartCounts, statusFilter, t])
+  }, [loadItems, loadSmartCounts, smartFilter, t])
+
+  const handleGenerateReportFromQueue = useCallback(async () => {
+    const runId = queueRunFilter
+    if (!runId) {
+      message.info(
+        t(
+          "watchlists:items.queue.runRequired",
+          "Select a run to generate a queued report."
+        )
+      )
+      return
+    }
+
+    setQueueGenerating(true)
+    try {
+      const queuePageSize = 200
+      const queuedItems: ScrapedItem[] = []
+      let page = 1
+
+      while (true) {
+        const response = await fetchScrapedItems({
+          run_id: runId,
+          queued_for_briefing: true,
+          page,
+          size: queuePageSize
+        })
+        const batch = Array.isArray(response.items) ? response.items : []
+        queuedItems.push(...batch)
+        if (batch.length < queuePageSize || queuedItems.length >= Number(response.total || 0)) {
+          break
+        }
+        page += 1
+      }
+
+      if (queuedItems.length === 0) {
+        message.info(
+          t(
+            "watchlists:items.queue.empty",
+            "No queued items found for this run."
+          )
+        )
+        return
+      }
+
+      await createWatchlistOutput({
+        run_id: runId,
+        item_ids: queuedItems.map((item) => item.id)
+      })
+      message.success(
+        t(
+          "watchlists:items.queue.generated",
+          "Created report from {{count}} queued item{{plural}}.",
+          {
+            count: queuedItems.length,
+            plural: queuedItems.length === 1 ? "" : "s"
+          }
+        )
+      )
+
+      setOutputsRunFilter(runId)
+      const jobId = queuedItems[0]?.job_id
+      if (typeof jobId === "number") {
+        setOutputsJobFilter(jobId)
+      }
+      setActiveTab("outputs")
+    } catch (error) {
+      console.error("Failed to generate queued watchlist report:", error)
+      message.error(
+        t(
+          "watchlists:items.queue.generateError",
+          "Failed to generate report from queued items."
+        )
+      )
+    } finally {
+      setQueueGenerating(false)
+    }
+  }, [queueRunFilter, setActiveTab, setOutputsJobFilter, setOutputsRunFilter, t])
 
   const pageItemIds = useMemo(() => sortedItems.map((item) => item.id), [sortedItems])
 
@@ -1558,6 +1693,12 @@ export const ItemsTab: React.FC = () => {
       icon: <CheckCircle2 className="h-4 w-4" />
     },
     {
+      key: "queued",
+      label: t("watchlists:items.queuedForBriefing", "Queued for briefing"),
+      count: smartCounts.queued,
+      icon: <HelpCircle className="h-4 w-4" />
+    },
+    {
       key: "all",
       label: t("watchlists:items.filters.all", "All"),
       count: smartCounts.all,
@@ -1814,7 +1955,34 @@ export const ItemsTab: React.FC = () => {
                 ]}
               />
 
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface/70 px-2.5 py-2">
+              {smartFilter === "queued" && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select<number>
+                    data-testid="watchlists-items-queue-run-filter"
+                    placeholder={t("watchlists:items.queue.runPlaceholder", "Select run")}
+                    value={queueRunFilter ?? undefined}
+                    onChange={(value) =>
+                      handleQueueRunFilterChange(
+                        typeof value === "number" ? value : null
+                      )
+                    }
+                    allowClear
+                    loading={runsLoading}
+                    className="min-w-[200px]"
+                    options={queueRunOptions}
+                  />
+                  <Button
+                    size="small"
+                    data-testid="watchlists-items-queue-generate-report"
+                    loading={queueGenerating}
+                    onClick={() => void handleGenerateReportFromQueue()}
+                  >
+                    {t("watchlists:items.queue.generateReport", "Generate report from queue")}
+                  </Button>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
                   {t("watchlists:items.sort.label", "Sort")}
                 </span>
@@ -2280,6 +2448,11 @@ export const ItemsTab: React.FC = () => {
                         <Tag color={selectedItem.status === "ingested" ? "green" : "orange"}>
                           {selectedItem.status}
                         </Tag>
+                        {Boolean(selectedItem.queued_for_briefing) && (
+                          <Tag color="purple">
+                            {t("watchlists:items.queuedTag", "Queued")}
+                          </Tag>
+                        )}
                         {!selectedItem.reviewed && (
                           <Tag color="blue">{t("watchlists:items.unread", "All Unread")}</Tag>
                         )}
@@ -2323,18 +2496,19 @@ export const ItemsTab: React.FC = () => {
                       </Button>
                       <Button
                         size="small"
-                        disabled={selectedItem.status === "ingested"}
-                        loading={
-                          updatingItemId === selectedItem.id &&
-                          selectedItem.status !== "ingested"
-                        }
-                        onClick={() => void handleIncludeInNextBriefing(selectedItem)}
+                        loading={updatingItemId === selectedItem.id}
+                        onClick={() => void handleToggleBriefingQueue(selectedItem)}
                         data-testid="watchlists-item-include-briefing"
                       >
-                        {t(
-                          "watchlists:items.includeInNextBriefing",
-                          "Include in next briefing"
-                        )}
+                        {Boolean(selectedItem.queued_for_briefing)
+                          ? t(
+                              "watchlists:items.removeFromBriefingQueue",
+                              "Remove from briefing queue"
+                            )
+                          : t(
+                              "watchlists:items.includeInNextBriefing",
+                              "Include in next briefing"
+                            )}
                       </Button>
                       {selectedItem.url && (
                         <Tooltip title={selectedItem.url}>

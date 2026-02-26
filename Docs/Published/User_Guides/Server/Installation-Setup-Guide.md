@@ -54,7 +54,7 @@ The server supports two modes:
 Quick setup using the AuthNZ template:
 
 ```bash
-cp tldw_Server_API/Config_Files/.env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 # Edit .env and set AUTH_MODE and keys
 #  - AUTH_MODE=single_user and SINGLE_USER_API_KEY=<your_key>
 #  - OR AUTH_MODE=multi_user and JWT_SECRET_KEY=<secure-32+ chars>
@@ -68,7 +68,7 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 
 Tip:
 - Generate a secure key with `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
-- For a full provider list, see `tldw_Server_API/Config_Files/.env.template`.
+- For a full provider list, see `tldw_Server_API/Config_Files/.env.example`.
 
 Environment variables of interest (from `.env`):
 - `AUTH_MODE`: `single_user` or `multi_user`

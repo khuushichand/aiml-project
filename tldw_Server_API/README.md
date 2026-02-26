@@ -29,7 +29,7 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 
 Quick setup:
 ```bash
-cp .env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 ```
 

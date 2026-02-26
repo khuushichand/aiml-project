@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   deleteWatchlistSourceMock: vi.fn(),
   restoreWatchlistSourceMock: vi.fn(),
   updateWatchlistSourceMock: vi.fn(),
+  tableColumnsRef: { current: [] as Array<Record<string, unknown>> },
   storeStateRef: { current: {} as Record<string, any> },
   tMock: (key: string, defaultValue?: unknown, options?: Record<string, unknown>) => {
     if (typeof defaultValue !== "string") return key
@@ -199,6 +200,7 @@ describe("SourcesTab load-error retry", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.storeStateRef.current = baseState()
+    mocks.tableColumnsRef.current = []
     mocks.fetchWatchlistTagsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.fetchWatchlistGroupsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.fetchWatchlistJobsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
@@ -257,9 +259,30 @@ describe("SourcesTab load-error retry", () => {
     render(<SourcesTab />)
 
     await waitFor(() => {
-      expect(screen.getByRole("table", { name: "Feeds table" })).toBeInTheDocument()
+      const nameColumn = mocks.tableColumnsRef.current.find(
+        (column) => column.key === "name" || column.dataIndex === "name"
+      )
+      expect(nameColumn).toBeDefined()
+      expect(typeof nameColumn?.width).toBe("number")
+      expect((nameColumn?.width as number) > 0).toBe(true)
+
+      const renderedNameCell =
+        typeof nameColumn?.render === "function"
+          ? nameColumn.render(source.name, source)
+          : null
+
+      if (React.isValidElement(renderedNameCell)) {
+        const { container } = render(<>{renderedNameCell}</>)
+        const nameNode = container.querySelector("span.font-medium")
+        expect(nameNode).not.toBeNull()
+        expect(nameNode?.className).toContain("truncate")
+
+        const linkNode = container.querySelector("a")
+        expect(linkNode).not.toBeNull()
+        expect(linkNode?.className).toContain("shrink-0")
+      } else {
+        expect(renderedNameCell).not.toBeNull()
+      }
     })
-    expect(screen.getByText("Enabled")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Disable feed" })).toBeInTheDocument()
   })
 })

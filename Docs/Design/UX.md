@@ -107,7 +107,7 @@ https://creativecommons.org/2006/02/14/yahoodesignpatternlibrary/
 https://component.gallery/
 https://medium.com/@alphadesignglobal/8-tiny-ui-fixes-that-will-make-your-product-feel-10x-smarter-afffb1a61a6b
 
-
+https://github.com/Dammyjay93/interface-design?tab=readme-ov-file#installation
 https://www.youtube.com/watch?v=1fZTOjd_bOQ
 https://medium.com/design-bootcamp/7-tips-to-become-a-master-of-ui-design-i-wish-i-knew-this-earlier-8e52de05783d
 https://medium.com/design-bootcamp/how-i-design-light-theme-ui-2bb7961f5ed6

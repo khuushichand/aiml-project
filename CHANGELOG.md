@@ -25,6 +25,13 @@ and this project adheres to Some kind of Versioning
   - Banner image normalization utility for local uploads (JPEG/PNG/WebP validation, resize, encoding, and byte-cap enforcement).
   - Extension parity route support for `/workspace-playground`.
   - Regression coverage for banner defaults, lifecycle persistence, bundle round-trip, header modal behavior, quota eviction, conflict labeling, and extension route parity.
+- Skills authoring + seed UX
+  - Added built-in `feynman-technique` skill under `tldw_Server_API/app/core/Skills/builtin/`.
+  - Added importable `feynman-technique-template` skill under `Docs/Prompts/Skills/`.
+  - Added Feynman prompt template at `Docs/Prompts/Academic-or-Studying/Feynman_Technique.md`.
+  - Added Skills Manager built-ins seeding dropdown actions for both `Seed Missing Only` (`overwrite=false`) and `Seed and Overwrite Existing` (`overwrite=true`).
+  - Added protocol-sync regression coverage for Feynman skill/prompt assets in `tldw_Server_API/tests/Skills/unit/test_feynman_assets_sync.py`.
+- Added regression coverage ensuring Watchlists pipeline setup propagates HTML template format into generated job and output payloads.
 
 ### Changed
 - Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
@@ -38,12 +45,15 @@ and this project adheres to Some kind of Versioning
 - Model Studio base URL resolution now uses region presets when explicit base URL overrides are unset.
 - Model Studio payload construction was refactored to remove duplicate model/extra-parameter logic across sync and async builders.
 - Env-var and image setup docs were updated for Model Studio and Qwen routing, including grouped readability improvements for `[Image-Generation]` key listings.
+- Feynman skill/prompt assets now use a shared `protocol_version` marker key (replacing mixed legacy markers).
+- Importable `feynman-technique-template` now defaults to `disable-model-invocation: true` to avoid duplicate auto-invocable behavior after import.
+- Watchlists pipeline contract now carries selected template format (`md` or `html`) through job defaults and output-create payload construction instead of forcing Markdown.
+- Watchlists source delete confirmation copy now reuses a single locale key across standard and in-use delete flows to reduce translation-key duplication.
 
 ### Removed
 - No removals in this session.
 
 ### Fixed
-
 - Fixed `modelstudio_image_mode=auto` to actually do sync-first fallback to async.
 - Fixed validation so `payload.extra_params.mode` is accepted for Model Studio control flow without requiring passthrough allowlisting.
 - Fixed user-facing error hygiene by sanitizing Model Studio transport exception details while logging internals.
@@ -52,6 +62,10 @@ and this project adheres to Some kind of Versioning
 - Fixed missing docstring on `_coerce_choice` in image generation config helpers.
 - Fixed bundle import compatibility in environments lacking `File.arrayBuffer()`.
 - Fixed invalid imported banner image payload handling to fail soft (drop bad image, preserve banner text fields).
+- Fixed a Watchlists UC2 mismatch where selecting an HTML template could still generate Markdown outputs due to hardcoded `default_format`/`format`.
+- Fixed duplicate English locale maintenance drift for source delete undo-window messaging by consolidating copy to `sources.deleteConfirmDescription`.
+- Fixed newly added Watchlists API audio-briefing tests to comply with typing/docstring standards by adding explicit fixture type hints, return annotations, and test docstrings.
+
 
 ## [0.1.24] 2026-02-22
 
