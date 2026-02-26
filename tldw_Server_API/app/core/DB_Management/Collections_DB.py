@@ -250,6 +250,22 @@ class ReminderTaskRow:
 
 
 @dataclass
+class ReminderTaskRunRow:
+    id: int
+    task_id: str
+    user_id: str
+    scheduled_for: str | None
+    job_id: str | None
+    run_slot_utc: str
+    run_slot_key: str
+    status: str
+    error: str | None
+    created_at: str
+    started_at: str | None
+    completed_at: str | None
+
+
+@dataclass
 class UserNotificationRow:
     id: int
     user_id: str
@@ -4002,6 +4018,91 @@ class CollectionsDatabase:
         params.extend(status_params)
         res = self.backend.execute(q, tuple(params))
         return res.rowcount > 0
+
+    def _reminder_task_run_row_from_db(self, row: dict[str, Any]) -> ReminderTaskRunRow:
+        return ReminderTaskRunRow(
+            id=int(row.get("id")),
+            task_id=str(row.get("task_id") or ""),
+            user_id=str(row.get("user_id") or ""),
+            scheduled_for=row.get("scheduled_for"),
+            job_id=row.get("job_id"),
+            run_slot_utc=str(row.get("run_slot_utc") or ""),
+            run_slot_key=str(row.get("run_slot_key") or ""),
+            status=str(row.get("status") or ""),
+            error=row.get("error"),
+            created_at=str(row.get("created_at") or ""),
+            started_at=row.get("started_at"),
+            completed_at=row.get("completed_at"),
+        )
+
+    def create_reminder_task_run(
+        self,
+        *,
+        task_id: str,
+        scheduled_for: str | None,
+        job_id: str | None,
+        run_slot_utc: str,
+        run_slot_key: str,
+        status: str,
+        error: str | None = None,
+        started_at: str | None = None,
+        completed_at: str | None = None,
+    ) -> ReminderTaskRunRow:
+        now = _utcnow_iso()
+        q = (
+            "INSERT INTO reminder_task_runs ("
+            "task_id, user_id, scheduled_for, job_id, run_slot_utc, run_slot_key, status, error, "
+            "created_at, started_at, completed_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(task_id, run_slot_key) DO NOTHING"
+        )
+        params = (
+            task_id,
+            self.user_id,
+            scheduled_for,
+            job_id,
+            run_slot_utc,
+            run_slot_key,
+            status,
+            error,
+            now,
+            started_at,
+            completed_at,
+        )
+        self.backend.execute(q, params)
+        return self.get_reminder_task_run_by_slot(task_id=task_id, run_slot_key=run_slot_key)
+
+    def get_reminder_task_run_by_slot(self, *, task_id: str, run_slot_key: str) -> ReminderTaskRunRow:
+        row = self.backend.execute(
+            "SELECT * FROM reminder_task_runs WHERE task_id = ? AND user_id = ? AND run_slot_key = ?",
+            (task_id, self.user_id, run_slot_key),
+        ).first
+        if not row:
+            raise KeyError("reminder_task_run_not_found")
+        return self._reminder_task_run_row_from_db(row)
+
+    def update_reminder_task_run_status(
+        self,
+        *,
+        run_id: int,
+        status: str,
+        error: str | None = None,
+        completed_at: str | None = None,
+    ) -> ReminderTaskRunRow:
+        q = (
+            "UPDATE reminder_task_runs SET status = ?, error = ?, completed_at = ? "
+            "WHERE id = ? AND user_id = ?"
+        )
+        res = self.backend.execute(q, (status, error, completed_at, run_id, self.user_id))
+        if res.rowcount <= 0:
+            raise KeyError("reminder_task_run_not_found")
+        row = self.backend.execute(
+            "SELECT * FROM reminder_task_runs WHERE id = ? AND user_id = ?",
+            (run_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("reminder_task_run_not_found")
+        return self._reminder_task_run_row_from_db(row)
 
     # ------------------------
     # Notifications API
