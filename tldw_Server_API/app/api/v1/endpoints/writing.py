@@ -58,8 +58,13 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import get_allowed_fields
+from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
+    get_model_extra_body_compat,
+    get_provider_extra_body_compat,
+)
 from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter()
@@ -86,6 +91,8 @@ _WRITING_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     json.JSONDecodeError,
 )
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
@@ -196,6 +203,60 @@ def _coerce_model_name(model: Any) -> str | None:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return None
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE_VALUES
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _runtime_context() -> dict[str, Any]:
+    strict_openai_compat = False
+    try:
+        config_parser = load_comprehensive_config()
+        if config_parser.has_section("Local-API") and config_parser.has_option("Local-API", "strict_openai_compat"):
+            strict_openai_compat = _truthy(
+                config_parser.get("Local-API", "strict_openai_compat", fallback="false")
+            )
+    except Exception:  # noqa: BLE001 - capabilities metadata should fail open
+        strict_openai_compat = False
+
+    env_override = os.getenv("LOCAL_LLM_STRICT_OPENAI_COMPAT")
+    if env_override is not None:
+        strict_openai_compat = _truthy(env_override)
+
+    return {"strict_openai_compat": strict_openai_compat}
+
+
+def _fallback_extra_body_compat() -> dict[str, Any]:
+    return {
+        "supported": False,
+        "effective_reason": "unsupported for deployment/runtime configuration",
+        "known_params": [],
+        "param_groups": [],
+        "notes": "No extra_body compatibility metadata registered for this provider/model.",
+        "example": {"extra_body": {}},
+        "source": "catalog+runtime",
+    }
+
+
+def _safe_provider_extra_body_compat(provider: str, runtime_context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return get_provider_extra_body_compat(provider, runtime_context=runtime_context)
+    except Exception:  # noqa: BLE001 - capabilities metadata should fail open
+        return _fallback_extra_body_compat()
+
+
+def _safe_model_extra_body_compat(provider: str, model: str, runtime_context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return get_model_extra_body_compat(provider, model, runtime_context=runtime_context)
+    except Exception:  # noqa: BLE001 - capabilities metadata should fail open
+        return _fallback_extra_body_compat()
 
 
 def _normalize_theme_response(theme: dict[str, Any]) -> dict[str, Any]:
@@ -507,6 +568,7 @@ async def get_writing_capabilities(
 
     providers_payload: list[WritingProviderCapabilities] | None = None
     default_provider = None
+    runtime_ctx = _runtime_context()
     if include_providers:
         providers_info = await get_configured_providers_async(include_deprecated=include_deprecated)
         default_provider = providers_info.get("default_provider")
@@ -524,6 +586,10 @@ async def get_writing_capabilities(
             tokenizers = None
             if models:
                 tokenizers = {model: _tokenizer_support(name, model) for model in models}
+            model_extra_body_compat = {
+                model_name: _safe_model_extra_body_compat(name, model_name, runtime_ctx)
+                for model_name in models
+            }
             providers_payload.append(
                 WritingProviderCapabilities(
                     name=name,
@@ -532,6 +598,8 @@ async def get_writing_capabilities(
                     supported_fields=supported_fields,
                     features=_provider_features(name),
                     tokenizers=tokenizers,
+                    extra_body_compat=_safe_provider_extra_body_compat(name, runtime_ctx),
+                    model_extra_body_compat=model_extra_body_compat or None,
                 )
             )
 
@@ -544,12 +612,16 @@ async def get_writing_capabilities(
         tokenizer_available = False
         tokenizer_name = None
         tokenization_error = None
+        extra_body_compat = None
         if provider_name and model_name:
             try:
                 _, tokenizer_name = _resolve_tokenizer(provider_name, model_name)
                 tokenizer_available = True
             except TokenizerUnavailable as exc:
                 tokenization_error = str(exc)
+            extra_body_compat = _safe_model_extra_body_compat(provider_name, model_name, runtime_ctx)
+        elif provider_name:
+            extra_body_compat = _safe_provider_extra_body_compat(provider_name, runtime_ctx)
         requested = WritingRequestedCapabilities(
             provider=provider_name,
             model=model_name,
@@ -558,6 +630,7 @@ async def get_writing_capabilities(
             tokenizer_available=tokenizer_available,
             tokenizer=tokenizer_name,
             tokenization_error=tokenization_error,
+            extra_body_compat=extra_body_compat,
         )
 
     return WritingCapabilitiesResponse(

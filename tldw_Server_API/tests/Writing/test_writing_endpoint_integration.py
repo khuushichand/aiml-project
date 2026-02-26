@@ -272,6 +272,77 @@ def test_writing_capabilities_provider_tokenizers(client_with_writing_db: TestCl
         assert "unavailable" in tokenizers["gpt-3.5-turbo"]["error"].lower()
 
 
+def test_writing_capabilities_includes_extra_body_compat(client_with_writing_db: TestClient, monkeypatch):
+    client = client_with_writing_db
+
+    async def fake_get_configured_providers_async(include_deprecated: bool = False):
+        return {
+            "default_provider": "openai",
+            "providers": [
+                {
+                    "name": "openai",
+                    "models": ["gpt-4o-mini"],
+                    "capabilities": {},
+                }
+            ],
+        }
+
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    monkeypatch.setattr(writing_endpoints, "get_configured_providers_async", fake_get_configured_providers_async)
+
+    resp = client.get("/api/v1/writing/capabilities")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    providers = data["providers"]
+    assert providers
+    assert "extra_body_compat" in providers[0]
+    assert isinstance(providers[0]["extra_body_compat"]["known_params"], list)
+    assert "model_extra_body_compat" in providers[0]
+    assert "gpt-4o-mini" in providers[0]["model_extra_body_compat"]
+    assert isinstance(providers[0]["model_extra_body_compat"]["gpt-4o-mini"]["known_params"], list)
+
+
+def test_writing_capabilities_requested_extra_body_compat_unknown_fallback(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "definitely-unknown-provider",
+            "model": "definitely-unknown-model",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    requested = data["requested"]
+    assert requested is not None
+    assert requested["extra_body_compat"]["supported"] is False
+    assert requested["extra_body_compat"]["known_params"] == []
+
+
+def test_writing_capabilities_requested_extra_body_compat_reflects_strict_runtime(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("LOCAL_LLM_STRICT_OPENAI_COMPAT", "true")
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    requested = data["requested"]
+    assert requested is not None
+    assert requested["extra_body_compat"]["supported"] is False
+    assert "strict_openai_compat" in str(requested["extra_body_compat"]["effective_reason"])
+
+
 def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     if not _has_tiktoken():
         pytest.skip("tiktoken not available")

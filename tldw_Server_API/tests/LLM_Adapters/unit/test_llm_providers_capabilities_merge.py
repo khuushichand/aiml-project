@@ -93,3 +93,57 @@ def test_llm_providers_legacy_capabilities_fallback(monkeypatch, llm_client):
     assert caps.get("json_mode") is True
     assert caps.get("supports_tools") is True
     assert providers["openai"].get("availability") == "enabled"
+
+
+def test_llm_providers_includes_model_level_extra_body_compat(monkeypatch, llm_client):
+    import tldw_Server_API.app.core.config as core_config
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+
+    monkeypatch.setattr(core_config, "load_comprehensive_config", _fake_config)
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config)
+
+    import tldw_Server_API.app.core.LLM_Calls.adapter_registry as reg_mod
+
+    class _DummyReg:
+        def list_capabilities(self, include_disabled=True):
+            return []
+
+    monkeypatch.setattr(reg_mod, "get_registry", lambda: _DummyReg())
+
+    r = llm_client.get("/api/v1/llm/providers")
+    assert r.status_code == 200
+    data = r.json()
+    providers = {p["name"]: p for p in data.get("providers", [])}
+    assert "openai" in providers
+    assert "extra_body_compat" in providers["openai"]
+    assert isinstance(providers["openai"]["extra_body_compat"].get("known_params"), list)
+    models_info = providers["openai"].get("models_info") or []
+    assert models_info
+    assert "extra_body_compat" in models_info[0]
+
+
+def test_llm_providers_extra_body_compat_reflects_strict_runtime(monkeypatch, llm_client):
+    import tldw_Server_API.app.core.config as core_config
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+
+    monkeypatch.setattr(core_config, "load_comprehensive_config", _fake_config)
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config)
+    monkeypatch.setenv("LOCAL_LLM_STRICT_OPENAI_COMPAT", "true")
+
+    import tldw_Server_API.app.core.LLM_Calls.adapter_registry as reg_mod
+
+    class _DummyReg:
+        def list_capabilities(self, include_disabled=True):
+            return []
+
+    monkeypatch.setattr(reg_mod, "get_registry", lambda: _DummyReg())
+
+    r = llm_client.get("/api/v1/llm/providers")
+    assert r.status_code == 200
+    data = r.json()
+    providers = {p["name"]: p for p in data.get("providers", [])}
+    assert providers["openai"]["extra_body_compat"]["supported"] is False
+    assert "strict_openai_compat" in str(providers["openai"]["extra_body_compat"]["effective_reason"])
+    first_model = providers["openai"].get("models_info", [])[0]
+    assert first_model["extra_body_compat"]["supported"] is False
+    assert "strict_openai_compat" in str(first_model["extra_body_compat"]["effective_reason"])
