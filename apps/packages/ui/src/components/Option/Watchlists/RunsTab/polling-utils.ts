@@ -13,11 +13,6 @@ const DEFAULT_IDLE_PAGE_SIZE = 10
 
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running", "queued"])
 
-const normalizeStatus = (status: unknown): string =>
-  String(status ?? "")
-    .trim()
-    .toLowerCase()
-
 const normalizePositiveInt = (value: number, fallback: number): number => {
   if (!Number.isFinite(value)) return fallback
   const normalized = Math.floor(value)
