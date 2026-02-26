@@ -95,9 +95,26 @@ import {
 } from "./writing-context-utils"
 import { buildTokenPreviewRows } from "./writing-token-utils"
 import {
+  resolveGenerationStopStrings,
+  type BasicStoppingModeType
+} from "./writing-stop-mode-utils"
+import {
+  extractLogprobEntriesFromChunk,
+  type WritingLogprobEntry
+} from "./writing-logprob-utils"
+import {
+  buildResponseInspectorCsv,
+  selectResponseInspectorRows,
+  type ResponseInspectorSort
+} from "./writing-response-inspector-utils"
+import {
   normalizeWordcloudWords,
   parseWordcloudStopwordsInput
 } from "./writing-wordcloud-utils"
+import {
+  computeTokensPerSecond,
+  estimateTokenCountFromText
+} from "./writing-generation-stats-utils"
 
 const { Title, Paragraph } = Typography
 
@@ -128,6 +145,11 @@ type WritingSessionSettings = {
   temperature: number
   top_p: number
   top_k: number
+  token_streaming: boolean
+  use_basic_stopping_mode: boolean
+  basic_stopping_mode_type: BasicStoppingModeType
+  logprobs: boolean
+  top_logprobs: number | null
   max_tokens: number
   presence_penalty: number
   frequency_penalty: number
@@ -196,6 +218,18 @@ const SAVE_DEBOUNCE_MS = 800
 const MAX_MATCHES = 500
 const MAX_CHUNKS = 80
 const MAX_WORDCLOUD_WORDS = 200
+const MAX_RESPONSE_LOGPROBS = 200
+const DEFAULT_TOP_LOGPROBS = 5
+const RESPONSE_INSPECTOR_SORT_OPTIONS: Array<{
+  value: ResponseInspectorSort
+  label: string
+}> = [
+  { value: "sequence", label: "Sequence" },
+  { value: "logprob_desc", label: "Logprob desc" },
+  { value: "logprob_asc", label: "Logprob asc" },
+  { value: "probability_desc", label: "Probability desc" },
+  { value: "probability_asc", label: "Probability asc" }
+]
 const WORDCLOUD_POLL_ATTEMPTS = 20
 const WORDCLOUD_POLL_DELAY_MS = 600
 
@@ -264,6 +298,11 @@ const DEFAULT_SETTINGS: WritingSessionSettings = {
   temperature: 0.7,
   top_p: 0.9,
   top_k: 0,
+  token_streaming: true,
+  use_basic_stopping_mode: false,
+  basic_stopping_mode_type: "max_tokens",
+  logprobs: false,
+  top_logprobs: null,
   max_tokens: 512,
   presence_penalty: 0,
   frequency_penalty: 0,
@@ -934,10 +973,40 @@ const getSettingsFromPayload = (
   const worldInfo = normalizeWorldInfoSettings(
     settings.world_info ?? settings.worldInfo
   )
+  const rawTopLogprobs = toNullableNumber(
+    settings.top_logprobs ?? settings.topLogprobs,
+    DEFAULT_SETTINGS.top_logprobs
+  )
   return {
     temperature: toNumber(settings.temperature, DEFAULT_SETTINGS.temperature),
     top_p: toNumber(settings.top_p, DEFAULT_SETTINGS.top_p),
     top_k: toNumber(settings.top_k, DEFAULT_SETTINGS.top_k),
+    token_streaming: toBoolean(
+      settings.token_streaming ?? settings.tokenStreaming,
+      DEFAULT_SETTINGS.token_streaming
+    ),
+    use_basic_stopping_mode: toBoolean(
+      settings.use_basic_stopping_mode ?? settings.useBasicStoppingMode,
+      DEFAULT_SETTINGS.use_basic_stopping_mode
+    ),
+    basic_stopping_mode_type: [
+      "max_tokens",
+      "new_line",
+      "fill_suffix"
+    ].includes(
+      String(
+        settings.basic_stopping_mode_type ?? settings.basicStoppingModeType || ""
+      )
+    )
+      ? (String(
+          settings.basic_stopping_mode_type ?? settings.basicStoppingModeType
+        ) as BasicStoppingModeType)
+      : DEFAULT_SETTINGS.basic_stopping_mode_type,
+    logprobs: toBoolean(settings.logprobs, DEFAULT_SETTINGS.logprobs),
+    top_logprobs:
+      rawTopLogprobs == null
+        ? null
+        : Math.max(1, Math.min(20, Math.floor(rawTopLogprobs))),
     max_tokens: Math.max(
       1,
       Math.round(toNumber(settings.max_tokens, DEFAULT_SETTINGS.max_tokens))
@@ -1017,6 +1086,11 @@ const areSettingsEqual = (
   if (left.temperature !== right.temperature) return false
   if (left.top_p !== right.top_p) return false
   if (left.top_k !== right.top_k) return false
+  if (left.token_streaming !== right.token_streaming) return false
+  if (left.use_basic_stopping_mode !== right.use_basic_stopping_mode) return false
+  if (left.basic_stopping_mode_type !== right.basic_stopping_mode_type) return false
+  if (left.logprobs !== right.logprobs) return false
+  if (left.top_logprobs !== right.top_logprobs) return false
   if (left.max_tokens !== right.max_tokens) return false
   if (left.presence_penalty !== right.presence_penalty) return false
   if (left.frequency_penalty !== right.frequency_penalty) return false
@@ -1110,6 +1184,15 @@ export const WritingPlayground = () => {
     React.useState<WritingTokenizeResponse | null>(null)
   const [tokenInspectorError, setTokenInspectorError] =
     React.useState<string | null>(null)
+  const [responseLogprobs, setResponseLogprobs] =
+    React.useState<WritingLogprobEntry[]>([])
+  const [responseInspectorQuery, setResponseInspectorQuery] = React.useState("")
+  const [responseInspectorSort, setResponseInspectorSort] =
+    React.useState<ResponseInspectorSort>("sequence")
+  const [responseInspectorHideWhitespace, setResponseInspectorHideWhitespace] =
+    React.useState(false)
+  const [generationTokenCount, setGenerationTokenCount] = React.useState(0)
+  const [generationTokensPerSec, setGenerationTokensPerSec] = React.useState(0)
   const [isCountingTokens, setIsCountingTokens] = React.useState(false)
   const [isTokenizingText, setIsTokenizingText] = React.useState(false)
   const [wordcloudId, setWordcloudId] = React.useState<string | null>(null)
@@ -1193,6 +1276,21 @@ export const WritingPlayground = () => {
 
   const extraBodyCompat: WritingExtraBodyCompat | null =
     requestedCaps?.requested?.extra_body_compat ?? null
+  const requestedFeatures = isRecord(requestedCaps?.requested?.features)
+    ? requestedCaps.requested.features
+    : {}
+  const requestedSupportedFields = Array.isArray(
+    requestedCaps?.requested?.supported_fields
+  )
+    ? requestedCaps.requested.supported_fields
+        .map((field) => String(field || "").trim())
+        .filter(Boolean)
+    : []
+  const requestedLogprobsSupported = requestedFeatures.logprobs === true
+  const requestedLogprobsExplicitlyUnsupported = requestedFeatures.logprobs === false
+  const requestedTopLogprobsSupported = requestedSupportedFields.includes(
+    "top_logprobs"
+  )
 
   const showOffline = !isOnline
   const showUnsupported =
@@ -1681,6 +1779,12 @@ export const WritingPlayground = () => {
     generationCancelledRef.current = false
     setCanUndoGeneration(false)
     setCanRedoGeneration(false)
+    setResponseLogprobs([])
+    setResponseInspectorQuery("")
+    setResponseInspectorSort("sequence")
+    setResponseInspectorHideWhitespace(false)
+    setGenerationTokenCount(0)
+    setGenerationTokensPerSec(0)
     setWordcloudId(null)
     setWordcloudStatus(null)
     setWordcloudWords([])
@@ -1798,6 +1902,12 @@ export const WritingPlayground = () => {
       setTokenCountResult(null)
       setTokenizeResult(null)
       setTokenInspectorError(null)
+      setResponseLogprobs([])
+      setResponseInspectorQuery("")
+      setResponseInspectorSort("sequence")
+      setResponseInspectorHideWhitespace(false)
+      setGenerationTokenCount(0)
+      setGenerationTokensPerSec(0)
       setWordcloudId(null)
       setWordcloudStatus(null)
       setWordcloudWords([])
@@ -1837,6 +1947,12 @@ export const WritingPlayground = () => {
       setTokenCountResult(null)
       setTokenizeResult(null)
       setTokenInspectorError(null)
+      setResponseLogprobs([])
+      setResponseInspectorQuery("")
+      setResponseInspectorSort("sequence")
+      setResponseInspectorHideWhitespace(false)
+      setGenerationTokenCount(0)
+      setGenerationTokensPerSec(0)
       setWordcloudId(null)
       setWordcloudStatus(null)
       setWordcloudWords([])
@@ -1900,6 +2016,12 @@ export const WritingPlayground = () => {
     setTokenCountResult(null)
     setTokenizeResult(null)
     setTokenInspectorError(null)
+    setResponseLogprobs([])
+    setResponseInspectorQuery("")
+    setResponseInspectorSort("sequence")
+    setResponseInspectorHideWhitespace(false)
+    setGenerationTokenCount(0)
+    setGenerationTokensPerSec(0)
     setWordcloudId(null)
     setWordcloudStatus(null)
     setWordcloudWords([])
@@ -3465,47 +3587,108 @@ export const WritingPlayground = () => {
       world_info: settings.world_info
     })
     const messages = injectSystemMessages(baseMessages, contextMessages)
+    const stopStrings = resolveGenerationStopStrings({
+      useBasicMode: settings.use_basic_stopping_mode,
+      basicModeType: settings.basic_stopping_mode_type,
+      customStopStrings: settings.stop,
+      fillSuffix: plan.suffix
+    })
     const advancedExtraBody =
       supportsAdvancedCompat ? settings.advanced_extra_body : {}
     const extraBody = buildExtraBodyPayload({
       top_k: settings.top_k,
       seed: settings.seed,
-      stop: settings.stop,
+      stop: stopStrings,
       advanced_extra_body: advancedExtraBody
     })
+    const enableLogprobs =
+      settings.logprobs && !requestedLogprobsExplicitlyUnsupported
+    const requestedTopLogprobs = enableLogprobs
+      ? settings.top_logprobs ?? undefined
+      : undefined
+    const generationRequestOptions = {
+      model: selectedModel,
+      temperature: settings.temperature,
+      maxTokens: settings.max_tokens,
+      topP: settings.top_p,
+      frequencyPenalty: settings.frequency_penalty,
+      presencePenalty: settings.presence_penalty,
+      logprobs: enableLogprobs,
+      topLogprobs: requestedTopLogprobs,
+      systemPrompt: chatMode
+        ? undefined
+        : plan.mode === "fill"
+          ? FILL_SYSTEM_PROMPT
+          : PREDICT_SYSTEM_PROMPT,
+      extraBody
+    }
 
     generationSessionIdRef.current = activeSessionDetail.id
     generationCancelledRef.current = false
     setIsGenerating(true)
     setIsDirty(true)
+    setResponseLogprobs([])
+    setResponseInspectorQuery("")
+    setResponseInspectorSort("sequence")
+    setResponseInspectorHideWhitespace(false)
+    setGenerationTokenCount(0)
+    setGenerationTokensPerSec(0)
     if (plan.placeholder) {
       setEditorText(plan.prefix + plan.suffix)
     }
 
     let generated = ""
+    let generatedTokenCount = 0
     let streamError: unknown = null
+    const streamedLogprobs: WritingLogprobEntry[] = []
+    const generationStartMs = performance.now()
 
     try {
-      for await (const token of generationServiceRef.current.streamMessage(
-        messages,
-        {
-          model: selectedModel,
-          temperature: settings.temperature,
-          maxTokens: settings.max_tokens,
-          topP: settings.top_p,
-          frequencyPenalty: settings.frequency_penalty,
-          presencePenalty: settings.presence_penalty,
-          systemPrompt: chatMode
-            ? undefined
-            : plan.mode === "fill"
-              ? FILL_SYSTEM_PROMPT
-              : PREDICT_SYSTEM_PROMPT,
-          extraBody
+      if (settings.token_streaming) {
+        for await (const token of generationServiceRef.current.streamMessage(
+          messages,
+          generationRequestOptions,
+          (chunk) => {
+            if (!enableLogprobs) return
+            const entries = extractLogprobEntriesFromChunk(chunk)
+            if (entries.length === 0) return
+            streamedLogprobs.push(...entries)
+          }
+        )) {
+          if (generationCancelledRef.current) break
+          generated += token
+          generatedTokenCount += 1
+          setGenerationTokenCount(generatedTokenCount)
+          setGenerationTokensPerSec(
+            computeTokensPerSecond(
+              generatedTokenCount,
+              performance.now() - generationStartMs
+            )
+          )
+          setEditorText(plan.prefix + generated + plan.suffix)
         }
-      )) {
-        if (generationCancelledRef.current) break
-        generated += token
-        setEditorText(plan.prefix + generated + plan.suffix)
+      } else {
+        generated = await generationServiceRef.current.sendMessage(
+          messages,
+          generationRequestOptions,
+          (response) => {
+            if (!enableLogprobs) return
+            const entries = extractLogprobEntriesFromChunk(response)
+            if (entries.length === 0) return
+            streamedLogprobs.push(...entries)
+          }
+        )
+        generatedTokenCount = estimateTokenCountFromText(generated)
+        setGenerationTokenCount(generatedTokenCount)
+        setGenerationTokensPerSec(
+          computeTokensPerSecond(
+            generatedTokenCount,
+            performance.now() - generationStartMs
+          )
+        )
+        if (!generationCancelledRef.current) {
+          setEditorText(plan.prefix + generated + plan.suffix)
+        }
       }
     } catch (error) {
       streamError = error
@@ -3514,9 +3697,15 @@ export const WritingPlayground = () => {
     const aborted = generationCancelledRef.current || isAbortError(streamError)
     const finalText =
       generated.length > 0 ? plan.prefix + generated + plan.suffix : beforeText
+    if (generatedTokenCount > 0) {
+      setGenerationTokensPerSec(
+        computeTokensPerSecond(generatedTokenCount, performance.now() - generationStartMs)
+      )
+    }
     if (activeSessionDetail.id === generationSessionIdRef.current) {
       applyHistoryText(finalText)
       pushGenerationHistory(beforeText, finalText)
+      setResponseLogprobs(streamedLogprobs)
     }
 
     generationSessionIdRef.current = null
@@ -3548,13 +3737,18 @@ export const WritingPlayground = () => {
     pushGenerationHistory,
     selectedModel,
     settings,
+    requestedLogprobsExplicitlyUnsupported,
     supportsAdvancedCompat,
     t
   ])
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && isGenerating) {
+      if (
+        event.key === "Escape" &&
+        isGenerating &&
+        settings.token_streaming
+      ) {
         handleCancelGeneration()
         return
       }
@@ -3569,7 +3763,12 @@ export const WritingPlayground = () => {
     return () => {
       window.removeEventListener("keydown", handleKeyDown)
     }
-  }, [handleCancelGeneration, handleGenerate, isGenerating])
+  }, [
+    handleCancelGeneration,
+    handleGenerate,
+    isGenerating,
+    settings.token_streaming
+  ])
 
   const promptChunkData = React.useMemo(() => {
     if (!editorText) {
@@ -3603,6 +3802,42 @@ export const WritingPlayground = () => {
     setTokenizeResult(null)
     setTokenInspectorError(null)
   }, [])
+
+  const clearResponseInspector = React.useCallback(() => {
+    setResponseLogprobs([])
+    setResponseInspectorQuery("")
+    setResponseInspectorSort("sequence")
+    setResponseInspectorHideWhitespace(false)
+  }, [])
+
+  const handleCopyResponseInspectorJson = React.useCallback(async () => {
+    if (responseLogprobs.length === 0) return
+    const payload = responseLogprobs.map((entry) => ({
+      token: entry.token,
+      logprob: entry.logprob,
+      probability: Math.exp(entry.logprob),
+      top_logprobs: entry.topLogprobs
+    }))
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+      message.success(
+        t(
+          "option:writingPlayground.responseInspectorCopySuccess",
+          "Response inspector JSON copied."
+        )
+      )
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : t("option:error", "Error")
+      message.error(
+        t(
+          "option:writingPlayground.responseInspectorCopyError",
+          "Unable to copy inspector JSON: {{detail}}",
+          { detail }
+        )
+      )
+    }
+  }, [responseLogprobs, t])
 
   const resolveTokenInspectorTarget = React.useCallback(async () => {
     const model = String(selectedModel || "").trim()
@@ -3813,6 +4048,8 @@ export const WritingPlayground = () => {
   const serverSupportsTokenize = writingCaps?.server?.tokenize === true
   const serverSupportsTokenCount = writingCaps?.server?.token_count === true
   const serverSupportsWordclouds = writingCaps?.server?.wordclouds === true
+  const showResponseInspectorPanel =
+    settings.logprobs || responseLogprobs.length > 0
   const showTokenInspectorPanel =
     serverSupportsTokenCount || serverSupportsTokenize
   const showWordcloudPanel = serverSupportsWordclouds
@@ -3829,8 +4066,97 @@ export const WritingPlayground = () => {
     () => buildTokenPreviewRows(tokenizeResult?.ids ?? [], tokenizeResult?.strings, 200),
     [tokenizeResult]
   )
+  const responseInspectorRowsAll = React.useMemo(
+    () =>
+      selectResponseInspectorRows(responseLogprobs, {
+        query: responseInspectorQuery,
+        hideWhitespaceOnly: responseInspectorHideWhitespace,
+        sort: responseInspectorSort,
+        maxRows: Number.MAX_SAFE_INTEGER
+      }),
+    [
+      responseInspectorHideWhitespace,
+      responseInspectorQuery,
+      responseInspectorSort,
+      responseLogprobs
+    ]
+  )
+  const responseLogprobRows = React.useMemo(
+    () => responseInspectorRowsAll.slice(0, MAX_RESPONSE_LOGPROBS),
+    [responseInspectorRowsAll]
+  )
+  const responseLogprobTruncated =
+    responseInspectorRowsAll.length > responseLogprobRows.length
+  const handleExportResponseInspectorCsv = React.useCallback(() => {
+    if (responseInspectorRowsAll.length === 0) return
+    const csv = buildResponseInspectorCsv(responseInspectorRowsAll)
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = "writing-response-inspector.csv"
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }, [responseInspectorRowsAll])
   const tokenPreviewTotal = tokenizeResult?.ids.length ?? 0
   const tokenPreviewTruncated = tokenPreviewTotal > tokenPreviewRows.length
+  const logprobsUnavailableReason = React.useMemo(() => {
+    if (!selectedModel) {
+      return t(
+        "option:writingPlayground.logprobsModelMissing",
+        "Select a model to configure logprobs."
+      )
+    }
+    if (requestedCapsLoading) {
+      return t(
+        "option:writingPlayground.logprobsChecking",
+        "Checking logprobs support for this model..."
+      )
+    }
+    if (requestedLogprobsExplicitlyUnsupported) {
+      return t(
+        "option:writingPlayground.logprobsUnavailable",
+        "Logprobs are not advertised for this provider/model."
+      )
+    }
+    return null
+  }, [
+    requestedCapsLoading,
+    requestedLogprobsExplicitlyUnsupported,
+    selectedModel,
+    t
+  ])
+  const topLogprobsHint = React.useMemo(() => {
+    if (requestedCapsLoading) {
+      return t(
+        "option:writingPlayground.topLogprobsChecking",
+        "Checking top_logprobs metadata..."
+      )
+    }
+    if (requestedLogprobsSupported && requestedTopLogprobsSupported) {
+      return t(
+        "option:writingPlayground.topLogprobsSupported",
+        "Model metadata includes top_logprobs support."
+      )
+    }
+    if (requestedLogprobsSupported && !requestedTopLogprobsSupported) {
+      return t(
+        "option:writingPlayground.topLogprobsNotAdvertised",
+        "top_logprobs is not advertised for this model. Compatibility mode keeps the field optional."
+      )
+    }
+    return t(
+      "option:writingPlayground.topLogprobsFallback",
+      "Compatibility mode: if supported by the provider, top_logprobs may still be honored."
+    )
+  }, [
+    requestedCapsLoading,
+    requestedLogprobsSupported,
+    requestedTopLogprobsSupported,
+    t
+  ])
   const tokenInspectorUnavailableReason = React.useMemo(() => {
     if (!selectedModel) {
       return t(
@@ -3862,6 +4188,7 @@ export const WritingPlayground = () => {
     t
   ])
   const tokenInspectorBusy = isCountingTokens || isTokenizingText
+  const responseInspectorHasRows = responseInspectorRowsAll.length > 0
   const canCountTokens =
     !settingsDisabled &&
     !tokenInspectorBusy &&
@@ -3872,6 +4199,10 @@ export const WritingPlayground = () => {
     !tokenInspectorBusy &&
     serverSupportsTokenize &&
     !tokenInspectorUnavailableReason
+  const logprobsControlsDisabled =
+    settingsDisabled || requestedLogprobsExplicitlyUnsupported
+  const topLogprobsControlsDisabled =
+    logprobsControlsDisabled || !settings.logprobs
   const canGenerateWordcloud =
     !settingsDisabled &&
     !isGeneratingWordcloud &&
@@ -4186,6 +4517,29 @@ export const WritingPlayground = () => {
                             {saveStatusLabel}
                           </span>
                         ) : null}
+                        {generationTokenCount > 0 ? (
+                          <Tag color="blue">
+                            {t(
+                              "option:writingPlayground.generationTokensLabel",
+                              "{{count}} tokens",
+                              { count: generationTokenCount }
+                            )}
+                          </Tag>
+                        ) : null}
+                        {generationTokensPerSec > 0 ? (
+                          <Tag>
+                            {t(
+                              "option:writingPlayground.generationRateLabel",
+                              "{{rate}} tok/s",
+                              {
+                                rate:
+                                  generationTokensPerSec >= 10
+                                    ? generationTokensPerSec.toFixed(1)
+                                    : generationTokensPerSec.toFixed(2)
+                              }
+                            )}
+                          </Tag>
+                        ) : null}
                         <Tooltip
                           title={t(
                             "option:writingPlayground.generateShortcutTooltip",
@@ -4203,7 +4557,7 @@ export const WritingPlayground = () => {
                             )}
                           </Button>
                         </Tooltip>
-                        {isGenerating ? (
+                        {isGenerating && settings.token_streaming ? (
                           <Tooltip
                             title={t(
                               "option:writingPlayground.stopShortcutTooltip",
@@ -4566,6 +4920,218 @@ export const WritingPlayground = () => {
                             )
                         }
                       ].concat(
+                        showResponseInspectorPanel
+                          ? [
+                              {
+                                key: "response-inspector",
+                                label: t(
+                                  "option:writingPlayground.responseInspectorTitle",
+                                  "Response inspector"
+                                ),
+                                children: (
+                                  <div className="flex flex-col gap-3">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      {responseInspectorHasRows ? (
+                                        <Tag color="blue">
+                                          {t(
+                                            "option:writingPlayground.responseInspectorCount",
+                                            "{{count}} rows",
+                                            { count: responseInspectorRowsAll.length }
+                                          )}
+                                        </Tag>
+                                      ) : null}
+                                      {responseLogprobs.length > 0 ? (
+                                        <Button
+                                          size="small"
+                                          disabled={settingsDisabled}
+                                          onClick={() => {
+                                            void handleCopyResponseInspectorJson()
+                                          }}>
+                                          {t(
+                                            "option:writingPlayground.responseInspectorCopyAction",
+                                            "Copy JSON"
+                                          )}
+                                        </Button>
+                                      ) : null}
+                                      {responseInspectorHasRows ? (
+                                        <Button
+                                          size="small"
+                                          disabled={settingsDisabled}
+                                          onClick={handleExportResponseInspectorCsv}>
+                                          {t(
+                                            "option:writingPlayground.responseInspectorExportAction",
+                                            "Export CSV"
+                                          )}
+                                        </Button>
+                                      ) : null}
+                                      {responseLogprobs.length > 0 ? (
+                                        <Button
+                                          size="small"
+                                          disabled={settingsDisabled}
+                                          onClick={clearResponseInspector}>
+                                          {t("common:clear", "Clear")}
+                                        </Button>
+                                      ) : null}
+                                    </div>
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.responseInspectorHint",
+                                        "Inspect generated token logprobs from the latest run."
+                                      )}
+                                    </span>
+                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_170px_auto]">
+                                      <Input
+                                        size="small"
+                                        value={responseInspectorQuery}
+                                        disabled={settingsDisabled}
+                                        placeholder={t(
+                                          "option:writingPlayground.responseInspectorSearchPlaceholder",
+                                          "Filter tokens or alternatives"
+                                        )}
+                                        onChange={(event) =>
+                                          setResponseInspectorQuery(event.target.value)
+                                        }
+                                      />
+                                      <Select
+                                        size="small"
+                                        value={responseInspectorSort}
+                                        disabled={settingsDisabled}
+                                        options={RESPONSE_INSPECTOR_SORT_OPTIONS}
+                                        onChange={(value) =>
+                                          setResponseInspectorSort(
+                                            value as ResponseInspectorSort
+                                          )
+                                        }
+                                      />
+                                      <Checkbox
+                                        checked={responseInspectorHideWhitespace}
+                                        disabled={settingsDisabled}
+                                        onChange={(event) =>
+                                          setResponseInspectorHideWhitespace(
+                                            event.target.checked
+                                          )
+                                        }>
+                                        {t(
+                                          "option:writingPlayground.responseInspectorHideWhitespace",
+                                          "Hide whitespace"
+                                        )}
+                                      </Checkbox>
+                                    </div>
+                                    {!settings.logprobs ? (
+                                      <Alert
+                                        type="info"
+                                        showIcon
+                                        message={t(
+                                          "option:writingPlayground.responseInspectorDisabled",
+                                          "Enable logprobs in generation settings to capture response token scores."
+                                        )}
+                                      />
+                                    ) : null}
+                                    {settings.logprobs &&
+                                    responseLogprobs.length === 0 ? (
+                                      <Empty
+                                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                        description={t(
+                                          "option:writingPlayground.responseInspectorEmpty",
+                                          "No logprob data captured yet."
+                                        )}
+                                      />
+                                    ) : null}
+                                    {settings.logprobs &&
+                                    responseLogprobs.length > 0 &&
+                                    responseLogprobRows.length === 0 ? (
+                                      <Empty
+                                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                        description={t(
+                                          "option:writingPlayground.responseInspectorFilteredEmpty",
+                                          "No rows match the active response-inspector filters."
+                                        )}
+                                      />
+                                    ) : null}
+                                    {responseLogprobRows.length > 0 ? (
+                                      <div className="flex flex-col gap-2">
+                                        <div className="max-h-64 overflow-y-auto rounded-md border border-border bg-surface">
+                                          <div className="grid grid-cols-[auto_1fr_auto_auto_2fr] gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                                            <span className="font-medium text-text-muted">
+                                              #
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              {t(
+                                                "option:writingPlayground.responseInspectorTokenLabel",
+                                                "Token"
+                                              )}
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              {t(
+                                                "option:writingPlayground.responseInspectorLogprobLabel",
+                                                "Logprob"
+                                              )}
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              {t(
+                                                "option:writingPlayground.responseInspectorProbabilityLabel",
+                                                "P(token)"
+                                              )}
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              {t(
+                                                "option:writingPlayground.responseInspectorTopLabel",
+                                                "Top alternatives"
+                                              )}
+                                            </span>
+                                            {responseLogprobRows.map((row) => {
+                                              const alternatives = row.topLogprobs
+                                                .slice(0, 5)
+                                                .map(
+                                                  (alt) =>
+                                                    `${alt.token} (${alt.logprob.toFixed(3)})`
+                                                )
+                                                .join(", ")
+                                              return (
+                                                <React.Fragment
+                                                  key={`${row.sequence}-${row.token}-${row.logprob}`}>
+                                                  <span className="text-text-muted">
+                                                    {row.sequence + 1}
+                                                  </span>
+                                                  <span className="whitespace-pre-wrap text-text">
+                                                    {row.token}
+                                                  </span>
+                                                  <span className="text-text">
+                                                    {row.logprob.toFixed(4)}
+                                                  </span>
+                                                  <span className="text-text">
+                                                    {row.probability >= 0.001
+                                                      ? row.probability.toFixed(4)
+                                                      : row.probability.toExponential(2)}
+                                                  </span>
+                                                  <span className="whitespace-pre-wrap text-text-muted">
+                                                    {alternatives || "(none)"}
+                                                  </span>
+                                                </React.Fragment>
+                                              )
+                                            })}
+                                          </div>
+                                        </div>
+                                        {responseLogprobTruncated ? (
+                                          <span className="text-xs text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.responseInspectorTruncated",
+                                              "Showing first {{count}} rows.",
+                                              {
+                                                count: responseLogprobRows.length
+                                              }
+                                            )}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                )
+                              }
+                            ]
+                          : []
+                      )
+                      .concat(
                         showTokenInspectorPanel
                           ? [
                               {
@@ -5241,6 +5807,125 @@ export const WritingPlayground = () => {
                           className="w-full"
                         />
                       </div>
+                      <div className="flex flex-col gap-2 sm:col-span-2">
+                        <Checkbox
+                          checked={settings.token_streaming}
+                          disabled={settingsDisabled}
+                          onChange={(event) =>
+                            updateSetting({
+                              token_streaming: event.target.checked
+                            })
+                          }>
+                          {t(
+                            "option:writingPlayground.tokenStreamingLabel",
+                            "Token streaming"
+                          )}
+                        </Checkbox>
+                        <span className="text-xs text-text-muted">
+                          {t(
+                            "option:writingPlayground.tokenStreamingHint",
+                            "Stream tokens as they arrive. Disable for one-shot generation."
+                          )}
+                        </span>
+                      </div>
+                      <div className="flex flex-col gap-2 sm:col-span-2">
+                        <Checkbox
+                          checked={settings.use_basic_stopping_mode}
+                          disabled={settingsDisabled}
+                          onChange={(event) =>
+                            updateSetting({
+                              use_basic_stopping_mode: event.target.checked
+                            })
+                          }>
+                          {t(
+                            "option:writingPlayground.basicStoppingModeLabel",
+                            "Use basic stopping mode"
+                          )}
+                        </Checkbox>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_180px]">
+                          <span className="text-xs text-text-muted">
+                            {t(
+                              "option:writingPlayground.basicStoppingModeHint",
+                              "Mikupad-style quick stopping presets for generation."
+                            )}
+                          </span>
+                          <Select
+                            size="small"
+                            value={settings.basic_stopping_mode_type}
+                            disabled={
+                              settingsDisabled || !settings.use_basic_stopping_mode
+                            }
+                            options={[
+                              { value: "max_tokens", label: "Max tokens" },
+                              { value: "new_line", label: "New line" },
+                              { value: "fill_suffix", label: "Fill suffix" }
+                            ]}
+                            onChange={(value) =>
+                              updateSetting({
+                                basic_stopping_mode_type:
+                                  value as BasicStoppingModeType
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-2 sm:col-span-2">
+                        <Checkbox
+                          checked={settings.logprobs}
+                          disabled={logprobsControlsDisabled}
+                          onChange={(event) => {
+                            const checked = event.target.checked
+                            updateSetting({
+                              logprobs: checked,
+                              top_logprobs: checked
+                                ? settings.top_logprobs ?? DEFAULT_TOP_LOGPROBS
+                                : null
+                            })
+                          }}>
+                          {t(
+                            "option:writingPlayground.logprobsLabel",
+                            "Enable logprobs"
+                          )}
+                        </Checkbox>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_180px]">
+                          <span className="text-xs text-text-muted">
+                            {topLogprobsHint}
+                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs text-text-muted">
+                              {t(
+                                "option:writingPlayground.topLogprobsLabel",
+                                "Top logprobs"
+                              )}
+                            </span>
+                            <InputNumber
+                              size="small"
+                              min={1}
+                              max={20}
+                              step={1}
+                              value={settings.top_logprobs ?? null}
+                              disabled={topLogprobsControlsDisabled}
+                              placeholder={String(DEFAULT_TOP_LOGPROBS)}
+                              onChange={(value) =>
+                                updateSetting({
+                                  top_logprobs:
+                                    value == null
+                                      ? null
+                                      : Math.max(1, Math.min(20, Math.floor(value)))
+                                })
+                              }
+                              className="w-full"
+                            />
+                          </div>
+                        </div>
+                        {logprobsUnavailableReason ? (
+                          <Alert
+                            type="info"
+                            showIcon
+                            message={logprobsUnavailableReason}
+                          />
+                        ) : null}
+                      </div>
                     </div>
                     <div className="flex flex-col gap-1">
                       <span className="text-xs text-text-muted">
@@ -5251,7 +5936,9 @@ export const WritingPlayground = () => {
                       </span>
                       <Input.TextArea
                         value={stopStringsInput}
-                        disabled={settingsDisabled}
+                        disabled={
+                          settingsDisabled || settings.use_basic_stopping_mode
+                        }
                         onChange={(event) => {
                           const nextInput = event.target.value
                           updateSetting(
