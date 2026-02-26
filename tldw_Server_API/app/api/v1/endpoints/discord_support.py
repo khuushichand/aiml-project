@@ -678,5 +678,3 @@ def _enqueue_discord_job(
         "response_mode": response_mode,
         "job_status": str(job.get("status") or "queued"),
     }
-
-
