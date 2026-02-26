@@ -208,6 +208,12 @@ Response (202 Accepted):
 }
 ```
 
+Import normalization behavior:
+- URLs are canonicalized (tracking params removed where possible) before dedupe/upsert.
+- Equivalent URLs in one import batch are merged with tag union and strongest status precedence (`read > archived > reading > saved`).
+- Missing titles are backfilled from URL path/domain.
+- If merged status is `read` and no timestamp is provided, `read_at` is set automatically.
+
 ## Reading Digests
 
 ### Create schedule
