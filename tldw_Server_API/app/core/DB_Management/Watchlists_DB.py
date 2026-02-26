@@ -16,7 +16,8 @@ Tables (per-user, colocated with Media DB):
               error_msg, log_path)
 - scrape_run_items(run_id, media_id, source_id)
 - scraped_items(id, run_id, job_id, source_id, media_id, media_uuid, url, title,
-                summary, content, published_at, tags_json, status, reviewed, created_at)
+                summary, content, published_at, tags_json, status, reviewed,
+                queued_for_briefing, created_at)
 - watchlist_ia_experiment_events(id, user_id, variant, session_id, previous_tab,
                 current_tab, transitions, visited_tabs_json, first_seen_at,
                 last_seen_at, elapsed_ms, reached_target, created_at)
@@ -154,6 +155,7 @@ class ScrapedItemRow:
     tags_json: str | None
     status: str
     reviewed: int
+    queued_for_briefing: int
     created_at: str
 
     def tags(self) -> list[str]:
@@ -412,6 +414,7 @@ class WatchlistsDatabase:
                 tags_json TEXT,
                 status TEXT NOT NULL,
                 reviewed INTEGER NOT NULL DEFAULT 0,
+                queued_for_briefing INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_scraped_items_run ON scraped_items(run_id);
@@ -621,6 +624,7 @@ class WatchlistsDatabase:
                 tags_json TEXT,
                 status TEXT NOT NULL,
                 reviewed INTEGER NOT NULL DEFAULT 0,
+                queued_for_briefing INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_scraped_items_run ON scraped_items(run_id);
@@ -744,6 +748,12 @@ class WatchlistsDatabase:
         if not _col_exists("scraped_items", "content"):
             with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
                 self.backend.execute("ALTER TABLE scraped_items ADD COLUMN content TEXT", ())
+        if not _col_exists("scraped_items", "queued_for_briefing"):
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute(
+                    "ALTER TABLE scraped_items ADD COLUMN queued_for_briefing INTEGER NOT NULL DEFAULT 0",
+                    (),
+                )
     # ------------------------
     # Tags helpers
     # ------------------------
@@ -2023,8 +2033,8 @@ class WatchlistsDatabase:
             """
             INSERT INTO scraped_items (
                 run_id, job_id, source_id, media_id, media_uuid, url, title,
-                summary, content, published_at, tags_json, status, reviewed, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                summary, content, published_at, tags_json, status, reviewed, queued_for_briefing, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
             """,
             (
                 run_id,
@@ -2051,7 +2061,7 @@ class WatchlistsDatabase:
         row = self.backend.execute(
             """
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
-                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.queued_for_briefing, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE si.id = ? AND sj.user_id = ?
@@ -2070,6 +2080,7 @@ class WatchlistsDatabase:
         source_id: int | None = None,
         status: str | None = None,
         reviewed: bool | None = None,
+        queued_for_briefing: bool | None = None,
         search: str | None = None,
         since: str | None = None,
         until: str | None = None,
@@ -2093,6 +2104,9 @@ class WatchlistsDatabase:
         if reviewed is not None:
             where.append("si.reviewed = ?")
             params.append(1 if reviewed else 0)
+        if queued_for_briefing is not None:
+            where.append("si.queued_for_briefing = ?")
+            params.append(1 if queued_for_briefing else 0)
         if since:
             where.append("si.created_at >= ?")
             params.append(since)
@@ -2114,7 +2128,7 @@ class WatchlistsDatabase:
         rows = self.backend.execute(
             """
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
-                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.queued_for_briefing, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE {where_sql}
@@ -2132,7 +2146,7 @@ class WatchlistsDatabase:
         rows = self.backend.execute(
             """
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
-                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.queued_for_briefing, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE si.id IN ({placeholders}) AND sj.user_id = ?
@@ -2147,6 +2161,7 @@ class WatchlistsDatabase:
         *,
         reviewed: bool | None = None,
         status: str | None = None,
+        queued_for_briefing: bool | None = None,
     ) -> ScrapedItemRow:
         fields: list[str] = []
         params: list[Any] = []
@@ -2156,6 +2171,9 @@ class WatchlistsDatabase:
         if status is not None:
             fields.append("status = ?")
             params.append(status)
+        if queued_for_briefing is not None:
+            fields.append("queued_for_briefing = ?")
+            params.append(1 if queued_for_briefing else 0)
         if not fields:
             return self.get_item(item_id)
         params.extend([item_id, self.user_id])

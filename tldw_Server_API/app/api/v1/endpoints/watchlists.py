@@ -850,6 +850,7 @@ def _row_to_scraped_item(row) -> ScrapedItem:
             except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
                 tags = []
     reviewed_flag = bool(getattr(row, "reviewed", 0))
+    queued_for_briefing = bool(getattr(row, "queued_for_briefing", 0))
     return ScrapedItem(
         id=row.id,
         run_id=row.run_id,
@@ -865,6 +866,7 @@ def _row_to_scraped_item(row) -> ScrapedItem:
         tags=tags,
         status=row.status,
         reviewed=reviewed_flag,
+        queued_for_briefing=queued_for_briefing,
         created_at=row.created_at,
     )
 
@@ -4354,6 +4356,7 @@ async def list_scraped_items(
     source_id: int | None = Query(None),
     status: str | None = Query(None),
     reviewed: bool | None = Query(None),
+    queued_for_briefing: bool | None = Query(None),
     target_user_id: int | None = Query(
         None,
         ge=1,
@@ -4380,6 +4383,7 @@ async def list_scraped_items(
         source_id=source_id,
         status=status,
         reviewed=reviewed,
+        queued_for_briefing=queued_for_briefing,
         search=q,
         since=since,
         until=until,
@@ -4424,6 +4428,7 @@ async def update_scraped_item(
             item_id,
             reviewed=payload.reviewed,
             status=payload.status,
+            queued_for_briefing=payload.queued_for_briefing,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="item_not_found") from None

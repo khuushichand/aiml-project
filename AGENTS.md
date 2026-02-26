@@ -238,7 +238,7 @@ Default choice:
 1. **Activate venv first**: `source .venv/bin/activate` (do this before running `python`, `pip`, or `pytest` commands)
 2. **Dependencies**: `pip install -e .` (add extras as needed, e.g., `.[dev]`, `.[multiplayer]`)
 3. **FFmpeg**: Required for audio/video processing
-4. **Auth Setup**: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
+4. **Auth Setup**: `cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
 5. **Provider Keys**: Add to `.env` or `Config_Files/config.txt`
 6. **Optional**: CUDA for accelerated STT
 

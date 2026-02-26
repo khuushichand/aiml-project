@@ -1084,17 +1084,19 @@ export const SourcesTab: React.FC = () => {
       title: t("watchlists:sources.columns.name", "Name"),
       dataIndex: "name",
       key: "name",
-      ellipsis: true,
+      width: 260,
       render: (name: string, record) => (
-        <div className="flex items-center gap-2">
-          <span className="font-medium">{name}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          <Tooltip title={name}>
+            <span className="block min-w-0 truncate font-medium">{name}</span>
+          </Tooltip>
           {record.url && (
             <Tooltip title={record.url}>
               <a
                 href={record.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-text-subtle hover:text-text-muted"
+                className="shrink-0 text-text-subtle hover:text-text-muted"
                 onClick={(e) => e.stopPropagation()}
               >
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -1497,7 +1499,7 @@ export const SourcesTab: React.FC = () => {
                 }
               }}
               size="middle"
-              scroll={{ x: 800 }}
+              scroll={{ x: "max-content" }}
             />
           </div>
         </div>

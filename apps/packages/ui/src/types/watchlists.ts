@@ -256,12 +256,14 @@ export interface ScrapedItem {
   tags: string[]
   status: ItemStatus
   reviewed: boolean
+  queued_for_briefing?: boolean
   created_at: string
 }
 
 export interface ScrapedItemUpdate {
   reviewed?: boolean
   status?: ItemStatus
+  queued_for_briefing?: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

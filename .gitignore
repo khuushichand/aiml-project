@@ -184,6 +184,9 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+# Generated static docs output
+/Docs/Docs/site/
+
 
 
 # Pyre type checker

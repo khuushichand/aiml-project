@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   deleteWatchlistSourceMock: vi.fn(),
   restoreWatchlistSourceMock: vi.fn(),
   updateWatchlistSourceMock: vi.fn(),
+  tableColumnsRef: { current: [] as Array<Record<string, unknown>> },
   storeStateRef: { current: {} as Record<string, any> },
   tMock: (key: string, defaultValue?: unknown, options?: Record<string, unknown>) => {
     if (typeof defaultValue !== "string") return key
@@ -87,7 +88,10 @@ vi.mock("antd", () => {
     Select,
     Space: ({ children }: any) => <>{children}</>,
     Switch: () => <button type="button">switch</button>,
-    Table: () => <div data-testid="sources-table" />,
+    Table: ({ columns }: any) => {
+      mocks.tableColumnsRef.current = Array.isArray(columns) ? columns : []
+      return <div data-testid="sources-table" />
+    },
     Tag: ({ children }: any) => <span>{children}</span>,
     Tooltip: ({ children }: any) => <>{children}</>,
     message: {
@@ -180,6 +184,7 @@ describe("SourcesTab load-error retry", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.storeStateRef.current = baseState()
+    mocks.tableColumnsRef.current = []
     mocks.fetchWatchlistTagsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.fetchWatchlistGroupsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.fetchWatchlistJobsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
@@ -208,6 +213,59 @@ describe("SourcesTab load-error retry", () => {
 
     await waitFor(() => {
       expect(mocks.fetchWatchlistSourcesMock).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it("assigns an explicit width to the feed name column", async () => {
+    const source = {
+      id: 42,
+      name: "Example Feed",
+      url: "https://example.com/feed.xml",
+      source_type: "rss",
+      tags: [],
+      status: "healthy",
+      last_scraped_at: null,
+      active: true
+    }
+
+    mocks.storeStateRef.current = baseState({
+      sources: [source],
+      sourcesTotal: 1
+    })
+
+    mocks.fetchWatchlistSourcesMock.mockResolvedValueOnce({
+      items: [source],
+      total: 1,
+      has_more: false
+    })
+
+    render(<SourcesTab />)
+
+    await waitFor(() => {
+      const nameColumn = mocks.tableColumnsRef.current.find(
+        (column) => column.key === "name" || column.dataIndex === "name"
+      )
+      expect(nameColumn).toBeDefined()
+      expect(typeof nameColumn?.width).toBe("number")
+      expect((nameColumn?.width as number) > 0).toBe(true)
+
+      const renderedNameCell =
+        typeof nameColumn?.render === "function"
+          ? nameColumn.render(source.name, source)
+          : null
+
+      if (React.isValidElement(renderedNameCell)) {
+        const { container } = render(<>{renderedNameCell}</>)
+        const nameNode = container.querySelector("span.font-medium")
+        expect(nameNode).not.toBeNull()
+        expect(nameNode?.className).toContain("truncate")
+
+        const linkNode = container.querySelector("a")
+        expect(linkNode).not.toBeNull()
+        expect(linkNode?.className).toContain("shrink-0")
+      } else {
+        expect(renderedNameCell).not.toBeNull()
+      }
     })
   })
 })

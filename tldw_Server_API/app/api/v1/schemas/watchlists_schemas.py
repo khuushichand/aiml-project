@@ -420,6 +420,7 @@ class ScrapedItem(BaseModel):
     tags: list[str] = []
     status: str
     reviewed: bool
+    queued_for_briefing: bool = False
     created_at: str
 
 
@@ -431,6 +432,10 @@ class ScrapedItemsListResponse(BaseModel):
 class ScrapedItemUpdateRequest(BaseModel):
     reviewed: bool | None = None
     status: str | None = Field(None, description="Optional status override (e.g., reviewed, ignored)")
+    queued_for_briefing: bool | None = Field(
+        None,
+        description="Optional explicit queue toggle for briefing/report inclusion.",
+    )
 
 
 class WatchlistOutputEmailDelivery(BaseModel):

@@ -810,6 +810,7 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     item_id = first_item["id"]
     assert first_item["status"] in {"ingested", "error", "duplicate"}
     assert "content" in first_item
+    assert first_item.get("queued_for_briefing") is False
 
     # Item detail should also expose content for feed-reader style rendering.
     r = c.get(f"/api/v1/watchlists/items/{item_id}")
@@ -831,11 +832,29 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     updated = r.json()
     assert updated["reviewed"] is True
 
+    # Queue item for briefing-driven report generation.
+    r = c.patch(
+        f"/api/v1/watchlists/items/{item_id}",
+        json={"queued_for_briefing": True},
+    )
+    assert r.status_code == 200, r.text
+    updated = r.json()
+    assert updated["queued_for_briefing"] is True
+
     # Filter reviewed items
     r = c.get("/api/v1/watchlists/items", params={"run_id": run_id, "reviewed": True})
     assert r.status_code == 200, r.text
     filt = r.json()
     assert any(it["id"] == item_id for it in filt["items"])
+
+    # Filter queued items
+    r = c.get(
+        "/api/v1/watchlists/items",
+        params={"run_id": run_id, "queued_for_briefing": True},
+    )
+    assert r.status_code == 200, r.text
+    queued = r.json()
+    assert any(it["id"] == item_id for it in queued["items"])
 
     # Generate output
     out_payload = {
