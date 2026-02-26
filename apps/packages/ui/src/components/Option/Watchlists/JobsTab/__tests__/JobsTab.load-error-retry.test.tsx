@@ -38,10 +38,29 @@ vi.mock("antd", () => {
     </button>
   )
 
-  const Table = () => <div data-testid="jobs-table" />
+  const Table = ({ dataSource = [], columns = [], "aria-label": ariaLabel }: any) => (
+    <table data-testid="jobs-table" role="table" aria-label={ariaLabel}>
+      <tbody>
+        {dataSource.map((record: any, rowIndex: number) => (
+          <tr key={record.id ?? rowIndex}>
+            {columns.map((column: any, columnIndex: number) => {
+              const key = String(column.key ?? column.dataIndex ?? columnIndex)
+              const value = column.dataIndex ? record[column.dataIndex] : undefined
+              const content = column.render ? column.render(value, record, rowIndex) : value
+              return <td key={key}>{content}</td>
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
   const Popconfirm = ({ children }: any) => <>{children}</>
   const Space = ({ children }: any) => <>{children}</>
-  const Switch = () => <button type="button">switch</button>
+  const Switch = ({ "aria-label": ariaLabel }: any) => (
+    <button type="button" aria-label={ariaLabel}>
+      switch
+    </button>
+  )
   const Tag = ({ children }: any) => <span>{children}</span>
   const Tooltip = ({ children }: any) => <>{children}</>
   const Alert = ({ title, description, action }: any) => (
@@ -124,6 +143,22 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   ...overrides
 })
 
+const buildJob = () => ({
+  id: 5,
+  name: "Morning monitor",
+  description: "Daily run",
+  active: true,
+  scope: { sources: [1] },
+  job_filters: { filters: [] },
+  schedule_expr: "0 9 * * *",
+  timezone: "UTC",
+  output_prefs: {},
+  created_at: "2026-02-18T00:00:00Z",
+  updated_at: "2026-02-18T00:00:00Z",
+  last_run_at: null,
+  next_run_at: null
+})
+
 describe("JobsTab load-error retry", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -144,6 +179,8 @@ describe("JobsTab load-error retry", () => {
 
     render(<JobsTab />)
 
+    expect(screen.getByRole("table", { name: "Monitors table" })).toBeInTheDocument()
+
     await waitFor(() => {
       expect(screen.getByText("Could not load Monitors.")).toBeInTheDocument()
       expect(screen.getByText("Check server connection and try again. Details: Failed to fetch")).toBeInTheDocument()
@@ -154,5 +191,27 @@ describe("JobsTab load-error retry", () => {
     await waitFor(() => {
       expect(mocks.fetchWatchlistJobsMock).toHaveBeenCalledTimes(2)
     })
+  })
+
+  it("shows explicit active-state text next to the monitor toggle", async () => {
+    const job = buildJob()
+    mocks.storeStateRef.current = baseState({
+      jobs: [job],
+      jobsTotal: 1
+    })
+    mocks.fetchWatchlistJobsMock.mockResolvedValue({
+      items: [job],
+      total: 1,
+      page: 1,
+      size: 20,
+      has_more: false
+    })
+
+    render(<JobsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByText("Enabled")).toBeInTheDocument()
+    })
+    expect(screen.getByRole("button", { name: "Disable monitor" })).toBeInTheDocument()
   })
 })

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => {
       | "outputs"
       | "templates"
       | "settings",
+    pollingActive: false,
     setActiveTab: vi.fn((next: string) => {
       state.activeTab = next as typeof state.activeTab
     })
@@ -28,6 +29,7 @@ const mocks = vi.hoisted(() => {
     notificationSuccessMock: vi.fn(),
     notificationWarningMock: vi.fn(),
     openRunDetailMock: vi.fn(),
+    trackWatchlistsOnboardingTelemetryMock: vi.fn(),
     state
   }
 })
@@ -97,6 +99,7 @@ vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: Record<string, unknown>) => unknown) =>
     selector({
       activeTab: mocks.state.activeTab,
+      pollingActive: mocks.state.pollingActive,
       setActiveTab: mocks.state.setActiveTab,
       openRunDetail: mocks.openRunDetailMock,
       resetStore: vi.fn()
@@ -141,6 +144,7 @@ describe("WatchlistsPlaygroundPage run notifications", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.state.activeTab = "sources"
+    mocks.state.pollingActive = false
     ;(window as { __TLDW_WATCHLISTS_RUN_NOTIFICATIONS_POLL_MS?: unknown })
       .__TLDW_WATCHLISTS_RUN_NOTIFICATIONS_POLL_MS = 100
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = false
@@ -223,24 +227,22 @@ describe("WatchlistsPlaygroundPage run notifications", () => {
     expect(mocks.notificationDestroyMock).toHaveBeenCalledWith(config.key)
   })
 
-  it("does not overlap run-notification polling requests while a prior poll is in flight", async () => {
-    vi.useFakeTimers()
-    let resolveFirstPoll:
-      | ((value: {
-          items: Array<{
-            id: number
-            job_id: number
-            status: string
-            started_at: string
-            finished_at: string | null
-            error_msg: string | null
-            stats: Record<string, unknown>
-          }>
-          total: number
-          has_more: boolean
-        }) => void)
-      | null = null
+  it("suppresses run-notification polling while Activity tab already auto-refreshes", async () => {
+    mocks.state.activeTab = "runs"
+    mocks.state.pollingActive = true
+    mocks.fetchWatchlistRunsMock.mockReset()
 
+    render(<WatchlistsPlaygroundPage />)
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250)
+    })
+
+    expect(mocks.fetchWatchlistRunsMock).not.toHaveBeenCalled()
+  })
+
+  it("dedupes overlapping polling requests when previous fetch is still in flight", async () => {
+    let resolveFirstPoll: ((value: unknown) => void) | null = null
     mocks.fetchWatchlistRunsMock.mockReset()
     mocks.fetchWatchlistRunsMock
       .mockImplementationOnce(
@@ -257,10 +259,10 @@ describe("WatchlistsPlaygroundPage run notifications", () => {
 
     render(<WatchlistsPlaygroundPage />)
 
-    await vi.advanceTimersByTimeAsync(0)
-    expect(mocks.fetchWatchlistRunsMock).toHaveBeenCalledTimes(1)
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250)
+    })
 
-    await vi.advanceTimersByTimeAsync(500)
     expect(mocks.fetchWatchlistRunsMock).toHaveBeenCalledTimes(1)
 
     resolveFirstPoll?.({
@@ -269,51 +271,35 @@ describe("WatchlistsPlaygroundPage run notifications", () => {
       has_more: false
     })
 
-    await vi.advanceTimersByTimeAsync(150)
-    expect(mocks.fetchWatchlistRunsMock.mock.calls.length).toBeGreaterThanOrEqual(2)
+    await waitFor(() => {
+      expect(mocks.fetchWatchlistRunsMock).toHaveBeenCalledTimes(2)
+    }, { timeout: 3000 })
   })
 
-  it("records onboarding first-run success milestone when a run completes", async () => {
+  it("tracks first successful run once polling sees a completed run", async () => {
     mocks.fetchWatchlistRunsMock.mockReset()
-    mocks.fetchWatchlistRunsMock
-      .mockResolvedValueOnce({
-        items: [
-          {
-            id: 20,
-            job_id: 3,
-            status: "running",
-            started_at: "2026-02-18T09:55:00Z",
-            finished_at: null,
-            error_msg: null,
-            stats: {}
-          }
-        ],
-        total: 1,
-        has_more: false
-      })
-      .mockResolvedValue({
-        items: [
-          {
-            id: 20,
-            job_id: 3,
-            status: "completed",
-            started_at: "2026-02-18T09:55:00Z",
-            finished_at: "2026-02-18T10:00:00Z",
-            error_msg: null,
-            stats: {}
-          }
-        ],
-        total: 1,
-        has_more: false
-      })
+    mocks.fetchWatchlistRunsMock.mockResolvedValue({
+      items: [
+        {
+          id: 77,
+          job_id: 9,
+          status: "completed",
+          started_at: "2026-02-18T09:58:00Z",
+          finished_at: "2026-02-18T10:01:00Z",
+          error_msg: null,
+          stats: {}
+        }
+      ],
+      total: 1,
+      has_more: false
+    })
 
     render(<WatchlistsPlaygroundPage />)
 
     await waitFor(() => {
       expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
-        type: "quick_setup_first_run_succeeded",
-        source: "run_notifications",
-        runId: 20
+        type: "first_run_succeeded",
+        runId: 77
       })
     }, { timeout: 3000 })
   })

@@ -50,17 +50,6 @@
   - `Docs/Plans/watchlists_ux_stage1_telemetry_export_raw_2026_02_23.csv`
   - `Docs/Plans/watchlists_ux_stage1_telemetry_export_summary_2026_02_23.json`
 
-### Stage 1 Baseline Funnel Snapshot (Telemetry Export)
-
-| Funnel Metric | Baseline | Numerator / Denominator |
-|---|---:|---:|
-| UC1-F1 First source setup | 92.96% | 66 / 71 users |
-| UC1-F2 Time-to-first-review (median) | 567.49s (0.16h) | sample size = 1 |
-| UC1-F3 Triage completion (>=20/day) | 0.00% | 0 / 2 users |
-| UC2-F1 Pipeline completion (source -> job -> run) | 56.72% | 38 / 67 users |
-| UC2-F2 Text output success | 0.06% | 2 / 3182 completed runs |
-| UC2-F3 Audio output success | 0.03% | 1 / 3182 completed runs |
-
 ## Stage 2: Foundation Execution (Groups 01, 02, 03)
 **Goal**: Resolve IA, onboarding, and end-to-end workflow structure first.
 **Success Criteria**:
@@ -80,56 +69,7 @@
 - Group 01 Stage 2 completed: task-view navigation strip (`Collect`, `Review`, `Briefings`) added with legacy-tab fallback mapping and experimental IA interaction coverage.
 - Group 03 Stage 2 completed: dedicated Overview pipeline builder implemented with run-now output preview routing and rollback handling for partial failures.
 - Group 02 Stage 2 completed: quick setup expanded for multi-feed UC2 setup, explicit audio toggle, and goal-based destination routing with failure-path coverage.
-- Group 01 Stage 3 completed: cross-surface orientation guidance is now live with per-tab “what this is / what to do next” copy, explicit run->reports and item->monitor jump actions, and journey coverage for Overview->Feeds->Monitors->Activity->Reports.
-- Group 01 Stage 3 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
-  - `/tmp/bandit_watchlists_group01_stage3_frontend_scope_2026_02_23.json`
-- Group 01 Stage 4 completed: IA variant routing is now governed by controlled rollout resolution (override, persisted assignment, forced variant, percent rollout, baseline fallback), payload-contract telemetry coverage, and documented go/no-go/rollback criteria.
-- Group 01 Stage 4 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/utils/__tests__/watchlists-ia-experiment-telemetry.test.ts src/utils/__tests__/watchlists-ia-rollout.test.ts`
-  - `Docs/Plans/WATCHLISTS_IA_EXPERIMENT_ROLLOUT_GONOGO_2026_02_23.md`
-  - `/tmp/bandit_watchlists_group01_stage4_frontend_scope_2026_02_23.json`
-- Group 01 Stage 5 completed: IA navigation/adoption playbook now documents navigation map + vocabulary matrix, QA checklist, and baseline/post-change adoption comparison framework; tab-by-tab context help routing coverage has been expanded.
-- Group 01 Stage 5 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/shared/__tests__/help-docs.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/routes/__tests__/option-watchlists.route-state.test.tsx src/utils/__tests__/watchlists-ia-experiment-telemetry.test.ts src/utils/__tests__/watchlists-ia-rollout.test.ts`
-  - `bun run test:watchlists:help`
-  - `Docs/Plans/WATCHLISTS_IA_NAVIGATION_ADOPTION_PLAYBOOK_2026_02_23.md`
-  - `/tmp/bandit_watchlists_group01_stage5_frontend_scope_2026_02_23.json`
-- Group 02 Stage 3 completed: guided tour now explains monitor -> template -> output + audio relationships, contextual first-time teach points (cron, filters, templates) persist dismissals, and help-tooltip topics were reframed to task-oriented guidance.
-- Group 02 Stage 3 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx -u`
-  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts`
-  - `/tmp/bandit_watchlists_group02_stage3_frontend_scope_2026_02_23.json`
-- Group 03 Stage 3 completed: cross-tab dependency visibility now includes monitor output-linkage summaries, run/report deep links, and run-detail linkage actions that expose upstream/downstream workflow relationships directly from Activity and Reports.
-- Group 03 Stage 3 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.relationship-jumps.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.relationship-jumps.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
-  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.relationship-jumps.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.relationship-jumps.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
-  - `/tmp/bandit_watchlists_group03_stage3_frontend_scope_2026_02_23.json`
-- Group 03 Stage 4 completed: Overview quick setup now surfaces pre-commit candidate preview, template-style output preview, explicit audio/text outcome expectations, and test-generation destination guidance before setup submission.
-- Group 03 Stage 4 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
-  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts`
-  - `/tmp/bandit_watchlists_group03_stage4_frontend_scope_2026_02_23.json`
-- Group 03 Stage 5 completed: UC2 onboarding telemetry now captures preview/test-run milestones and first run/output success milestones, emits a funnel snapshot contract with setup/run/output rates + drop-off/timing metrics, and ships with a dedicated UC2 regression gate plus KPI runbook.
-- Group 03 Stage 5 validation evidence:
-  - `bunx vitest run src/utils/__tests__/watchlists-onboarding-telemetry.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
-  - `bun run test:watchlists:uc2`
-  - `bun run test:watchlists:onboarding`
-  - `Docs/Plans/WATCHLISTS_UC2_WORKFLOW_KPI_RUNBOOK_2026_02_23.md`
-  - `/tmp/bandit_watchlists_group03_stage5_frontend_scope_2026_02_23.json`
-- Group 02 Stage 4 completed: onboarding copy now avoids backend model nouns on first-run surfaces, includes clearer next-step wording, and is protected by dedicated first-run terminology contracts plus onboarding copy snapshots.
-- Group 02 Stage 4 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.onboarding-copy.snapshot.test.ts src/components/Option/Watchlists/__tests__/watchlists-first-run-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx -u`
-  - `bun run test:watchlists:uc2`
-  - `/tmp/bandit_watchlists_group02_stage4_frontend_scope_2026_02_23.json`
-- Group 02 Stage 5 completed: onboarding telemetry now tracks first run/output success milestones, includes TTTV + drop-off snapshot metrics, and is validated through dedicated onboarding regression + runbook governance.
-- Group 02 Stage 5 validation evidence:
-  - `bun run test:watchlists:onboarding`
-  - `bun run test:watchlists:uc2`
-  - `bunx vitest run src/utils/__tests__/watchlists-onboarding-telemetry.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
-  - `Docs/Plans/WATCHLISTS_ONBOARDING_EFFECTIVENESS_VALIDATION_RUNBOOK_2026_02_23.md`
-  - `/tmp/bandit_watchlists_group02_stage5_frontend_scope_2026_02_23.json`
-- Next execution focus: Program Stage 5 closeout is complete; maintain `test:watchlists:program` on release candidates and operate post-release monitoring thresholds/escalation from the monitoring plan.
+- Next execution focus: Group 09 Stage 2 keyboard and focus-management hardening across modal/drawer flows.
 
 ## Stage 3: Authoring and Reliability Execution (Groups 04, 05, 07, 08)
 **Goal**: Improve complex configuration ergonomics and reduce failure risk.
@@ -148,7 +88,7 @@
 - Group 04 Stage 2 completed: monitor confidence panel added in `JobFormModal` with explicit readiness status and unresolved-risk messaging.
 - Group 04 Stage 3 completed: dense list profiles now covered across Jobs, Sources, Runs, and Outputs with compact-vs-advanced disclosure test coverage.
 - Group 04 Stage 4 completed: live summary now includes delivery/audio consequences and hidden advanced settings, with explicit recurring-delivery confirmation gating before save/create.
-- Group 04 Stage 5 completed: scale-path usability validation now covers 1/10/50 feed monitor setup and high-density list rendering regressions for Sources, Monitors, Activity, and Reports.
+- Group 04 Stage 5 completed: scale validation now covers 1/10/50 monitor and feed datasets in compact/advanced density modes, and a dedicated density QA checklist was published.
 - Group 05 Stage 1 completed: shared Watchlists error taxonomy now includes validation/timeout refinements with locale-contract coverage for remediation keys.
 - Group 05 Stage 2 completed: prevention-before-commit coverage now includes explicit test coverage for too-frequent schedule and invalid email recipient submit blockers in `JobFormModal`.
 - Group 05 Stage 3 completed: reversible-delete messaging now consistently surfaces undo windows for single and bulk delete flows, with partial bulk-restore next-step guidance coverage.
@@ -171,11 +111,10 @@
   - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/empty-state.test.ts src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/job-summaries.test.ts src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx`
   - `/tmp/bandit_watchlists_group04_stage3_2026_02_23.json`
   - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts --maxWorkers=1 --no-file-parallelism`
+  - `Docs/Plans/WATCHLISTS_MONITOR_DENSITY_SCALE_QA_CHECKLIST_2026_02_23.md`
   - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/job-summaries.test.ts src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/empty-state.test.ts src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
   - `/tmp/bandit_watchlists_group04_stage4_2026_02_23.json`
-  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
-  - `Docs/Plans/WATCHLISTS_MONITOR_DENSITY_SCALE_QA_CHECKLIST_2026_02_23.md`
-  - `/tmp/bandit_watchlists_group04_stage5_frontend_scope_2026_02_23.json`
   - `bunx vitest run src/components/Option/Watchlists/shared/__tests__/watchlists-error.test.ts src/components/Option/Watchlists/shared/__tests__/watchlists-error.locale-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/job-summaries.test.ts src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/empty-state.test.ts src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
   - `/tmp/bandit_watchlists_group05_stage1_2026_02_23.json`
   - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.delete-confirm.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/source-undo.test.ts src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx src/components/Option/Watchlists/shared/__tests__/watchlists-error.test.ts src/components/Option/Watchlists/shared/__tests__/watchlists-error.locale-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts`
@@ -220,72 +159,64 @@
 
 ### Stage 4 Kickoff Notes (2026-02-23)
 
-- Group 06 Stage 1 completed: reader prioritization model now includes explicit sort modes (`newest`, `oldest`, `unreadFirst`, `reviewedFirst`) with saved-view persistence.
+- Group 06 Stage 1 completed: reader prioritization baseline now includes explicit sort modes (`newest`, `oldest`, `unread-first`) with persistent sort preference and saved-view sort contract support.
 - Group 06 Stage 1 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `/tmp/bandit_watchlists_group06_stage1_frontend_scope_2026_02_23.json`
-- Group 06 Stage 2 completed: batch review scale/recovery coverage now includes all-filtered confirmation flows and partial-failure reconciliation semantics.
-- Group 06 Stage 2 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `/tmp/bandit_watchlists_group06_stage2_frontend_scope_2026_02_23.json`
-- Group 06 Stage 3 completed: shortcut discoverability coverage now explicitly verifies list navigation shortcuts are blocked while shortcut help is open.
-- Group 06 Stage 3 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `/tmp/bandit_watchlists_group06_stage3_frontend_scope_2026_02_23.json`
-- Group 06 Stage 4 completed: reader cross-action flow now includes explicit include-in-briefing state-transition coverage alongside existing Monitor/Run/Reports jump behavior.
-- Group 06 Stage 4 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `/tmp/bandit_watchlists_group06_stage4_frontend_scope_2026_02_23.json`
-- Group 06 Stage 5 completed: mobile/high-volume reader validation now includes narrow-viewport operability checks, high-volume batch regression coverage, and a 5/50/200 profile QA checklist.
+  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx --maxWorkers=1 --no-file-parallelism`
+- Group 06 Stage 5 completed: source-list render windowing now protects high-volume source profiles with scroll expansion, dedicated responsive/scale test coverage is in place, and a reader mobile+scale QA checklist has been published.
 - Group 06 Stage 5 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `Docs/Plans/WATCHLISTS_ARTICLES_READER_SCALE_QA_CHECKLIST_2026_02_23.md`
-  - `/tmp/bandit_watchlists_group06_stage5_frontend_scope_2026_02_23.json`
-- Group 09 Stage 1 completed: baseline a11y regression contracts now cover shell labels, runs/outputs live-region attributes, and template preview control naming checks; tab-level severity registry and localization inventory were published.
+  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `Docs/Plans/WATCHLISTS_READER_SCALE_MOBILE_QA_CHECKLIST_2026_02_24.md`
+  - `/tmp/bandit_watchlists_group06_stage5_2026_02_24.json`
+- Group 09 Stage 1 completed: accessibility baseline gap registry now catalogs keyboard/focus/ARIA/signaling/localization gaps across Watchlists tabs, and focused accessibility regression coverage was added for Articles reader control labeling and text-based status signals.
 - Group 09 Stage 1 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/TemplatesTab/__tests__/TemplatePreviewPane.accessibility-baseline.test.tsx`
-  - `Docs/Plans/WATCHLISTS_ACCESSIBILITY_GAP_REGISTRY_2026_02_23.md`
-  - `/tmp/bandit_watchlists_group09_stage1_frontend_scope_2026_02_23.json`
-- Group 09 Stage 2 completed: focus restore is now covered for output preview drawer + monitor modal close paths, and keyboard shortcut collision coverage now includes contenteditable contexts.
+  - `bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/shared/__tests__/StatusTag.accessibility.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `Docs/Plans/WATCHLISTS_ACCESSIBILITY_BASELINE_GAP_REGISTRY_2026_02_24.md`
+  - `/tmp/bandit_watchlists_group09_stage1_2026_02_24.json`
+- Group 09 Stage 2 completed: modal/drawer keyboard focus restoration now consistently covers monitor setup, monitor preview, guided setup, pipeline builder, and output preview close flows.
 - Group 09 Stage 2 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.focus-management.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/TemplatesTab/__tests__/TemplatePreviewPane.accessibility-baseline.test.tsx`
-  - `/tmp/bandit_watchlists_group09_stage2_frontend_scope_2026_02_23.json`
-- Group 09 Stage 3 completed: Items reader now exposes row-level SR labels and selection-change live announcements; live-status baseline remains covered across Activity and Reports.
+  - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage2_2026_02_24.json`
+- Group 09 Stage 3 completed: semantic accessibility contracts now cover monitor/feed table labeling, feed/article region naming, and article row accessible labels while preserving existing run/output live-region announcements.
 - Group 09 Stage 3 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.focus-management.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/TemplatesTab/__tests__/TemplatePreviewPane.accessibility-baseline.test.tsx`
-  - `/tmp/bandit_watchlists_group09_stage3_frontend_scope_2026_02_23.json`
-- Group 09 Stage 4 completed: Settings cluster subscription controls now provide descriptive switch labels and explicit yes/no state text; reader semantics regressions remain covered.
+  - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage3_2026_02_24.json`
+- Group 09 Stage 4 completed: monitor/feed active controls now expose explicit Enabled/Disabled text (not color-only switch state) and accessibility contracts cover semantic list/table discoverability plus state signaling.
 - Group 09 Stage 4 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.focus-management.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/TemplatesTab/__tests__/TemplatePreviewPane.accessibility-baseline.test.tsx src/components/Option/Watchlists/SettingsTab/__tests__/SettingsTab.help.test.tsx`
-  - `/tmp/bandit_watchlists_group09_stage4_frontend_scope_2026_02_23.json`
-- Group 09 Stage 5 completed: accessibility governance is now operationalized with a dedicated Watchlists a11y CI gate command and runbook-backed PR checklist/smoke protocol.
+  - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage4_2026_02_24.json`
+- Group 09 Stage 5 completed: a dedicated Watchlists accessibility gate command and CI workflow are in place, PR checklist criteria now include Watchlists accessibility acceptance checks, and assistive-tech usage notes/constraints were published.
 - Group 09 Stage 5 validation evidence:
   - `bun run test:watchlists:a11y`
-  - `Docs/Plans/WATCHLISTS_ACCESSIBILITY_GOVERNANCE_RUNBOOK_2026_02_23.md`
-  - `/tmp/bandit_watchlists_group09_stage5_frontend_scope_2026_02_23.json`
-- Group 10 Stage 1 completed: scale-profile benchmark harness and baseline budget registry published for sources/items/notifications at 5/50/200 and high-volume item profiles.
+  - `.github/workflows/ui-watchlists-a11y-gates.yml`
+  - `.github/pull_request_template.md` (Watchlists accessibility checklist section)
+  - `Docs/Plans/WATCHLISTS_ASSISTIVE_TECH_AUDIT_2026_02_24.md`
+- Group 10 Stage 1 completed: scale profiles and per-surface budgets are now codified, benchmark harness coverage is in place, and baseline timings/constraints have been published.
 - Group 10 Stage 1 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/__tests__/watchlists-scale-baseline.bench.test.ts`
-  - `Docs/Plans/WATCHLISTS_SCALE_PROFILE_BASELINE_2026_02_23.md`
-- Group 10 Stage 2 completed: Items reader source sidebar now uses bounded initial rendering with scroll-driven expansion, source-cap messaging is explicit at the 1000-feed ceiling, and selection/filter responsiveness has dedicated scale regressions.
-- Group 10 Stage 2 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-behavior.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/__tests__/watchlists-scale-baseline.bench.test.ts`
-  - `/tmp/bandit_watchlists_group10_stage2_frontend_scope_2026_02_23.json`
-- Group 10 Stage 3 completed: high-volume batch review operations now expose chunked progress status, terminal success/failure summaries, and explicit retry for failed IDs without blocking the reader surface.
-- Group 10 Stage 3 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-behavior.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/__tests__/watchlists-scale-baseline.bench.test.ts`
-  - `bun run test:watchlists:a11y`
-  - `/tmp/bandit_watchlists_group10_stage3_frontend_scope_2026_02_23.json`
-- Group 10 Stage 4 completed: run-notification polling now adapts by visibility/workload, prevents overlapping in-flight requests, and uses reduced payload size when idle/hidden; shared polling utilities now standardize active-run detection across shell and Activity surfaces.
-- Group 10 Stage 4 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/polling-utils.test.ts src/components/Option/Watchlists/RunsTab/__tests__/run-notifications.test.ts src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`
-  - `bun run test:watchlists:a11y`
-  - `/tmp/bandit_watchlists_group10_stage4_frontend_scope_2026_02_23.json`
-- Group 10 Stage 5 completed: scale readiness is now operationalized with a dedicated runbook, scripted scale regression gate, and updated baseline constraints/mitigations aligned with adaptive polling implementation.
-- Group 10 Stage 5 validation evidence:
   - `bun run test:watchlists:scale`
-  - `Docs/Plans/WATCHLISTS_SCALE_READINESS_RUNBOOK_2026_02_23.md`
-  - `/tmp/bandit_watchlists_group10_stage5_frontend_scope_2026_02_23.json`
+  - `Docs/Plans/WATCHLISTS_SCALE_BASELINE_BUDGETS_2026_02_24.md`
+- Group 10 Stage 2 completed: runs client filtering now paginates beyond the first 200 rows, feeds group filtering caches OPML URL sets to reduce repeated overfetch, and reader smart-count requests now reuse short-lived cache entries for unchanged filters.
+- Group 10 Stage 2 validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/runs-filter-fetch.test.ts src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/shared/__tests__/scale-benchmark.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.performance.test.ts --maxWorkers=1 --no-file-parallelism`
+  - `bun run test:watchlists:scale`
+- Group 10 Stage 3 completed: Articles bulk actions now expose live progress and terminal summaries, large batches keep the surface responsive during execution, and partial failures include a direct retry entrypoint that reruns only failed item IDs.
+- Group 10 Stage 3 validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `bun run test:watchlists:scale`
+  - `/tmp/bandit_watchlists_group10_stage3_2026_02_24.json`
+- Group 10 Stage 4 completed: run notification polling now adapts by active tab/visibility and suppresses low-signal completion noise in Activity-focused contexts, overlapping poll requests are deduped in-flight, and Runs auto-refresh is gated to active+visible Activity sessions.
+- Group 10 Stage 4 validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/run-notifications.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `bun run test:watchlists:scale`
+  - `/tmp/bandit_watchlists_group10_stage4_2026_02_24.json`
+- Group 10 Stage 5 completed: scale readiness runbook is published, CI scale gate workflow is active, PR checklist criteria include scale validation, and the scale regression command is release-gated.
+- Group 10 Stage 5 validation evidence:
+  - `Docs/Plans/WATCHLISTS_SCALE_READINESS_RUNBOOK_2026_02_24.md`
+  - `.github/workflows/ui-watchlists-scale-gates.yml`
+  - `.github/pull_request_template.md` (Watchlists scale checklist section)
+  - `bun run test:watchlists:scale`
+  - `/tmp/bandit_watchlists_group10_stage4_2026_02_24.json`
+- Next execution focus: Program Stage 5 closeout and cross-group completion ledger validation.
 
 ## Stage 5: Program Closeout and Operationalization
 **Goal**: Complete evidence-led closure and handoff for sustained quality.
@@ -298,24 +229,23 @@
 - Validate finding-to-fix coverage ledger for all 10 groups.
 **Status**: Complete
 
-### Stage 5 Kickoff Notes (2026-02-23)
+### Stage 5 Completion Notes (2026-02-24)
 
-- Program-level Watchlists regression gate now runs through a single command (`test:watchlists:program`) chaining help, onboarding, UC2, accessibility, and scale suites.
-- Cross-group plan hygiene normalized: Group 05, Group 07, and Group 08 stage statuses are explicitly marked `Complete` across all five stages.
-- Missing Stage 3 runbook references were reconciled and published:
-  - `Docs/Plans/WATCHLISTS_RECOVERY_RUNBOOK_2026_02_23.md`
-  - `Docs/Plans/WATCHLISTS_UC2_TEXT_AUDIO_E2E_RUNBOOK_2026_02_23.md`
-  - `Docs/Plans/WATCHLISTS_TEMPLATE_AUTHORING_RUNBOOK_2026_02_23.md`
-- Program closeout governance artifacts are now in place:
-  - `Docs/Plans/WATCHLISTS_UX_FINDING_TO_FIX_COVERAGE_LEDGER_2026_02_23.md`
-  - `Docs/Plans/WATCHLISTS_POST_RELEASE_MONITORING_PLAN_2026_02_23.md`
-
-- Stage 5 validation evidence:
-  - `bun run test:watchlists:program`
-  - `Docs/Plans/WATCHLISTS_UX_FINDING_TO_FIX_COVERAGE_LEDGER_2026_02_23.md`
-  - `Docs/Plans/WATCHLISTS_POST_RELEASE_MONITORING_PLAN_2026_02_23.md`
-  - `/tmp/bandit_watchlists_program_stage5_frontend_scope_2026_02_23.json`
-- Stage 5 execution outcome (2026-02-23): integrated Watchlists regression gate passed across help, onboarding, UC2, accessibility, and scale suites; closeout frontend Bandit scope recorded zero findings.
+- Executed final integrated Watchlists regression gate on the release-candidate branch:
+  - `bun run test:watchlists:help`
+  - `bun run test:watchlists:a11y`
+  - `bun run test:watchlists:scale`
+  - result: all suites passed (`help`: 10/10 tests, `a11y`: 67/67 tests, `scale`: 42/42 tests).
+- Completed cross-group finding-to-fix ledger validation:
+  - all 10 group rows are marked `Complete` with linked stage evidence in the tracking ledger below.
+- Finalized runbook coverage for operational handoff:
+  - onboarding: `Docs/Plans/WATCHLISTS_ONBOARDING_FIRST_VALUE_RUNBOOK_2026_02_24.md`
+  - recovery: `Docs/Plans/WATCHLISTS_RECOVERY_RUNBOOK_2026_02_23.md`
+  - scale: `Docs/Plans/WATCHLISTS_SCALE_READINESS_RUNBOOK_2026_02_24.md`
+  - accessibility: `Docs/Plans/WATCHLISTS_ASSISTIVE_TECH_AUDIT_2026_02_24.md`
+  - UC2 KPI/reporting: `Docs/Plans/WATCHLISTS_UC2_PIPELINE_KPI_RUNBOOK_2026_02_24.md`
+- Activated post-release monitoring ownership and threshold definitions:
+  - `Docs/Plans/WATCHLISTS_POST_RELEASE_MONITORING_PLAN_2026_02_24.md`
 
 ## Dependency Matrix
 
@@ -335,16 +265,16 @@
 
 | Group | Owner (Assignee) | Reviewer (Assignee) | Phase | Status | Validation Evidence | Notes |
 |---|---|---|---|---|---|---|
-| 01 | Robert | Mike | 2 | Complete | Stage 1 baseline artifact + telemetry exports + Group 01 Stage 1 terminology contracts + Group 01 Stage 2 task-navigation/experimental-IA coverage + Group 01 Stage 3 orientation guidance + journey coverage + Group 01 Stage 4 controlled rollout resolver + telemetry contract tests + go/no-go runbook + Group 01 Stage 5 navigation/adoption playbook + expanded help-routing regressions + Bandit artifacts | IA/navigation |
-| 02 | Mike | Robert | 2 | Complete | Stage 1 baseline artifact + telemetry exports + Group 02 Stage 1 and Stage 2 completion notes + Group 02 Stage 3 guided-tour/teach-point/help-topic coverage + Group 02 Stage 4 onboarding copy reduction + first-run terminology contracts + onboarding snapshot coverage + Group 02 Stage 5 onboarding milestone telemetry (first run/output success), TTTV/drop-off snapshot metrics, onboarding regression gate, and onboarding effectiveness runbook + Bandit artifacts | onboarding/learnability |
-| 03 | Robert | Mike | 2 | Complete | Stage 1 baseline artifact + telemetry exports + Group 03 Stage 1 and Stage 2 completion notes + Group 03 Stage 3 cross-tab dependency visibility + relationship deep-link regressions + Group 03 Stage 4 candidate/template preview + test-generation routing regressions + Group 03 Stage 5 UC2 milestone telemetry (including first run/output success) + funnel snapshot rates/drop-off/timings + UC2 + onboarding regression gates + KPI runbook + Bandit artifacts | UC2 workflow |
-| 04 | Mike | Robert | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 04 Stage 1/2 completion notes + Stage 3 cross-tab profile completion + Stage 4 summary/confirmation completion + Stage 5 scale-path usability regressions + density QA checklist + Bandit artifacts | density/cognitive load |
+| 01 | Robert | Mike | 5 | Complete | Stage 1 baseline artifact + telemetry exports + Group 01 Stage 1/2/3/4/5 completion notes + orientation guidance tests + rollout/telemetry contract coverage + IA rollout go/no-go doc + IA adoption validation checklist | IA/navigation |
+| 02 | Mike | Robert | 5 | Complete | Stage 1 baseline artifact + telemetry exports + Group 02 Stage 1/2/3/4/5 completion notes + guided-tour/teach-point/help-tooltip regressions + first-run terminology contract coverage + onboarding-first-value telemetry milestones (first run/output) + Stage 5 onboarding regression suite + onboarding first-value runbook + Bandit stage artifact | onboarding/learnability |
+| 03 | Robert | Mike | 5 | Complete | Stage 1 baseline artifact + telemetry exports + Group 03 Stage 1/2/3/4/5 completion notes + cross-tab relationship jump actions (Activity/Reports/Monitors) + pipeline preview/test-generation confidence flow + UC2 pipeline KPI dashboard snapshot helpers + UC2 pipeline KPI runbook + focused Overview/Runs/Outputs/Items linkage regressions + Bandit stage artifacts | UC2 workflow |
+| 04 | Mike | Robert | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 04 Stage 1/2 completion notes + Stage 3 cross-tab profile completion + Stage 4 summary/confirmation completion + Stage 5 1/10/50 scale validation + density QA checklist + focused Jobs/Sources/Runs/Outputs regressions + Bandit artifacts | density/cognitive load |
 | 05 | Robert | Mike | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 05 Stage 1 taxonomy/locale-contract completion + Stage 2 blocker coverage + Stage 3 undo/recovery consistency coverage + Stage 4 delivery-status filtering coverage + Group 05 runbook artifact + focused Sources/Jobs/Outputs/shared regressions + Bandit artifacts | prevention/recovery |
-| 06 | Mike | Robert | 4 | Complete | Stage 1 baseline artifact + telemetry exports + Group 06 Stage 1 sort/prioritization + saved-view persistence coverage + Group 06 Stage 2 all-filtered and partial-failure batch coverage + Group 06 Stage 3 shortcut discoverability reinforcement + Group 06 Stage 4 cross-action/statefulness coverage + Group 06 Stage 5 mobile/high-volume validation + QA checklist + ItemsTab focused regressions + Bandit artifacts | articles/triage |
+| 06 | Mike | Robert | 4 | Complete | Stage 1 baseline artifact + telemetry exports + Group 06 Stage 1 prioritization/sort baseline + Stage 5 source-window/mobile/high-volume validation + reader scale QA checklist + ItemsTab focused regressions + Bandit stage artifact | articles/triage |
 | 07 | Robert | Mike | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 07 Stage 1 output/audio contract completion + Group 07 Stage 2 audio discoverability completion + Group 07 Stage 3 audio test/preview completion + Group 07 Stage 4 delivery/recovery visibility completion + Group 07 Stage 5 UC2 runbook + fallback integration coverage + focused Jobs/Outputs/backend regressions + Bandit artifacts | outputs/audio |
 | 08 | Mike | Robert | 3 | Complete | Stage 1 baseline artifact + telemetry exports + Group 08 Stage 1/2/3/4/5 completion notes + template mode/preview/telemetry regressions + Bandit stage artifacts + template authoring runbook | templates |
-| 09 | Robert | Mike | 4 | Complete | Stage 1 baseline artifact + telemetry exports + Group 09 Stage 1 accessibility baseline test coverage + gap registry + Stage 2 focus/shortcut hardening regressions + Stage 3 reader semantics/live announcements + Stage 4 settings cognitive/switch labeling + Stage 5 governance runbook + scripted a11y gate + Bandit artifacts | accessibility |
-| 10 | Mike | Robert | 4 | Complete | Stage 1 baseline artifact + telemetry exports + Group 10 Stage 1 benchmark baseline profile + Group 10 Stage 2 high-volume list/reader optimization regressions + Group 10 Stage 3 batch-progress/retry recovery coverage + Group 10 Stage 4 adaptive polling/no-overlap coverage + Group 10 Stage 5 scale-readiness runbook + scripted scale gate + Bandit artifacts | scalability |
+| 09 | Robert | Mike | 4 | Complete | Stage 1 baseline artifact + telemetry exports + Group 09 Stage 1 gap registry + Group 09 Stage 2 keyboard/focus restoration coverage + Group 09 Stage 3 semantics/live-region coverage + Group 09 Stage 4 visual/state-signaling coverage + Stage 5 Watchlists a11y CI gate + PR checklist criteria + assistive-tech audit notes + Sources/Runs/Items/Jobs/Overview/Outputs a11y regressions + Bandit stage artifacts | accessibility |
+| 10 | Mike | Robert | 4 | Complete | Stage 1 baseline artifact + telemetry exports + Group 10 Stage 1 scale profile/performance budget contract + benchmark harness coverage + baseline timing artifact + Stage 2 runs/source/reader high-volume optimization + Stage 3 batch progress/recovery model + Stage 4 adaptive polling/notification dedup model + Stage 5 runbook/CI gate/checklist closure + scale/performance regression suites | scalability |
 
 ## Exit Criteria
 
@@ -352,12 +282,3 @@
 - No open critical regressions in UC1 or UC2 workflows.
 - Accessibility and scale gates pass on release candidate builds.
 - Monitoring and ownership are assigned for post-release stabilization.
-
-## Follow-on Workstream (2026-02-23)
-
-- Release Candidate operations plan:
-  - `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_rc_operations_workstream_2026_02_23.md`
-- Release Candidate operations design:
-  - `Docs/Plans/2026-02-23-watchlists-rc-operations-design.md`
-- Release Candidate runbook:
-  - `Docs/Plans/WATCHLISTS_RC_OPERATIONS_RUNBOOK_2026_02_23.md`

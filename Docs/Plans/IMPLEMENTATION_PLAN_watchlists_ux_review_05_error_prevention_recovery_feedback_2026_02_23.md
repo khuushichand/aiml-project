@@ -81,10 +81,64 @@
 - Validate all runbook paths against current UI and error copy.
 **Status**: Complete
 
-### Completion Note (2026-02-23)
+## Execution Notes
 
-- All Group 05 stages were executed and validated under the program coordination flow.
-- Consolidated execution notes and validation evidence are tracked in:
-  - `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_ux_review_program_coordination_index_2026_02_23.md`
-- Group 05 operational artifact:
+### 2026-02-23 - Stage 1 completion (taxonomy + locale contract)
+
+- Extended Watchlists shared error taxonomy for actionable remediation consistency:
+  - Added `validation` error kind classification.
+  - Added explicit timeout classification for HTTP `408` and `504`.
+  - Expanded auth detection for token-expiration strings.
+  - Implemented in:
+    - `apps/packages/ui/src/components/Option/Watchlists/shared/watchlists-error.ts`
+- Added/updated Stage 1 tests:
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/watchlists-error.test.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/watchlists-error.locale-contract.test.ts`
+- Added locale contract copy key for validation remediation:
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
+- Validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/shared/__tests__/watchlists-error.test.ts src/components/Option/Watchlists/shared/__tests__/watchlists-error.locale-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/job-summaries.test.ts src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/empty-state.test.ts src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+  - `/tmp/bandit_watchlists_group05_stage1_2026_02_23.json`
+
+### 2026-02-23 - Stage 2 completion (prevention-before-commit coverage)
+
+- Expanded monitor pre-save blocker coverage in:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
+  - Added explicit tests for:
+    - too-frequent schedule submit blocking with actionable guidance.
+    - invalid email recipient submit blocking in edit mode with remediation prompt.
+- Validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx`
+
+### 2026-02-23 - Stage 3 completion (undo/recovery consistency)
+
+- Completed reversible-delete copy alignment and undo discoverability updates:
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/SourcesTab.tsx`
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
+- Added delete/recovery behavior coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.delete-confirm.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
+- Validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.delete-confirm.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/source-undo.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
+  - `/tmp/bandit_watchlists_group05_stage2_stage3_2026_02_23.json`
+
+### 2026-02-23 - Stage 4 completion (reliability signal filtering)
+
+- Added delivery-status filtering for Reports to make delivery failures directly filterable in advanced mode:
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputsTab.tsx`
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
+- Added/updated Stage 4 regression coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
+- Validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.delete-confirm.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/source-undo.test.ts src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/shared/__tests__/watchlists-error.test.ts src/components/Option/Watchlists/shared/__tests__/watchlists-error.locale-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts`
+  - `/tmp/bandit_watchlists_group05_stage4_2026_02_23.json`
+
+### 2026-02-23 - Stage 5 completion (operational runbook + QA matrix)
+
+- Added operational recovery runbook documenting:
+  - top failure classes and UI-first recovery workflows,
+  - QA scenario matrix across source/run/template/delivery failures,
+  - monitoring thresholds and escalation checklist.
+- Artifact:
   - `Docs/Plans/WATCHLISTS_RECOVERY_RUNBOOK_2026_02_23.md`

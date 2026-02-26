@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import {
   getLocalTimezone,
+  parseQuickSetupExtraSourceUrls,
   QUICK_SETUP_DEFAULT_VALUES,
   resolveQuickSetupSchedule,
   toQuickSetupJobPayload,
@@ -12,12 +13,14 @@ describe("watchlists overview quick setup helpers", () => {
     expect(QUICK_SETUP_DEFAULT_VALUES).toEqual({
       sourceName: "",
       sourceUrl: "",
+      extraSourceUrls: "",
       sourceType: "rss",
       monitorName: "",
       schedulePreset: "daily",
       audioBriefing: false,
       runNow: true,
-      setupGoal: "briefing"
+      setupGoal: "briefing",
+      includeAudioBriefing: true
     })
   })
 
@@ -81,10 +84,10 @@ describe("watchlists overview quick setup helpers", () => {
         {
           monitorName: " Morning Monitor ",
           schedulePreset: "daily",
-          audioBriefing: false,
-          setupGoal: "triage"
+          setupGoal: "triage",
+          includeAudioBriefing: false
         },
-        42
+        [42]
       )
     ).toEqual({
       name: "Morning Monitor",
@@ -99,19 +102,20 @@ describe("watchlists overview quick setup helpers", () => {
         {
           monitorName: " Morning Monitor ",
           schedulePreset: "daily",
-          audioBriefing: false,
-          setupGoal: "briefing"
+          setupGoal: "briefing",
+          includeAudioBriefing: true
         },
-        42
+        [42, 42, 77]
       )
     ).toEqual({
       name: "Morning Monitor",
-      scope: { sources: [42] },
+      scope: { sources: [42, 77] },
       active: true,
       schedule_expr: "0 8 * * *",
       timezone: "UTC",
       output_prefs: {
-        template_name: "briefing_md"
+        template_name: "briefing_md",
+        generate_audio: true
       }
     })
 
@@ -138,5 +142,13 @@ describe("watchlists overview quick setup helpers", () => {
     })
 
     timezoneSpy.mockRestore()
+  })
+
+  it("parses extra source URLs from newline/comma-delimited values", () => {
+    expect(
+      parseQuickSetupExtraSourceUrls(
+        "https://example.com/a.xml\ninvalid\nhttps://example.com/b.xml, https://example.com/a.xml"
+      )
+    ).toEqual(["https://example.com/a.xml", "https://example.com/b.xml"])
   })
 })

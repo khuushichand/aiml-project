@@ -2,74 +2,75 @@
 
 ## Purpose
 
-Operationalize validation for beginner and expert template authoring so custom report generation remains reliable.
+This runbook defines a practical operator checklist for template authoring across beginner and advanced paths, with explicit validation steps for static and live preview behaviors.
 
-## Coverage Areas
+## Beginner Recipes (No-Code Path)
 
-- Basic/no-code authoring path (recipes, guided fields, save flow).
-- Advanced authoring path (versioning, validation, drift/reload handling).
-- Visual block composer path (block CRUD, Visual↔Code sync, RawCodeBlock fallback).
-- Manual section generation controls (run-scoped prompt orchestration).
-- Manual final flow-check modes (`suggest_only`, `auto_apply`) and diff handling.
-- Preview confidence (static/live semantics, warnings, errors).
-- Authoring telemetry and adoption signals.
+1. Start in `Basic` mode.
+2. Open `Recipe builder` and select one of:
+- `Briefing (Markdown)` for daily digest output.
+- `Newsletter (HTML)` for email-friendly layouts.
+- `MECE analysis (Markdown)` for grouped analytical reports.
+3. Apply recipe and verify that name/description defaults are auto-filled.
+4. Adjust recipe options:
+- Include source links
+- Include executive summary (where supported)
+- Include published timestamp
+- Include tags
+5. Use `Preview` tab:
+- Confirm static preview renders expected sections.
+- If a completed run is available, switch to live preview and verify data-backed rendering.
 
-## Validation Commands
+## Advanced Best Practices (Jinja2 Path)
 
-Run from `apps/packages/ui`:
-
-```bash
-bunx vitest run \
-  src/components/Option/Watchlists/TemplatesTab/__tests__/TemplateEditor.visual-mode.test.tsx \
-  src/components/Option/Watchlists/TemplatesTab/__tests__/TemplateEditor.roundtrip.test.tsx \
-  src/components/Option/Watchlists/TemplatesTab/__tests__/VisualComposerPane.section-generation.test.tsx \
-  src/components/Option/Watchlists/TemplatesTab/__tests__/FlowCheckDiffPanel.test.tsx \
-  src/components/Option/Watchlists/TemplatesTab/__tests__/template-mode.test.ts \
-  src/components/Option/Watchlists/TemplatesTab/__tests__/template-recipes.test.ts \
-  src/components/Option/Watchlists/TemplatesTab/__tests__/template-usage.test.ts \
-  src/utils/__tests__/watchlists-prevention-telemetry.test.ts
-```
-
-Run backend composer/template contracts from repo root:
-
-```bash
-source .venv/bin/activate && python -m pytest -q \
-  tldw_Server_API/tests/Watchlists/test_watchlists_template_composer_contract.py \
-  tldw_Server_API/tests/Watchlists/test_watchlists_template_store.py \
-  tldw_Server_API/tests/Watchlists/test_template_endpoints.py \
-  tldw_Server_API/tests/Watchlists/test_watchlists_template_composer_roundtrip.py
-```
+1. Switch to `Advanced` mode only after confirming baseline structure in Basic mode.
+2. Use `Quick insert snippets` to avoid syntax mistakes for loops/conditionals.
+3. Keep high-risk edits isolated:
+- Save smaller template changes incrementally.
+- Validate each change with live preview before final save.
+4. Use `Version tools` for safe rollback:
+- Load historical version before major edits.
+- Compare current drift indicator before save.
+- Load latest to resync if historical experiments are abandoned.
+5. Treat render warnings as blockers for production schedules unless intentionally accepted.
 
 ## QA Checklist
 
-1. Create template in basic mode and save without Jinja edits.
-2. Switch to Visual mode, add core blocks, and confirm content sync in Code mode.
-3. Paste unsupported Jinja (`macro/include`) in Code mode and verify `RawCodeBlock` appears in Visual mode.
-4. Run manual section generation for a prompt-capable block and confirm block content updates.
-5. Run final flow-check in both `suggest_only` and `auto_apply`; validate diff accept/reject behavior.
-6. Load historical version, compare to latest, and restore latest.
-7. Run preview in static and live contexts and verify warning/error messaging.
+### Static Preview (No Run Required)
 
-## Monitoring Thresholds
+- [ ] Preview mode label clearly indicates static markup behavior.
+- [ ] Markdown and HTML templates render safely in static mode.
+- [ ] Empty-content state is clear and non-technical.
 
-Investigate when either condition persists across two release candidates:
+### Live Preview (Completed Run Required)
 
-- Template save failure rate >5%.
-- Preview render failure rate >5%.
-- Basic-mode adoption drops >=10 percentage points after release.
-- Section-generation endpoint error rate >5%.
-- Flow-check endpoint error rate >5%.
+- [ ] Live mode label indicates run-data dependency.
+- [ ] No-run warning appears when no completed runs exist.
+- [ ] Run selector is visible and selectable when runs exist.
+- [ ] Successful live render returns output and warning metadata when applicable.
+- [ ] Warning list renders all returned warning entries.
+- [ ] Error state includes remediation guidance and raw error context.
 
-## Release Candidate Evidence
+### Save and Validation
 
-- Validation command output.
-- Sample basic, advanced, and visual authoring traces.
-- RawCodeBlock fallback screenshot/log for unsupported syntax.
-- Manual section-generation and flow-check request/response samples.
-- Template preview success/failure counts and related remediation issues.
+- [ ] Server-side syntax validation blocks invalid saves in Basic and Advanced modes.
+- [ ] Validation marker count appears in advanced editor when errors are returned.
+- [ ] Save success telemetry events are emitted with mode/context details.
 
-## Guardrails
+## Telemetry Signals (Stage 5)
 
-- Manual-only scope: section generation and flow-check must not auto-trigger jobs/schedules.
-- Keep runtime render source as template `content`; composer metadata is auxiliary.
-- Preserve unsupported syntax as RawCodeBlock; never silently drop or rewrite unsupported constructs.
+Track these events to monitor adoption and reliability:
+
+- `watchlists_authoring_started`
+- `watchlists_authoring_mode_changed`
+- `watchlists_template_recipe_applied`
+- `watchlists_authoring_saved`
+- `watchlists_template_preview_mode_changed`
+- `watchlists_template_preview_rendered`
+
+Suggested weekly checks:
+
+1. Basic vs advanced authoring start ratio.
+2. Recipe usage distribution by recipe ID.
+3. Live preview success/error ratio.
+4. Mean warning count per live preview render.

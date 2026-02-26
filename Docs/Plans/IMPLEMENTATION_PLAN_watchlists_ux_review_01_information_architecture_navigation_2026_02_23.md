@@ -34,16 +34,11 @@
 - Add UI tests that assert canonical labels in header tabs and quick actions.
 **Status**: Complete
 
-### Stage 1 Execution Notes (2026-02-23)
+### Stage 1 Completion Notes (2026-02-23)
 
-- Canonical terminology contracts were established and validated for Watchlists tab/section nouns and plain-language helper copy:
-  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts`
-  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
-- Canonical user-facing labels remain aligned for `Feeds`, `Monitors`, `Activity`, `Articles`, and `Reports` across tab and section surfaces.
-
-### Stage 1 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
+- Added canonical terminology map in `apps/packages/ui/src/assets/locale/en/watchlists.json` under `terminology.canonical` and `terminology.aliases`.
+- Extended i18n contract coverage in `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts`.
+- Added UI contract assertions for tab and task shortcut labels in `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`.
 
 ## Stage 2: Task-Oriented Navigation Layer
 **Goal**: Present primary user flows (Collect, Review, Briefings) without removing advanced capability.
@@ -56,15 +51,22 @@
 - Add regression tests ensuring deep-link tab state still opens correct legacy surfaces.
 **Status**: Complete
 
-### Stage 2 Execution Notes (2026-02-23)
+### Stage 2 Completion Notes (2026-02-23)
 
-- Task-oriented shortcut navigation (`Collect`, `Review`, `Briefings` entry points via quick actions) and reduced-IA fallback behavior are now validated through interaction coverage:
-  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx`
-- Experimental IA mode preserves one-click access to secondary/advanced views while keeping legacy routes reachable.
-
-### Stage 2 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx`
+- Implemented task-view navigation strip (`Collect`, `Review`, `Briefings`) in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx` behind the experimental IA flag.
+- Added explicit task-to-tab routing and legacy-tab fallback mapping:
+  - `collect -> sources` (also active for `jobs`)
+  - `review -> items` (also active for `runs`)
+  - `briefings -> outputs` (also active for `templates`)
+- Updated reduced IA tab model so primary tabs align with outcomes (`overview`, `sources`, `items`, `outputs`, `settings`) while advanced implementation tabs are in `More views` (`jobs`, `runs`, `templates`).
+- Extended interaction coverage in `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx`:
+  - task-centered primary tab assertions
+  - task-view click routing assertions
+  - fallback highlighting assertions for deep-linked legacy tabs (`runs`, `templates`)
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/SettingsTab/__tests__/SettingsTab.help.test.tsx src/components/Option/Watchlists/shared/__tests__/onboarding-path.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists -f json -o /tmp/bandit_watchlists_group01_stage2_2026_02_23.json`
 
 ## Stage 3: Cross-Surface Orientation and “Next Step” Guidance
 **Goal**: Make current location and adjacent actions explicit in each tab.
@@ -77,26 +79,18 @@
 - Add journey tests for Overview -> Feeds -> Monitors -> Activity -> Reports transitions.
 **Status**: Complete
 
-### Stage 3 Execution Notes (2026-02-23)
+### Stage 3 Completion Notes (2026-02-24)
 
-- Added cross-surface orientation guidance banner to Watchlists shell with per-tab:
-  - “What this is” context
-  - “What to do next” guidance
-  - explicit cross-tab action buttons
-  - `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`
-- Added explicit transition actions for key handoffs:
-  - Activity (`runs`) -> Reports (`outputs`)
-  - Articles (`items`) -> Monitors (`jobs`)
-- Added localized copy contract for orientation guidance and destination-explicit action labels:
-  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
-- Added Stage 3 regression coverage:
+- Added a per-tab orientation guidance banner in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx` with explicit “what this tab is” + “what to do next” copy.
+- Added explicit cross-tab next-step actions with outcome-oriented labels, including the missing key transition:
+  - `Activity -> Reports`
+  - `Articles -> Monitors`
+- Added localized orientation copy in `apps/packages/ui/src/assets/locale/en/watchlists.json` under `orientation.*`.
+- Added focused guidance + journey test coverage in:
   - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx`
-  - includes journey path validation for `Overview -> Feeds -> Monitors -> Activity -> Reports`.
-
-### Stage 3 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
-- `/tmp/bandit_watchlists_group01_stage3_frontend_scope_2026_02_23.json`
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
 
 ## Stage 4: Experimental IA Rollout and Safety
 **Goal**: Replace ad hoc IA experiment flags with a controlled rollout plan.
@@ -109,31 +103,24 @@
 - Add telemetry payload contract tests for IA transition events.
 **Status**: Complete
 
-### Stage 4 Execution Notes (2026-02-23)
+### Stage 4 Completion Notes (2026-02-24)
 
-- Replaced ad hoc IA variant resolution with a controlled rollout resolver:
-  - `apps/packages/ui/src/utils/watchlists-ia-rollout.ts`
-  - Supports prioritized controls:
-    - runtime override (`window.__TLDW_WATCHLISTS_IA_EXPERIMENT__`)
-    - persisted rollout assignment (`watchlists:ia-rollout:v1`)
-    - forced env variant (`NEXT_PUBLIC_WATCHLISTS_IA_EXPERIMENT_VARIANT`)
-    - percentage rollout (`NEXT_PUBLIC_WATCHLISTS_IA_EXPERIMENT_PERCENT`)
-    - safe fallback to baseline.
-- Wired Watchlists shell to use rollout variant resolution directly:
-  - `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`
-- Added rollout safety regression coverage:
+- Replaced ad hoc IA enablement with controlled rollout resolution in `apps/packages/ui/src/utils/watchlists-ia-rollout.ts`.
+- Wired Watchlists IA rollout to shared rollout infrastructure from `apps/packages/ui/src/utils/feature-rollout.ts`:
+  - flag key: `watchlists_ia_reduced_nav_v1`
+  - sticky subject assignment + percentage-gated variant resolution
+  - explicit fallback precedence for runtime override, legacy env, forced mode, and rollout mode
+- Updated `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx` to consume rollout resolution and preserve baseline/experimental behavior contract.
+- Added telemetry heartbeat flush on `pagehide` to improve session/drop-off fidelity across variants via `flushWatchlistsIaExperimentSession`.
+- Added product rollout gates doc:
+  - `Docs/Product/Watchlists_IA_Reduced_Navigation_Rollout_Gates_2026_02_24.md`
+- Added/updated tests:
   - `apps/packages/ui/src/utils/__tests__/watchlists-ia-rollout.test.ts`
-  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx`
-  - includes persisted assignment validation and secondary-tab access behavior under experimental mode.
-- Added explicit IA telemetry payload contract coverage for backend ingest schema fields:
   - `apps/packages/ui/src/utils/__tests__/watchlists-ia-experiment-telemetry.test.ts`
-- Published rollout go/no-go criteria and rollback procedure:
-  - `Docs/Plans/WATCHLISTS_IA_EXPERIMENT_ROLLOUT_GONOGO_2026_02_23.md`
-
-### Stage 4 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/utils/__tests__/watchlists-ia-experiment-telemetry.test.ts src/utils/__tests__/watchlists-ia-rollout.test.ts`
-- `/tmp/bandit_watchlists_group01_stage4_frontend_scope_2026_02_23.json`
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx`
+- Verification evidence:
+  - `bunx vitest run src/utils/__tests__/watchlists-ia-rollout.test.ts src/utils/__tests__/watchlists-ia-experiment-telemetry.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx`
 
 ## Stage 5: Documentation and Adoption Validation
 **Goal**: Ensure IA changes are operable by engineering, QA, and product stakeholders.
@@ -146,20 +133,16 @@
 - Verify docs links and help topic routing against updated IA labels.
 **Status**: Complete
 
-### Stage 5 Execution Notes (2026-02-23)
+### Stage 5 Completion Notes (2026-02-24)
 
-- Published Group 01 IA adoption playbook with:
-  - canonical navigation map (task -> surface -> next-step flow)
-  - vocabulary matrix (internal nouns vs canonical user-facing labels)
-  - QA checklist for journey, terminology, and help-link routing validation
-  - adoption baseline + post-change comparison template tied to Stage 1 telemetry exports
-  - `Docs/Plans/WATCHLISTS_IA_NAVIGATION_ADOPTION_PLAYBOOK_2026_02_23.md`
-- Extended help-link routing regression coverage to verify all tab destinations and tab-aligned help labels:
+- Added IA adoption validation artifact:
+  - `Docs/Plans/WATCHLISTS_IA_ADOPTION_VALIDATION_CHECKLIST_2026_02_24.md`
+- Documented:
+  - baseline and reduced IA navigation maps,
+  - system-to-user terminology matrix,
+  - QA checklist for primary transitions and terminology consistency,
+  - UC1/UC2 baseline funnel values and post-change comparison method.
+- Added docs-link routing regression coverage to ensure help routing stays aligned with canonical labels:
   - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`
-
-### Stage 5 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/shared/__tests__/help-docs.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/routes/__tests__/option-watchlists.route-state.test.tsx src/utils/__tests__/watchlists-ia-experiment-telemetry.test.ts src/utils/__tests__/watchlists-ia-rollout.test.ts`
-- `bun run test:watchlists:help`
-- `Docs/Plans/WATCHLISTS_IA_NAVIGATION_ADOPTION_PLAYBOOK_2026_02_23.md`
-- `/tmp/bandit_watchlists_group01_stage5_frontend_scope_2026_02_23.json`
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/routes/__tests__/option-watchlists.route-state.test.tsx`

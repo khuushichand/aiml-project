@@ -36,22 +36,6 @@
 - Add baseline accessibility regression tests for existing live regions and labels.
 **Status**: Complete
 
-### Stage 1 Execution Notes (2026-02-23)
-
-- Added baseline accessibility regression coverage for Watchlists shell, runs, outputs, and template preview surfaces:
-  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/TemplatesTab/__tests__/TemplatePreviewPane.accessibility-baseline.test.tsx`
-- Published component-level baseline gap registry with severity categorization and localization inventory:
-  - `Docs/Plans/WATCHLISTS_ACCESSIBILITY_GAP_REGISTRY_2026_02_23.md`
-- Localization baseline finding: `TemplatePreviewPane` contains multiple hardcoded user-facing strings that are not mapped into `watchlists.json`.
-
-### Stage 1 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/TemplatesTab/__tests__/TemplatePreviewPane.accessibility-baseline.test.tsx`
-- `/tmp/bandit_watchlists_group09_stage1_frontend_scope_2026_02_23.json`
-
 ## Stage 2: Keyboard and Focus Management Hardening
 **Goal**: Guarantee predictable keyboard navigation and focus restoration.
 **Success Criteria**:
@@ -62,21 +46,6 @@
 - Add keyboard navigation tests for tabs, forms, lists, and reader interactions.
 - Add focus trap/restore tests for modal and drawer components.
 **Status**: Complete
-
-### Stage 2 Execution Notes (2026-02-23)
-
-- Added explicit focus-restore lifecycle to output preview drawer:
-  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputPreviewDrawer.tsx`
-- Added regression tests to guarantee focus handoff after close for output preview drawer and monitor modal:
-  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.focus-management.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
-- Tightened keyboard shortcut collision coverage to include contenteditable targets in Articles reader:
-  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-
-### Stage 2 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.focus-management.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/TemplatesTab/__tests__/TemplatePreviewPane.accessibility-baseline.test.tsx`
-- `/tmp/bandit_watchlists_group09_stage2_frontend_scope_2026_02_23.json`
 
 ## Stage 3: Screen Reader Semantics and Live Status Updates
 **Goal**: Improve semantic structure and narrated state changes.
@@ -89,24 +58,6 @@
 - Add tests verifying live-region announcement content changes.
 **Status**: Complete
 
-### Stage 3 Execution Notes (2026-02-23)
-
-- Added reader-side live region announcements for selection changes and ensured first auto-selection does not create noisy startup announcements:
-  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx`
-- Added explicit row-level SR labels for article list rows to improve list navigation context:
-  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx`
-- Added/updated regression coverage for live announcements and row semantics:
-  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
-- Added locale contract entries for new Items SR announcement copy:
-  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
-
-### Stage 3 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.focus-management.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/TemplatesTab/__tests__/TemplatePreviewPane.accessibility-baseline.test.tsx`
-- `/tmp/bandit_watchlists_group09_stage3_frontend_scope_2026_02_23.json`
-
 ## Stage 4: Visual and Cognitive Accessibility Improvements
 **Goal**: Reduce ambiguity and cognitive burden for status-heavy interfaces.
 **Success Criteria**:
@@ -117,21 +68,6 @@
 - Add visual tests for status badge/icon combinations.
 - Add responsive behavior tests for small-screen interactions.
 **Status**: Complete
-
-### Stage 4 Execution Notes (2026-02-23)
-
-- Strengthened cognitive accessibility for Settings cluster subscriptions by adding descriptive switch labels and explicit yes/no switch state labels:
-  - `apps/packages/ui/src/components/Option/Watchlists/SettingsTab/SettingsTab.tsx`
-- Added regression coverage ensuring switch controls expose meaningful cluster-specific labels:
-  - `apps/packages/ui/src/components/Option/Watchlists/SettingsTab/__tests__/SettingsTab.help.test.tsx`
-- Reinforced reader comprehension patterns introduced in Stage 3 (row-level contextual labels + live selection announcements), reducing ambiguity in dense article triage lists:
-  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-
-### Stage 4 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.focus-management.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/TemplatesTab/__tests__/TemplatePreviewPane.accessibility-baseline.test.tsx src/components/Option/Watchlists/SettingsTab/__tests__/SettingsTab.help.test.tsx`
-- `/tmp/bandit_watchlists_group09_stage4_frontend_scope_2026_02_23.json`
 
 ## Stage 5: Accessibility Governance and Regression Gates
 **Goal**: Prevent accessibility regressions as Watchlists evolves.
@@ -144,19 +80,73 @@
 - Re-run accessibility smoke checks on all 8 tabs before release.
 **Status**: Complete
 
-### Stage 5 Execution Notes (2026-02-23)
+## Execution Notes
 
-- Added dedicated Watchlists accessibility CI gate script:
+### 2026-02-24 - Stage 1 completion (baseline audit + gap registry)
+
+- Published component-level accessibility gap registry with severity categories and localization gap notes:
+  - `Docs/Plans/WATCHLISTS_ACCESSIBILITY_BASELINE_GAP_REGISTRY_2026_02_24.md`
+- Added baseline accessibility regression coverage for Articles reader control labels and explicit text-based status signaling:
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx`
+- Stage 1 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/shared/__tests__/StatusTag.accessibility.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage1_2026_02_24.json`
+
+### 2026-02-24 - Stage 2 completion (keyboard + focus hardening)
+
+- Added focus restoration coverage for key Watchlists modal/drawer flows used in UC1/UC2 setup and output review:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobFormModal.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobPreviewModal.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputPreviewDrawer.tsx`
+- Added regression tests proving focus returns to launch controls after close:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx`
+- Stage 2 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage2_2026_02_24.json`
+
+### 2026-02-24 - Stage 3 completion (screen-reader semantics + live status contracts)
+
+- Added explicit assistive labels/regions for high-density Watchlists surfaces:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobsTab.tsx` (`Monitors table` label)
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/SourcesTab.tsx` (`Feeds table` label)
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx` (feed/article region labels + article row accessible names)
+- Added regression contracts for semantic labels and region discoverability:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx`
+- Revalidated existing run/output live-region announcement coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
+- Stage 3 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage3_2026_02_24.json`
+
+### 2026-02-24 - Stage 4 completion (visual + cognitive signaling hardening)
+
+- Added explicit text labels next to active-state toggles so monitor/feed state is never conveyed by switch color alone:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobsTab.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/SourcesTab.tsx`
+- Expanded accessibility regression coverage for state signaling and semantic discoverability:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx`
+- Stage 4 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group09_stage4_2026_02_24.json`
+
+### 2026-02-24 - Stage 5 completion (governance + regression gates)
+
+- Added a dedicated Watchlists accessibility gate command:
   - `apps/packages/ui/package.json` (`test:watchlists:a11y`)
-- Published governance runbook with:
-  - PR accessibility acceptance checklist
-  - CI gate command
-  - assistive-tech usage notes and known constraints
-  - release smoke set command list
-  - `Docs/Plans/WATCHLISTS_ACCESSIBILITY_GOVERNANCE_RUNBOOK_2026_02_23.md`
-- Re-ran targeted accessibility smoke suite through the new scripted entrypoint.
-
-### Stage 5 Validation Evidence
-
-- `bun run test:watchlists:a11y`
-- `/tmp/bandit_watchlists_group09_stage5_frontend_scope_2026_02_23.json`
+- Added CI workflow wiring for targeted Watchlists accessibility regressions:
+  - `.github/workflows/ui-watchlists-a11y-gates.yml`
+- Added Watchlists-specific accessibility acceptance criteria to PR checklist:
+  - `.github/pull_request_template.md`
+- Published assistive-tech usage notes with known constraints and release-gate expectations:
+  - `Docs/Plans/WATCHLISTS_ASSISTIVE_TECH_AUDIT_2026_02_24.md`
+- Stage 5 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.load-error-retry.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobPreviewModal.focus.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.accessibility-baseline.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx --maxWorkers=1 --no-file-parallelism`

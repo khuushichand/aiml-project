@@ -128,12 +128,12 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
           <div
             class="text-sm font-medium"
           >
-            Choose preset schedules first
+            Set a reliable monitor schedule
           </div>
           <div
             class="text-xs text-text-muted"
           >
-            Use preset timing for most monitors. Switch to custom cron only for uncommon timing windows.
+            Start with presets for daily or weekday runs. Use cron only when you need exact custom timing.
           </div>
           <a
             class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
@@ -294,12 +294,12 @@ exports[`WatchlistsHelpTooltip > renders help tooltip content snapshots for all 
           <div
             class="text-sm font-medium"
           >
-            Shape briefing format with templates
+            Customize briefing format
           </div>
           <div
             class="text-xs text-text-muted"
           >
-            Start with a preset template to control sections and tone, then customize only if you need advanced formatting.
+            Start from a preset report template, then edit sections to shape briefing tone, structure, and audio script text.
           </div>
           <a
             class="inline-flex items-center gap-1 text-xs text-primary hover:underline"

@@ -5,7 +5,11 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { ItemsTab } from "../ItemsTab"
 import { useWatchlistsStore } from "@/store/watchlists"
-import { ITEMS_PAGE_SIZE_STORAGE_KEY, ITEMS_VIEW_PRESETS_STORAGE_KEY } from "../items-utils"
+import {
+  ITEMS_PAGE_SIZE_STORAGE_KEY,
+  ITEMS_SORT_MODE_STORAGE_KEY,
+  ITEMS_VIEW_PRESETS_STORAGE_KEY
+} from "../items-utils"
 
 const serviceMocks = vi.hoisted(() => ({
   createWatchlistOutput: vi.fn(),
@@ -127,10 +131,13 @@ const makeItems = () => ([
   }
 ])
 
-const getRenderedRowOrder = (): number[] =>
-  screen
-    .getAllByTestId(/watchlists-item-row-\d+/)
-    .map((element) => Number(element.getAttribute("data-testid")?.split("-").at(-1)))
+const createDeferred = <TValue,>() => {
+  let resolve!: (value: TValue | PromiseLike<TValue>) => void
+  const promise = new Promise<TValue>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
 
 const setupFetchScrapedItemsMock = (listItems = makeItems()) => {
   ;(serviceMocks.fetchScrapedItems as Mock).mockImplementation(async (params?: Record<string, unknown>) => {
@@ -354,6 +361,73 @@ describe("ItemsTab batch throughput controls", () => {
     expect(window.localStorage.getItem(ITEMS_PAGE_SIZE_STORAGE_KEY)).toBe("20")
   })
 
+  it("supports all-filtered batch confirmation scope and applies unread-only updates", async () => {
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-mark-all-filtered"))
+
+    await waitFor(() => {
+      expect(uiMocks.modalConfirm).toHaveBeenCalled()
+    })
+
+    const confirmConfig = uiMocks.modalConfirm.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(confirmConfig?.title).toBe("Mark all filtered items as reviewed?")
+    expect(confirmConfig?.content).toBe(
+      "Scope: all filtered items. This will mark 2 items as reviewed."
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(101, { reviewed: true })
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(102, { reviewed: true })
+    })
+    expect(serviceMocks.updateScrapedItem).not.toHaveBeenCalledWith(103, { reviewed: true })
+    expect(uiMocks.messageSuccess).toHaveBeenCalledWith(
+      "Marked 2 all filtered items as reviewed."
+    )
+  })
+
+  it("shows batch progress state while updates are running and keeps terminal summary visible", async () => {
+    const pendingById = new Map<number, ReturnType<typeof createDeferred<{ id: number; reviewed: boolean }>>>()
+    pendingById.set(101, createDeferred<{ id: number; reviewed: boolean }>())
+    pendingById.set(102, createDeferred<{ id: number; reviewed: boolean }>())
+
+    serviceMocks.updateScrapedItem.mockImplementation((itemId: number) => {
+      const pending = pendingById.get(itemId)
+      if (!pending) throw new Error(`missing deferred for ${itemId}`)
+      return pending.promise
+    })
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-mark-page"))
+    await waitFor(() => {
+      expect(uiMocks.modalConfirm).toHaveBeenCalled()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-items-batch-progress")).toBeInTheDocument()
+      expect(screen.getByTestId("watchlists-items-batch-progress-count")).toHaveTextContent("0 / 2")
+    })
+
+    pendingById.get(101)?.resolve({ id: 101, reviewed: true })
+    pendingById.get(102)?.resolve({ id: 102, reviewed: true })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-items-batch-progress-count")).toHaveTextContent("2 / 2")
+      expect(screen.getByTestId("watchlists-items-batch-progress-summary")).toHaveTextContent(
+        "Batch review complete: 2 succeeded, 0 failed."
+      )
+    })
+  })
+
   it("supports saved view preset save, apply, and delete", async () => {
     render(<ItemsTab />)
 
@@ -411,35 +485,256 @@ describe("ItemsTab batch throughput controls", () => {
     })
   })
 
-  it("reorders rows when sort mode changes", async () => {
+  it("transitions smart feed filters and requests matching reviewed states", async () => {
     render(<ItemsTab />)
 
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
     })
 
+    fireEvent.click(screen.getByTestId("watchlists-items-smart-feed-reviewed"))
+    expect(useWatchlistsStore.getState().itemsSmartFilter).toBe("reviewed")
+
     await waitFor(() => {
-      expect(getRenderedRowOrder()).toEqual([103, 102, 101])
+      expect(
+        (serviceMocks.fetchScrapedItems as Mock).mock.calls.some(([params]) =>
+          params?.reviewed === true && params?.size === 25
+        )
+      ).toBe(true)
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-smart-feed-unread"))
+    expect(useWatchlistsStore.getState().itemsSmartFilter).toBe("unread")
+
+    await waitFor(() => {
+      expect(
+        (serviceMocks.fetchScrapedItems as Mock).mock.calls.some(([params]) =>
+          params?.reviewed === false && params?.size === 25
+        )
+      ).toBe(true)
+    })
+  })
+
+  it("supports triage sort changes and persists sort preference", async () => {
+    setupFetchScrapedItemsMock([
+      {
+        id: 201,
+        run_id: 1,
+        job_id: 1,
+        source_id: 1,
+        url: "https://example.com/reviewed-newest",
+        title: "Reviewed newest",
+        summary: "summary",
+        tags: ["tech"],
+        status: "ingested",
+        reviewed: true,
+        created_at: "2026-02-18T08:20:00Z",
+        published_at: "2026-02-18T08:20:00Z"
+      },
+      {
+        id: 202,
+        run_id: 1,
+        job_id: 1,
+        source_id: 1,
+        url: "https://example.com/unread-mid",
+        title: "Unread mid",
+        summary: "summary",
+        tags: ["tech"],
+        status: "ingested",
+        reviewed: false,
+        created_at: "2026-02-18T08:10:00Z",
+        published_at: "2026-02-18T08:10:00Z"
+      },
+      {
+        id: 203,
+        run_id: 1,
+        job_id: 1,
+        source_id: 1,
+        url: "https://example.com/unread-oldest",
+        title: "Unread oldest",
+        summary: "summary",
+        tags: ["tech"],
+        status: "ingested",
+        reviewed: false,
+        created_at: "2026-02-18T08:00:00Z",
+        published_at: "2026-02-18T08:00:00Z"
+      }
+    ])
+
+    render(<ItemsTab />)
+
+    const orderedRowIds = () =>
+      screen.getAllByTestId(/^watchlists-item-row-\d+$/).map((node) =>
+        Number(String(node.getAttribute("data-testid") || "").replace("watchlists-item-row-", ""))
+      )
+
+    await waitFor(() => {
+      expect(orderedRowIds()).toEqual([201, 202, 203])
     })
 
     const sortSelect = screen.getByTestId("watchlists-items-sort-select")
     fireEvent.mouseDown(sortSelect)
     fireEvent.click(await screen.findByText("Unread first"))
+
     await waitFor(() => {
-      expect(getRenderedRowOrder()).toEqual([102, 101, 103])
+      expect(orderedRowIds()).toEqual([202, 203, 201])
     })
+    expect(window.localStorage.getItem(ITEMS_SORT_MODE_STORAGE_KEY)).toBe("unreadFirst")
 
     fireEvent.mouseDown(sortSelect)
     fireEvent.click(await screen.findByText("Oldest first"))
+
     await waitFor(() => {
-      expect(getRenderedRowOrder()).toEqual([101, 102, 103])
+      expect(orderedRowIds()).toEqual([203, 202, 201])
+    })
+    expect(window.localStorage.getItem(ITEMS_SORT_MODE_STORAGE_KEY)).toBe("oldest")
+  })
+
+  it("reconciles partial batch-review failures without losing successful row updates", async () => {
+    serviceMocks.updateScrapedItem.mockImplementation(async (itemId: number) => {
+      if (itemId === 102) {
+        throw new Error("transient failure")
+      }
+      return { id: itemId, reviewed: true }
     })
 
-    fireEvent.mouseDown(sortSelect)
-    fireEvent.click(await screen.findByText("Reviewed first"))
+    render(<ItemsTab />)
+
     await waitFor(() => {
-      expect(getRenderedRowOrder()).toEqual([103, 102, 101])
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
     })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-mark-page"))
+
+    await waitFor(() => {
+      expect(uiMocks.modalConfirm).toHaveBeenCalled()
+    })
+
+    await waitFor(() => {
+      expect(uiMocks.messageWarning).toHaveBeenCalledWith(
+        "Marked 1 items on this page as reviewed; 1 failed."
+      )
+    })
+
+    expect(screen.getByTestId("watchlists-item-row-review-state-101")).toHaveTextContent("Reviewed")
+    expect(screen.getByTestId("watchlists-item-row-review-state-102")).toHaveTextContent("Unread")
+    expect(screen.getByTestId("watchlists-items-batch-retry-failed")).toHaveTextContent(
+      "Retry 1 failed"
+    )
+  })
+
+  it("retries failed batch updates from the recovery entrypoint", async () => {
+    const failOnce = new Set([102])
+    serviceMocks.updateScrapedItem.mockImplementation(async (itemId: number) => {
+      if (failOnce.has(itemId)) {
+        failOnce.delete(itemId)
+        throw new Error("transient failure")
+      }
+      return { id: itemId, reviewed: true }
+    })
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-mark-page"))
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-items-batch-retry-failed")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-batch-retry-failed"))
+
+    await waitFor(() => {
+      const callsFor102 = serviceMocks.updateScrapedItem.mock.calls.filter(
+        ([itemId]) => Number(itemId) === 102
+      )
+      expect(callsFor102).toHaveLength(2)
+      expect(screen.getByTestId("watchlists-item-row-review-state-102")).toHaveTextContent("Reviewed")
+      expect(screen.queryByTestId("watchlists-items-batch-retry-failed")).not.toBeInTheDocument()
+    })
+  })
+
+  it("paginates all-filtered review lookups for thousand-item datasets", async () => {
+    const highVolumeItems = Array.from({ length: 1200 }, (_item, index) => {
+      const id = index + 1
+      const minute = String(index % 60).padStart(2, "0")
+      return {
+        id,
+        run_id: 1,
+        job_id: 1,
+        source_id: 1,
+        url: `https://example.com/high-volume-${id}`,
+        title: `High Volume Item ${id}`,
+        summary: "summary",
+        tags: ["tech"],
+        status: "ingested",
+        reviewed: false,
+        created_at: `2026-02-18T08:${minute}:00Z`,
+        published_at: `2026-02-18T08:${minute}:00Z`
+      }
+    })
+
+    ;(serviceMocks.fetchScrapedItems as Mock).mockImplementation(async (params?: Record<string, unknown>) => {
+      const page = Number(params?.page || 1)
+      const size = Number(params?.size || 25)
+
+      if (size === 1) {
+        if (params?.reviewed === false) return { items: [], total: highVolumeItems.length, page: 1, size: 1, has_more: false }
+        if (params?.reviewed === true) return { items: [], total: 0, page: 1, size: 1, has_more: false }
+        return { items: [], total: highVolumeItems.length, page: 1, size: 1, has_more: false }
+      }
+
+      if (params?.reviewed === false && size === 200) {
+        const start = (page - 1) * size
+        return {
+          items: highVolumeItems.slice(start, start + size),
+          total: highVolumeItems.length,
+          page,
+          size,
+          has_more: start + size < highVolumeItems.length
+        }
+      }
+
+      const start = (page - 1) * size
+      return {
+        items: highVolumeItems.slice(start, start + size),
+        total: highVolumeItems.length,
+        page,
+        size,
+        has_more: start + size < highVolumeItems.length
+      }
+    })
+
+    ;(serviceMocks.updateScrapedItem as Mock).mockImplementation(async (itemId: number) => ({
+      id: itemId,
+      reviewed: true
+    }))
+
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-1")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-items-mark-all-filtered"))
+
+    await waitFor(() => {
+      expect(uiMocks.modalConfirm).toHaveBeenCalled()
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledTimes(1200)
+    }, { timeout: 15000 })
+
+    const lookupCalls = (serviceMocks.fetchScrapedItems as Mock).mock.calls
+      .map((entry) => entry[0] as Record<string, unknown>)
+      .filter((params) => params?.reviewed === false && Number(params?.size) === 200)
+
+    expect(lookupCalls).toHaveLength(6)
+    expect(lookupCalls.map((params) => Number(params.page))).toEqual([1, 2, 3, 4, 5, 6])
+    expect(uiMocks.messageSuccess).toHaveBeenCalledWith("Marked 1200 all filtered items as reviewed.")
   })
 
   it("supports item handoff to monitor/run/reports and briefing queue action", async () => {

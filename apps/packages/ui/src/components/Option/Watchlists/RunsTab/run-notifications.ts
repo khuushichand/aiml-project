@@ -46,9 +46,38 @@ const RUN_NOTIFICATION_PRIORITY: Record<RunNotificationKind, number> = {
   stalled: 1,
   completed: 2
 }
+const DEFAULT_RUN_NOTIFICATIONS_PAGE_SIZE = 25
+const DEFAULT_RUN_NOTIFICATIONS_REDUCED_PAGE_SIZE = 10
+const DEFAULT_RUN_NOTIFICATIONS_BACKGROUND_POLL_MS = 60_000
+const DEFAULT_RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS = 30_000
+
+export interface RunNotificationsPollPlanInput {
+  isOnline: boolean
+  activeTab: string | null | undefined
+  runsPollingActive: boolean
+  documentVisible: boolean
+  baseIntervalMs: number
+  minIntervalMs?: number
+  defaultPageSize?: number
+  reducedPageSize?: number
+  backgroundIntervalMs?: number
+  runsTabIntervalMs?: number
+}
+
+export interface RunNotificationsPollPlan {
+  enabled: boolean
+  intervalMs: number
+  pageSize: number
+  suppressCompleted: boolean
+}
 
 const normalizeStatus = (status: string | null | undefined): string =>
   String(status || "").trim().toLowerCase()
+
+const normalizePositiveInt = (value: number, fallback: number): number => {
+  if (!Number.isFinite(value)) return fallback
+  return Math.max(1, Math.floor(value))
+}
 
 const parseEpochMs = (value: string | null | undefined): number | null => {
   if (!value) return null
@@ -294,4 +323,81 @@ export const shouldNotifyNewTerminalRun = (
   const finishedAtMs = parseEpochMs(run.finished_at)
   if (finishedAtMs == null) return false
   return finishedAtMs >= sessionStartedAtMs
+}
+
+export const resolveRunNotificationsPollPlan = (
+  input: RunNotificationsPollPlanInput
+): RunNotificationsPollPlan => {
+  const minInterval = normalizePositiveInt(input.minIntervalMs ?? 100, 100)
+  const baseInterval = Math.max(
+    minInterval,
+    normalizePositiveInt(input.baseIntervalMs, minInterval)
+  )
+  const backgroundInterval = Math.max(
+    baseInterval,
+    normalizePositiveInt(
+      input.backgroundIntervalMs ?? DEFAULT_RUN_NOTIFICATIONS_BACKGROUND_POLL_MS,
+      DEFAULT_RUN_NOTIFICATIONS_BACKGROUND_POLL_MS
+    )
+  )
+  const runsTabInterval = Math.max(
+    baseInterval,
+    normalizePositiveInt(
+      input.runsTabIntervalMs ?? DEFAULT_RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS,
+      DEFAULT_RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS
+    )
+  )
+  const defaultPageSize = normalizePositiveInt(
+    input.defaultPageSize ?? DEFAULT_RUN_NOTIFICATIONS_PAGE_SIZE,
+    DEFAULT_RUN_NOTIFICATIONS_PAGE_SIZE
+  )
+  const reducedPageSize = normalizePositiveInt(
+    input.reducedPageSize ?? DEFAULT_RUN_NOTIFICATIONS_REDUCED_PAGE_SIZE,
+    DEFAULT_RUN_NOTIFICATIONS_REDUCED_PAGE_SIZE
+  )
+  const activeTab = String(input.activeTab || "")
+  const runsTabActive = activeTab === "runs"
+
+  if (!input.isOnline) {
+    return {
+      enabled: false,
+      intervalMs: baseInterval,
+      pageSize: defaultPageSize,
+      suppressCompleted: false
+    }
+  }
+
+  if (runsTabActive && input.runsPollingActive) {
+    return {
+      enabled: false,
+      intervalMs: runsTabInterval,
+      pageSize: reducedPageSize,
+      suppressCompleted: true
+    }
+  }
+
+  if (!input.documentVisible) {
+    return {
+      enabled: true,
+      intervalMs: backgroundInterval,
+      pageSize: reducedPageSize,
+      suppressCompleted: true
+    }
+  }
+
+  if (runsTabActive) {
+    return {
+      enabled: true,
+      intervalMs: runsTabInterval,
+      pageSize: reducedPageSize,
+      suppressCompleted: true
+    }
+  }
+
+  return {
+    enabled: true,
+    intervalMs: baseInterval,
+    pageSize: defaultPageSize,
+    suppressCompleted: false
+  }
 }

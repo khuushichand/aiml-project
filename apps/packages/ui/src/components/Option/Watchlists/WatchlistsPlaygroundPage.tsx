@@ -39,53 +39,77 @@ import {
   dedupeRunNotificationEvents,
   groupRunNotificationEvents,
   getRunFailureHint,
+  resolveRunNotificationsPollPlan,
   resolveStalledRunNotification,
   resolveRunTransitionNotification,
   shouldNotifyNewTerminalRun
 } from "./RunsTab/run-notifications"
 import {
-  hasActiveWatchlistRuns,
-  resolveAdaptiveRunNotificationsPollMs,
-  resolveRunNotificationsPageSize
-} from "./RunsTab/polling-utils"
-import { resolveWatchlistsIaExperimentVariant } from "@/utils/watchlists-ia-rollout"
-import { trackWatchlistsIaExperimentTransition } from "@/utils/watchlists-ia-experiment-telemetry"
+  flushWatchlistsIaExperimentSession,
+  trackWatchlistsIaExperimentTransition
+} from "@/utils/watchlists-ia-experiment-telemetry"
 import { trackWatchlistsOnboardingTelemetry } from "@/utils/watchlists-onboarding-telemetry"
+import { resolveWatchlistsIaExperimentRollout } from "@/utils/watchlists-ia-rollout"
 
 const RUN_NOTIFICATIONS_POLL_MS = 15_000
+const RUN_NOTIFICATIONS_PAGE_SIZE = 25
+const RUN_NOTIFICATIONS_REDUCED_PAGE_SIZE = 10
 const RUN_NOTIFICATIONS_MIN_POLL_MS = 100
+const RUN_NOTIFICATIONS_BACKGROUND_POLL_MS = 60_000
+const RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS = 30_000
 const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
 const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
 const TEACH_POINTS_STORAGE_KEY = "watchlists:teach-points:v1"
+const SUCCESSFUL_RUN_STATUSES = new Set(["completed", "succeeded", "success", "done", "finished"])
 
 type GuidedTourTab = "sources" | "jobs" | "runs" | "items" | "outputs"
 type GuidedTourStatus = "idle" | "in_progress" | "dismissed" | "completed"
-type TeachPointKey = "cron" | "filters" | "templates"
+type TaskViewKey = "collect" | "review" | "briefings"
+type WatchlistsTabKey =
+  | "overview"
+  | "sources"
+  | "jobs"
+  | "runs"
+  | "items"
+  | "outputs"
+  | "templates"
+  | "settings"
+
+interface OrientationAction {
+  key: string
+  label: string
+  target: WatchlistsTabKey
+}
+
+interface TabOrientation {
+  title: string
+  description: string
+  actions: OrientationAction[]
+}
 interface GuidedTourState {
   status: GuidedTourStatus
   step: number
 }
+type TeachPointKey = "jobsCronFilters" | "templatesAuthoring"
+
 interface TeachPointState {
-  dismissed: Record<TeachPointKey, boolean>
-}
-interface OrientationAction {
-  target: WatchlistTab
-  label: string
-}
-interface TabOrientationGuide {
-  what: string
-  next: string
-  actions: [OrientationAction, OrientationAction]
+  jobsCronFilters: boolean
+  templatesAuthoring: boolean
 }
 
 const GUIDED_TOUR_TABS: GuidedTourTab[] = ["sources", "jobs", "runs", "items", "outputs"]
 const GUIDED_TOUR_LAST_STEP = GUIDED_TOUR_TABS.length - 1
-const DEFAULT_TEACH_POINT_STATE: TeachPointState = {
-  dismissed: {
-    cron: false,
-    filters: false,
-    templates: false
-  }
+const TASK_VIEW_PRIMARY_TAB: Record<TaskViewKey, "sources" | "items" | "outputs"> = {
+  collect: "sources",
+  review: "items",
+  briefings: "outputs"
+}
+
+const resolveTaskViewForTab = (tab: string): TaskViewKey | null => {
+  if (tab === "sources" || tab === "jobs") return "collect"
+  if (tab === "runs" || tab === "items") return "review"
+  if (tab === "outputs" || tab === "templates") return "briefings"
+  return null
 }
 
 const clampTourStep = (step: number): number => {
@@ -124,23 +148,30 @@ const writeGuidedTourState = (state: GuidedTourState): void => {
 }
 
 const readTeachPointState = (): TeachPointState => {
-  if (typeof window === "undefined") return DEFAULT_TEACH_POINT_STATE
+  if (typeof window === "undefined") {
+    return {
+      jobsCronFilters: false,
+      templatesAuthoring: false
+    }
+  }
   try {
     const raw = localStorage.getItem(TEACH_POINTS_STORAGE_KEY)
-    if (!raw) return DEFAULT_TEACH_POINT_STATE
-    const parsed = JSON.parse(raw) as Partial<TeachPointState>
-    const dismissed = parsed.dismissed && typeof parsed.dismissed === "object"
-      ? parsed.dismissed
-      : {}
-    return {
-      dismissed: {
-        cron: dismissed.cron === true,
-        filters: dismissed.filters === true,
-        templates: dismissed.templates === true
+    if (!raw) {
+      return {
+        jobsCronFilters: false,
+        templatesAuthoring: false
       }
     }
+    const parsed = JSON.parse(raw) as Partial<TeachPointState>
+    return {
+      jobsCronFilters: Boolean(parsed.jobsCronFilters),
+      templatesAuthoring: Boolean(parsed.templatesAuthoring)
+    }
   } catch {
-    return DEFAULT_TEACH_POINT_STATE
+    return {
+      jobsCronFilters: false,
+      templatesAuthoring: false
+    }
   }
 }
 
@@ -176,6 +207,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
 
   const activeTab = useWatchlistsStore((s) => s.activeTab)
   const overviewHealth = useWatchlistsStore((s) => s.overviewHealth)
+  const runsPollingActive = useWatchlistsStore((s) => s.pollingActive)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const resetStore = useWatchlistsStore((s) => s.resetStore)
@@ -193,7 +225,12 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const [guidedTourOpen, setGuidedTourOpen] = React.useState(false)
   const [showGuidedTourCompletion, setShowGuidedTourCompletion] = React.useState(false)
   const [teachPointState, setTeachPointState] = React.useState<TeachPointState>(() => readTeachPointState())
-  const iaExperimentVariant = React.useMemo(() => resolveWatchlistsIaExperimentVariant(), [])
+  const [documentVisible, setDocumentVisible] = React.useState<boolean>(() => {
+    if (typeof document === "undefined") return true
+    return document.visibilityState !== "hidden"
+  })
+  const iaRollout = React.useMemo(() => resolveWatchlistsIaExperimentRollout(), [])
+  const iaExperimentVariant = iaRollout.variant
   const iaExperimentEnabled = iaExperimentVariant === "experimental"
   const previousActiveTabRef = useRef<typeof activeTab | null>(null)
 
@@ -230,178 +267,179 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       label: t("watchlists:quickActions.outputs", "View reports")
     }
   ]
-  const orientationByTab = React.useMemo<Record<WatchlistTab, TabOrientationGuide>>(
-    () => ({
-      overview: {
-        what: t(
-          "watchlists:orientation.tabs.overview.what",
-          "Overview summarizes watchlist health, setup progress, and attention signals."
-        ),
-        next: t(
-          "watchlists:orientation.tabs.overview.next",
-          "Next: open Feeds to add sources, then create Monitors."
-        ),
-        actions: [
-          {
-            target: "sources",
-            label: t("watchlists:orientation.actions.openSources", "Open Feeds")
-          },
-          {
-            target: "jobs",
-            label: t("watchlists:orientation.actions.openJobs", "Open Monitors")
-          }
-        ]
-      },
-      sources: {
-        what: t(
-          "watchlists:orientation.tabs.sources.what",
-          "Feeds are your input sources for monitor runs."
-        ),
-        next: t(
-          "watchlists:orientation.tabs.sources.next",
-          "Next: create Monitors to schedule collection from selected feeds."
-        ),
-        actions: [
-          {
-            target: "jobs",
-            label: t("watchlists:orientation.actions.openJobs", "Open Monitors")
-          },
-          {
-            target: "runs",
-            label: t("watchlists:orientation.actions.openRuns", "Open Activity")
-          }
-        ]
-      },
-      jobs: {
-        what: t(
-          "watchlists:orientation.tabs.jobs.what",
-          "Monitors combine feed scope, schedules, filters, and output settings."
-        ),
-        next: t(
-          "watchlists:orientation.tabs.jobs.next",
-          "Next: check Activity after runs to confirm collection health."
-        ),
-        actions: [
-          {
-            target: "runs",
-            label: t("watchlists:orientation.actions.openRuns", "Open Activity")
-          },
-          {
-            target: "outputs",
-            label: t("watchlists:orientation.actions.openOutputs", "Open Reports")
-          }
-        ]
-      },
-      runs: {
-        what: t(
-          "watchlists:orientation.tabs.runs.what",
-          "Activity shows monitor run status, logs, and failures."
-        ),
-        next: t(
-          "watchlists:orientation.tabs.runs.next",
-          "Next: open Reports to verify generated briefing outputs."
-        ),
-        actions: [
-          {
-            target: "outputs",
-            label: t(
-              "watchlists:orientation.actions.openReportsFromRuns",
-              "Open Reports (generated briefings)"
-            )
-          },
-          {
-            target: "items",
-            label: t("watchlists:orientation.actions.openItems", "Open Articles")
-          }
-        ]
-      },
-      items: {
-        what: t(
-          "watchlists:orientation.tabs.items.what",
-          "Articles are captured content for daily triage and briefing input."
-        ),
-        next: t(
-          "watchlists:orientation.tabs.items.next",
-          "Next: adjust Monitors when article quality or volume needs tuning."
-        ),
-        actions: [
-          {
-            target: "jobs",
-            label: t(
-              "watchlists:orientation.actions.openMonitorsFromItems",
-              "Open Monitors (tune collection)"
-            )
-          },
-          {
-            target: "outputs",
-            label: t("watchlists:orientation.actions.openOutputs", "Open Reports")
-          }
-        ]
-      },
-      outputs: {
-        what: t(
-          "watchlists:orientation.tabs.outputs.what",
-          "Reports contains generated briefings, including delivery outcomes."
-        ),
-        next: t(
-          "watchlists:orientation.tabs.outputs.next",
-          "Next: refine Templates or Monitors to improve future briefings."
-        ),
-        actions: [
-          {
-            target: "templates",
-            label: t("watchlists:orientation.actions.openTemplates", "Open Templates")
-          },
-          {
-            target: "jobs",
-            label: t("watchlists:orientation.actions.openJobs", "Open Monitors")
-          }
-        ]
-      },
-      templates: {
-        what: t(
-          "watchlists:orientation.tabs.templates.what",
-          "Templates define formatting for generated report and briefing content."
-        ),
-        next: t(
-          "watchlists:orientation.tabs.templates.next",
-          "Next: apply template changes in Monitors, then rerun Activity."
-        ),
-        actions: [
-          {
-            target: "jobs",
-            label: t("watchlists:orientation.actions.openJobs", "Open Monitors")
-          },
-          {
-            target: "runs",
-            label: t("watchlists:orientation.actions.openRuns", "Open Activity")
-          }
-        ]
-      },
-      settings: {
-        what: t(
-          "watchlists:orientation.tabs.settings.what",
-          "Settings controls workspace defaults, retention, and integration options."
-        ),
-        next: t(
-          "watchlists:orientation.tabs.settings.next",
-          "Next: return to Feeds or Monitors to apply workspace changes."
-        ),
-        actions: [
-          {
-            target: "sources",
-            label: t("watchlists:orientation.actions.openSources", "Open Feeds")
-          },
-          {
-            target: "jobs",
-            label: t("watchlists:orientation.actions.openJobs", "Open Monitors")
-          }
-        ]
-      }
-    }),
-    [t]
-  )
-  const activeOrientationGuide = orientationByTab[activeTab]
+  const taskViews = [
+    {
+      key: "collect" as const,
+      label: t("watchlists:taskViews.collect", "Collect"),
+      hint: t("watchlists:taskViews.collectHint", "Feeds and monitors")
+    },
+    {
+      key: "review" as const,
+      label: t("watchlists:taskViews.review", "Review"),
+      hint: t("watchlists:taskViews.reviewHint", "Activity and articles")
+    },
+    {
+      key: "briefings" as const,
+      label: t("watchlists:taskViews.briefings", "Briefings"),
+      hint: t("watchlists:taskViews.briefingsHint", "Reports and templates")
+    }
+  ]
+  const activeTaskView = resolveTaskViewForTab(activeTab)
+  const tabOrientation: Record<WatchlistsTabKey, TabOrientation> = {
+    overview: {
+      title: t("watchlists:orientation.overview.title", "Overview: watchlist health at a glance"),
+      description: t(
+        "watchlists:orientation.overview.description",
+        "Review current health and attention signals, then start by adding or refining feeds."
+      ),
+      actions: [
+        {
+          key: "open-feeds",
+          label: t("watchlists:orientation.actions.openFeeds", "Open Feeds"),
+          target: "sources"
+        },
+        {
+          key: "open-monitors",
+          label: t("watchlists:orientation.actions.openMonitors", "Open Monitors"),
+          target: "jobs"
+        }
+      ]
+    },
+    sources: {
+      title: t("watchlists:orientation.sources.title", "Feeds: define what to collect"),
+      description: t(
+        "watchlists:orientation.sources.description",
+        "Add or clean feed inputs here. Next, configure monitors to schedule collection."
+      ),
+      actions: [
+        {
+          key: "open-monitors",
+          label: t("watchlists:orientation.actions.openMonitors", "Open Monitors"),
+          target: "jobs"
+        },
+        {
+          key: "open-activity",
+          label: t("watchlists:orientation.actions.openActivity", "Open Activity"),
+          target: "runs"
+        }
+      ]
+    },
+    jobs: {
+      title: t("watchlists:orientation.jobs.title", "Monitors: control schedule and processing"),
+      description: t(
+        "watchlists:orientation.jobs.description",
+        "Monitors run your feed pipeline. Next, check Activity to confirm runs are healthy."
+      ),
+      actions: [
+        {
+          key: "open-activity",
+          label: t("watchlists:orientation.actions.openActivity", "Open Activity"),
+          target: "runs"
+        },
+        {
+          key: "open-articles",
+          label: t("watchlists:orientation.actions.openArticles", "Open Articles"),
+          target: "items"
+        }
+      ]
+    },
+    runs: {
+      title: t("watchlists:orientation.runs.title", "Activity: run health and history"),
+      description: t(
+        "watchlists:orientation.runs.description",
+        "Inspect failures and logs here. Next, open Reports to view generated briefings."
+      ),
+      actions: [
+        {
+          key: "open-reports",
+          label: t("watchlists:orientation.actions.openReports", "Open Reports"),
+          target: "outputs"
+        },
+        {
+          key: "open-articles",
+          label: t("watchlists:orientation.actions.openArticles", "Open Articles"),
+          target: "items"
+        }
+      ]
+    },
+    items: {
+      title: t("watchlists:orientation.items.title", "Articles: triage captured content"),
+      description: t(
+        "watchlists:orientation.items.description",
+        "Review and prioritize captured items. Next, tune monitor scope or open reports."
+      ),
+      actions: [
+        {
+          key: "open-monitors",
+          label: t("watchlists:orientation.actions.openMonitors", "Open Monitors"),
+          target: "jobs"
+        },
+        {
+          key: "open-reports",
+          label: t("watchlists:orientation.actions.openReports", "Open Reports"),
+          target: "outputs"
+        }
+      ]
+    },
+    outputs: {
+      title: t("watchlists:orientation.outputs.title", "Reports: generated briefing outputs"),
+      description: t(
+        "watchlists:orientation.outputs.description",
+        "Download, review, or regenerate briefings. Next, edit templates when format needs change."
+      ),
+      actions: [
+        {
+          key: "open-templates",
+          label: t("watchlists:orientation.actions.openTemplates", "Open Templates"),
+          target: "templates"
+        },
+        {
+          key: "open-activity",
+          label: t("watchlists:orientation.actions.openActivity", "Open Activity"),
+          target: "runs"
+        }
+      ]
+    },
+    templates: {
+      title: t("watchlists:orientation.templates.title", "Templates: define briefing format"),
+      description: t(
+        "watchlists:orientation.templates.description",
+        "Template changes apply to future output generation. Next, run monitors or open reports."
+      ),
+      actions: [
+        {
+          key: "open-monitors",
+          label: t("watchlists:orientation.actions.openMonitors", "Open Monitors"),
+          target: "jobs"
+        },
+        {
+          key: "open-reports",
+          label: t("watchlists:orientation.actions.openReports", "Open Reports"),
+          target: "outputs"
+        }
+      ]
+    },
+    settings: {
+      title: t("watchlists:orientation.settings.title", "Settings: workspace-level watchlists defaults"),
+      description: t(
+        "watchlists:orientation.settings.description",
+        "Adjust watchlists defaults and integration settings. Return to overview to validate health."
+      ),
+      actions: [
+        {
+          key: "open-overview",
+          label: t("watchlists:orientation.actions.openOverview", "Open Overview"),
+          target: "overview"
+        },
+        {
+          key: "open-feeds",
+          label: t("watchlists:orientation.actions.openFeeds", "Open Feeds"),
+          target: "sources"
+        }
+      ]
+    }
+  }
+  const activeTabOrientation = tabOrientation[activeTab as WatchlistsTabKey] || tabOrientation.overview
 
   const activeTabHelpHref = WATCHLISTS_TAB_HELP_DOCS[activeTab] || WATCHLISTS_MAIN_DOCS_URL
   const activeTabHelpLabel = tabHelpLabels[activeTab] || t("watchlists:help.docs", "Watchlists docs")
@@ -412,7 +450,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.sources.title", "1. Add feeds"),
       description: t(
         "watchlists:guide.steps.sources.description",
-        "Feeds are inputs for monitors. Add RSS/site sources before scheduling runs."
+        "Feeds are inputs for monitors. Add RSS/site feeds before scheduling Activity checks."
       )
     },
     {
@@ -420,7 +458,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.jobs.title", "2. Create monitors"),
       description: t(
         "watchlists:guide.steps.jobs.description",
-        "Monitors connect feeds to schedule, output template, and optional audio briefing delivery."
+        "Monitors define schedule, filters, and template-driven reports, including optional audio."
       )
     },
     {
@@ -428,7 +466,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.runs.title", "3. Check activity"),
       description: t(
         "watchlists:guide.steps.runs.description",
-        "Activity shows run status, logs, and failures for each monitor."
+        "Activity shows monitor status, logs, and failures."
       )
     },
     {
@@ -436,7 +474,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.items.title", "4. Review articles"),
       description: t(
         "watchlists:guide.steps.items.description",
-        "Articles are captured content from successful runs, ready for triage."
+        "Articles are captured content from successful monitor checks, ready for triage."
       )
     },
     {
@@ -444,49 +482,45 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.outputs.title", "5. Deliver reports"),
       description: t(
         "watchlists:guide.steps.outputs.description",
-        "Reports show text and audio briefings generated from monitor runs and template choices."
+        "Reports contain generated briefings from monitor templates; regenerate with different template or audio settings."
       )
     }
   ]
   const guidedTourStep = guidedTourSteps[clampTourStep(guidedTourState.step)]
   const activeTeachPoint = React.useMemo(() => {
-    if (activeTab === "jobs") {
-      if (!teachPointState.dismissed.cron) {
-        return {
-          key: "cron" as const,
-          title: t("watchlists:teachPoints.cron.title", "Use schedule presets before custom cron"),
-          description: t(
-            "watchlists:teachPoints.cron.description",
-            "Start with a preset schedule. Use custom cron only for uncommon timing."
-          )
-        }
-      }
-      if (!teachPointState.dismissed.filters) {
-        return {
-          key: "filters" as const,
-          title: t("watchlists:teachPoints.filters.title", "Use filters to reduce noisy items"),
-          description: t(
-            "watchlists:teachPoints.filters.description",
-            "Add include/exclude filters when monitors collect too much or irrelevant content."
-          )
-        }
+    if (activeTab === "jobs" && !teachPointState.jobsCronFilters) {
+      return {
+        key: "jobsCronFilters" as TeachPointKey,
+        title: t("watchlists:teachPoints.jobs.title", "Monitor setup tip"),
+        description: t(
+          "watchlists:teachPoints.jobs.description",
+          "Start with schedule presets first. Use cron and advanced filters only after your first successful Activity check."
+        ),
+        actionLabel: t("watchlists:teachPoints.jobs.action", "Open Templates"),
+        actionTarget: "templates" as WatchlistsTabKey
       }
     }
-    if (activeTab === "templates" && !teachPointState.dismissed.templates) {
+    if (activeTab === "templates" && !teachPointState.templatesAuthoring) {
       return {
-        key: "templates" as const,
-        title: t(
-          "watchlists:teachPoints.templates.title",
-          "Start from a briefing template preset"
-        ),
+        key: "templatesAuthoring" as TeachPointKey,
+        title: t("watchlists:teachPoints.templates.title", "Template setup tip"),
         description: t(
           "watchlists:teachPoints.templates.description",
-          "Pick a preset template first, then edit only the sections you need to customize."
-        )
+          "Start from a preset template, preview changes, then regenerate reports to compare text and audio results."
+        ),
+        actionLabel: t("watchlists:teachPoints.templates.action", "Open Reports"),
+        actionTarget: "outputs" as WatchlistsTabKey
       }
     }
     return null
-  }, [activeTab, t, teachPointState.dismissed.cron, teachPointState.dismissed.filters, teachPointState.dismissed.templates])
+  }, [activeTab, t, teachPointState.jobsCronFilters, teachPointState.templatesAuthoring])
+
+  const dismissTeachPoint = useCallback((key: TeachPointKey) => {
+    setTeachPointState((previous) => ({
+      ...previous,
+      [key]: true
+    }))
+  }, [])
 
   useEffect(() => {
     writeGuidedTourState(guidedTourState)
@@ -499,22 +533,13 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   useEffect(() => {
     if (typeof document === "undefined") return
     const handleVisibilityChange = () => {
-      setRunNotificationsDocumentHidden(document.visibilityState === "hidden")
+      setDocumentVisible(document.visibilityState !== "hidden")
     }
     document.addEventListener("visibilitychange", handleVisibilityChange)
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange)
     }
   }, [])
-
-  const runNotificationsPollMs = React.useMemo(
-    () =>
-      resolveAdaptiveRunNotificationsPollMs(resolveRunNotificationsPollMs(), {
-        documentHidden: runNotificationsDocumentHidden,
-        hasActiveRuns: notificationPollHasActiveRuns
-      }),
-    [notificationPollHasActiveRuns, runNotificationsDocumentHidden]
-  )
 
   const startGuidedTour = useCallback(() => {
     const nextState: GuidedTourState = { status: "in_progress", step: 0 }
@@ -598,6 +623,22 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     notification.destroy(key)
     setActiveTab("runs")
   }, [notification, setActiveTab])
+
+  const runNotificationsPollPlan = React.useMemo(() => {
+    const basePollMs = resolveRunNotificationsPollMs()
+    return resolveRunNotificationsPollPlan({
+      isOnline,
+      activeTab,
+      runsPollingActive,
+      documentVisible,
+      baseIntervalMs: basePollMs,
+      minIntervalMs: RUN_NOTIFICATIONS_MIN_POLL_MS,
+      defaultPageSize: RUN_NOTIFICATIONS_PAGE_SIZE,
+      reducedPageSize: RUN_NOTIFICATIONS_REDUCED_PAGE_SIZE,
+      backgroundIntervalMs: RUN_NOTIFICATIONS_BACKGROUND_POLL_MS,
+      runsTabIntervalMs: RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS
+    })
+  }, [activeTab, documentVisible, isOnline, runsPollingActive])
 
   const showRunNotification = useCallback((run: WatchlistRun, kind: "completed" | "failed", hint?: string | null) => {
     const key = `watchlists-run-${run.id}-${run.status}`
@@ -728,10 +769,18 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       })
       const response = await fetchWatchlistRuns({
         page: 1,
-        size: pageSize
+        size: runNotificationsPollPlan.pageSize
       })
       const nextRuns = Array.isArray(response.items) ? response.items : []
-      setNotificationPollHasActiveRuns(hasActiveWatchlistRuns(nextRuns))
+      const firstSuccessfulRun = nextRuns.find((run) =>
+        SUCCESSFUL_RUN_STATUSES.has(String(run.status || "").toLowerCase())
+      )
+      if (firstSuccessfulRun) {
+        void trackWatchlistsOnboardingTelemetry({
+          type: "first_run_succeeded",
+          runId: firstSuccessfulRun.id
+        })
+      }
       const previousStatusMap = runStatusRef.current
       const nextStatusMap = new Map<number, string>()
       const initialized = initializedRunPollingRef.current
@@ -792,15 +841,9 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         candidateEvents,
         notifiedRunStatesRef.current
       )
-      freshEvents.forEach((event) => {
-        if (event.kind !== "completed") return
-        void trackWatchlistsOnboardingTelemetry({
-          type: "quick_setup_first_run_succeeded",
-          source: "run_notifications",
-          runId: event.runId
-        })
-      })
-      const groupedEvents = groupRunNotificationEvents(freshEvents)
+      const groupedEvents = groupRunNotificationEvents(freshEvents).filter((group) =>
+        runNotificationsPollPlan.suppressCompleted ? group.kind !== "completed" : true
+      )
 
       groupedEvents.forEach((group) => {
         if (group.count === 1 && group.kind !== "stalled") {
@@ -820,16 +863,17 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     } finally {
       runNotificationsPollingInFlightRef.current = false
     }
-  }, [
-    notificationPollHasActiveRuns,
-    runNotificationsDocumentHidden,
-    showGroupedRunNotification,
-    showRunNotification,
-    t
-  ])
+  }, [runNotificationsPollPlan.pageSize, runNotificationsPollPlan.suppressCompleted, showGroupedRunNotification, showRunNotification, t])
 
   useEffect(() => {
-    if (!isOnline) return
+    if (!runNotificationsPollPlan.enabled) {
+      if (runNotificationsTimerRef.current) {
+        clearInterval(runNotificationsTimerRef.current)
+        runNotificationsTimerRef.current = null
+      }
+      return
+    }
+    const pollIntervalMs = runNotificationsPollPlan.intervalMs
     void pollRunNotifications()
     runNotificationsTimerRef.current = setInterval(() => {
       void pollRunNotifications()
@@ -841,7 +885,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       }
       runNotificationsPollingInFlightRef.current = false
     }
-  }, [isOnline, pollRunNotifications, runNotificationsPollMs])
+  }, [pollRunNotifications, runNotificationsPollPlan.enabled, runNotificationsPollPlan.intervalMs])
 
   const overviewBadges = overviewHealth?.tabBadges || {
     sources: 0,
@@ -943,15 +987,15 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       children: <SettingsTab />
     }
   ]
-  const reducedIaPrimaryTabKeys = ["overview", "sources", "runs", "outputs", "settings"] as const
-  const reducedIaSecondaryTabKeys = ["jobs", "items", "templates"] as const
+  const reducedIaPrimaryTabKeys = ["overview", "sources", "items", "outputs", "settings"] as const
+  const reducedIaSecondaryTabKeys = ["jobs", "runs", "templates"] as const
   const reducedIaSecondaryButtons = reducedIaSecondaryTabKeys.map((key) => ({
     key,
     label:
       key === "jobs"
         ? t("watchlists:tabs.jobs", "Monitors")
-        : key === "items"
-          ? t("watchlists:tabs.items", "Articles")
+        : key === "runs"
+          ? t("watchlists:tabs.runs", "Activity")
           : t("watchlists:tabs.templates", "Templates")
   }))
   const renderedTabItems: TabsProps["items"] = iaExperimentEnabled
@@ -972,6 +1016,17 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       iaExperimentVariant
     )
     previousActiveTabRef.current = activeTab
+  }, [activeTab, iaExperimentVariant])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const handlePageHide = () => {
+      flushWatchlistsIaExperimentSession(activeTab, iaExperimentVariant)
+    }
+    window.addEventListener("pagehide", handlePageHide)
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide)
+    }
   }, [activeTab, iaExperimentVariant])
 
   if (!isOnline) {
@@ -1062,82 +1117,88 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
             </div>
           )}
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-text-muted">
-            {t("watchlists:quickActions.label", "Jump to")}
-          </span>
-          {taskShortcuts.map((shortcut) => (
-            <Button
-              key={shortcut.key}
-              size="small"
-              type={activeTab === shortcut.key ? "primary" : "default"}
-              onClick={() => setActiveTab(shortcut.key)}
-              data-testid={`watchlists-task-open-${shortcut.key}`}
-            >
-              {shortcut.label}
-            </Button>
-          ))}
-        </div>
-        <div
-          className="mt-4 rounded-lg border border-border bg-surface p-4"
-          data-testid="watchlists-orientation-banner"
-        >
-          <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-            {t("watchlists:orientation.label", "Current view guide")}
-          </div>
-          <div
-            className="mt-1 text-sm font-medium text-text"
-            data-testid="watchlists-orientation-what"
-          >
-            {activeOrientationGuide.what}
-          </div>
-          <div
-            className="mt-1 text-sm text-text-muted"
-            data-testid="watchlists-orientation-next"
-          >
-            {activeOrientationGuide.next}
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {activeOrientationGuide.actions.map((action, index) => (
+        {iaExperimentEnabled ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-text-muted">
+              {t("watchlists:taskViews.label", "Task views")}
+            </span>
+            {taskViews.map((taskView) => (
               <Button
-                key={action.target}
+                key={taskView.key}
                 size="small"
-                type={index === 0 ? "primary" : "default"}
-                onClick={() => setActiveTab(action.target)}
-                data-testid={`watchlists-orientation-action-${action.target}`}
+                type={activeTaskView === taskView.key ? "primary" : "default"}
+                aria-pressed={activeTaskView === taskView.key}
+                onClick={() => setActiveTab(TASK_VIEW_PRIMARY_TAB[taskView.key])}
+                data-testid={`watchlists-task-view-${taskView.key}`}
+              >
+                {taskView.label}
+                <span className="ml-1 text-xs text-text-muted">{taskView.hint}</span>
+              </Button>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-text-muted">
+              {t("watchlists:quickActions.label", "Jump to")}
+            </span>
+            {taskShortcuts.map((shortcut) => (
+              <Button
+                key={shortcut.key}
+                size="small"
+                type={activeTab === shortcut.key ? "primary" : "default"}
+                onClick={() => setActiveTab(shortcut.key)}
+                data-testid={`watchlists-task-open-${shortcut.key}`}
+              >
+                {shortcut.label}
+              </Button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <Alert
+        type="info"
+        showIcon
+        className="mb-4"
+        title={<span data-testid="watchlists-orientation-title">{activeTabOrientation.title}</span>}
+        description={<span data-testid="watchlists-orientation-description">{activeTabOrientation.description}</span>}
+        action={(
+          <div className="flex flex-wrap gap-2">
+            {activeTabOrientation.actions.map((action) => (
+              <Button
+                key={action.key}
+                size="small"
+                data-testid={`watchlists-orientation-action-${action.key}`}
+                onClick={() => setActiveTab(action.target as typeof activeTab)}
               >
                 {action.label}
               </Button>
             ))}
           </div>
-        </div>
-        {activeTeachPoint && (
-          <div
-            className="mt-3 rounded-lg border border-primary/30 bg-primary/5 p-4"
-            data-testid="watchlists-teach-point"
-          >
-            <div className="text-xs font-semibold uppercase tracking-wide text-primary">
-              {t("watchlists:teachPoints.label", "First-time tip")}
-            </div>
-            <div className="mt-1 text-sm font-medium text-text">
-              {activeTeachPoint.title}
-            </div>
-            <div className="mt-1 text-sm text-text-muted">
-              {activeTeachPoint.description}
-            </div>
-            <div className="mt-3">
-              <Button
-                size="small"
-                type="primary"
-                onClick={() => dismissTeachPoint(activeTeachPoint.key)}
-                data-testid="watchlists-teach-point-dismiss"
-              >
-                {t("watchlists:teachPoints.dismiss", "Got it")}
-              </Button>
-            </div>
-          </div>
         )}
-      </div>
+      />
+
+      {activeTeachPoint && (
+        <Alert
+          type="info"
+          showIcon
+          className="mb-4"
+          data-testid="watchlists-teach-point-alert"
+          title={<span data-testid="watchlists-teach-point-title">{activeTeachPoint.title}</span>}
+          description={<span data-testid="watchlists-teach-point-description">{activeTeachPoint.description}</span>}
+          action={(
+            <Button
+              size="small"
+              data-testid={`watchlists-teach-point-action-${activeTeachPoint.key}`}
+              onClick={() => setActiveTab(activeTeachPoint.actionTarget as typeof activeTab)}
+            >
+              {activeTeachPoint.actionLabel}
+            </Button>
+          )}
+          closable
+          onClose={() => dismissTeachPoint(activeTeachPoint.key)}
+        />
+      )}
 
       {showGuidedTourCompletion && (
         <Alert
@@ -1147,7 +1208,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           title={t("watchlists:guide.completedTitle", "Guided tour complete")}
           description={t(
             "watchlists:guide.completedDescription",
-            "Next: monitor Activity for run health, review Articles for captured content, and open Reports for generated briefings."
+            "Next: monitor Activity for monitor health, review Articles for captured content, and open Reports for generated briefings."
           )}
           action={(
             <div className="flex flex-wrap gap-2">

@@ -80,10 +80,93 @@
 - Run end-to-end workflow checks across success and fallback cases.
 **Status**: Complete
 
-### Completion Note (2026-02-23)
+## Execution Notes
 
-- All Group 07 stages were executed and validated under the program coordination flow.
-- Consolidated execution notes and validation evidence are tracked in:
-  - `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_ux_review_program_coordination_index_2026_02_23.md`
-- Group 07 operational artifact:
-  - `Docs/Plans/WATCHLISTS_UC2_TEXT_AUDIO_E2E_RUNBOOK_2026_02_23.md`
+### 2026-02-23 - Stage 1 completion (output/audio UX contract)
+
+- Implemented output/audio contract and provenance clarity across Outputs surfaces:
+  - Audio artifact labeling now uses explicit `Audio briefing` contract in:
+    - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/outputMetadata.ts`
+  - Output preview now always shows provenance metadata (monitor, run, artifact):
+    - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputPreviewDrawer.tsx`
+  - Regenerate modal now constrains template overrides for audio outputs and documents the rule:
+    - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputsTab.tsx`
+  - Locale copy added for provenance and regenerate constraints:
+    - `apps/packages/ui/src/assets/locale/en/watchlists.json`
+- Added/updated Stage 1 test coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/outputMetadata.test.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx`
+- Validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/OutputsTab/__tests__/outputMetadata.test.ts src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourceFormModal.test-source.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.delete-confirm.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/source-undo.test.ts src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/outputMetadata.test.ts src/components/Option/Watchlists/shared/__tests__/watchlists-error.test.ts src/components/Option/Watchlists/shared/__tests__/watchlists-error.locale-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts`
+  - `/tmp/bandit_watchlists_group07_stage1_2026_02_23.json`
+
+### 2026-02-23 - Stage 2 completion (audio discoverability in setup and overview)
+
+- Confirmed Overview setup already exposes audio briefing controls in quick setup and pipeline setup.
+- Implemented monitor-list discoverability and practical setup guidance in:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobsTab.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobFormModal.tsx`
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
+- Added/updated Stage 2 test coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
+- Validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/outputMetadata.test.ts src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
+  - `/tmp/bandit_watchlists_group07_stage2_2026_02_23.json`
+
+### 2026-02-23 - Stage 3 completion (audio configuration testing and preview)
+
+- Added lightweight audio sample testing in monitor configuration:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobFormModal.tsx`
+  - `apps/packages/ui/src/services/watchlists.ts`
+- Added inline audio test loading/success/error states and playable sample rendering in monitor setup.
+- Added advanced audio validation for background track URI format (`https://`, `http://`, `file://`) for both test and save flows.
+- Added/updated Stage 3 test coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
+- Validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/outputMetadata.test.ts src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
+  - `/tmp/bandit_watchlists_group07_stage3_2026_02_23.json`
+
+### 2026-02-23 - Stage 4 completion (output delivery and recovery visibility)
+
+- Added outputs-level delivery issue highlight with direct remediation actions:
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputsTab.tsx`
+  - Banner now surfaces failed/partial delivery incidents with:
+    - `Show failed only` (applies delivery filter and resets paging)
+    - `Open failed runs` (routes to Activity with failed-run status context)
+- Added locale and plain-language coverage for recovery guidance:
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
+- Added Stage 4 regression coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx`
+- Validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/outputMetadata.test.ts src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.accessibility-live-region.test.tsx`
+  - `/tmp/bandit_watchlists_group07_stage4_2026_02_23.json`
+
+### 2026-02-23 - Stage 5 completion (UC2 text+audio end-to-end validation)
+
+- Added Stage 5 runbook with:
+  - documented UC2 happy-path scenario from monitor setup to output consumption,
+  - reliability metric definitions for enqueue/generation/fallback signals,
+  - QA matrix for no-item, enqueue failure, disabled-audio, and fallback paths:
+    - `Docs/Plans/WATCHLISTS_UC2_TEXT_AUDIO_E2E_RUNBOOK_2026_02_23.md`
+- Added integration test coverage for missing audio fallback metadata paths in outputs API:
+  - `tldw_Server_API/tests/Watchlists/test_watchlists_api.py`
+  - New assertions now verify:
+    - `audio_briefing_status=skipped` when workflow trigger returns `None`
+    - `audio_briefing_status=enqueue_failed` with preserved error context when trigger raises
+- Validation evidence:
+  - `python -m pytest -q tldw_Server_API/tests/Watchlists/test_watchlists_api.py -k "generate_audio_payload_triggers_workflow_and_updates_run_stats or generate_audio_false_does_not_trigger_workflow or generate_audio_trigger_returns_none_marks_skipped_metadata or generate_audio_trigger_failure_marks_enqueue_failed_metadata"`
+  - `python -m pytest -q tldw_Server_API/tests/Watchlists/test_audio_briefing_workflow.py -k "trigger_enqueues_workflow or trigger_skips_when_no_items or trigger_handles_scheduler_failure"`
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputPreviewDrawer.audio.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+  - `/tmp/bandit_watchlists_group07_stage5_2026_02_23.json`

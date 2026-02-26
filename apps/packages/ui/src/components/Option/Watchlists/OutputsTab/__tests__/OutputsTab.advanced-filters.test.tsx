@@ -51,15 +51,14 @@ vi.mock("antd", () => {
   )
 
   const Table = ({ dataSource = [] }: any) => (
-    <table data-testid="outputs-table">
-      <tbody>
-        {dataSource.map((record: any) => (
-          <tr key={String(record.id)}>
-            <td>{String(record.id)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div data-testid="outputs-table-rows">{dataSource.length}</div>
+  )
+  const Alert = ({ message, description, action, ...rest }: any) => (
+    <div data-testid={rest["data-testid"] || "outputs-alert"}>
+      <div>{message}</div>
+      <div>{description}</div>
+      {action}
+    </div>
   )
   const Space = ({ children }: any) => <>{children}</>
   const Tag = ({ children }: any) => <span>{children}</span>
@@ -82,6 +81,7 @@ vi.mock("antd", () => {
   )
 
   return {
+    Alert,
     Button,
     Input,
     InputNumber,
@@ -119,6 +119,11 @@ vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: any) => unknown) => selector(mocks.storeStateRef.current)
 }))
 
+vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
+  trackWatchlistsOnboardingTelemetry: (...args: any[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
+}))
+
 vi.mock("../OutputPreviewDrawer", () => ({
   OutputPreviewDrawer: () => null
 }))
@@ -139,21 +144,33 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   setOutputsPageSize: vi.fn(),
   setOutputsJobFilter: vi.fn(),
   setOutputsRunFilter: vi.fn(),
+  setRunsJobFilter: vi.fn(),
+  setRunsStatusFilter: vi.fn(),
+  setActiveTab: vi.fn(),
   openOutputPreview: vi.fn(),
   closeOutputPreview: vi.fn(),
   ...overrides
 })
 
-const buildOutput = (id: number) => ({
+const buildOutput = (id: number, deliveryStatus: string) => ({
   id,
-  job_id: id % 3 ? 8 : 9,
-  run_id: 1000 + id,
-  title: `Report ${id}`,
-  format: "markdown",
-  created_at: "2026-02-18T00:00:00Z",
+  job_id: 8,
+  run_id: 40 + id,
+  title: `Output ${id}`,
+  format: "md",
+  content: "body",
+  storage_path: null,
+  metadata: {
+    deliveries: [
+      {
+        channel: "email",
+        status: deliveryStatus
+      }
+    ]
+  },
   expires_at: null,
   expired: false,
-  metadata: {}
+  created_at: "2026-02-23T10:00:00Z"
 })
 
 describe("OutputsTab advanced filters disclosure", () => {
@@ -200,24 +217,63 @@ describe("OutputsTab advanced filters disclosure", () => {
     expect(screen.getByTestId("watchlists-outputs-run-filter")).toBeInTheDocument()
   })
 
-  it("renders high-density reports tables while preserving filter access", () => {
-    const outputs = Array.from({ length: 500 }, (_value, index) =>
-      buildOutput(index + 1)
-    )
+  it("filters visible outputs by delivery status in advanced mode", async () => {
     mocks.storeStateRef.current = baseState({
-      outputs,
-      outputsTotal: outputs.length
+      outputs: [buildOutput(1, "failed"), buildOutput(2, "sent")],
+      outputsTotal: 2
     })
 
-    const { container } = render(<OutputsTab />)
+    render(<OutputsTab />)
 
-    expect(screen.getByTestId("watchlists-outputs-advanced-toggle")).toBeInTheDocument()
-    expect(container.querySelectorAll("tr").length).toBe(500)
+    fireEvent.click(screen.getByTestId("watchlists-outputs-advanced-toggle"))
+    expect(screen.getByTestId("watchlists-outputs-delivery-filter")).toBeInTheDocument()
+    expect(screen.getByTestId("outputs-table-rows")).toHaveTextContent("2")
+
+    fireEvent.change(screen.getByTestId("watchlists-outputs-delivery-filter"), {
+      target: { value: "failed" }
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("outputs-table-rows")).toHaveTextContent("1")
+    })
   })
 
-  it("records onboarding success milestones when unfiltered reports exist", async () => {
+  it("highlights delivery issues and links remediation actions", async () => {
+    const setRunsStatusFilter = vi.fn()
+    const setRunsJobFilter = vi.fn()
+    const setActiveTab = vi.fn()
+
+    mocks.storeStateRef.current = baseState({
+      outputs: [buildOutput(1, "failed"), buildOutput(2, "sent")],
+      outputsTotal: 2,
+      setRunsStatusFilter,
+      setRunsJobFilter,
+      setActiveTab
+    })
+
+    render(<OutputsTab />)
+
+    expect(screen.getByTestId("watchlists-outputs-delivery-issues-banner")).toHaveTextContent(
+      "Delivery issues detected in 1 report."
+    )
+    expect(screen.getByTestId("outputs-table-rows")).toHaveTextContent("2")
+
+    fireEvent.click(screen.getByTestId("watchlists-outputs-banner-show-failed"))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("outputs-table-rows")).toHaveTextContent("1")
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-outputs-banner-open-runs"))
+
+    expect(setRunsStatusFilter).toHaveBeenCalledWith("failed")
+    expect(setRunsJobFilter).toHaveBeenCalledWith(null)
+    expect(setActiveTab).toHaveBeenCalledWith("runs")
+  })
+
+  it("tracks first output milestone when outputs load returns items", async () => {
     mocks.fetchWatchlistOutputsMock.mockResolvedValue({
-      items: [buildOutput(1)],
+      items: [buildOutput(501, "sent")],
       total: 1,
       has_more: false
     })
@@ -226,13 +282,10 @@ describe("OutputsTab advanced filters disclosure", () => {
 
     await waitFor(() => {
       expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
-        type: "quick_setup_first_run_succeeded",
-        source: "outputs"
+        type: "first_output_succeeded",
+        outputId: 501,
+        format: "md"
       })
-    })
-    expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
-      type: "quick_setup_first_output_succeeded",
-      source: "outputs"
     })
   })
 })

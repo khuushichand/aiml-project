@@ -76,7 +76,7 @@ export const getOutputArtifactLabel = (
   output: Pick<WatchlistOutput, "format" | "type"> | null | undefined
 ): string => {
   if (!output) return "Output"
-  if (isAudioOutput(output)) return "Audio"
+  if (isAudioOutput(output)) return "Audio briefing"
   const normalized = normalizeOutputFormat(output.format)
   if (normalized === "html") return "HTML"
   if (normalized === "md" || normalized === "markdown") return "Markdown"
@@ -207,6 +207,7 @@ interface BuildRegenerateOptions {
   title?: string | null
   templateName?: string | null
   templateVersion?: number | null
+  allowTemplateOverrides?: boolean
 }
 
 export const buildRegenerateOutputRequest = (
@@ -223,12 +224,16 @@ export const buildRegenerateOutputRequest = (
     request.title = title
   }
 
-  const templateName = asNonEmptyString(options.templateName)
-  if (templateName) {
-    request.template_name = templateName
-    const version = asPositiveInteger(options.templateVersion)
-    if (version != null) {
-      request.template_version = version
+  const allowTemplateOverrides =
+    options.allowTemplateOverrides !== false && !isAudioTypeHint(output.type)
+  if (allowTemplateOverrides) {
+    const templateName = asNonEmptyString(options.templateName)
+    if (templateName) {
+      request.template_name = templateName
+      const version = asPositiveInteger(options.templateVersion)
+      if (version != null) {
+        request.template_version = version
+      }
     }
   }
 

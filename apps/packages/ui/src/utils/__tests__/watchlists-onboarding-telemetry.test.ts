@@ -94,6 +94,15 @@ describe("watchlists-onboarding-telemetry", () => {
       type: "guided_tour_dismissed",
       step: 2
     })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_run_succeeded",
+      runId: 91
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_output_succeeded",
+      outputId: 301,
+      format: "md"
+    })
 
     const state = storageMap.get(STORAGE_KEY) as Record<string, any>
     expect(state.counters.quick_setup_opened).toBe(1)
@@ -116,9 +125,11 @@ describe("watchlists-onboarding-telemetry", () => {
     expect(state.guided_tour.dismissed).toBe(1)
     expect(state.guided_tour.step_views["1"]).toBe(1)
     expect(state.guided_tour.step_views["2"]).toBe(1)
-    expect(state.recent_events).toHaveLength(14)
-    expect(typeof state.session_id).toBe("string")
-    expect(recordOnboardingTelemetryMock).toHaveBeenCalledTimes(14)
+    expect(state.value_milestones.first_run_succeeded).toBe(1)
+    expect(state.value_milestones.first_output_succeeded).toBe(1)
+    expect(state.value_milestones.first_run_succeeded_at).toBeTypeOf("number")
+    expect(state.value_milestones.first_output_succeeded_at).toBeTypeOf("number")
+    expect(state.recent_events).toHaveLength(10)
   })
 
   it("caps recent events to the configured maximum", async () => {
@@ -136,85 +147,140 @@ describe("watchlists-onboarding-telemetry", () => {
     expect(state.counters.guided_tour_step_viewed).toBe(260)
   })
 
-  it("builds UC2 funnel dashboard snapshot metrics", async () => {
+  it("records first-value milestones only once", async () => {
     const telemetry = await import("@/utils/watchlists-onboarding-telemetry")
 
-    await telemetry.trackWatchlistsOnboardingTelemetry({ type: "quick_setup_opened" })
-    await telemetry.trackWatchlistsOnboardingTelemetry({ type: "quick_setup_opened" })
     await telemetry.trackWatchlistsOnboardingTelemetry({
-      type: "quick_setup_step_completed",
+      type: "first_run_succeeded",
+      runId: 1
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_run_succeeded",
+      runId: 2
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_output_succeeded",
+      outputId: 11,
+      format: "md"
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "first_output_succeeded",
+      outputId: 12,
+      format: "html"
+    })
+
+    const state = storageMap.get(STORAGE_KEY) as Record<string, any>
+    expect(state.counters.first_run_succeeded).toBe(1)
+    expect(state.counters.first_output_succeeded).toBe(1)
+    expect(state.value_milestones.first_run_succeeded).toBe(1)
+    expect(state.value_milestones.first_output_succeeded).toBe(1)
+    const milestoneEvents = state.recent_events.filter((event: Record<string, unknown>) =>
+      event.type === "first_run_succeeded" || event.type === "first_output_succeeded"
+    )
+    expect(milestoneEvents).toHaveLength(2)
+  })
+
+  it("tracks UC2 pipeline funnel milestones and builds KPI snapshot", async () => {
+    const telemetry = await import("@/utils/watchlists-onboarding-telemetry")
+
+    await telemetry.trackWatchlistsOnboardingTelemetry({ type: "pipeline_setup_opened" })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "pipeline_setup_step_completed",
+      step: "scope"
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "pipeline_setup_step_completed",
+      step: "briefing"
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "pipeline_setup_step_completed",
       step: "review"
     })
     await telemetry.trackWatchlistsOnboardingTelemetry({
-      type: "quick_setup_completed",
-      goal: "briefing",
+      type: "pipeline_setup_preview_generated",
+      status: "success",
+      warning_count: 1,
+      run_id: 44
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "pipeline_setup_submitted",
+      mode: "create",
+      runNow: true
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "pipeline_setup_completed",
+      mode: "create",
       runNow: true,
-      destination: "runs"
+      destination: "outputs"
     })
     await telemetry.trackWatchlistsOnboardingTelemetry({
-      type: "quick_setup_preview_loaded",
-      preview: "candidate",
-      total: 4,
-      ingestable: 3,
-      filtered: 1
+      type: "first_run_succeeded",
+      runId: 44
     })
     await telemetry.trackWatchlistsOnboardingTelemetry({
-      type: "quick_setup_preview_failed",
-      preview: "candidate",
-      reason: "load_failed"
-    })
-    await telemetry.trackWatchlistsOnboardingTelemetry({
-      type: "quick_setup_test_run_triggered",
-      runId: 42
-    })
-    await telemetry.trackWatchlistsOnboardingTelemetry({
-      type: "quick_setup_first_run_succeeded",
-      source: "run_notifications",
-      runId: 42
-    })
-    await telemetry.trackWatchlistsOnboardingTelemetry({
-      type: "quick_setup_first_output_succeeded",
-      source: "overview"
-    })
-    await telemetry.trackWatchlistsOnboardingTelemetry({
-      type: "quick_setup_first_output_succeeded",
-      source: "overview"
+      type: "first_output_succeeded",
+      outputId: 55,
+      format: "md"
     })
 
     const state = await telemetry.getWatchlistsOnboardingTelemetryState()
-    const snapshot = telemetry.buildWatchlistsUc2FunnelDashboardSnapshot(state)
+    expect(state.uc2_pipeline.opened).toBe(1)
+    expect(state.uc2_pipeline.step_completed.scope).toBe(1)
+    expect(state.uc2_pipeline.step_completed.briefing).toBe(1)
+    expect(state.uc2_pipeline.step_completed.review).toBe(1)
+    expect(state.uc2_pipeline.submitted_by_mode.create).toBe(1)
+    expect(state.uc2_pipeline.completed_by_mode.create).toBe(1)
+    expect(state.uc2_pipeline.completed_with_run_now).toBe(1)
+    expect(state.uc2_pipeline.preview_by_status.success).toBe(1)
 
-    expect(snapshot.counters.quickSetupOpened).toBe(2)
-    expect(snapshot.counters.quickSetupCompleted).toBe(1)
-    expect(snapshot.counters.briefingCompletions).toBe(1)
-    expect(snapshot.counters.runNowOptIns).toBe(1)
-    expect(snapshot.counters.destination.runs).toBe(1)
-    expect(snapshot.counters.previewLoaded.candidate).toBe(1)
-    expect(snapshot.counters.previewFailed.candidate).toBe(1)
-    expect(snapshot.counters.testRunTriggered).toBe(1)
-    expect(snapshot.counters.firstRunSuccess).toBe(1)
-    expect(snapshot.counters.firstOutputSuccess).toBe(1)
-    expect(snapshot.rates.setupCompletionRate).toBe(0.5)
-    expect(snapshot.rates.testRunTriggerRate).toBe(1)
-    expect(snapshot.rates.firstSuccessProxyRate).toBe(1)
-    expect(snapshot.rates.firstRunSuccessRate).toBe(1)
-    expect(snapshot.rates.firstOutputSuccessRate).toBe(1)
-    expect(snapshot.rates.setupDropoffRate).toBe(0.5)
-    expect(snapshot.rates.runSuccessDropoffRate).toBe(0)
-    expect(snapshot.rates.outputSuccessDropoffRate).toBe(0)
-    expect(snapshot.timings.medianSecondsToSetupCompletion).toBeGreaterThanOrEqual(0)
-    expect(snapshot.timings.medianSecondsToFirstRunSuccess).toBeGreaterThanOrEqual(0)
-    expect(snapshot.timings.medianSecondsToFirstOutputSuccess).toBeGreaterThanOrEqual(0)
+    const snapshot = telemetry.buildWatchlistsUc2PipelineDashboardSnapshot(state)
+    expect(snapshot.funnel.opened).toBe(1)
+    expect(snapshot.funnel.submitted).toBe(1)
+    expect(snapshot.funnel.completed).toBe(1)
+    expect(snapshot.rates.completionPerOpened).toBe(1)
+    expect(snapshot.rates.completionPerSubmitted).toBe(1)
+    expect(snapshot.rates.firstRunPerCompleted).toBe(1)
+    expect(snapshot.rates.firstOutputPerCompleted).toBe(1)
+    expect(snapshot.windowed.last24h.opened).toBe(1)
+    expect(snapshot.windowed.last24h.completed).toBe(1)
+    expect(snapshot.windowed.last7d.opened).toBe(1)
+    expect(snapshot.windowed.last7d.completed).toBe(1)
+
+    const pipelineEvents = telemetry.queryWatchlistsOnboardingTelemetryEvents(state, {
+      eventTypes: telemetry.WATCHLISTS_UC2_PIPELINE_EVENT_TYPES
+    })
+    expect(pipelineEvents.length).toBeGreaterThanOrEqual(7)
   })
 
-  it("swallows backend telemetry ingest failures and keeps local state updates", async () => {
-    recordOnboardingTelemetryMock.mockRejectedValueOnce(new Error("backend unavailable"))
+  it("tracks pipeline preview/failure statuses for drop-off analysis", async () => {
     const telemetry = await import("@/utils/watchlists-onboarding-telemetry")
 
-    await telemetry.trackWatchlistsOnboardingTelemetry({ type: "quick_setup_opened" })
+    await telemetry.trackWatchlistsOnboardingTelemetry({ type: "pipeline_setup_opened" })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "pipeline_setup_preview_generated",
+      status: "no_run_context"
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "pipeline_setup_submitted",
+      mode: "test",
+      runNow: true
+    })
+    await telemetry.trackWatchlistsOnboardingTelemetry({
+      type: "pipeline_setup_failed",
+      stage: "run_trigger",
+      mode: "test",
+      runNow: true
+    })
 
-    const state = storageMap.get(STORAGE_KEY) as Record<string, any>
-    expect(state.counters.quick_setup_opened).toBe(1)
-    expect(recordOnboardingTelemetryMock).toHaveBeenCalledTimes(1)
+    const state = await telemetry.getWatchlistsOnboardingTelemetryState()
+    expect(state.uc2_pipeline.preview_by_status.no_run_context).toBe(1)
+    expect(state.uc2_pipeline.failed_by_stage.run_trigger).toBe(1)
+
+    const snapshot = telemetry.buildWatchlistsUc2PipelineDashboardSnapshot(state)
+    expect(snapshot.funnel.opened).toBe(1)
+    expect(snapshot.funnel.completed).toBe(0)
+    expect(snapshot.rates.completionPerOpened).toBe(0)
+    expect(snapshot.failures.run_trigger).toBe(1)
+    expect(snapshot.preview.no_run_context).toBe(1)
   })
 })

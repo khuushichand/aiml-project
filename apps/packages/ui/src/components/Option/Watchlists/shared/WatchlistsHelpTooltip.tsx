@@ -21,10 +21,10 @@ const TOPIC_FALLBACKS: Record<
       "Use OPML when moving feed lists from another reader so setup takes minutes instead of manual entry."
   },
   cron: {
-    label: "advanced schedule timing",
-    title: "Choose preset schedules first",
+    label: "cron scheduling",
+    title: "Set a reliable monitor schedule",
     description:
-      "Use preset timing for most monitors. Switch to custom cron only for uncommon timing windows."
+      "Start with presets for daily or weekday runs. Use cron only when you need exact custom timing."
   },
   ttl: {
     label: "retention window",
@@ -33,10 +33,10 @@ const TOPIC_FALLBACKS: Record<
       "Set retention to keep briefings only as long as your review workflow needs before automatic cleanup."
   },
   jinja2: {
-    label: "briefing templates",
-    title: "Shape briefing format with templates",
+    label: "Jinja2 templates",
+    title: "Customize briefing format",
     description:
-      "Start with a preset template to control sections and tone, then customize only if you need advanced formatting."
+      "Start from a preset report template, then edit sections to shape briefing tone, structure, and audio script text."
   },
   claimClusters: {
     label: "claim tracking",

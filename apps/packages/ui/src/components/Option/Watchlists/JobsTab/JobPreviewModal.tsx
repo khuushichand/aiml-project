@@ -1,9 +1,13 @@
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Modal, Spin, Table, Tag } from "antd"
 import type { ColumnsType } from "antd/es/table"
 import { useTranslation } from "react-i18next"
 import { previewWatchlistJob } from "@/services/watchlists"
 import type { JobPreviewResult, PreviewItem, WatchlistJob } from "@/types/watchlists"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 
 interface JobPreviewModalProps {
   job: WatchlistJob | null
@@ -19,6 +23,23 @@ export const JobPreviewModal: React.FC<JobPreviewModalProps> = ({
   const { t } = useTranslation(["watchlists", "common"])
   const [loading, setLoading] = useState(false)
   const [preview, setPreview] = useState<JobPreviewResult | null>(null)
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open || !job) {

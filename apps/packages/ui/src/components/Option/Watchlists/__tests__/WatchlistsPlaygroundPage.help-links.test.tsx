@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 
 import React from "react"
-import axe from "axe-core"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WatchlistsPlaygroundPage } from "../WatchlistsPlaygroundPage"
 import {
@@ -87,10 +86,21 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("antd", () => {
-  const Alert = ({ title, description, closable, onClose }: any) => (
-    <div>
+  const Alert = ({
+    title,
+    description,
+    action,
+    closable,
+    onClose,
+    className,
+    type: _type,
+    showIcon: _showIcon,
+    ...rest
+  }: any) => (
+    <div className={className} data-testid={rest["data-testid"]}>
       <div>{title}</div>
       <div>{description}</div>
+      <div>{action}</div>
       {closable ? (
         <button type="button" onClick={() => onClose?.()}>
           Dismiss
@@ -239,31 +249,47 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     expect(screen.getByTestId("watchlists-beta-report-link")).toHaveAttribute("href", WATCHLISTS_ISSUE_REPORT_URL)
   })
 
-  it("routes tab-context help link to the matching docs section and IA label for each tab", () => {
-    const tabExpectations: Array<{
+  it("keeps context docs routing aligned with each canonical tab help label", () => {
+    const expectations: Array<{
       tab: typeof mocks.state.activeTab
-      helpLabel: string
+      href: string
+      label: string
     }> = [
-      { tab: "overview", helpLabel: "Overview guidance" },
-      { tab: "sources", helpLabel: "Feeds setup" },
-      { tab: "jobs", helpLabel: "Monitor scheduling" },
-      { tab: "runs", helpLabel: "Activity guidance" },
-      { tab: "items", helpLabel: "Article review" },
-      { tab: "outputs", helpLabel: "Reports guidance" },
-      { tab: "templates", helpLabel: "Template authoring" },
-      { tab: "settings", helpLabel: "Workspace settings" }
+      { tab: "overview", href: WATCHLISTS_TAB_HELP_DOCS.overview, label: "Overview guidance" },
+      { tab: "sources", href: WATCHLISTS_TAB_HELP_DOCS.sources, label: "Feeds setup" },
+      { tab: "jobs", href: WATCHLISTS_TAB_HELP_DOCS.jobs, label: "Monitor scheduling" },
+      { tab: "runs", href: WATCHLISTS_TAB_HELP_DOCS.runs, label: "Activity guidance" },
+      { tab: "items", href: WATCHLISTS_TAB_HELP_DOCS.items, label: "Article review" },
+      { tab: "outputs", href: WATCHLISTS_TAB_HELP_DOCS.outputs, label: "Reports guidance" },
+      { tab: "templates", href: WATCHLISTS_TAB_HELP_DOCS.templates, label: "Template authoring" },
+      { tab: "settings", href: WATCHLISTS_TAB_HELP_DOCS.settings, label: "Workspace settings" }
     ]
 
-    for (const expectation of tabExpectations) {
+    const { rerender } = render(<WatchlistsPlaygroundPage />)
+    const link = () => screen.getByTestId("watchlists-context-docs-link")
+
+    for (const expectation of expectations) {
       mocks.state.activeTab = expectation.tab
-      const { unmount } = render(<WatchlistsPlaygroundPage />)
-
-      const contextLink = screen.getByTestId("watchlists-context-docs-link")
-      expect(contextLink).toHaveAttribute("href", WATCHLISTS_TAB_HELP_DOCS[expectation.tab])
-      expect(contextLink).toHaveTextContent(`Learn more: ${expectation.helpLabel}`)
-
-      unmount()
+      rerender(<WatchlistsPlaygroundPage />)
+      expect(link()).toHaveAttribute("href", expectation.href)
+      expect(link()).toHaveTextContent(`Learn more: ${expectation.label}`)
     }
+  })
+
+  it("renders canonical tab and quick-action labels for the primary workflow", () => {
+    render(<WatchlistsPlaygroundPage />)
+
+    expect(screen.getByTestId("watchlists-tab-sources")).toHaveTextContent("Feeds")
+    expect(screen.getByTestId("watchlists-tab-jobs")).toHaveTextContent("Monitors")
+    expect(screen.getByTestId("watchlists-tab-runs")).toHaveTextContent("Activity")
+    expect(screen.getByTestId("watchlists-tab-items")).toHaveTextContent("Articles")
+    expect(screen.getByTestId("watchlists-tab-outputs")).toHaveTextContent("Reports")
+
+    expect(screen.getByTestId("watchlists-task-open-sources")).toHaveTextContent("Set up feeds")
+    expect(screen.getByTestId("watchlists-task-open-jobs")).toHaveTextContent("Configure monitors")
+    expect(screen.getByTestId("watchlists-task-open-runs")).toHaveTextContent("Check activity")
+    expect(screen.getByTestId("watchlists-task-open-items")).toHaveTextContent("Review articles")
+    expect(screen.getByTestId("watchlists-task-open-outputs")).toHaveTextContent("View reports")
   })
 
   it("keeps beta banner dismissible and persisted by storage key", () => {
@@ -286,15 +312,13 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     expect(screen.getByText("Watchlists guided tour")).toBeInTheDocument()
     expect(screen.getByText("Step 1 of 5")).toBeInTheDocument()
     expect(
-      screen.getByText("Feeds are inputs for monitors. Add RSS/site sources before scheduling runs.")
+      screen.getByText("Feeds are inputs for monitors. Add RSS/site feeds before scheduling Activity checks.")
     ).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     expect(screen.getByText("Step 2 of 5")).toBeInTheDocument()
     expect(
-      screen.getByText(
-        "Monitors connect feeds to schedule, output template, and optional audio briefing delivery."
-      )
+      screen.getByText("Monitors define schedule, filters, and template-driven reports, including optional audio.")
     ).toBeInTheDocument()
 
     const persisted = JSON.parse(localStorage.getItem("watchlists:guided-tour:v1") || "{}")
@@ -321,47 +345,32 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     })
   })
 
-  it("shows first-time teach points for cron, filters, and templates with dismissal persistence", () => {
+  it("shows first-time teach points for jobs/templates and persists dismissal", () => {
     mocks.state.activeTab = "jobs"
-    const { rerender, unmount } = render(<WatchlistsPlaygroundPage />)
+    const { rerender } = render(<WatchlistsPlaygroundPage />)
 
-    expect(screen.getByTestId("watchlists-teach-point")).toBeInTheDocument()
-    expect(screen.getByText("First-time tip")).toBeInTheDocument()
-    expect(screen.getByText("Use schedule presets before custom cron")).toBeInTheDocument()
-    expect(
-      screen.getByText("Start with a preset schedule. Use custom cron only for uncommon timing.")
-    ).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-teach-point-title")).toHaveTextContent("Monitor setup tip")
+    expect(screen.getByTestId("watchlists-teach-point-description")).toHaveTextContent(
+      "Start with schedule presets first. Use cron and advanced filters only after your first successful Activity check."
+    )
+    fireEvent.click(
+      within(screen.getByTestId("watchlists-teach-point-alert")).getByRole("button", { name: "Dismiss" })
+    )
 
-    fireEvent.click(screen.getByTestId("watchlists-teach-point-dismiss"))
-    expect(screen.getByText("Use filters to reduce noisy items")).toBeInTheDocument()
-    expect(
-      screen.getByText("Add include/exclude filters when monitors collect too much or irrelevant content.")
-    ).toBeInTheDocument()
+    const persisted = JSON.parse(localStorage.getItem("watchlists:teach-points:v1") || "{}")
+    expect(persisted.jobsCronFilters).toBe(true)
 
-    fireEvent.click(screen.getByTestId("watchlists-teach-point-dismiss"))
-    expect(screen.queryByTestId("watchlists-teach-point")).not.toBeInTheDocument()
-
-    const jobsPersisted = JSON.parse(localStorage.getItem("watchlists:teach-points:v1") || "{}")
-    expect(jobsPersisted.dismissed?.cron).toBe(true)
-    expect(jobsPersisted.dismissed?.filters).toBe(true)
+    rerender(<WatchlistsPlaygroundPage />)
+    expect(screen.queryByTestId("watchlists-teach-point-title")).not.toBeInTheDocument()
 
     mocks.state.activeTab = "templates"
     rerender(<WatchlistsPlaygroundPage />)
-    expect(screen.getByTestId("watchlists-teach-point")).toBeInTheDocument()
-    expect(screen.getByText("Start from a briefing template preset")).toBeInTheDocument()
-    expect(
-      screen.getByText("Pick a preset template first, then edit only the sections you need to customize.")
-    ).toBeInTheDocument()
-
-    fireEvent.click(screen.getByTestId("watchlists-teach-point-dismiss"))
-    const templatesPersisted = JSON.parse(localStorage.getItem("watchlists:teach-points:v1") || "{}")
-    expect(templatesPersisted.dismissed?.templates).toBe(true)
-    expect(screen.queryByTestId("watchlists-teach-point")).not.toBeInTheDocument()
-
-    unmount()
-    mocks.state.activeTab = "jobs"
-    render(<WatchlistsPlaygroundPage />)
-    expect(screen.queryByTestId("watchlists-teach-point")).not.toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-teach-point-title")).toHaveTextContent("Template setup tip")
+    fireEvent.click(
+      within(screen.getByTestId("watchlists-teach-point-alert")).getByRole("button", { name: "Dismiss" })
+    )
+    const nextPersisted = JSON.parse(localStorage.getItem("watchlists:teach-points:v1") || "{}")
+    expect(nextPersisted.templatesAuthoring).toBe(true)
   })
 
   it("marks guided tour complete and shows completion notice", () => {

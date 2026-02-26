@@ -16,13 +16,6 @@ const mocks = vi.hoisted(() => {
       | "outputs"
       | "templates"
       | "settings",
-    overviewHealth: {
-      tabBadges: {
-        sources: 0,
-        runs: 0,
-        outputs: 0
-      }
-    },
     setActiveTab: vi.fn((next: string) => {
       state.activeTab = next as typeof state.activeTab
     })
@@ -47,10 +40,11 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("antd", () => {
-  const Alert = ({ title, description, closable, onClose }: any) => (
+  const Alert = ({ title, description, action, closable, onClose }: any) => (
     <div>
       <div>{title}</div>
       <div>{description}</div>
+      <div>{action}</div>
       {closable ? (
         <button type="button" onClick={() => onClose?.()}>
           Dismiss
@@ -116,7 +110,6 @@ vi.mock("@/store/watchlists", () => ({
   useWatchlistsStore: (selector: (state: Record<string, unknown>) => unknown) =>
     selector({
       activeTab: mocks.state.activeTab,
-      overviewHealth: mocks.state.overviewHealth,
       setActiveTab: mocks.state.setActiveTab,
       openRunDetail: vi.fn(),
       resetStore: vi.fn()
@@ -151,12 +144,11 @@ vi.mock("../ItemsTab/ItemsTab", () => ({
 describe("WatchlistsPlaygroundPage orientation guidance", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mocks.state.activeTab = "overview"
     mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.recordWatchlistsIaExperimentTelemetryMock.mockResolvedValue({ accepted: true })
     mocks.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)
+    mocks.state.activeTab = "overview"
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = false
-    localStorage.removeItem("beta-dismissed:watchlists")
     localStorage.removeItem("watchlists:guided-tour:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
   })
@@ -164,44 +156,40 @@ describe("WatchlistsPlaygroundPage orientation guidance", () => {
   afterEach(() => {
     cleanup()
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
-    localStorage.removeItem("beta-dismissed:watchlists")
     localStorage.removeItem("watchlists:guided-tour:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
   })
 
-  it("renders contextual guidance and key cross-surface actions for Activity and Articles", () => {
+  it("shows per-tab orientation and explicit Activity to Reports next action", () => {
     mocks.state.activeTab = "runs"
-    const { unmount } = render(<WatchlistsPlaygroundPage />)
-
-    expect(screen.getByTestId("watchlists-orientation-banner")).toBeInTheDocument()
-    expect(screen.getByTestId("watchlists-orientation-what")).toHaveTextContent(
-      "Activity shows monitor run status, logs, and failures."
-    )
-    expect(screen.getByTestId("watchlists-orientation-next")).toHaveTextContent(
-      "Next: open Reports to verify generated briefing outputs."
-    )
-    fireEvent.click(screen.getByTestId("watchlists-orientation-action-outputs"))
-    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("outputs")
-
-    unmount()
-    mocks.state.activeTab = "items"
     render(<WatchlistsPlaygroundPage />)
-    fireEvent.click(screen.getByTestId("watchlists-orientation-action-jobs"))
-    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("jobs")
+
+    expect(screen.getByTestId("watchlists-orientation-title")).toHaveTextContent("Activity")
+    expect(screen.getByTestId("watchlists-orientation-description")).toHaveTextContent("Reports")
+
+    fireEvent.click(screen.getByTestId("watchlists-orientation-action-open-reports"))
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("outputs")
   })
 
-  it("supports Overview -> Feeds -> Monitors -> Activity -> Reports next-step journey", () => {
-    mocks.state.activeTab = "overview"
+  it("supports the primary workflow journey from overview through reports", () => {
     const { rerender } = render(<WatchlistsPlaygroundPage />)
 
-    const expectedPath: Array<
-      "sources" | "jobs" | "runs" | "outputs"
-    > = ["sources", "jobs", "runs", "outputs"]
+    fireEvent.click(screen.getByTestId("watchlists-orientation-action-open-feeds"))
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("sources")
 
-    for (const nextTab of expectedPath) {
-      fireEvent.click(screen.getByTestId(`watchlists-orientation-action-${nextTab}`))
-      expect(mocks.state.setActiveTab).toHaveBeenLastCalledWith(nextTab)
-      rerender(<WatchlistsPlaygroundPage />)
-    }
+    mocks.state.activeTab = "sources"
+    rerender(<WatchlistsPlaygroundPage />)
+    fireEvent.click(screen.getByTestId("watchlists-orientation-action-open-monitors"))
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("jobs")
+
+    mocks.state.activeTab = "jobs"
+    rerender(<WatchlistsPlaygroundPage />)
+    fireEvent.click(screen.getByTestId("watchlists-orientation-action-open-activity"))
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("runs")
+
+    mocks.state.activeTab = "runs"
+    rerender(<WatchlistsPlaygroundPage />)
+    fireEvent.click(screen.getByTestId("watchlists-orientation-action-open-reports"))
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("outputs")
   })
 })

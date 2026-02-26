@@ -35,6 +35,15 @@
 - Add contract tests for source/job/output request mapping.
 **Status**: Complete
 
+### Stage 1 Completion Notes (2026-02-23)
+
+- Added pipeline draft schema and contract helpers in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/pipeline-contract.ts`.
+- Implemented validation, job payload mapping, output payload mapping, and review-summary generation for UC2 setup drafts.
+- Added unit tests in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts` to verify:
+  - Required-field validation behavior.
+  - Mapping to `WatchlistJobCreate` and `WatchlistOutputCreate`.
+  - Review summary artifact/delivery/schedule output.
+
 ## Stage 2: Pipeline Builder UI Implementation
 **Goal**: Implement a dedicated UC2 setup flow available from Overview.
 **Success Criteria**:
@@ -45,6 +54,32 @@
 - Add flow tests for successful pipeline creation and run-now variants.
 - Add failure-path tests for partial creation and recovery prompts.
 **Status**: Complete
+
+### Stage 2 Completion Notes (2026-02-23)
+
+- Added a dedicated pipeline-builder CTA in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx` (`watchlists-overview-cta-pipeline-builder`) so UC2 setup is accessible directly from Overview.
+- Implemented a three-step pipeline modal (Scope -> Briefing -> Review) with:
+  - multi-feed selection via source checklist,
+  - cadence/template/audio configuration,
+  - review summary generated from `buildPipelineReviewSummary`.
+- Wired Stage 1 contracts into execution:
+  - `toPipelineJobCreatePayload` for monitor creation,
+  - `toPipelineOutputCreatePayload` for first output creation after run trigger,
+  - `validateBriefingPipelineDraft` for client-side validation gating.
+- Added transactional recovery behavior:
+  - if pipeline creation fails before run start, newly created monitor is rolled back via `deleteWatchlistJob`,
+  - recovery messaging distinguishes rollback success, rollback failure, and post-run failures.
+- Added completion routing behavior:
+  - run-now success routes to Reports with run filter + output preview (`setOutputsRunFilter`, `openOutputPreview`),
+  - non-run-now success routes to Monitors,
+  - post-run failures route to Activity with run detail.
+- Extended tests in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`:
+  - run-now pipeline success path to output preview,
+  - partial creation failure path with rollback assertion.
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/SettingsTab/__tests__/SettingsTab.help.test.tsx src/components/Option/Watchlists/shared/__tests__/onboarding-path.test.ts`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists/OverviewTab -f json -o /tmp/bandit_watchlists_group03_stage2_2026_02_23.json`
 
 ## Stage 3: Dependency Visibility Across Existing Tabs
 **Goal**: Clarify entity relationships even outside the new builder.
@@ -57,30 +92,27 @@
 - Add integration tests for deep-linking between related entities.
 **Status**: Complete
 
-### Stage 3 Execution Notes (2026-02-23)
+### Stage 3 Completion Notes (2026-02-24)
 
-- Jobs list now surfaces per-monitor output linkage summaries (template + audio mode) so monitor intent is visible without opening each monitor modal:
-  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/job-summaries.ts`
-  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobsTab.tsx`
-- Reports rows now expose direct “jump to monitor” and “jump to run” actions to reduce cross-tab hunting:
-  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputsTab.tsx`
-- Activity rows now include explicit “open reports” action that routes with run/job filters:
-  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/RunsTab.tsx`
-- Run detail now shows linked report count plus dependency actions (`open monitor`, `open reports`) and clarifies item inclusion state using briefing-language statuses:
-  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/RunDetailDrawer.tsx`
-- Localization and regression coverage were expanded for the new linkage actions/labels:
-  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
-  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.relationship-jumps.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.relationship-jumps.test.tsx`
+- Added explicit run/output relationship visibility and destination handoffs in `apps/packages/ui/src/components/Option/Watchlists/RunsTab/RunsTab.tsx`:
+  - completed runs with ingested items now show `Included in briefing`,
+  - Activity actions now include `Open Reports` deep-linking (`outputsJobFilter` + `outputsRunFilter` + `outputs` tab).
+- Added upstream monitor/run jump actions in `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputsTab.tsx`:
+  - monitor column opens monitor settings (`jobs` tab + `openJobForm`),
+  - run column opens Activity run detail (`runs` tab + run filter + `openRunDetail`),
+  - run linkage is now visible in compact mode by default.
+- Added run-detail output linkage in `apps/packages/ui/src/components/Option/Watchlists/RunsTab/RunDetailDrawer.tsx`:
+  - statistics panel now includes explicit `Monitor` and `Reports` jump actions,
+  - reports action routes directly to Reports filtered to the active run.
+- Added Stage 3 linkage/deep-link test coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.cancel-run.test.tsx`
   - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx`
-
-### Stage 3 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.relationship-jumps.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.relationship-jumps.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
-- `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.relationship-jumps.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.relationship-jumps.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
-- `/tmp/bandit_watchlists_group03_stage3_frontend_scope_2026_02_23.json`
+  - existing Articles handoff coverage in `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx` remained green.
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.cancel-run.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.stream-lifecycle.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.cancel-run.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunDetailDrawer.source-column.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.regenerate-modal.test.tsx`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists -f json -o /tmp/bandit_watchlists_group03_stage3_2026_02_24.json`
 
 ## Stage 4: Preview Before Commit and First-Output Confidence
 **Goal**: Let users see likely briefing outcomes before schedules run long-term.
@@ -93,27 +125,24 @@
 - Add tests for test-run completion routing.
 **Status**: Complete
 
-### Stage 4 Execution Notes (2026-02-23)
+### Stage 4 Completion Notes (2026-02-24)
 
-- Extended quick-setup workflow model with explicit audio briefing toggle support and output payload mapping (`generate_audio`) for briefing goal paths:
-  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/quick-setup.ts`
-- Upgraded Overview quick-setup review step to provide pre-commit confidence:
-  - source candidate preview via `testWatchlistSourceDraft` with retry/error fallback handling,
-  - template-style briefing preview text derived from monitor/feed selections and sample candidates,
-  - explicit destination/result hints for test-run vs scheduled-only flows.
-  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`
-- Clarified completion behavior by promoting “run now” into explicit “test generation” language and dynamic submit CTA (`Create setup + run test`).
-- Added localization coverage for candidate preview, template preview, outcome expectations, and destination hints:
-  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
-- Added regression tests for preview success/failure and test-run destination routing:
-  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts`
-
-### Stage 4 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
-- `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts`
-- `/tmp/bandit_watchlists_group03_stage4_frontend_scope_2026_02_23.json`
+- Extended pipeline review-step confidence tooling in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`:
+  - added explicit text/audio outcome expectation copy in the Review step,
+  - added template preview generation against latest completed run context (`fetchWatchlistRuns` + `getWatchlistTemplate` + `previewWatchlistTemplate`),
+  - added fallback/error handling for missing run context, empty template content, and preview failures.
+- Added explicit `Run test generation` entrypoint in pipeline review footer:
+  - forces one immediate run + output creation without requiring `Run immediately` toggle,
+  - routes to Reports preview (`setOutputsRunFilter` + `openOutputPreview`) with test-generation completion messaging.
+- Updated modal state lifecycle to reset preview/loading/error artifacts across open/close cycles.
+- Added Stage 4 coverage in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`:
+  - preview generation success path,
+  - no-run-context fallback path,
+  - test-generation routing path to report preview.
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists/OverviewTab -f json -o /tmp/bandit_watchlists_group03_stage4_2026_02_24.json`
 
 ## Stage 5: Workflow KPI and Reliability Validation
 **Goal**: Validate UC2 completion quality and reduce setup abandonment.
@@ -126,39 +155,24 @@
 - Run end-to-end regression for pipeline setup on clean user state.
 **Status**: Complete
 
-### Stage 5 Execution Notes (2026-02-23)
+### Stage 5 Completion Notes (2026-02-24)
 
-- Expanded onboarding telemetry contract for UC2 workflow milestones:
-  - preview milestones (`quick_setup_preview_loaded`, `quick_setup_preview_failed`) for candidate/template confidence checks,
-  - test-generation milestones (`quick_setup_test_run_triggered`, `quick_setup_test_run_failed`),
-  - destination rollups (`completed_by_destination`) and UC2 snapshot rates.
-  - `apps/packages/ui/src/utils/watchlists-onboarding-telemetry.ts`
-- Added UC2 dashboard snapshot builder (`buildWatchlistsUc2FunnelDashboardSnapshot`) with completion and first-success proxy rate calculations.
-- Wired quick-setup UI to emit new telemetry checkpoints:
-  - candidate preview success/failure events,
-  - template preview readiness event at review transition,
-  - explicit test-run triggered/failed events around run kickoff.
-  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`
-- Added telemetry contract/regression coverage:
+- Extended the existing onboarding metrics module in `apps/packages/ui/src/utils/watchlists-onboarding-telemetry.ts` with UC2 pipeline funnel instrumentation:
+  - new pipeline milestone events (`opened`, `step_completed`, `preview_generated`, `submitted`, `completed`, `failed`),
+  - explicit failure-stage and preview-status counters,
+  - dashboard/report helpers (`queryWatchlistsOnboardingTelemetryEvents`, `buildWatchlistsUc2PipelineDashboardSnapshot`) to track completion and first-success rates.
+- Wired UC2 funnel event emitters into the pipeline builder flow in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`:
+  - modal open, step progression, preview outcomes, submit/completion, and failure/rollback stages.
+- Added Stage 5 telemetry contract and UI regression coverage:
   - `apps/packages/ui/src/utils/__tests__/watchlists-onboarding-telemetry.test.ts`
   - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
-- Added dedicated UC2 regression gate command:
-  - `apps/packages/ui/package.json` -> `test:watchlists:uc2`
-- Published UC2 KPI runbook:
-  - `Docs/Plans/WATCHLISTS_UC2_WORKFLOW_KPI_RUNBOOK_2026_02_23.md`
-
-### Stage 5 Addendum (2026-02-23, Group 03 Continuation)
-
-- Refreshed UC2 KPI runbook to include milestone-based onboarding outcomes introduced in shared telemetry:
-  - added first-success milestones (`quick_setup_first_run_succeeded`, `quick_setup_first_output_succeeded`),
-  - added explicit run/output success and drop-off rates,
-  - added median timing metrics for setup/run/output first-success checkpoints,
-  - aligned investigation thresholds to first-output success and timing regressions.
-  - `Docs/Plans/WATCHLISTS_UC2_WORKFLOW_KPI_RUNBOOK_2026_02_23.md`
-
-### Stage 5 Validation Evidence
-
-- `bunx vitest run src/utils/__tests__/watchlists-onboarding-telemetry.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
-- `bun run test:watchlists:uc2`
-- `bun run test:watchlists:onboarding`
-- `/tmp/bandit_watchlists_group03_stage5_frontend_scope_2026_02_23.json`
+  - retained payload contract coverage in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts`
+  - validated first-success integration stability in:
+    - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
+    - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+- Published UC2 KPI + QA/demo runbook:
+  - `Docs/Plans/WATCHLISTS_UC2_PIPELINE_KPI_RUNBOOK_2026_02_24.md`
+- Verification evidence:
+  - `bunx vitest run src/utils/__tests__/watchlists-onboarding-telemetry.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts --maxWorkers=1 --no-file-parallelism`
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists/OverviewTab apps/packages/ui/src/utils -f json -o /tmp/bandit_watchlists_group03_stage5_2026_02_24.json`

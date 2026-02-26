@@ -34,6 +34,16 @@
 - Add tests for “skip onboarding” and resume behavior.
 **Status**: Complete
 
+### Stage 1 Completion Notes (2026-02-23)
+
+- Added persisted onboarding path helpers in `apps/packages/ui/src/components/Option/Watchlists/shared/onboarding-path.ts`.
+- Added onboarding path branch controls in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx` with beginner/advanced defaults and direct advanced CTA.
+- Added onboarding path configuration control in `apps/packages/ui/src/components/Option/Watchlists/SettingsTab/SettingsTab.tsx`.
+- Added test coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/onboarding-path.test.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/SettingsTab/__tests__/SettingsTab.help.test.tsx`
+
 ## Stage 2: Quick Setup Expansion for Real UC2
 **Goal**: Extend quick setup beyond a single source into practical briefing setup.
 **Success Criteria**:
@@ -44,6 +54,30 @@
 - Add tests for multi-feed setup success/failure flows.
 - Add tests for setup-goal routing (triage vs briefing vs briefing+run-now).
 **Status**: Complete
+
+### Stage 2 Completion Notes (2026-02-23)
+
+- Expanded quick-setup contract in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/quick-setup.ts`:
+  - added `extraSourceUrls` and `includeAudioBriefing`,
+  - updated job payload builder to support multi-feed scopes and briefing audio defaults,
+  - added `parseQuickSetupExtraSourceUrls` helper for newline/comma import strings.
+- Extended quick-setup execution in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`:
+  - creates additional feeds via `bulkCreateSources` when extra URLs are provided,
+  - blocks setup on partial multi-feed creation failures,
+  - includes explicit audio briefing toggle in monitor step,
+  - surfaces destination hints in review step (Activity vs Reports vs Monitors).
+- Added setup-goal routing coverage and multi-feed flow coverage in
+  `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`:
+  - multi-feed success scope mapping,
+  - multi-feed partial-failure prevention,
+  - briefing+run-now routing to Activity,
+  - triage/no-run routing to Monitors,
+  - existing briefing/no-run routing to Reports retained.
+- Updated helper tests in `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts` for new defaults and parser behavior.
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/pipeline-contract.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/SettingsTab/__tests__/SettingsTab.help.test.tsx src/components/Option/Watchlists/shared/__tests__/onboarding-path.test.ts`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists/OverviewTab -f json -o /tmp/bandit_watchlists_group02_stage2_2026_02_23.json`
 
 ## Stage 3: Guided Tour Coverage and Contextual Teach Points
 **Goal**: Make guided tour explain key concepts users encounter later.
@@ -56,28 +90,24 @@
 - Add tests for first-time teach-point visibility and dismissal persistence.
 **Status**: Complete
 
-### Stage 3 Execution Notes (2026-02-23)
+### Stage 3 Completion Notes (2026-02-24)
 
-- Expanded guided tour copy to explain monitor -> template -> output relationships and audio briefing discoverability:
-  - `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`
-  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
-- Added first-time contextual teach-point system with dismissal persistence (`watchlists:teach-points:v1`):
-  - Jobs tab: cron-first tip, then filters tip.
-  - Templates tab: preset-first template tip.
-  - Implemented in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`.
-- Reframed help tooltip topic copy from technical definitions to task-oriented guidance:
-  - `apps/packages/ui/src/components/Option/Watchlists/shared/WatchlistsHelpTooltip.tsx`
-  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
-- Added/updated regression coverage:
+- Expanded guided-tour concept coverage in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`:
+  - monitor step now explicitly covers schedule/filters/template-output relationship,
+  - reports step now includes template/audio regeneration discoverability.
+- Added first-time contextual teach points with dismissal persistence:
+  - storage key: `watchlists:teach-points:v1`,
+  - `jobs` teach point: cron + advanced filter progressive-disclosure guidance,
+  - `templates` teach point: preset-first + regenerate comparison guidance.
+- Updated help topic copy to task-oriented guidance in:
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`,
+  - `apps/packages/ui/src/components/Option/Watchlists/shared/WatchlistsHelpTooltip.tsx`.
+- Added/updated tests:
   - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`
   - `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx`
   - `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/__snapshots__/WatchlistsHelpTooltip.test.tsx.snap`
-
-### Stage 3 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx -u`
-- `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts`
-- `/tmp/bandit_watchlists_group02_stage3_frontend_scope_2026_02_23.json`
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`
 
 ## Stage 4: Concept Burden Reduction in Copy
 **Goal**: Reduce jargon and improve actionability of onboarding/UI copy.
@@ -90,25 +120,19 @@
 - Add copy contract tests for terminology consistency in first-run keys.
 **Status**: Complete
 
-### Stage 4 Execution Notes (2026-02-23)
+### Stage 4 Completion Notes (2026-02-24)
 
-- Refined first-run copy to reduce model-driven terms and improve action clarity:
-  - onboarding feed step now uses feed language consistently (removed source noun),
-  - guided-tour monitor step now uses “briefing format” wording (removed output noun),
-  - review-step messaging now uses “expected briefing” wording (removed output noun).
-  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
-  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/OverviewTab.tsx`
-- Added first-run terminology contract checks to guard against backend-model nouns on onboarding surfaces:
-  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-first-run-copy-contract.test.ts`
-- Added onboarding copy snapshot coverage for key first-run blocks (`overview.onboarding`, `guide`, `teachPoints`):
-  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.onboarding-copy.snapshot.test.ts`
-  - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/__snapshots__/OverviewTab.onboarding-copy.snapshot.test.ts.snap`
-
-### Stage 4 Validation Evidence
-
-- `bunx vitest run src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.onboarding-copy.snapshot.test.ts src/components/Option/Watchlists/__tests__/watchlists-first-run-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/watchlists-terminology-contract.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx -u`
-- `bun run test:watchlists:uc2`
-- `/tmp/bandit_watchlists_group02_stage4_frontend_scope_2026_02_23.json`
+- Refined first-run copy across onboarding and guided-tour surfaces in `apps/packages/ui/src/assets/locale/en/watchlists.json` and fallback strings in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`:
+  - replaced mixed system aliases with canonical terms (`Feeds`, `Monitors`, `Activity`, `Articles`, `Reports`),
+  - made “what happens next” wording explicit in onboarding path hints and guided steps,
+  - reduced jargon density while preserving advanced discoverability via teach-point/task guidance.
+- Updated contextual help fallback copy in `apps/packages/ui/src/components/Option/Watchlists/shared/WatchlistsHelpTooltip.tsx` to task-oriented guidance for cron and Jinja2 topics.
+- Extended copy governance tests:
+  - added first-run terminology contract assertions in `apps/packages/ui/src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts`,
+  - updated guided-tour and teach-point assertions in `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`,
+  - refreshed snapshot baseline in `apps/packages/ui/src/components/Option/Watchlists/shared/__tests__/__snapshots__/WatchlistsHelpTooltip.test.tsx.snap`.
+- Verification evidence:
+  - `bunx vitest run src/components/Option/Watchlists/__tests__/watchlists-plain-language-copy-contract.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.experimental-ia.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.orientation-guidance.test.tsx src/components/Option/Watchlists/shared/__tests__/WatchlistsHelpTooltip.test.tsx`
 
 ## Stage 5: Onboarding Effectiveness Validation
 **Goal**: Validate that users reach first successful run and first report faster.
@@ -121,35 +145,19 @@
 - Run onboarding regression suite for happy path and interruption recovery.
 **Status**: Complete
 
-### Stage 5 Execution Notes (2026-02-23)
+### Stage 5 Completion Notes (2026-02-24)
 
-- Extended onboarding telemetry contract with explicit first-success milestones and rate/timing/drop-off snapshot metrics:
-  - added events: `quick_setup_first_run_succeeded`, `quick_setup_first_output_succeeded`,
-  - added counters: `first_run_success`, `first_output_success`,
-  - added timing samples: setup completion, first run success, first output success,
-  - added rates: first-run/output success + setup/run/output drop-off rates.
-  - `apps/packages/ui/src/utils/watchlists-onboarding-telemetry.ts`
-- Wired milestone telemetry emission across beginner and power paths:
-  - Overview snapshot path (existing users/new outputs): `OverviewTab.tsx`,
-  - Reports list load path (unfiltered outputs): `OutputsTab.tsx`,
-  - Global run-status transition polling path: `WatchlistsPlaygroundPage.tsx`.
-- Added and updated regression coverage:
-  - telemetry schema/rate/timing contract:
-    - `apps/packages/ui/src/utils/__tests__/watchlists-onboarding-telemetry.test.ts`
-  - onboarding happy-path + interruption recovery flow validation (guided setup + preview failure):
-    - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx`
-    - `apps/packages/ui/src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts`
-  - milestone propagation on run completion and outputs availability:
-    - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
-    - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
-- Added dedicated onboarding regression gate command:
-  - `apps/packages/ui/package.json` -> `test:watchlists:onboarding`
-- Published Stage 5 QA/KPI runbook:
-  - `Docs/Plans/WATCHLISTS_ONBOARDING_EFFECTIVENESS_VALIDATION_RUNBOOK_2026_02_23.md`
-
-### Stage 5 Validation Evidence
-
-- `bun run test:watchlists:onboarding`
-- `bun run test:watchlists:uc2`
-- `bunx vitest run src/utils/__tests__/watchlists-onboarding-telemetry.test.ts src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
-- `/tmp/bandit_watchlists_group02_stage5_frontend_scope_2026_02_23.json`
+- Extended onboarding telemetry schema in `apps/packages/ui/src/utils/watchlists-onboarding-telemetry.ts` with value milestones:
+  - `first_run_succeeded` + `first_run_succeeded_at`
+  - `first_output_succeeded` + `first_output_succeeded_at`
+  - one-time milestone dedupe to prevent duplicate first-value counts.
+- Wired milestone event emitters into core onboarding-to-value surfaces:
+  - successful run polling in `apps/packages/ui/src/components/Option/Watchlists/WatchlistsPlaygroundPage.tsx`
+  - successful output fetch in `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/OutputsTab.tsx`.
+- Added Stage 5 telemetry and regression coverage:
+  - `apps/packages/ui/src/utils/__tests__/watchlists-onboarding-telemetry.test.ts`
+  - `apps/packages/ui/src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+- Verification evidence:
+  - `bunx vitest run src/utils/__tests__/watchlists-onboarding-telemetry.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.run-notifications.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/Watchlists apps/packages/ui/src/utils -f json -o /tmp/bandit_watchlists_group02_stage5_2026_02_24.json`

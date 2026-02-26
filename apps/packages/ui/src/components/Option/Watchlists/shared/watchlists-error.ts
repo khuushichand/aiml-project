@@ -6,6 +6,7 @@ type ErrorKind =
   | "dns"
   | "tls"
   | "timeout"
+  | "validation"
   | "auth"
   | "rate_limit"
   | "not_found"
@@ -81,7 +82,8 @@ const classifyError = (status: number | null, rawMessage: string): ErrorKind => 
     status === 403 ||
     normalized.includes("forbidden") ||
     normalized.includes("unauthorized") ||
-    normalized.includes("permission denied")
+    normalized.includes("permission denied") ||
+    normalized.includes("token expired")
   ) {
     return "auth"
   }
@@ -92,6 +94,22 @@ const classifyError = (status: number | null, rawMessage: string): ErrorKind => 
     normalized.includes("too many requests")
   ) {
     return "rate_limit"
+  }
+
+  if (status === 408 || status === 504) {
+    return "timeout"
+  }
+
+  if (
+    status === 400 ||
+    status === 422 ||
+    normalized.includes("validation error") ||
+    normalized.includes("watchlists_validation_error") ||
+    normalized.includes("invalid input") ||
+    normalized.includes("invalid payload") ||
+    normalized.includes("unprocessable")
+  ) {
+    return "validation"
   }
 
   if (status === 404) {
@@ -142,7 +160,12 @@ const classifyError = (status: number | null, rawMessage: string): ErrorKind => 
 }
 
 const toSeverity = (kind: ErrorKind): ErrorSeverity => {
-  if (kind === "auth" || kind === "rate_limit" || kind === "not_found") {
+  if (
+    kind === "auth" ||
+    kind === "rate_limit" ||
+    kind === "not_found" ||
+    kind === "validation"
+  ) {
     return "warning"
   }
   return "error"
@@ -181,6 +204,13 @@ const getNextStep = (
     return t(
       "watchlists:errors.next.timeout",
       "Retry now. If this continues, reduce scope or schedule intensity.",
+      { context }
+    )
+  }
+  if (kind === "validation") {
+    return t(
+      "watchlists:errors.next.validation",
+      "Review highlighted values for {{context}}, then retry.",
       { context }
     )
   }

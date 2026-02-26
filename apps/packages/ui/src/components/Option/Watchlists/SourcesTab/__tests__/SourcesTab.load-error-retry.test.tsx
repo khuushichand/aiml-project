@@ -87,11 +87,27 @@ vi.mock("antd", () => {
     Modal: { confirm: vi.fn() },
     Select,
     Space: ({ children }: any) => <>{children}</>,
-    Switch: () => <button type="button">switch</button>,
-    Table: ({ columns }: any) => {
-      mocks.tableColumnsRef.current = Array.isArray(columns) ? columns : []
-      return <div data-testid="sources-table" />
-    },
+    Switch: ({ "aria-label": ariaLabel }: any) => (
+      <button type="button" aria-label={ariaLabel}>
+        switch
+      </button>
+    ),
+    Table: ({ dataSource = [], columns = [], "aria-label": ariaLabel }: any) => (
+      <table data-testid="sources-table" role="table" aria-label={ariaLabel}>
+        <tbody>
+          {dataSource.map((record: any, rowIndex: number) => (
+            <tr key={record.id ?? rowIndex}>
+              {columns.map((column: any, columnIndex: number) => {
+                const key = String(column.key ?? column.dataIndex ?? columnIndex)
+                const value = column.dataIndex ? record[column.dataIndex] : undefined
+                const content = column.render ? column.render(value, record, rowIndex) : value
+                return <td key={key}>{content}</td>
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    ),
     Tag: ({ children }: any) => <span>{children}</span>,
     Tooltip: ({ children }: any) => <>{children}</>,
     message: {
@@ -216,25 +232,26 @@ describe("SourcesTab load-error retry", () => {
     })
   })
 
-  it("assigns an explicit width to the feed name column", async () => {
-    const source = {
-      id: 42,
-      name: "Example Feed",
+  it("labels the feeds table and exposes explicit active-state text", async () => {
+    const sourceRecord = {
+      id: 44,
+      name: "AI Feed",
       url: "https://example.com/feed.xml",
       source_type: "rss",
+      active: true,
       tags: [],
-      status: "healthy",
+      group_ids: [],
+      created_at: "2026-02-18T00:00:00Z",
       last_scraped_at: null,
-      active: true
+      status: "healthy"
     }
-
     mocks.storeStateRef.current = baseState({
-      sources: [source],
+      sources: [sourceRecord],
       sourcesTotal: 1
     })
 
-    mocks.fetchWatchlistSourcesMock.mockResolvedValueOnce({
-      items: [source],
+    mocks.fetchWatchlistSourcesMock.mockResolvedValue({
+      items: [sourceRecord],
       total: 1,
       has_more: false
     })

@@ -57,6 +57,26 @@ describe("outputMetadata helpers", () => {
     })
   })
 
+  it("prevents template overrides for audio regenerate payloads", () => {
+    const payload = buildRegenerateOutputRequest(
+      {
+        run_id: 11,
+        type: "tts_audio"
+      },
+      {
+        title: "Audio Digest",
+        templateName: "newsletter_html",
+        templateVersion: 2
+      }
+    )
+
+    expect(payload).toEqual({
+      run_id: 11,
+      type: "tts_audio",
+      title: "Audio Digest"
+    })
+  })
+
   it("normalizes deliveries from array and object fallback shapes", () => {
     const fromArray = getOutputDeliveryStatuses({
       deliveries: [
@@ -138,7 +158,7 @@ describe("outputMetadata helpers", () => {
   })
 
   it("returns artifact labels and tag colors by output kind", () => {
-    expect(getOutputArtifactLabel({ format: "mp3", type: "tts_audio" })).toBe("Audio")
+    expect(getOutputArtifactLabel({ format: "mp3", type: "tts_audio" })).toBe("Audio briefing")
     expect(getOutputArtifactTagColor({ format: "mp3", type: "tts_audio" })).toBe("purple")
 
     expect(getOutputArtifactLabel({ format: "html", type: "briefing" })).toBe("HTML")

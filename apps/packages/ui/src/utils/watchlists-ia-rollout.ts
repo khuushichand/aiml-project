@@ -1,119 +1,196 @@
 import type { WatchlistsIaExperimentVariant } from "@/types/watchlists"
+import {
+  FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS,
+  FEATURE_ROLLOUT_SUBJECT_ID_STORAGE_KEY,
+  createRolloutSubjectId,
+  isFlagEnabledForRollout,
+  resolveRolloutPercentageFromCandidates
+} from "@/utils/feature-rollout"
 
+export const WATCHLISTS_IA_ROLLOUT_FLAG_KEY = "watchlists_ia_reduced_nav_v1"
 export const WATCHLISTS_IA_ROLLOUT_STORAGE_KEY = "watchlists:ia-rollout:v1"
 
-interface WatchlistsIaRolloutAssignment {
+export type WatchlistsIaRolloutSource =
+  | "window_override"
+  | "legacy_env"
+  | "mode_forced"
+  | "rollout"
+  | "fallback_baseline"
+
+export interface WatchlistsIaRolloutResolution {
+  variant: WatchlistsIaExperimentVariant
+  enabled: boolean
+  source: WatchlistsIaRolloutSource
+  rolloutPercentage: number
+  subjectId: string | null
+}
+
+interface WatchlistsIaRolloutSnapshot {
   version: 1
   variant: WatchlistsIaExperimentVariant
-  source: "override" | "storage" | "env_variant" | "env_percent" | "default"
-  assigned_at: string
-  percent?: number
+  source: WatchlistsIaRolloutSource
+  rollout_percentage: number
+  subject_id: string | null
+  updated_at: string
 }
 
 const parseVariant = (value: unknown): WatchlistsIaExperimentVariant | null => {
-  const normalized = String(value ?? "").trim().toLowerCase()
-  if (normalized === "experimental" || normalized === "1" || normalized === "true" || normalized === "on") {
+  const normalized = String(value || "").trim().toLowerCase()
+  if (normalized === "experimental") return "experimental"
+  if (normalized === "baseline") return "baseline"
+  return null
+}
+
+const parseBooleanVariant = (value: unknown): WatchlistsIaExperimentVariant | null => {
+  if (typeof value === "boolean") {
+    return value ? "experimental" : "baseline"
+  }
+  if (typeof value !== "string") return null
+  const normalized = value.trim().toLowerCase()
+  if (normalized === "true" || normalized === "1" || normalized === "yes") {
     return "experimental"
   }
-  if (normalized === "baseline" || normalized === "0" || normalized === "false" || normalized === "off") {
+  if (normalized === "false" || normalized === "0" || normalized === "no") {
     return "baseline"
   }
   return null
 }
 
-const parseOverrideVariant = (value: unknown): WatchlistsIaExperimentVariant | null => {
-  if (typeof value === "boolean") {
-    return value ? "experimental" : "baseline"
+const resolveExperimentMode = (value: unknown): "baseline" | "experimental" | "rollout" => {
+  const normalized = String(value || "").trim().toLowerCase()
+  if (normalized === "baseline" || normalized === "experimental") {
+    return normalized
   }
-  return parseVariant(value)
+  return "rollout"
 }
 
-const readStoredAssignment = (): WatchlistsIaRolloutAssignment | null => {
+const safeGetItem = (key: string): string | null => {
   if (typeof window === "undefined") return null
   try {
-    const raw = localStorage.getItem(WATCHLISTS_IA_ROLLOUT_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<WatchlistsIaRolloutAssignment>
-    const variant = parseVariant(parsed.variant)
-    if (!variant) return null
-    const source =
-      parsed.source === "override" ||
-      parsed.source === "storage" ||
-      parsed.source === "env_variant" ||
-      parsed.source === "env_percent" ||
-      parsed.source === "default"
-        ? parsed.source
-        : "storage"
-    return {
-      version: 1,
-      variant,
-      source,
-      assigned_at:
-        typeof parsed.assigned_at === "string" && parsed.assigned_at
-          ? parsed.assigned_at
-          : new Date().toISOString(),
-      percent: typeof parsed.percent === "number" ? parsed.percent : undefined
-    }
+    return window.localStorage.getItem(key)
   } catch {
     return null
   }
 }
 
-const writeStoredAssignment = (
-  variant: WatchlistsIaExperimentVariant,
-  source: WatchlistsIaRolloutAssignment["source"],
-  percent?: number
-): void => {
+const safeSetItem = (key: string, value: string): void => {
   if (typeof window === "undefined") return
-  const payload: WatchlistsIaRolloutAssignment = {
-    version: 1,
-    variant,
-    source,
-    assigned_at: new Date().toISOString(),
-    percent: Number.isFinite(percent) ? Number(percent) : undefined
-  }
   try {
-    localStorage.setItem(WATCHLISTS_IA_ROLLOUT_STORAGE_KEY, JSON.stringify(payload))
+    window.localStorage.setItem(key, value)
   } catch {
-    // localStorage may be unavailable.
+    // Ignore storage write failures and continue with in-memory resolution.
   }
 }
 
-const resolvePercentVariant = (): WatchlistsIaExperimentVariant | null => {
-  const raw = process.env.NEXT_PUBLIC_WATCHLISTS_IA_EXPERIMENT_PERCENT
-  if (raw == null || String(raw).trim() === "") return null
-  const percent = Number(raw)
-  if (!Number.isFinite(percent)) return null
-  const bounded = Math.max(0, Math.min(100, percent))
-  return Math.random() * 100 < bounded ? "experimental" : "baseline"
+const ensureRolloutSubjectId = (): string => {
+  const existing = safeGetItem(FEATURE_ROLLOUT_SUBJECT_ID_STORAGE_KEY)
+  if (existing && existing.trim().length > 0) {
+    return existing.trim()
+  }
+
+  const created = createRolloutSubjectId()
+  safeSetItem(FEATURE_ROLLOUT_SUBJECT_ID_STORAGE_KEY, created)
+  return created
 }
 
-export const resolveWatchlistsIaExperimentVariant = (): WatchlistsIaExperimentVariant => {
-  if (typeof window !== "undefined") {
-    const override = (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown })
-      .__TLDW_WATCHLISTS_IA_EXPERIMENT__
-    const overrideVariant = parseOverrideVariant(override)
-    if (overrideVariant) {
-      writeStoredAssignment(overrideVariant, "override")
-      return overrideVariant
-    }
+const buildResolution = (
+  variant: WatchlistsIaExperimentVariant,
+  source: WatchlistsIaRolloutSource,
+  rolloutPercentage: number,
+  subjectId: string | null
+): WatchlistsIaRolloutResolution => ({
+  variant,
+  enabled: variant === "experimental",
+  source,
+  rolloutPercentage,
+  subjectId
+})
 
-    const stored = readStoredAssignment()
-    if (stored) return stored.variant
+const persistResolution = (resolution: WatchlistsIaRolloutResolution): void => {
+  const snapshot: WatchlistsIaRolloutSnapshot = {
+    version: 1,
+    variant: resolution.variant,
+    source: resolution.source,
+    rollout_percentage: resolution.rolloutPercentage,
+    subject_id: resolution.subjectId,
+    updated_at: new Date().toISOString()
+  }
+  safeSetItem(WATCHLISTS_IA_ROLLOUT_STORAGE_KEY, JSON.stringify(snapshot))
+}
+
+export const resolveWatchlistsIaExperimentRollout = (): WatchlistsIaRolloutResolution => {
+  if (typeof window === "undefined") {
+    return buildResolution("baseline", "fallback_baseline", 0, null)
   }
 
-  const envVariant = parseVariant(process.env.NEXT_PUBLIC_WATCHLISTS_IA_EXPERIMENT_VARIANT)
-  if (envVariant) {
-    writeStoredAssignment(envVariant, "env_variant")
-    return envVariant
+  const windowVariant = parseVariant(
+    (window as { __TLDW_WATCHLISTS_IA_VARIANT__?: unknown }).__TLDW_WATCHLISTS_IA_VARIANT__
+  )
+  if (windowVariant) {
+    const resolution = buildResolution(windowVariant, "window_override", windowVariant === "experimental" ? 100 : 0, null)
+    persistResolution(resolution)
+    return resolution
   }
 
-  const percentVariant = resolvePercentVariant()
-  if (percentVariant) {
-    const percent = Number(process.env.NEXT_PUBLIC_WATCHLISTS_IA_EXPERIMENT_PERCENT)
-    writeStoredAssignment(percentVariant, "env_percent", percent)
-    return percentVariant
+  const windowBooleanVariant = parseBooleanVariant(
+    (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
+  )
+  if (windowBooleanVariant) {
+    const resolution = buildResolution(
+      windowBooleanVariant,
+      "window_override",
+      windowBooleanVariant === "experimental" ? 100 : 0,
+      null
+    )
+    persistResolution(resolution)
+    return resolution
   }
 
-  return "baseline"
+  const legacyEnvVariant = parseBooleanVariant(process.env.NEXT_PUBLIC_WATCHLISTS_EXPERIMENTAL_IA)
+  if (legacyEnvVariant) {
+    const resolution = buildResolution(
+      legacyEnvVariant,
+      "legacy_env",
+      legacyEnvVariant === "experimental" ? 100 : 0,
+      null
+    )
+    persistResolution(resolution)
+    return resolution
+  }
+
+  const mode = resolveExperimentMode(process.env.NEXT_PUBLIC_WATCHLISTS_IA_EXPERIMENT_MODE)
+  if (mode === "baseline" || mode === "experimental") {
+    const resolution = buildResolution(
+      mode,
+      "mode_forced",
+      mode === "experimental" ? 100 : 0,
+      null
+    )
+    persistResolution(resolution)
+    return resolution
+  }
+
+  const rolloutPercentage = resolveRolloutPercentageFromCandidates(
+    [
+      (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT_ROLLOUT_PERCENT__?: unknown })
+        .__TLDW_WATCHLISTS_IA_EXPERIMENT_ROLLOUT_PERCENT__,
+      safeGetItem(FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS.watchlists_ia_reduced_nav_v1),
+      process.env.NEXT_PUBLIC_WATCHLISTS_IA_EXPERIMENT_ROLLOUT_PERCENT
+    ],
+    0
+  )
+  const subjectId = ensureRolloutSubjectId()
+  const enabled = isFlagEnabledForRollout({
+    flagKey: WATCHLISTS_IA_ROLLOUT_FLAG_KEY,
+    subjectId,
+    rolloutPercentage
+  })
+  const resolution = buildResolution(
+    enabled ? "experimental" : "baseline",
+    "rollout",
+    rolloutPercentage,
+    subjectId
+  )
+  persistResolution(resolution)
+  return resolution
 }

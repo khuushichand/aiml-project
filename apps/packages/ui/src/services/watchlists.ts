@@ -369,6 +369,35 @@ export const previewWatchlistJob = async (
   })
 }
 
+export interface WatchlistAudioSettingsTestRequest {
+  text: string
+  voice: string
+  speed: number
+  model?: string
+  response_format?: "mp3" | "wav" | "ogg" | "opus" | "flac" | "aac" | "webm"
+}
+
+export const testWatchlistAudioSettings = async (
+  payload: WatchlistAudioSettingsTestRequest
+): Promise<ArrayBuffer> => {
+  return bgRequest<ArrayBuffer>({
+    path: "/api/v1/audio/speech",
+    method: "POST",
+    headers: {
+      Accept: "audio/mpeg"
+    },
+    body: {
+      input: payload.text,
+      text: payload.text,
+      voice: payload.voice,
+      speed: payload.speed,
+      ...(payload.model ? { model: payload.model } : {}),
+      ...(payload.response_format ? { response_format: payload.response_format } : {})
+    },
+    responseType: "arrayBuffer"
+  })
+}
+
 export const updateJobFilters = async (
   jobId: number,
   filters: WatchlistFilter[]
