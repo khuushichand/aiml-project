@@ -12,6 +12,7 @@ import { SplashOverlay } from "@/components/Common/SplashScreen"
 import { useSplashScreen } from "@/hooks/useSplashScreen"
 import { SPLASH_TRIGGER_EVENT } from "@/services/splash-events"
 import { patchStaticAntdNotificationCompat } from "@/utils/antd-notification-compat"
+import { ToastProvider } from "@web/components/ui/ToastProvider"
 
 type AppProvidersProps = {
   children: React.ReactNode
@@ -81,15 +82,17 @@ export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
                 renderEmpty={renderEmpty}
                 direction={direction}
               >
-                <AntdApp>{children}</AntdApp>
-                {splash.visible && splash.card && (
-                  <SplashOverlay
-                    card={splash.card}
-                    message={splash.message}
-                    onDismiss={splash.dismiss}
-                  />
-                )}
-                <div id="tldw-portal-root" ref={portalRootRef} />
+                <ToastProvider>
+                  <AntdApp>{children}</AntdApp>
+                  {splash.visible && splash.card && (
+                    <SplashOverlay
+                      card={splash.card}
+                      message={splash.message}
+                      onDismiss={splash.dismiss}
+                    />
+                  )}
+                  <div id="tldw-portal-root" ref={portalRootRef} />
+                </ToastProvider>
               </ConfigProvider>
             </FontSizeProvider>
           </PageAssistProvider>
