@@ -123,6 +123,20 @@ Persistence behavior:
 - Watchlists always record run stats and scraped items.
 - Set `ingest_prefs.persist_to_media_db=true` to also write items into the Media DB.
 
+### Queue items into a run-specific report (WebUI `/watchlists`)
+
+Use this flow when you want to hand-pick scraped items and generate a report from only those queued items:
+
+1. Open `/watchlists` and go to the **Articles** tab.
+2. Open an item and click **Include in next briefing** to toggle `queued_for_briefing=true`.
+3. In **Smart Feeds**, switch to **Queued for briefing**.
+4. Select the run in the run selector, then click **Generate report from queue**.
+5. The UI switches to **Reports** and filters to that run so you can open/download the generated output.
+
+Notes:
+- Queueing is independent of item `status` (`ingested`/`filtered`) and `reviewed`; it only controls report candidate selection.
+- The generated report request is run-specific and includes explicit queued `item_ids`.
+
 ### Example: create a site source with scrape rules
 
 ```bash

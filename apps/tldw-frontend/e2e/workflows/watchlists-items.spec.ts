@@ -400,7 +400,7 @@ test.describe("Watchlists Items Reader", () => {
     await authedPage.goto("/watchlists")
     await waitForConnection(authedPage)
 
-    await authedPage.getByRole("tab", { name: /^Items$/ }).click()
+    await authedPage.getByRole("tab", { name: /^(Items|Articles)$/ }).click()
     const layout = authedPage.getByTestId("watchlists-items-layout")
     await expect(layout).toBeVisible()
 
@@ -428,7 +428,7 @@ test.describe("Watchlists Items Reader", () => {
     await authedPage.goto("/watchlists")
     await waitForConnection(authedPage)
 
-    await authedPage.getByRole("tab", { name: /^Items$/ }).click()
+    await authedPage.getByRole("tab", { name: /^(Items|Articles)$/ }).click()
 
     const row1 = authedPage.getByTestId("watchlists-item-row-9001")
     await expect(row1).toBeVisible()
@@ -462,7 +462,7 @@ test.describe("Watchlists Items Reader", () => {
     await authedPage.goto("/watchlists")
     await waitForConnection(authedPage)
 
-    await authedPage.getByRole("tab", { name: /^Items$/ }).click()
+    await authedPage.getByRole("tab", { name: /^(Items|Articles)$/ }).click()
 
     const row1 = authedPage.getByTestId("watchlists-item-row-9001")
     await expect(row1).toBeVisible()
@@ -478,8 +478,7 @@ test.describe("Watchlists Items Reader", () => {
     await expect(authedPage.getByTestId("watchlists-item-row-9002")).toHaveCount(0)
 
     const runFilter = authedPage.getByTestId("watchlists-items-queue-run-filter")
-    await runFilter.click()
-    await authedPage.getByRole("option", { name: "Run #500" }).click()
+    await expect(runFilter).toContainText("500")
     await authedPage.getByTestId("watchlists-items-queue-generate-report").click()
 
     await expect(authedPage.getByRole("tab", { name: /^Reports$/ })).toHaveAttribute(
