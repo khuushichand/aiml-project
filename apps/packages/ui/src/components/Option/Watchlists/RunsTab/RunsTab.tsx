@@ -32,6 +32,7 @@ import {
   resolveStalledRunNotification
 } from "./run-notifications"
 import { fetchFilteredJobRuns, RUNS_CLIENT_FILTER_PAGE_SIZE } from "./runs-filter-fetch"
+import { hasActiveWatchlistRuns } from "./polling-utils"
 
 const POLL_INTERVAL_MS = 5000
 const DEFAULT_RUNS_CSV_SERVER_THRESHOLD = 2000
@@ -144,9 +145,6 @@ export const RunsTab: React.FC = () => {
   const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const setPollingActive = useWatchlistsStore((s) => s.setPollingActive)
-  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
-  const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
-  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const closeRunDetail = useWatchlistsStore((s) => s.closeRunDetail)
   const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
@@ -712,11 +710,7 @@ export const RunsTab: React.FC = () => {
                 aria-label={t("watchlists:runs.openReports", "Open Reports")}
                 icon={<Download className="h-4 w-4" />}
                 data-testid={`watchlists-run-open-outputs-${record.id}`}
-                onClick={() => {
-                  setOutputsJobFilter(record.job_id)
-                  setOutputsRunFilter(record.id)
-                  setActiveTab("outputs")
-                }}
+                onClick={() => openRunOutputs(record.id, record.job_id)}
               />
             </Tooltip>
             {isCancellable && (
@@ -792,10 +786,19 @@ export const RunsTab: React.FC = () => {
       }
     }
   ]
+  const resolveColumnKey = (column: ColumnsType<WatchlistRun>[number]): string => {
+    if (column.key != null) return String(column.key)
+    if ("dataIndex" in column && column.dataIndex != null) {
+      return Array.isArray(column.dataIndex)
+        ? column.dataIndex.map((entry) => String(entry)).join(".")
+        : String(column.dataIndex)
+    }
+    return ""
+  }
   const defaultColumnKeys = new Set(["job", "status", "started_at", "actions"])
   const columns = showAdvancedFilters
     ? allColumns
-    : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
+    : allColumns.filter((column) => defaultColumnKeys.has(resolveColumnKey(column)))
 
   // Status options for filter
   const statusOptions = useMemo(() => ([

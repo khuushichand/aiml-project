@@ -29,7 +29,6 @@ const mocks = vi.hoisted(() => {
     notificationSuccessMock: vi.fn(),
     notificationWarningMock: vi.fn(),
     openRunDetailMock: vi.fn(),
-    trackWatchlistsOnboardingTelemetryMock: vi.fn(),
     state
   }
 })

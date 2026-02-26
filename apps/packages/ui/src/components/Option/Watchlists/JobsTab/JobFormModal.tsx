@@ -1839,6 +1839,12 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                 "Practical default: Alloy voice at 1.0 speed and 8-minute target, then tune after your first run."
               )}
             </div>
+            <div className="mt-1 text-xs text-text-muted" data-testid="job-form-audio-item-cap-hint">
+              {t(
+                "watchlists:jobs.form.audioItemCapHint",
+                "Audio briefings currently include up to 100 items per run. Tighten filters for more focused narration."
+              )}
+            </div>
             <div className="mt-2 space-y-2 rounded-md border border-border bg-surface p-3">
               <Button
                 type="default"

@@ -34,7 +34,6 @@ export interface PersistedItemsViewPreset {
   statusFilter: string
   sortMode?: string
   searchQuery: string
-  sortMode?: string
 }
 
 export const buildDefaultItemsViewPresets = (
@@ -209,7 +208,6 @@ const isPersistedItemsViewPreset = (value: unknown): value is PersistedItemsView
   if (typeof candidate.statusFilter !== "string") return false
   if (candidate.sortMode != null && typeof candidate.sortMode !== "string") return false
   if (typeof candidate.searchQuery !== "string") return false
-  if (candidate.sortMode !== undefined && typeof candidate.sortMode !== "string") return false
   return true
 }
 

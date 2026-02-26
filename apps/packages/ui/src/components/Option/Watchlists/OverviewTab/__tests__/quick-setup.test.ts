@@ -17,7 +17,6 @@ describe("watchlists overview quick setup helpers", () => {
       sourceType: "rss",
       monitorName: "",
       schedulePreset: "daily",
-      audioBriefing: false,
       runNow: true,
       setupGoal: "briefing",
       includeAudioBriefing: true
@@ -110,28 +109,6 @@ describe("watchlists overview quick setup helpers", () => {
     ).toEqual({
       name: "Morning Monitor",
       scope: { sources: [42, 77] },
-      active: true,
-      schedule_expr: "0 8 * * *",
-      timezone: "UTC",
-      output_prefs: {
-        template_name: "briefing_md",
-        generate_audio: true
-      }
-    })
-
-    expect(
-      toQuickSetupJobPayload(
-        {
-          monitorName: " Morning Monitor ",
-          schedulePreset: "daily",
-          audioBriefing: true,
-          setupGoal: "briefing"
-        },
-        42
-      )
-    ).toEqual({
-      name: "Morning Monitor",
-      scope: { sources: [42] },
       active: true,
       schedule_expr: "0 8 * * *",
       timezone: "UTC",

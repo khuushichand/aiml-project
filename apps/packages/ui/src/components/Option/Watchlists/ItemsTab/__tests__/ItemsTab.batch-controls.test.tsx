@@ -13,6 +13,7 @@ import {
 
 const serviceMocks = vi.hoisted(() => ({
   createWatchlistOutput: vi.fn(),
+  fetchScrapedItemSmartCounts: vi.fn(),
   fetchWatchlistSources: vi.fn(),
   fetchWatchlistRuns: vi.fn(),
   fetchScrapedItems: vi.fn(),
@@ -77,6 +78,8 @@ vi.mock("antd", async () => {
 
 vi.mock("@/services/watchlists", () => ({
   createWatchlistOutput: (...args: unknown[]) => serviceMocks.createWatchlistOutput(...args),
+  fetchScrapedItemSmartCounts: (...args: unknown[]) =>
+    serviceMocks.fetchScrapedItemSmartCounts(...args),
   fetchWatchlistSources: (...args: unknown[]) => serviceMocks.fetchWatchlistSources(...args),
   fetchWatchlistRuns: (...args: unknown[]) => serviceMocks.fetchWatchlistRuns(...args),
   fetchScrapedItems: (...args: unknown[]) => serviceMocks.fetchScrapedItems(...args),
@@ -200,6 +203,14 @@ describe("ItemsTab batch throughput controls", () => {
     vi.clearAllMocks()
     window.localStorage.clear()
     useWatchlistsStore.getState().resetStore()
+    ;(serviceMocks.fetchScrapedItemSmartCounts as Mock).mockResolvedValue({
+      all: 3,
+      today: 3,
+      today_unread: 2,
+      unread: 2,
+      reviewed: 1,
+      queued: 0
+    })
 
     if (!window.matchMedia) {
       Object.defineProperty(window, "matchMedia", {
@@ -1059,7 +1070,7 @@ describe("ItemsTab batch throughput controls", () => {
     expect(screen.getByTestId("watchlists-items-batch-progress-panel")).toBeInTheDocument()
     expect(screen.getByTestId("watchlists-items-batch-progress-count")).toHaveTextContent("0 / 45")
     expect(screen.getByTestId("watchlists-items-batch-progress-summary")).toHaveTextContent(
-      "Running all filtered items..."
+      "Processing 0 of 45 items"
     )
 
     firstChunkResolvers.forEach((resolve) => resolve())
@@ -1072,7 +1083,7 @@ describe("ItemsTab batch throughput controls", () => {
     )
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-items-batch-progress-summary")).toHaveTextContent(
-        "Completed 45 of 45. 0 failed."
+        "Batch review complete: 45 succeeded, 0 failed."
       )
     })
   })
@@ -1104,7 +1115,7 @@ describe("ItemsTab batch throughput controls", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-items-batch-progress-summary")).toHaveTextContent(
-        "Completed 1 of 2. 1 failed."
+        "Batch review complete: 1 succeeded, 1 failed."
       )
     })
 
@@ -1122,7 +1133,7 @@ describe("ItemsTab batch throughput controls", () => {
 
     expect(screen.getByTestId("watchlists-items-selected-count")).toHaveTextContent("0 selected")
     expect(screen.getByTestId("watchlists-items-batch-progress-summary")).toHaveTextContent(
-      "Completed 1 of 1. 0 failed."
+      "Batch review complete: 1 succeeded, 0 failed."
     )
   })
 })

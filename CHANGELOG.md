@@ -32,6 +32,10 @@ and this project adheres to Some kind of Versioning
   - Added Skills Manager built-ins seeding dropdown actions for both `Seed Missing Only` (`overwrite=false`) and `Seed and Overwrite Existing` (`overwrite=true`).
   - Added protocol-sync regression coverage for Feynman skill/prompt assets in `tldw_Server_API/tests/Skills/unit/test_feynman_assets_sync.py`.
 - Added regression coverage ensuring Watchlists pipeline setup propagates HTML template format into generated job and output payloads.
+- Watchlists guardrails and release-gate coverage:
+  - Added static duplicate guard coverage for Watchlists source files (`useWatchlistsStore` selector reuse, duplicate top-level identifiers, duplicate interface keys).
+  - Added `test:watchlists:typecheck` package script and wired it into the Watchlists scale gate workflow to prevent silent duplicate/type-regression drift.
+  - Added/updated regression coverage for quick-setup candidate preview mocking, accessibility toggle labeling contracts, and run-notification polling harness consistency.
 
 ### Changed
 - Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
@@ -49,6 +53,7 @@ and this project adheres to Some kind of Versioning
 - Importable `feynman-technique-template` now defaults to `disable-model-invocation: true` to avoid duplicate auto-invocable behavior after import.
 - Watchlists pipeline contract now carries selected template format (`md` or `html`) through job defaults and output-create payload construction instead of forcing Markdown.
 - Watchlists source delete confirmation copy now reuses a single locale key across standard and in-use delete flows to reduce translation-key duplication.
+- Watchlists guided quick setup now uses a single audio preference field (`includeAudioBriefing`) across telemetry, preview copy, and submission flow instead of dual field state.
 
 ### Removed
 - No removals in this session.
@@ -65,6 +70,9 @@ and this project adheres to Some kind of Versioning
 - Fixed a Watchlists UC2 mismatch where selecting an HTML template could still generate Markdown outputs due to hardcoded `default_format`/`format`.
 - Fixed duplicate English locale maintenance drift for source delete undo-window messaging by consolidating copy to `sources.deleteConfirmDescription`.
 - Fixed newly added Watchlists API audio-briefing tests to comply with typing/docstring standards by adding explicit fixture type hints, return annotations, and test docstrings.
+- Fixed Watchlists static-guard false positives by distinguishing type/value namespaces and limiting interface-property scans to top-level declarations.
+- Fixed Watchlists quick-setup review/test-flow regressions caused by stale CTA label assumptions and missing source-preview service mocks in the Overview test suite.
+- Fixed Watchlists a11y/load-retry test drift for Sources/Monitors toggles by aligning assertions with row-context ARIA labels and current table-render behavior.
 
 
 ## [0.1.24] 2026-02-22

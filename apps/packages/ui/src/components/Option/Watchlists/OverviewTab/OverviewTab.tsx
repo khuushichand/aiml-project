@@ -39,6 +39,7 @@ import {
   fetchWatchlistSources,
   getWatchlistTemplate,
   previewWatchlistTemplate,
+  testWatchlistSourceDraft,
   triggerWatchlistRun
 } from "@/services/watchlists"
 import {
@@ -150,6 +151,9 @@ export const OverviewTab: React.FC = () => {
   const [quickSetupOpen, setQuickSetupOpen] = useState(false)
   const [quickSetupStep, setQuickSetupStep] = useState(0)
   const [quickSetupSubmitting, setQuickSetupSubmitting] = useState(false)
+  const [quickSetupCandidatePreview, setQuickSetupCandidatePreview] = useState<JobPreviewResult | null>(null)
+  const [quickSetupCandidatePreviewLoading, setQuickSetupCandidatePreviewLoading] = useState(false)
+  const [quickSetupCandidatePreviewError, setQuickSetupCandidatePreviewError] = useState<string | null>(null)
   const [pipelineSetupOpen, setPipelineSetupOpen] = useState(false)
   const [pipelineSetupStep, setPipelineSetupStep] = useState(0)
   const [pipelineSetupSubmitting, setPipelineSetupSubmitting] = useState(false)
@@ -168,6 +172,7 @@ export const OverviewTab: React.FC = () => {
   const pipelineSetupRestoreFocusTargetRef = useRef<HTMLElement | null>(null)
   const quickSetupWasOpenRef = useRef(false)
   const pipelineSetupWasOpenRef = useRef(false)
+  const quickSetupPreviewRequestRef = useRef(0)
   const [quickSetupForm] = Form.useForm<QuickSetupValues>()
   const [pipelineSetupForm] = Form.useForm<PipelineBuilderValues>()
 
@@ -424,7 +429,7 @@ export const OverviewTab: React.FC = () => {
         type: "quick_setup_preview_loaded",
         preview: "template",
         goal: values.setupGoal,
-        audioEnabled: values.audioBriefing
+        audioEnabled: values.includeAudioBriefing
       })
     }
     setQuickSetupStep((prev) => Math.min(prev + 1, QUICK_SETUP_MAX_STEP))
@@ -1041,11 +1046,11 @@ export const OverviewTab: React.FC = () => {
         ? topItems.map((item, index) => `${index + 1}. ${item}`)
         : ["1. Headlines will appear after the first run completes."]),
       "",
-      `Audio briefing: ${quickSetupSnapshot.audioBriefing ? "Enabled" : "Disabled"}`
+      `Audio briefing: ${quickSetupSnapshot.includeAudioBriefing ? "Enabled" : "Disabled"}`
     ].join("\n")
   }, [
     quickSetupCandidatePreview,
-    quickSetupSnapshot.audioBriefing,
+    quickSetupSnapshot.includeAudioBriefing,
     quickSetupSnapshot.monitorName,
     quickSetupSnapshot.setupGoal,
     quickSetupSnapshot.sourceName,
@@ -1858,20 +1863,6 @@ export const OverviewTab: React.FC = () => {
                 )}
 
                 <Form.Item
-                  label={t("watchlists:overview.onboarding.quickSetup.fields.audioBriefing", "Audio briefing")}
-                  name="audioBriefing"
-                  valuePropName="checked"
-                >
-                  <Switch />
-                </Form.Item>
-                <div className="-mt-3 mb-2 text-xs text-text-muted">
-                  {t(
-                    "watchlists:overview.onboarding.quickSetup.hints.audioBriefing",
-                    "Enable spoken briefings alongside text reports."
-                  )}
-                </div>
-
-                <Form.Item
                   label={t(
                     "watchlists:overview.onboarding.quickSetup.fields.runNow",
                     "Run test generation immediately"
@@ -1960,7 +1951,7 @@ export const OverviewTab: React.FC = () => {
                     </span>{" "}
                     {quickSetupSnapshot.setupGoal === "triage"
                       ? t("watchlists:overview.onboarding.quickSetup.outcome.triage", "Article triage only")
-                      : quickSetupSnapshot.audioBriefing
+                      : quickSetupSnapshot.includeAudioBriefing
                         ? t("watchlists:overview.onboarding.quickSetup.outcome.textAndAudio", "Text + audio briefing")
                         : t("watchlists:overview.onboarding.quickSetup.outcome.textOnly", "Text briefing")}
                   </p>

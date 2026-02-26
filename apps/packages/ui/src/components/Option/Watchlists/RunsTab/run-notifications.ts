@@ -33,11 +33,7 @@ export interface RunNotificationGroup {
   hint: string | null
 }
 
-type Translator = (
-  key: string,
-  defaultValue?: string,
-  options?: Record<string, unknown>
-) => string
+type Translator = (...args: any[]) => string
 
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running", "queued"])
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"])

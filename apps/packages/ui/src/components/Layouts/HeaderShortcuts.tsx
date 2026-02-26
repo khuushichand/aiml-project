@@ -96,10 +96,12 @@ export function HeaderShortcuts({
   const [query, setQuery] = useState("")
   const [activeCategory, setActiveCategory] = useState(ALL_CATEGORY)
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const [allOptionsOpen, setAllOptionsOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const previousPathRef = useRef(location.pathname)
   const triggerRef = useRef<HTMLElement | null>(null)
+  const allOptionsCloseButtonRef = useRef<HTMLButtonElement>(null)
 
   /* ---------- resolved items (respecting user selection) ---------- */
   const shortcutSelectionSet = useMemo(
@@ -217,10 +219,16 @@ export function HeaderShortcuts({
       setSelectedIndex(0)
       requestAnimationFrame(() => inputRef.current?.focus())
     } else {
+      setAllOptionsOpen(false)
       triggerRef.current?.focus()
       triggerRef.current = null
     }
   }, [open])
+
+  useEffect(() => {
+    if (!allOptionsOpen) return
+    requestAnimationFrame(() => allOptionsCloseButtonRef.current?.focus())
+  }, [allOptionsOpen])
 
   /* ---------- scroll selected into view ---------- */
   useEffect(() => {
@@ -238,6 +246,14 @@ export function HeaderShortcuts({
       setOpen(false)
     },
     [navigate, setOpen]
+  )
+
+  const navigateFromAllOptions = useCallback(
+    (to: string) => {
+      setAllOptionsOpen(false)
+      navigateTo(to)
+    },
+    [navigateTo]
   )
 
   /* ---------- keyboard (meta+1-9 shortcuts) ---------- */
@@ -284,6 +300,10 @@ export function HeaderShortcuts({
       switch (e.key) {
         case "Escape":
           e.preventDefault()
+          if (allOptionsOpen) {
+            setAllOptionsOpen(false)
+            break
+          }
           setOpen(false)
           break
         case "ArrowDown":
@@ -306,7 +326,7 @@ export function HeaderShortcuts({
           break
       }
     },
-    [flatItems, selectedIndex, setOpen, navigateTo]
+    [allOptionsOpen, flatItems, selectedIndex, setOpen, navigateTo]
   )
 
   /* ---------- render ---------- */
@@ -325,8 +345,8 @@ export function HeaderShortcuts({
 
       {/* Modal */}
       <div
-        className="fixed left-1/2 top-[15vh] z-50 flex w-[calc(100%-2rem)] max-w-[640px] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-modal"
-        style={{ maxHeight: "70vh" }}
+        className="fixed left-1/2 top-[15vh] z-50 flex w-[calc(100%-2rem)] max-w-[960px] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-modal"
+        style={{ maxHeight: "80vh" }}
         role="dialog"
         aria-modal="true"
         aria-label={t("option:header.showShortcuts", "Shortcuts")}
@@ -358,7 +378,7 @@ export function HeaderShortcuts({
         <div className="flex min-h-0 flex-1">
           {/* Left sidebar */}
           <nav
-            className="flex w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border p-2"
+            className="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border p-2"
             aria-label={t("option:header.launcherCategories", "Categories")}
           >
             {/* "All" category */}
@@ -509,16 +529,96 @@ export function HeaderShortcuts({
               </span>
             </span>
           </div>
-          <span className="flex items-center gap-1">
-            <kbd className="rounded border border-border bg-surface2 px-1">
-              &lsaquo;?
-            </kbd>
-            <span className="ml-1">
-              {t("option:header.launcherToggle", "toggle")}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setAllOptionsOpen(true)}
+              className="rounded border border-border bg-surface2 px-2 py-1 text-xs text-text hover:bg-surface3"
+            >
+              {t("option:header.launcherViewAllOptions", "View all options")}
+            </button>
+            <span className="flex items-center gap-1">
+              <kbd className="rounded border border-border bg-surface2 px-1">
+                &lsaquo;?
+              </kbd>
+              <span className="ml-1">
+                {t("option:header.launcherToggle", "toggle")}
+              </span>
             </span>
-          </span>
+          </div>
         </div>
       </div>
+
+      {allOptionsOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm"
+            onClick={() => setAllOptionsOpen(false)}
+          />
+          <div
+            className="fixed inset-0 z-[60] flex flex-col bg-surface"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("option:header.launcherAllOptionsTitle", "All options")}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault()
+                setAllOptionsOpen(false)
+              }
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6">
+              <h2 className="text-lg font-semibold text-text">
+                {t("option:header.launcherAllOptionsTitle", "All options")}
+              </h2>
+              <button
+                ref={allOptionsCloseButtonRef}
+                type="button"
+                onClick={() => setAllOptionsOpen(false)}
+                className="rounded border border-border bg-surface2 px-3 py-1.5 text-sm text-text hover:bg-surface3"
+              >
+                {t("common:close", "Close")}
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              <div className="space-y-6">
+                {resolvedGroups.map((group) => (
+                  <section key={group.id}>
+                    <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-text-subtle">
+                      {group.title}
+                    </h3>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {group.items.map((ri) => {
+                        const Icon = ri.item.icon
+                        return (
+                          <NavLink
+                            key={ri.item.id}
+                            to={ri.item.to}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              navigateFromAllOptions(ri.item.to)
+                            }}
+                            className="flex items-center gap-3 rounded-lg border border-border bg-surface2 px-3 py-2 text-sm text-text transition-colors hover:bg-surface3"
+                          >
+                            <Icon className="size-4 shrink-0 text-text-subtle" aria-hidden="true" />
+                            <span className="min-w-0 truncate">{ri.label}</span>
+                            {ri.item.shortcutIndex != null && (
+                              <kbd className="ml-auto shrink-0 rounded border border-border bg-surface px-1.5 py-0.5 text-xs text-text-subtle">
+                                {META_LABEL}
+                                {ri.item.shortcutIndex}
+                              </kbd>
+                            )}
+                          </NavLink>
+                        )
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </>
   )
 

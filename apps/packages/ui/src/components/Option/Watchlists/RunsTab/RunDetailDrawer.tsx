@@ -821,7 +821,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
                     size="small"
                     type="primary"
                     loading={linkedOutputsLoading}
-                    onClick={handleOpenRunOutputs}
+                    onClick={handleOpenOutputs}
                   >
                     {t("watchlists:runs.detail.openRunOutputs", "Open reports for this run")}
                   </Button>

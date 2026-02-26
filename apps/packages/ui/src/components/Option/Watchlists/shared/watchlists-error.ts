@@ -13,11 +13,7 @@ type ErrorKind =
   | "server"
   | "unknown"
 
-type Translator = (
-  key: string,
-  defaultValue?: string,
-  options?: Record<string, unknown>
-) => string
+type Translator = (...args: any[]) => string
 
 export interface WatchlistsMappedError {
   kind: ErrorKind

@@ -84,6 +84,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   const [loadedVersion, setLoadedVersion] = useState<number | null>(null)
   const [loadedContentBaseline, setLoadedContentBaseline] = useState("")
   const [composerAst, setComposerAst] = useState<ComposerAst>(createEmptyComposerAst())
+  const [composerNeedsRepair, setComposerNeedsRepair] = useState(false)
   const [selectedComposeRunId, setSelectedComposeRunId] = useState<number | undefined>(undefined)
   const editorRef = useRef<TemplateCodeEditorHandle>(null)
   const [validationErrors, setValidationErrors] = useState<Array<{ line?: number | null; column?: number | null; message: string }>>([])
@@ -112,6 +113,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
 
   const applyComposerAst = (nextAst: ComposerAst) => {
     setComposerAst(nextAst)
+    setComposerNeedsRepair(false)
     const compiled = compileComposerAstToTemplate(nextAst)
     form.setFieldsValue({ content: compiled })
   }
@@ -138,7 +140,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       const resolvedContent = result.content || ""
       const resolvedComposerAst =
         result.composer_ast && typeof result.composer_ast === "object"
-          ? (result.composer_ast as ComposerAst)
+          ? (result.composer_ast as unknown as ComposerAst)
           : parseTemplateToComposerAst(resolvedContent)
       form.setFieldsValue({
         name: result.name,
@@ -149,6 +151,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       setLoadedVersion(typeof result.version === "number" ? result.version : null)
       setLoadedContentBaseline(resolvedContent)
       setComposerAst(resolvedComposerAst)
+      setComposerNeedsRepair(result.composer_sync_status === "needs_repair")
     } finally {
       setLoadingVersion(false)
     }
@@ -171,7 +174,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           const resolvedContent = result.content || ""
           const resolvedComposerAst =
             result.composer_ast && typeof result.composer_ast === "object"
-              ? (result.composer_ast as ComposerAst)
+              ? (result.composer_ast as unknown as ComposerAst)
               : parseTemplateToComposerAst(resolvedContent)
           form.setFieldsValue({
             name: result.name,
@@ -182,6 +185,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           setLoadedVersion(typeof result.version === "number" ? result.version : null)
           setLoadedContentBaseline(resolvedContent)
           setComposerAst(resolvedComposerAst)
+          setComposerNeedsRepair(result.composer_sync_status === "needs_repair")
           setTemplateVersions(Array.isArray(versions.items) ? versions.items : [])
           setSelectedVersion(undefined)
           setAuthoringMode("advanced")
@@ -197,6 +201,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           setLoadedVersion(null)
           setLoadedContentBaseline("")
           setComposerAst(createEmptyComposerAst())
+          setComposerNeedsRepair(false)
           setAuthoringMode("advanced")
           setActiveTab("visual")
           setSelectedRecipeId("briefing_md")
@@ -217,12 +222,22 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       setLoadedVersion(null)
       setLoadedContentBaseline(DEFAULT_HTML_TEMPLATE)
       setComposerAst(parseTemplateToComposerAst(DEFAULT_HTML_TEMPLATE))
+      setComposerNeedsRepair(false)
       setAuthoringMode("basic")
       setActiveTab("visual")
       setSelectedRecipeId("briefing_md")
       setRecipeOptions(createDefaultTemplateRecipeOptions())
     }
   }, [open, template, form, t])
+
+  useEffect(() => {
+    if (!open || activeTab !== "visual") return
+    const compiled = compileComposerAstToTemplate(composerAst).trim()
+    const content = String(contentValue || "").trim()
+    if (compiled !== content) {
+      setComposerNeedsRepair(true)
+    }
+  }, [activeTab, composerAst, contentValue, open])
 
   // Fetch recent completed runs for live preview
   useEffect(() => {
@@ -377,6 +392,18 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       )
     }
     applyComposerAst(nextAst)
+  }
+
+  const handleRepairVisualLayout = () => {
+    const currentContent = String(form.getFieldValue("content") || "")
+    setComposerAst(parseTemplateToComposerAst(currentContent))
+    setComposerNeedsRepair(false)
+    message.success(
+      t(
+        "watchlists:templates.repairVisualLayoutSuccess",
+        "Visual layout re-synced from the current template code."
+      )
+    )
   }
 
   const hasAdvancedTemplateContext = hasTemplateAdvancedContext({
@@ -827,6 +854,31 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
               "Version tools are available in Advanced mode."
             )}
           </div>
+        )}
+
+        {activeTab === "visual" && composerNeedsRepair && (
+          <Alert
+            className="mb-4"
+            type="warning"
+            showIcon
+            title={t(
+              "watchlists:templates.visualOutOfSyncTitle",
+              "Visual layout may be out of sync"
+            )}
+            description={t(
+              "watchlists:templates.visualOutOfSyncDescription",
+              "The template was edited in code mode and the visual block layout may need repair."
+            )}
+            action={(
+              <Button
+                size="small"
+                onClick={handleRepairVisualLayout}
+                data-testid="template-editor-repair-visual-layout"
+              >
+                {t("watchlists:templates.repairVisualLayout", "Repair layout")}
+              </Button>
+            )}
+          />
         )}
 
         <Tabs

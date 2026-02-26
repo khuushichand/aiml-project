@@ -6,6 +6,43 @@ const storage = createSafeStorage({ area: "local" })
 export const WATCHLISTS_ONBOARDING_TELEMETRY_STORAGE_KEY =
   "tldw:watchlists:onboarding:telemetry"
 const MAX_RECENT_EVENTS = 200
+const MAX_PENDING_COMPLETION_EVENTS = 100
+const MAX_DURATION_SAMPLES = 100
+
+export type WatchlistsQuickSetupDestination = "runs" | "outputs" | "jobs"
+export type WatchlistsQuickSetupPreview = "candidate" | "template"
+export type WatchlistsOnboardingSuccessSource =
+  | "overview"
+  | "outputs"
+  | "run_notifications"
+  | "manual"
+  | "unknown"
+
+type QuickSetupDestinationCounters = Record<WatchlistsQuickSetupDestination, number>
+type QuickSetupPreviewCounters = Record<WatchlistsQuickSetupPreview, number>
+
+const DEFAULT_DESTINATION_COUNTERS: QuickSetupDestinationCounters = {
+  runs: 0,
+  outputs: 0,
+  jobs: 0
+}
+
+const DEFAULT_PREVIEW_COUNTERS: QuickSetupPreviewCounters = {
+  candidate: 0,
+  template: 0
+}
+
+const createOnboardingSessionId = (): string => {
+  try {
+    if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
+      return globalThis.crypto.randomUUID()
+    }
+  } catch {
+    // Fallback below.
+  }
+  const randomSuffix = Math.random().toString(16).slice(2, 10)
+  return `watchlists-${Date.now().toString(36)}-${randomSuffix}`
+}
 
 export type WatchlistsQuickSetupStep = "feed" | "monitor" | "review"
 export type WatchlistsGuidedTourStep = 1 | 2 | 3 | 4 | 5
@@ -501,6 +538,7 @@ export const trackWatchlistsOnboardingTelemetry = async (
     }
     const now = Date.now()
     let shouldRecord = true
+    let includeInRecentEvents = true
 
     switch (event.type) {
       case "quick_setup_step_completed":
@@ -544,12 +582,15 @@ export const trackWatchlistsOnboardingTelemetry = async (
         break
       case "quick_setup_preview_loaded":
         state.quick_setup.preview_loaded[event.preview] += 1
+        includeInRecentEvents = false
         break
       case "quick_setup_preview_failed":
         state.quick_setup.preview_failed[event.preview] += 1
+        includeInRecentEvents = false
         break
       case "quick_setup_test_run_triggered":
         state.quick_setup.test_run_triggered += 1
+        includeInRecentEvents = false
         break
       case "quick_setup_test_run_failed":
         state.quick_setup.test_run_failed += 1
@@ -560,6 +601,7 @@ export const trackWatchlistsOnboardingTelemetry = async (
         )
         state.quick_setup.pending_first_run_success_at = runCompletion.next
         state.quick_setup.first_run_success += 1
+        includeInRecentEvents = false
         if (runCompletion.consumedAt != null) {
           state.quick_setup.seconds_to_first_run_success_samples = pushDurationSample(
             state.quick_setup.seconds_to_first_run_success_samples,
@@ -574,6 +616,7 @@ export const trackWatchlistsOnboardingTelemetry = async (
         )
         state.quick_setup.pending_first_output_success_at = outputCompletion.next
         state.quick_setup.first_output_success += 1
+        includeInRecentEvents = false
         if (outputCompletion.consumedAt != null) {
           state.quick_setup.seconds_to_first_output_success_samples = pushDurationSample(
             state.quick_setup.seconds_to_first_output_success_samples,
@@ -645,13 +688,15 @@ export const trackWatchlistsOnboardingTelemetry = async (
     state.last_event_at = now
     incrementCounter(state.counters, event.type)
 
-    state.recent_events.push({
-      type: event.type,
-      at: now,
-      details: toEventDetails(event)
-    })
-    if (state.recent_events.length > MAX_RECENT_EVENTS) {
-      state.recent_events = state.recent_events.slice(-MAX_RECENT_EVENTS)
+    if (includeInRecentEvents) {
+      state.recent_events.push({
+        type: event.type,
+        at: now,
+        details: toEventDetails(event)
+      })
+      if (state.recent_events.length > MAX_RECENT_EVENTS) {
+        state.recent_events = state.recent_events.slice(-MAX_RECENT_EVENTS)
+      }
     }
 
     await writeTelemetryState(state)

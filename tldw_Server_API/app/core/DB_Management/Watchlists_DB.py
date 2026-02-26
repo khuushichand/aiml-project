@@ -2139,6 +2139,73 @@ class WatchlistsDatabase:
         ).rows
         return [ScrapedItemRow(**r) for r in rows], total
 
+    def get_item_smart_counts(
+        self,
+        *,
+        run_id: int | None = None,
+        job_id: int | None = None,
+        source_id: int | None = None,
+        status: str | None = None,
+        search: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        queue_run_id: int | None = None,
+        today_since: str | None = None,
+    ) -> dict[str, int]:
+        where = ["sj.user_id = ?"]
+        params: list[Any] = [self.user_id]
+        if run_id is not None:
+            where.append("si.run_id = ?")
+            params.append(run_id)
+        if job_id is not None:
+            where.append("si.job_id = ?")
+            params.append(job_id)
+        if source_id is not None:
+            where.append("si.source_id = ?")
+            params.append(source_id)
+        if status:
+            where.append("si.status = ?")
+            params.append(status)
+        if since:
+            where.append("si.created_at >= ?")
+            params.append(since)
+        if until:
+            where.append("si.created_at <= ?")
+            params.append(until)
+        if search:
+            like = f"%{search}%"
+            where.append("(si.title LIKE ? OR si.summary LIKE ? OR si.content LIKE ?)")
+            params.extend([like, like, like])
+
+        today_cutoff = today_since
+        if not today_cutoff:
+            utc_now = datetime.now(timezone.utc)
+            today_cutoff = utc_now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        where_sql = " AND ".join(where)
+        row = self.backend.execute(
+            f"""
+            SELECT
+              COUNT(*) AS all_count,
+              COALESCE(SUM(CASE WHEN si.created_at >= ? THEN 1 ELSE 0 END), 0) AS today_count,
+              COALESCE(SUM(CASE WHEN si.created_at >= ? AND si.reviewed = 0 THEN 1 ELSE 0 END), 0) AS today_unread_count,
+              COALESCE(SUM(CASE WHEN si.reviewed = 0 THEN 1 ELSE 0 END), 0) AS unread_count,
+              COALESCE(SUM(CASE WHEN si.reviewed = 1 THEN 1 ELSE 0 END), 0) AS reviewed_count,
+              COALESCE(SUM(CASE WHEN si.queued_for_briefing = 1 AND (? IS NULL OR si.run_id = ?) THEN 1 ELSE 0 END), 0) AS queued_count
+            FROM scraped_items si
+            JOIN scrape_jobs sj ON sj.id = si.job_id
+            WHERE {where_sql}
+            """,  # nosec B608
+            tuple([today_cutoff, today_cutoff, queue_run_id, queue_run_id, *params]),
+        ).first
+        return {
+            "all": int((row or {}).get("all_count") or 0),
+            "today": int((row or {}).get("today_count") or 0),
+            "today_unread": int((row or {}).get("today_unread_count") or 0),
+            "unread": int((row or {}).get("unread_count") or 0),
+            "reviewed": int((row or {}).get("reviewed_count") or 0),
+            "queued": int((row or {}).get("queued_count") or 0),
+        }
+
     def get_items_by_ids(self, item_ids: list[int]) -> list[ScrapedItemRow]:
         if not item_ids:
             return []

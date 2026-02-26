@@ -27,7 +27,7 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("antd", () => {
-  const Button = ({ children, onClick, loading, ...rest }: any) => (
+  const Button = ({ children, onClick, loading, danger: _danger, ...rest }: any) => (
     <button
       type="button"
       disabled={Boolean(loading)}
@@ -212,6 +212,6 @@ describe("JobsTab load-error retry", () => {
     await waitFor(() => {
       expect(screen.getByText("Enabled")).toBeInTheDocument()
     })
-    expect(screen.getByRole("button", { name: "Disable monitor" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Toggle active for Morning monitor" })).toBeInTheDocument()
   })
 })

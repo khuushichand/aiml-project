@@ -200,7 +200,7 @@ describe("WatchlistsPlaygroundPage orientation guidance", () => {
     render(<WatchlistsPlaygroundPage />)
 
     expect(screen.getByTestId("watchlists-orientation-title")).toHaveTextContent("Activity")
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
+    fireEvent.click(screen.getAllByRole("button", { name: "Dismiss" })[0])
 
     expect(screen.queryByTestId("watchlists-orientation-title")).not.toBeInTheDocument()
     expect(screen.getByTestId("watchlists-orientation-restore")).toHaveTextContent("Show tab guidance")

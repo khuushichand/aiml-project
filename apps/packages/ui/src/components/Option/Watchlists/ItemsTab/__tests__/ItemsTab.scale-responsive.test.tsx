@@ -7,7 +7,9 @@ import { ItemsTab } from "../ItemsTab"
 import { useWatchlistsStore } from "@/store/watchlists"
 
 const serviceMocks = vi.hoisted(() => ({
+  fetchScrapedItemSmartCounts: vi.fn(),
   fetchWatchlistSources: vi.fn(),
+  fetchWatchlistRuns: vi.fn(),
   fetchScrapedItems: vi.fn(),
   updateScrapedItem: vi.fn()
 }))
@@ -69,7 +71,10 @@ vi.mock("antd", async () => {
 })
 
 vi.mock("@/services/watchlists", () => ({
+  fetchScrapedItemSmartCounts: (...args: unknown[]) =>
+    serviceMocks.fetchScrapedItemSmartCounts(...args),
   fetchWatchlistSources: (...args: unknown[]) => serviceMocks.fetchWatchlistSources(...args),
+  fetchWatchlistRuns: (...args: unknown[]) => serviceMocks.fetchWatchlistRuns(...args),
   fetchScrapedItems: (...args: unknown[]) => serviceMocks.fetchScrapedItems(...args),
   updateScrapedItem: (...args: unknown[]) => serviceMocks.updateScrapedItem(...args)
 }))
@@ -127,6 +132,21 @@ describe("ItemsTab scale and responsive behavior", () => {
     vi.clearAllMocks()
     window.localStorage.clear()
     useWatchlistsStore.getState().resetStore()
+    ;(serviceMocks.fetchScrapedItemSmartCounts as Mock).mockResolvedValue({
+      all: 2,
+      today: 2,
+      today_unread: 2,
+      unread: 2,
+      reviewed: 0,
+      queued: 0
+    })
+    ;(serviceMocks.fetchWatchlistRuns as Mock).mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      size: 200,
+      has_more: false
+    })
 
     if (!window.matchMedia) {
       Object.defineProperty(window, "matchMedia", {
@@ -185,7 +205,7 @@ describe("ItemsTab scale and responsive behavior", () => {
     render(<ItemsTab />)
 
     await waitFor(() => {
-      expect(screen.getAllByTestId(/^watchlists-items-source-row-/)).toHaveLength(5)
+      expect(screen.getAllByTestId(/watchlists-items-source-row-\d+/)).toHaveLength(5)
     })
 
     expect(screen.queryByTestId("watchlists-items-source-window-hint")).not.toBeInTheDocument()
@@ -203,7 +223,7 @@ describe("ItemsTab scale and responsive behavior", () => {
     render(<ItemsTab />)
 
     await waitFor(() => {
-      expect(screen.getAllByTestId(/^watchlists-items-source-row-/)).toHaveLength(120)
+      expect(screen.getAllByTestId(/watchlists-items-source-row-\d+/)).toHaveLength(120)
     })
 
     expect(screen.queryByTestId("watchlists-items-source-row-200")).not.toBeInTheDocument()
@@ -219,7 +239,7 @@ describe("ItemsTab scale and responsive behavior", () => {
     fireEvent.scroll(sourceList)
 
     await waitFor(() => {
-      expect(screen.getAllByTestId(/^watchlists-items-source-row-/)).toHaveLength(200)
+      expect(screen.getAllByTestId(/watchlists-items-source-row-\d+/)).toHaveLength(200)
     })
     expect(screen.getByTestId("watchlists-items-source-row-200")).toBeInTheDocument()
     expect(screen.queryByTestId("watchlists-items-source-window-hint")).not.toBeInTheDocument()

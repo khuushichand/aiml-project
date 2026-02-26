@@ -856,6 +856,33 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     queued = r.json()
     assert any(it["id"] == item_id for it in queued["items"])
 
+    # Smart counts endpoint should aggregate the same scoped item set.
+    r = c.get("/api/v1/watchlists/items/smart-counts", params={"run_id": run_id})
+    assert r.status_code == 200, r.text
+    counts = r.json()
+    for field in ("all", "today", "today_unread", "unread", "reviewed", "queued"):
+        assert field in counts
+        assert isinstance(counts[field], int)
+        assert counts[field] >= 0
+    assert counts["all"] >= 1
+    assert counts["reviewed"] >= 1
+    assert counts["queued"] >= 1
+    assert counts["today"] >= counts["today_unread"]
+
+    # Search-scoped smart counts should return zero for a guaranteed miss.
+    r = c.get(
+        "/api/v1/watchlists/items/smart-counts",
+        params={"run_id": run_id, "q": "__watchlists_unmatched_search_token__"},
+    )
+    assert r.status_code == 200, r.text
+    missing = r.json()
+    assert missing["all"] == 0
+    assert missing["today"] == 0
+    assert missing["today_unread"] == 0
+    assert missing["unread"] == 0
+    assert missing["reviewed"] == 0
+    assert missing["queued"] == 0
+
     # Generate output
     out_payload = {
         "run_id": run_id,

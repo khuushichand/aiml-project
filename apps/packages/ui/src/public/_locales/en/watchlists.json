@@ -1578,7 +1578,7 @@
     "message": "Actions"
   },
   "templates_description": {
-    "message": "Jinja2 templates for generating briefing outputs."
+    "message": "Templates for generating briefing outputs."
   },
   "templates_fetchError": {
     "message": "Failed to load templates"
@@ -2522,6 +2522,15 @@
   "errors_operation_retry": {
     "message": "retry"
   },
+  "errors_operation_delete": {
+    "message": "delete"
+  },
+  "errors_operation_cancel": {
+    "message": "cancel"
+  },
+  "errors_operation_update": {
+    "message": "update"
+  },
   "errors_next_dns": {
     "message": "Verify the source host resolves correctly and retry."
   },
@@ -2605,6 +2614,9 @@
   },
   "jobs_form_audioHint": {
     "message": "Enable spoken briefings alongside text outputs. Keep defaults for fastest setup."
+  },
+  "jobs_form_audioItemCapHint": {
+    "message": "Audio briefings currently include up to 100 items per run. Tighten filters for more focused narration."
   },
   "jobs_form_showAudioAdvanced": {
     "message": "Show advanced audio options"
@@ -3019,6 +3031,18 @@
   },
   "templates_modeVersionToolsHidden": {
     "message": "Version tools are available in Advanced mode."
+  },
+  "templates_visualOutOfSyncTitle": {
+    "message": "Visual layout may be out of sync"
+  },
+  "templates_visualOutOfSyncDescription": {
+    "message": "The template was edited in code mode and the visual block layout may need repair."
+  },
+  "templates_repairVisualLayout": {
+    "message": "Repair layout"
+  },
+  "templates_repairVisualLayoutSuccess": {
+    "message": "Visual layout re-synced from the current template code."
   },
   "templates_modeBasicEditorHint": {
     "message": "Start in Basic mode with plain text or Markdown. Switch to Advanced only if you need variables, loops, or version tools."

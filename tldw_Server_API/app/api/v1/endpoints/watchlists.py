@@ -145,6 +145,7 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     RunDetail,
     RunsListResponse,
     ScrapedItem,
+    ScrapedItemSmartCountsResponse,
     ScrapedItemsListResponse,
     ScrapedItemUpdateRequest,
     Source,
@@ -4349,6 +4350,45 @@ async def export_run_tallies_csv(
 # --------------------
 # Scraped items
 # --------------------
+@router.get("/items/smart-counts", response_model=ScrapedItemSmartCountsResponse, summary="Get smart feed counts")
+async def get_scraped_item_smart_counts(
+    run_id: int | None = Query(None),
+    job_id: int | None = Query(None),
+    source_id: int | None = Query(None),
+    status: str | None = Query(None),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: list item counts for another user ID.",
+    ),
+    q: str | None = Query(None, description="Search by title/summary/content substring"),
+    since: str | None = Query(None, description="ISO date filter (created_at >= since)"),
+    until: str | None = Query(None, description="ISO date filter (created_at <= until)"),
+    queue_run_id: int | None = Query(None, description="Optional queued-count run filter"),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
+    today_since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return ScrapedItemSmartCountsResponse(
+        **target_db.get_item_smart_counts(
+            run_id=run_id,
+            job_id=job_id,
+            source_id=source_id,
+            status=status,
+            search=q,
+            since=since,
+            until=until,
+            queue_run_id=queue_run_id,
+            today_since=today_since,
+        )
+    )
+
+
 @router.get("/items", response_model=ScrapedItemsListResponse, summary="List scraped items across runs")
 async def list_scraped_items(
     run_id: int | None = Query(None),

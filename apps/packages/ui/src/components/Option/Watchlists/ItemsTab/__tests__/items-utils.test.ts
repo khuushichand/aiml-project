@@ -174,8 +174,8 @@ describe("sortItemsForReader", () => {
     expect(sortItemsForReader(fixture, "unreadFirst").map((item) => item.id)).toEqual([2, 3, 1])
   })
 
-  it("prioritizes reviewed items first while keeping recency within groups", () => {
-    expect(sortItemsForReader(fixture, "reviewedFirst").map((item) => item.id)).toEqual([1, 2, 3])
+  it("falls back to newest ordering for unsupported reader sort modes", () => {
+    expect(sortItemsForReader(fixture, "reviewedFirst" as any).map((item) => item.id)).toEqual([2, 1, 3])
   })
 })
 
@@ -409,7 +409,11 @@ describe("items view preset persistence helpers", () => {
       "system-high-priority",
       "system-needs-review"
     ])
-    expect(provisioned.every((preset) => preset.sortMode === DEFAULT_ITEMS_SORT_MODE)).toBe(true)
+    expect(provisioned.map((preset) => preset.sortMode ?? DEFAULT_ITEMS_SORT_MODE)).toEqual([
+      "unreadFirst",
+      "unreadFirst",
+      "newest"
+    ])
   })
 
   it("keeps custom presets sorted after system defaults", () => {

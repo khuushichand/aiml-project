@@ -51,6 +51,12 @@ jobs:
         working-directory: apps
         run: bun install --frozen-lockfile
 
+      - name: Run Watchlists static typecheck gate
+        working-directory: apps/packages/ui
+        env:
+          CI: "true"
+        run: bun run test:watchlists:typecheck
+
       - name: Run Watchlists scale regression gate
         working-directory: apps/packages/ui
         env:

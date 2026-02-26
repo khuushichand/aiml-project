@@ -246,7 +246,10 @@ export const JobsTab: React.FC = () => {
     try {
       const runsResult = await fetchJobRuns(job.id, { page: 1, size: 10 })
       const activeRuns = (runsResult.items || []).filter(
-        (run) => run.status === "running" || run.status === "pending" || run.status === "queued"
+        (run) => {
+          const normalized = String(run.status || "").toLowerCase()
+          return normalized === "running" || normalized === "pending" || normalized === "queued"
+        }
       )
       if (activeRuns.length > 0) {
         warnings.push(
@@ -560,10 +563,19 @@ export const JobsTab: React.FC = () => {
       )}
     }
   ]
+  const resolveColumnKey = (column: ColumnsType<WatchlistJob>[number]): string => {
+    if (column.key != null) return String(column.key)
+    if ("dataIndex" in column && column.dataIndex != null) {
+      return Array.isArray(column.dataIndex)
+        ? column.dataIndex.map((entry) => String(entry)).join(".")
+        : String(column.dataIndex)
+    }
+    return ""
+  }
   const defaultColumnKeys = new Set(["name", "schedule_expr", "active", "actions"])
   const columns = showAdvancedColumns
     ? allColumns
-    : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
+    : allColumns.filter((column) => defaultColumnKeys.has(resolveColumnKey(column)))
 
   return (
     <div className="space-y-4">

@@ -227,6 +227,45 @@ describe("HeaderShortcuts launcher modal", () => {
     expect(dialog).toHaveAttribute("aria-modal", "true")
   })
 
+  it("uses enlarged default modal dimensions", () => {
+    renderWithRouter(
+      <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
+    )
+
+    const dialog = screen.getByRole("dialog")
+    expect(dialog.className).toContain("max-w-[960px]")
+    expect(dialog).toHaveStyle({ maxHeight: "80vh" })
+  })
+
+  it("uses a wider left category column", () => {
+    renderWithRouter(
+      <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
+    )
+
+    const nav = screen.getByLabelText("Categories")
+    expect(nav.className).toContain("w-56")
+  })
+
+  it("opens and closes a full-screen all-options modal", () => {
+    renderWithRouter(
+      <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
+    )
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "View all options" })
+    )
+
+    const allOptionsDialog = screen.getByRole("dialog", { name: "All options" })
+    expect(allOptionsDialog).toBeInTheDocument()
+    expect(allOptionsDialog.className).toContain("inset-0")
+    expect(within(allOptionsDialog).getByText("Chat & Persona")).toBeInTheDocument()
+
+    fireEvent.keyDown(allOptionsDialog, { key: "Escape" })
+    expect(
+      screen.queryByRole("dialog", { name: "All options" })
+    ).not.toBeInTheDocument()
+  })
+
   it("shows footer with keyboard navigation hints", () => {
     renderWithRouter(
       <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />

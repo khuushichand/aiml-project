@@ -8,6 +8,7 @@ import { useWatchlistsStore } from "@/store/watchlists"
 
 const serviceMocks = vi.hoisted(() => ({
   createWatchlistOutput: vi.fn(),
+  fetchScrapedItemSmartCounts: vi.fn(),
   fetchWatchlistSources: vi.fn(),
   fetchWatchlistRuns: vi.fn(),
   fetchScrapedItems: vi.fn(),
@@ -67,6 +68,8 @@ vi.mock("antd", async () => {
 
 vi.mock("@/services/watchlists", () => ({
   createWatchlistOutput: (...args: unknown[]) => serviceMocks.createWatchlistOutput(...args),
+  fetchScrapedItemSmartCounts: (...args: unknown[]) =>
+    serviceMocks.fetchScrapedItemSmartCounts(...args),
   fetchWatchlistSources: (...args: unknown[]) => serviceMocks.fetchWatchlistSources(...args),
   fetchWatchlistRuns: (...args: unknown[]) => serviceMocks.fetchWatchlistRuns(...args),
   fetchScrapedItems: (...args: unknown[]) => serviceMocks.fetchScrapedItems(...args),
@@ -111,6 +114,14 @@ describe("ItemsTab keyboard shortcuts", () => {
     vi.clearAllMocks()
     window.localStorage.clear()
     useWatchlistsStore.getState().resetStore()
+    serviceMocks.fetchScrapedItemSmartCounts.mockResolvedValue({
+      all: 2,
+      today: 2,
+      today_unread: 2,
+      unread: 2,
+      reviewed: 0,
+      queued: 0
+    })
 
     serviceMocks.fetchWatchlistSources.mockResolvedValue({
       items: [
@@ -172,28 +183,28 @@ describe("ItemsTab keyboard shortcuts", () => {
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
     })
-    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item Two")
-
-    fireEvent.keyDown(document, { key: "j" })
     expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
 
-    fireEvent.keyDown(document, { key: "k" })
+    fireEvent.keyDown(document, { key: "j" })
     expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item Two")
+
+    fireEvent.keyDown(document, { key: "k" })
+    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
 
     const searchInput = screen.getByPlaceholderText("Search feed items...")
     searchInput.focus()
     fireEvent.keyDown(searchInput, { key: "j" })
-    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item Two")
+    expect(screen.getByTestId("watchlists-item-reader")).toHaveTextContent("Item One")
     searchInput.blur()
 
     fireEvent.keyDown(document, { key: " " })
     await waitFor(() => {
-      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(102, { reviewed: true })
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(101, { reviewed: true })
     })
 
     fireEvent.keyDown(document, { key: "o" })
     expect(openSpy).toHaveBeenCalledWith(
-      "https://example.com/two",
+      "https://example.com/one",
       "_blank",
       "noopener,noreferrer"
     )
@@ -255,7 +266,7 @@ describe("ItemsTab keyboard shortcuts", () => {
 
     expect(screen.getByTestId("watchlists-item-row-101")).toHaveAttribute(
       "aria-label",
-      "Item One. Unread. Source: Tech Daily."
+      "Item One from Tech Daily. Unread."
     )
   })
 

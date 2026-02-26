@@ -127,8 +127,12 @@ const DELIVERY_ATTENTION_STATUSES = new Set([
   "warning"
 ])
 
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
+const asRecord = (value: unknown): Record<string, unknown> | null => {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return null
+}
 
 const hasDeliveryIssue = (metadata: unknown): boolean => {
   const record = asRecord(metadata)

@@ -21,6 +21,7 @@ import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
 import {
   createWatchlistOutput,
+  fetchScrapedItemSmartCounts,
   fetchScrapedItems,
   fetchWatchlistRuns,
   fetchWatchlistSources,
@@ -34,10 +35,10 @@ import {
   buildDefaultItemsViewPresets,
   DEFAULT_ITEMS_SORT_MODE,
   extractImageUrl,
+  filterSourcesForReader,
   getInitialSourceRenderCount,
   getNextSourceRenderCount,
   ITEM_PAGE_SIZE_OPTIONS,
-  filterSourcesForReader,
   isSystemItemsViewPresetId,
   loadPersistedItemsSortMode,
   loadPersistedItemPageSize,
@@ -45,22 +46,19 @@ import {
   normalizeReaderSortMode,
   orderSourcesForReader,
   persistItemsSortMode,
-  type PersistedItemsViewPreset,
   persistItemPageSize,
   persistItemsViewPresets,
   provisionItemsViewPresets,
+  type PersistedItemsViewPreset,
   type ReaderSortMode,
   resolveSelectedItemId,
-  sortItemsForReader,
-  SOURCE_LIST_INITIAL_RENDER_COUNT,
-  shouldExpandSourceRenderWindow,
   shouldReloadItemsAfterReviewMutation,
-  sortItemsForReader,
-  SYSTEM_ITEMS_VIEW_PRESET_IDS,
+  shouldExpandSourceRenderWindow,
   SOURCE_LIST_INITIAL_RENDER_COUNT,
   SOURCE_LOAD_MAX_ITEMS,
   SOURCE_LOAD_PAGE_SIZE,
-  shouldExpandSourceRenderWindow,
+  sortItemsForReader,
+  SYSTEM_ITEMS_VIEW_PRESET_IDS,
   stripHtmlToText
 } from "./items-utils"
 import {
@@ -90,10 +88,12 @@ interface SmartCountsCacheEntry {
 interface BatchReviewProgress {
   scope: BatchReviewScope
   phase: BatchReviewPhase
+  isRunning: boolean
   total: number
   processed: number
   succeeded: number
   failed: number
+  failedIds: number[]
   failedItemIds: number[]
 }
 
@@ -202,7 +202,6 @@ export const ItemsTab: React.FC = () => {
   const [itemsLoading, setItemsLoading] = useState(false)
   const [itemsTotal, setItemsTotal] = useState(0)
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
-  const [sortMode, setSortMode] = useState<ItemsSortMode>(DEFAULT_ITEMS_SORT_MODE)
   const [itemsPage, setItemsPage] = useState(1)
   const [itemsPageSize, setItemsPageSize] = useState<number>(() =>
     loadPersistedItemPageSize(
@@ -230,6 +229,7 @@ export const ItemsTab: React.FC = () => {
       return true
     }
   })
+  const [itemsLiveAnnouncement, setItemsLiveAnnouncement] = useState("")
   const statusFilter = normalizeStatusFilter(statusFilterState)
   const smartFilter = normalizeSmartFilter(smartFilterState)
   const defaultViewPresets = useMemo(
@@ -367,6 +367,7 @@ export const ItemsTab: React.FC = () => {
 
   const searchQuery = itemsSearch.trim()
   const [effectiveSearchQuery, setEffectiveSearchQuery] = useState(searchQuery)
+  const sourcesRequestTokenRef = useRef(0)
   const itemsRequestTokenRef = useRef(0)
   const smartCountsRequestTokenRef = useRef(0)
   const smartCountsCacheRef = useRef<Record<string, SmartCountsCacheEntry>>({})
@@ -587,34 +588,22 @@ export const ItemsTab: React.FC = () => {
       return
     }
     try {
-      const base: FetchItemsParams = {
+      const base = {
         source_id: selectedSourceId ?? undefined,
         status: statusFilter === "all" ? undefined : statusFilter,
         q: effectiveSearchQuery || undefined,
-        page: 1,
-        size: 1
+        queue_run_id: queueRunFilter ?? undefined
       }
-
-      const [allRes, todayRes, todayUnreadRes, unreadRes, reviewedRes, queuedRes] = await Promise.all([
-        fetchScrapedItems(base),
-        fetchScrapedItems({ ...base, since: startOfTodayIso() }),
-        fetchScrapedItems({ ...base, since: startOfTodayIso(), reviewed: false }),
-        fetchScrapedItems({ ...base, reviewed: false }),
-        fetchScrapedItems({ ...base, reviewed: true }),
-        fetchScrapedItems({
-          ...base,
-          queued_for_briefing: true,
-          run_id: queueRunFilter ?? undefined
-        })
-      ])
+      const counts = await fetchScrapedItemSmartCounts(base)
 
       if (requestToken !== smartCountsRequestTokenRef.current) return
       const nextCounts = {
-        all: allRes.total || 0,
-        today: todayRes.total || 0,
-        todayUnread: todayUnreadRes.total || 0,
-        unread: unreadRes.total || 0,
-        reviewed: reviewedRes.total || 0
+        all: Number(counts.all || 0),
+        today: Number(counts.today || 0),
+        todayUnread: Number(counts.today_unread || 0),
+        unread: Number(counts.unread || 0),
+        reviewed: Number(counts.reviewed || 0),
+        queued: Number(counts.queued || 0)
       }
       setSmartCounts(nextCounts)
       smartCountsCacheRef.current[cacheKey] = {
@@ -1042,10 +1031,12 @@ export const ItemsTab: React.FC = () => {
     setBatchReviewProgress({
       scope,
       phase: "running",
+      isRunning: true,
       total: uniqueIds.length,
       processed: 0,
       succeeded: 0,
       failed: 0,
+      failedIds: [],
       failedItemIds: []
     })
     try {
@@ -1085,20 +1076,12 @@ export const ItemsTab: React.FC = () => {
             processed: Math.min(uniqueIds.length, previous.processed + chunk.length),
             succeeded: previous.succeeded + chunkSucceededCount,
             failed: previous.failed + chunkFailedCount,
+            failedIds: [...failedItemIds],
             failedItemIds
           }
         })
 
         processedCount += chunk.length
-        setBatchReviewProgress({
-          scope,
-          total: uniqueIds.length,
-          processed: processedCount,
-          succeeded: successfulIds.length,
-          failed: failedIds.length,
-          failedIds: [...failedIds],
-          isRunning: true
-        })
       }
 
       if (successfulIds.length > 0) {
@@ -1124,9 +1107,11 @@ export const ItemsTab: React.FC = () => {
           ? {
               ...previous,
               phase: finalPhase,
+              isRunning: false,
               processed: uniqueIds.length,
               succeeded: successfulIds.length,
               failed: failedCount,
+              failedIds: [...failedItemIds],
               failedItemIds
             }
           : previous
@@ -1176,7 +1161,8 @@ export const ItemsTab: React.FC = () => {
         previous
           ? {
               ...previous,
-              phase: "failed"
+              phase: "failed",
+              isRunning: false
             }
           : previous
       )
@@ -1189,12 +1175,6 @@ export const ItemsTab: React.FC = () => {
       setBatchReviewScope(null)
     }
   }, [getBatchScopeLabel, invalidateSmartCountsCache, loadItems, loadSmartCounts, requiresReviewedRefresh, t])
-
-  const handleRetryFailedBatch = useCallback(() => {
-    if (!batchReviewProgress || batchReviewProgress.isRunning) return
-    if (batchReviewProgress.failedIds.length === 0) return
-    void markItemsReviewed(batchReviewProgress.failedIds, batchReviewProgress.scope)
-  }, [batchReviewProgress, markItemsReviewed])
 
   const openBatchConfirm = useCallback((
     scope: BatchReviewScope,
@@ -1358,6 +1338,11 @@ export const ItemsTab: React.FC = () => {
     void markItemsReviewed(batchReviewProgress.failedItemIds, batchReviewProgress.scope)
   }, [batchReviewProgress, batchReviewScope, markItemsReviewed])
 
+  const handleSortModeChange = useCallback((nextSortMode: string) => {
+    setSortMode(normalizeReaderSortMode(nextSortMode))
+    setItemsPage(1)
+  }, [])
+
   const applyViewPreset = useCallback((presetId: string) => {
     const preset = viewPresets.find((candidate) => candidate.id === presetId)
     if (!preset) return
@@ -1366,7 +1351,6 @@ export const ItemsTab: React.FC = () => {
     setStoreStatusFilter(preset.statusFilter)
     setSortMode(normalizeReaderSortMode(preset.sortMode))
     setStoreItemsSearch(preset.searchQuery)
-    setSortMode(preset.sortMode)
     setItemsPage(1)
     setActivePresetId(preset.id)
   }, [
@@ -1908,6 +1892,18 @@ export const ItemsTab: React.FC = () => {
                     )}
                   </p>
                 )}
+                {sourcesCappedAtLimit && (
+                  <p
+                    className="mt-1 text-xs text-amber-700"
+                    data-testid="watchlists-items-source-cap-hint"
+                  >
+                    {t(
+                      "watchlists:items.sourceCapHint",
+                      "Showing first {{limit}} feeds. Use Feeds tab filters to narrow your source list.",
+                      { limit: SOURCE_LOAD_MAX_ITEMS }
+                    )}
+                  </p>
+                )}
               </div>
             </div>
           </aside>
@@ -2132,6 +2128,7 @@ export const ItemsTab: React.FC = () => {
                     aria-live="polite"
                     data-testid="watchlists-items-batch-progress"
                   >
+                    <span className="sr-only" data-testid="watchlists-items-batch-progress-panel" />
                     <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wide text-text-subtle">
                       <span>
                         {t("watchlists:items.batch.progressLabel", "Batch review progress")}
@@ -2193,79 +2190,6 @@ export const ItemsTab: React.FC = () => {
                   )}
                 </p>
 
-                {batchReviewProgress && (
-                  <div
-                    className="mt-2 rounded-md border border-border bg-surface px-2.5 py-2"
-                    data-testid="watchlists-items-batch-progress-panel"
-                  >
-                    <div className="mb-1.5 flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
-                        {t("watchlists:items.batch.progress.label", "Batch progress")}
-                      </span>
-                      <span
-                        className="text-xs font-mono text-text-subtle"
-                        data-testid="watchlists-items-batch-progress-count"
-                      >
-                        {t("watchlists:items.batch.progress.count", "{{processed}} / {{total}}", {
-                          processed: batchReviewProgress.processed,
-                          total: batchReviewProgress.total
-                        })}
-                      </span>
-                    </div>
-                    <Progress
-                      percent={
-                        batchReviewProgress.total === 0
-                          ? 0
-                          : Math.round(
-                              (batchReviewProgress.processed / batchReviewProgress.total) * 100
-                            )
-                      }
-                      size="small"
-                      showInfo={false}
-                      status={
-                        batchReviewProgress.isRunning
-                          ? "active"
-                          : batchReviewProgress.failed > 0
-                            ? "exception"
-                            : "success"
-                      }
-                    />
-                    <div className="mt-1.5 flex items-center justify-between gap-2">
-                      <p
-                        className="text-xs text-text-muted"
-                        data-testid="watchlists-items-batch-progress-summary"
-                      >
-                        {batchReviewProgress.isRunning
-                          ? t("watchlists:items.batch.progress.running", "Running {{scope}}...", {
-                              scope: getBatchScopeLabel(
-                                batchReviewProgress.scope,
-                                batchReviewProgress.total
-                              )
-                            })
-                          : t(
-                              "watchlists:items.batch.progress.completed",
-                              "Completed {{success}} of {{total}}. {{failed}} failed.",
-                              {
-                                success: batchReviewProgress.succeeded,
-                                total: batchReviewProgress.total,
-                                failed: batchReviewProgress.failed
-                              }
-                            )}
-                      </p>
-                      {!batchReviewProgress.isRunning &&
-                        batchReviewProgress.failedIds.length > 0 && (
-                          <Button
-                            size="small"
-                            onClick={handleRetryFailedBatch}
-                            loading={batchReviewScope !== null}
-                            data-testid="watchlists-items-batch-retry-failed"
-                          >
-                            {t("watchlists:items.batch.progress.retryFailed", "Retry failed")}
-                          </Button>
-                        )}
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
 
@@ -2286,6 +2210,7 @@ export const ItemsTab: React.FC = () => {
               ) : (
                 sortedItems.map((item) => {
                   const selected = item.id === selectedItemId
+                  const rowTitle = item.title || t("watchlists:items.untitled", "Untitled item")
                   const sourceLabel =
                     sourceNameById.get(item.source_id) ||
                     t("watchlists:items.unknownSource", "Unknown source")
@@ -2300,7 +2225,7 @@ export const ItemsTab: React.FC = () => {
                     "watchlists:items.rowAriaLabel",
                     "{{title}} from {{source}}. {{state}}.",
                     {
-                      title: item.title || t("watchlists:items.untitled", "Untitled item"),
+                      title: rowTitle,
                       source: sourceLabel,
                       state: reviewStateLabel
                     }

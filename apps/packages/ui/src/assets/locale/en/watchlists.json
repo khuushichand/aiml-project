@@ -678,6 +678,7 @@
       "audioTargetMinutes": "Target duration (minutes)",
       "audioHint": "Enable spoken briefings alongside text outputs. Keep defaults for fastest setup.",
       "audioPracticalHint": "Practical default: Alloy voice at 1.0 speed and 8-minute target, then tune after your first run.",
+      "audioItemCapHint": "Audio briefings currently include up to 100 items per run. Tighten filters for more focused narration.",
       "showAudioAdvanced": "Show advanced audio options",
       "hideAudioAdvanced": "Hide advanced audio options",
       "audioBackgroundTrack": "Background track URI",
@@ -1276,6 +1277,10 @@
     "modeHelpAdvanced": "Advanced mode adds Jinja2 snippets, variable docs, and version tools.",
     "modeHiddenToolsNotice": "Advanced template tools are hidden in Basic mode. Your content and version context are preserved.",
     "modeVersionToolsHidden": "Version tools are available in Advanced mode.",
+    "visualOutOfSyncTitle": "Visual layout may be out of sync",
+    "visualOutOfSyncDescription": "The template was edited in code mode and the visual block layout may need repair.",
+    "repairVisualLayout": "Repair layout",
+    "repairVisualLayoutSuccess": "Visual layout re-synced from the current template code.",
     "modeBasicEditorHint": "Start in Basic mode with plain text or Markdown. Switch to Advanced only if you need variables, loops, or version tools.",
     "syntaxErrorBeforeSave": "Could not save template. Fix syntax errors, then try again.",
     "recipe": {

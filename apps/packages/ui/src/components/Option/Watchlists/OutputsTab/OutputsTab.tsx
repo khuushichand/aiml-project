@@ -125,11 +125,7 @@ export const OutputsTab: React.FC = () => {
   const openJobForm = useWatchlistsStore((s) => s.openJobForm)
   const openOutputPreview = useWatchlistsStore((s) => s.openOutputPreview)
   const closeOutputPreview = useWatchlistsStore((s) => s.closeOutputPreview)
-  const setRunsJobFilter = useWatchlistsStore((s) => s.setRunsJobFilter)
   const setRunsStatusFilter = useWatchlistsStore((s) => s.setRunsStatusFilter)
-  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
-  const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
-  const openJobForm = useWatchlistsStore((s) => s.openJobForm)
 
   const [jobs, setJobs] = useState<WatchlistJob[]>([])
   const [regenOpen, setRegenOpen] = useState(false)
@@ -155,6 +151,9 @@ export const OutputsTab: React.FC = () => {
   const hasOutputAnnouncementBaselineRef = useRef(false)
   const regenTriggerRef = useRef<HTMLElement | null>(null)
   const wasRegenOpenRef = useRef(false)
+  const regenTemplateFieldId = "outputs-regenerate-template-field"
+  const regenTemplateVersionFieldId = "outputs-regenerate-template-version-field"
+  const regenTitleFieldId = "outputs-regenerate-title-field"
 
   const selectedTemplateVersionOptions = useMemo(() => {
     if (!selectedTemplate) return []
@@ -679,10 +678,19 @@ export const OutputsTab: React.FC = () => {
       )
     }
   ]
+  const resolveColumnKey = (column: ColumnsType<WatchlistOutput>[number]): string => {
+    if (column.key != null) return String(column.key)
+    if ("dataIndex" in column && column.dataIndex != null) {
+      return Array.isArray(column.dataIndex)
+        ? column.dataIndex.map((entry) => String(entry)).join(".")
+        : String(column.dataIndex)
+    }
+    return ""
+  }
   const defaultColumnKeys = new Set(["title", "job", "run_id", "created_at", "delivery", "actions"])
   const columns = showAdvancedFilters
     ? allColumns
-    : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
+    : allColumns.filter((column) => defaultColumnKeys.has(resolveColumnKey(column)))
 
   return (
     <div className="space-y-4">
@@ -880,10 +888,11 @@ export const OutputsTab: React.FC = () => {
           {!regenOutputIsAudio ? (
             <>
               <div>
-                <div className="text-xs font-medium text-text-muted mb-1">
+                <label className="text-xs font-medium text-text-muted mb-1 block" htmlFor={regenTemplateFieldId}>
                   {t("watchlists:outputs.templateLabel", "Template")}
-                </div>
+                </label>
                 <Select
+                  id={regenTemplateFieldId}
                   data-testid="outputs-regenerate-template"
                   value={selectedTemplate ?? undefined}
                   onChange={(value) => {
@@ -904,11 +913,12 @@ export const OutputsTab: React.FC = () => {
                 />
               </div>
               <div>
-                <div className="text-xs font-medium text-text-muted mb-1">
+                <label className="text-xs font-medium text-text-muted mb-1 block" htmlFor={regenTemplateVersionFieldId}>
                   {t("watchlists:outputs.templateVersionLabel", "Template version")}
-                </div>
+                </label>
                 {selectedTemplateVersionOptions.length > 0 ? (
                   <Select
+                    id={regenTemplateVersionFieldId}
                     data-testid="outputs-regenerate-template-version-select"
                     value={selectedTemplateVersion ?? undefined}
                     onChange={(value) =>
@@ -922,6 +932,7 @@ export const OutputsTab: React.FC = () => {
                   />
                 ) : (
                   <InputNumber
+                    id={regenTemplateVersionFieldId}
                     data-testid="outputs-regenerate-template-version-input"
                     value={selectedTemplateVersion ?? undefined}
                     min={1}
@@ -947,10 +958,11 @@ export const OutputsTab: React.FC = () => {
             </div>
           )}
           <div>
-            <div className="text-xs font-medium text-text-muted mb-1">
+            <label className="text-xs font-medium text-text-muted mb-1 block" htmlFor={regenTitleFieldId}>
               {t("watchlists:outputs.titleLabel", "Title")}
-            </div>
+            </label>
             <Input
+              id={regenTitleFieldId}
               value={customTitle}
               onChange={(e) => setCustomTitle(e.target.value)}
               placeholder={t("watchlists:outputs.titlePlaceholder", "Optional title override")}

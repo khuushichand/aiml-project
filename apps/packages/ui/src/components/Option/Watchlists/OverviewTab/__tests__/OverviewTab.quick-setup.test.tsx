@@ -20,6 +20,7 @@ const mockState = vi.hoisted(() => ({
   createWatchlistOutputMock: vi.fn(),
   getWatchlistTemplateMock: vi.fn(),
   previewWatchlistTemplateMock: vi.fn(),
+  testWatchlistSourceDraftMock: vi.fn(),
   trackWatchlistsOnboardingTelemetryMock: vi.fn(),
   setActiveTabMock: vi.fn(),
   setOutputsRunFilterMock: vi.fn(),
@@ -73,7 +74,8 @@ vi.mock("@/services/watchlists", () => ({
   triggerWatchlistRun: (...args: unknown[]) => mockState.triggerWatchlistRunMock(...args),
   createWatchlistOutput: (...args: unknown[]) => mockState.createWatchlistOutputMock(...args),
   getWatchlistTemplate: (...args: unknown[]) => mockState.getWatchlistTemplateMock(...args),
-  previewWatchlistTemplate: (...args: unknown[]) => mockState.previewWatchlistTemplateMock(...args)
+  previewWatchlistTemplate: (...args: unknown[]) => mockState.previewWatchlistTemplateMock(...args),
+  testWatchlistSourceDraft: (...args: unknown[]) => mockState.testWatchlistSourceDraftMock(...args)
 }))
 
 vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
@@ -188,6 +190,19 @@ describe("OverviewTab quick setup flow", () => {
       rendered: "Preview output",
       context_keys: [],
       warnings: []
+    })
+    mockState.testWatchlistSourceDraftMock.mockResolvedValue({
+      items: [
+        {
+          source_id: 11,
+          title: "AI lead story",
+          url: "https://example.com/post-1",
+          decision: "ingest"
+        }
+      ],
+      total: 1,
+      ingestable: 1,
+      filtered: 0
     })
     QUICK_SETUP_DEFAULT_VALUES.setupGoal = "briefing"
     QUICK_SETUP_DEFAULT_VALUES.runNow = true
@@ -353,9 +368,9 @@ describe("OverviewTab quick setup flow", () => {
     fireEvent.click(screen.getByLabelText("Run immediately"))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Create setup" })).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /Create setup/i })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole("button", { name: "Create setup" }))
+    fireEvent.click(screen.getByRole("button", { name: /Create setup/i }))
 
     await waitFor(() => {
       expect(mockState.setActiveTabMock).toHaveBeenLastCalledWith("outputs")
@@ -416,9 +431,9 @@ describe("OverviewTab quick setup flow", () => {
     fireEvent.click(screen.getByLabelText("Run immediately"))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Create setup" })).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /Create setup/i })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole("button", { name: "Create setup" }))
+    fireEvent.click(screen.getByRole("button", { name: /Create setup/i }))
 
     await waitFor(() => {
       expect(mockState.createWatchlistJobMock).toHaveBeenCalledWith(
@@ -469,9 +484,9 @@ describe("OverviewTab quick setup flow", () => {
     })
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Create setup" })).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /Create setup/i })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole("button", { name: "Create setup" }))
+    fireEvent.click(screen.getByRole("button", { name: /Create setup/i }))
 
     await waitFor(() => {
       expect(mockState.createWatchlistJobMock).not.toHaveBeenCalled()
@@ -504,9 +519,9 @@ describe("OverviewTab quick setup flow", () => {
     })
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Create setup" })).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /Create setup/i })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole("button", { name: "Create setup" }))
+    fireEvent.click(screen.getByRole("button", { name: /Create setup/i }))
 
     await waitFor(() => {
       expect(mockState.setActiveTabMock).toHaveBeenLastCalledWith("runs")

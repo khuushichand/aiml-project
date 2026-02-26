@@ -10,6 +10,7 @@ import type {
   PaginatedResponse,
   RunDetailResponse,
   ScrapedItem,
+  ScrapedItemSmartCounts,
   ScrapedItemUpdate,
   SourceSeenResetResponse,
   SourceSeenStats,
@@ -534,6 +535,27 @@ export const fetchScrapedItems = async (
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<ScrapedItem>>({
     path: `/api/v1/watchlists/items${qs}` as any,
+    method: "GET"
+  })
+}
+
+export interface FetchItemSmartCountsParams {
+  run_id?: number
+  job_id?: number
+  source_id?: number
+  status?: string
+  q?: string
+  since?: string
+  until?: string
+  queue_run_id?: number
+}
+
+export const fetchScrapedItemSmartCounts = async (
+  params?: FetchItemSmartCountsParams
+): Promise<ScrapedItemSmartCounts> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<ScrapedItemSmartCounts>({
+    path: `/api/v1/watchlists/items/smart-counts${qs}` as any,
     method: "GET"
   })
 }

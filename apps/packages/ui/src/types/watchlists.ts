@@ -260,6 +260,15 @@ export interface ScrapedItem {
   created_at: string
 }
 
+export interface ScrapedItemSmartCounts {
+  all: number
+  today: number
+  today_unread: number
+  unread: number
+  reviewed: number
+  queued: number
+}
+
 export interface ScrapedItemUpdate {
   reviewed?: boolean
   status?: ItemStatus
