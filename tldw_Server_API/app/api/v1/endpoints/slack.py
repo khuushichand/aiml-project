@@ -735,7 +735,7 @@ def _enqueue_slack_job(
 
 
 @router.post("/events")
-async def slack_events(request: Request):
+async def slack_events(request: Request) -> JSONResponse:
     raw_body = await request.body()
     ok, error = _verify_slack_signature(
         raw_body,
@@ -835,7 +835,7 @@ async def slack_events(request: Request):
 
 
 @router.post("/commands")
-async def slack_commands(request: Request):
+async def slack_commands(request: Request) -> JSONResponse:
     raw_body = await request.body()
     ok, error = _verify_slack_signature(
         raw_body,
