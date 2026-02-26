@@ -59,6 +59,11 @@ jobs:
             ${{ runner.os }}-pip-${{ matrix.python-version }}-
             ${{ runner.os }}-pip-
 
+      - name: Install FFmpeg and PortAudio deps
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip wheel
