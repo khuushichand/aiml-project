@@ -31,6 +31,7 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
   const [position, setPosition] = React.useState({ top: 0, left: 0 })
 
   const groupedTabs = React.useMemo(() => {
+    if (tabs.length === 0) return []
     const groups = new Map<string, TabInfo[]>()
     for (const tab of tabs) {
       let category = "Other"
