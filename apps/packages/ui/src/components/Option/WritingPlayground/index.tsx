@@ -1089,6 +1089,14 @@ export const WritingPlayground = () => {
   const [isGenerating, setIsGenerating] = React.useState(false)
   const [canUndoGeneration, setCanUndoGeneration] = React.useState(false)
   const [canRedoGeneration, setCanRedoGeneration] = React.useState(false)
+  const [tokenCountResult, setTokenCountResult] =
+    React.useState<WritingTokenCountResponse | null>(null)
+  const [tokenizeResult, setTokenizeResult] =
+    React.useState<WritingTokenizeResponse | null>(null)
+  const [tokenInspectorError, setTokenInspectorError] =
+    React.useState<string | null>(null)
+  const [isCountingTokens, setIsCountingTokens] = React.useState(false)
+  const [isTokenizingText, setIsTokenizingText] = React.useState(false)
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingSaveMapRef = React.useRef<Record<string, WritingSessionPayload>>({})
   const pendingQueueRef = React.useRef<string[]>([])
@@ -1129,7 +1137,7 @@ export const WritingPlayground = () => {
   const hasThemes = Boolean(writingCaps?.server?.themes)
   const hasChat = capabilities?.hasChat !== false
 
-  const { data: requestedCaps } = useQuery({
+  const { data: requestedCaps, isLoading: requestedCapsLoading } = useQuery({
     queryKey: [
       "writing-capabilities",
       "requested",
@@ -1742,6 +1750,9 @@ export const WritingPlayground = () => {
       setSelectedThemeName(null)
       setChatMode(false)
       setIsDirty(false)
+      setTokenCountResult(null)
+      setTokenizeResult(null)
+      setTokenInspectorError(null)
       lastLoadedSessionIdRef.current = null
       return
     }
@@ -1772,6 +1783,9 @@ export const WritingPlayground = () => {
       setSelectedThemeName(nextThemeName)
       setChatMode(nextChatMode)
       setIsDirty(false)
+      setTokenCountResult(null)
+      setTokenizeResult(null)
+      setTokenInspectorError(null)
       setLastSavedAt(Date.now())
       lastSavedPromptRef.current[activeSessionDetail.id] = nextPrompt
       lastSavedSettingsRef.current[activeSessionDetail.id] = nextSettings
@@ -1824,6 +1838,12 @@ export const WritingPlayground = () => {
     selectedThemeName,
     settings
   ])
+
+  React.useEffect(() => {
+    setTokenCountResult(null)
+    setTokenizeResult(null)
+    setTokenInspectorError(null)
+  }, [selectedModel])
 
   const openRenameModal = React.useCallback(
     (session: WritingSessionListItem) => {
@@ -3515,6 +3535,104 @@ export const WritingPlayground = () => {
     }
   }, [editorText])
 
+  const clearTokenInspector = React.useCallback(() => {
+    setTokenCountResult(null)
+    setTokenizeResult(null)
+    setTokenInspectorError(null)
+  }, [])
+
+  const resolveTokenInspectorTarget = React.useCallback(async () => {
+    const model = String(selectedModel || "").trim()
+    if (!model) {
+      throw new Error(
+        t(
+          "option:writingPlayground.modelMissing",
+          "Select a model in Settings to generate."
+        )
+      )
+    }
+    const requestedProvider = String(
+      requestedCaps?.requested?.provider || ""
+    ).trim()
+    if (requestedProvider) {
+      return { provider: requestedProvider, model }
+    }
+    const provider = await resolveApiProviderForModel({
+      modelId: model,
+      explicitProvider: apiProviderOverride
+    })
+    if (!provider) {
+      throw new Error(
+        t(
+          "option:writingPlayground.tokenInspectorProviderMissing",
+          "Unable to resolve a provider for the selected model."
+        )
+      )
+    }
+    return { provider, model }
+  }, [apiProviderOverride, requestedCaps?.requested?.provider, selectedModel, t])
+
+  const handleCountTokens = React.useCallback(async () => {
+    if (!editorText.trim()) {
+      message.info(
+        t(
+          "option:writingPlayground.tokenInspectorEmptyPrompt",
+          "Enter text in the editor before counting tokens."
+        )
+      )
+      return
+    }
+    setIsCountingTokens(true)
+    setTokenInspectorError(null)
+    try {
+      const target = await resolveTokenInspectorTarget()
+      const result = await countWritingTokens({
+        provider: target.provider,
+        model: target.model,
+        text: editorText
+      })
+      setTokenCountResult(result)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : t("option:error", "Error")
+      setTokenInspectorError(detail)
+    } finally {
+      setIsCountingTokens(false)
+    }
+  }, [editorText, resolveTokenInspectorTarget, t])
+
+  const handleTokenizePreview = React.useCallback(async () => {
+    if (!editorText.trim()) {
+      message.info(
+        t(
+          "option:writingPlayground.tokenInspectorEmptyPrompt",
+          "Enter text in the editor before counting tokens."
+        )
+      )
+      return
+    }
+    setIsTokenizingText(true)
+    setTokenInspectorError(null)
+    try {
+      const target = await resolveTokenInspectorTarget()
+      const result = await tokenizeWritingText({
+        provider: target.provider,
+        model: target.model,
+        text: editorText,
+        options: { include_strings: true }
+      })
+      setTokenizeResult(result)
+      setTokenCountResult({
+        count: result.meta.token_count,
+        meta: result.meta
+      })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : t("option:error", "Error")
+      setTokenInspectorError(detail)
+    } finally {
+      setIsTokenizingText(false)
+    }
+  }, [editorText, resolveTokenInspectorTarget, t])
+
   const handlePromptChange = React.useCallback(
     (event: React.ChangeEvent<HTMLTextAreaElement>) => {
       applyPromptValue(event.target.value)
@@ -3527,6 +3645,67 @@ export const WritingPlayground = () => {
     Boolean(selectedModel) &&
     hasChat &&
     !isGenerating
+  const settingsDisabled = isGenerating
+  const serverSupportsTokenize = writingCaps?.server?.tokenize === true
+  const serverSupportsTokenCount = writingCaps?.server?.token_count === true
+  const showTokenInspectorPanel =
+    serverSupportsTokenCount || serverSupportsTokenize
+  const requestedTokenizerAvailable =
+    requestedCaps?.requested?.tokenizer_available === true
+  const requestedTokenizerError =
+    requestedCaps?.requested?.tokenization_error?.trim() || null
+  const tokenizerName =
+    tokenCountResult?.meta.tokenizer ||
+    tokenizeResult?.meta.tokenizer ||
+    requestedCaps?.requested?.tokenizer ||
+    null
+  const tokenPreviewRows = React.useMemo(
+    () => buildTokenPreviewRows(tokenizeResult?.ids ?? [], tokenizeResult?.strings, 200),
+    [tokenizeResult]
+  )
+  const tokenPreviewTotal = tokenizeResult?.ids.length ?? 0
+  const tokenPreviewTruncated = tokenPreviewTotal > tokenPreviewRows.length
+  const tokenInspectorUnavailableReason = React.useMemo(() => {
+    if (!selectedModel) {
+      return t(
+        "option:writingPlayground.tokenInspectorModelMissing",
+        "Select a model to use token inspection."
+      )
+    }
+    if (requestedCapsLoading) {
+      return t(
+        "option:writingPlayground.tokenInspectorChecking",
+        "Checking tokenizer support for this model..."
+      )
+    }
+    if (requestedTokenizerError) {
+      return requestedTokenizerError
+    }
+    if (!requestedTokenizerAvailable) {
+      return t(
+        "option:writingPlayground.tokenInspectorUnavailable",
+        "Tokenizer unavailable for this provider/model."
+      )
+    }
+    return null
+  }, [
+    requestedCapsLoading,
+    requestedTokenizerAvailable,
+    requestedTokenizerError,
+    selectedModel,
+    t
+  ])
+  const tokenInspectorBusy = isCountingTokens || isTokenizingText
+  const canCountTokens =
+    !settingsDisabled &&
+    !tokenInspectorBusy &&
+    serverSupportsTokenCount &&
+    !tokenInspectorUnavailableReason
+  const canTokenizePreview =
+    !settingsDisabled &&
+    !tokenInspectorBusy &&
+    serverSupportsTokenize &&
+    !tokenInspectorUnavailableReason
   const advancedExtraBodyUnknownKeys = React.useMemo(
     () =>
       Object.keys(advancedExtraBody || {}).filter(
@@ -3539,7 +3718,6 @@ export const WritingPlayground = () => {
     Object.keys(advancedExtraBody || {}).length > 0
   const showAdvancedSamplerControls =
     knownExtraBodyParams.length > 0 || hasAdvancedSettingsValues
-  const settingsDisabled = isGenerating
   const templateSelectDisabled =
     settingsDisabled || !hasTemplates || templatesLoading || Boolean(templatesError)
   const templateSaveLoading =
@@ -4207,7 +4385,159 @@ export const WritingPlayground = () => {
                               </div>
                             )
                         }
-                      ]}
+                      ].concat(
+                        showTokenInspectorPanel
+                          ? [
+                              {
+                                key: "token-inspector",
+                                label: t(
+                                  "option:writingPlayground.tokenInspectorTitle",
+                                  "Token inspector"
+                                ),
+                                children: (
+                                  <div className="flex flex-col gap-3">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      {serverSupportsTokenCount ? (
+                                        <Button
+                                          size="small"
+                                          disabled={!canCountTokens}
+                                          loading={isCountingTokens}
+                                          onClick={() => {
+                                            void handleCountTokens()
+                                          }}>
+                                          {t(
+                                            "option:writingPlayground.countTokensAction",
+                                            "Count tokens"
+                                          )}
+                                        </Button>
+                                      ) : null}
+                                      {serverSupportsTokenize ? (
+                                        <Button
+                                          size="small"
+                                          disabled={!canTokenizePreview}
+                                          loading={isTokenizingText}
+                                          onClick={() => {
+                                            void handleTokenizePreview()
+                                          }}>
+                                          {t(
+                                            "option:writingPlayground.tokenizePreviewAction",
+                                            "Tokenize preview"
+                                          )}
+                                        </Button>
+                                      ) : null}
+                                      {tokenCountResult ||
+                                      tokenizeResult ||
+                                      tokenInspectorError ? (
+                                        <Button
+                                          size="small"
+                                          disabled={tokenInspectorBusy}
+                                          onClick={clearTokenInspector}>
+                                          {t("common:clear", "Clear")}
+                                        </Button>
+                                      ) : null}
+                                    </div>
+                                    <span className="text-xs text-text-muted">
+                                      {tokenizerName
+                                        ? t(
+                                            "option:writingPlayground.tokenInspectorTokenizer",
+                                            "Tokenizer: {{tokenizer}}",
+                                            { tokenizer: tokenizerName }
+                                          )
+                                        : t(
+                                            "option:writingPlayground.tokenInspectorHint",
+                                            "Inspect token count and tokenization output for the selected model."
+                                          )}
+                                    </span>
+                                    {tokenInspectorUnavailableReason ? (
+                                      <Alert
+                                        type="info"
+                                        showIcon
+                                        message={tokenInspectorUnavailableReason}
+                                      />
+                                    ) : null}
+                                    {tokenInspectorError ? (
+                                      <Alert
+                                        type="error"
+                                        showIcon
+                                        message={tokenInspectorError}
+                                      />
+                                    ) : null}
+                                    {tokenCountResult ? (
+                                      <div className="rounded-md border border-border bg-surface p-3">
+                                        <div className="flex flex-wrap items-center gap-3 text-xs">
+                                          <Tag color="blue">
+                                            {t(
+                                              "option:writingPlayground.tokenInspectorCountLabel",
+                                              "{{count}} tokens",
+                                              {
+                                                count: tokenCountResult.count
+                                              }
+                                            )}
+                                          </Tag>
+                                          <span className="text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.tokenInspectorCharsLabel",
+                                              "{{count}} chars",
+                                              {
+                                                count: tokenCountResult.meta.input_chars
+                                              }
+                                            )}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                    {tokenizeResult ? (
+                                      <div className="flex flex-col gap-2">
+                                        <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface">
+                                          <div className="grid grid-cols-[auto_auto_1fr] gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                                            <span className="font-medium text-text-muted">
+                                              #
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              ID
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              {t(
+                                                "option:writingPlayground.tokenInspectorTextLabel",
+                                                "Text"
+                                              )}
+                                            </span>
+                                            {tokenPreviewRows.map((row) => (
+                                              <React.Fragment
+                                                key={`${row.index}-${row.id}`}>
+                                                <span className="text-text-muted">
+                                                  {row.index + 1}
+                                                </span>
+                                                <span className="text-text">
+                                                  {row.id}
+                                                </span>
+                                                <span className="whitespace-pre-wrap text-text">
+                                                  {row.text}
+                                                </span>
+                                              </React.Fragment>
+                                            ))}
+                                          </div>
+                                        </div>
+                                        {tokenPreviewTruncated ? (
+                                          <span className="text-xs text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.tokenInspectorTruncated",
+                                              "Showing first {{count}} of {{total}} tokens.",
+                                              {
+                                                count: tokenPreviewRows.length,
+                                                total: tokenPreviewTotal
+                                              }
+                                            )}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                )
+                              }
+                            ]
+                          : []
+                      )}
                     />
                   </div>
                 )
