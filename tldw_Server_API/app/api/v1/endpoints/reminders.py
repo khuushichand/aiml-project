@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
@@ -13,8 +15,19 @@ from tldw_Server_API.app.api.v1.schemas.reminders_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import TASKS_CONTROL, TASKS_READ
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ReminderTaskRow
+from tldw_Server_API.app.services.reminders_scheduler import get_reminders_scheduler
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+_REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def _row_to_response(row: ReminderTaskRow) -> ReminderTaskResponse:
@@ -63,6 +76,8 @@ async def create_task(
         link_id=payload.link_id,
         link_url=payload.link_url,
     )
+    with contextlib.suppress(_REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+        await get_reminders_scheduler().reconcile_task(task_id=task_id, user_id=int(db.user_id))
     return _row_to_response(db.get_reminder_task(task_id))
 
 
@@ -108,7 +123,10 @@ async def update_task(
 ) -> ReminderTaskResponse:
     patch = payload.model_dump(exclude_unset=True)
     try:
-        return _row_to_response(db.update_reminder_task(task_id, patch))
+        updated = db.update_reminder_task(task_id, patch)
+        with contextlib.suppress(_REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await get_reminders_scheduler().reconcile_task(task_id=task_id, user_id=int(db.user_id))
+        return _row_to_response(updated)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task_not_found") from exc
 
@@ -124,4 +142,7 @@ async def delete_task(
     _principal=Depends(require_permissions(TASKS_CONTROL)),  # noqa: B008
 ) -> ReminderTaskDeleteResponse:
     deleted = db.delete_reminder_task(task_id)
+    if deleted:
+        with contextlib.suppress(_REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await get_reminders_scheduler().unschedule_task(task_id=task_id)
     return ReminderTaskDeleteResponse(deleted=deleted)

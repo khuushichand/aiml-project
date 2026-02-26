@@ -87,3 +87,41 @@ def test_create_list_get_patch_delete_task(reminders_app):
         r = client.delete(f"/api/v1/tasks/{task_id}")
         assert r.status_code == 200, r.text
         assert r.json()["deleted"] is True
+
+
+def test_task_mutations_notify_scheduler(reminders_app, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import reminders as reminders_endpoint
+
+    reconcile_calls: list[tuple[str, int]] = []
+    unschedule_calls: list[str] = []
+
+    class _FakeScheduler:
+        async def reconcile_task(self, *, task_id: str, user_id: int) -> None:
+            reconcile_calls.append((task_id, user_id))
+
+        async def unschedule_task(self, *, task_id: str) -> None:
+            unschedule_calls.append(task_id)
+
+    scheduler = _FakeScheduler()
+    monkeypatch.setattr(reminders_endpoint, "get_reminders_scheduler", lambda: scheduler, raising=False)
+
+    with TestClient(reminders_app) as client:
+        create_payload = {
+            "title": "Scheduler sync",
+            "body": "Ensure immediate reconcile",
+            "schedule_kind": "one_time",
+            "run_at": "2026-03-01T10:00:00+00:00",
+            "enabled": True,
+        }
+        create_response = client.post("/api/v1/tasks", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        task_id = create_response.json()["id"]
+
+        patch_response = client.patch(f"/api/v1/tasks/{task_id}", json={"enabled": False})
+        assert patch_response.status_code == 200, patch_response.text
+
+        delete_response = client.delete(f"/api/v1/tasks/{task_id}")
+        assert delete_response.status_code == 200, delete_response.text
+
+    assert reconcile_calls == [(task_id, 880), (task_id, 880)]
+    assert unschedule_calls == [task_id]

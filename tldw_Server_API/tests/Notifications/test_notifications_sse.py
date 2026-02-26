@@ -177,3 +177,14 @@ def test_notifications_stream_emits_reset_required_for_stale_cursor(notification
     assert isinstance(payload, dict)
     assert payload["latest_event_id"] >= rows[-1].id
     assert payload["min_event_id"] == rows[-2].id - 1
+
+
+def test_notifications_stream_rejects_invalid_last_event_id(notifications_sse_app):
+    with TestClient(notifications_sse_app) as client:
+        response = client.get(
+            "/api/v1/notifications/stream",
+            headers={"Last-Event-ID": "not-an-integer"},
+        )
+
+    assert response.status_code == 400
+    assert response.json().get("detail") == "invalid_last_event_id"

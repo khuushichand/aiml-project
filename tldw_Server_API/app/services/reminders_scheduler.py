@@ -133,6 +133,9 @@ class _RemindersScheduler:
                 pass
             self._rescan_task = None
             self._started = False
+            for db in self._db_cache.values():
+                with contextlib.suppress(_NONCRITICAL_EXCEPTIONS):
+                    db.close()
             self._db_cache.clear()
             logger.info("Reminders scheduler stopped")
 
@@ -189,6 +192,32 @@ class _RemindersScheduler:
                     self._aps.remove_job(stale_id)
         except _NONCRITICAL_EXCEPTIONS:
             pass
+
+    async def reconcile_task(self, *, task_id: str, user_id: int) -> None:
+        """Immediately sync one reminder task into APS state."""
+        async with self._lock:
+            if not self._started or not self._aps:
+                return
+            db = self._get_db(int(user_id))
+            try:
+                task = db.get_reminder_task(task_id)
+            except KeyError:
+                with contextlib.suppress(_NONCRITICAL_EXCEPTIONS):
+                    self._aps.remove_job(task_id)
+                return
+            if not task.enabled:
+                with contextlib.suppress(_NONCRITICAL_EXCEPTIONS):
+                    self._aps.remove_job(task_id)
+                return
+            self._add_job(task, int(user_id))
+
+    async def unschedule_task(self, *, task_id: str) -> None:
+        """Immediately unschedule one reminder task from APS state."""
+        async with self._lock:
+            if not self._started or not self._aps:
+                return
+            with contextlib.suppress(_NONCRITICAL_EXCEPTIONS):
+                self._aps.remove_job(task_id)
 
     def _add_job(self, task: ReminderTaskRow, user_id: int | None = None) -> None:
         if not self._aps:

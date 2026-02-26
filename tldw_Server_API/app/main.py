@@ -3490,9 +3490,25 @@ async def lifespan(app: FastAPI):
             else:
                 reading_digest_jobs_task.cancel()
         if "reminder_jobs_task" in locals() and reminder_jobs_task:
-            reminder_jobs_task.cancel()
+            try:
+                reminder_jobs_task.cancel()
+                await _asyncio.wait_for(reminder_jobs_task, timeout=5.0)
+                logger.info("Reminder Jobs worker cancelled")
+            except _asyncio.CancelledError:
+                pass
+            except _STARTUP_GUARD_EXCEPTIONS:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                    reminder_jobs_task.cancel()
         if "jobs_notifications_bridge_task" in locals() and jobs_notifications_bridge_task:
-            jobs_notifications_bridge_task.cancel()
+            try:
+                jobs_notifications_bridge_task.cancel()
+                await _asyncio.wait_for(jobs_notifications_bridge_task, timeout=5.0)
+                logger.info("Jobs notifications bridge worker cancelled")
+            except _asyncio.CancelledError:
+                pass
+            except _STARTUP_GUARD_EXCEPTIONS:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                    jobs_notifications_bridge_task.cancel()
         if "evals_abtest_jobs_task" in locals() and evals_abtest_jobs_task:
             if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
                 try:

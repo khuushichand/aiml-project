@@ -121,3 +121,55 @@ def test_normalize_slot_to_utc_iso_handles_naive_local_dst_edges():
     )
     assert ambiguous == "2026-11-01T05:30:00+00:00"
     assert non_existent == "2026-03-08T07:30:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_task_adds_enabled_task_when_scheduler_started(reminders_scheduler_env, monkeypatch):
+    user_id = 883
+    task_id = _create_recurring_task(user_id)
+    scheduler = _RemindersScheduler()
+
+    class _FakeAPS:
+        def __init__(self) -> None:
+            self.removed: list[str] = []
+
+        def remove_job(self, job_id: str) -> None:
+            self.removed.append(job_id)
+
+    scheduler._aps = _FakeAPS()
+    scheduler._started = True
+
+    adds: list[tuple[str, int]] = []
+
+    def _capture_add(task, user_id: int | None = None):
+        adds.append((task.id, int(user_id or 0)))
+
+    monkeypatch.setattr(scheduler, "_add_job", _capture_add)
+
+    await scheduler.reconcile_task(task_id=task_id, user_id=user_id)
+
+    assert adds == [(task_id, user_id)]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_task_removes_disabled_task_when_scheduler_started(reminders_scheduler_env):
+    user_id = 884
+    task_id = _create_recurring_task(user_id)
+    cdb = CollectionsDatabase.for_user(user_id=user_id)
+    cdb.update_reminder_task(task_id, {"enabled": False})
+    scheduler = _RemindersScheduler()
+
+    class _FakeAPS:
+        def __init__(self) -> None:
+            self.removed: list[str] = []
+
+        def remove_job(self, job_id: str) -> None:
+            self.removed.append(job_id)
+
+    fake_aps = _FakeAPS()
+    scheduler._aps = fake_aps
+    scheduler._started = True
+
+    await scheduler.reconcile_task(task_id=task_id, user_id=user_id)
+
+    assert fake_aps.removed == [task_id]

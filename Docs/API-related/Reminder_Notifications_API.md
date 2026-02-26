@@ -203,6 +203,7 @@ data: {"reason":"cursor_too_old","min_event_id":700,"latest_event_id":1205}
 - `REMINDERS_SCHEDULER_ENABLED` (default: disabled)
 - `REMINDERS_SCHEDULER_TZ` (default: `UTC`)
 - `REMINDERS_SCHEDULER_RESCAN_SEC` (default: `300`, minimum `30`)
+- Task create/update/delete requests attempt immediate in-process scheduler reconciliation when a scheduler instance is running; periodic rescan remains as safety sync.
 - `REMINDER_JOBS_WORKER_ENABLED` (default: disabled)
 - `REMINDER_JOBS_QUEUE` (default: `default`)
 
@@ -224,6 +225,8 @@ data: {"reason":"cursor_too_old","min_event_id":700,"latest_event_id":1205}
 - `NOTIFICATIONS_STREAM_POLL_SEC` (default: `1.0`, minimum `0.01`)
 - `NOTIFICATIONS_STREAM_HEARTBEAT_SEC` (default: `10.0`, minimum `0.05`)
 - `NOTIFICATIONS_STREAM_MAX_DURATION_SEC` (default: disabled when unset/`<=0`)
+- `NOTIFICATIONS_STREAM_FLOOR_CHECK_EVERY_POLLS` (default: `15`, clamped `1..3600`)
+- `NOTIFICATIONS_STREAM_SEND_TIMEOUT_SEC` (default: `1.0`, minimum `0.05`)
 
 ### Retention Prune
 

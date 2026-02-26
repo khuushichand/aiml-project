@@ -261,7 +261,9 @@ async def stream_notifications(
     replay_window = _stream_int_env("NOTIFICATIONS_STREAM_REPLAY_WINDOW", 500, min_value=1, max_value=5000)
     batch_size = _stream_int_env("NOTIFICATIONS_STREAM_BATCH_SIZE", 200, min_value=1, max_value=1000)
     burst_threshold = _stream_int_env("NOTIFICATIONS_STREAM_BURST_THRESHOLD", 50, min_value=1, max_value=1000)
+    floor_check_every = _stream_int_env("NOTIFICATIONS_STREAM_FLOOR_CHECK_EVERY_POLLS", 15, min_value=1, max_value=3600)
     poll_interval_s = _stream_float_env("NOTIFICATIONS_STREAM_POLL_SEC", 1.0, min_value=0.01)
+    send_timeout_s = _stream_float_env("NOTIFICATIONS_STREAM_SEND_TIMEOUT_SEC", 1.0, min_value=0.05)
     heartbeat_interval_s = _stream_float_env("NOTIFICATIONS_STREAM_HEARTBEAT_SEC", 10.0, min_value=0.05)
     max_duration_s = _stream_float_env("NOTIFICATIONS_STREAM_MAX_DURATION_SEC", 0.0, min_value=0.0)
     if max_duration_s <= 0:
@@ -273,10 +275,21 @@ async def stream_notifications(
         labels={"component": "notifications", "endpoint": "notifications_stream"},
     )
 
+    async def _send_with_timeout(event: str, payload: dict, *, event_id: str | None = None) -> bool:
+        try:
+            await asyncio.wait_for(stream.send_event(event, payload, event_id=event_id), timeout=send_timeout_s)
+            return True
+        except asyncio.TimeoutError:
+            logger.warning("notifications stream send timeout for event={}", event)
+            with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
+                await stream.done(force=True)
+            return False
+
     async def _producer() -> None:
         nonlocal cursor
-        with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
-            await stream.send_event("heartbeat", {})
+        if not await _send_with_timeout("heartbeat", {}):
+            return
+        poll_count = 0
         while True:
             try:
                 if getattr(stream, "_closed", False):
@@ -285,44 +298,56 @@ async def stream_notifications(
                 pass
             try:
                 with CollectionsDatabase.for_user(user_id=user_id) as user_db:
-                    floor_id = user_db.get_user_notifications_window_floor_id(window_size=replay_window)
-                    latest_id = user_db.get_user_notifications_latest_id()
-                    if cursor > 0 and floor_id is not None and cursor < (floor_id - 1):
-                        await stream.send_event(
-                            "reset_required",
-                            {
-                                "reason": "cursor_too_old",
-                                "min_event_id": floor_id - 1,
-                                "latest_event_id": latest_id,
-                            },
-                            event_id=str(latest_id or floor_id - 1),
-                        )
-                        cursor = floor_id - 1
+                    while True:
+                        try:
+                            if getattr(stream, "_closed", False):
+                                return
+                        except _NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS:
+                            pass
 
-                    rows = user_db.list_user_notifications_after_id(after_id=cursor, limit=batch_size)
-                if rows:
-                    if len(rows) > burst_threshold:
-                        first_id = rows[0].id
-                        last_id = rows[-1].id
-                        await stream.send_event(
-                            "notifications_coalesced",
-                            {
-                                "count": len(rows),
-                                "from_event_id": first_id,
-                                "to_event_id": last_id,
-                            },
-                            event_id=str(last_id),
-                        )
-                        cursor = last_id
-                    else:
-                        for row in rows:
-                            await stream.send_event(
-                                "notification",
-                                _notification_stream_payload(row),
-                                event_id=str(row.id),
-                            )
-                            cursor = row.id
-                await asyncio.sleep(poll_interval_s)
+                        if cursor > 0 and (poll_count % floor_check_every == 0):
+                            floor_id = user_db.get_user_notifications_window_floor_id(window_size=replay_window)
+                            if floor_id is not None and cursor < (floor_id - 1):
+                                latest_id = user_db.get_user_notifications_latest_id()
+                                if not await _send_with_timeout(
+                                    "reset_required",
+                                    {
+                                        "reason": "cursor_too_old",
+                                        "min_event_id": floor_id - 1,
+                                        "latest_event_id": latest_id,
+                                    },
+                                    event_id=str(latest_id or floor_id - 1),
+                                ):
+                                    return
+                                cursor = floor_id - 1
+
+                        rows = user_db.list_user_notifications_after_id(after_id=cursor, limit=batch_size)
+                        if rows:
+                            if len(rows) > burst_threshold:
+                                first_id = rows[0].id
+                                last_id = rows[-1].id
+                                if not await _send_with_timeout(
+                                    "notifications_coalesced",
+                                    {
+                                        "count": len(rows),
+                                        "from_event_id": first_id,
+                                        "to_event_id": last_id,
+                                    },
+                                    event_id=str(last_id),
+                                ):
+                                    return
+                                cursor = last_id
+                            else:
+                                for row in rows:
+                                    if not await _send_with_timeout(
+                                        "notification",
+                                        _notification_stream_payload(row),
+                                        event_id=str(row.id),
+                                    ):
+                                        return
+                                    cursor = row.id
+                        poll_count += 1
+                        await asyncio.sleep(poll_interval_s)
             except (asyncio.CancelledError, GeneratorExit):
                 break
             except _NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS as exc:
@@ -337,6 +362,8 @@ async def stream_notifications(
         except asyncio.CancelledError:
             if not producer_task.done():
                 with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
+                    await stream.done(force=True)
+                with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
                     producer_task.cancel()
                 with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
                     await producer_task
@@ -344,9 +371,15 @@ async def stream_notifications(
         else:
             if not producer_task.done():
                 with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
+                    await stream.done(force=True)
+                with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
+                    producer_task.cancel()
+                with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
                     await producer_task
         finally:
             if not producer_task.done():
+                with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
+                    await stream.done(force=True)
                 with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
                     producer_task.cancel()
                 with contextlib.suppress(_NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS):
