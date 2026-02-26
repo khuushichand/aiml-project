@@ -48,11 +48,13 @@ import {
   createWritingSession,
   createWritingTemplate,
   createWritingTheme,
+  createWritingWordcloud,
   countWritingTokens,
   deleteWritingSession,
   deleteWritingTemplate,
   deleteWritingTheme,
   getWritingCapabilities,
+  getWritingWordcloud,
   getWritingSession,
   listWritingSessions,
   listWritingTemplates,
@@ -64,6 +66,7 @@ import {
   type WritingExtraBodyCompat,
   type WritingTokenCountResponse,
   type WritingTokenizeResponse,
+  type WritingWordcloudResponse,
   type WritingSessionListResponse,
   type WritingSessionListItem,
   type WritingTemplateListResponse,
@@ -91,6 +94,10 @@ import {
   type WritingWorldInfoSettings
 } from "./writing-context-utils"
 import { buildTokenPreviewRows } from "./writing-token-utils"
+import {
+  normalizeWordcloudWords,
+  parseWordcloudStopwordsInput
+} from "./writing-wordcloud-utils"
 
 const { Title, Paragraph } = Typography
 
@@ -188,6 +195,9 @@ type ThemeFormState = {
 const SAVE_DEBOUNCE_MS = 800
 const MAX_MATCHES = 500
 const MAX_CHUNKS = 80
+const MAX_WORDCLOUD_WORDS = 200
+const WORDCLOUD_POLL_ATTEMPTS = 20
+const WORDCLOUD_POLL_DELAY_MS = 600
 
 const PREDICT_PLACEHOLDER = "{predict}"
 const FILL_PLACEHOLDER = "{fill}"
@@ -902,6 +912,11 @@ const isAbortError = (error: unknown): boolean => {
   return false
 }
 
+const wait = (ms: number) =>
+  new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+
 const getSettingsFromPayload = (
   payload?: Record<string, unknown> | null
 ): WritingSessionSettings => {
@@ -1097,6 +1112,23 @@ export const WritingPlayground = () => {
     React.useState<string | null>(null)
   const [isCountingTokens, setIsCountingTokens] = React.useState(false)
   const [isTokenizingText, setIsTokenizingText] = React.useState(false)
+  const [wordcloudId, setWordcloudId] = React.useState<string | null>(null)
+  const [wordcloudStatus, setWordcloudStatus] = React.useState<string | null>(null)
+  const [wordcloudWords, setWordcloudWords] =
+    React.useState<Array<{ text: string; weight: number }>>([])
+  const [wordcloudMeta, setWordcloudMeta] = React.useState<{
+    input_chars: number
+    total_tokens: number
+    top_n: number
+  } | null>(null)
+  const [wordcloudError, setWordcloudError] = React.useState<string | null>(null)
+  const [isGeneratingWordcloud, setIsGeneratingWordcloud] = React.useState(false)
+  const [wordcloudMaxWords, setWordcloudMaxWords] = React.useState(100)
+  const [wordcloudMinWordLength, setWordcloudMinWordLength] = React.useState(3)
+  const [wordcloudKeepNumbers, setWordcloudKeepNumbers] = React.useState(false)
+  const [wordcloudStopwordsInput, setWordcloudStopwordsInput] = React.useState("")
+  const wordcloudRequestSeqRef = React.useRef(0)
+  const wordcloudUnmountedRef = React.useRef(false)
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingSaveMapRef = React.useRef<Record<string, WritingSessionPayload>>({})
   const pendingQueueRef = React.useRef<string[]>([])
@@ -1636,12 +1668,25 @@ export const WritingPlayground = () => {
   }, [])
 
   React.useEffect(() => {
+    wordcloudUnmountedRef.current = false
+    return () => {
+      wordcloudUnmountedRef.current = true
+    }
+  }, [])
+
+  React.useEffect(() => {
     generationUndoRef.current = []
     generationRedoRef.current = []
     generationSessionIdRef.current = null
     generationCancelledRef.current = false
     setCanUndoGeneration(false)
     setCanRedoGeneration(false)
+    setWordcloudId(null)
+    setWordcloudStatus(null)
+    setWordcloudWords([])
+    setWordcloudMeta(null)
+    setWordcloudError(null)
+    setIsGeneratingWordcloud(false)
   }, [activeSessionId])
 
   const templates = templatesData?.templates ?? []
@@ -1753,6 +1798,12 @@ export const WritingPlayground = () => {
       setTokenCountResult(null)
       setTokenizeResult(null)
       setTokenInspectorError(null)
+      setWordcloudId(null)
+      setWordcloudStatus(null)
+      setWordcloudWords([])
+      setWordcloudMeta(null)
+      setWordcloudError(null)
+      setIsGeneratingWordcloud(false)
       lastLoadedSessionIdRef.current = null
       return
     }
@@ -1786,6 +1837,12 @@ export const WritingPlayground = () => {
       setTokenCountResult(null)
       setTokenizeResult(null)
       setTokenInspectorError(null)
+      setWordcloudId(null)
+      setWordcloudStatus(null)
+      setWordcloudWords([])
+      setWordcloudMeta(null)
+      setWordcloudError(null)
+      setIsGeneratingWordcloud(false)
       setLastSavedAt(Date.now())
       lastSavedPromptRef.current[activeSessionDetail.id] = nextPrompt
       lastSavedSettingsRef.current[activeSessionDetail.id] = nextSettings
@@ -1843,6 +1900,12 @@ export const WritingPlayground = () => {
     setTokenCountResult(null)
     setTokenizeResult(null)
     setTokenInspectorError(null)
+    setWordcloudId(null)
+    setWordcloudStatus(null)
+    setWordcloudWords([])
+    setWordcloudMeta(null)
+    setWordcloudError(null)
+    setIsGeneratingWordcloud(false)
   }, [selectedModel])
 
   const openRenameModal = React.useCallback(
@@ -3633,6 +3696,107 @@ export const WritingPlayground = () => {
     }
   }, [editorText, resolveTokenInspectorTarget, t])
 
+  const applyWordcloudResponse = React.useCallback(
+    (response: WritingWordcloudResponse, sequence: number) => {
+      if (wordcloudUnmountedRef.current) return
+      if (sequence !== wordcloudRequestSeqRef.current) return
+      setWordcloudId(response.id || null)
+      setWordcloudStatus(response.status || null)
+      setWordcloudError(response.error?.trim() || null)
+      setWordcloudWords(
+        normalizeWordcloudWords(response.result?.words, wordcloudMaxWords)
+      )
+      setWordcloudMeta(response.result?.meta ?? null)
+    },
+    [wordcloudMaxWords]
+  )
+
+  const clearWordcloud = React.useCallback(() => {
+    wordcloudRequestSeqRef.current += 1
+    setWordcloudId(null)
+    setWordcloudStatus(null)
+    setWordcloudWords([])
+    setWordcloudMeta(null)
+    setWordcloudError(null)
+    setIsGeneratingWordcloud(false)
+  }, [])
+
+  const handleGenerateWordcloud = React.useCallback(async () => {
+    const text = editorText.trim()
+    if (!text) {
+      message.info(
+        t(
+          "option:writingPlayground.wordcloudEmptyPrompt",
+          "Enter text in the editor before generating a wordcloud."
+        )
+      )
+      return
+    }
+    const sequence = wordcloudRequestSeqRef.current + 1
+    wordcloudRequestSeqRef.current = sequence
+    setIsGeneratingWordcloud(true)
+    setWordcloudId(null)
+    setWordcloudStatus(null)
+    setWordcloudWords([])
+    setWordcloudMeta(null)
+    setWordcloudError(null)
+    try {
+      const stopwords = parseWordcloudStopwordsInput(wordcloudStopwordsInput)
+      const created = await createWritingWordcloud({
+        text,
+        options: {
+          max_words: wordcloudMaxWords,
+          min_word_length: wordcloudMinWordLength,
+          keep_numbers: wordcloudKeepNumbers,
+          stopwords: stopwords.length > 0 ? stopwords : undefined
+        }
+      })
+      applyWordcloudResponse(created, sequence)
+      let latest = created
+      if (latest.id && (latest.status === "queued" || latest.status === "running")) {
+        for (let attempt = 0; attempt < WORDCLOUD_POLL_ATTEMPTS; attempt += 1) {
+          if (wordcloudUnmountedRef.current) return
+          if (sequence !== wordcloudRequestSeqRef.current) return
+          await wait(WORDCLOUD_POLL_DELAY_MS)
+          latest = await getWritingWordcloud(latest.id)
+          applyWordcloudResponse(latest, sequence)
+          if (latest.status === "ready" || latest.status === "failed") {
+            break
+          }
+        }
+      }
+      if (
+        sequence === wordcloudRequestSeqRef.current &&
+        latest.status !== "ready" &&
+        latest.status !== "failed"
+      ) {
+        setWordcloudError(
+          t(
+            "option:writingPlayground.wordcloudTimeout",
+            "Wordcloud generation is taking longer than expected. Try again in a moment."
+          )
+        )
+      }
+    } catch (error) {
+      if (wordcloudUnmountedRef.current) return
+      if (sequence !== wordcloudRequestSeqRef.current) return
+      const detail = error instanceof Error ? error.message : t("option:error", "Error")
+      setWordcloudError(detail)
+    } finally {
+      if (wordcloudUnmountedRef.current) return
+      if (sequence !== wordcloudRequestSeqRef.current) return
+      setIsGeneratingWordcloud(false)
+    }
+  }, [
+    applyWordcloudResponse,
+    editorText,
+    wordcloudKeepNumbers,
+    wordcloudMaxWords,
+    wordcloudMinWordLength,
+    wordcloudStopwordsInput,
+    t
+  ])
+
   const handlePromptChange = React.useCallback(
     (event: React.ChangeEvent<HTMLTextAreaElement>) => {
       applyPromptValue(event.target.value)
@@ -3648,8 +3812,10 @@ export const WritingPlayground = () => {
   const settingsDisabled = isGenerating
   const serverSupportsTokenize = writingCaps?.server?.tokenize === true
   const serverSupportsTokenCount = writingCaps?.server?.token_count === true
+  const serverSupportsWordclouds = writingCaps?.server?.wordclouds === true
   const showTokenInspectorPanel =
     serverSupportsTokenCount || serverSupportsTokenize
+  const showWordcloudPanel = serverSupportsWordclouds
   const requestedTokenizerAvailable =
     requestedCaps?.requested?.tokenizer_available === true
   const requestedTokenizerError =
@@ -3706,6 +3872,20 @@ export const WritingPlayground = () => {
     !tokenInspectorBusy &&
     serverSupportsTokenize &&
     !tokenInspectorUnavailableReason
+  const canGenerateWordcloud =
+    !settingsDisabled &&
+    !isGeneratingWordcloud &&
+    serverSupportsWordclouds &&
+    editorText.trim().length > 0
+  const wordcloudTopWeight = wordcloudWords[0]?.weight ?? 0
+  const wordcloudStatusColor =
+    wordcloudStatus === "ready"
+      ? "green"
+      : wordcloudStatus === "failed"
+        ? "red"
+        : wordcloudStatus
+          ? "blue"
+          : "default"
   const advancedExtraBodyUnknownKeys = React.useMemo(
     () =>
       Object.keys(advancedExtraBody || {}).filter(
@@ -4531,6 +4711,222 @@ export const WritingPlayground = () => {
                                           </span>
                                         ) : null}
                                       </div>
+                                    ) : null}
+                                  </div>
+                                )
+                              }
+                            ]
+                          : []
+                      )
+                      .concat(
+                        showWordcloudPanel
+                          ? [
+                              {
+                                key: "wordcloud",
+                                label: t(
+                                  "option:writingPlayground.wordcloudTitle",
+                                  "Wordcloud"
+                                ),
+                                children: (
+                                  <div className="flex flex-col gap-3">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Button
+                                        size="small"
+                                        disabled={!canGenerateWordcloud}
+                                        loading={isGeneratingWordcloud}
+                                        onClick={() => {
+                                          void handleGenerateWordcloud()
+                                        }}>
+                                        {t(
+                                          "option:writingPlayground.wordcloudGenerateAction",
+                                          "Generate wordcloud"
+                                        )}
+                                      </Button>
+                                      {wordcloudStatus || wordcloudError ? (
+                                        <Button
+                                          size="small"
+                                          disabled={isGeneratingWordcloud}
+                                          onClick={clearWordcloud}>
+                                          {t("common:clear", "Clear")}
+                                        </Button>
+                                      ) : null}
+                                      {wordcloudStatus ? (
+                                        <Tag color={wordcloudStatusColor}>
+                                          {wordcloudStatus}
+                                        </Tag>
+                                      ) : null}
+                                    </div>
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                      <div className="flex flex-col gap-1">
+                                        <span className="text-xs text-text-muted">
+                                          {t(
+                                            "option:writingPlayground.wordcloudMaxWordsLabel",
+                                            "Max words"
+                                          )}
+                                        </span>
+                                        <InputNumber
+                                          size="small"
+                                          min={1}
+                                          max={MAX_WORDCLOUD_WORDS}
+                                          step={1}
+                                          value={wordcloudMaxWords}
+                                          disabled={isGeneratingWordcloud}
+                                          onChange={(value) =>
+                                            setWordcloudMaxWords(
+                                              value == null
+                                                ? 100
+                                                : Math.max(
+                                                    1,
+                                                    Math.min(
+                                                      MAX_WORDCLOUD_WORDS,
+                                                      Math.floor(value)
+                                                    )
+                                                  )
+                                            )
+                                          }
+                                          className="w-full"
+                                        />
+                                      </div>
+                                      <div className="flex flex-col gap-1">
+                                        <span className="text-xs text-text-muted">
+                                          {t(
+                                            "option:writingPlayground.wordcloudMinLengthLabel",
+                                            "Min word length"
+                                          )}
+                                        </span>
+                                        <InputNumber
+                                          size="small"
+                                          min={1}
+                                          max={64}
+                                          step={1}
+                                          value={wordcloudMinWordLength}
+                                          disabled={isGeneratingWordcloud}
+                                          onChange={(value) =>
+                                            setWordcloudMinWordLength(
+                                              value == null
+                                                ? 3
+                                                : Math.max(
+                                                    1,
+                                                    Math.min(64, Math.floor(value))
+                                                  )
+                                            )
+                                          }
+                                          className="w-full"
+                                        />
+                                      </div>
+                                    </div>
+                                    <Checkbox
+                                      checked={wordcloudKeepNumbers}
+                                      disabled={isGeneratingWordcloud}
+                                      onChange={(event) =>
+                                        setWordcloudKeepNumbers(
+                                          event.target.checked
+                                        )
+                                      }>
+                                      {t(
+                                        "option:writingPlayground.wordcloudKeepNumbers",
+                                        "Include numeric tokens"
+                                      )}
+                                    </Checkbox>
+                                    <div className="flex flex-col gap-1">
+                                      <span className="text-xs text-text-muted">
+                                        {t(
+                                          "option:writingPlayground.wordcloudStopwordsLabel",
+                                          "Custom stopwords (comma or newline separated)"
+                                        )}
+                                      </span>
+                                      <Input.TextArea
+                                        value={wordcloudStopwordsInput}
+                                        rows={3}
+                                        disabled={isGeneratingWordcloud}
+                                        onChange={(event) =>
+                                          setWordcloudStopwordsInput(
+                                            event.target.value
+                                          )
+                                        }
+                                        placeholder={t(
+                                          "option:writingPlayground.wordcloudStopwordsHint",
+                                          "Leave empty to use server defaults."
+                                        )}
+                                      />
+                                    </div>
+                                    {wordcloudError ? (
+                                      <Alert
+                                        type="error"
+                                        showIcon
+                                        message={wordcloudError}
+                                      />
+                                    ) : null}
+                                    {wordcloudMeta ? (
+                                      <div className="rounded-md border border-border bg-surface p-3">
+                                        <div className="flex flex-wrap items-center gap-3 text-xs">
+                                          <Tag color="blue">
+                                            {t(
+                                              "option:writingPlayground.wordcloudTopWords",
+                                              "{{count}} words",
+                                              { count: wordcloudMeta.top_n }
+                                            )}
+                                          </Tag>
+                                          <span className="text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.wordcloudInputChars",
+                                              "{{count}} chars",
+                                              { count: wordcloudMeta.input_chars }
+                                            )}
+                                          </span>
+                                          <span className="text-text-muted">
+                                            {t(
+                                              "option:writingPlayground.wordcloudTotalTokens",
+                                              "{{count}} tokens",
+                                              { count: wordcloudMeta.total_tokens }
+                                            )}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                    {wordcloudWords.length > 0 ? (
+                                      <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface px-3 py-2">
+                                        <div className="flex flex-col gap-2">
+                                          {wordcloudWords.map((word) => (
+                                            <div
+                                              key={`${word.text}-${word.weight}`}
+                                              className="grid grid-cols-[1fr_auto] gap-2 text-xs">
+                                              <div className="flex flex-col gap-1">
+                                                <span className="text-text">
+                                                  {word.text}
+                                                </span>
+                                                <div className="h-1.5 rounded bg-background">
+                                                  <div
+                                                    className="h-1.5 rounded bg-primary"
+                                                    style={{
+                                                      width: `${wordcloudTopWeight > 0 ? (word.weight / wordcloudTopWeight) * 100 : 0}%`
+                                                    }}
+                                                  />
+                                                </div>
+                                              </div>
+                                              <span className="text-text-muted">
+                                                {word.weight}
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : wordcloudStatus === "ready" ? (
+                                      <Paragraph type="secondary" className="!mb-0">
+                                        {t(
+                                          "option:writingPlayground.wordcloudEmpty",
+                                          "No words matched the current filters."
+                                        )}
+                                      </Paragraph>
+                                    ) : null}
+                                    {wordcloudId ? (
+                                      <span className="text-xs text-text-muted">
+                                        {t(
+                                          "option:writingPlayground.wordcloudJobId",
+                                          "Job ID: {{id}}",
+                                          { id: wordcloudId }
+                                        )}
+                                      </span>
                                     ) : null}
                                   </div>
                                 )
