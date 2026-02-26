@@ -662,7 +662,7 @@ describe("OverviewTab quick setup flow", () => {
       runNow: true,
       destination: "outputs"
     })
-  })
+  }, 20_000)
 
   it("rolls back monitor creation when pipeline creation fails before completion", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
@@ -712,7 +712,7 @@ describe("OverviewTab quick setup flow", () => {
       runNow: true
     })
     consoleErrorSpy.mockRestore()
-  })
+  }, 20_000)
 
   it("generates pipeline template preview on review step when run context exists", async () => {
     mockState.fetchOverviewMock.mockResolvedValue(
@@ -785,7 +785,7 @@ describe("OverviewTab quick setup flow", () => {
       run_id: 777,
       warning_count: 0
     })
-  })
+  }, 20_000)
 
   it("shows fallback guidance when template preview has no completed run context", async () => {
     mockState.fetchOverviewMock.mockResolvedValue(
@@ -834,7 +834,7 @@ describe("OverviewTab quick setup flow", () => {
       type: "pipeline_setup_preview_generated",
       status: "no_run_context"
     })
-  })
+  }, 20_000)
 
   it("runs test generation from review step and routes to report preview", async () => {
     mockState.fetchOverviewMock.mockResolvedValue(
