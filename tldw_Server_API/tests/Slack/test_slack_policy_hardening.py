@@ -10,8 +10,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.endpoints import slack as slack_endpoint
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
 class _FakeJobManager:
@@ -68,6 +70,12 @@ def slack_policy_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _F
     app = FastAPI()
     app.include_router(slack_endpoint.router, prefix="/api/v1")
     app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[get_auth_principal] = lambda: AuthPrincipal(
+        kind="user",
+        user_id=1,
+        roles=["admin"],
+        is_admin=True,
+    )
     return TestClient(app), jm
 
 
@@ -127,6 +135,26 @@ def test_slack_admin_policy_roundtrip(slack_policy_client: tuple[TestClient, _Fa
     fetched = client.get("/api/v1/slack/admin/policy", params={"team_id": "T1"})
     assert fetched.status_code == 200
     assert fetched.json()["policy"]["default_response_mode"] == "thread"
+
+
+def test_slack_admin_policy_requires_admin_role(slack_policy_client: tuple[TestClient, _FakeJobManager]) -> None:
+    client, _ = slack_policy_client
+    original_override = client.app.dependency_overrides[get_auth_principal]
+    client.app.dependency_overrides[get_auth_principal] = lambda: AuthPrincipal(
+        kind="user",
+        user_id=2,
+        roles=["member"],
+        is_admin=False,
+    )
+
+    try:
+        get_resp = client.get("/api/v1/slack/admin/policy", params={"team_id": "T1"})
+        put_resp = client.put("/api/v1/slack/admin/policy", json={"team_id": "T1", "allowed_commands": ["help"]})
+    finally:
+        client.app.dependency_overrides[get_auth_principal] = original_override
+
+    assert get_resp.status_code == 403
+    assert put_resp.status_code == 403
 
 
 def test_slack_policy_blocks_unknown_mapping_and_disallowed_command(

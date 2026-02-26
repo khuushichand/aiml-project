@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager as _global_get_job_manager
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -1176,12 +1177,13 @@ async def slack_oauth_callback(
     }
 
 
-@router.get("/admin/policy")
+@router.get(
+    "/admin/policy",
+    dependencies=[Depends(require_roles("admin"))],
+)
 async def slack_admin_get_policy(
     team_id: str | None = Query(default=None),
-    user: User = Depends(get_request_user),
 ):
-    _ = user
     cleaned_team_id = _coerce_nonempty_string(team_id)
     policy = _slack_policy_for_workspace(cleaned_team_id)
     return {
@@ -1191,12 +1193,13 @@ async def slack_admin_get_policy(
     }
 
 
-@router.put("/admin/policy")
+@router.put(
+    "/admin/policy",
+    dependencies=[Depends(require_roles("admin"))],
+)
 async def slack_admin_set_policy(
     payload: dict[str, Any] | None = None,
-    user: User = Depends(get_request_user),
 ):
-    _ = user
     body = dict(payload or {})
     cleaned_team_id = _coerce_nonempty_string(body.pop("team_id", None))
     scope = "workspace" if cleaned_team_id else "default"
