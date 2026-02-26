@@ -48,6 +48,7 @@ import {
   createWritingSession,
   createWritingTemplate,
   createWritingTheme,
+  countWritingTokens,
   deleteWritingSession,
   deleteWritingTemplate,
   deleteWritingTheme,
@@ -56,10 +57,13 @@ import {
   listWritingSessions,
   listWritingTemplates,
   listWritingThemes,
+  tokenizeWritingText,
   updateWritingSession,
   updateWritingTemplate,
   updateWritingTheme,
   type WritingExtraBodyCompat,
+  type WritingTokenCountResponse,
+  type WritingTokenizeResponse,
   type WritingSessionListResponse,
   type WritingSessionListItem,
   type WritingTemplateListResponse,
@@ -86,6 +90,7 @@ import {
   type WritingWorldInfoEntry,
   type WritingWorldInfoSettings
 } from "./writing-context-utils"
+import { buildTokenPreviewRows } from "./writing-token-utils"
 
 const { Title, Paragraph } = Typography
 
