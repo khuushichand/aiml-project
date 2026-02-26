@@ -7,13 +7,13 @@ import { isMac } from "@/hooks/useKeyboardShortcuts"
 import { useSetting } from "@/hooks/useSetting"
 import {
   HEADER_SHORTCUTS_EXPANDED_SETTING,
+  HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING,
   HEADER_SHORTCUT_SELECTION_SETTING
 } from "@/services/settings/ui-settings"
 import { Search } from "lucide-react"
 import { cn } from "@/libs/utils"
 import {
   HEADER_SHORTCUT_GROUPS,
-  type HeaderShortcutGroup,
   type HeaderShortcutItem
 } from "./header-shortcut-items"
 
@@ -65,6 +65,9 @@ export function HeaderShortcuts({
   const [shortcutsPreference, setShortcutsPreference] = useSetting(
     HEADER_SHORTCUTS_EXPANDED_SETTING
   )
+  const [displayModePreference, setDisplayModePreference] = useSetting(
+    HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING
+  )
   const [shortcutSelection] = useSetting(HEADER_SHORTCUT_SELECTION_SETTING)
 
   /* ---------- open state ---------- */
@@ -96,12 +99,17 @@ export function HeaderShortcuts({
   const [query, setQuery] = useState("")
   const [activeCategory, setActiveCategory] = useState(ALL_CATEGORY)
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [allOptionsOpen, setAllOptionsOpen] = useState(false)
+  const [displayMode, setDisplayMode] = useState<"current" | "legacy">(
+    displayModePreference
+  )
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const previousPathRef = useRef(location.pathname)
   const triggerRef = useRef<HTMLElement | null>(null)
-  const allOptionsCloseButtonRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    setDisplayMode(displayModePreference)
+  }, [displayModePreference])
 
   /* ---------- resolved items (respecting user selection) ---------- */
   const shortcutSelectionSet = useMemo(
@@ -219,16 +227,10 @@ export function HeaderShortcuts({
       setSelectedIndex(0)
       requestAnimationFrame(() => inputRef.current?.focus())
     } else {
-      setAllOptionsOpen(false)
       triggerRef.current?.focus()
       triggerRef.current = null
     }
   }, [open])
-
-  useEffect(() => {
-    if (!allOptionsOpen) return
-    requestAnimationFrame(() => allOptionsCloseButtonRef.current?.focus())
-  }, [allOptionsOpen])
 
   /* ---------- scroll selected into view ---------- */
   useEffect(() => {
@@ -246,14 +248,6 @@ export function HeaderShortcuts({
       setOpen(false)
     },
     [navigate, setOpen]
-  )
-
-  const navigateFromAllOptions = useCallback(
-    (to: string) => {
-      setAllOptionsOpen(false)
-      navigateTo(to)
-    },
-    [navigateTo]
   )
 
   /* ---------- keyboard (meta+1-9 shortcuts) ---------- */
@@ -300,10 +294,6 @@ export function HeaderShortcuts({
       switch (e.key) {
         case "Escape":
           e.preventDefault()
-          if (allOptionsOpen) {
-            setAllOptionsOpen(false)
-            break
-          }
           setOpen(false)
           break
         case "ArrowDown":
@@ -326,8 +316,16 @@ export function HeaderShortcuts({
           break
       }
     },
-    [allOptionsOpen, flatItems, selectedIndex, setOpen, navigateTo]
+    [flatItems, selectedIndex, setOpen, navigateTo]
   )
+
+  const handleDisplayModeToggle = useCallback(() => {
+    const nextMode = displayMode === "current" ? "legacy" : "current"
+    setDisplayMode(nextMode)
+    void setDisplayModePreference(nextMode).catch(() => {})
+    setActiveCategory(ALL_CATEGORY)
+    setSelectedIndex(0)
+  }, [displayMode, setDisplayModePreference])
 
   /* ---------- render ---------- */
   if (!open) return null
@@ -374,67 +372,145 @@ export function HeaderShortcuts({
           </kbd>
         </div>
 
-        {/* Two-panel body */}
-        <div className="flex min-h-0 flex-1">
-          {/* Left sidebar */}
-          <nav
-            className="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border p-2"
-            aria-label={t("option:header.launcherCategories", "Categories")}
-          >
-            {/* "All" category */}
-            <button
-              type="button"
-              onClick={() => setActiveCategory(ALL_CATEGORY)}
-              className={cn(
-                "flex items-center justify-between rounded-md px-3 py-1.5 text-left text-sm transition",
-                activeCategory === ALL_CATEGORY
-                  ? "bg-primary/10 font-medium text-primary"
-                  : "text-text-muted hover:bg-surface2 hover:text-text"
-              )}
+        {displayMode === "current" ? (
+          /* Two-panel list view */
+          <div className="flex min-h-0 flex-1">
+            {/* Left sidebar */}
+            <nav
+              className="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border p-2"
+              aria-label={t("option:header.launcherCategories", "Categories")}
             >
-              <span>{t("option:header.launcherAll", "All")}</span>
-              {query && (
-                <span className="ml-1 text-xs text-text-subtle">
-                  {matchCounts[ALL_CATEGORY] ?? 0}
-                </span>
+              {/* "All" category */}
+              <button
+                type="button"
+                onClick={() => setActiveCategory(ALL_CATEGORY)}
+                className={cn(
+                  "flex items-center justify-between rounded-md px-3 py-1.5 text-left text-sm transition",
+                  activeCategory === ALL_CATEGORY
+                    ? "bg-primary/10 font-medium text-primary"
+                    : "text-text-muted hover:bg-surface2 hover:text-text"
+                )}
+              >
+                <span>{t("option:header.launcherAll", "All")}</span>
+                {query && (
+                  <span className="ml-1 text-xs text-text-subtle">
+                    {matchCounts[ALL_CATEGORY] ?? 0}
+                  </span>
+                )}
+              </button>
+
+              {resolvedGroups.map((group) => {
+                const count = matchCounts[group.id] ?? 0
+                const isActive = activeCategory === group.id
+                const isDimmed = query !== "" && count === 0
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    onClick={() => setActiveCategory(group.id)}
+                    className={cn(
+                      "flex items-center justify-between rounded-md px-3 py-1.5 text-left text-sm transition",
+                      isActive
+                        ? "bg-primary/10 font-medium text-primary"
+                        : isDimmed
+                          ? "text-text-subtle opacity-50 hover:bg-surface2"
+                          : "text-text-muted hover:bg-surface2 hover:text-text"
+                    )}
+                  >
+                    <span className="truncate">{group.title}</span>
+                    {query && (
+                      <span className="ml-1 shrink-0 text-xs text-text-subtle">
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </nav>
+
+            {/* Right panel */}
+            <div
+              ref={listRef}
+              className="flex-1 overflow-y-auto p-2"
+              role="listbox"
+              aria-label={t("option:header.launcherItems", "Pages")}
+            >
+              {flatItems.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-text-subtle">
+                  {t(
+                    "option:header.launcherNoResults",
+                    "No pages match your search"
+                  )}
+                </div>
+              ) : (
+                groupedFiltered.map((group) => (
+                  <div key={group.id} className="mb-2">
+                    {showGroupHeaders && (
+                      <div className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+                        {group.title}
+                      </div>
+                    )}
+                    {group.items.map((ri) => {
+                      const globalIdx = flatItems.indexOf(ri)
+                      const isSelected = globalIdx === selectedIndex
+                      const Icon = ri.item.icon
+                      const isCurrentRoute =
+                        location.pathname === ri.item.to ||
+                        (ri.item.to === "/" && location.pathname === "/chat")
+
+                      return (
+                        <NavLink
+                          key={ri.item.id}
+                          to={ri.item.to}
+                          onClick={(e) => {
+                            e.preventDefault()
+                            navigateTo(ri.item.to)
+                          }}
+                          onMouseEnter={() => setSelectedIndex(globalIdx)}
+                          data-selected={isSelected}
+                          role="option"
+                          aria-selected={isSelected}
+                          className={cn(
+                            "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                            isCurrentRoute && "border-l-2 border-primary bg-primary/5",
+                            isSelected
+                              ? "bg-surface2 text-text"
+                              : "text-text hover:bg-surface2"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "shrink-0",
+                              isSelected || isCurrentRoute
+                                ? "text-primary"
+                                : "text-text-subtle"
+                            )}
+                          >
+                            <Icon className="size-4" aria-hidden="true" />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {ri.label}
+                          </span>
+                          {ri.item.shortcutIndex != null && (
+                            <kbd className="ml-auto shrink-0 rounded border border-border bg-surface2 px-1.5 py-0.5 text-xs text-text-subtle">
+                              {META_LABEL}{ri.item.shortcutIndex}
+                            </kbd>
+                          )}
+                        </NavLink>
+                      )
+                    })}
+                  </div>
+                ))
               )}
-            </button>
-
-            {resolvedGroups.map((group) => {
-              const count = matchCounts[group.id] ?? 0
-              const isActive = activeCategory === group.id
-              const isDimmed = query !== "" && count === 0
-              return (
-                <button
-                  key={group.id}
-                  type="button"
-                  onClick={() => setActiveCategory(group.id)}
-                  className={cn(
-                    "flex items-center justify-between rounded-md px-3 py-1.5 text-left text-sm transition",
-                    isActive
-                      ? "bg-primary/10 font-medium text-primary"
-                      : isDimmed
-                        ? "text-text-subtle opacity-50 hover:bg-surface2"
-                        : "text-text-muted hover:bg-surface2 hover:text-text"
-                  )}
-                >
-                  <span className="truncate">{group.title}</span>
-                  {query && (
-                    <span className="ml-1 shrink-0 text-xs text-text-subtle">
-                      {count}
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-          </nav>
-
-          {/* Right panel */}
+            </div>
+          </div>
+        ) : (
+          /* Legacy sheet view */
           <div
             ref={listRef}
-            className="flex-1 overflow-y-auto p-2"
+            className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4"
             role="listbox"
-            aria-label={t("option:header.launcherItems", "Pages")}
+            aria-label={t("option:header.launcherLegacySheetTitle", "Legacy sheet")}
           >
             {flatItems.length === 0 ? (
               <div className="px-4 py-8 text-center text-sm text-text-subtle">
@@ -444,67 +520,59 @@ export function HeaderShortcuts({
                 )}
               </div>
             ) : (
-              groupedFiltered.map((group) => (
-                <div key={group.id} className="mb-2">
-                  {showGroupHeaders && (
-                    <div className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+              <div className="space-y-4">
+                {groupedFiltered.map((group) => (
+                  <section key={group.id}>
+                    <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-subtle">
                       {group.title}
-                    </div>
-                  )}
-                  {group.items.map((ri) => {
-                    const globalIdx = flatItems.indexOf(ri)
-                    const isSelected = globalIdx === selectedIndex
-                    const Icon = ri.item.icon
-                    const isCurrentRoute =
-                      location.pathname === ri.item.to ||
-                      (ri.item.to === "/" && location.pathname === "/chat")
+                    </h3>
+                    <div className="flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:gap-1.5">
+                      {group.items.map((ri) => {
+                        const globalIdx = flatItems.indexOf(ri)
+                        const isSelected = globalIdx === selectedIndex
+                        const Icon = ri.item.icon
+                        const isCurrentRoute =
+                          location.pathname === ri.item.to ||
+                          (ri.item.to === "/" && location.pathname === "/chat")
 
-                    return (
-                      <NavLink
-                        key={ri.item.id}
-                        to={ri.item.to}
-                        onClick={(e) => {
-                          e.preventDefault()
-                          navigateTo(ri.item.to)
-                        }}
-                        onMouseEnter={() => setSelectedIndex(globalIdx)}
-                        data-selected={isSelected}
-                        role="option"
-                        aria-selected={isSelected}
-                        className={cn(
-                          "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                          isCurrentRoute && "border-l-2 border-primary bg-primary/5",
-                          isSelected
-                            ? "bg-surface2 text-text"
-                            : "text-text hover:bg-surface2"
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "shrink-0",
-                            isSelected || isCurrentRoute
-                              ? "text-primary"
-                              : "text-text-subtle"
-                          )}
-                        >
-                          <Icon className="size-4" aria-hidden="true" />
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">
-                          {ri.label}
-                        </span>
-                        {ri.item.shortcutIndex != null && (
-                          <kbd className="ml-auto shrink-0 rounded border border-border bg-surface2 px-1.5 py-0.5 text-xs text-text-subtle">
-                            {META_LABEL}{ri.item.shortcutIndex}
-                          </kbd>
-                        )}
-                      </NavLink>
-                    )
-                  })}
-                </div>
-              ))
+                        return (
+                          <NavLink
+                            key={ri.item.id}
+                            to={ri.item.to}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              navigateTo(ri.item.to)
+                            }}
+                            onMouseEnter={() => setSelectedIndex(globalIdx)}
+                            data-selected={isSelected}
+                            role="option"
+                            aria-selected={isSelected}
+                            className={cn(
+                              "flex w-full items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs transition-colors sm:w-auto sm:text-sm",
+                              isCurrentRoute && "border-border bg-surface text-text",
+                              isSelected
+                                ? "border-border bg-surface text-text"
+                                : "border-transparent text-text-muted hover:border-border hover:bg-surface"
+                            )}
+                          >
+                            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                            <span className="min-w-0 truncate">{ri.label}</span>
+                            {ri.item.shortcutIndex != null && (
+                              <kbd className="ml-auto shrink-0 rounded border border-border bg-surface2 px-1 py-0 text-[10px] text-text-subtle sm:px-1.5 sm:py-0.5 sm:text-xs">
+                                {META_LABEL}
+                                {ri.item.shortcutIndex}
+                              </kbd>
+                            )}
+                          </NavLink>
+                        )
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
             )}
           </div>
-        </div>
+        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-border px-4 py-2 text-xs text-text-subtle">
@@ -532,93 +600,17 @@ export function HeaderShortcuts({
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => setAllOptionsOpen(true)}
+              onClick={handleDisplayModeToggle}
+              aria-pressed={displayMode === "legacy"}
               className="rounded border border-border bg-surface2 px-2 py-1 text-xs text-text hover:bg-surface3"
             >
-              {t("option:header.launcherViewAllOptions", "View all options")}
+              {displayMode === "current"
+                ? t("option:header.launcherLegacySheetView", "Legacy sheet view")
+                : t("option:header.launcherCurrentView", "Current view")}
             </button>
-            <span className="flex items-center gap-1">
-              <kbd className="rounded border border-border bg-surface2 px-1">
-                &lsaquo;?
-              </kbd>
-              <span className="ml-1">
-                {t("option:header.launcherToggle", "toggle")}
-              </span>
-            </span>
           </div>
         </div>
       </div>
-
-      {allOptionsOpen && (
-        <>
-          <div
-            className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm"
-            onClick={() => setAllOptionsOpen(false)}
-          />
-          <div
-            className="fixed inset-0 z-[60] flex flex-col bg-surface"
-            role="dialog"
-            aria-modal="true"
-            aria-label={t("option:header.launcherAllOptionsTitle", "All options")}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                e.preventDefault()
-                setAllOptionsOpen(false)
-              }
-            }}
-          >
-            <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6">
-              <h2 className="text-lg font-semibold text-text">
-                {t("option:header.launcherAllOptionsTitle", "All options")}
-              </h2>
-              <button
-                ref={allOptionsCloseButtonRef}
-                type="button"
-                onClick={() => setAllOptionsOpen(false)}
-                className="rounded border border-border bg-surface2 px-3 py-1.5 text-sm text-text hover:bg-surface3"
-              >
-                {t("common:close", "Close")}
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-              <div className="space-y-6">
-                {resolvedGroups.map((group) => (
-                  <section key={group.id}>
-                    <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-text-subtle">
-                      {group.title}
-                    </h3>
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                      {group.items.map((ri) => {
-                        const Icon = ri.item.icon
-                        return (
-                          <NavLink
-                            key={ri.item.id}
-                            to={ri.item.to}
-                            onClick={(e) => {
-                              e.preventDefault()
-                              navigateFromAllOptions(ri.item.to)
-                            }}
-                            className="flex items-center gap-3 rounded-lg border border-border bg-surface2 px-3 py-2 text-sm text-text transition-colors hover:bg-surface3"
-                          >
-                            <Icon className="size-4 shrink-0 text-text-subtle" aria-hidden="true" />
-                            <span className="min-w-0 truncate">{ri.label}</span>
-                            {ri.item.shortcutIndex != null && (
-                              <kbd className="ml-auto shrink-0 rounded border border-border bg-surface px-1.5 py-0.5 text-xs text-text-subtle">
-                                {META_LABEL}
-                                {ri.item.shortcutIndex}
-                              </kbd>
-                            )}
-                          </NavLink>
-                        )
-                      })}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            </div>
-          </div>
-        </>
-      )}
     </>
   )
 

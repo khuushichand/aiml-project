@@ -4,6 +4,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
 import { HeaderShortcuts } from "../HeaderShortcuts"
 
+const mockState = vi.hoisted(() => ({
+  expanded: false,
+  launcherView: "current" as "current" | "legacy",
+  setExpanded: vi.fn().mockResolvedValue(undefined),
+  setLauncherView: vi.fn().mockResolvedValue(undefined),
+  setSelection: vi.fn().mockResolvedValue(undefined)
+}))
+
+const mockUseSetting = vi.hoisted(() => vi.fn())
+
+const ALL_SHORTCUT_IDS = [
+  "chat", "prompts", "prompt-studio", "characters",
+  "chat-dictionaries", "world-books", "workspace-playground",
+  "knowledge-qa", "media", "document-workspace",
+  "multi-item-review", "content-review", "collections",
+  "watchlists", "notes", "chatbooks-playground", "flashcards",
+  "quizzes", "evaluations", "chunking-playground",
+  "stt-playground", "tts-playground", "audiobook-studio",
+  "workflows", "writing-playground", "acp-playground",
+  "skills", "kanban-playground",
+  "model-playground", "data-tables",
+  "admin-server", "documentation", "moderation-playground",
+  "admin-llamacpp", "admin-mlx", "settings"
+]
+
 /* ------------------------------------------------------------------ */
 /*  Mocks                                                              */
 /* ------------------------------------------------------------------ */
@@ -22,33 +47,15 @@ vi.mock("@/hooks/useKeyboardShortcuts", () => ({
 }))
 
 vi.mock("@/hooks/useSetting", () => ({
-  useSetting: (setting: { key: string }) => {
-    if (setting.key === "header_shortcuts_expanded") {
-      return [false, vi.fn().mockResolvedValue(undefined)]
-    }
-    // shortcut selection: return all IDs so all items are visible
-    return [
-      [
-        "chat", "prompts", "prompt-studio", "characters",
-        "chat-dictionaries", "world-books", "workspace-playground",
-        "knowledge-qa", "media", "document-workspace",
-        "multi-item-review", "content-review", "collections",
-        "watchlists", "notes", "chatbooks-playground", "flashcards",
-        "quizzes", "evaluations", "chunking-playground",
-        "stt-playground", "tts-playground", "audiobook-studio",
-        "workflows", "writing-playground", "acp-playground",
-        "skills", "kanban-playground",
-        "model-playground", "data-tables",
-        "admin-server", "documentation", "moderation-playground",
-        "admin-llamacpp", "admin-mlx", "settings"
-      ],
-      vi.fn().mockResolvedValue(undefined)
-    ]
-  }
+  useSetting: mockUseSetting
 }))
 
 vi.mock("@/services/settings/ui-settings", () => ({
   HEADER_SHORTCUTS_EXPANDED_SETTING: { key: "header_shortcuts_expanded", defaultValue: false },
+  HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING: {
+    key: "header_shortcuts_launcher_view",
+    defaultValue: "current"
+  },
   HEADER_SHORTCUT_SELECTION_SETTING: { key: "header_shortcut_selection", defaultValue: [] }
 }))
 
@@ -62,6 +69,21 @@ const renderWithRouter = (ui: React.ReactElement, initialRoute = "/") =>
 describe("HeaderShortcuts launcher modal", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockState.expanded = false
+    mockState.launcherView = "current"
+    mockState.setExpanded = vi.fn().mockResolvedValue(undefined)
+    mockState.setLauncherView = vi.fn().mockResolvedValue(undefined)
+    mockState.setSelection = vi.fn().mockResolvedValue(undefined)
+
+    mockUseSetting.mockImplementation((setting: { key: string }) => {
+      if (setting.key === "header_shortcuts_expanded") {
+        return [mockState.expanded, mockState.setExpanded]
+      }
+      if (setting.key === "header_shortcuts_launcher_view") {
+        return [mockState.launcherView, mockState.setLauncherView]
+      }
+      return [ALL_SHORTCUT_IDS, mockState.setSelection]
+    })
   })
 
   it("renders nothing when closed (expanded=false)", () => {
@@ -246,24 +268,38 @@ describe("HeaderShortcuts launcher modal", () => {
     expect(nav.className).toContain("w-56")
   })
 
-  it("opens and closes a full-screen all-options modal", () => {
+  it("toggles between current and legacy sheet views", () => {
     renderWithRouter(
       <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
     )
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "View all options" })
+    expect(screen.getByLabelText("Categories")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("listbox", { name: "Legacy sheet" })
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Legacy sheet view" }))
+
+    expect(
+      screen.queryByLabelText("Categories")
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole("listbox", { name: "Legacy sheet" })).toBeInTheDocument()
+    expect(mockState.setLauncherView).toHaveBeenCalledWith("legacy")
+
+    fireEvent.click(screen.getByRole("button", { name: "Current view" }))
+    expect(screen.getByLabelText("Categories")).toBeInTheDocument()
+    expect(mockState.setLauncherView).toHaveBeenCalledWith("current")
+  })
+
+  it("opens in persisted legacy view mode when preference is set", () => {
+    mockState.launcherView = "legacy"
+
+    renderWithRouter(
+      <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
     )
 
-    const allOptionsDialog = screen.getByRole("dialog", { name: "All options" })
-    expect(allOptionsDialog).toBeInTheDocument()
-    expect(allOptionsDialog.className).toContain("inset-0")
-    expect(within(allOptionsDialog).getByText("Chat & Persona")).toBeInTheDocument()
-
-    fireEvent.keyDown(allOptionsDialog, { key: "Escape" })
-    expect(
-      screen.queryByRole("dialog", { name: "All options" })
-    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Categories")).not.toBeInTheDocument()
+    expect(screen.getByRole("listbox", { name: "Legacy sheet" })).toBeInTheDocument()
   })
 
   it("shows footer with keyboard navigation hints", () => {
@@ -273,6 +309,6 @@ describe("HeaderShortcuts launcher modal", () => {
 
     expect(screen.getByText("navigate")).toBeInTheDocument()
     expect(screen.getByText("select")).toBeInTheDocument()
-    expect(screen.getByText("toggle")).toBeInTheDocument()
+    expect(screen.queryByText("toggle")).not.toBeInTheDocument()
   })
 })
