@@ -10,8 +10,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.endpoints import discord as discord_endpoint
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
 class _FakeJobManager:
@@ -76,6 +78,12 @@ def discord_policy_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, 
     app = FastAPI()
     app.include_router(discord_endpoint.router, prefix="/api/v1")
     app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[get_auth_principal] = lambda: AuthPrincipal(
+        kind="user",
+        user_id=1,
+        roles=["admin"],
+        is_admin=True,
+    )
     return TestClient(app), signer, jm
 
 
@@ -134,6 +142,28 @@ def test_discord_admin_policy_roundtrip(discord_policy_client: tuple[TestClient,
     assert policy["allowed_commands"] == ["help", "status"]
     assert policy["strict_user_mapping"] is True
     assert policy["status_scope"] == "guild_and_user"
+
+
+def test_discord_admin_policy_requires_admin_role(
+    discord_policy_client: tuple[TestClient, Ed25519PrivateKey, _FakeJobManager],
+) -> None:
+    client, _, _ = discord_policy_client
+    original_override = client.app.dependency_overrides[get_auth_principal]
+    client.app.dependency_overrides[get_auth_principal] = lambda: AuthPrincipal(
+        kind="user",
+        user_id=2,
+        roles=["member"],
+        is_admin=False,
+    )
+
+    try:
+        get_resp = client.get("/api/v1/discord/admin/policy", params={"guild_id": "G1"})
+        put_resp = client.put("/api/v1/discord/admin/policy", json={"guild_id": "G1", "allowed_commands": ["help"]})
+    finally:
+        client.app.dependency_overrides[get_auth_principal] = original_override
+
+    assert get_resp.status_code == 403
+    assert put_resp.status_code == 403
 
 
 def test_discord_policy_blocks_unknown_mapping_and_command(
