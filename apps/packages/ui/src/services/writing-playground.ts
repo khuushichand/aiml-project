@@ -18,6 +18,12 @@ const themesClient = createResourceClient({
     `/api/v1/writing/themes/${encodeURIComponent(String(name))}` as AllowedPath
 })
 
+const wordcloudClient = createResourceClient({
+  basePath: "/api/v1/writing/wordclouds" as AllowedPath,
+  detailPath: (id) =>
+    `/api/v1/writing/wordclouds/${encodeURIComponent(String(id))}` as AllowedPath
+})
+
 export type WritingVersionResponse = {
   version: number
 }
@@ -28,12 +34,23 @@ export type WritingServerCapabilities = {
   themes: boolean
   tokenize: boolean
   token_count: boolean
+  wordclouds?: boolean
 }
 
 export type WritingTokenizerSupport = {
   available: boolean
   tokenizer?: string | null
   error?: string | null
+}
+
+export type WritingExtraBodyCompat = {
+  supported: boolean
+  effective_reason?: string | null
+  known_params: string[]
+  param_groups: string[]
+  notes?: string | null
+  example?: Record<string, unknown>
+  source?: string
 }
 
 export type WritingProviderCapabilities = {
@@ -43,6 +60,8 @@ export type WritingProviderCapabilities = {
   supported_fields: string[]
   features: Record<string, boolean>
   tokenizers?: Record<string, WritingTokenizerSupport>
+  extra_body_compat?: WritingExtraBodyCompat
+  model_extra_body_compat?: Record<string, WritingExtraBodyCompat>
 }
 
 export type WritingRequestedCapabilities = {
@@ -53,6 +72,7 @@ export type WritingRequestedCapabilities = {
   tokenizer_available: boolean
   tokenizer?: string | null
   tokenization_error?: string | null
+  extra_body_compat?: WritingExtraBodyCompat
 }
 
 export type WritingCapabilitiesResponse = {
@@ -214,6 +234,42 @@ export type WritingTokenCountRequest = {
 export type WritingTokenCountResponse = {
   count: number
   meta: WritingTokenizeMeta
+}
+
+export type WritingWordcloudOptions = {
+  max_words?: number
+  min_word_length?: number
+  keep_numbers?: boolean
+  stopwords?: string[] | null
+}
+
+export type WritingWordcloudRequest = {
+  text: string
+  options?: WritingWordcloudOptions
+}
+
+export type WritingWordcloudWord = {
+  text: string
+  weight: number
+}
+
+export type WritingWordcloudMeta = {
+  input_chars: number
+  total_tokens: number
+  top_n: number
+}
+
+export type WritingWordcloudResult = {
+  words: WritingWordcloudWord[]
+  meta: WritingWordcloudMeta
+}
+
+export type WritingWordcloudResponse = {
+  id: string
+  status: "queued" | "running" | "ready" | "failed" | string
+  cached?: boolean
+  result?: WritingWordcloudResult | null
+  error?: string | null
 }
 
 type WritingCapabilitiesQuery = {
@@ -401,4 +457,16 @@ export async function countWritingTokens(
     headers: { "Content-Type": "application/json" },
     body: input
   })
+}
+
+export async function createWritingWordcloud(
+  input: WritingWordcloudRequest
+): Promise<WritingWordcloudResponse> {
+  return await wordcloudClient.create<WritingWordcloudResponse>(input)
+}
+
+export async function getWritingWordcloud(
+  id: string
+): Promise<WritingWordcloudResponse> {
+  return await wordcloudClient.get<WritingWordcloudResponse>(id)
 }

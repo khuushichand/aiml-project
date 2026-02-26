@@ -84,6 +84,7 @@ const fallbackSpec = {
       "/api/v1/rag/health",
       "/api/v1/rag/",
       "/api/v1/rag/feedback/implicit",
+      "/api/v1/media/ingest/jobs",
       "/api/v1/media/add",
       "/api/v1/media/",
       "/api/v1/media/process-videos",
@@ -354,6 +355,7 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
     hasChat: has("/api/v1/chat/completions"),
     hasRag: has("/api/v1/rag/search") || has("/api/v1/rag/health") || has("/api/v1/rag/"),
     hasMedia:
+      has("/api/v1/media/ingest/jobs") ||
       has("/api/v1/media/add") ||
       has("/api/v1/media/") ||
       has("/api/v1/media/process-videos") ||

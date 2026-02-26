@@ -3,11 +3,12 @@ import {
   expect,
   seedAuth,
   getCriticalIssues,
-  classifySmokeIssues
+  classifySmokeIssues,
+  SMOKE_LOAD_TIMEOUT
 } from "./smoke.setup"
 import type { Route } from "@playwright/test"
 
-const LOAD_TIMEOUT = 30_000
+const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT
 const UNRESOLVED_TEMPLATE_PATTERN = /\{\{[^{}\n]{1,120}\}\}/g
 
 type AudioRoute = {

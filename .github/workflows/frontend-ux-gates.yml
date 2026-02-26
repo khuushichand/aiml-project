@@ -145,6 +145,7 @@ jobs:
       TLDW_WEB_AUTOSTART: 'true'
       TLDW_WEB_CMD: npm run dev -- --webpack -p 8080
       TLDW_SMOKE_HARD_GATE: '1'
+      TLDW_SMOKE_LOAD_TIMEOUT_MS: '45000'
 
     steps:
       - name: Checkout

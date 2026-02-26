@@ -3,7 +3,8 @@
 //   - tldw_server2 OpenAPI: /openapi.json
 //   - Notes/media ingestion section: /docs-static/Design/Media_Ingestion.md (if available)
 // Last synchronized: 2025-12-13 from tldw_server v0.1.0 (Body_add_media_api_v1_media_add_post)
-// Run `bun verify:openapi` to check for field-name drift against /api/v1/media/add
+// Run `bun verify:openapi` to check for field-name drift against media ingest submit schemas
+// (`/api/v1/media/ingest/jobs` primary, `/api/v1/media/add` legacy).
 
 export const MEDIA_ADD_SCHEMA_FALLBACK_VERSION = "0.1.0"
 
@@ -91,7 +92,7 @@ export const MEDIA_ADD_SCHEMA_FALLBACK: Array<{
 
 // Web scraping request schema fallback when /openapi.json is unavailable.
 // This is intentionally separate from MEDIA_ADD_SCHEMA_FALLBACK to keep
-// verify:openapi checks scoped to /api/v1/media/add.
+// verify:openapi checks scoped to media ingest submit schemas.
 export const WEB_SCRAPING_SCHEMA_FALLBACK_VERSION = "0.1.0"
 
 export const WEB_SCRAPING_SCHEMA_FALLBACK: Array<{

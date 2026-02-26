@@ -521,6 +521,26 @@ export const HEADER_SHORTCUTS_EXPANDED_SETTING = defineSetting(
   }
 )
 
+const HEADER_SHORTCUTS_LAUNCHER_VIEW_VALUES = ["current", "legacy"] as const
+export type HeaderShortcutsLauncherViewValue =
+  (typeof HEADER_SHORTCUTS_LAUNCHER_VIEW_VALUES)[number]
+
+export const HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING = defineSetting(
+  "headerShortcutsLauncherView",
+  "current" as HeaderShortcutsLauncherViewValue,
+  (value) => {
+    const normalized = String(value || "").toLowerCase()
+    return HEADER_SHORTCUTS_LAUNCHER_VIEW_VALUES.includes(
+      normalized as HeaderShortcutsLauncherViewValue
+    )
+      ? (normalized as HeaderShortcutsLauncherViewValue)
+      : "current"
+  },
+  {
+    area: "local"
+  }
+)
+
 const coerceBooleanRecord = (value: unknown): Record<string, boolean> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {}
   const entries = Object.entries(value as Record<string, unknown>)

@@ -32,6 +32,10 @@ from tldw_Server_API.app.core.LLM_Calls.provider_metadata import (
 from tldw_Server_API.app.core.LLM_Calls.openrouter_model_inventory import (
     discover_openrouter_models as _discover_openrouter_models_shared,
 )
+from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
+    get_model_extra_body_compat,
+    get_provider_extra_body_compat,
+)
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 
 #######################################################################################################################
@@ -1075,6 +1079,7 @@ LOCAL_MODEL_DISCOVERY_TIMEOUT = 3.0  # seconds
 LOCAL_MODEL_DISCOVERY_TTL = 300  # seconds
 _LOCAL_MODEL_CACHE: dict[str, tuple[float, list[str]]] = {}
 OPENROUTER_MODEL_DISCOVERY_TIMEOUT = 5.0  # seconds
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def _dedupe_preserve_order(values: list[str]) -> list[str]:
@@ -1240,6 +1245,57 @@ def discover_models_from_endpoint(
     _LOCAL_MODEL_CACHE[cache_key] = (now, discovered)
     return discovered
 
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE_VALUES
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _build_runtime_context(config_parser: Any) -> dict[str, Any]:
+    strict_openai_compat = False
+    try:
+        if config_parser.has_section("Local-API") and config_parser.has_option("Local-API", "strict_openai_compat"):
+            strict_openai_compat = _truthy(config_parser.get("Local-API", "strict_openai_compat", fallback="false"))
+    except Exception:  # noqa: BLE001 - capability metadata should fail open
+        strict_openai_compat = False
+
+    env_override = os.getenv("LOCAL_LLM_STRICT_OPENAI_COMPAT")
+    if env_override is not None:
+        strict_openai_compat = _truthy(env_override)
+    return {"strict_openai_compat": strict_openai_compat}
+
+
+def _fallback_extra_body_compat() -> dict[str, Any]:
+    return {
+        "supported": False,
+        "effective_reason": "unsupported for deployment/runtime configuration",
+        "known_params": [],
+        "param_groups": [],
+        "notes": "No extra_body compatibility metadata registered for this provider/model.",
+        "example": {"extra_body": {}},
+        "source": "catalog+runtime",
+    }
+
+
+def _safe_provider_extra_body_compat(provider: str, runtime_context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return get_provider_extra_body_compat(provider, runtime_context=runtime_context)
+    except Exception:  # noqa: BLE001 - capability metadata should fail open
+        return _fallback_extra_body_compat()
+
+
+def _safe_model_extra_body_compat(provider: str, model: str, runtime_context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return get_model_extra_body_compat(provider, model, runtime_context=runtime_context)
+    except Exception:  # noqa: BLE001 - capability metadata should fail open
+        return _fallback_extra_body_compat()
+
+
 def get_configured_providers(
     include_deprecated: bool = False,
     refresh_openrouter: bool = False,
@@ -1252,6 +1308,7 @@ def get_configured_providers(
     """
     try:
         config_parser = load_comprehensive_config()
+        runtime_context = _build_runtime_context(config_parser)
         providers = []
 
         # Check if we have the required sections
@@ -1591,6 +1648,14 @@ def get_configured_providers(
                 models_info = filtered
                 models = [mi['name'] for mi in models_info]
 
+            for model_info in models_info:
+                model_name = str(model_info.get("name") or model_info.get("id") or "").strip()
+                model_info["extra_body_compat"] = _safe_model_extra_body_compat(
+                    provider_name,
+                    model_name,
+                    runtime_context,
+                )
+
             endpoint_only = provider_info['type'] == 'local' and is_configured and not models
 
             provider_data = {
@@ -1602,7 +1667,8 @@ def get_configured_providers(
                 'type': provider_info['type'],
                 'default_model': models[0] if models else None,
                 'is_configured': is_configured,  # Add configuration status
-                'endpoint_only': endpoint_only
+                'endpoint_only': endpoint_only,
+                'extra_body_compat': _safe_provider_extra_body_compat(provider_name, runtime_context),
             }
 
             # Add endpoint for local providers

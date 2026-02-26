@@ -17,7 +17,8 @@ def _upload_doc(api_client, data_tracker, text: str, title: str):
     path = create_test_file(text, suffix=".txt")
     data_tracker.add_file(path)
     try:
-        resp = api_client.upload_media(file_path=path, title=title, media_type="document", generate_embeddings=True)
+        # Keep this critical RAG smoke path independent of external Redis workers.
+        resp = api_client.upload_media(file_path=path, title=title, media_type="document", generate_embeddings=False)
         # Be permissive on new/legacy formats
         media_id = None
         if isinstance(resp, dict) and resp.get("results"):

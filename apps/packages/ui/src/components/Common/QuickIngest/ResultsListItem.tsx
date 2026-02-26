@@ -29,6 +29,8 @@ export const ResultsListItem: React.FC<ResultsListItemProps> = React.memo(
     const outcomeLabel =
       outcome === "skipped"
         ? t("quickIngest.resultStatusSkipped", "Skipped")
+        : outcome === "cancelled"
+          ? t("quickIngest.resultStatusCancelled", "Cancelled")
         : outcome === "processed"
           ? t("quickIngest.resultStatusProcessed", "Processed")
           : outcome === "ingested"
@@ -37,6 +39,8 @@ export const ResultsListItem: React.FC<ResultsListItemProps> = React.memo(
     const outcomeColor =
       outcome === "skipped"
         ? "gold"
+        : outcome === "cancelled"
+          ? "orange"
         : outcome === "processed"
           ? "blue"
           : outcome === "ingested"
