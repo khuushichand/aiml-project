@@ -299,6 +299,15 @@ class NotificationPreferencesRow:
 
 
 @dataclass
+class NotificationBridgeStateRow:
+    consumer_name: str
+    last_event_id: int
+    lease_owner_id: str | None
+    lease_expires_at: str | None
+    updated_at: str
+
+
+@dataclass
 class VoiceProfileRow:
     profile_id: str
     user_id: str
@@ -4403,6 +4412,111 @@ class CollectionsDatabase:
         )
         self.backend.execute(q, (self.user_id, reminder_flag, completed_flag, failed_flag, now))
         return self.get_notification_preferences()
+
+    def _notification_bridge_state_row_from_db(self, row: dict[str, Any]) -> NotificationBridgeStateRow:
+        return NotificationBridgeStateRow(
+            consumer_name=str(row.get("consumer_name") or ""),
+            last_event_id=int(row.get("last_event_id") or 0),
+            lease_owner_id=row.get("lease_owner_id"),
+            lease_expires_at=row.get("lease_expires_at"),
+            updated_at=str(row.get("updated_at") or ""),
+        )
+
+    def get_notification_bridge_state(self, *, consumer_name: str) -> NotificationBridgeStateRow:
+        row = self.backend.execute(
+            "SELECT * FROM notification_bridge_state WHERE consumer_name = ?",
+            (consumer_name,),
+        ).first
+        if row:
+            return self._notification_bridge_state_row_from_db(row)
+        return NotificationBridgeStateRow(
+            consumer_name=consumer_name,
+            last_event_id=0,
+            lease_owner_id=None,
+            lease_expires_at=None,
+            updated_at=_utcnow_iso(),
+        )
+
+    def update_notification_bridge_state(
+        self,
+        *,
+        consumer_name: str,
+        last_event_id: int | None = None,
+        lease_owner_id: str | None = None,
+        lease_expires_at: str | None = None,
+    ) -> NotificationBridgeStateRow:
+        current = self.get_notification_bridge_state(consumer_name=consumer_name)
+        next_last_event_id = current.last_event_id if last_event_id is None else int(last_event_id)
+        next_lease_owner_id = current.lease_owner_id if lease_owner_id is None else lease_owner_id
+        next_lease_expires_at = current.lease_expires_at if lease_expires_at is None else lease_expires_at
+        now = _utcnow_iso()
+
+        q = (
+            "INSERT INTO notification_bridge_state (consumer_name, last_event_id, lease_owner_id, lease_expires_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(consumer_name) DO UPDATE SET "
+            "last_event_id = excluded.last_event_id, "
+            "lease_owner_id = excluded.lease_owner_id, "
+            "lease_expires_at = excluded.lease_expires_at, "
+            "updated_at = excluded.updated_at"
+        )
+        self.backend.execute(
+            q,
+            (
+                consumer_name,
+                next_last_event_id,
+                next_lease_owner_id,
+                next_lease_expires_at,
+                now,
+            ),
+        )
+        return self.get_notification_bridge_state(consumer_name=consumer_name)
+
+    def try_claim_notification_bridge_lease(
+        self,
+        *,
+        consumer_name: str,
+        lease_owner_id: str,
+        lease_expires_at: str,
+        now_iso: str | None = None,
+    ) -> bool:
+        now = now_iso or _utcnow_iso()
+        self.backend.execute(
+            (
+                "INSERT INTO notification_bridge_state (consumer_name, last_event_id, lease_owner_id, lease_expires_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(consumer_name) DO NOTHING"
+            ),
+            (consumer_name, 0, None, None, now),
+        )
+        q = (
+            "UPDATE notification_bridge_state "
+            "SET lease_owner_id = ?, lease_expires_at = ?, updated_at = ? "
+            "WHERE consumer_name = ? AND ("
+            "lease_owner_id IS NULL OR lease_owner_id = ? OR lease_expires_at IS NULL OR lease_expires_at <= ?"
+            ")"
+        )
+        res = self.backend.execute(
+            q,
+            (
+                lease_owner_id,
+                lease_expires_at,
+                now,
+                consumer_name,
+                lease_owner_id,
+                now,
+            ),
+        )
+        return bool(res.rowcount and res.rowcount > 0)
+
+    def release_notification_bridge_lease(self, *, consumer_name: str, lease_owner_id: str) -> bool:
+        q = (
+            "UPDATE notification_bridge_state "
+            "SET lease_owner_id = NULL, lease_expires_at = NULL, updated_at = ? "
+            "WHERE consumer_name = ? AND lease_owner_id = ?"
+        )
+        res = self.backend.execute(q, (_utcnow_iso(), consumer_name, lease_owner_id))
+        return bool(res.rowcount and res.rowcount > 0)
 
     def purge_expired_outputs(self) -> int:
         """Hard delete expired/retained outputs. Returns number of rows removed."""
