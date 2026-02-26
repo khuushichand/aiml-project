@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.endpoints._in_memory_limits import SlidingWindowLimiter
 from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentInfo,
     ACPAgentListResponse,
@@ -84,28 +85,7 @@ _ACP_WS_ACTIVE_BY_PERSONA: dict[str, int] = {}
 _ACP_WS_ACTIVE_BY_SESSION: dict[str, int] = {}
 
 
-class _SlidingWindowLimiter:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._windows: dict[str, deque[float]] = {}
-
-    def allow(self, key: str, limit_per_minute: int, now: float | None = None) -> tuple[bool, int]:
-        ts = now if now is not None else time.time()
-        limit = max(1, int(limit_per_minute))
-        cutoff = ts - 60.0
-
-        with self._lock:
-            window = self._windows.setdefault(key, deque())
-            while window and window[0] <= cutoff:
-                window.popleft()
-            if len(window) >= limit:
-                retry_after = int(max(1, 60 - (ts - window[0])))
-                return False, retry_after
-            window.append(ts)
-            return True, 0
-
-
-_ACP_CONTROL_RATE_LIMITER = _SlidingWindowLimiter()
+_ACP_CONTROL_RATE_LIMITER = SlidingWindowLimiter()
 _ACP_AUDIT_LOCK = threading.Lock()
 _ACP_AUDIT_EVENTS: deque[dict[str, Any]] = deque(maxlen=5000)
 _ACP_RECONCILIATION_LOCK = threading.Lock()

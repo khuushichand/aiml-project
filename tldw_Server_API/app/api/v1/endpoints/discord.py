@@ -4,7 +4,6 @@ import os
 import secrets
 import threading
 import time
-from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
@@ -15,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.endpoints._in_memory_limits import SlidingWindowLimiter, TTLReceiptStore
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager as _global_get_job_manager
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -35,59 +35,9 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
 router = APIRouter(prefix="/discord", tags=["discord"])
 
 
-class _TTLReceiptStore:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._seen: dict[str, float] = {}
-
-    def clear(self) -> None:
-        with self._lock:
-            self._seen.clear()
-
-    def seen_or_store(self, key: str, ttl_seconds: int, now: float | None = None) -> bool:
-        ts = now if now is not None else time.time()
-        expiry = ts + max(1, ttl_seconds)
-        with self._lock:
-            self._cleanup_locked(ts)
-            existing = self._seen.get(key)
-            if existing and existing > ts:
-                return True
-            self._seen[key] = expiry
-            return False
-
-    def _cleanup_locked(self, now: float) -> None:
-        stale_keys = [k for k, expires_at in self._seen.items() if expires_at <= now]
-        for k in stale_keys:
-            self._seen.pop(k, None)
-
-
-class _SlidingWindowLimiter:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._windows: dict[str, deque[float]] = {}
-
-    def clear(self) -> None:
-        with self._lock:
-            self._windows.clear()
-
-    def allow(self, key: str, limit_per_minute: int, now: float | None = None) -> tuple[bool, int]:
-        ts = now if now is not None else time.time()
-        limit = max(1, limit_per_minute)
-        cutoff = ts - 60.0
-        with self._lock:
-            window = self._windows.setdefault(key, deque())
-            while window and window[0] <= cutoff:
-                window.popleft()
-            if len(window) >= limit:
-                retry_after = int(max(1, 60 - (ts - window[0])))
-                return False, retry_after
-            window.append(ts)
-            return True, 0
-
-
-_INTERACTION_RECEIPTS = _TTLReceiptStore()
-_RATE_LIMITER = _SlidingWindowLimiter()
-_POLICY_RATE_LIMITER = _SlidingWindowLimiter()
+_INTERACTION_RECEIPTS = TTLReceiptStore()
+_RATE_LIMITER = SlidingWindowLimiter()
+_POLICY_RATE_LIMITER = SlidingWindowLimiter()
 _DISCORD_POLICY_LOCK = threading.Lock()
 _DISCORD_POLICIES: dict[str, dict[str, Any]] = {}
 _POLICY_DEFAULT_KEY = "__default__"
