@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   buildExtraBodyPayload,
+  parseExtraBodyJsonObject,
   parseStringListInput,
   sanitizeExtraBodyPayload
 } from "../extra-body-utils"
@@ -78,5 +79,26 @@ describe("writing extra_body utils", () => {
       "four"
     ])
     expect(parseStringListInput("  a  ,  b  \n\nc  ")).toEqual(["a", "b", "c"])
+  })
+
+  it("parses a JSON object string and sanitizes it", () => {
+    const result = parseExtraBodyJsonObject(
+      "{\"mirostat\":2,\"grammar\":\"  root ::= .+  \",\"empty\":\"\"}"
+    )
+    expect(result.error).toBeNull()
+    expect(result.value).toEqual({
+      mirostat: 2,
+      grammar: "root ::= .+"
+    })
+  })
+
+  it("rejects non-object JSON payloads", () => {
+    const listResult = parseExtraBodyJsonObject("[1,2,3]")
+    expect(listResult.error).toContain("JSON object")
+    expect(listResult.value).toEqual({})
+
+    const invalidResult = parseExtraBodyJsonObject("{oops")
+    expect(invalidResult.error).toContain("Invalid JSON")
+    expect(invalidResult.value).toEqual({})
   })
 })

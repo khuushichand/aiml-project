@@ -49,6 +49,34 @@ export const sanitizeExtraBodyPayload = (
   return sanitized
 }
 
+export const parseExtraBodyJsonObject = (
+  value: string
+): { value: Record<string, unknown>; error: string | null } => {
+  const trimmed = String(value || "").trim()
+  if (!trimmed) {
+    return { value: {}, error: null }
+  }
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (!isRecord(parsed)) {
+      return {
+        value: {},
+        error: "extra_body payload must be a JSON object."
+      }
+    }
+    return {
+      value: sanitizeExtraBodyPayload(parsed),
+      error: null
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown parse error"
+    return {
+      value: {},
+      error: `Invalid JSON: ${detail}`
+    }
+  }
+}
+
 type BuildExtraBodyInput = {
   top_k: number
   seed: number | null

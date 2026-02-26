@@ -74,6 +74,7 @@ import { cn } from "@/libs/utils"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import {
   buildExtraBodyPayload,
+  parseExtraBodyJsonObject,
   parseStringListInput
 } from "./extra-body-utils"
 import {
@@ -1050,6 +1051,11 @@ export const WritingPlayground = () => {
   const [bannedTokensInput, setBannedTokensInput] = React.useState("")
   const [drySequenceBreakersInput, setDrySequenceBreakersInput] =
     React.useState("")
+  const [extraBodyJsonModalOpen, setExtraBodyJsonModalOpen] =
+    React.useState(false)
+  const [extraBodyJsonDraft, setExtraBodyJsonDraft] = React.useState("{}")
+  const [extraBodyJsonError, setExtraBodyJsonError] =
+    React.useState<string | null>(null)
   const [selectedTemplateName, setSelectedTemplateName] =
     React.useState<string | null>(null)
   const [selectedThemeName, setSelectedThemeName] =
@@ -2117,6 +2123,33 @@ export const WritingPlayground = () => {
     },
     [advancedExtraBody]
   )
+
+  const openExtraBodyJsonEditor = React.useCallback(() => {
+    setExtraBodyJsonDraft(
+      JSON.stringify(advancedExtraBody || {}, null, 2) || "{}"
+    )
+    setExtraBodyJsonError(null)
+    setExtraBodyJsonModalOpen(true)
+  }, [advancedExtraBody])
+
+  const applyExtraBodyJsonDraft = React.useCallback(() => {
+    const parsed = parseExtraBodyJsonObject(extraBodyJsonDraft)
+    if (parsed.error) {
+      setExtraBodyJsonError(parsed.error)
+      return
+    }
+    updateSetting({
+      advanced_extra_body: parsed.value
+    })
+    setBannedTokensInput(
+      normalizeStringArrayValue(parsed.value.banned_tokens).join("\n")
+    )
+    setDrySequenceBreakersInput(
+      normalizeStringArrayValue(parsed.value.dry_sequence_breakers).join("\n")
+    )
+    setExtraBodyJsonError(null)
+    setExtraBodyJsonModalOpen(false)
+  }, [extraBodyJsonDraft, updateSetting])
 
   const memoryBlock = settings.memory_block
   const authorNote = settings.author_note
@@ -3489,6 +3522,14 @@ export const WritingPlayground = () => {
     Boolean(selectedModel) &&
     hasChat &&
     !isGenerating
+  const advancedExtraBodyUnknownKeys = React.useMemo(
+    () =>
+      Object.keys(advancedExtraBody || {}).filter(
+        (key) =>
+          knownExtraBodyParamSet.size > 0 && !knownExtraBodyParamSet.has(key)
+      ),
+    [advancedExtraBody, knownExtraBodyParamSet]
+  )
   const hasAdvancedSettingsValues =
     Object.keys(advancedExtraBody || {}).length > 0
   const showAdvancedSamplerControls =
@@ -4860,11 +4901,56 @@ export const WritingPlayground = () => {
                                     }
                                   />
                                 ) : null}
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Button
+                                    size="small"
+                                    disabled={
+                                      settingsDisabled || !supportsAdvancedCompat
+                                    }
+                                    onClick={openExtraBodyJsonEditor}>
+                                    {t(
+                                      "option:writingPlayground.extraBodyJsonEditorLabel",
+                                      "Edit raw extra_body JSON"
+                                    )}
+                                  </Button>
+                                  {hasAdvancedSettingsValues ? (
+                                    <Button
+                                      size="small"
+                                      disabled={settingsDisabled}
+                                      onClick={() => {
+                                        updateSetting({
+                                          advanced_extra_body: {}
+                                        })
+                                        setBannedTokensInput("")
+                                        setDrySequenceBreakersInput("")
+                                      }}>
+                                      {t(
+                                        "option:writingPlayground.clearAdvancedSettings",
+                                        "Clear advanced values"
+                                      )}
+                                    </Button>
+                                  ) : null}
+                                </div>
                                 {knownExtraBodyParams.length > 0 ? (
                                   <div className="flex flex-wrap gap-1">
                                     {knownExtraBodyParams.map((param) => (
                                       <Tag key={param}>{param}</Tag>
                                     ))}
+                                  </div>
+                                ) : null}
+                                {advancedExtraBodyUnknownKeys.length > 0 ? (
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.extraBodyCustomKeys",
+                                        "Custom keys from raw JSON:"
+                                      )}
+                                    </span>
+                                    <div className="flex flex-wrap gap-1">
+                                      {advancedExtraBodyUnknownKeys.map((key) => (
+                                        <Tag key={key}>{key}</Tag>
+                                      ))}
+                                    </div>
                                   </div>
                                 ) : null}
                                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -5018,6 +5104,45 @@ export const WritingPlayground = () => {
           </div>
         </div>
       )}
+
+      <Modal
+        title={t(
+          "option:writingPlayground.extraBodyJsonModalTitle",
+          "Edit extra_body JSON"
+        )}
+        open={extraBodyJsonModalOpen}
+        onCancel={() => {
+          setExtraBodyJsonModalOpen(false)
+          setExtraBodyJsonError(null)
+        }}
+        onOk={applyExtraBodyJsonDraft}
+        okText={t("common:apply", "Apply")}
+        cancelText={t("common:cancel", "Cancel")}
+        okButtonProps={{ disabled: settingsDisabled || !supportsAdvancedCompat }}
+        width={760}>
+        <div className="flex flex-col gap-3">
+          <span className="text-xs text-text-muted">
+            {t(
+              "option:writingPlayground.extraBodyJsonModalHint",
+              "Provide a JSON object to merge advanced provider-specific parameters."
+            )}
+          </span>
+          {extraBodyJsonError ? (
+            <Alert type="error" showIcon message={extraBodyJsonError} />
+          ) : null}
+          <Input.TextArea
+            value={extraBodyJsonDraft}
+            rows={14}
+            disabled={settingsDisabled || !supportsAdvancedCompat}
+            onChange={(event) => {
+              setExtraBodyJsonDraft(event.target.value)
+              if (extraBodyJsonError) {
+                setExtraBodyJsonError(null)
+              }
+            }}
+          />
+        </div>
+      </Modal>
 
       <Modal
         title={t(
