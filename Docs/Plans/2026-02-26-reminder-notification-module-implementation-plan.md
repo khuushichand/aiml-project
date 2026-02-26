@@ -4,7 +4,7 @@
 
 **Goal:** Build v1 user reminders/tasks and in-app notifications (inbox + realtime + snooze), including owned-job completion/failure notifications.
 
-**Architecture:** Use APScheduler only to enqueue due reminder runs into the existing Jobs module. Use dedicated reminder/notification persistence in the per-user Collections DB and process delivery via Jobs workers. Provide REST + SSE APIs for task/inbox management and realtime UI updates.
+**Architecture:** Use APScheduler only to enqueue due reminder runs into the existing Jobs module. Use dedicated reminder/notification persistence in the per-user Collections DB and process delivery via Jobs workers. In multi-instance deployments, scheduler and jobs-event bridge loops run under explicit lease ownership with persisted cursors for safe failover. Provide REST + SSE APIs for task/inbox management and realtime UI updates.
 
 **Tech Stack:** FastAPI, Pydantic v2, APScheduler, Jobs manager/worker SDK, SQLite/Postgres-compatible DB adapters via `Collections_DB`, pytest, Next.js frontend toast/inbox components.
 
@@ -137,6 +137,7 @@ Expected: FAIL due to missing schema/table/method.
   - `reminder_task_runs`
   - `user_notifications`
   - `notification_preferences`
+  - `notification_bridge_state`
 - Add explicit idempotency fields/indexes:
   - `reminder_task_runs.run_slot_utc`, `run_slot_key`
   - unique index on `(task_id, run_slot_key)`
@@ -148,6 +149,7 @@ Expected: FAIL due to missing schema/table/method.
   - `create_user_notification`, `list_user_notifications`, `mark_user_notifications_read`, `dismiss_user_notification`, `count_unread_user_notifications`
   - `get_notification_preferences`, `update_notification_preferences`
   - `prune_user_notifications` (retention-based)
+  - `get_notification_bridge_state`, `update_notification_bridge_state` (cursor + lease state)
 
 **Step 4: Run test to verify it passes**
 
@@ -184,9 +186,14 @@ Expected: FAIL due to missing worker/service.
 
 **Step 3: Write minimal implementation**
 
-- Add periodic prune service with configurable interval and retention defaults.
+- Add periodic prune service with explicit retention defaults:
+  - `reminder_due` / `reminder_failed`: 90 days
+  - `job_completed`: 30 days
+  - `job_failed`: 60 days
+- Apply read/dismissed acceleration window (30 days after `read_at`/`dismissed_at`).
+- Implement two-step prune semantics: archive expired first, hard-delete archived rows after 7 days.
 - Use `prune_user_notifications` DB method.
-- Emit basic metrics for deleted/kept counts.
+- Emit metrics for archived/deleted counts.
 
 **Step 4: Run test to verify it passes**
 
@@ -200,7 +207,7 @@ git add tldw_Server_API/app/services/notifications_prune_service.py tldw_Server_
 git commit -m "feat(notifications): add retention prune worker"
 ```
 
-### Task 3: Build Reminder Domain Service (CRUD + Snooze)
+### Task 3: Build Reminder Domain Service (CRUD + Notification-Derived Snooze)
 
 **Files:**
 - Create: `tldw_Server_API/app/core/Reminders/reminders_service.py`
@@ -209,26 +216,26 @@ git commit -m "feat(notifications): add retention prune worker"
 **Step 1: Write the failing test**
 
 ```python
-def test_snooze_creates_one_time_task(reminders_service):
-    new_task = reminders_service.snooze_task(task_id="t1", user_id="1", minutes=30)
+def test_snooze_notification_creates_one_time_task(reminders_service):
+    new_task = reminders_service.snooze_notification(notification_id="n1", user_id="1", minutes=30)
     assert new_task.schedule_kind == "one_time"
 ```
 
 **Step 2: Run test to verify it fails**
 
-Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Notifications/test_reminders_service.py::test_snooze_creates_one_time_task -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Notifications/test_reminders_service.py::test_snooze_notification_creates_one_time_task -v`
 Expected: FAIL due to missing service.
 
 **Step 3: Write minimal implementation**
 
 ```python
 class RemindersService:
-    def snooze_task(self, task_id: str, user_id: str, minutes: int):
-        # clone task content and create one-time task at now + minutes
+    def snooze_notification(self, notification_id: str, user_id: str, minutes: int):
+        # resolve source notification and create one-time task at now + minutes
         ...
 ```
 
-Include ownership checks and sane bounds for `minutes`.
+Include ownership checks, source notification resolution, link metadata carryover, and sane bounds for `minutes`.
 
 **Step 4: Run test to verify it passes**
 
@@ -270,6 +277,7 @@ Expected: FAIL due to missing scheduler module.
   - user DB rescan
   - per-schedule APS registration
   - run-slot idempotency key: `task:{task_id}:{run_slot_utc}`
+- Enforce single active scheduler loop via lease ownership (heartbeat + expiry takeover semantics).
 - Enqueue Jobs with dedicated domain/job type, owner user id set.
 - Normalize recurrence slot to UTC before enqueue; persist `run_slot_utc`.
 - Add DST handling tests for ambiguous/non-existent local times.
@@ -388,7 +396,9 @@ Expected: FAIL due to missing service.
 - Resolve owning user and enforce prefs.
 - Skip unresolved-owner events (no user notification), record metric/log entry.
 - Write deduped `user_notifications` rows.
-- Persist cursor safely.
+- Persist bridge cursor/lease in `notification_bridge_state`.
+- Commit cursor only after notification writes commit successfully.
+- Ensure lease failover resumes from last committed cursor.
 
 **Step 4: Run test to verify it passes**
 
@@ -437,10 +447,11 @@ Expected: FAIL due to missing endpoints.
 **Step 3: Write minimal implementation**
 
 Implement:
-- `/api/v1/tasks` CRUD + `/api/v1/tasks/{id}/snooze`
+- `/api/v1/tasks` CRUD
 - `/api/v1/notifications` list/read/dismiss/unread-count/preferences
 - `/api/v1/notifications/{id}/snooze`
 - Add explicit route dependencies for required scopes/permissions/rate-limit keys.
+- Enforce active-task cap semantics: active means `enabled=true` and `next_run_at IS NOT NULL`; return `409` typed error on cap exceedance.
 
 **Step 4: Run tests to verify they pass**
 
@@ -476,6 +487,9 @@ Expected: FAIL.
 **Step 3: Write minimal implementation**
 
 - Add SSE stream with cursor support and heartbeat.
+- Support `Last-Event-ID` header (preferred) and `after` query cursor.
+- Include stable `event_id`, `notification_id`, `kind`, `created_at` fields in stream payloads.
+- Implement bounded replay window (default 500 events) and `reset_required` event for stale cursors.
 - Emit on newly created `user_notifications` rows.
 - Add per-user burst control/coalescing behavior for high-volume event periods.
 
@@ -524,9 +538,9 @@ Expected: FAIL until lifecycle wiring exists.
 **Step 3: Write minimal implementation**
 
 - Start/stop:
-  - reminders scheduler
+  - reminders scheduler (lease-owner execution mode)
   - reminder jobs worker
-  - jobs notifications bridge worker
+  - jobs notifications bridge worker (lease-owner execution mode)
 - Follow existing `reading_digest` and `jobs_webhooks` lifecycle patterns.
 
 **Step 4: Run test to verify it passes**
@@ -610,7 +624,7 @@ Expected: no new high-severity findings in changed code.
 **Step 4: Update docs**
 
 - Add endpoint and payload documentation with examples.
-- Document env flags and defaults (`task cap`, scheduler toggles, polling intervals).
+- Document env flags and defaults (`task cap`, scheduler toggles, polling intervals, SSE replay window, retention durations).
 
 **Step 5: Commit**
 
