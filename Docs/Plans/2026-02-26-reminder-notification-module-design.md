@@ -63,6 +63,14 @@ Reuse domain-specific tables/services for generic reminders.
 - Existing SSE conventions (jobs events stream/admin events stream).
 - Existing per-user DB patterns used by `Collections` / `Guardian` / `Claims`.
 
+### 4.3 Auth and Access Model
+
+- All routes are authenticated and owner-scoped by default.
+- Task/inbox read routes require read-level task/notification scopes.
+- Task mutating routes (create/update/delete/snooze) require write/control task scope.
+- Notification preference updates require notification settings write scope.
+- Admin-only visibility beyond owner scope is out of v1 scope.
+
 ## 5. Data Model (v1)
 
 Persist in per-user DB (new tables in a module local to reminders/notifications).
@@ -89,10 +97,12 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
 - `task_id`, `user_id`
 - `scheduled_for`
 - `job_id`
+- `run_slot_utc` (normalized UTC ISO timestamp used for idempotency)
+- `run_slot_key` (stable derived key from `task_id + run_slot_utc`)
 - `status` (`queued|running|succeeded|failed|skipped`)
 - `error`
 - `created_at`, `started_at`, `completed_at`
-- unique idempotency key per run slot
+- unique index on `(task_id, run_slot_key)` for per-slot exactly-once semantics
 
 ### 5.3 `user_notifications`
 
@@ -105,6 +115,7 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
   - `source_domain`, `source_job_type`
 - optional link fields: `link_type`, `link_id`, `link_url`
 - `dedupe_key` (unique per user)
+- retention fields: `retention_until`, `archived_at`
 - `created_at`, `read_at`, `dismissed_at`
 
 ### 5.4 `notification_preferences`
@@ -132,9 +143,18 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
 - `GET /api/v1/notifications/unread-count`
 - `POST /api/v1/notifications/mark-read`
 - `POST /api/v1/notifications/{id}/dismiss`
+- `POST /api/v1/notifications/{id}/snooze`
 - `GET /api/v1/notifications/preferences`
 - `PATCH /api/v1/notifications/preferences`
 - `GET /api/v1/notifications/stream` (SSE)
+
+### 6.3 Auth Contract (v1)
+
+- `GET /api/v1/tasks*` requires task read scope.
+- `POST/PATCH/DELETE /api/v1/tasks*` requires task control scope.
+- `GET /api/v1/notifications*` requires notification read scope.
+- `POST/PATCH /api/v1/notifications*` requires notification control scope.
+- Endpoint-level rate limits follow existing RBAC rate-limit dependency patterns.
 
 ## 7. Runtime Flows
 
@@ -154,24 +174,46 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
 
 ### 7.3 Snooze flow (toast action)
 
-1. Client sends snooze request.
-2. Server creates derived one-time reminder preserving optional link metadata.
+1. Client sends snooze request via notification id (`/notifications/{id}/snooze`).
+2. Server resolves source notification and creates derived one-time reminder preserving optional link metadata.
 3. Scheduler handles it as normal reminder task.
+
+### 7.4 Notification Retention and Prune flow
+
+1. Inbox rows are created with `retention_until` based on configurable defaults.
+2. Background prune worker marks old rows archived/deleted according to retention policy.
+3. Prune is idempotent and scoped per user DB; metrics are emitted for deleted counts.
 
 ## 8. Error Handling and Guardrails
 
 - Idempotency keys:
-  - task run enqueue: `task:{task_id}:{scheduled_for_iso}`
+  - task run enqueue: `task:{task_id}:{run_slot_utc}`
   - notification dedupe: e.g. `job:{job_id}:{event_type}`
+- Run slot normalization:
+  - all recurrence slots are normalized to UTC (`run_slot_utc`) before enqueue.
+  - ambiguous/non-existent local DST timestamps are resolved at schedule evaluation time, then persisted as UTC.
 - Validate cron/timezone with `422` responses on invalid input.
 - Scheduler settings: `max_instances=1`, coalescing enabled, bounded misfire grace.
 - Active task cap in v1 (default `10`, configurable env).
 - All notification state is persisted first; realtime stream is additive.
 - Strict per-user ownership scope across all endpoints.
+- Realtime flood controls:
+  - per-user burst cap for SSE/toasts.
+  - optional coalesced summary notification for high event volume.
+- Link safety:
+  - validate `link_url` scheme/host policy before persistence or rendering.
+- Retention:
+  - notifications are pruned/archived by policy to prevent unbounded table growth.
 
 ## 9. Important Hardening Item
 
-To support “notify for all owned jobs”, event rows must reliably carry owner attribution for completion/failure paths. Existing code already writes these events but some pathways may need explicit owner propagation hardening.
+To support “notify for all owned jobs”, event rows must reliably carry owner attribution for completion/failure paths.
+
+Release gate for v1:
+
+- no `job.completed`/`job.failed` notification is emitted unless owner resolution succeeds.
+- all completion/failure emission paths are covered by tests asserting owner fields are present/derivable.
+- unresolved-owner events are counted and logged for operator visibility.
 
 ## 10. Testing Strategy
 
@@ -188,18 +230,22 @@ To support “notify for all owned jobs”, event rows must reliably carry owner
 - Notifications list/unread/mark-read/dismiss.
 - Preferences impact on job-completion notifications.
 - AuthNZ owner scoping (single-user + multi-user).
+- Route-level permission/scope enforcement for all new endpoints.
 
 ### Worker/service tests
 
 - Due reminder enqueued exactly once per slot.
 - Worker writes run + notification records.
 - Job-events bridge writes expected notifications and dedupes.
+- Job-events bridge skips events lacking owner attribution (and records metrics).
+- Notification prune worker enforces retention policy safely.
 
 ### Frontend/E2E
 
 - Badge increments on new notification.
 - Toast appears on realtime event.
-- Snooze from toast schedules and later delivers reminder.
+- Snooze from toast (`/notifications/{id}/snooze`) schedules and later delivers reminder.
+- High-volume event bursts are coalesced/throttled correctly.
 
 ### Security/quality
 
@@ -215,6 +261,7 @@ To support “notify for all owned jobs”, event rows must reliably carry owner
 - Realtime notification stream.
 - Toast + badge + snooze UX.
 - Job completion/failure notification bridge (owned jobs default enabled).
+- Notification retention/prune worker and related metrics.
 
 ### Phase 2
 
@@ -233,4 +280,3 @@ To support “notify for all owned jobs”, event rows must reliably carry owner
 - Multi-channel external delivery (email/webhooks).
 - Complex escalation/routing rules.
 - Cross-domain unification with claims/self-monitoring notification tables.
-

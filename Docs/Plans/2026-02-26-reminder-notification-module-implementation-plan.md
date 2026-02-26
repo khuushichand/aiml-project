@@ -33,9 +33,9 @@ from tldw_Server_API.app.api.v1.schemas.reminders_schemas import ReminderTaskCre
 def test_reminder_task_create_requires_schedule_fields():
     try:
         ReminderTaskCreateRequest(title="Follow up", schedule_kind="one_time")
-        assert False, "expected validation error"
+        raise AssertionError("expected validation error")
     except ValidationError:
-        assert True
+        pass
 ```
 
 **Step 2: Run test to verify it fails**
@@ -71,6 +71,45 @@ git add tldw_Server_API/app/api/v1/schemas/reminders_schemas.py tldw_Server_API/
 git commit -m "feat(reminders): add request/response schemas"
 ```
 
+### Task 1A: Define AuthNZ Scope/Permission Contract for New Endpoints
+
+**Files:**
+- Create: `tldw_Server_API/app/core/AuthNZ/permissions/reminders_notifications.py` (or existing permissions module if preferred)
+- Modify: `tldw_Server_API/app/api/v1/endpoints/reminders.py`
+- Modify: `tldw_Server_API/app/api/v1/endpoints/notifications.py`
+- Test: `tldw_Server_API/tests/Notifications/test_reminders_notifications_authz.py`
+
+**Step 1: Write the failing test**
+
+```python
+def test_notifications_unread_requires_read_scope(client, token_without_scope):
+    res = client.get("/api/v1/notifications/unread-count", headers={"Authorization": f"Bearer {token_without_scope}"})
+    assert res.status_code in (401, 403)
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Notifications/test_reminders_notifications_authz.py::test_notifications_unread_requires_read_scope -v`
+Expected: FAIL until route-level scope dependencies are added.
+
+**Step 3: Write minimal implementation**
+
+- Define explicit read/control scopes for tasks and notifications.
+- Apply route-level dependencies for all new endpoints.
+- Add rate-limit dependency wiring matching existing API patterns.
+
+**Step 4: Run test to verify it passes**
+
+Run: same pytest command as Step 2.
+Expected: PASS.
+
+**Step 5: Commit**
+
+```bash
+git add tldw_Server_API/app/core/AuthNZ/permissions/reminders_notifications.py tldw_Server_API/app/api/v1/endpoints/reminders.py tldw_Server_API/app/api/v1/endpoints/notifications.py tldw_Server_API/tests/Notifications/test_reminders_notifications_authz.py
+git commit -m "feat(auth): add route-level scopes for reminders and notifications"
+```
+
 ### Task 2: Add Reminder/Notification Tables and DB Methods
 
 **Files:**
@@ -98,11 +137,17 @@ Expected: FAIL due to missing schema/table/method.
   - `reminder_task_runs`
   - `user_notifications`
   - `notification_preferences`
+- Add explicit idempotency fields/indexes:
+  - `reminder_task_runs.run_slot_utc`, `run_slot_key`
+  - unique index on `(task_id, run_slot_key)`
+- Add notification retention fields:
+  - `user_notifications.retention_until`, `archived_at`
 - Add methods:
   - `create_reminder_task`, `get_reminder_task`, `list_reminder_tasks`, `update_reminder_task`, `delete_reminder_task`
   - `create_reminder_task_run`, `update_reminder_task_run_status`
   - `create_user_notification`, `list_user_notifications`, `mark_user_notifications_read`, `dismiss_user_notification`, `count_unread_user_notifications`
   - `get_notification_preferences`, `update_notification_preferences`
+  - `prune_user_notifications` (retention-based)
 
 **Step 4: Run test to verify it passes**
 
@@ -114,6 +159,45 @@ Expected: PASS.
 ```bash
 git add tldw_Server_API/app/core/DB_Management/Collections_DB.py tldw_Server_API/tests/Collections/test_reminders_notifications_db.py
 git commit -m "feat(reminders): add reminder and notification persistence"
+```
+
+### Task 2A: Add Notification Retention Prune Worker
+
+**Files:**
+- Create: `tldw_Server_API/app/services/notifications_prune_service.py`
+- Modify: `tldw_Server_API/app/main.py`
+- Test: `tldw_Server_API/tests/Notifications/test_notifications_prune_service.py`
+
+**Step 1: Write the failing test**
+
+```python
+async def test_prune_deletes_expired_notifications(collections_db, prune_service):
+    # seed expired notification and run one prune tick
+    deleted = await prune_service.run_once_for_user(user_id=1)
+    assert deleted >= 1
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Notifications/test_notifications_prune_service.py::test_prune_deletes_expired_notifications -v`
+Expected: FAIL due to missing worker/service.
+
+**Step 3: Write minimal implementation**
+
+- Add periodic prune service with configurable interval and retention defaults.
+- Use `prune_user_notifications` DB method.
+- Emit basic metrics for deleted/kept counts.
+
+**Step 4: Run test to verify it passes**
+
+Run: same pytest command as Step 2.
+Expected: PASS.
+
+**Step 5: Commit**
+
+```bash
+git add tldw_Server_API/app/services/notifications_prune_service.py tldw_Server_API/app/main.py tldw_Server_API/tests/Notifications/test_notifications_prune_service.py
+git commit -m "feat(notifications): add retention prune worker"
 ```
 
 ### Task 3: Build Reminder Domain Service (CRUD + Snooze)
@@ -185,8 +269,10 @@ Expected: FAIL due to missing scheduler module.
   - start/stop lifecycle
   - user DB rescan
   - per-schedule APS registration
-  - run-slot idempotency key: `task:{task_id}:{run_slot}`
+  - run-slot idempotency key: `task:{task_id}:{run_slot_utc}`
 - Enqueue Jobs with dedicated domain/job type, owner user id set.
+- Normalize recurrence slot to UTC before enqueue; persist `run_slot_utc`.
+- Add DST handling tests for ambiguous/non-existent local times.
 
 **Step 4: Run test to verify it passes**
 
@@ -239,6 +325,44 @@ git add tldw_Server_API/app/core/Reminders/reminder_jobs.py tldw_Server_API/app/
 git commit -m "feat(reminders): add reminder jobs handler and worker"
 ```
 
+### Task 5A: Harden Jobs Event Owner Attribution (Release Gate)
+
+**Files:**
+- Modify: `tldw_Server_API/app/core/Jobs/manager.py`
+- Test: `tldw_Server_API/tests/Jobs/test_jobs_event_owner_attribution.py`
+
+**Step 1: Write the failing test**
+
+```python
+def test_job_completed_event_includes_owner_user_id(jobs_manager):
+    # create/acquire/complete a job with owner
+    events = jobs_manager.list_job_events(after_id=0, limit=200)
+    completed = [e for e in events if e.get("event_type") == "job.completed"]
+    assert completed and completed[-1].get("owner_user_id") is not None
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Jobs/test_jobs_event_owner_attribution.py::test_job_completed_event_includes_owner_user_id -v`
+Expected: FAIL where owner attribution is missing.
+
+**Step 3: Write minimal implementation**
+
+- Ensure all completion/failure event writes include `owner_user_id`.
+- Add defensive checks so notification bridge skips unresolved owners and increments a metric.
+
+**Step 4: Run test to verify it passes**
+
+Run: same pytest command as Step 2.
+Expected: PASS.
+
+**Step 5: Commit**
+
+```bash
+git add tldw_Server_API/app/core/Jobs/manager.py tldw_Server_API/tests/Jobs/test_jobs_event_owner_attribution.py
+git commit -m "fix(jobs): enforce owner attribution on completion/failure events"
+```
+
 ### Task 6: Add Jobs Event -> In-App Notification Bridge
 
 **Files:**
@@ -262,6 +386,7 @@ Expected: FAIL due to missing service.
 
 - Poll/tail `job_events` for `job.completed` and `job.failed`.
 - Resolve owning user and enforce prefs.
+- Skip unresolved-owner events (no user notification), record metric/log entry.
 - Write deduped `user_notifications` rows.
 - Persist cursor safely.
 
@@ -314,6 +439,8 @@ Expected: FAIL due to missing endpoints.
 Implement:
 - `/api/v1/tasks` CRUD + `/api/v1/tasks/{id}/snooze`
 - `/api/v1/notifications` list/read/dismiss/unread-count/preferences
+- `/api/v1/notifications/{id}/snooze`
+- Add explicit route dependencies for required scopes/permissions/rate-limit keys.
 
 **Step 4: Run tests to verify they pass**
 
@@ -350,6 +477,7 @@ Expected: FAIL.
 
 - Add SSE stream with cursor support and heartbeat.
 - Emit on newly created `user_notifications` rows.
+- Add per-user burst control/coalescing behavior for high-volume event periods.
 
 **Step 4: Run test to verify it passes**
 
@@ -372,10 +500,20 @@ git commit -m "feat(notifications): add SSE stream endpoint"
 **Step 1: Write the failing test**
 
 ```python
-def test_notifications_services_start_when_enabled(monkeypatch):
+def test_notifications_services_start_when_enabled(monkeypatch, app):
     monkeypatch.setenv("REMINDERS_SCHEDULER_ENABLED", "true")
-    # assert startup wires scheduler and workers
-    assert True
+    called = {"scheduler": False}
+
+    async def _fake_start(*args, **kwargs):
+        called["scheduler"] = True
+        return None
+
+    monkeypatch.setattr("tldw_Server_API.app.services.reminders_scheduler.start_reminders_scheduler", _fake_start)
+    # enter startup/shutdown lifecycle for app under test
+    from fastapi.testclient import TestClient
+    with TestClient(app):
+        pass
+    assert called["scheduler"] is True
 ```
 
 **Step 2: Run test to verify it fails meaningfully**
@@ -430,7 +568,8 @@ Expected: FAIL due to missing page/API wiring.
 
 - Add notifications page with inbox list + mark read + dismiss.
 - Add SSE/poll listener for realtime new-notification events.
-- Show toast with Snooze button; on click call `/api/v1/tasks/{id}/snooze`.
+- Show toast with Snooze button; on click call `/api/v1/notifications/{id}/snooze`.
+- For bursty updates, coalesce toast messages while keeping inbox rows intact.
 
 **Step 4: Run test to verify it passes**
 
@@ -476,7 +615,6 @@ Expected: no new high-severity findings in changed code.
 **Step 5: Commit**
 
 ```bash
-git add Docs/API-related README.md
+git add Docs/API-related/Reminder_Notifications_API.md README.md
 git commit -m "docs: add reminders and notifications API usage"
 ```
-
