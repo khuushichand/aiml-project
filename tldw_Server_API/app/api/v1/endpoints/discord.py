@@ -732,7 +732,7 @@ def _enqueue_discord_job(
 
 
 @router.post("/interactions")
-async def discord_interactions(request: Request):
+async def discord_interactions(request: Request) -> JSONResponse:
     raw_body = await request.body()
     ok, error = _verify_discord_signature(
         raw_body,
