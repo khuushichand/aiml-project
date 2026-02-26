@@ -81,6 +81,21 @@ def test_unified_schema_research_loop_valid_when_query_classification_enabled():
     assert req.enable_query_classification is True
 
 
+def test_unified_schema_accepts_pre_retrieval_clarification_fields():
+    from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGRequest
+
+    req = UnifiedRAGRequest(
+        query="Explain this",
+        enable_generation=True,
+        enable_pre_retrieval_clarification=None,
+        clarification_timeout_sec=1.2,
+        enable_research_action_dedup=True,
+    )
+    assert req.enable_pre_retrieval_clarification is None
+    assert req.clarification_timeout_sec == pytest.approx(1.2)
+    assert req.enable_research_action_dedup is True
+
+
 @pytest.mark.asyncio
 async def test_unified_pipeline_invalid_query_returns_result():
     """Invalid/empty query should return a UnifiedSearchResult with an error, not raise or return other types."""

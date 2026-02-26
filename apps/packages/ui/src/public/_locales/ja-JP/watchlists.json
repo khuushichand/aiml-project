@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "ブリーフィングキュー"
+  },
+  "items_includeInNextBriefing": {
+    "message": "次のブリーフィングに含める"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "ブリーフィングキューから削除"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "この項目はすでにブリーフィング出力に含まれています。"
+  },
+  "items_briefingIncluded": {
+    "message": "次のブリーフィングキューに追加しました。"
+  },
+  "items_briefingRemoved": {
+    "message": "ブリーフィングキューから削除しました。"
+  },
+  "items_briefingIncludeError": {
+    "message": "項目をブリーフィングに含められませんでした。"
+  },
+  "items_queuedTag": {
+    "message": "キュー済み"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "実行を選択"
+  },
+  "items_queue_runOption": {
+    "message": "実行 #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "キューからレポートを生成するには実行を選択してください。"
+  },
+  "items_queue_empty": {
+    "message": "この実行にはキュー済み項目がありません。"
+  },
+  "items_queue_generated": {
+    "message": "{{count}} 件のキュー済み項目{{plural}}からレポートを作成しました。"
+  },
+  "items_queue_generateError": {
+    "message": "キュー済み項目からレポートを生成できませんでした。"
+  },
+  "items_queue_generateReport": {
+    "message": "キューからレポートを生成"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "I kø til briefing"
+  },
+  "items_includeInNextBriefing": {
+    "message": "Inkluder i næste briefing"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "Fjern fra briefingkø"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "Denne post er allerede inkluderet i briefing-output."
+  },
+  "items_briefingIncluded": {
+    "message": "Tilføjet til næste briefingkø."
+  },
+  "items_briefingRemoved": {
+    "message": "Fjernet fra briefingkøen."
+  },
+  "items_briefingIncludeError": {
+    "message": "Kunne ikke inkludere posten i briefing."
+  },
+  "items_queuedTag": {
+    "message": "I kø"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "Vælg kørsel"
+  },
+  "items_queue_runOption": {
+    "message": "Kørsel #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "Vælg en kørsel for at generere en rapport fra køen."
+  },
+  "items_queue_empty": {
+    "message": "Ingen køede poster fundet for denne kørsel."
+  },
+  "items_queue_generated": {
+    "message": "Oprettede rapport fra {{count}} køet post{{plural}}."
+  },
+  "items_queue_generateError": {
+    "message": "Kunne ikke generere rapport fra køede poster."
+  },
+  "items_queue_generateReport": {
+    "message": "Generer rapport fra kø"
+  }
+}

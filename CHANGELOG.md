@@ -36,6 +36,12 @@ and this project adheres to Some kind of Versioning
   - Added static duplicate guard coverage for Watchlists source files (`useWatchlistsStore` selector reuse, duplicate top-level identifiers, duplicate interface keys).
   - Added `test:watchlists:typecheck` package script and wired it into the Watchlists scale gate workflow to prevent silent duplicate/type-regression drift.
   - Added/updated regression coverage for quick-setup candidate preview mocking, accessibility toggle labeling contracts, and run-notification polling harness consistency.
+- RAG pipeline parity improvements:
+  - Added pre-retrieval clarification gating (`clarification_gate.py`) with heuristic-first ambiguity detection and timeout-bounded fallback behavior.
+  - Added unified request fields for clarification/dedup controls: `enable_pre_retrieval_clarification`, `clarification_timeout_sec`, and `enable_research_action_dedup`.
+  - Added unified-pipeline clarification short-circuit for ambiguous generation requests (`200 OK` with clarifying prompt in `generated_answer` plus clarification metadata).
+  - Added research-loop action-signature dedup (web/academic/discussion/local DB) with result reuse and `action_dedup` metadata reporting.
+  - Added regression coverage for schema acceptance, clarification short-circuit behavior, clarification metric emission, action-signature dedup (unit + integration), and `/api/v1/rag/features` contract updates.
 
 ### Changed
 - Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
@@ -54,6 +60,7 @@ and this project adheres to Some kind of Versioning
 - Watchlists pipeline contract now carries selected template format (`md` or `html`) through job defaults and output-create payload construction instead of forcing Markdown.
 - Watchlists source delete confirmation copy now reuses a single locale key across standard and in-use delete flows to reduce translation-key duplication.
 - Watchlists guided quick setup now uses a single audio preference field (`includeAudioBriefing`) across telemetry, preview copy, and submission flow instead of dual field state.
+- RAG features/capabilities surfaces now advertise pre-retrieval clarification and research action-dedup support (`/api/v1/rag/features`, `/api/v1/rag/capabilities`, API guide, and capabilities docs).
 
 ### Removed
 - No removals in this session.
@@ -73,6 +80,7 @@ and this project adheres to Some kind of Versioning
 - Fixed Watchlists static-guard false positives by distinguishing type/value namespaces and limiting interface-property scans to top-level declarations.
 - Fixed Watchlists quick-setup review/test-flow regressions caused by stale CTA label assumptions and missing source-preview service mocks in the Overview test suite.
 - Fixed Watchlists a11y/load-retry test drift for Sources/Monitors toggles by aligning assertions with row-context ARIA labels and current table-render behavior.
+- Fixed redundant iterative research-loop calls for equivalent action/query signatures by reusing previously successful action outputs.
 
 
 ## [0.1.24] 2026-02-22

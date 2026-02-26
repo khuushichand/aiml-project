@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "En cola para informe"
+  },
+  "items_includeInNextBriefing": {
+    "message": "Incluir en el próximo informe"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "Quitar de la cola de informes"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "Este elemento ya está incluido en las salidas del informe."
+  },
+  "items_briefingIncluded": {
+    "message": "Se añadió a la cola del próximo informe."
+  },
+  "items_briefingRemoved": {
+    "message": "Se quitó de la cola de informes."
+  },
+  "items_briefingIncludeError": {
+    "message": "No se pudo incluir el elemento en el informe."
+  },
+  "items_queuedTag": {
+    "message": "En cola"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "Seleccionar ejecución"
+  },
+  "items_queue_runOption": {
+    "message": "Ejecución #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "Selecciona una ejecución para generar un informe desde la cola."
+  },
+  "items_queue_empty": {
+    "message": "No se encontraron elementos en cola para esta ejecución."
+  },
+  "items_queue_generated": {
+    "message": "Se creó un informe con {{count}} elemento{{plural}} en cola."
+  },
+  "items_queue_generateError": {
+    "message": "No se pudo generar un informe a partir de los elementos en cola."
+  },
+  "items_queue_generateReport": {
+    "message": "Generar informe desde la cola"
+  }
+}

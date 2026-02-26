@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "En cola para informe",
+    "includeInNextBriefing": "Incluir en el próximo informe",
+    "removeFromBriefingQueue": "Quitar de la cola de informes",
+    "briefingAlreadyIncluded": "Este elemento ya está incluido en las salidas del informe.",
+    "briefingIncluded": "Se añadió a la cola del próximo informe.",
+    "briefingRemoved": "Se quitó de la cola de informes.",
+    "briefingIncludeError": "No se pudo incluir el elemento en el informe.",
+    "queuedTag": "En cola",
+    "queue": {
+      "runPlaceholder": "Seleccionar ejecución",
+      "runOption": "Ejecución #{{id}}",
+      "runRequired": "Selecciona una ejecución para generar un informe desde la cola.",
+      "empty": "No se encontraron elementos en cola para esta ejecución.",
+      "generated": "Se creó un informe con {{count}} elemento{{plural}} en cola.",
+      "generateError": "No se pudo generar un informe a partir de los elementos en cola.",
+      "generateReport": "Generar informe desde la cola"
+    }
+  }
+}

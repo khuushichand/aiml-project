@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "已加入簡報佇列"
+  },
+  "items_includeInNextBriefing": {
+    "message": "加入下一次簡報"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "從簡報佇列移除"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "此項目已包含在簡報輸出中。"
+  },
+  "items_briefingIncluded": {
+    "message": "已加入下一次簡報佇列。"
+  },
+  "items_briefingRemoved": {
+    "message": "已從簡報佇列移除。"
+  },
+  "items_briefingIncludeError": {
+    "message": "無法將項目加入簡報。"
+  },
+  "items_queuedTag": {
+    "message": "已排入佇列"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "選擇執行"
+  },
+  "items_queue_runOption": {
+    "message": "執行 #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "請選擇一個執行以從佇列產生報告。"
+  },
+  "items_queue_empty": {
+    "message": "此執行找不到佇列項目。"
+  },
+  "items_queue_generated": {
+    "message": "已從 {{count}} 個佇列項目{{plural}}建立報告。"
+  },
+  "items_queue_generateError": {
+    "message": "無法從佇列項目產生報告。"
+  },
+  "items_queue_generateReport": {
+    "message": "從佇列產生報告"
+  }
+}

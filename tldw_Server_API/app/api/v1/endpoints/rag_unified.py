@@ -814,7 +814,8 @@ async def get_capabilities(request: Request):
         },
         "answer_generation": {
             "supported": True,
-            "configurable_model": True
+            "configurable_model": True,
+            "pre_retrieval_clarification": True
         },
         "reranking": {
             "supported": True,
@@ -882,7 +883,8 @@ async def get_capabilities(request: Request):
         "resilience": {
             "supported": True,
             "retries": True,
-            "circuit_breakers": True
+            "circuit_breakers": True,
+            "research_action_dedup": True
         },
         "streaming": {
             "supported": True,
@@ -2251,7 +2253,14 @@ async def list_features():
         },
         "generation": {
                 "description": "Generate answers from retrieved context",
-                "parameters": ["enable_generation", "generation_provider", "generation_model", "generation_prompt"]
+                "parameters": [
+                    "enable_generation",
+                    "generation_provider",
+                    "generation_model",
+                    "generation_prompt",
+                    "enable_pre_retrieval_clarification",
+                    "clarification_timeout_sec",
+                ]
         },
         "reranking": {
                 "description": "Rerank documents for better relevance",
@@ -2289,7 +2298,12 @@ async def list_features():
         },
         "resilience": {
                 "description": "Fault tolerance with retries and circuit breakers",
-                "parameters": ["enable_resilience", "retry_attempts", "circuit_breaker"]
+                "parameters": [
+                    "enable_resilience",
+                    "retry_attempts",
+                    "circuit_breaker",
+                    "enable_research_action_dedup",
+                ]
         }
     }
 

@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "En file pour briefing",
+    "includeInNextBriefing": "Inclure dans le prochain briefing",
+    "removeFromBriefingQueue": "Retirer de la file du briefing",
+    "briefingAlreadyIncluded": "Cet élément est déjà inclus dans les sorties de briefing.",
+    "briefingIncluded": "Ajouté à la file du prochain briefing.",
+    "briefingRemoved": "Retiré de la file du briefing.",
+    "briefingIncludeError": "Échec de l’inclusion de l’élément dans le briefing.",
+    "queuedTag": "En file",
+    "queue": {
+      "runPlaceholder": "Sélectionner une exécution",
+      "runOption": "Exécution n°{{id}}",
+      "runRequired": "Sélectionnez une exécution pour générer un rapport depuis la file.",
+      "empty": "Aucun élément en file trouvé pour cette exécution.",
+      "generated": "Rapport créé à partir de {{count}} élément{{plural}} en file.",
+      "generateError": "Échec de la génération du rapport à partir des éléments en file.",
+      "generateReport": "Générer un rapport depuis la file"
+    }
+  }
+}

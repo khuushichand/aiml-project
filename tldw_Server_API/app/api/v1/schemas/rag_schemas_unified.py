@@ -944,6 +944,18 @@ class UnifiedRAGRequest(BaseModel):
         description="Custom prompt template for generation",
         example=None
     )
+    enable_pre_retrieval_clarification: Optional[bool] = Field(
+        default=None,
+        description="When None, defaults to true if enable_generation=true. Enables pre-retrieval clarification gating.",
+        example=None,
+    )
+    clarification_timeout_sec: Optional[float] = Field(
+        default=None,
+        ge=0.05,
+        le=10.0,
+        description="Timeout budget for LLM clarification decision on borderline queries.",
+        example=1.5,
+    )
 
     max_generation_tokens: int = Field(
         default=500,
@@ -1274,6 +1286,11 @@ class UnifiedRAGRequest(BaseModel):
                     "analyzes results, and refines queries until sufficient information is found. "
                     "Requires enable_query_classification=true.",
         example=False,
+    )
+    enable_research_action_dedup: bool = Field(
+        default=True,
+        description="Skip duplicate research loop actions by reusing prior results for equivalent action signatures.",
+        example=True,
     )
     enable_discussion_search: bool = Field(
         default=False,

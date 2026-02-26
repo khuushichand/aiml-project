@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "У черзі на брифінг",
+    "includeInNextBriefing": "Додати до наступного брифінгу",
+    "removeFromBriefingQueue": "Видалити з черги брифінгу",
+    "briefingAlreadyIncluded": "Цей елемент уже включено до матеріалів брифінгу.",
+    "briefingIncluded": "Додано до черги наступного брифінгу.",
+    "briefingRemoved": "Видалено з черги брифінгу.",
+    "briefingIncludeError": "Не вдалося додати елемент до брифінгу.",
+    "queuedTag": "У черзі",
+    "queue": {
+      "runPlaceholder": "Виберіть запуск",
+      "runOption": "Запуск #{{id}}",
+      "runRequired": "Виберіть запуск, щоб створити звіт із черги.",
+      "empty": "Для цього запуску не знайдено елементів у черзі.",
+      "generated": "Створено звіт із {{count}} елемент{{plural}} у черзі.",
+      "generateError": "Не вдалося створити звіт з елементів у черзі.",
+      "generateReport": "Створити звіт із черги"
+    }
+  }
+}

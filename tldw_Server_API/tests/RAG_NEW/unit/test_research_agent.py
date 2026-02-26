@@ -230,3 +230,54 @@ async def test_research_loop_skips_duplicate_scrape_url_fetch(monkeypatch):
     assert output.metadata["url_dedup"]["urls_seen"] == 1
     assert output.metadata["url_dedup"]["duplicates_merged"] == 1
     assert output.metadata["url_dedup"]["duplicate_fetches_skipped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_research_loop_skips_duplicate_web_search_signature(monkeypatch):
+    import tldw_Server_API.app.core.Chat.chat_service as chat_service
+    import tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs as web_apis
+
+    llm_responses = iter([
+        '{"reasoning":"first","action":"web_search","params":{"query":"rag updates","result_count":1}}',
+        '{"reasoning":"duplicate","action":"web_search","params":{"query":"rag updates","result_count":1}}',
+        '{"reasoning":"done","action":"done","params":{"reason":"enough"}}',
+    ])
+
+    async def _fake_chat_call_async(**_kwargs):  # noqa: ANN001
+        return next(llm_responses)
+
+    calls = {"to_thread": 0}
+
+    def _fake_perform_websearch(**_kwargs):  # noqa: ANN001
+        return {
+            "results": [
+                {
+                    "title": "RAG Updates",
+                    "url": "https://example.com/rag-updates",
+                    "content": "Latest updates",
+                }
+            ]
+        }
+
+    async def _fake_to_thread(func, *args, **kwargs):  # noqa: ANN001
+        calls["to_thread"] += 1
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(chat_service, "perform_chat_api_call_async", _fake_chat_call_async)
+    monkeypatch.setattr(web_apis, "perform_websearch", _fake_perform_websearch)
+    monkeypatch.setattr(ra.asyncio, "to_thread", _fake_to_thread)
+
+    classification = QueryClassification(
+        skip_search=False,
+        search_local_db=False,
+        search_web=True,
+        standalone_query="rag updates",
+    )
+    out = await ra.research_loop(
+        query="rag updates",
+        classification=classification,
+        mode="speed",
+        max_iterations=3,
+    )
+    assert out.metadata["action_dedup"]["duplicates_skipped"] >= 1
+    assert calls["to_thread"] == 1

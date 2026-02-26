@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "I kö för briefing"
+  },
+  "items_includeInNextBriefing": {
+    "message": "Inkludera i nästa briefing"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "Ta bort från briefingkön"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "Det här objektet ingår redan i briefing-utdata."
+  },
+  "items_briefingIncluded": {
+    "message": "Lades till i nästa briefingkö."
+  },
+  "items_briefingRemoved": {
+    "message": "Togs bort från briefingkön."
+  },
+  "items_briefingIncludeError": {
+    "message": "Kunde inte inkludera objektet i briefing."
+  },
+  "items_queuedTag": {
+    "message": "I kö"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "Välj körning"
+  },
+  "items_queue_runOption": {
+    "message": "Körning #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "Välj en körning för att skapa en rapport från kön."
+  },
+  "items_queue_empty": {
+    "message": "Inga köade objekt hittades för denna körning."
+  },
+  "items_queue_generated": {
+    "message": "Skapade rapport från {{count}} köat objekt{{plural}}."
+  },
+  "items_queue_generateError": {
+    "message": "Kunde inte skapa rapport från köade objekt."
+  },
+  "items_queue_generateReport": {
+    "message": "Skapa rapport från kö"
+  }
+}

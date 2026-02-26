@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "已加入简报队列",
+    "includeInNextBriefing": "加入下一次简报",
+    "removeFromBriefingQueue": "从简报队列中移除",
+    "briefingAlreadyIncluded": "此条目已包含在简报输出中。",
+    "briefingIncluded": "已加入下一次简报队列。",
+    "briefingRemoved": "已从简报队列中移除。",
+    "briefingIncludeError": "无法将条目加入简报。",
+    "queuedTag": "已排队",
+    "queue": {
+      "runPlaceholder": "选择运行",
+      "runOption": "运行 #{{id}}",
+      "runRequired": "请选择一个运行以从队列生成报告。",
+      "empty": "此运行未找到排队条目。",
+      "generated": "已从 {{count}} 个排队条目{{plural}}创建报告。",
+      "generateError": "无法从排队条目生成报告。",
+      "generateReport": "从队列生成报告"
+    }
+  }
+}

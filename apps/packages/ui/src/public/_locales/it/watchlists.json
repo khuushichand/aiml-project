@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "In coda per briefing"
+  },
+  "items_includeInNextBriefing": {
+    "message": "Includi nel prossimo briefing"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "Rimuovi dalla coda briefing"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "Questo elemento è già incluso negli output del briefing."
+  },
+  "items_briefingIncluded": {
+    "message": "Aggiunto alla coda del prossimo briefing."
+  },
+  "items_briefingRemoved": {
+    "message": "Rimosso dalla coda briefing."
+  },
+  "items_briefingIncludeError": {
+    "message": "Impossibile includere l'elemento nel briefing."
+  },
+  "items_queuedTag": {
+    "message": "In coda"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "Seleziona esecuzione"
+  },
+  "items_queue_runOption": {
+    "message": "Esecuzione #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "Seleziona un'esecuzione per generare un report dalla coda."
+  },
+  "items_queue_empty": {
+    "message": "Nessun elemento in coda trovato per questa esecuzione."
+  },
+  "items_queue_generated": {
+    "message": "Creato report da {{count}} elemento{{plural}} in coda."
+  },
+  "items_queue_generateError": {
+    "message": "Impossibile generare il report dagli elementi in coda."
+  },
+  "items_queue_generateReport": {
+    "message": "Genera report dalla coda"
+  }
+}

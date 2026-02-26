@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "브리핑 대기열"
+  },
+  "items_includeInNextBriefing": {
+    "message": "다음 브리핑에 포함"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "브리핑 대기열에서 제거"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "이 항목은 이미 브리핑 출력에 포함되어 있습니다."
+  },
+  "items_briefingIncluded": {
+    "message": "다음 브리핑 대기열에 추가되었습니다."
+  },
+  "items_briefingRemoved": {
+    "message": "브리핑 대기열에서 제거되었습니다."
+  },
+  "items_briefingIncludeError": {
+    "message": "항목을 브리핑에 포함하지 못했습니다."
+  },
+  "items_queuedTag": {
+    "message": "대기열"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "실행 선택"
+  },
+  "items_queue_runOption": {
+    "message": "실행 #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "대기열 보고서를 생성하려면 실행을 선택하세요."
+  },
+  "items_queue_empty": {
+    "message": "이 실행에서 대기열 항목을 찾을 수 없습니다."
+  },
+  "items_queue_generated": {
+    "message": "대기열 항목 {{count}}개{{plural}}로 보고서를 생성했습니다."
+  },
+  "items_queue_generateError": {
+    "message": "대기열 항목으로 보고서를 생성하지 못했습니다."
+  },
+  "items_queue_generateReport": {
+    "message": "대기열에서 보고서 생성"
+  }
+}

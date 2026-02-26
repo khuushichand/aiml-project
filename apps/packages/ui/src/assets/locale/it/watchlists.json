@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "In coda per briefing",
+    "includeInNextBriefing": "Includi nel prossimo briefing",
+    "removeFromBriefingQueue": "Rimuovi dalla coda briefing",
+    "briefingAlreadyIncluded": "Questo elemento è già incluso negli output del briefing.",
+    "briefingIncluded": "Aggiunto alla coda del prossimo briefing.",
+    "briefingRemoved": "Rimosso dalla coda briefing.",
+    "briefingIncludeError": "Impossibile includere l'elemento nel briefing.",
+    "queuedTag": "In coda",
+    "queue": {
+      "runPlaceholder": "Seleziona esecuzione",
+      "runOption": "Esecuzione #{{id}}",
+      "runRequired": "Seleziona un'esecuzione per generare un report dalla coda.",
+      "empty": "Nessun elemento in coda trovato per questa esecuzione.",
+      "generated": "Creato report da {{count}} elemento{{plural}} in coda.",
+      "generateError": "Impossibile generare il report dagli elementi in coda.",
+      "generateReport": "Genera report dalla coda"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "في قائمة انتظار الإحاطة"
+  },
+  "items_includeInNextBriefing": {
+    "message": "أدرج في الإحاطة التالية"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "إزالة من قائمة انتظار الإحاطة"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "هذا العنصر مُضمَّن بالفعل في مخرجات الإحاطة."
+  },
+  "items_briefingIncluded": {
+    "message": "تمت الإضافة إلى قائمة انتظار الإحاطة التالية."
+  },
+  "items_briefingRemoved": {
+    "message": "تمت الإزالة من قائمة انتظار الإحاطة."
+  },
+  "items_briefingIncludeError": {
+    "message": "تعذر إدراج العنصر في الإحاطة."
+  },
+  "items_queuedTag": {
+    "message": "قيد الانتظار"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "اختر تشغيلًا"
+  },
+  "items_queue_runOption": {
+    "message": "تشغيل رقم {{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "اختر تشغيلًا لإنشاء تقرير من العناصر في قائمة الانتظار."
+  },
+  "items_queue_empty": {
+    "message": "لم يتم العثور على عناصر في قائمة الانتظار لهذا التشغيل."
+  },
+  "items_queue_generated": {
+    "message": "تم إنشاء تقرير من {{count}} عنصر{{plural}} في قائمة الانتظار."
+  },
+  "items_queue_generateError": {
+    "message": "تعذر إنشاء تقرير من العناصر في قائمة الانتظار."
+  },
+  "items_queue_generateReport": {
+    "message": "إنشاء تقرير من قائمة الانتظار"
+  }
+}

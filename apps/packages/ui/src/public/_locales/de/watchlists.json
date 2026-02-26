@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "Für Briefing vorgemerkt"
+  },
+  "items_includeInNextBriefing": {
+    "message": "In nächstes Briefing aufnehmen"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "Aus Briefing-Warteschlange entfernen"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "Dieses Element ist bereits in Briefing-Ausgaben enthalten."
+  },
+  "items_briefingIncluded": {
+    "message": "Zur nächsten Briefing-Warteschlange hinzugefügt."
+  },
+  "items_briefingRemoved": {
+    "message": "Aus der Briefing-Warteschlange entfernt."
+  },
+  "items_briefingIncludeError": {
+    "message": "Element konnte nicht in das Briefing aufgenommen werden."
+  },
+  "items_queuedTag": {
+    "message": "In Warteschlange"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "Lauf auswählen"
+  },
+  "items_queue_runOption": {
+    "message": "Lauf #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "Wählen Sie einen Lauf aus, um einen Bericht aus der Warteschlange zu erstellen."
+  },
+  "items_queue_empty": {
+    "message": "Keine Elemente in der Warteschlange für diesen Lauf gefunden."
+  },
+  "items_queue_generated": {
+    "message": "Bericht aus {{count}} Warteschlangen-Element{{plural}} erstellt."
+  },
+  "items_queue_generateError": {
+    "message": "Bericht aus Warteschlangen-Elementen konnte nicht erstellt werden."
+  },
+  "items_queue_generateReport": {
+    "message": "Bericht aus Warteschlange erstellen"
+  }
+}
