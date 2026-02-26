@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from loguru import logger
 
@@ -115,10 +116,15 @@ _SQLITE_PRAGMA_TABLES = {
     "content_item_tags",
     "content_items",
     "file_artifacts",
+    "notification_preferences",
+    "notification_bridge_state",
     "output_templates",
     "outputs",
+    "reminder_task_runs",
+    "reminder_tasks",
     "reading_digest_schedules",
     "reading_highlights",
+    "user_notifications",
 }
 
 
@@ -214,6 +220,28 @@ class ReadingDigestScheduleRow:
     template_name: str | None
     format: str
     retention_days: int | None
+    last_run_at: str | None
+    next_run_at: str | None
+    last_status: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class ReminderTaskRow:
+    id: str
+    user_id: str
+    tenant_id: str
+    title: str
+    body: str | None
+    link_type: str | None
+    link_id: str | None
+    link_url: str | None
+    schedule_kind: str
+    run_at: str | None
+    cron: str | None
+    timezone: str | None
+    enabled: bool
     last_run_at: str | None
     next_run_at: str | None
     last_status: str | None
@@ -537,6 +565,88 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_reading_digest_user ON reading_digest_schedules(user_id);
             CREATE INDEX IF NOT EXISTS idx_reading_digest_tenant ON reading_digest_schedules(tenant_id);
 
+            CREATE TABLE IF NOT EXISTS reminder_tasks (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT,
+                link_type TEXT,
+                link_id TEXT,
+                link_url TEXT,
+                schedule_kind TEXT NOT NULL,
+                run_at TEXT,
+                cron TEXT,
+                timezone TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                last_status TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminder_tasks_user ON reminder_tasks(user_id);
+            CREATE INDEX IF NOT EXISTS idx_reminder_tasks_user_enabled ON reminder_tasks(user_id, enabled);
+
+            CREATE TABLE IF NOT EXISTS reminder_task_runs (
+                id BIGSERIAL PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                scheduled_for TEXT,
+                job_id TEXT,
+                run_slot_utc TEXT NOT NULL,
+                run_slot_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminder_task_runs_task_id ON reminder_task_runs(task_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_reminder_task_runs_slot ON reminder_task_runs(task_id, run_slot_key);
+
+            CREATE TABLE IF NOT EXISTS user_notifications (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                source_task_id TEXT,
+                source_task_run_id BIGINT,
+                source_job_id TEXT,
+                source_domain TEXT,
+                source_job_type TEXT,
+                link_type TEXT,
+                link_id TEXT,
+                link_url TEXT,
+                dedupe_key TEXT,
+                retention_until TEXT,
+                archived_at TEXT,
+                created_at TEXT NOT NULL,
+                read_at TEXT,
+                dismissed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_user_notifications_user_dedupe ON user_notifications(user_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS notification_preferences (
+                user_id TEXT PRIMARY KEY,
+                reminder_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                job_completed_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                job_failed_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_bridge_state (
+                consumer_name TEXT PRIMARY KEY,
+                last_event_id BIGINT,
+                lease_owner_id TEXT,
+                lease_expires_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS file_artifacts (
                 id BIGSERIAL PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -703,6 +813,88 @@ class CollectionsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_reading_digest_user ON reading_digest_schedules(user_id);
             CREATE INDEX IF NOT EXISTS idx_reading_digest_tenant ON reading_digest_schedules(tenant_id);
+
+            CREATE TABLE IF NOT EXISTS reminder_tasks (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT,
+                link_type TEXT,
+                link_id TEXT,
+                link_url TEXT,
+                schedule_kind TEXT NOT NULL,
+                run_at TEXT,
+                cron TEXT,
+                timezone TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                last_status TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminder_tasks_user ON reminder_tasks(user_id);
+            CREATE INDEX IF NOT EXISTS idx_reminder_tasks_user_enabled ON reminder_tasks(user_id, enabled);
+
+            CREATE TABLE IF NOT EXISTS reminder_task_runs (
+                id INTEGER PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                scheduled_for TEXT,
+                job_id TEXT,
+                run_slot_utc TEXT NOT NULL,
+                run_slot_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminder_task_runs_task_id ON reminder_task_runs(task_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_reminder_task_runs_slot ON reminder_task_runs(task_id, run_slot_key);
+
+            CREATE TABLE IF NOT EXISTS user_notifications (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                source_task_id TEXT,
+                source_task_run_id INTEGER,
+                source_job_id TEXT,
+                source_domain TEXT,
+                source_job_type TEXT,
+                link_type TEXT,
+                link_id TEXT,
+                link_url TEXT,
+                dedupe_key TEXT,
+                retention_until TEXT,
+                archived_at TEXT,
+                created_at TEXT NOT NULL,
+                read_at TEXT,
+                dismissed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_user_notifications_user_dedupe ON user_notifications(user_id, dedupe_key);
+
+            CREATE TABLE IF NOT EXISTS notification_preferences (
+                user_id TEXT PRIMARY KEY,
+                reminder_enabled INTEGER NOT NULL DEFAULT 1,
+                job_completed_enabled INTEGER NOT NULL DEFAULT 1,
+                job_failed_enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_bridge_state (
+                consumer_name TEXT PRIMARY KEY,
+                last_event_id INTEGER,
+                lease_owner_id TEXT,
+                lease_expires_at TEXT,
+                updated_at TEXT NOT NULL
+            );
 
             CREATE TABLE IF NOT EXISTS file_artifacts (
                 id INTEGER PRIMARY KEY,
@@ -3602,6 +3794,143 @@ class CollectionsDatabase:
         params.extend(status_params)
         res = self.backend.execute(q, tuple(params))
         return res.rowcount > 0
+
+    # ------------------------
+    # Reminder tasks API
+    # ------------------------
+    def _reminder_task_row_from_db(self, row: dict[str, Any]) -> ReminderTaskRow:
+        return ReminderTaskRow(
+            id=str(row.get("id")),
+            user_id=str(row.get("user_id")),
+            tenant_id=str(row.get("tenant_id") or "default"),
+            title=str(row.get("title") or ""),
+            body=row.get("body"),
+            link_type=row.get("link_type"),
+            link_id=row.get("link_id"),
+            link_url=row.get("link_url"),
+            schedule_kind=str(row.get("schedule_kind") or ""),
+            run_at=row.get("run_at"),
+            cron=row.get("cron"),
+            timezone=row.get("timezone"),
+            enabled=self._coerce_bool_setting(row.get("enabled"), True),
+            last_run_at=row.get("last_run_at"),
+            next_run_at=row.get("next_run_at"),
+            last_status=row.get("last_status"),
+            created_at=str(row.get("created_at") or ""),
+            updated_at=str(row.get("updated_at") or ""),
+        )
+
+    def create_reminder_task(
+        self,
+        *,
+        title: str,
+        body: str | None,
+        schedule_kind: str,
+        run_at: str | None,
+        cron: str | None,
+        timezone: str | None,
+        enabled: bool = True,
+        link_type: str | None = None,
+        link_id: str | None = None,
+        link_url: str | None = None,
+        tenant_id: str = "default",
+    ) -> str:
+        now = _utcnow_iso()
+        task_id = uuid4().hex
+        enabled_flag = self._coerce_bool_flag(enabled, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        q = (
+            "INSERT INTO reminder_tasks ("
+            "id, user_id, tenant_id, title, body, link_type, link_id, link_url, "
+            "schedule_kind, run_at, cron, timezone, enabled, last_run_at, next_run_at, last_status, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            task_id,
+            self.user_id,
+            tenant_id,
+            title,
+            body,
+            link_type,
+            link_id,
+            link_url,
+            schedule_kind,
+            run_at,
+            cron,
+            timezone,
+            enabled_flag,
+            None,
+            None,
+            None,
+            now,
+            now,
+        )
+        self._execute_insert(q, params)
+        return task_id
+
+    def get_reminder_task(self, task_id: str) -> ReminderTaskRow:
+        row = self.backend.execute(
+            "SELECT * FROM reminder_tasks WHERE id = ? AND user_id = ?",
+            (task_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("reminder_task_not_found")
+        return self._reminder_task_row_from_db(row)
+
+    def list_reminder_tasks(self, *, include_disabled: bool = True) -> list[ReminderTaskRow]:
+        params: list[Any] = [self.user_id]
+        where = "user_id = ?"
+        if not include_disabled:
+            where += " AND enabled = ?"
+            params.append(self._coerce_bool_flag(True, postgres=self.backend.backend_type == BackendType.POSTGRESQL))
+        q = f"SELECT * FROM reminder_tasks WHERE {where} ORDER BY created_at DESC"  # nosec B608
+        rows = self.backend.execute(q, tuple(params)).rows
+        return [self._reminder_task_row_from_db(row) for row in rows]
+
+    def update_reminder_task(self, task_id: str, patch: dict[str, Any]) -> ReminderTaskRow:
+        if not patch:
+            return self.get_reminder_task(task_id)
+        fields: list[str] = []
+        params: list[Any] = []
+        for key in (
+            "title",
+            "body",
+            "link_type",
+            "link_id",
+            "link_url",
+            "schedule_kind",
+            "run_at",
+            "cron",
+            "timezone",
+            "last_run_at",
+            "next_run_at",
+            "last_status",
+        ):
+            if key in patch:
+                fields.append(f"{key} = ?")
+                params.append(patch.get(key))
+        if "enabled" in patch:
+            fields.append("enabled = ?")
+            params.append(
+                self._coerce_bool_flag(
+                    patch.get("enabled"),
+                    postgres=self.backend.backend_type == BackendType.POSTGRESQL,
+                )
+            )
+        fields.append("updated_at = ?")
+        params.append(_utcnow_iso())
+        params.extend([task_id, self.user_id])
+        q = f"UPDATE reminder_tasks SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
+        res = self.backend.execute(q, tuple(params))
+        if res.rowcount <= 0:
+            raise KeyError("reminder_task_not_found")
+        return self.get_reminder_task(task_id)
+
+    def delete_reminder_task(self, task_id: str) -> bool:
+        res = self.backend.execute(
+            "DELETE FROM reminder_tasks WHERE id = ? AND user_id = ?",
+            (task_id, self.user_id),
+        )
+        return bool(res.rowcount and res.rowcount > 0)
 
     def purge_expired_outputs(self) -> int:
         """Hard delete expired/retained outputs. Returns number of rows removed."""
