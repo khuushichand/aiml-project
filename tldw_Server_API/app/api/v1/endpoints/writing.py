@@ -10,7 +10,7 @@ import re
 from collections import Counter
 from typing import Any, NoReturn
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 from loguru import logger
 
@@ -772,6 +772,7 @@ async def update_writing_session(
 @router.delete(
     "/sessions/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a writing session",
     tags=["writing"],
 )
@@ -782,12 +783,12 @@ async def delete_writing_session(
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.sessions.delete")),
-) -> None:
+) -> Response:
     """Soft-delete a writing session."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.delete")
     try:
         db.soft_delete_writing_session(session_id, expected_version)
-        return None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
@@ -953,6 +954,7 @@ async def update_writing_template(
 @router.delete(
     "/templates/{name}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a writing template",
     tags=["writing"],
 )
@@ -963,12 +965,12 @@ async def delete_writing_template(
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.templates.delete")),
-) -> None:
+) -> Response:
     """Soft-delete a writing template."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.templates.delete")
     try:
         db.soft_delete_writing_template(name, expected_version)
-        return None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
@@ -1116,6 +1118,7 @@ async def update_writing_theme(
 @router.delete(
     "/themes/{name}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a writing theme",
     tags=["writing"],
 )
@@ -1126,12 +1129,12 @@ async def delete_writing_theme(
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.themes.delete")),
-) -> None:
+) -> Response:
     """Soft-delete a writing theme."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.themes.delete")
     try:
         db.soft_delete_writing_theme(name, expected_version)
-        return None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
 

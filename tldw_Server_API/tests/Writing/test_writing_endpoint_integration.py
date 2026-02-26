@@ -35,8 +35,11 @@ def client_with_writing_db(tmp_path, monkeypatch):
     def override_db_dep():
         return db
 
-    monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    # Keep this suite focused on writing routes and avoid heavyweight media/audio imports.
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+    monkeypatch.setenv("ROUTES_DISABLE", "media,audio")
+    monkeypatch.setenv("SKIP_AUDIO_ROUTERS_IN_TESTS", "1")
 
     from tldw_Server_API.app import main as app_main
 
@@ -290,6 +293,11 @@ def test_writing_capabilities_includes_extra_body_compat(client_with_writing_db:
     from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
 
     monkeypatch.setattr(writing_endpoints, "get_configured_providers_async", fake_get_configured_providers_async)
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_tokenizer_support",
+        lambda _provider, _model: writing_endpoints.WritingTokenizerSupport(available=False, error="test"),
+    )
 
     resp = client.get("/api/v1/writing/capabilities")
     assert resp.status_code == 200, resp.text
@@ -327,6 +335,13 @@ def test_writing_capabilities_requested_extra_body_compat_reflects_strict_runtim
 ):
     client = client_with_writing_db
     monkeypatch.setenv("LOCAL_LLM_STRICT_OPENAI_COMPAT", "true")
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_tokenizer",
+        lambda _provider, _model: (object(), "test-tokenizer"),
+    )
     resp = client.get(
         "/api/v1/writing/capabilities",
         params={
