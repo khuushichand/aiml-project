@@ -403,6 +403,10 @@ class RunDetail(BaseModel):
     log_path: str | None = None
     truncated: bool = False
     filtered_sample: list[dict[str, Any]] | None = None
+    audio_briefing_limit: int | None = None
+    audio_briefing_items_total: int | None = None
+    audio_briefing_items_used: int | None = None
+    audio_briefing_truncated: bool = False
 
 
 class ScrapedItem(BaseModel):
@@ -427,6 +431,15 @@ class ScrapedItem(BaseModel):
 class ScrapedItemsListResponse(BaseModel):
     items: list[ScrapedItem]
     total: int
+
+
+class ScrapedItemSmartCountsResponse(BaseModel):
+    all: int = 0
+    today: int = 0
+    today_unread: int = 0
+    unread: int = 0
+    reviewed: int = 0
+    queued: int = 0
 
 
 class ScrapedItemUpdateRequest(BaseModel):

@@ -28,10 +28,6 @@ import {
   getOutputTemplateVersion,
   isAudioOutput
 } from "./outputMetadata"
-import {
-  getFocusableActiveElement,
-  restoreFocusToElement
-} from "../shared/focus-management"
 
 interface OutputPreviewDrawerProps {
   output: WatchlistOutput | null | undefined

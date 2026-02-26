@@ -791,7 +791,7 @@ export const ItemsTab: React.FC = () => {
     setItemsPage(1)
   }
 
-  const handleToggleReviewed = async (item: ScrapedItem) => {
+  const handleToggleReviewed = useCallback(async (item: ScrapedItem) => {
     setUpdatingItemId(item.id)
     try {
       const updated = await updateScrapedItem(item.id, { reviewed: !item.reviewed })
@@ -2330,11 +2330,18 @@ export const ItemsTab: React.FC = () => {
                         />
                       </div>
 
-                      <div className="mt-1 shrink-0">
-                        {!item.reviewed ? (
-                          <span className="block h-2.5 w-2.5 rounded-full bg-primary" />
+                      <div className="mt-1 shrink-0" aria-hidden="true">
+                        {item.reviewed ? (
+                          <CheckCircle2
+                            className="h-3.5 w-3.5 text-text-subtle"
+                            aria-label={t("watchlists:items.rowStatusReviewed", "Reviewed")}
+                          />
                         ) : (
-                          <span className="block h-2.5 w-2.5 rounded-full bg-border" />
+                          <span
+                            className="block h-2.5 w-2.5 rounded-full bg-primary"
+                            role="img"
+                            aria-label={t("watchlists:items.rowStatusUnread", "Unread")}
+                          />
                         )}
                       </div>
 

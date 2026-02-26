@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -95,6 +95,10 @@ interface PipelineBuilderValues {
   includeAudio: boolean
   audioVoice: string
   targetAudioMinutes: number
+  emailDeliveryEnabled: boolean
+  emailRecipients: string[]
+  chatbookDeliveryEnabled: boolean
+  chatbookTitle: string
   runNow: boolean
 }
 
@@ -106,6 +110,10 @@ const PIPELINE_DEFAULT_VALUES: PipelineBuilderValues = {
   includeAudio: true,
   audioVoice: "alloy",
   targetAudioMinutes: 8,
+  emailDeliveryEnabled: false,
+  emailRecipients: [],
+  chatbookDeliveryEnabled: false,
+  chatbookTitle: "",
   runNow: true
 }
 
@@ -116,8 +124,22 @@ const toPipelineDraft = (values: PipelineBuilderValues): BriefingPipelineDraft =
   templateName: values.templateName,
   includeAudio: values.includeAudio,
   audioVoice: values.includeAudio ? values.audioVoice : undefined,
-  targetAudioMinutes: values.includeAudio ? Number(values.targetAudioMinutes) : undefined
+  targetAudioMinutes: values.includeAudio ? Number(values.targetAudioMinutes) : undefined,
+  emailRecipients: values.emailDeliveryEnabled
+    ? (values.emailRecipients || []).map((entry) => String(entry || "").trim()).filter((entry) => entry.length > 0)
+    : [],
+  createChatbook: Boolean(values.chatbookDeliveryEnabled),
+  chatbookTitle: values.chatbookDeliveryEnabled ? String(values.chatbookTitle || "").trim() : undefined
 })
+
+const PIPELINE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+const normalizePipelineRecipients = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value
+      .map((entry) => String(entry || "").trim().toLowerCase())
+      .filter((entry) => entry.length > 0)
+    : []
 
 export const OverviewTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
@@ -619,6 +641,7 @@ export const OverviewTab: React.FC = () => {
         completedStep = "scope"
       } else if (pipelineSetupStep === 1) {
         const includeAudio = Boolean(pipelineSetupForm.getFieldValue("includeAudio"))
+        const emailDeliveryEnabled = Boolean(pipelineSetupForm.getFieldValue("emailDeliveryEnabled"))
         const fields: Array<keyof PipelineBuilderValues> = [
           "monitorName",
           "schedulePreset",
@@ -626,6 +649,9 @@ export const OverviewTab: React.FC = () => {
         ]
         if (includeAudio) {
           fields.push("audioVoice", "targetAudioMinutes")
+        }
+        if (emailDeliveryEnabled) {
+          fields.push("emailRecipients")
         }
         await pipelineSetupForm.validateFields(fields)
         completedStep = "briefing"
@@ -1026,25 +1052,6 @@ export const OverviewTab: React.FC = () => {
     t
   ])
 
-  const quickSetupDestinationHint = useMemo(() => {
-    if (quickSetupSnapshot.runNow) {
-      return t(
-        "watchlists:overview.onboarding.quickSetup.destinationHint.runNow",
-        "Starts one test run immediately and opens Activity details."
-      )
-    }
-    if (quickSetupSnapshot.setupGoal === "briefing") {
-      return t(
-        "watchlists:overview.onboarding.quickSetup.destinationHint.briefing",
-        "Opens Reports after setup. Use Run now in Monitors if you want immediate output."
-      )
-    }
-    return t(
-      "watchlists:overview.onboarding.quickSetup.destinationHint.triage",
-      "Opens Monitors after setup so you can run checks when ready."
-    )
-  }, [quickSetupSnapshot.runNow, quickSetupSnapshot.setupGoal, t])
-
   const quickSetupIsLastStep = quickSetupStep >= QUICK_SETUP_MAX_STEP
   const quickSetupFinishLabel = quickSetupSnapshot.runNow
     ? t(
@@ -1092,6 +1099,35 @@ export const OverviewTab: React.FC = () => {
     ...(pipelineSetupValues || {})
   } as PipelineBuilderValues)
   const pipelineReviewSummary = buildPipelineReviewSummary(pipelineDraftPreview)
+  const pipelineEmailRecipients = normalizePipelineRecipients(pipelineSetupValues?.emailRecipients)
+  const pipelineHasValidEmailRecipients = !pipelineSetupValues?.emailDeliveryEnabled || (
+    pipelineEmailRecipients.length > 0 &&
+    pipelineEmailRecipients.every((entry) => PIPELINE_EMAIL_PATTERN.test(entry))
+  )
+  const pipelineScopeComplete = Array.isArray(pipelineDraftPreview.sourceIds) && pipelineDraftPreview.sourceIds.length > 0
+  const pipelineBriefingComplete = Boolean(
+    pipelineDraftPreview.monitorName.trim().length > 0 &&
+      pipelineDraftPreview.templateName.trim().length > 0 &&
+      (!pipelineDraftPreview.includeAudio ||
+        (Boolean(pipelineDraftPreview.audioVoice) &&
+          Number(pipelineDraftPreview.targetAudioMinutes || 0) > 0)) &&
+      pipelineHasValidEmailRecipients
+  )
+  const pipelineReviewComplete = pipelineScopeComplete && pipelineBriefingComplete
+  const pipelineStepItems = useMemo(() => ([
+    {
+      title: t("watchlists:overview.pipelineSetup.steps.scope", "Scope"),
+      status: pipelineScopeComplete ? "finish" : pipelineSetupStep === 0 ? "process" : "wait"
+    },
+    {
+      title: t("watchlists:overview.pipelineSetup.steps.briefing", "Briefing"),
+      status: pipelineBriefingComplete ? "finish" : pipelineSetupStep === 1 ? "process" : "wait"
+    },
+    {
+      title: t("watchlists:overview.pipelineSetup.steps.review", "Review"),
+      status: pipelineReviewComplete ? "finish" : pipelineSetupStep === 2 ? "process" : "wait"
+    }
+  ]), [pipelineBriefingComplete, pipelineReviewComplete, pipelineScopeComplete, pipelineSetupStep, t])
   const pipelineSetupIsLastStep = pipelineSetupStep >= PIPELINE_SETUP_MAX_STEP
   const overviewBadges = getOverviewTabBadges(data?.health)
 
@@ -2067,17 +2103,7 @@ export const OverviewTab: React.FC = () => {
           <Steps
             size="small"
             current={pipelineSetupStep}
-            items={[
-              {
-                title: t("watchlists:overview.pipelineSetup.steps.scope", "Scope")
-              },
-              {
-                title: t("watchlists:overview.pipelineSetup.steps.briefing", "Briefing")
-              },
-              {
-                title: t("watchlists:overview.pipelineSetup.steps.review", "Review")
-              }
-            ]}
+            items={pipelineStepItems}
           />
 
           <Form
@@ -2229,6 +2255,90 @@ export const OverviewTab: React.FC = () => {
                 )}
 
                 <Form.Item
+                  label={t("watchlists:overview.pipelineSetup.fields.emailDelivery", "Email delivery")}
+                  name="emailDeliveryEnabled"
+                  valuePropName="checked"
+                >
+                  <Switch
+                    aria-label={t("watchlists:overview.pipelineSetup.fields.emailDelivery", "Email delivery")}
+                  />
+                </Form.Item>
+
+                {pipelineSetupValues?.emailDeliveryEnabled && (
+                  <Form.Item
+                    label={t("watchlists:overview.pipelineSetup.fields.emailRecipients", "Email recipients")}
+                    name="emailRecipients"
+                    rules={[
+                      {
+                        validator: (_rule, value) => {
+                          const recipients = normalizePipelineRecipients(value)
+                          if (recipients.length === 0) {
+                            return Promise.reject(
+                              new Error(
+                                t(
+                                  "watchlists:overview.pipelineSetup.validation.emailRecipientsRequired",
+                                  "Enter at least one recipient email"
+                                )
+                              )
+                            )
+                          }
+                          const invalidRecipients = recipients.filter(
+                            (entry) => !PIPELINE_EMAIL_PATTERN.test(entry)
+                          )
+                          if (invalidRecipients.length > 0) {
+                            return Promise.reject(
+                              new Error(
+                                t(
+                                  "watchlists:overview.pipelineSetup.validation.emailRecipientsInvalid",
+                                  "Fix invalid email recipients before continuing."
+                                )
+                              )
+                            )
+                          }
+                          return Promise.resolve()
+                        }
+                      }
+                    ]}
+                  >
+                    <Select
+                      mode="tags"
+                      tokenSeparators={[","]}
+                      placeholder={t(
+                        "watchlists:overview.pipelineSetup.fields.emailRecipientsPlaceholder",
+                        "name@example.com"
+                      )}
+                    />
+                  </Form.Item>
+                )}
+
+                <Form.Item
+                  label={t("watchlists:overview.pipelineSetup.fields.chatbookDelivery", "Chatbook delivery")}
+                  name="chatbookDeliveryEnabled"
+                  valuePropName="checked"
+                >
+                  <Switch
+                    aria-label={t(
+                      "watchlists:overview.pipelineSetup.fields.chatbookDelivery",
+                      "Chatbook delivery"
+                    )}
+                  />
+                </Form.Item>
+
+                {pipelineSetupValues?.chatbookDeliveryEnabled && (
+                  <Form.Item
+                    label={t("watchlists:overview.pipelineSetup.fields.chatbookTitle", "Chatbook title")}
+                    name="chatbookTitle"
+                  >
+                    <Input
+                      placeholder={t(
+                        "watchlists:overview.pipelineSetup.fields.chatbookTitlePlaceholder",
+                        "Morning Intel"
+                      )}
+                    />
+                  </Form.Item>
+                )}
+
+                <Form.Item
                   label={t("watchlists:overview.pipelineSetup.fields.runNow", "Run immediately")}
                   name="runNow"
                   valuePropName="checked"
@@ -2281,6 +2391,22 @@ export const OverviewTab: React.FC = () => {
                     </span>{" "}
                     {pipelineReviewSummary.deliveries.join(", ")}
                   </p>
+                  {pipelineSetupValues?.emailDeliveryEnabled && (
+                    <p>
+                      <span className="font-medium">
+                        {t("watchlists:overview.pipelineSetup.review.emailRecipients", "Email recipients")}:
+                      </span>{" "}
+                      {pipelineEmailRecipients.length}
+                    </p>
+                  )}
+                  {pipelineSetupValues?.chatbookDeliveryEnabled && (
+                    <p>
+                      <span className="font-medium">
+                        {t("watchlists:overview.pipelineSetup.review.chatbookTitle", "Chatbook title")}:
+                      </span>{" "}
+                      {String(pipelineSetupValues?.chatbookTitle || "").trim() || "Watchlists Briefing"}
+                    </p>
+                  )}
                   <p>
                     <span className="font-medium">
                       {t("watchlists:overview.pipelineSetup.review.runNow", "Run now")}:

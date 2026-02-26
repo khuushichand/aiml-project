@@ -54,9 +54,9 @@ export type HeaderShortcutGroup = {
 
 export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
   {
-    id: "chat",
-    titleKey: "option:header.groupChat",
-    titleDefault: "Chat & Characters",
+    id: "chat-persona",
+    titleKey: "option:header.groupChatPersona",
+    titleDefault: "Chat & Persona",
     items: [
       {
         id: "chat",
@@ -73,14 +73,6 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelKey: "option:header.modePromptsPlayground",
         labelDefault: "Prompts",
         shortcutIndex: 2
-      },
-      {
-        id: "prompt-studio",
-        to: "/prompt-studio",
-        icon: NotebookPen,
-        labelKey: "option:header.modePromptStudio",
-        labelDefault: "Prompt Studio",
-        shortcutIndex: 3
       },
       {
         id: "characters",
@@ -107,20 +99,35 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         shortcutIndex: 6
       },
       {
+        id: "model-playground",
+        to: "/model-playground",
+        icon: FlaskConical,
+        labelKey: "settings:modelPlaygroundNav",
+        labelDefault: "Model Playground"
+      }
+    ]
+  },
+  {
+    id: "research",
+    titleKey: "option:header.groupResearch",
+    titleDefault: "Research",
+    items: [
+      {
+        id: "prompt-studio",
+        to: "/prompt-studio",
+        icon: NotebookPen,
+        labelKey: "option:header.modePromptStudio",
+        labelDefault: "Prompt Studio",
+        shortcutIndex: 3
+      },
+      {
         id: "workspace-playground",
         to: "/workspace-playground",
         icon: GitCompare,
         labelKey: "settings:researchStudioNav",
         labelDefault: "Research Studio",
         shortcutIndex: 7
-      }
-    ]
-  },
-  {
-    id: "library",
-    titleKey: "option:header.groupLibrary",
-    titleDefault: "Library & Research",
-    items: [
+      },
       {
         id: "knowledge-qa",
         to: "/knowledge",
@@ -130,19 +137,33 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         shortcutIndex: 8
       },
       {
+        id: "document-workspace",
+        to: DOCUMENT_WORKSPACE_PATH,
+        icon: FileSearch,
+        labelKey: "option:header.documentWorkspace",
+        labelDefault: "Document Workspace"
+      },
+      {
+        id: "evaluations",
+        to: "/evaluations",
+        icon: Microscope,
+        labelKey: "option:header.evaluations",
+        labelDefault: "Evaluations"
+      }
+    ]
+  },
+  {
+    id: "library",
+    titleKey: "option:header.groupLibrary",
+    titleDefault: "Library",
+    items: [
+      {
         id: "media",
         to: "/media",
         icon: BookText,
         labelKey: "option:header.media",
         labelDefault: "Media",
         shortcutIndex: 9
-      },
-      {
-        id: "document-workspace",
-        to: DOCUMENT_WORKSPACE_PATH,
-        icon: FileSearch,
-        labelKey: "option:header.documentWorkspace",
-        labelDefault: "Document Workspace"
       },
       {
         id: "multi-item-review",
@@ -178,49 +199,28 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: StickyNote,
         labelKey: "option:header.notes",
         labelDefault: "Notes"
-      },
-      {
-        id: "chatbooks-playground",
-        to: "/chatbooks",
-        icon: BookOpen,
-        labelKey: "option:header.chatbooksPlayground",
-        labelDefault: "Chatbooks Playground"
-      },
-      {
-        id: "flashcards",
-        to: "/flashcards",
-        icon: Layers,
-        labelKey: "option:header.flashcards",
-        labelDefault: "Flashcards"
-      },
-      {
-        id: "quizzes",
-        to: "/quiz",
-        icon: ClipboardList,
-        labelKey: "option:header.quiz",
-        labelDefault: "Quizzes"
-      },
-      {
-        id: "evaluations",
-        to: "/evaluations",
-        icon: Microscope,
-        labelKey: "option:header.evaluations",
-        labelDefault: "Evaluations"
-      },
-      {
-        id: "chunking-playground",
-        to: "/chunking-playground",
-        icon: Scissors,
-        labelKey: "settings:chunkingPlayground.nav",
-        labelDefault: "Chunking Playground"
       }
     ]
   },
   {
-    id: "audio",
-    titleKey: "option:header.groupAudio",
-    titleDefault: "Audio & Speech",
+    id: "creation",
+    titleKey: "option:header.groupCreationWorkspace",
+    titleDefault: "Creation",
     items: [
+      {
+        id: "writing-playground",
+        to: "/writing-playground",
+        icon: SquarePen,
+        labelKey: "option:header.writingPlayground",
+        labelDefault: "Writing Playground"
+      },
+      {
+        id: "data-tables",
+        to: "/data-tables",
+        icon: Table2,
+        labelKey: "option:header.dataTables",
+        labelDefault: "Data Tables"
+      },
       {
         id: "stt-playground",
         to: "/stt",
@@ -245,9 +245,37 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
     ]
   },
   {
-    id: "creation",
-    titleKey: "option:header.groupCreation",
-    titleDefault: "Creation & Automation",
+    id: "planning-learning",
+    titleKey: "option:header.groupPlanningLearning",
+    titleDefault: "Planning & Learning",
+    items: [
+      {
+        id: "kanban-playground",
+        to: "/kanban",
+        icon: Kanban,
+        labelKey: "option:header.modeKanban",
+        labelDefault: "Kanban Playground"
+      },
+      {
+        id: "flashcards",
+        to: "/flashcards",
+        icon: Layers,
+        labelKey: "option:header.flashcards",
+        labelDefault: "Flashcards"
+      },
+      {
+        id: "quizzes",
+        to: "/quiz",
+        icon: ClipboardList,
+        labelKey: "option:header.quiz",
+        labelDefault: "Quizzes"
+      }
+    ]
+  },
+  {
+    id: "automation-agents",
+    titleKey: "option:header.groupAutomationAgents",
+    titleDefault: "Automation & Agents",
     items: [
       {
         id: "workflows",
@@ -255,13 +283,6 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: Workflow,
         labelKey: "option:header.workflows",
         labelDefault: "Workflows"
-      },
-      {
-        id: "writing-playground",
-        to: "/writing-playground",
-        icon: SquarePen,
-        labelKey: "option:header.writingPlayground",
-        labelDefault: "Writing Playground"
       },
       {
         id: "acp-playground",
@@ -276,55 +297,27 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: Zap,
         labelKey: "settings:skillsNav",
         labelDefault: "Skills"
-      },
-      {
-        id: "kanban-playground",
-        to: "/kanban",
-        icon: Kanban,
-        labelKey: "option:header.modeKanban",
-        labelDefault: "Kanban Playground"
       }
     ]
   },
   {
     id: "tools",
     titleKey: "option:header.groupTools",
-    titleDefault: "Tools & Playgrounds",
+    titleDefault: "Tools",
     items: [
       {
-        id: "model-playground",
-        to: "/model-playground",
-        icon: FlaskConical,
-        labelKey: "settings:modelPlaygroundNav",
-        labelDefault: "Model Playground"
+        id: "chatbooks-playground",
+        to: "/chatbooks",
+        icon: BookOpen,
+        labelKey: "option:header.chatbooksPlayground",
+        labelDefault: "Chatbooks Playground"
       },
       {
-        id: "data-tables",
-        to: "/data-tables",
-        icon: Table2,
-        labelKey: "option:header.dataTables",
-        labelDefault: "Data Tables"
-      }
-    ]
-  },
-  {
-    id: "admin",
-    titleKey: "option:header.groupAdmin",
-    titleDefault: "Admin & Settings",
-    items: [
-      {
-        id: "admin-server",
-        to: "/admin/server",
-        icon: CogIcon,
-        labelKey: "option:header.adminServer",
-        labelDefault: "Server Admin"
-      },
-      {
-        id: "documentation",
-        to: "/documentation",
-        icon: FileText,
-        labelKey: "option:header.modeDocumentation",
-        labelDefault: "Documentation"
+        id: "chunking-playground",
+        to: "/chunking-playground",
+        icon: Scissors,
+        labelKey: "settings:chunkingPlayground.nav",
+        labelDefault: "Chunking Playground"
       },
       {
         id: "moderation-playground",
@@ -332,6 +325,20 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: ShieldCheck,
         labelKey: "option:moderationPlayground.nav",
         labelDefault: "Moderation Playground"
+      }
+    ]
+  },
+  {
+    id: "admin",
+    titleKey: "option:header.groupAdminHelp",
+    titleDefault: "Admin & Help",
+    items: [
+      {
+        id: "admin-server",
+        to: "/admin/server",
+        icon: CogIcon,
+        labelKey: "option:header.adminServer",
+        labelDefault: "Server Admin"
       },
       {
         id: "admin-llamacpp",
@@ -353,6 +360,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: CogIcon,
         labelKey: "settings",
         labelDefault: "Settings"
+      },
+      {
+        id: "documentation",
+        to: "/documentation",
+        icon: FileText,
+        labelKey: "option:header.modeDocumentation",
+        labelDefault: "Documentation"
       }
     ]
   }

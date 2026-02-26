@@ -151,6 +151,7 @@ describe("WatchlistsPlaygroundPage orientation guidance", () => {
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = false
     localStorage.removeItem("watchlists:guided-tour:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
+    localStorage.removeItem("watchlists:orientation-dismissed:v1")
   })
 
   afterEach(() => {
@@ -158,6 +159,7 @@ describe("WatchlistsPlaygroundPage orientation guidance", () => {
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
     localStorage.removeItem("watchlists:guided-tour:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
+    localStorage.removeItem("watchlists:orientation-dismissed:v1")
   })
 
   it("shows per-tab orientation and explicit Activity to Reports next action", () => {
@@ -191,5 +193,20 @@ describe("WatchlistsPlaygroundPage orientation guidance", () => {
     rerender(<WatchlistsPlaygroundPage />)
     fireEvent.click(screen.getByTestId("watchlists-orientation-action-open-reports"))
     expect(mocks.state.setActiveTab).toHaveBeenCalledWith("outputs")
+  })
+
+  it("persists orientation dismissal per tab and restores on demand", () => {
+    mocks.state.activeTab = "runs"
+    render(<WatchlistsPlaygroundPage />)
+
+    expect(screen.getByTestId("watchlists-orientation-title")).toHaveTextContent("Activity")
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
+
+    expect(screen.queryByTestId("watchlists-orientation-title")).not.toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-orientation-restore")).toHaveTextContent("Show tab guidance")
+    expect(localStorage.getItem("watchlists:orientation-dismissed:v1")).toContain("\"runs\":true")
+
+    fireEvent.click(screen.getByTestId("watchlists-orientation-restore"))
+    expect(screen.getByTestId("watchlists-orientation-title")).toHaveTextContent("Activity")
   })
 })

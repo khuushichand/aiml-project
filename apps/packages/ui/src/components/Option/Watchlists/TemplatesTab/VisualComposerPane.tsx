@@ -229,6 +229,7 @@ export const VisualComposerPane: React.FC<VisualComposerPaneProps> = ({
                 danger
                 size="small"
                 onClick={() => removeNode(node.id)}
+                aria-label={`Remove ${node.type} block`}
                 data-testid={`visual-remove-${node.id}`}
               >
                 Remove

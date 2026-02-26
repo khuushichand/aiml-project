@@ -108,6 +108,11 @@ https://component.gallery/
 https://medium.com/@alphadesignglobal/8-tiny-ui-fixes-that-will-make-your-product-feel-10x-smarter-afffb1a61a6b
 
 https://github.com/Dammyjay93/interface-design?tab=readme-ov-file#installation
+https://uxdesign.cc/so-youve-built-a-design-system-what-now-3df9ae21ef0c
+https://medium.com/design-bootcamp/how-to-build-your-startups-first-design-system-4d8724fbb802
+
+https://www.reddit.com/r/UXDesign/comments/1hy761l/how_do_you_guys_plan_your_design_systems_and/
+https://dessign.net/creating-a-design-system/
 https://www.youtube.com/watch?v=1fZTOjd_bOQ
 https://medium.com/design-bootcamp/7-tips-to-become-a-master-of-ui-design-i-wish-i-knew-this-earlier-8e52de05783d
 https://medium.com/design-bootcamp/how-i-design-light-theme-ui-2bb7961f5ed6

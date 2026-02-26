@@ -97,12 +97,14 @@ describe("HeaderShortcuts launcher modal", () => {
       <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
     )
     const nav = screen.getByLabelText("Categories")
-    expect(within(nav).getByText("Chat & Characters")).toBeInTheDocument()
-    expect(within(nav).getByText("Library & Research")).toBeInTheDocument()
-    expect(within(nav).getByText("Audio & Speech")).toBeInTheDocument()
-    expect(within(nav).getByText("Creation & Automation")).toBeInTheDocument()
-    expect(within(nav).getByText("Tools & Playgrounds")).toBeInTheDocument()
-    expect(within(nav).getByText("Admin & Settings")).toBeInTheDocument()
+    expect(within(nav).getByText("Chat & Persona")).toBeInTheDocument()
+    expect(within(nav).getByText("Research")).toBeInTheDocument()
+    expect(within(nav).getByText("Library")).toBeInTheDocument()
+    expect(within(nav).getByText("Creation")).toBeInTheDocument()
+    expect(within(nav).getByText("Planning & Learning")).toBeInTheDocument()
+    expect(within(nav).getByText("Automation & Agents")).toBeInTheDocument()
+    expect(within(nav).getByText("Tools")).toBeInTheDocument()
+    expect(within(nav).getByText("Admin & Help")).toBeInTheDocument()
   })
 
   it("shows items with group headers in All mode", () => {
@@ -120,9 +122,9 @@ describe("HeaderShortcuts launcher modal", () => {
       <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
     )
 
-    // Click "Audio & Speech" category in the sidebar
+    // Click "Creation" category in the sidebar
     const nav = screen.getByLabelText("Categories")
-    fireEvent.click(within(nav).getByText("Audio & Speech"))
+    fireEvent.click(within(nav).getByText("Creation"))
 
     // Audio items should be visible
     expect(screen.getByText("STT Playground")).toBeInTheDocument()

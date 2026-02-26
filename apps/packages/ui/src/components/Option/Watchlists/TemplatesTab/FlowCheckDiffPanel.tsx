@@ -49,7 +49,11 @@ export const FlowCheckDiffPanel: React.FC<FlowCheckDiffPanelProps> = ({
       ) : null}
 
       {trimmedDiff ? (
-        <pre className="max-h-64 overflow-auto rounded bg-surface p-3 text-xs leading-5">
+        <pre
+          className="max-h-64 overflow-auto rounded bg-surface p-3 text-xs leading-5"
+          role="region"
+          aria-label="Template flow-check diff"
+        >
           {trimmedDiff}
         </pre>
       ) : (

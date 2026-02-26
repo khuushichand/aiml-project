@@ -55,6 +55,7 @@
     "briefingsHint": "Reports and templates"
   },
   "orientation": {
+    "showTabGuidance": "Show tab guidance",
     "actions": {
       "openOverview": "Open Overview",
       "openFeeds": "Open Feeds",
@@ -357,7 +358,10 @@
       "load": "load",
       "save": "save",
       "test": "test",
-      "retry": "retry"
+      "retry": "retry",
+      "delete": "delete",
+      "cancel": "cancel",
+      "update": "update"
     },
     "title": "Could not {{operation}} {{context}}.",
     "details": "Details: {{message}}",
@@ -442,6 +446,7 @@
     "undoRestoreError": "Could not restore this feed. Refresh Feeds and retry while the undo timer is active.",
     "enabled": "Feed enabled",
     "disabled": "Feed disabled",
+    "toggleActiveAria": "Toggle active for {{name}}",
     "deleteConfirm": "Delete this feed?",
     "deleteConfirmDescription": "You can undo this deletion for {{seconds}} seconds.",
     "deleteConfirmForce": "Delete anyway",
@@ -618,8 +623,12 @@
     "undoRestoreError": "Could not restore this monitor. Refresh Monitors and retry while the undo timer is active.",
     "enabled": "Monitor enabled",
     "disabled": "Monitor disabled",
+    "toggleActiveAria": "Toggle active for {{name}}",
     "runTriggered": "Run triggered",
     "deleteConfirm": "Delete this monitor?",
+    "deleteConfirmDescription": "You can undo this deletion for {{seconds}} seconds.",
+    "deleteConfirmActiveRunsWarning": "This monitor has {{count}} active or pending run{{plural}}. Deleting it will not cancel in-progress runs.",
+    "deleteConfirmDeliveryWarning": "This monitor has configured delivery settings (email, chatbook). Deleting it removes scheduled deliveries.",
     "runNow": "Run Now",
     "runNowDisabledHint": "Activate this monitor to run it manually",
     "showAdvancedDetails": "Show advanced details",
@@ -1233,7 +1242,7 @@
   },
   "templates": {
     "title": "Templates",
-    "description": "Jinja2 templates for generating briefing outputs.",
+    "description": "Templates for generating briefing outputs.",
     "fetchError": "Failed to load templates",
     "loadError": "Failed to load template",
     "saveError": "Failed to save template",

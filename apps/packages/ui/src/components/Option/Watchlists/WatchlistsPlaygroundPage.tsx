@@ -60,6 +60,7 @@ const RUN_NOTIFICATIONS_RUNS_TAB_POLL_MS = 30_000
 const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
 const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
 const TEACH_POINTS_STORAGE_KEY = "watchlists:teach-points:v1"
+const ORIENTATION_DISMISSED_STORAGE_KEY = "watchlists:orientation-dismissed:v1"
 const SUCCESSFUL_RUN_STATUSES = new Set(["completed", "succeeded", "success", "done", "finished"])
 
 type GuidedTourTab = "sources" | "jobs" | "runs" | "items" | "outputs"
@@ -96,6 +97,7 @@ interface TeachPointState {
   jobsCronFilters: boolean
   templatesAuthoring: boolean
 }
+type OrientationDismissState = Partial<Record<WatchlistsTabKey, boolean>>
 
 const GUIDED_TOUR_TABS: GuidedTourTab[] = ["sources", "jobs", "runs", "items", "outputs"]
 const GUIDED_TOUR_LAST_STEP = GUIDED_TOUR_TABS.length - 1
@@ -184,6 +186,27 @@ const writeTeachPointState = (state: TeachPointState): void => {
   }
 }
 
+const readOrientationDismissState = (): OrientationDismissState => {
+  if (typeof window === "undefined") return {}
+  try {
+    const raw = localStorage.getItem(ORIENTATION_DISMISSED_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as OrientationDismissState
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+const writeOrientationDismissState = (state: OrientationDismissState): void => {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(ORIENTATION_DISMISSED_STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // localStorage may be unavailable.
+  }
+}
+
 const resolveRunNotificationsPollMs = (): number => {
   if (typeof window === "undefined") return RUN_NOTIFICATIONS_POLL_MS
   const override = Number(
@@ -217,14 +240,13 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const runNotificationsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const runNotificationsPollingInFlightRef = useRef(false)
   const sessionStartedAtMsRef = useRef<number>(Date.now())
-  const [runNotificationsDocumentHidden, setRunNotificationsDocumentHidden] = React.useState(() =>
-    typeof document !== "undefined" ? document.visibilityState === "hidden" : false
-  )
-  const [notificationPollHasActiveRuns, setNotificationPollHasActiveRuns] = React.useState(true)
   const [guidedTourState, setGuidedTourState] = React.useState<GuidedTourState>(() => readGuidedTourState())
   const [guidedTourOpen, setGuidedTourOpen] = React.useState(false)
   const [showGuidedTourCompletion, setShowGuidedTourCompletion] = React.useState(false)
   const [teachPointState, setTeachPointState] = React.useState<TeachPointState>(() => readTeachPointState())
+  const [orientationDismissedState, setOrientationDismissedState] = React.useState<OrientationDismissState>(
+    () => readOrientationDismissState()
+  )
   const [documentVisible, setDocumentVisible] = React.useState<boolean>(() => {
     if (typeof document === "undefined") return true
     return document.visibilityState !== "hidden"
@@ -440,6 +462,8 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     }
   }
   const activeTabOrientation = tabOrientation[activeTab as WatchlistsTabKey] || tabOrientation.overview
+  const activeOrientationKey = (activeTab as WatchlistsTabKey) || "overview"
+  const orientationDismissed = Boolean(orientationDismissedState[activeOrientationKey])
 
   const activeTabHelpHref = WATCHLISTS_TAB_HELP_DOCS[activeTab] || WATCHLISTS_MAIN_DOCS_URL
   const activeTabHelpLabel = tabHelpLabels[activeTab] || t("watchlists:help.docs", "Watchlists docs")
@@ -522,6 +546,22 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     }))
   }, [])
 
+  const dismissOrientationForActiveTab = useCallback(() => {
+    const orientationKey = (activeTab as WatchlistsTabKey) || "overview"
+    setOrientationDismissedState((previous) => ({
+      ...previous,
+      [orientationKey]: true
+    }))
+  }, [activeTab])
+
+  const restoreOrientationForActiveTab = useCallback(() => {
+    const orientationKey = (activeTab as WatchlistsTabKey) || "overview"
+    setOrientationDismissedState((previous) => ({
+      ...previous,
+      [orientationKey]: false
+    }))
+  }, [activeTab])
+
   useEffect(() => {
     writeGuidedTourState(guidedTourState)
   }, [guidedTourState])
@@ -529,6 +569,10 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   useEffect(() => {
     writeTeachPointState(teachPointState)
   }, [teachPointState])
+
+  useEffect(() => {
+    writeOrientationDismissState(orientationDismissedState)
+  }, [orientationDismissedState])
 
   useEffect(() => {
     if (typeof document === "undefined") return
@@ -594,15 +638,6 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       step: toGuidedTourStep(nextStep)
     })
   }, [guidedTourState.step, setActiveTab])
-
-  const dismissTeachPoint = useCallback((key: TeachPointKey) => {
-    setTeachPointState((previous) => ({
-      dismissed: {
-        ...previous.dismissed,
-        [key]: true
-      }
-    }))
-  }, [])
 
   // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
   const resetStoreRef = useRef(resetStore)
@@ -763,10 +798,6 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     if (runNotificationsPollingInFlightRef.current) return
     runNotificationsPollingInFlightRef.current = true
     try {
-      const pageSize = resolveRunNotificationsPageSize({
-        documentHidden: runNotificationsDocumentHidden,
-        hasActiveRuns: notificationPollHasActiveRuns
-      })
       const response = await fetchWatchlistRuns({
         page: 1,
         size: runNotificationsPollPlan.pageSize
@@ -877,7 +908,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     void pollRunNotifications()
     runNotificationsTimerRef.current = setInterval(() => {
       void pollRunNotifications()
-    }, runNotificationsPollMs)
+    }, pollIntervalMs)
     return () => {
       if (runNotificationsTimerRef.current) {
         clearInterval(runNotificationsTimerRef.current)
@@ -1156,27 +1187,42 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         )}
       </div>
 
-      <Alert
-        type="info"
-        showIcon
-        className="mb-4"
-        title={<span data-testid="watchlists-orientation-title">{activeTabOrientation.title}</span>}
-        description={<span data-testid="watchlists-orientation-description">{activeTabOrientation.description}</span>}
-        action={(
-          <div className="flex flex-wrap gap-2">
-            {activeTabOrientation.actions.map((action) => (
-              <Button
-                key={action.key}
-                size="small"
-                data-testid={`watchlists-orientation-action-${action.key}`}
-                onClick={() => setActiveTab(action.target as typeof activeTab)}
-              >
-                {action.label}
-              </Button>
-            ))}
-          </div>
-        )}
-      />
+      {orientationDismissed ? (
+        <div className="mb-4">
+          <Button
+            size="small"
+            type="link"
+            data-testid="watchlists-orientation-restore"
+            onClick={restoreOrientationForActiveTab}
+          >
+            {t("watchlists:orientation.showTabGuidance", "Show tab guidance")}
+          </Button>
+        </div>
+      ) : (
+        <Alert
+          type="info"
+          showIcon
+          className="mb-4"
+          title={<span data-testid="watchlists-orientation-title">{activeTabOrientation.title}</span>}
+          description={<span data-testid="watchlists-orientation-description">{activeTabOrientation.description}</span>}
+          action={(
+            <div className="flex flex-wrap gap-2">
+              {activeTabOrientation.actions.map((action) => (
+                <Button
+                  key={action.key}
+                  size="small"
+                  data-testid={`watchlists-orientation-action-${action.key}`}
+                  onClick={() => setActiveTab(action.target as typeof activeTab)}
+                >
+                  {action.label}
+                </Button>
+              ))}
+            </div>
+          )}
+          closable
+          onClose={dismissOrientationForActiveTab}
+        />
+      )}
 
       {activeTeachPoint && (
         <Alert

@@ -952,15 +952,21 @@ export const RunsTab: React.FC = () => {
               </span>
             </Tooltip>
           )}
-          {pollingActive && (
-            <span className="text-sm text-primary flex items-center gap-1">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
-              </span>
-              {t("watchlists:runs.autoRefreshing", "Auto-refreshing")}
-            </span>
-          )}
+          <span
+            role="status"
+            aria-live="polite"
+            className="text-sm text-primary flex items-center gap-1"
+          >
+            {pollingActive && (
+              <>
+                <span className="relative flex h-2 w-2" aria-hidden="true">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+                </span>
+                {t("watchlists:runs.autoRefreshing", "Auto-refreshing")}
+              </>
+            )}
+          </span>
           <Button
             icon={<RefreshCw className="h-4 w-4" />}
             onClick={() => loadRuns()}

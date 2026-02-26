@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react"
 import {
   Alert,
   Button,
-  Popconfirm,
+  Modal,
   Space,
   Switch,
   Table,
@@ -17,6 +17,7 @@ import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
   deleteWatchlistJob,
+  fetchJobRuns,
   fetchWatchlistGroups,
   fetchWatchlistJobs,
   fetchWatchlistSources,
@@ -188,8 +189,8 @@ export const JobsTab: React.FC = () => {
     }
   }
 
-  // Handle delete
-  const handleDelete = async (jobId: number) => {
+  // Handle delete with impact assessment
+  const executeDelete = async (jobId: number) => {
     const deletedJob = jobs.find((job) => job.id === jobId)
     try {
       const deleteResult = await deleteWatchlistJob(jobId)
@@ -237,6 +238,74 @@ export const JobsTab: React.FC = () => {
       console.error("Failed to delete job:", err)
       message.error(t("watchlists:jobs.deleteError", "Failed to delete monitor"))
     }
+  }
+
+  const requestDeleteConfirmation = async (job: WatchlistJob) => {
+    const warnings: string[] = []
+
+    try {
+      const runsResult = await fetchJobRuns(job.id, { page: 1, size: 10 })
+      const activeRuns = (runsResult.items || []).filter(
+        (run) => run.status === "running" || run.status === "pending" || run.status === "queued"
+      )
+      if (activeRuns.length > 0) {
+        warnings.push(
+          t(
+            "watchlists:jobs.deleteConfirmActiveRunsWarning",
+            "This monitor has {{count}} active or pending run{{plural}}. Deleting it will not cancel in-progress runs.",
+            { count: activeRuns.length, plural: activeRuns.length === 1 ? "" : "s" }
+          )
+        )
+      }
+    } catch {
+      // Non-critical: proceed with delete confirmation without run info.
+    }
+
+    const outputPrefs = job.output_prefs as Record<string, unknown> | undefined
+    const hasDelivery =
+      outputPrefs &&
+      (Array.isArray(outputPrefs.email_recipients) && (outputPrefs.email_recipients as unknown[]).length > 0 ||
+        outputPrefs.chatbook_path)
+    if (hasDelivery) {
+      warnings.push(
+        t(
+          "watchlists:jobs.deleteConfirmDeliveryWarning",
+          "This monitor has configured delivery settings (email, chatbook). Deleting it removes scheduled deliveries."
+        )
+      )
+    }
+
+    Modal.confirm({
+      title: t("watchlists:jobs.deleteConfirm", "Delete this monitor?"),
+      content: warnings.length > 0 ? (
+        <div className="space-y-2">
+          {warnings.map((warning, index) => (
+            <p key={index} className="text-sm text-warning">
+              {warning}
+            </p>
+          ))}
+          <p className="text-sm text-text-muted">
+            {t(
+              "watchlists:jobs.deleteConfirmDescription",
+              "You can undo this deletion for {{seconds}} seconds.",
+              { seconds: JOB_DELETE_UNDO_WINDOW_SECONDS }
+            )}
+          </p>
+        </div>
+      ) : (
+        <p className="text-sm text-text-muted">
+          {t(
+            "watchlists:jobs.deleteConfirmDescription",
+            "You can undo this deletion for {{seconds}} seconds.",
+            { seconds: JOB_DELETE_UNDO_WINDOW_SECONDS }
+          )}
+        </p>
+      ),
+      okText: t("common:delete", "Delete"),
+      okButtonProps: { danger: true },
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => executeDelete(job.id)
+    })
   }
 
   // Handle manual run trigger
@@ -423,11 +492,7 @@ export const JobsTab: React.FC = () => {
           <Switch
             checked={active}
             size="small"
-            aria-label={
-              active
-                ? t("watchlists:jobs.disableMonitor", "Disable monitor")
-                : t("watchlists:jobs.enableMonitor", "Enable monitor")
-            }
+            aria-label={t("watchlists:jobs.toggleActiveAria", "Toggle active for {{name}}", { name: record.name })}
             onChange={() => handleToggleActive(record)}
           />
           <span className="text-xs text-text-muted">
@@ -481,22 +546,16 @@ export const JobsTab: React.FC = () => {
               onClick={() => openJobForm(record.id)}
             />
           </Tooltip>
-          <Popconfirm
-            title={t("watchlists:jobs.deleteConfirm", "Delete this monitor?")}
-            onConfirm={() => handleDelete(record.id)}
-            okText={t("common:yes", "Yes")}
-            cancelText={t("common:no", "No")}
-          >
-            <Tooltip title={t("common:delete", "Delete")}>
-              <Button
-                type="text"
-                size="small"
-                danger
-                aria-label={t("common:delete", "Delete")}
-                icon={<Trash2 className="h-4 w-4" />}
-              />
-            </Tooltip>
-          </Popconfirm>
+          <Tooltip title={t("common:delete", "Delete")}>
+            <Button
+              type="text"
+              size="small"
+              danger
+              aria-label={t("common:delete", "Delete")}
+              icon={<Trash2 className="h-4 w-4" />}
+              onClick={() => requestDeleteConfirmation(record)}
+            />
+          </Tooltip>
         </Space>
       )}
     }

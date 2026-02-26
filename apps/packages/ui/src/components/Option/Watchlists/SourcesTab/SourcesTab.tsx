@@ -1312,11 +1312,7 @@ export const SourcesTab: React.FC = () => {
           <Switch
             checked={active}
             size="small"
-            aria-label={
-              active
-                ? t("watchlists:sources.disableSource", "Disable feed")
-                : t("watchlists:sources.enableSource", "Enable feed")
-            }
+            aria-label={t("watchlists:sources.toggleActiveAria", "Toggle active for {{name}}", { name: record.name })}
             onChange={() => handleToggleActive(record)}
           />
           <span className="text-xs text-text-muted">
