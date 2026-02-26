@@ -250,6 +250,39 @@ class ReminderTaskRow:
 
 
 @dataclass
+class UserNotificationRow:
+    id: int
+    user_id: str
+    kind: str
+    title: str
+    message: str
+    severity: str
+    source_task_id: str | None
+    source_task_run_id: int | None
+    source_job_id: str | None
+    source_domain: str | None
+    source_job_type: str | None
+    link_type: str | None
+    link_id: str | None
+    link_url: str | None
+    dedupe_key: str | None
+    retention_until: str | None
+    archived_at: str | None
+    created_at: str
+    read_at: str | None
+    dismissed_at: str | None
+
+
+@dataclass
+class NotificationPreferencesRow:
+    user_id: str
+    reminder_enabled: bool
+    job_completed_enabled: bool
+    job_failed_enabled: bool
+    updated_at: str
+
+
+@dataclass
 class VoiceProfileRow:
     profile_id: str
     user_id: str
@@ -3931,6 +3964,195 @@ class CollectionsDatabase:
             (task_id, self.user_id),
         )
         return bool(res.rowcount and res.rowcount > 0)
+
+    # ------------------------
+    # Notifications API
+    # ------------------------
+    def _notification_row_from_db(self, row: dict[str, Any]) -> UserNotificationRow:
+        return UserNotificationRow(
+            id=int(row.get("id")),
+            user_id=str(row.get("user_id")),
+            kind=str(row.get("kind") or ""),
+            title=str(row.get("title") or ""),
+            message=str(row.get("message") or ""),
+            severity=str(row.get("severity") or "info"),
+            source_task_id=row.get("source_task_id"),
+            source_task_run_id=(int(row["source_task_run_id"]) if row.get("source_task_run_id") is not None else None),
+            source_job_id=row.get("source_job_id"),
+            source_domain=row.get("source_domain"),
+            source_job_type=row.get("source_job_type"),
+            link_type=row.get("link_type"),
+            link_id=row.get("link_id"),
+            link_url=row.get("link_url"),
+            dedupe_key=row.get("dedupe_key"),
+            retention_until=row.get("retention_until"),
+            archived_at=row.get("archived_at"),
+            created_at=str(row.get("created_at") or ""),
+            read_at=row.get("read_at"),
+            dismissed_at=row.get("dismissed_at"),
+        )
+
+    def create_user_notification(
+        self,
+        *,
+        kind: str,
+        title: str,
+        message: str,
+        severity: str,
+        source_task_id: str | None = None,
+        source_task_run_id: int | None = None,
+        source_job_id: str | None = None,
+        source_domain: str | None = None,
+        source_job_type: str | None = None,
+        link_type: str | None = None,
+        link_id: str | None = None,
+        link_url: str | None = None,
+        dedupe_key: str | None = None,
+        retention_until: str | None = None,
+    ) -> UserNotificationRow:
+        now = _utcnow_iso()
+        q = (
+            "INSERT INTO user_notifications ("
+            "user_id, kind, title, message, severity, source_task_id, source_task_run_id, source_job_id, "
+            "source_domain, source_job_type, link_type, link_id, link_url, dedupe_key, retention_until, archived_at, "
+            "created_at, read_at, dismissed_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            self.user_id,
+            kind,
+            title,
+            message,
+            severity,
+            source_task_id,
+            source_task_run_id,
+            source_job_id,
+            source_domain,
+            source_job_type,
+            link_type,
+            link_id,
+            link_url,
+            dedupe_key,
+            retention_until,
+            None,
+            now,
+            None,
+            None,
+        )
+        res = self._execute_insert(q, params)
+        new_id = self._extract_lastrowid(res)
+        if not new_id and dedupe_key:
+            existing = self.backend.execute(
+                "SELECT * FROM user_notifications WHERE user_id = ? AND dedupe_key = ? ORDER BY id DESC LIMIT 1",
+                (self.user_id, dedupe_key),
+            ).first
+            if existing:
+                return self._notification_row_from_db(existing)
+        if not new_id:
+            raise DatabaseError("Failed to create user notification")
+        row = self.backend.execute(
+            "SELECT * FROM user_notifications WHERE id = ? AND user_id = ?",
+            (new_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("user_notification_not_found")
+        return self._notification_row_from_db(row)
+
+    def list_user_notifications(
+        self,
+        *,
+        include_archived: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[UserNotificationRow]:
+        params: list[Any] = [self.user_id]
+        where = "user_id = ?"
+        if not include_archived:
+            where += " AND archived_at IS NULL"
+        q = f"SELECT * FROM user_notifications WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"  # nosec B608
+        params.extend([limit, offset])
+        rows = self.backend.execute(q, tuple(params)).rows
+        return [self._notification_row_from_db(row) for row in rows]
+
+    def mark_user_notifications_read(self, ids: list[int]) -> int:
+        if not ids:
+            return 0
+        placeholders = ",".join(["?"] * len(ids))
+        q = (
+            f"UPDATE user_notifications SET read_at = ? WHERE user_id = ? AND id IN ({placeholders}) "  # nosec B608
+            "AND read_at IS NULL"
+        )
+        params: list[Any] = [_utcnow_iso(), self.user_id, *ids]
+        res = self.backend.execute(q, tuple(params))
+        return int(res.rowcount or 0)
+
+    def dismiss_user_notification(self, notification_id: int) -> bool:
+        q = (
+            "UPDATE user_notifications SET dismissed_at = ? "
+            "WHERE id = ? AND user_id = ? AND dismissed_at IS NULL"
+        )
+        res = self.backend.execute(q, (_utcnow_iso(), notification_id, self.user_id))
+        return bool(res.rowcount and res.rowcount > 0)
+
+    def count_unread_user_notifications(self) -> int:
+        q = (
+            "SELECT COUNT(*) AS cnt FROM user_notifications "
+            "WHERE user_id = ? AND read_at IS NULL AND dismissed_at IS NULL AND archived_at IS NULL"
+        )
+        return int(self.backend.execute(q, (self.user_id,)).scalar or 0)
+
+    def _notification_preferences_row_from_db(self, row: dict[str, Any]) -> NotificationPreferencesRow:
+        return NotificationPreferencesRow(
+            user_id=str(row.get("user_id")),
+            reminder_enabled=self._coerce_bool_setting(row.get("reminder_enabled"), True),
+            job_completed_enabled=self._coerce_bool_setting(row.get("job_completed_enabled"), True),
+            job_failed_enabled=self._coerce_bool_setting(row.get("job_failed_enabled"), True),
+            updated_at=str(row.get("updated_at") or ""),
+        )
+
+    def get_notification_preferences(self) -> NotificationPreferencesRow:
+        row = self.backend.execute(
+            "SELECT * FROM notification_preferences WHERE user_id = ?",
+            (self.user_id,),
+        ).first
+        if row:
+            return self._notification_preferences_row_from_db(row)
+        now = _utcnow_iso()
+        return NotificationPreferencesRow(
+            user_id=self.user_id,
+            reminder_enabled=True,
+            job_completed_enabled=True,
+            job_failed_enabled=True,
+            updated_at=now,
+        )
+
+    def update_notification_preferences(
+        self,
+        *,
+        reminder_enabled: bool | None = None,
+        job_completed_enabled: bool | None = None,
+        job_failed_enabled: bool | None = None,
+    ) -> NotificationPreferencesRow:
+        current = self.get_notification_preferences()
+        reminder = current.reminder_enabled if reminder_enabled is None else bool(reminder_enabled)
+        completed = current.job_completed_enabled if job_completed_enabled is None else bool(job_completed_enabled)
+        failed = current.job_failed_enabled if job_failed_enabled is None else bool(job_failed_enabled)
+        now = _utcnow_iso()
+
+        reminder_flag = self._coerce_bool_flag(reminder, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        completed_flag = self._coerce_bool_flag(completed, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        failed_flag = self._coerce_bool_flag(failed, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        q = (
+            "INSERT INTO notification_preferences (user_id, reminder_enabled, job_completed_enabled, job_failed_enabled, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "reminder_enabled = excluded.reminder_enabled, "
+            "job_completed_enabled = excluded.job_completed_enabled, "
+            "job_failed_enabled = excluded.job_failed_enabled, "
+            "updated_at = excluded.updated_at"
+        )
+        self.backend.execute(q, (self.user_id, reminder_flag, completed_flag, failed_flag, now))
+        return self.get_notification_preferences()
 
     def purge_expired_outputs(self) -> int:
         """Hard delete expired/retained outputs. Returns number of rows removed."""

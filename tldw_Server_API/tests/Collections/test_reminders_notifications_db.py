@@ -46,3 +46,44 @@ def test_create_and_list_reminder_task(collections_db: CollectionsDatabase) -> N
 
     rows = collections_db.list_reminder_tasks()
     assert any(row.id == task_id for row in rows)
+
+
+def test_notification_unread_mark_read_and_dismiss(collections_db: CollectionsDatabase) -> None:
+    n1 = collections_db.create_user_notification(
+        kind="reminder_due",
+        title="Reminder 1",
+        message="Do the thing",
+        severity="info",
+    )
+    n2 = collections_db.create_user_notification(
+        kind="job_completed",
+        title="Job done",
+        message="Background job completed",
+        severity="info",
+    )
+
+    assert collections_db.count_unread_user_notifications() == 2
+
+    updated = collections_db.mark_user_notifications_read([n1.id])
+    assert updated == 1
+    assert collections_db.count_unread_user_notifications() == 1
+
+    dismissed = collections_db.dismiss_user_notification(n2.id)
+    assert dismissed is True
+    assert collections_db.count_unread_user_notifications() == 0
+
+
+def test_notification_preferences_defaults_and_update(collections_db: CollectionsDatabase) -> None:
+    prefs = collections_db.get_notification_preferences()
+    assert prefs.reminder_enabled is True
+    assert prefs.job_completed_enabled is True
+    assert prefs.job_failed_enabled is True
+
+    updated = collections_db.update_notification_preferences(
+        reminder_enabled=False,
+        job_completed_enabled=True,
+        job_failed_enabled=False,
+    )
+    assert updated.reminder_enabled is False
+    assert updated.job_completed_enabled is True
+    assert updated.job_failed_enabled is False
