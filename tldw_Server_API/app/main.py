@@ -3024,6 +3024,20 @@ async def lifespan(app: FastAPI):
         # startup/shutdown guard; log and continue
         logger.warning(f"Failed to start File artifacts export GC scheduler: {e}")
 
+    # Start Notifications prune scheduler (retention cleanup)
+    try:
+        _enable_notifications_prune = _shared_is_truthy(_env_os.getenv("NOTIFICATIONS_PRUNE_ENABLED", "false"))
+        if not _enable_notifications_prune:
+            logger.info("Notifications prune scheduler disabled (NOTIFICATIONS_PRUNE_ENABLED != true)")
+        else:
+            from tldw_Server_API.app.services.notifications_prune_service import start_notifications_prune_scheduler
+
+            _notifications_prune_task = await start_notifications_prune_scheduler()
+            if _notifications_prune_task:
+                logger.info("Notifications prune scheduler started")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Notifications prune scheduler: {e}")
+
     # Start Jobs prune scheduler (daily maintenance)
     try:
         _enable_jobs_prune = _shared_is_truthy(_env_os.getenv("JOBS_PRUNE_ENFORCE", "false"))
@@ -3444,6 +3458,8 @@ async def lifespan(app: FastAPI):
             jobs_prune_task.cancel()
         if "_files_gc_task" in locals() and _files_gc_task:
             _files_gc_task.cancel()
+        if "_notifications_prune_task" in locals() and _notifications_prune_task:
+            _notifications_prune_task.cancel()
         if "embeddings_compactor_task" in locals() and embeddings_compactor_task:
             if "embeddings_compactor_stop_event" in locals() and embeddings_compactor_stop_event:
                 try:

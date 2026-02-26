@@ -4110,6 +4110,108 @@ class CollectionsDatabase:
         )
         return int(self.backend.execute(q, (self.user_id,)).scalar or 0)
 
+    @staticmethod
+    def _parse_iso_utc(value: Any) -> datetime | None:
+        if value in (None, ""):
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def prune_user_notifications(
+        self,
+        *,
+        now_iso: str | None = None,
+        retention_days_by_kind: dict[str, int] | None = None,
+        read_dismissed_grace_days: int = 30,
+        archive_grace_days: int = 7,
+    ) -> tuple[int, int]:
+        """Archive expired notifications and hard-delete stale archived notifications.
+
+        Returns:
+            (archived_count, deleted_count)
+        """
+        now_dt = self._parse_iso_utc(now_iso) or datetime.now(timezone.utc)
+        now_effective_iso = now_dt.isoformat()
+
+        retention = dict(retention_days_by_kind or {})
+        accel_days = max(0, int(read_dismissed_grace_days))
+        grace_days = max(0, int(archive_grace_days))
+        archived_cutoff_dt = now_dt - timedelta(days=grace_days)
+
+        rows = self.backend.execute(
+            "SELECT id, kind, created_at, read_at, dismissed_at, retention_until, archived_at "
+            "FROM user_notifications WHERE user_id = ?",
+            (self.user_id,),
+        ).rows
+
+        archive_ids: list[int] = []
+        delete_ids: list[int] = []
+        for row in rows:
+            if isinstance(row, dict):
+                row_id = int(row.get("id"))
+                kind = str(row.get("kind") or "")
+                created_at = self._parse_iso_utc(row.get("created_at"))
+                read_at = self._parse_iso_utc(row.get("read_at"))
+                dismissed_at = self._parse_iso_utc(row.get("dismissed_at"))
+                retention_until = self._parse_iso_utc(row.get("retention_until"))
+                archived_at = self._parse_iso_utc(row.get("archived_at"))
+            else:
+                row_id = int(row[0])
+                kind = str(row[1] or "")
+                created_at = self._parse_iso_utc(row[2])
+                read_at = self._parse_iso_utc(row[3])
+                dismissed_at = self._parse_iso_utc(row[4])
+                retention_until = self._parse_iso_utc(row[5])
+                archived_at = self._parse_iso_utc(row[6])
+
+            if archived_at is not None:
+                if archived_at <= archived_cutoff_dt:
+                    delete_ids.append(row_id)
+                continue
+
+            expire_candidates: list[datetime] = []
+            if retention_until is not None:
+                expire_candidates.append(retention_until)
+
+            default_days = retention.get(kind)
+            if default_days is not None and default_days > 0 and created_at is not None:
+                expire_candidates.append(created_at + timedelta(days=int(default_days)))
+
+            if accel_days > 0:
+                if read_at is not None:
+                    expire_candidates.append(read_at + timedelta(days=accel_days))
+                if dismissed_at is not None:
+                    expire_candidates.append(dismissed_at + timedelta(days=accel_days))
+
+            if expire_candidates and min(expire_candidates) <= now_dt:
+                archive_ids.append(row_id)
+
+        archived = 0
+        if archive_ids:
+            placeholders = ",".join(["?"] * len(archive_ids))
+            q = (
+                f"UPDATE user_notifications SET archived_at = ? "  # nosec B608
+                f"WHERE user_id = ? AND archived_at IS NULL AND id IN ({placeholders})"
+            )
+            params: list[Any] = [now_effective_iso, self.user_id, *archive_ids]
+            res = self.backend.execute(q, tuple(params))
+            archived = int(res.rowcount or 0)
+
+        deleted = 0
+        if delete_ids:
+            placeholders = ",".join(["?"] * len(delete_ids))
+            q = f"DELETE FROM user_notifications WHERE user_id = ? AND id IN ({placeholders})"  # nosec B608
+            params = tuple([self.user_id, *delete_ids])
+            res = self.backend.execute(q, params)
+            deleted = int(res.rowcount or 0)
+
+        return archived, deleted
+
     def _notification_preferences_row_from_db(self, row: dict[str, Any]) -> NotificationPreferencesRow:
         return NotificationPreferencesRow(
             user_id=str(row.get("user_id")),

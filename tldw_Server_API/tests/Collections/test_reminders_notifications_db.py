@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -87,3 +88,41 @@ def test_notification_preferences_defaults_and_update(collections_db: Collection
     assert updated.reminder_enabled is False
     assert updated.job_completed_enabled is True
     assert updated.job_failed_enabled is False
+
+
+def test_prune_user_notifications_archives_and_deletes(collections_db: CollectionsDatabase) -> None:
+    row = collections_db.create_user_notification(
+        kind="reminder_due",
+        title="Reminder 1",
+        message="Do the thing",
+        severity="info",
+    )
+    now = datetime.now(timezone.utc)
+    collections_db.backend.execute(
+        "UPDATE user_notifications SET created_at = ?, read_at = ? WHERE id = ? AND user_id = ?",
+        (
+            (now - timedelta(days=10)).isoformat(),
+            (now - timedelta(days=31)).isoformat(),
+            row.id,
+            collections_db.user_id,
+        ),
+    )
+    archived, deleted = collections_db.prune_user_notifications(
+        retention_days_by_kind={"reminder_due": 90},
+        read_dismissed_grace_days=30,
+        archive_grace_days=7,
+    )
+    assert archived == 1
+    assert deleted == 0
+
+    collections_db.backend.execute(
+        "UPDATE user_notifications SET archived_at = ? WHERE id = ? AND user_id = ?",
+        ((now - timedelta(days=8)).isoformat(), row.id, collections_db.user_id),
+    )
+    archived2, deleted2 = collections_db.prune_user_notifications(
+        retention_days_by_kind={"reminder_due": 90},
+        read_dismissed_grace_days=30,
+        archive_grace_days=7,
+    )
+    assert archived2 == 0
+    assert deleted2 == 1
