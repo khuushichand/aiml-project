@@ -3965,6 +3965,44 @@ class CollectionsDatabase:
         )
         return bool(res.rowcount and res.rowcount > 0)
 
+    def try_claim_reminder_task_slot(
+        self,
+        task_id: str,
+        *,
+        expected_next_run_at: str | None,
+        next_run_at: str | None,
+        last_run_at: str | None,
+        last_status: str | None,
+        disallow_statuses: tuple[str, ...] | None = None,
+    ) -> bool:
+        """Attempt to claim a reminder slot with optimistic next_run_at matching."""
+        fields = ["next_run_at = ?", "last_run_at = ?", "last_status = ?", "updated_at = ?"]
+        params: list[Any] = [next_run_at, last_run_at, last_status, _utcnow_iso(), task_id, self.user_id]
+        status_clause = ""
+        status_params: list[Any] = []
+        if disallow_statuses:
+            placeholders = ", ".join(["?"] * len(disallow_statuses))
+            status_clause = f" AND (last_status IS NULL OR last_status NOT IN ({placeholders}))"
+            status_params.extend(disallow_statuses)
+        enabled_true = self._coerce_bool_flag(True, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        if expected_next_run_at is None:
+            q = (
+                f"UPDATE reminder_tasks SET {', '.join(fields)} "  # nosec B608
+                "WHERE id = ? AND user_id = ? AND enabled = ? AND next_run_at IS NULL"
+                f"{status_clause}"
+            )
+        else:
+            q = (
+                f"UPDATE reminder_tasks SET {', '.join(fields)} "  # nosec B608
+                "WHERE id = ? AND user_id = ? AND enabled = ? AND next_run_at = ?"
+                f"{status_clause}"
+            )
+            params.append(expected_next_run_at)
+        params.insert(6, enabled_true)
+        params.extend(status_params)
+        res = self.backend.execute(q, tuple(params))
+        return res.rowcount > 0
+
     # ------------------------
     # Notifications API
     # ------------------------

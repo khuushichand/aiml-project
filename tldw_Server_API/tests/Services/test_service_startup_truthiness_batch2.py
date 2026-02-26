@@ -11,6 +11,7 @@ from tldw_Server_API.app.services import kanban_activity_cleanup_service
 from tldw_Server_API.app.services import kanban_purge_service
 from tldw_Server_API.app.services import notifications_prune_service
 from tldw_Server_API.app.services import quality_eval_scheduler
+from tldw_Server_API.app.services import reminders_scheduler
 
 
 pytestmark = pytest.mark.unit
@@ -24,6 +25,7 @@ pytestmark = pytest.mark.unit
         ("KANBAN_PURGE_ENABLED", kanban_purge_service.start_kanban_purge_scheduler),
         ("FILES_EXPORT_GC_ENABLED", file_artifacts_export_gc_service.start_file_artifacts_export_gc_scheduler),
         ("NOTIFICATIONS_PRUNE_ENABLED", notifications_prune_service.start_notifications_prune_scheduler),
+        ("REMINDERS_SCHEDULER_ENABLED", reminders_scheduler.start_reminders_scheduler),
         ("RAG_QUALITY_EVAL_ENABLED", quality_eval_scheduler.start_quality_eval_scheduler),
         ("CONNECTORS_WORKER_ENABLED", connectors_worker.start_connectors_worker),
         ("CLAIMS_ALERTS_SCHEDULER_ENABLED", claims_alerts_scheduler.start_claims_alerts_scheduler),
@@ -54,6 +56,7 @@ async def test_service_startup_flags_accept_single_letter_y(monkeypatch: pytest.
         ("KANBAN_PURGE_ENABLED", kanban_purge_service.start_kanban_purge_scheduler),
         ("FILES_EXPORT_GC_ENABLED", file_artifacts_export_gc_service.start_file_artifacts_export_gc_scheduler),
         ("NOTIFICATIONS_PRUNE_ENABLED", notifications_prune_service.start_notifications_prune_scheduler),
+        ("REMINDERS_SCHEDULER_ENABLED", reminders_scheduler.start_reminders_scheduler),
         ("RAG_QUALITY_EVAL_ENABLED", quality_eval_scheduler.start_quality_eval_scheduler),
         ("CONNECTORS_WORKER_ENABLED", connectors_worker.start_connectors_worker),
     ],
