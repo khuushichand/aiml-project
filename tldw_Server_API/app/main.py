@@ -2200,6 +2200,8 @@ async def lifespan(app: FastAPI):
     media_ingest_jobs_task = None
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
+    reminder_jobs_task = None
+    jobs_notifications_bridge_task = None
     chatbooks_cleanup_stop_event = None
     files_jobs_stop_event = None
     data_tables_jobs_stop_event = None
@@ -2210,6 +2212,7 @@ async def lifespan(app: FastAPI):
     reading_digest_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
+    reminders_sched_task = None
     try:
         import asyncio as _asyncio
         import os as _os
@@ -2566,6 +2569,38 @@ async def lifespan(app: FastAPI):
             logger.info("Reading digest Jobs worker disabled by flag (READING_DIGEST_JOBS_WORKER_ENABLED)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reading digest Jobs worker: {e}")
+
+    # Reminder Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Reminder Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.services.reminder_jobs_worker import start_reminder_jobs_worker
+
+            reminder_jobs_task = await start_reminder_jobs_worker()
+            if reminder_jobs_task:
+                logger.info("Reminder Jobs worker started")
+            else:
+                logger.info("Reminder Jobs worker disabled (REMINDER_JOBS_WORKER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Reminder Jobs worker: {e}")
+
+    # Jobs notifications bridge worker
+    try:
+        if _sidecar_mode:
+            logger.info("Jobs notifications bridge worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.services.jobs_notifications_service import start_jobs_notifications_service
+
+            jobs_notifications_bridge_task = await start_jobs_notifications_service()
+            if jobs_notifications_bridge_task:
+                logger.info("Jobs notifications bridge worker started")
+            else:
+                logger.info(
+                    "Jobs notifications bridge worker disabled (JOBS_NOTIFICATIONS_BRIDGE_ENABLED != true)"
+                )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Jobs notifications bridge worker: {e}")
 
     # Evaluations Embeddings A/B Jobs worker
     try:
@@ -3114,6 +3149,18 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reading digest scheduler: {e}")
 
+    # Start Reminders scheduler (cron/date based submission into Jobs)
+    try:
+        from tldw_Server_API.app.services.reminders_scheduler import start_reminders_scheduler
+
+        reminders_sched_task = await start_reminders_scheduler()
+        if reminders_sched_task:
+            logger.info("Reminders scheduler started")
+        else:
+            logger.info("Reminders scheduler disabled (REMINDERS_SCHEDULER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Reminders scheduler: {e}")
+
     # Display authentication mode (API key masked by default unless explicitly requested)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
@@ -3442,6 +3489,10 @@ async def lifespan(app: FastAPI):
                     reading_digest_jobs_task.cancel()
             else:
                 reading_digest_jobs_task.cancel()
+        if "reminder_jobs_task" in locals() and reminder_jobs_task:
+            reminder_jobs_task.cancel()
+        if "jobs_notifications_bridge_task" in locals() and jobs_notifications_bridge_task:
+            jobs_notifications_bridge_task.cancel()
         if "evals_abtest_jobs_task" in locals() and evals_abtest_jobs_task:
             if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
                 try:
@@ -3514,6 +3565,20 @@ async def lifespan(app: FastAPI):
             try:
                 if "reading_digest_sched_task" in locals() and reading_digest_sched_task:
                     reading_digest_sched_task.cancel()
+            except _STARTUP_GUARD_EXCEPTIONS:
+                pass
+        # Stop Reminders scheduler
+        try:
+            if "reminders_sched_task" in locals():
+                from tldw_Server_API.app.services.reminders_scheduler import (
+                    stop_reminders_scheduler as _stop_reminders_scheduler,
+                )
+
+                await _stop_reminders_scheduler(reminders_sched_task)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            try:
+                if "reminders_sched_task" in locals() and reminders_sched_task:
+                    reminders_sched_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
                 pass
         # Jobs metrics gauges worker shutdown
