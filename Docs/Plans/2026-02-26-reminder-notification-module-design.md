@@ -52,9 +52,9 @@ Reuse domain-specific tables/services for generic reminders.
 
 - **Tasks module** (new): manages user reminder/task definitions.
 - **Notifications module** (new): manages inbox entries, unread/read state, preferences, and realtime stream.
-- **Task scheduler service** (new): APScheduler service that registers enabled schedules and enqueues Jobs.
+- **Task scheduler service** (new): APScheduler service that registers enabled schedules and enqueues Jobs; runs only on the active lease holder in multi-instance deployments.
 - **Reminder jobs worker** (new): consumes reminder jobs, writes reminder notifications.
-- **Jobs-event notification bridge** (new): tails `job_events` and emits in-app notifications for `job.completed`/`job.failed` for owned jobs.
+- **Jobs-event notification bridge** (new): tails `job_events` and emits in-app notifications for `job.completed`/`job.failed` for owned jobs; uses a persisted cursor with lease ownership.
 
 ### 4.2 Reused primitives
 
@@ -67,9 +67,16 @@ Reuse domain-specific tables/services for generic reminders.
 
 - All routes are authenticated and owner-scoped by default.
 - Task/inbox read routes require read-level task/notification scopes.
-- Task mutating routes (create/update/delete/snooze) require write/control task scope.
+- Task mutating routes (create/update/delete) require write/control task scope.
 - Notification preference updates require notification settings write scope.
 - Admin-only visibility beyond owner scope is out of v1 scope.
+
+### 4.4 Multi-instance Ownership Semantics (v1)
+
+- Scheduler and bridge processes may start on all app instances, but only one active lease holder performs enqueue/tail loops at a time.
+- Lease acquisition/renewal reuses existing Jobs lease patterns (heartbeat + expiry), with automatic takeover after expiry.
+- Bridge cursor is committed only after its batch notification writes commit; a takeover resumes from the last committed cursor.
+- Processing model is at-least-once with deterministic dedupe keys (`run_slot_key`, `dedupe_key`) so failover/retry does not surface duplicate inbox entries.
 
 ## 5. Data Model (v1)
 
@@ -126,6 +133,14 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
 - `job_failed_enabled` (default true)
 - `updated_at`
 
+### 5.5 `notification_bridge_state`
+
+- `consumer_name` (PK; e.g. `jobs_event_notifications_v1`)
+- `last_event_id` (high-watermark cursor)
+- `lease_owner_id`
+- `lease_expires_at`
+- `updated_at`
+
 ## 6. API Surface (v1)
 
 ### 6.1 Tasks API
@@ -135,7 +150,6 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
 - `GET /api/v1/tasks/{id}`
 - `PATCH /api/v1/tasks/{id}`
 - `DELETE /api/v1/tasks/{id}`
-- `POST /api/v1/tasks/{id}/snooze`
 
 ### 6.2 Notifications API
 
@@ -156,6 +170,13 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
 - `POST/PATCH /api/v1/notifications*` requires notification control scope.
 - Endpoint-level rate limits follow existing RBAC rate-limit dependency patterns.
 
+### 6.4 SSE Contract (v1)
+
+- `GET /api/v1/notifications/stream` accepts reconnect cursor via `Last-Event-ID` header (preferred) or `after` query parameter.
+- Stream event payload includes stable `event_id`, `notification_id`, `kind`, and `created_at`.
+- Server replays missed events for `event_id > cursor` up to a bounded replay window (default `500` events).
+- If cursor is stale/outside replay window, server emits `reset_required`; client must refetch via `GET /api/v1/notifications` and resume streaming from fresh cursor.
+
 ## 7. Runtime Flows
 
 ### 7.1 Reminder due flow
@@ -170,7 +191,8 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
 1. Bridge worker polls/tails `job_events` for `job.completed` + `job.failed`.
 2. Resolves owner and applies preference toggles.
 3. Writes deduped `user_notifications` rows.
-4. SSE emits updates.
+4. Commits bridge cursor only after writes succeed.
+5. SSE emits updates.
 
 ### 7.3 Snooze flow (toast action)
 
@@ -180,9 +202,13 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
 
 ### 7.4 Notification Retention and Prune flow
 
-1. Inbox rows are created with `retention_until` based on configurable defaults.
-2. Background prune worker marks old rows archived/deleted according to retention policy.
-3. Prune is idempotent and scoped per user DB; metrics are emitted for deleted counts.
+1. Inbox rows are created with concrete defaults:
+   - `reminder_due` / `reminder_failed`: keep for `90` days.
+   - `job_completed`: keep for `30` days.
+   - `job_failed`: keep for `60` days.
+2. Read/dismissed notifications become prune-eligible `30` days after `read_at`/`dismissed_at` (even if base retention is longer).
+3. Prune worker archives expired rows first (`archived_at` set), then hard-deletes archived rows after `7` days.
+4. Prune is idempotent and scoped per user DB; metrics are emitted for archived/deleted counts.
 
 ## 8. Error Handling and Guardrails
 
@@ -193,8 +219,10 @@ Persist in per-user DB (new tables in a module local to reminders/notifications)
   - all recurrence slots are normalized to UTC (`run_slot_utc`) before enqueue.
   - ambiguous/non-existent local DST timestamps are resolved at schedule evaluation time, then persisted as UTC.
 - Validate cron/timezone with `422` responses on invalid input.
-- Scheduler settings: `max_instances=1`, coalescing enabled, bounded misfire grace.
-- Active task cap in v1 (default `10`, configurable env).
+- Scheduler settings: `max_instances=1` per lease holder, coalescing enabled, bounded misfire grace.
+- Active task cap in v1 (default `10`, configurable env), where active means `enabled=true` and `next_run_at IS NOT NULL`.
+- One-time tasks auto-disable after terminal success and no longer count toward cap.
+- Cap exceedance returns `409` with a typed error code (for deterministic UI handling).
 - All notification state is persisted first; realtime stream is additive.
 - Strict per-user ownership scope across all endpoints.
 - Realtime flood controls:
@@ -226,8 +254,9 @@ Release gate for v1:
 
 ### Integration tests
 
-- Task CRUD + pause/resume + snooze.
+- Task CRUD + pause/resume.
 - Notifications list/unread/mark-read/dismiss.
+- Notification snooze creates derived one-time reminder with preserved links.
 - Preferences impact on job-completion notifications.
 - AuthNZ owner scoping (single-user + multi-user).
 - Route-level permission/scope enforcement for all new endpoints.
@@ -238,6 +267,8 @@ Release gate for v1:
 - Worker writes run + notification records.
 - Job-events bridge writes expected notifications and dedupes.
 - Job-events bridge skips events lacking owner attribution (and records metrics).
+- Bridge cursor commits only after successful batch write; failover resumes from last committed cursor.
+- Lease failover permits single active scheduler/bridge owner at a time.
 - Notification prune worker enforces retention policy safely.
 
 ### Frontend/E2E
