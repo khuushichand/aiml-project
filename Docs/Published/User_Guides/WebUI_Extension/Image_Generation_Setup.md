@@ -159,6 +159,7 @@ curl -sS http://127.0.0.1:8000/api/v1/files/create \
     "payload": {
       "backend": "stable_diffusion_cpp",
       "prompt": "A neon-lit city street in the rain",
+      "prompt_refinement": "auto",
       "negative_prompt": "blurry, low quality",
       "width": 768,
       "height": 512,
@@ -174,6 +175,11 @@ curl -sS http://127.0.0.1:8000/api/v1/files/create \
 The response includes:
 - `artifact.export.content_b64` (base64 bytes)
 - `artifact.export.content_type` (image MIME type)
+
+Prompt refinement:
+- `payload.prompt_refinement` accepts `true|false` or `basic|auto|off`.
+- `auto` (default) keeps detailed prompts unchanged and enriches sparse prompts with a quality suffix.
+- `off` keeps the prompt unchanged (after whitespace normalization).
 
 ### Model Studio example (`backend=modelstudio`)
 

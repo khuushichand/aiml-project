@@ -105,6 +105,20 @@ async def run_image_gen_adapter(config: dict[str, Any], context: dict[str, Any])
     if not prompt.strip():
         return {"error": "missing_prompt"}
 
+    from tldw_Server_API.app.core.Image_Generation.config import get_image_generation_config
+    from tldw_Server_API.app.core.Image_Generation.prompt_refinement import (
+        normalize_prompt_refinement_mode,
+        refine_image_prompt,
+    )
+
+    image_generation_cfg = get_image_generation_config()
+    prompt_refinement_mode = normalize_prompt_refinement_mode(config.get("prompt_refinement"))
+    prompt = refine_image_prompt(
+        prompt,
+        mode=prompt_refinement_mode,
+        max_length=image_generation_cfg.max_prompt_length,
+    )
+
     # Negative prompt
     neg_prompt_t = config.get("negative_prompt")
     negative_prompt = None
@@ -150,6 +164,7 @@ async def run_image_gen_adapter(config: dict[str, Any], context: dict[str, Any])
             "count": 1,
             "timings": {"total_ms": 100.0},
             "prompt": prompt,
+            "prompt_refinement_mode": prompt_refinement_mode,
             "backend": backend,
             "simulated": True,
         }
@@ -247,6 +262,7 @@ async def run_image_gen_adapter(config: dict[str, Any], context: dict[str, Any])
             "count": len(images_output),
             "timings": {"total_ms": duration_ms},
             "prompt": prompt,
+            "prompt_refinement_mode": prompt_refinement_mode,
             "backend": resolved_backend,
             "artifact_registered": artifact_registered,
         }
