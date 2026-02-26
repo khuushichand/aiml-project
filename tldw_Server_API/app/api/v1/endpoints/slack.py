@@ -185,7 +185,7 @@ def _oauth_scopes() -> str:
     return ",".join(scopes)
 
 
-def _get_job_manager():
+def _get_job_manager() -> Any:
     return _global_get_job_manager()
 
 
