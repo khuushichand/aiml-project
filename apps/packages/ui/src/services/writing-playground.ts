@@ -36,6 +36,16 @@ export type WritingTokenizerSupport = {
   error?: string | null
 }
 
+export type WritingExtraBodyCompat = {
+  supported: boolean
+  effective_reason?: string | null
+  known_params: string[]
+  param_groups: string[]
+  notes?: string | null
+  example?: Record<string, unknown>
+  source?: string
+}
+
 export type WritingProviderCapabilities = {
   name: string
   models: string[]
@@ -43,6 +53,8 @@ export type WritingProviderCapabilities = {
   supported_fields: string[]
   features: Record<string, boolean>
   tokenizers?: Record<string, WritingTokenizerSupport>
+  extra_body_compat?: WritingExtraBodyCompat
+  model_extra_body_compat?: Record<string, WritingExtraBodyCompat>
 }
 
 export type WritingRequestedCapabilities = {
@@ -53,6 +65,7 @@ export type WritingRequestedCapabilities = {
   tokenizer_available: boolean
   tokenizer?: string | null
   tokenization_error?: string | null
+  extra_body_compat?: WritingExtraBodyCompat
 }
 
 export type WritingCapabilitiesResponse = {

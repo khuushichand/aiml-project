@@ -59,6 +59,7 @@ import {
   updateWritingSession,
   updateWritingTemplate,
   updateWritingTheme,
+  type WritingExtraBodyCompat,
   type WritingSessionListResponse,
   type WritingSessionListItem,
   type WritingTemplateListResponse,
@@ -67,8 +68,14 @@ import {
   type WritingThemeResponse
 } from "@/services/writing-playground"
 import type { ChatMessage } from "@/services/tldw/TldwApiClient"
+import { useStoreChatModelSettings } from "@/store/model"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
 import { cn } from "@/libs/utils"
+import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import {
+  buildExtraBodyPayload,
+  parseStringListInput
+} from "./extra-body-utils"
 
 const { Title, Paragraph } = Typography
 
@@ -104,6 +111,7 @@ type WritingSessionSettings = {
   frequency_penalty: number
   seed: number | null
   stop: string[]
+  advanced_extra_body: Record<string, unknown>
 }
 
 type EditorViewMode = "edit" | "preview" | "split"
@@ -211,8 +219,65 @@ const DEFAULT_SETTINGS: WritingSessionSettings = {
   presence_penalty: 0,
   frequency_penalty: 0,
   seed: null,
-  stop: []
+  stop: [],
+  advanced_extra_body: {}
 }
+
+const cloneDefaultSettings = (): WritingSessionSettings => ({
+  ...DEFAULT_SETTINGS,
+  stop: [...DEFAULT_SETTINGS.stop],
+  advanced_extra_body: {}
+})
+
+const ADVANCED_EXTRA_BODY_PARAM_KEYS = [
+  "dynatemp_range",
+  "dynatemp_exponent",
+  "repeat_penalty",
+  "repeat_last_n",
+  "ignore_eos",
+  "mirostat",
+  "mirostat_tau",
+  "mirostat_eta",
+  "typical_p",
+  "min_p",
+  "tfs_z",
+  "xtc_threshold",
+  "xtc_probability",
+  "dry_multiplier",
+  "dry_base",
+  "dry_allowed_length",
+  "dry_penalty_last_n",
+  "dry_sequence_breakers",
+  "banned_tokens",
+  "grammar"
+] as const
+
+type AdvancedNumberParamConfig = {
+  key: string
+  label: string
+  min?: number
+  max?: number
+  step?: number
+}
+
+const ADVANCED_NUMBER_PARAMS: AdvancedNumberParamConfig[] = [
+  { key: "dynatemp_range", label: "Dynatemp range", min: 0, max: 10, step: 0.01 },
+  { key: "dynatemp_exponent", label: "Dynatemp exponent", min: 0, max: 10, step: 0.01 },
+  { key: "repeat_penalty", label: "Repeat penalty", min: 0, max: 3, step: 0.01 },
+  { key: "repeat_last_n", label: "Repeat last N", min: -1, max: 8192, step: 1 },
+  { key: "typical_p", label: "Typical P", min: 0, max: 1, step: 0.01 },
+  { key: "min_p", label: "Min P", min: 0, max: 1, step: 0.01 },
+  { key: "tfs_z", label: "TFS Z", min: 0, max: 2, step: 0.01 },
+  { key: "mirostat", label: "Mirostat", min: 0, max: 2, step: 1 },
+  { key: "mirostat_tau", label: "Mirostat tau", min: 0, max: 20, step: 0.1 },
+  { key: "mirostat_eta", label: "Mirostat eta", min: 0, max: 5, step: 0.01 },
+  { key: "xtc_threshold", label: "XTC threshold", min: 0, max: 1, step: 0.01 },
+  { key: "xtc_probability", label: "XTC probability", min: 0, max: 1, step: 0.01 },
+  { key: "dry_multiplier", label: "DRY multiplier", min: 0, max: 10, step: 0.01 },
+  { key: "dry_base", label: "DRY base", min: 0, max: 10, step: 0.01 },
+  { key: "dry_allowed_length", label: "DRY allowed length", min: 0, max: 4096, step: 1 },
+  { key: "dry_penalty_last_n", label: "DRY penalty last N", min: 0, max: 8192, step: 1 }
+]
 
 const PREDICT_SYSTEM_PROMPT =
   "Continue the text from the prompt. Respond with only the continuation."
@@ -254,7 +319,7 @@ const toNullableNumber = (
 
 const normalizeStopStrings = (value: unknown): string[] => {
   if (Array.isArray(value)) {
-    return value.map((entry) => String(entry)).filter(Boolean)
+    return value.map((entry) => String(entry).trim()).filter(Boolean)
   }
   if (typeof value === "string") {
     return value
@@ -263,6 +328,40 @@ const normalizeStopStrings = (value: unknown): string[] => {
       .filter(Boolean)
   }
   return []
+}
+
+const normalizeStringArrayValue = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value.map((entry) => String(entry).trim()).filter(Boolean)
+}
+
+const pickAdvancedExtraBodyFromSettings = (
+  settings: Record<string, unknown>
+): Record<string, unknown> => {
+  const direct = isRecord(settings.advanced_extra_body)
+    ? { ...settings.advanced_extra_body }
+    : isRecord(settings.extra_body)
+      ? { ...settings.extra_body }
+      : {}
+
+  for (const key of ADVANCED_EXTRA_BODY_PARAM_KEYS) {
+    if (!(key in direct) && key in settings) {
+      direct[key] = settings[key]
+    }
+  }
+
+  if (Array.isArray(direct.banned_tokens)) {
+    direct.banned_tokens = normalizeStringArrayValue(direct.banned_tokens)
+  }
+  if (Array.isArray(direct.dry_sequence_breakers)) {
+    direct.dry_sequence_breakers = normalizeStringArrayValue(
+      direct.dry_sequence_breakers
+    )
+  }
+  if (typeof direct.grammar === "string") {
+    direct.grammar = direct.grammar.trim()
+  }
+  return direct
 }
 
 const escapeRegex = (value: string): string =>
@@ -676,9 +775,10 @@ const isAbortError = (error: unknown): boolean => {
 const getSettingsFromPayload = (
   payload?: Record<string, unknown> | null
 ): WritingSessionSettings => {
-  if (!isRecord(payload)) return { ...DEFAULT_SETTINGS }
+  if (!isRecord(payload)) return cloneDefaultSettings()
   const raw = payload.settings
   const settings = isRecord(raw) ? raw : {}
+  const advancedExtraBody = pickAdvancedExtraBodyFromSettings(settings)
   return {
     temperature: toNumber(settings.temperature, DEFAULT_SETTINGS.temperature),
     top_p: toNumber(settings.top_p, DEFAULT_SETTINGS.top_p),
@@ -696,7 +796,8 @@ const getSettingsFromPayload = (
       DEFAULT_SETTINGS.frequency_penalty
     ),
     seed: toNullableNumber(settings.seed, DEFAULT_SETTINGS.seed),
-    stop: normalizeStopStrings(settings.stop)
+    stop: normalizeStopStrings(settings.stop),
+    advanced_extra_body: advancedExtraBody
   }
 }
 
@@ -763,7 +864,10 @@ const areSettingsEqual = (
   if (left.frequency_penalty !== right.frequency_penalty) return false
   if (left.seed !== right.seed) return false
   if (left.stop.length !== right.stop.length) return false
-  return left.stop.every((value, index) => value === right.stop[index])
+  if (!left.stop.every((value, index) => value === right.stop[index])) return false
+  const leftAdvanced = JSON.stringify(left.advanced_extra_body || {})
+  const rightAdvanced = JSON.stringify(right.advanced_extra_body || {})
+  return leftAdvanced === rightAdvanced
 }
 
 export const WritingPlayground = () => {
@@ -778,6 +882,9 @@ export const WritingPlayground = () => {
     setActiveSessionName
   } = useWritingPlaygroundStore()
   const [selectedModel] = useStorage<string>("selectedModel")
+  const apiProviderOverride = useStoreChatModelSettings(
+    (state) => state.apiProvider
+  )
   const [sessionUsageMap, setSessionUsageMap] = useStorage<SessionUsageMap>(
     "writing:session-usage",
     {}
@@ -792,8 +899,11 @@ export const WritingPlayground = () => {
   const [editorText, setEditorText] = React.useState("")
   const [editorView, setEditorView] = React.useState<EditorViewMode>("edit")
   const [settings, setSettings] =
-    React.useState<WritingSessionSettings>(DEFAULT_SETTINGS)
+    React.useState<WritingSessionSettings>(() => cloneDefaultSettings())
   const [stopStringsInput, setStopStringsInput] = React.useState("")
+  const [bannedTokensInput, setBannedTokensInput] = React.useState("")
+  const [drySequenceBreakersInput, setDrySequenceBreakersInput] =
+    React.useState("")
   const [selectedTemplateName, setSelectedTemplateName] =
     React.useState<string | null>(null)
   const [selectedThemeName, setSelectedThemeName] =
@@ -861,6 +971,31 @@ export const WritingPlayground = () => {
   const hasTemplates = Boolean(writingCaps?.server?.templates)
   const hasThemes = Boolean(writingCaps?.server?.themes)
   const hasChat = capabilities?.hasChat !== false
+
+  const { data: requestedCaps } = useQuery({
+    queryKey: [
+      "writing-capabilities",
+      "requested",
+      selectedModel || "",
+      apiProviderOverride || ""
+    ],
+    queryFn: async () => {
+      const provider = await resolveApiProviderForModel({
+        modelId: selectedModel,
+        explicitProvider: apiProviderOverride
+      })
+      return await getWritingCapabilities({
+        provider,
+        model: selectedModel || undefined,
+        includeProviders: false
+      })
+    },
+    enabled: isOnline && hasWriting && Boolean(selectedModel),
+    staleTime: 60 * 1000
+  })
+
+  const extraBodyCompat: WritingExtraBodyCompat | null =
+    requestedCaps?.requested?.extra_body_compat ?? null
 
   const showOffline = !isOnline
   const showUnsupported =
@@ -974,7 +1109,7 @@ export const WritingPlayground = () => {
         name,
         payload: {
           prompt: "",
-          settings: { ...DEFAULT_SETTINGS },
+          settings: cloneDefaultSettings(),
           template_name: null,
           theme_name: null,
           chat_mode: false
@@ -1442,8 +1577,10 @@ export const WritingPlayground = () => {
   React.useEffect(() => {
     if (!activeSessionDetail) {
       setEditorText("")
-      setSettings(DEFAULT_SETTINGS)
+      setSettings(cloneDefaultSettings())
       setStopStringsInput("")
+      setBannedTokensInput("")
+      setDrySequenceBreakersInput("")
       setSelectedTemplateName(null)
       setSelectedThemeName(null)
       setChatMode(false)
@@ -1464,6 +1601,16 @@ export const WritingPlayground = () => {
       setEditorText(nextPrompt)
       setSettings(nextSettings)
       setStopStringsInput(nextSettings.stop.join("\n"))
+      setBannedTokensInput(
+        normalizeStringArrayValue(nextSettings.advanced_extra_body.banned_tokens).join(
+          "\n"
+        )
+      )
+      setDrySequenceBreakersInput(
+        normalizeStringArrayValue(
+          nextSettings.advanced_extra_body.dry_sequence_breakers
+        ).join("\n")
+      )
       setSelectedTemplateName(nextTemplateName)
       setSelectedThemeName(nextThemeName)
       setChatMode(nextChatMode)
@@ -1484,6 +1631,16 @@ export const WritingPlayground = () => {
       if (!areSettingsEqual(settings, nextSettings)) {
         setSettings(nextSettings)
         setStopStringsInput(nextSettings.stop.join("\n"))
+        setBannedTokensInput(
+          normalizeStringArrayValue(
+            nextSettings.advanced_extra_body.banned_tokens
+          ).join("\n")
+        )
+        setDrySequenceBreakersInput(
+          normalizeStringArrayValue(
+            nextSettings.advanced_extra_body.dry_sequence_breakers
+          ).join("\n")
+        )
       }
       if (selectedTemplateName !== nextTemplateName) {
         setSelectedTemplateName(nextTemplateName)
@@ -1751,6 +1908,68 @@ export const WritingPlayground = () => {
       handleSettingsChange(nextSettings, nextStopInput)
     },
     [handleSettingsChange, settings]
+  )
+
+  const advancedExtraBody = React.useMemo(
+    () => (isRecord(settings.advanced_extra_body) ? settings.advanced_extra_body : {}),
+    [settings.advanced_extra_body]
+  )
+  const knownExtraBodyParams = React.useMemo(
+    () =>
+      Array.isArray(extraBodyCompat?.known_params)
+        ? extraBodyCompat.known_params
+            .map((entry) => String(entry || "").trim())
+            .filter(Boolean)
+        : [],
+    [extraBodyCompat?.known_params]
+  )
+  const knownExtraBodyParamSet = React.useMemo(
+    () => new Set(knownExtraBodyParams),
+    [knownExtraBodyParams]
+  )
+  const supportsAdvancedCompat = extraBodyCompat?.supported !== false
+
+  const shouldShowAdvancedParam = React.useCallback(
+    (key: string) => {
+      if (Object.prototype.hasOwnProperty.call(advancedExtraBody, key)) {
+        return true
+      }
+      if (knownExtraBodyParamSet.size === 0) return false
+      return knownExtraBodyParamSet.has(key)
+    },
+    [advancedExtraBody, knownExtraBodyParamSet]
+  )
+
+  const updateAdvancedExtraBodyField = React.useCallback(
+    (key: string, value: unknown) => {
+      const nextAdvanced = { ...advancedExtraBody }
+      const shouldRemove =
+        value == null ||
+        (typeof value === "string" && value.trim().length === 0) ||
+        (Array.isArray(value) && value.length === 0)
+      if (shouldRemove) {
+        delete nextAdvanced[key]
+      } else {
+        nextAdvanced[key] = value
+      }
+      updateSetting({ advanced_extra_body: nextAdvanced })
+    },
+    [advancedExtraBody, updateSetting]
+  )
+
+  const getAdvancedNumberValue = React.useCallback(
+    (key: string): number | null => {
+      const raw = advancedExtraBody[key]
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        return raw
+      }
+      if (typeof raw === "string" && raw.trim()) {
+        const parsed = Number(raw)
+        return Number.isFinite(parsed) ? parsed : null
+      }
+      return null
+    },
+    [advancedExtraBody]
   )
 
   const handleTemplateChange = React.useCallback(
@@ -2871,16 +3090,14 @@ export const WritingPlayground = () => {
         ? fimPrompt ?? buildFillPrompt(plan.prefix, plan.suffix)
         : plan.prefix
     const messages = buildChatMessages(promptText, effectiveTemplate, chatMode)
-    const extraBody: Record<string, unknown> = {}
-    if (settings.top_k > 0) {
-      extraBody.top_k = settings.top_k
-    }
-    if (settings.seed != null) {
-      extraBody.seed = settings.seed
-    }
-    if (settings.stop.length > 0) {
-      extraBody.stop = settings.stop
-    }
+    const advancedExtraBody =
+      supportsAdvancedCompat ? settings.advanced_extra_body : {}
+    const extraBody = buildExtraBodyPayload({
+      top_k: settings.top_k,
+      seed: settings.seed,
+      stop: settings.stop,
+      advanced_extra_body: advancedExtraBody
+    })
 
     generationSessionIdRef.current = activeSessionDetail.id
     generationCancelledRef.current = false
@@ -2908,7 +3125,7 @@ export const WritingPlayground = () => {
             : plan.mode === "fill"
               ? FILL_SYSTEM_PROMPT
               : PREDICT_SYSTEM_PROMPT,
-          extraBody: Object.keys(extraBody).length ? extraBody : undefined
+          extraBody
         }
       )) {
         if (generationCancelledRef.current) break
@@ -2956,6 +3173,7 @@ export const WritingPlayground = () => {
     pushGenerationHistory,
     selectedModel,
     settings,
+    supportsAdvancedCompat,
     t
   ])
 
@@ -3017,6 +3235,10 @@ export const WritingPlayground = () => {
     Boolean(selectedModel) &&
     hasChat &&
     !isGenerating
+  const hasAdvancedSettingsValues =
+    Object.keys(advancedExtraBody || {}).length > 0
+  const showAdvancedSamplerControls =
+    knownExtraBodyParams.length > 0 || hasAdvancedSettingsValues
   const settingsDisabled = isGenerating
   const templateSelectDisabled =
     settingsDisabled || !hasTemplates || templatesLoading || Boolean(templatesError)
@@ -4018,6 +4240,188 @@ export const WritingPlayground = () => {
                         rows={4}
                       />
                     </div>
+                    {showAdvancedSamplerControls && (
+                      <Collapse
+                        ghost
+                        size="small"
+                        defaultActiveKey={
+                          supportsAdvancedCompat ? [] : ["advanced-extra-body"]
+                        }
+                        items={[
+                          {
+                            key: "advanced-extra-body",
+                            label: t(
+                              "option:writingPlayground.advancedSamplerLabel",
+                              "Advanced sampler controls (extra_body)"
+                            ),
+                            children: (
+                              <div className="flex flex-col gap-3">
+                                {extraBodyCompat ? (
+                                  <span className="text-xs text-text-muted">
+                                    {extraBodyCompat.notes ||
+                                      t(
+                                        "option:writingPlayground.advancedSamplerHint",
+                                        "Advanced controls are sent through extra_body for provider compatibility."
+                                      )}
+                                  </span>
+                                ) : null}
+                                {!supportsAdvancedCompat ? (
+                                  <Alert
+                                    type="info"
+                                    showIcon
+                                    message={
+                                      extraBodyCompat?.effective_reason ||
+                                      t(
+                                        "option:writingPlayground.advancedUnsupported",
+                                        "Advanced sampler controls are disabled by runtime configuration."
+                                      )
+                                    }
+                                  />
+                                ) : null}
+                                {knownExtraBodyParams.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {knownExtraBodyParams.map((param) => (
+                                      <Tag key={param}>{param}</Tag>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                  {ADVANCED_NUMBER_PARAMS.filter((param) =>
+                                    shouldShowAdvancedParam(param.key)
+                                  ).map((param) => (
+                                    <div
+                                      key={param.key}
+                                      className="flex flex-col gap-1">
+                                      <span className="text-xs text-text-muted">
+                                        {param.label}
+                                      </span>
+                                      <InputNumber
+                                        size="small"
+                                        min={param.min}
+                                        max={param.max}
+                                        step={param.step}
+                                        value={getAdvancedNumberValue(param.key)}
+                                        disabled={
+                                          settingsDisabled || !supportsAdvancedCompat
+                                        }
+                                        onChange={(value) => {
+                                          const parsed =
+                                            value == null
+                                              ? null
+                                              : param.step === 1
+                                                ? Math.round(value)
+                                                : value
+                                          updateAdvancedExtraBodyField(
+                                            param.key,
+                                            parsed
+                                          )
+                                        }}
+                                        className="w-full"
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                                {shouldShowAdvancedParam("ignore_eos") && (
+                                  <Checkbox
+                                    checked={Boolean(advancedExtraBody.ignore_eos)}
+                                    disabled={
+                                      settingsDisabled || !supportsAdvancedCompat
+                                    }
+                                    onChange={(event) =>
+                                      updateAdvancedExtraBodyField(
+                                        "ignore_eos",
+                                        event.target.checked ? true : null
+                                      )
+                                    }>
+                                    {t(
+                                      "option:writingPlayground.ignoreEosLabel",
+                                      "Ignore EOS"
+                                    )}
+                                  </Checkbox>
+                                )}
+                                {shouldShowAdvancedParam("banned_tokens") && (
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.bannedTokensLabel",
+                                        "Banned tokens (comma or newline separated)"
+                                      )}
+                                    </span>
+                                    <Input.TextArea
+                                      value={bannedTokensInput}
+                                      rows={3}
+                                      disabled={
+                                        settingsDisabled || !supportsAdvancedCompat
+                                      }
+                                      onChange={(event) => {
+                                        const nextInput = event.target.value
+                                        setBannedTokensInput(nextInput)
+                                        updateAdvancedExtraBodyField(
+                                          "banned_tokens",
+                                          parseStringListInput(nextInput)
+                                        )
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                                {shouldShowAdvancedParam("dry_sequence_breakers") && (
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.drySequenceBreakersLabel",
+                                        "DRY sequence breakers (comma or newline separated)"
+                                      )}
+                                    </span>
+                                    <Input.TextArea
+                                      value={drySequenceBreakersInput}
+                                      rows={3}
+                                      disabled={
+                                        settingsDisabled || !supportsAdvancedCompat
+                                      }
+                                      onChange={(event) => {
+                                        const nextInput = event.target.value
+                                        setDrySequenceBreakersInput(nextInput)
+                                        updateAdvancedExtraBodyField(
+                                          "dry_sequence_breakers",
+                                          parseStringListInput(nextInput)
+                                        )
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                                {shouldShowAdvancedParam("grammar") && (
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.grammarLabel",
+                                        "Grammar"
+                                      )}
+                                    </span>
+                                    <Input.TextArea
+                                      value={
+                                        typeof advancedExtraBody.grammar === "string"
+                                          ? advancedExtraBody.grammar
+                                          : ""
+                                      }
+                                      rows={4}
+                                      disabled={
+                                        settingsDisabled || !supportsAdvancedCompat
+                                      }
+                                      onChange={(event) =>
+                                        updateAdvancedExtraBodyField(
+                                          "grammar",
+                                          event.target.value
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          }
+                        ]}
+                      />
+                    )}
                   </div>
                 )
               ) : (
