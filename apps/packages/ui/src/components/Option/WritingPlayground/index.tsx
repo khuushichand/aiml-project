@@ -76,6 +76,15 @@ import {
   buildExtraBodyPayload,
   parseStringListInput
 } from "./extra-body-utils"
+import {
+  buildContextSystemMessages,
+  injectSystemMessages,
+  parseWorldInfoKeysInput,
+  type WritingAuthorNote,
+  type WritingContextBlock,
+  type WritingWorldInfoEntry,
+  type WritingWorldInfoSettings
+} from "./writing-context-utils"
 
 const { Title, Paragraph } = Typography
 
@@ -112,6 +121,9 @@ type WritingSessionSettings = {
   seed: number | null
   stop: string[]
   advanced_extra_body: Record<string, unknown>
+  memory_block: WritingContextBlock
+  author_note: WritingAuthorNote
+  world_info: WritingWorldInfoSettings
 }
 
 type EditorViewMode = "edit" | "preview" | "split"
@@ -211,6 +223,27 @@ const EMPTY_THEME_FORM: ThemeFormState = {
   isDefault: false
 }
 
+const DEFAULT_MEMORY_BLOCK: WritingContextBlock = {
+  enabled: false,
+  prefix: "Memory:\n",
+  text: "",
+  suffix: ""
+}
+
+const DEFAULT_AUTHOR_NOTE: WritingAuthorNote = {
+  enabled: false,
+  prefix: "Author note:\n",
+  text: "",
+  suffix: "",
+  insertion_depth: 1
+}
+
+const DEFAULT_WORLD_INFO: WritingWorldInfoSettings = {
+  enabled: false,
+  search_range: 2000,
+  entries: []
+}
+
 const DEFAULT_SETTINGS: WritingSessionSettings = {
   temperature: 0.7,
   top_p: 0.9,
@@ -220,13 +253,19 @@ const DEFAULT_SETTINGS: WritingSessionSettings = {
   frequency_penalty: 0,
   seed: null,
   stop: [],
-  advanced_extra_body: {}
+  advanced_extra_body: {},
+  memory_block: DEFAULT_MEMORY_BLOCK,
+  author_note: DEFAULT_AUTHOR_NOTE,
+  world_info: DEFAULT_WORLD_INFO
 }
 
 const cloneDefaultSettings = (): WritingSessionSettings => ({
   ...DEFAULT_SETTINGS,
   stop: [...DEFAULT_SETTINGS.stop],
-  advanced_extra_body: {}
+  advanced_extra_body: {},
+  memory_block: { ...DEFAULT_MEMORY_BLOCK },
+  author_note: { ...DEFAULT_AUTHOR_NOTE },
+  world_info: { ...DEFAULT_WORLD_INFO, entries: [] }
 })
 
 const ADVANCED_EXTRA_BODY_PARAM_KEYS = [
@@ -333,6 +372,91 @@ const normalizeStopStrings = (value: unknown): string[] => {
 const normalizeStringArrayValue = (value: unknown): string[] => {
   if (!Array.isArray(value)) return []
   return value.map((entry) => String(entry).trim()).filter(Boolean)
+}
+
+const toBoolean = (value: unknown, fallback: boolean): boolean => {
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === "true") return true
+    if (normalized === "false") return false
+  }
+  return fallback
+}
+
+const toStringValue = (value: unknown, fallback = ""): string =>
+  typeof value === "string" ? value : fallback
+
+const createWorldInfoId = (): string =>
+  `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+const normalizeWorldInfoEntries = (value: unknown): WritingWorldInfoEntry[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => {
+      if (!isRecord(entry)) return null
+      const keys = Array.isArray(entry.keys)
+        ? entry.keys.map((key) => String(key || "").trim()).filter(Boolean)
+        : typeof entry.keys === "string"
+          ? parseWorldInfoKeysInput(entry.keys)
+          : []
+      const content = toStringValue(entry.content).trim()
+      if (!content) return null
+      if (keys.length === 0) return null
+      return {
+        id: String(entry.id || createWorldInfoId()),
+        enabled: toBoolean(entry.enabled, true),
+        keys,
+        content,
+        use_regex: toBoolean(entry.use_regex ?? entry.useRegex, false),
+        case_sensitive: toBoolean(
+          entry.case_sensitive ?? entry.caseSensitive,
+          false
+        )
+      } as WritingWorldInfoEntry
+    })
+    .filter(Boolean) as WritingWorldInfoEntry[]
+}
+
+const normalizeContextBlock = (
+  raw: unknown,
+  fallback: WritingContextBlock
+): WritingContextBlock => {
+  const value = isRecord(raw) ? raw : {}
+  return {
+    enabled: toBoolean(value.enabled, fallback.enabled),
+    prefix: toStringValue(value.prefix, fallback.prefix),
+    text: toStringValue(value.text, fallback.text),
+    suffix: toStringValue(value.suffix, fallback.suffix)
+  }
+}
+
+const normalizeAuthorNote = (raw: unknown): WritingAuthorNote => {
+  const value = isRecord(raw) ? raw : {}
+  return {
+    ...normalizeContextBlock(value, DEFAULT_AUTHOR_NOTE),
+    insertion_depth: Math.max(
+      1,
+      Math.floor(
+        toNumber(
+          value.insertion_depth ?? value.insertionDepth,
+          DEFAULT_AUTHOR_NOTE.insertion_depth
+        )
+      )
+    )
+  }
+}
+
+const normalizeWorldInfoSettings = (raw: unknown): WritingWorldInfoSettings => {
+  const value = isRecord(raw) ? raw : {}
+  return {
+    enabled: toBoolean(value.enabled, DEFAULT_WORLD_INFO.enabled),
+    search_range: Math.max(
+      0,
+      Math.floor(toNumber(value.search_range ?? value.searchRange, 2000))
+    ),
+    entries: normalizeWorldInfoEntries(value.entries)
+  }
 }
 
 const pickAdvancedExtraBodyFromSettings = (
@@ -779,6 +903,16 @@ const getSettingsFromPayload = (
   const raw = payload.settings
   const settings = isRecord(raw) ? raw : {}
   const advancedExtraBody = pickAdvancedExtraBodyFromSettings(settings)
+  const memoryBlock = normalizeContextBlock(
+    settings.memory_block ?? settings.memoryBlock,
+    DEFAULT_MEMORY_BLOCK
+  )
+  const authorNote = normalizeAuthorNote(
+    settings.author_note ?? settings.authorNote
+  )
+  const worldInfo = normalizeWorldInfoSettings(
+    settings.world_info ?? settings.worldInfo
+  )
   return {
     temperature: toNumber(settings.temperature, DEFAULT_SETTINGS.temperature),
     top_p: toNumber(settings.top_p, DEFAULT_SETTINGS.top_p),
@@ -797,7 +931,10 @@ const getSettingsFromPayload = (
     ),
     seed: toNullableNumber(settings.seed, DEFAULT_SETTINGS.seed),
     stop: normalizeStopStrings(settings.stop),
-    advanced_extra_body: advancedExtraBody
+    advanced_extra_body: advancedExtraBody,
+    memory_block: memoryBlock,
+    author_note: authorNote,
+    world_info: worldInfo
   }
 }
 
@@ -867,7 +1004,16 @@ const areSettingsEqual = (
   if (!left.stop.every((value, index) => value === right.stop[index])) return false
   const leftAdvanced = JSON.stringify(left.advanced_extra_body || {})
   const rightAdvanced = JSON.stringify(right.advanced_extra_body || {})
-  return leftAdvanced === rightAdvanced
+  if (leftAdvanced !== rightAdvanced) return false
+  const leftMemory = JSON.stringify(left.memory_block || {})
+  const rightMemory = JSON.stringify(right.memory_block || {})
+  if (leftMemory !== rightMemory) return false
+  const leftAuthor = JSON.stringify(left.author_note || {})
+  const rightAuthor = JSON.stringify(right.author_note || {})
+  if (leftAuthor !== rightAuthor) return false
+  const leftWorldInfo = JSON.stringify(left.world_info || {})
+  const rightWorldInfo = JSON.stringify(right.world_info || {})
+  return leftWorldInfo === rightWorldInfo
 }
 
 export const WritingPlayground = () => {
@@ -1970,6 +2116,104 @@ export const WritingPlayground = () => {
       return null
     },
     [advancedExtraBody]
+  )
+
+  const memoryBlock = settings.memory_block
+  const authorNote = settings.author_note
+  const worldInfo = settings.world_info
+  const worldInfoEntries = worldInfo.entries
+
+  const updateMemoryBlock = React.useCallback(
+    (patch: Partial<WritingContextBlock>) => {
+      updateSetting({
+        memory_block: {
+          ...memoryBlock,
+          ...patch
+        }
+      })
+    },
+    [memoryBlock, updateSetting]
+  )
+
+  const updateAuthorNote = React.useCallback(
+    (patch: Partial<WritingAuthorNote>) => {
+      updateSetting({
+        author_note: {
+          ...authorNote,
+          ...patch,
+          insertion_depth: Math.max(
+            1,
+            Math.floor(
+              toNumber(
+                patch.insertion_depth ?? authorNote.insertion_depth,
+                authorNote.insertion_depth
+              )
+            )
+          )
+        }
+      })
+    },
+    [authorNote, updateSetting]
+  )
+
+  const updateWorldInfo = React.useCallback(
+    (patch: Partial<WritingWorldInfoSettings>) => {
+      updateSetting({
+        world_info: {
+          ...worldInfo,
+          ...patch,
+          search_range: Math.max(
+            0,
+            Math.floor(
+              toNumber(
+                patch.search_range ?? worldInfo.search_range,
+                worldInfo.search_range
+              )
+            )
+          )
+        }
+      })
+    },
+    [updateSetting, worldInfo]
+  )
+
+  const addWorldInfoEntry = React.useCallback(() => {
+    const entry: WritingWorldInfoEntry = {
+      id: createWorldInfoId(),
+      enabled: true,
+      keys: [],
+      content: "",
+      use_regex: false,
+      case_sensitive: false
+    }
+    updateWorldInfo({
+      entries: [...worldInfoEntries, entry]
+    })
+  }, [updateWorldInfo, worldInfoEntries])
+
+  const updateWorldInfoEntry = React.useCallback(
+    (entryId: string, patch: Partial<WritingWorldInfoEntry>) => {
+      updateWorldInfo({
+        entries: worldInfoEntries.map((entry) =>
+          entry.id === entryId
+            ? {
+                ...entry,
+                ...patch
+              }
+            : entry
+        )
+      })
+    },
+    [updateWorldInfo, worldInfoEntries]
+  )
+
+  const removeWorldInfoEntry = React.useCallback(
+    (entryId: string) => {
+      updateWorldInfo({
+        entries: worldInfoEntries.filter((entry) => entry.id !== entryId)
+      })
+    },
+    [updateWorldInfo, worldInfoEntries]
   )
 
   const handleTemplateChange = React.useCallback(
@@ -3089,7 +3333,17 @@ export const WritingPlayground = () => {
       plan.mode === "fill"
         ? fimPrompt ?? buildFillPrompt(plan.prefix, plan.suffix)
         : plan.prefix
-    const messages = buildChatMessages(promptText, effectiveTemplate, chatMode)
+    const baseMessages = buildChatMessages(
+      promptText,
+      effectiveTemplate,
+      chatMode
+    )
+    const contextMessages = buildContextSystemMessages(beforeText, {
+      memory_block: settings.memory_block,
+      author_note: settings.author_note,
+      world_info: settings.world_info
+    })
+    const messages = injectSystemMessages(baseMessages, contextMessages)
     const advancedExtraBody =
       supportsAdvancedCompat ? settings.advanced_extra_body : {}
     const extraBody = buildExtraBodyPayload({
@@ -4240,6 +4494,334 @@ export const WritingPlayground = () => {
                         rows={4}
                       />
                     </div>
+                    <Collapse
+                      ghost
+                      size="small"
+                      defaultActiveKey={[]}
+                      items={[
+                        {
+                          key: "context-controls",
+                          label: t(
+                            "option:writingPlayground.contextControlsLabel",
+                            "Context controls"
+                          ),
+                          children: (
+                            <div className="flex flex-col gap-4">
+                              <div className="rounded-md border border-border bg-surface p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-medium text-text">
+                                    {t(
+                                      "option:writingPlayground.memoryBlockLabel",
+                                      "Memory block"
+                                    )}
+                                  </span>
+                                  <Checkbox
+                                    checked={memoryBlock.enabled}
+                                    disabled={settingsDisabled}
+                                    onChange={(event) =>
+                                      updateMemoryBlock({
+                                        enabled: event.target.checked
+                                      })
+                                    }>
+                                    {t("common:enabled", "Enabled")}
+                                  </Checkbox>
+                                </div>
+                                <div className="mt-3 grid grid-cols-1 gap-3">
+                                  <Input
+                                    value={memoryBlock.prefix}
+                                    disabled={settingsDisabled}
+                                    placeholder={t(
+                                      "option:writingPlayground.prefixLabel",
+                                      "Prefix"
+                                    )}
+                                    onChange={(event) =>
+                                      updateMemoryBlock({
+                                        prefix: event.target.value
+                                      })
+                                    }
+                                  />
+                                  <Input.TextArea
+                                    value={memoryBlock.text}
+                                    rows={3}
+                                    disabled={settingsDisabled}
+                                    placeholder={t(
+                                      "option:writingPlayground.memoryTextPlaceholder",
+                                      "Facts and reminders to keep consistent."
+                                    )}
+                                    onChange={(event) =>
+                                      updateMemoryBlock({
+                                        text: event.target.value
+                                      })
+                                    }
+                                  />
+                                  <Input
+                                    value={memoryBlock.suffix}
+                                    disabled={settingsDisabled}
+                                    placeholder={t(
+                                      "option:writingPlayground.suffixLabel",
+                                      "Suffix"
+                                    )}
+                                    onChange={(event) =>
+                                      updateMemoryBlock({
+                                        suffix: event.target.value
+                                      })
+                                    }
+                                  />
+                                </div>
+                              </div>
+                              <div className="rounded-md border border-border bg-surface p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="text-xs font-medium text-text">
+                                    {t(
+                                      "option:writingPlayground.authorNoteLabel",
+                                      "Author note"
+                                    )}
+                                  </span>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.authorDepthLabel",
+                                        "Depth"
+                                      )}
+                                    </span>
+                                    <InputNumber
+                                      size="small"
+                                      min={1}
+                                      step={1}
+                                      value={authorNote.insertion_depth}
+                                      disabled={settingsDisabled}
+                                      onChange={(value) =>
+                                        updateAuthorNote({
+                                          insertion_depth:
+                                            value == null
+                                              ? 1
+                                              : Math.max(1, Math.floor(value))
+                                        })
+                                      }
+                                    />
+                                    <Checkbox
+                                      checked={authorNote.enabled}
+                                      disabled={settingsDisabled}
+                                      onChange={(event) =>
+                                        updateAuthorNote({
+                                          enabled: event.target.checked
+                                        })
+                                      }>
+                                      {t("common:enabled", "Enabled")}
+                                    </Checkbox>
+                                  </div>
+                                </div>
+                                <div className="mt-3 grid grid-cols-1 gap-3">
+                                  <Input
+                                    value={authorNote.prefix}
+                                    disabled={settingsDisabled}
+                                    placeholder={t(
+                                      "option:writingPlayground.prefixLabel",
+                                      "Prefix"
+                                    )}
+                                    onChange={(event) =>
+                                      updateAuthorNote({
+                                        prefix: event.target.value
+                                      })
+                                    }
+                                  />
+                                  <Input.TextArea
+                                    value={authorNote.text}
+                                    rows={3}
+                                    disabled={settingsDisabled}
+                                    placeholder={t(
+                                      "option:writingPlayground.authorNotePlaceholder",
+                                      "Guidance to inject during generation."
+                                    )}
+                                    onChange={(event) =>
+                                      updateAuthorNote({
+                                        text: event.target.value
+                                      })
+                                    }
+                                  />
+                                  <Input
+                                    value={authorNote.suffix}
+                                    disabled={settingsDisabled}
+                                    placeholder={t(
+                                      "option:writingPlayground.suffixLabel",
+                                      "Suffix"
+                                    )}
+                                    onChange={(event) =>
+                                      updateAuthorNote({
+                                        suffix: event.target.value
+                                      })
+                                    }
+                                  />
+                                </div>
+                              </div>
+                              <div className="rounded-md border border-border bg-surface p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="text-xs font-medium text-text">
+                                    {t(
+                                      "option:writingPlayground.worldInfoLabel",
+                                      "World info"
+                                    )}
+                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <Checkbox
+                                      checked={worldInfo.enabled}
+                                      disabled={settingsDisabled}
+                                      onChange={(event) =>
+                                        updateWorldInfo({
+                                          enabled: event.target.checked
+                                        })
+                                      }>
+                                      {t("common:enabled", "Enabled")}
+                                    </Checkbox>
+                                    <Button
+                                      size="small"
+                                      disabled={settingsDisabled}
+                                      onClick={addWorldInfoEntry}>
+                                      {t(
+                                        "option:writingPlayground.addWorldInfo",
+                                        "Add entry"
+                                      )}
+                                    </Button>
+                                  </div>
+                                </div>
+                                <div className="mt-3 flex flex-col gap-3">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.worldInfoSearchRange",
+                                        "Search range (chars)"
+                                      )}
+                                    </span>
+                                    <InputNumber
+                                      size="small"
+                                      min={0}
+                                      step={100}
+                                      value={worldInfo.search_range}
+                                      disabled={settingsDisabled}
+                                      onChange={(value) =>
+                                        updateWorldInfo({
+                                          search_range:
+                                            value == null
+                                              ? 0
+                                              : Math.max(0, Math.floor(value))
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                  {worldInfoEntries.length === 0 ? (
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.worldInfoEmpty",
+                                        "No world info entries yet."
+                                      )}
+                                    </span>
+                                  ) : (
+                                    <div className="flex flex-col gap-3">
+                                      {worldInfoEntries.map((entry, index) => (
+                                        <div
+                                          key={entry.id}
+                                          className="rounded-md border border-border bg-background p-3">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <span className="text-xs font-medium text-text">
+                                              {t(
+                                                "option:writingPlayground.worldInfoEntryLabel",
+                                                "Entry {{index}}",
+                                                { index: index + 1 }
+                                              )}
+                                            </span>
+                                            <Button
+                                              size="small"
+                                              danger
+                                              disabled={settingsDisabled}
+                                              onClick={() =>
+                                                removeWorldInfoEntry(entry.id)
+                                              }>
+                                              {t("common:delete", "Delete")}
+                                            </Button>
+                                          </div>
+                                          <div className="mt-3 flex flex-col gap-3">
+                                            <div className="flex flex-wrap items-center gap-3">
+                                              <Checkbox
+                                                checked={entry.enabled}
+                                                disabled={settingsDisabled}
+                                                onChange={(event) =>
+                                                  updateWorldInfoEntry(entry.id, {
+                                                    enabled: event.target.checked
+                                                  })
+                                                }>
+                                                {t("common:enabled", "Enabled")}
+                                              </Checkbox>
+                                              <Checkbox
+                                                checked={entry.use_regex}
+                                                disabled={settingsDisabled}
+                                                onChange={(event) =>
+                                                  updateWorldInfoEntry(entry.id, {
+                                                    use_regex:
+                                                      event.target.checked
+                                                  })
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.worldInfoRegex",
+                                                  "Regex"
+                                                )}
+                                              </Checkbox>
+                                              <Checkbox
+                                                checked={entry.case_sensitive}
+                                                disabled={settingsDisabled}
+                                                onChange={(event) =>
+                                                  updateWorldInfoEntry(entry.id, {
+                                                    case_sensitive:
+                                                      event.target.checked
+                                                  })
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.worldInfoCaseSensitive",
+                                                  "Case sensitive"
+                                                )}
+                                              </Checkbox>
+                                            </div>
+                                            <Input.TextArea
+                                              value={entry.keys.join("\n")}
+                                              rows={2}
+                                              disabled={settingsDisabled}
+                                              placeholder={t(
+                                                "option:writingPlayground.worldInfoKeysPlaceholder",
+                                                "Trigger keys (comma or newline separated)"
+                                              )}
+                                              onChange={(event) =>
+                                                updateWorldInfoEntry(entry.id, {
+                                                  keys: parseWorldInfoKeysInput(
+                                                    event.target.value
+                                                  )
+                                                })
+                                              }
+                                            />
+                                            <Input.TextArea
+                                              value={entry.content}
+                                              rows={3}
+                                              disabled={settingsDisabled}
+                                              placeholder={t(
+                                                "option:writingPlayground.worldInfoContentPlaceholder",
+                                                "Context to inject when triggered."
+                                              )}
+                                              onChange={(event) =>
+                                                updateWorldInfoEntry(entry.id, {
+                                                  content: event.target.value
+                                                })
+                                              }
+                                            />
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        }
+                      ]}
+                    />
                     {showAdvancedSamplerControls && (
                       <Collapse
                         ghost
