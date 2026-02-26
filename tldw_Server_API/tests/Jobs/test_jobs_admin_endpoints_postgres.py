@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 psycopg = pytest.importorskip("psycopg")
@@ -27,10 +28,22 @@ def _client_pg(monkeypatch):
         app.dependency_overrides.clear()
     except Exception:
         _ = None
-    # Force-include jobs admin router for this test context
+    # Force-include jobs admin router only when missing.
+    # Some app boot paths already register these routes, and re-including
+    # the same router triggers duplicate-route guards in startup.
     try:
-        from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
-        app.include_router(jobs_admin_router, prefix=f"/api/v1", tags=["jobs"])  # idempotent
+        has_queue_control = any(
+            isinstance(route, APIRoute)
+            and route.path == "/api/v1/jobs/queue/control"
+            and "POST" in (route.methods or set())
+            for route in app.routes
+        )
+        if not has_queue_control:
+            from tldw_Server_API.app.api.v1.endpoints.jobs_admin import (
+                router as jobs_admin_router,
+            )
+
+            app.include_router(jobs_admin_router, prefix="/api/v1", tags=["jobs"])
     except Exception:
         _ = None
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}

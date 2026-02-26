@@ -48,7 +48,8 @@ def test_smoke_basic_user_journey(api_client, data_tracker):
             file_path=file_path,
             title="E2E Smoke Test Document",
             media_type="document",
-            generate_embeddings=True,
+            # Critical smoke should not depend on Redis worker availability.
+            generate_embeddings=False,
         )
 
         # Extract media_id from either new (results[0].db_id) or legacy (media_id/id) format

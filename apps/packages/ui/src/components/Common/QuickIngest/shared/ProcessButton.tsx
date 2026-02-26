@@ -16,6 +16,8 @@ type ProcessButtonProps = {
   missingFileCount: number
   /** Callback to start processing */
   onRun: () => void
+  /** Callback to cancel an in-flight run */
+  onCancel?: () => void
   /** Whether to store remotely or process locally */
   storeRemote: boolean
   /** Whether review-before-storage mode is enabled */
@@ -31,6 +33,7 @@ export const ProcessButton: React.FC<ProcessButtonProps> = ({
   hasMissingFiles,
   missingFileCount,
   onRun,
+  onCancel,
   storeRemote,
   reviewBeforeStorage,
   className
@@ -75,6 +78,21 @@ export const ProcessButton: React.FC<ProcessButtonProps> = ({
     : isDisabled
       ? "disabled"
       : "ready"
+  if (running && onCancel) {
+    return (
+      <Button
+        danger
+        size="large"
+        onClick={onCancel}
+        className={className}
+        data-testid="quick-ingest-cancel"
+        aria-label={qi("cancelIngest", "Cancel ingest")}
+      >
+        {qi("cancelIngest", "Cancel ingest")}
+      </Button>
+    )
+  }
+
   const button = (
     <Button
       type="primary"

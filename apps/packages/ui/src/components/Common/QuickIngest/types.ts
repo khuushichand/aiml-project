@@ -28,7 +28,12 @@ export type ResultItem = {
   error?: string
 }
 
-export type ResultOutcome = "ingested" | "processed" | "skipped" | "failed"
+export type ResultOutcome =
+  | "ingested"
+  | "processed"
+  | "skipped"
+  | "failed"
+  | "cancelled"
 
 export type ResultItemWithMediaId = ResultItem & {
   mediaId: string | number | null
@@ -38,6 +43,7 @@ export type ResultItemWithMediaId = ResultItem & {
 export type ResultSummary = {
   successCount: number
   failCount: number
+  cancelledCount: number
 }
 
 export type ResultFilters = {

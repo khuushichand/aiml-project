@@ -1,7 +1,36 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import type { BrowserContext } from '@playwright/test'
 
+type ResolveExtensionIdOptions = {
+  userDataDir?: string
+}
+
+function resolveExtensionIdFromUserDataDir(userDataDir?: string): string | null {
+  if (!userDataDir) {
+    return null
+  }
+
+  const extensionsRoot = path.join(userDataDir, 'Default', 'Extensions')
+  if (!fs.existsSync(extensionsRoot)) {
+    return null
+  }
+
+  try {
+    const candidates = fs
+      .readdirSync(extensionsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^[a-p]{32}$/.test(entry.name))
+      .map((entry) => entry.name)
+
+    return candidates[0] || null
+  } catch {
+    return null
+  }
+}
+
 export async function resolveExtensionId(
-  context: BrowserContext
+  context: BrowserContext,
+  options: ResolveExtensionIdOptions = {}
 ): Promise<string> {
   let targetUrl =
     context.backgroundPages()[0]?.url() ||
@@ -39,13 +68,27 @@ export async function resolveExtensionId(
   }
 
   const match = targetUrl.match(/chrome-extension:\/\/([a-p]{32})/)
-  if (!match) {
-    throw new Error(
-      `Could not determine extension id from ${
-        targetUrl || '[no extension targets]'
-      }`
-    )
+  if (match) {
+    return match[1]
   }
-  return match[1]
-}
 
+  const extensionIdFromProfile = resolveExtensionIdFromUserDataDir(
+    options.userDataDir
+  )
+  if (extensionIdFromProfile) {
+    return extensionIdFromProfile
+  }
+
+  const activeTargets = context
+    .backgroundPages()
+    .concat(context.serviceWorkers())
+    .map((target) => target.url())
+    .filter(Boolean)
+
+  const targetSummary = activeTargets.length
+    ? activeTargets.join(', ')
+    : '[no extension targets]'
+  throw new Error(
+    `Could not determine extension id from ${targetUrl || targetSummary}`
+  )
+}

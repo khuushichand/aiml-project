@@ -7690,7 +7690,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             startInlineEdit(record, "name", event.currentTarget)
                           }
                           onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === "F2") {
+                            if (
+                              event.key === "Enter" ||
+                              event.key === "F2" ||
+                              event.key === " " ||
+                              event.key === "Spacebar"
+                            ) {
                               event.preventDefault()
                               startInlineEdit(record, "name", event.currentTarget)
                             }
@@ -7739,7 +7744,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           startInlineEdit(record, "description", event.currentTarget)
                         }
                         onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === "F2") {
+                          if (
+                            event.key === "Enter" ||
+                            event.key === "F2" ||
+                            event.key === " " ||
+                            event.key === "Spacebar"
+                          ) {
                             event.preventDefault()
                             startInlineEdit(record, "description", event.currentTarget)
                           }

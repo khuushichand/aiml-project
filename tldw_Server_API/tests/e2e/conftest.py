@@ -143,7 +143,52 @@ def _attach_results_to_config(test_results, request):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _ensure_inprocess_admin_bearer(disable_rate_limiting):
+def _ensure_inprocess_single_user_profile(disable_rate_limiting):
+    """Bootstrap single-user AuthNZ profile for in-process e2e runs."""
+    if not _env_truthy("E2E_INPROCESS"):
+        yield
+        return
+
+    from tldw_Server_API.tests.e2e.fixtures import ensure_server_running
+
+    try:
+        health = ensure_server_running()
+    except Exception as exc:
+        pytest.fail(f"❌ Failed to initialize in-process API for single-user bootstrap: {exc}")
+
+    auth_mode = str(health.get("auth_mode") or os.getenv("AUTH_MODE", "")).lower()
+    if auth_mode not in {"single_user", "single-user", "singleuser"}:
+        yield
+        return
+
+    from tldw_Server_API.app.core.AuthNZ.initialize import (
+        bootstrap_single_user_profile,
+        ensure_single_user_rbac_seed_if_needed,
+    )
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
+
+    async def _bootstrap_single_user():
+        await ensure_single_user_rbac_seed_if_needed()
+        await bootstrap_single_user_profile()
+        settings = get_settings()
+        users_db = await get_users_db()
+        user = await users_db.get_user_by_id(int(settings.SINGLE_USER_FIXED_ID))
+        if not user:
+            raise RuntimeError(
+                f"single-user bootstrap did not create user id={settings.SINGLE_USER_FIXED_ID}"
+            )
+
+    try:
+        asyncio.run(_bootstrap_single_user())
+    except Exception as exc:
+        pytest.fail(f"❌ Failed single-user bootstrap for in-process e2e tests: {exc}")
+
+    yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_inprocess_admin_bearer(disable_rate_limiting, _ensure_inprocess_single_user_profile):
     if not _env_truthy("E2E_INPROCESS"):
         yield
         return

@@ -28,6 +28,7 @@ describe("quick ingest store", () => {
     expect(summary.totalCount).toBe(3)
     expect(summary.successCount).toBe(2)
     expect(summary.failedCount).toBe(1)
+    expect(summary.cancelledCount).toBe(0)
     expect(summary.firstMediaId).toBe("1234")
     expect(summary.primarySourceLabel).toBe("https://example.com/source")
     expect(summary.errorMessage).toBeNull()
@@ -44,7 +45,26 @@ describe("quick ingest store", () => {
     expect(summary.totalCount).toBe(0)
     expect(summary.successCount).toBe(0)
     expect(summary.failedCount).toBe(1)
+    expect(summary.cancelledCount).toBe(0)
     expect(summary.errorMessage).toBe("Invalid API key")
+  })
+
+  it("records cancelled run summary", () => {
+    useQuickIngestStore.getState().recordRunCancelled({
+      totalCount: 5,
+      successCount: 2,
+      failedCount: 1,
+      cancelledCount: 2,
+      errorMessage: "Cancelled by user."
+    })
+
+    const summary = useQuickIngestStore.getState().lastRunSummary
+    expect(summary.status).toBe("cancelled")
+    expect(summary.totalCount).toBe(5)
+    expect(summary.successCount).toBe(2)
+    expect(summary.failedCount).toBe(1)
+    expect(summary.cancelledCount).toBe(2)
+    expect(summary.errorMessage).toBe("Cancelled by user.")
   })
 
   it("resets run summary", () => {

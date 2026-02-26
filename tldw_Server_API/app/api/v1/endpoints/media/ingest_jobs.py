@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -11,6 +13,7 @@ from uuid import uuid4
 
 from cachetools import LRUCache
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
@@ -31,11 +34,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
-    validate_add_media_inputs,
-)
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter()
 
@@ -43,6 +45,7 @@ MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 _job_manager_lock = threading.Lock()
 _ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+_TERMINAL_MEDIA_INGEST_JOB_STATUSES = frozenset({"completed", "failed", "cancelled", "quarantined"})
 
 
 def get_job_manager() -> JobManager:
@@ -106,6 +109,16 @@ class CancelMediaIngestJobResponse(BaseModel):
     message: str | None = None
 
 
+class CancelMediaIngestBatchResponse(BaseModel):
+    success: bool
+    batch_id: str
+    requested: int
+    cancelled: int
+    already_terminal: int
+    failed: int = 0
+    message: str | None = None
+
+
 class MediaIngestJobListResponse(BaseModel):
     batch_id: str
     jobs: list[MediaIngestJobStatus]
@@ -116,6 +129,24 @@ def _cleanup_dir(path_str: str) -> None:
         shutil.rmtree(path_str, ignore_errors=True)
     except Exception as exc:
         logger.debug("Failed to cleanup temp dir {}: {}", path_str, exc)
+
+
+def _validate_submit_inputs(
+    media_type: Any,
+    urls: list[str] | None,
+    files: list[UploadFile] | None,
+) -> None:
+    if urls or files:
+        return
+
+    logger.warning("No URLs or files provided in media ingest job submit request")
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "No valid media sources supplied. At least one 'url' in the "
+            "'urls' list or one 'file' in the 'files' list must be provided."
+        ),
+    )
 
 
 def _normalize_payload(payload: Any) -> dict[str, Any]:
@@ -225,6 +256,99 @@ def _job_to_status(job: dict[str, Any]) -> MediaIngestJobStatus:
     )
 
 
+def _collect_jobs_for_batch(
+    *,
+    jm: JobManager,
+    batch_id: str,
+    owner_filter: str | None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    if not batch_id:
+        return []
+
+    matched = jm.list_jobs(
+        domain="media_ingest",
+        owner_user_id=owner_filter,
+        batch_group=batch_id,
+        limit=limit,
+        sort_by="created_at",
+        sort_order="desc",
+    )
+    if len(matched) >= limit:
+        return matched[:limit]
+
+    page_limit = min(500, max(limit, 100))
+    seen_ids = {int(job.get("id")) for job in matched if job.get("id") is not None}
+    cursor_created_at: datetime | None = None
+    cursor_id: int | None = None
+    last_cursor: tuple[datetime, int] | None = None
+
+    while len(matched) < limit:
+        jobs = jm.list_jobs(
+            domain="media_ingest",
+            owner_user_id=owner_filter,
+            limit=page_limit,
+            created_before=cursor_created_at,
+            before_id=cursor_id,
+            sort_by="created_at",
+            sort_order="desc",
+        )
+        if not jobs:
+            break
+        for job in jobs:
+            raw_job_id = job.get("id")
+            if raw_job_id is not None and int(raw_job_id) in seen_ids:
+                continue
+            payload = _normalize_payload(job.get("payload"))
+            if str(payload.get("batch_id") or "") == batch_id:
+                matched.append(job)
+                if raw_job_id is not None:
+                    seen_ids.add(int(raw_job_id))
+                if len(matched) >= limit:
+                    return matched[:limit]
+        if len(jobs) < page_limit:
+            break
+        last_job = jobs[-1]
+        next_created_at = _parse_job_created_at(last_job.get("created_at"))
+        next_id_raw = last_job.get("id")
+        if next_created_at is None or next_id_raw is None:
+            break
+        next_cursor = (next_created_at, int(next_id_raw))
+        if last_cursor == next_cursor:
+            break
+        last_cursor = next_cursor
+        cursor_created_at, cursor_id = next_cursor
+
+    return matched[:limit]
+
+
+def _batch_exists_for_any_owner(
+    *,
+    jm: JobManager,
+    batch_id: str,
+) -> bool:
+    if not batch_id:
+        return False
+    jobs = _collect_jobs_for_batch(
+        jm=jm,
+        batch_id=batch_id,
+        owner_filter=None,
+        limit=1,
+    )
+    return bool(jobs)
+
+
+def _resolve_batch_or_session_id(
+    *,
+    batch_id: str | None,
+    session_id: str | None,
+) -> str:
+    resolved = str(batch_id or session_id or "").strip()
+    if resolved:
+        return resolved
+    raise HTTPException(status_code=400, detail="Either batch_id or session_id is required")
+
+
 @router.post(
     "/ingest/jobs",
     response_model=SubmitMediaIngestJobsResponse,
@@ -249,7 +373,7 @@ async def submit_media_ingest_jobs(
     if form_data.urls and form_data.urls == [""]:
         form_data.urls = None
 
-    validate_add_media_inputs(form_data.media_type, form_data.urls, files)
+    _validate_submit_inputs(form_data.media_type, form_data.urls, files)
 
     options = form_data.model_dump(mode="json")
     options.pop("urls", None)
@@ -277,6 +401,7 @@ async def submit_media_ingest_jobs(
             queue=selected_queue,
             job_type="media_ingest_item",
             payload=payload,
+            batch_group=batch_id,
             owner_user_id=str(current_user.id),
             priority=5,
             max_retries=3,
@@ -342,6 +467,7 @@ async def submit_media_ingest_jobs(
                     queue=selected_queue,
                     job_type="media_ingest_item",
                     payload=payload,
+                    batch_group=batch_id,
                     owner_user_id=str(current_user.id),
                     priority=5,
                     max_retries=3,
@@ -423,45 +549,208 @@ async def list_media_ingest_jobs(
     jm: JobManager = Depends(get_job_manager),
 ) -> MediaIngestJobListResponse:
     owner_filter = None if _principal_has_admin_claims(principal) else str(current_user.id)
-    # Fetch in larger batches internally (100-500) to reduce DB round-trips
-    # while still respecting the user limit for the final result set.
-    page_limit = min(500, max(limit, 100))
-    matched: list[MediaIngestJobStatus] = []
-    cursor_created_at: datetime | None = None
-    cursor_id: int | None = None
-    last_cursor: tuple[datetime, int] | None = None
-    while len(matched) < limit:
-        jobs = jm.list_jobs(
+    indexed_jobs = jm.list_jobs(
+        domain="media_ingest",
+        owner_user_id=owner_filter,
+        batch_group=batch_id,
+        limit=limit,
+        sort_by="created_at",
+        sort_order="desc",
+    )
+    indexed_statuses = [_job_to_status(job) for job in indexed_jobs[:limit]]
+    if len(indexed_statuses) >= limit:
+        return MediaIngestJobListResponse(batch_id=batch_id, jobs=indexed_statuses[:limit])
+
+    # Backward compatibility: legacy rows may only have payload.batch_id.
+    legacy_jobs = _collect_jobs_for_batch(
+        jm=jm,
+        batch_id=batch_id,
+        owner_filter=owner_filter,
+        limit=limit,
+    )
+    merged: list[MediaIngestJobStatus] = list(indexed_statuses)
+    seen_ids = {int(item.id) for item in merged}
+    for job in legacy_jobs:
+        raw_job_id = job.get("id")
+        if raw_job_id is None:
+            continue
+        job_id = int(raw_job_id)
+        if job_id in seen_ids:
+            continue
+        merged.append(_job_to_status(job))
+        seen_ids.add(job_id)
+        if len(merged) >= limit:
+            break
+
+    return MediaIngestJobListResponse(batch_id=batch_id, jobs=merged[:limit])
+
+
+@router.get(
+    "/ingest/jobs/events/stream",
+    summary="Stream media ingest job events (SSE)",
+    tags=["Media Ingestion Jobs"],
+    dependencies=[Depends(check_rate_limit)],
+)
+async def stream_media_ingest_job_events(
+    request: Request,
+    batch_id: str | None = Query(
+        None,
+        min_length=1,
+        description="Optional batch identifier to scope events to a single submit response",
+    ),
+    after_id: int = Query(0, ge=0),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
+) -> StreamingResponse:
+    is_admin = _principal_has_admin_claims(principal)
+    owner_filter = None if is_admin else str(current_user.id)
+
+    tracked_jobs: list[dict[str, Any]]
+    if batch_id:
+        tracked_jobs = _collect_jobs_for_batch(
+            jm=jm,
+            batch_id=batch_id,
+            owner_filter=owner_filter,
+        )
+        if not tracked_jobs and not is_admin and _batch_exists_for_any_owner(jm=jm, batch_id=batch_id):
+            raise HTTPException(status_code=403, detail="Not authorized for this batch")
+    else:
+        tracked_jobs = jm.list_jobs(
             domain="media_ingest",
             owner_user_id=owner_filter,
-            limit=page_limit,
-            created_before=cursor_created_at,
-            before_id=cursor_id,
+            limit=200,
             sort_by="created_at",
             sort_order="desc",
         )
-        if not jobs:
-            break
-        for job in jobs:
-            payload = _normalize_payload(job.get("payload"))
-            if str(payload.get("batch_id") or "") == batch_id:
-                matched.append(_job_to_status(job))
-                if len(matched) >= limit:
-                    return MediaIngestJobListResponse(batch_id=batch_id, jobs=matched[:limit])
-        if len(jobs) < page_limit:
-            break
-        last_job = jobs[-1]
-        next_created_at = _parse_job_created_at(last_job.get("created_at"))
-        next_id_raw = last_job.get("id")
-        if next_created_at is None or next_id_raw is None:
-            break
-        next_cursor = (next_created_at, int(next_id_raw))
-        if last_cursor == next_cursor:
-            break
-        last_cursor = next_cursor
-        cursor_created_at, cursor_id = next_cursor
 
-    return MediaIngestJobListResponse(batch_id=batch_id, jobs=matched[:limit])
+    tracked_job_ids = {int(job.get("id")) for job in tracked_jobs if job.get("id") is not None}
+
+    poll_interval = float(os.getenv("JOBS_EVENTS_POLL_INTERVAL", "1.0") or "1.0")
+    max_duration_s: float | None = None
+    try:
+        if is_test_mode():
+            max_duration_s = float(os.getenv("JOBS_SSE_TEST_MAX_SECONDS", "1.0") or "1.0")
+    except (OSError, ValueError, TypeError):
+        max_duration_s = 1.0
+
+    stream = SSEStream(
+        heartbeat_interval_s=poll_interval,
+        heartbeat_mode="data",
+        max_duration_s=max_duration_s,
+        labels={"component": "jobs", "endpoint": "media_ingest_events_sse"},
+    )
+
+    async def _producer() -> None:
+        nonlocal after_id
+        snapshot_jobs = [_job_to_status(job).model_dump(mode="json") for job in tracked_jobs]
+        await stream.send_event(
+            "snapshot",
+            {
+                "domain": "media_ingest",
+                "batch_id": batch_id,
+                "jobs": snapshot_jobs,
+            },
+        )
+
+        while True:
+            try:
+                if getattr(stream, "_closed", False):
+                    break
+            except (AttributeError, RuntimeError):
+                pass
+
+            conn = jm._connect()
+            rows: list[Any] = []
+            try:
+                if jm.backend == "postgres":
+                    with jm._pg_cursor(conn) as cur:
+                        query = (
+                            "SELECT id, job_id, event_type, attrs_json, owner_user_id "
+                            "FROM job_events WHERE id > %s AND domain = %s"
+                        )
+                        params: list[Any] = [int(after_id), "media_ingest"]
+                        if owner_filter is not None:
+                            query += " AND owner_user_id = %s"
+                            params.append(owner_filter)
+                        query += " ORDER BY id ASC LIMIT 500"
+                        cur.execute(query, tuple(params))
+                        rows = cur.fetchall() or []
+                else:
+                    query = (
+                        "SELECT id, job_id, event_type, attrs_json, owner_user_id "
+                        "FROM job_events WHERE id > ? AND domain = ?"
+                    )
+                    params_sqlite: list[Any] = [int(after_id), "media_ingest"]
+                    if owner_filter is not None:
+                        query += " AND owner_user_id = ?"
+                        params_sqlite.append(owner_filter)
+                    query += " ORDER BY id ASC LIMIT 500"
+                    rows = conn.execute(query, tuple(params_sqlite)).fetchall() or []
+            except (OSError, RuntimeError, TypeError, ValueError):
+                rows = []
+            finally:
+                with contextlib.suppress(OSError, RuntimeError, TypeError, ValueError):
+                    conn.close()
+
+            if rows:
+                for row in rows:
+                    if isinstance(row, dict):
+                        event_id = int(row.get("id"))
+                        job_id = int(row.get("job_id"))
+                        event_type = str(row.get("event_type"))
+                        attrs_raw = row.get("attrs_json")
+                    else:
+                        event_id = int(row[0])
+                        job_id = int(row[1])
+                        event_type = str(row[2])
+                        attrs_raw = row[3]
+                    if tracked_job_ids and job_id not in tracked_job_ids:
+                        after_id = event_id
+                        continue
+                    try:
+                        attrs = json.loads(attrs_raw) if isinstance(attrs_raw, str) else (attrs_raw or {})
+                    except (TypeError, ValueError):
+                        attrs = {}
+                    await stream.send_event(
+                        "job",
+                        {
+                            "event_id": event_id,
+                            "job_id": job_id,
+                            "event_type": event_type,
+                            "attrs": attrs,
+                        },
+                        event_id=str(event_id),
+                    )
+                    after_id = event_id
+
+            if tracked_job_ids:
+                refreshed = [jm.get_job(job_id) for job_id in tracked_job_ids]
+                if all(
+                    (job or {}).get("status") in {"completed", "failed", "cancelled", "quarantined"}
+                    for job in refreshed
+                ) and not rows:
+                    break
+
+            await asyncio.sleep(poll_interval)
+
+    async def _gen():
+        producer = asyncio.create_task(_producer())
+        try:
+            async for line in stream.iter_sse():
+                yield line
+        finally:
+            if not producer.done():
+                with contextlib.suppress(asyncio.CancelledError, RuntimeError, OSError):
+                    producer.cancel()
+                with contextlib.suppress(asyncio.CancelledError, RuntimeError, OSError):
+                    await producer
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.delete(
@@ -499,6 +788,84 @@ async def cancel_media_ingest_job(
         job_id=int(job_id),
         status="cancelled",
         message="Job cancellation requested",
+    )
+
+
+@router.post(
+    "/ingest/jobs/cancel",
+    response_model=CancelMediaIngestBatchResponse,
+    summary="Cancel media ingest jobs by batch/session id",
+    tags=["Media Ingestion Jobs"],
+    dependencies=[Depends(check_rate_limit)],
+)
+async def cancel_media_ingest_jobs_batch(
+    batch_id: str | None = Query(None, min_length=1, description="Batch identifier to cancel"),
+    session_id: str | None = Query(
+        None,
+        min_length=1,
+        description="Session identifier alias for batch-level cancellation",
+    ),
+    reason: str | None = Query(None, description="Reason for cancellation"),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
+) -> CancelMediaIngestBatchResponse:
+    resolved_batch_id = _resolve_batch_or_session_id(batch_id=batch_id, session_id=session_id)
+    is_admin = _principal_has_admin_claims(principal)
+    owner_filter = None if is_admin else str(current_user.id)
+
+    matched_jobs = _collect_jobs_for_batch(
+        jm=jm,
+        batch_id=resolved_batch_id,
+        owner_filter=owner_filter,
+        limit=5000,
+    )
+    if not matched_jobs:
+        if not is_admin and _batch_exists_for_any_owner(jm=jm, batch_id=resolved_batch_id):
+            raise HTTPException(status_code=403, detail="Not authorized for this batch")
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    requested = len(matched_jobs)
+    cancelled = 0
+    already_terminal = 0
+    failed = 0
+
+    for job in matched_jobs:
+        raw_job_id = job.get("id")
+        if raw_job_id is None:
+            failed += 1
+            continue
+        job_id = int(raw_job_id)
+        status_value = str(job.get("status") or "").lower()
+        if status_value in _TERMINAL_MEDIA_INGEST_JOB_STATUSES:
+            already_terminal += 1
+            continue
+        if jm.cancel_job(job_id, reason=reason):
+            cancelled += 1
+            continue
+
+        refreshed = jm.get_job(job_id) or {}
+        refreshed_status = str(refreshed.get("status") or "").lower()
+        if refreshed_status in _TERMINAL_MEDIA_INGEST_JOB_STATUSES:
+            already_terminal += 1
+        else:
+            failed += 1
+
+    if cancelled > 0:
+        message = f"Cancellation requested for {cancelled} job(s)"
+    elif already_terminal == requested:
+        message = "All jobs already terminal"
+    else:
+        message = "No jobs were cancelled"
+
+    return CancelMediaIngestBatchResponse(
+        success=failed == 0,
+        batch_id=resolved_batch_id,
+        requested=requested,
+        cancelled=cancelled,
+        already_terminal=already_terminal,
+        failed=failed,
+        message=message,
     )
 
 

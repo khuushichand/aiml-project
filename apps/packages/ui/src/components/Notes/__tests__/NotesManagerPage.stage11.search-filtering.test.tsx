@@ -265,9 +265,11 @@ describe("NotesManagerPage stage 11 search filtering", () => {
       },
       { timeout: 1500 }
     )
-    expect(screen.getByTestId("notes-search-request-metrics")).toHaveTextContent(
-      "Requests in this filter session: 1"
-    )
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-search-request-metrics")).toHaveTextContent(
+        "Requests in this filter session: 1"
+      )
+    })
 
     fireEvent.change(input, { target: { value: "alpha beta" } })
     await waitFor(
@@ -279,9 +281,11 @@ describe("NotesManagerPage stage 11 search filtering", () => {
       },
       { timeout: 1500 }
     )
-    expect(screen.getByTestId("notes-search-request-metrics")).toHaveTextContent(
-      "Requests in this filter session: 2"
-    )
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-search-request-metrics")).toHaveTextContent(
+        "Requests in this filter session: 2"
+      )
+    })
 
     fireEvent.change(input, { target: { value: "" } })
     await waitFor(() => {

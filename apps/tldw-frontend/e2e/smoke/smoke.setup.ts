@@ -78,6 +78,21 @@ export const test = base.extend<{ diagnostics: DiagnosticsData }>({
 
 export { expect }
 
+const DEFAULT_SMOKE_LOAD_TIMEOUT_MS = 30_000
+const MIN_SMOKE_LOAD_TIMEOUT_MS = 5_000
+
+const resolveSmokeLoadTimeoutMs = (): number => {
+  const raw = process.env.TLDW_SMOKE_LOAD_TIMEOUT_MS
+  if (!raw || !raw.trim()) return DEFAULT_SMOKE_LOAD_TIMEOUT_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return DEFAULT_SMOKE_LOAD_TIMEOUT_MS
+  const normalized = Math.floor(parsed)
+  if (normalized < MIN_SMOKE_LOAD_TIMEOUT_MS) return DEFAULT_SMOKE_LOAD_TIMEOUT_MS
+  return normalized
+}
+
+export const SMOKE_LOAD_TIMEOUT = resolveSmokeLoadTimeoutMs()
+
 /**
  * Auth configuration for smoke tests
  */

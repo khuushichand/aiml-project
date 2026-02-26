@@ -7,7 +7,6 @@ Intended for use as a quick pre-commit hook; compiles provided files only.
 from __future__ import annotations
 
 import argparse
-import os
 import py_compile
 from pathlib import Path
 from typing import Iterator
@@ -53,7 +52,7 @@ def main(argv: list[str]) -> int:
     failures = 0
     for path in _iter_python_files(args.paths):
         try:
-            py_compile.compile(str(path), cfile=os.devnull, doraise=True)
+            py_compile.compile(str(path), doraise=True)
         except py_compile.PyCompileError as exc:
             failures += 1
             msg = exc.msg or str(exc)

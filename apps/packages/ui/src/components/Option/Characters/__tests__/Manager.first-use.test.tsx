@@ -1570,8 +1570,21 @@ describe("CharactersManager first-use onboarding", () => {
       .getByText("Folder")
       .closest(".ant-form-item")
     expect(folderField).not.toBeNull()
-    fireEvent.mouseDown(within(folderField as HTMLElement).getByRole("combobox"))
-    await user.click(await screen.findByText("New Folder"))
+    const folderCombobox = within(folderField as HTMLElement).getByRole("combobox")
+    const folderSelectContent = (folderField as HTMLElement).querySelector(
+      ".ant-select-content"
+    )
+    expect(folderSelectContent).not.toBeNull()
+    fireEvent.mouseDown(folderSelectContent as HTMLElement)
+    await waitFor(() => {
+      expect(folderCombobox).toHaveAttribute("aria-expanded", "true")
+    })
+    await user.click(
+      await screen.findByText("New Folder", {
+        selector: ".ant-select-item-option-content"
+      })
+    )
+    await waitFor(() => expect(saveButton).toBeEnabled())
     await user.click(saveButton)
 
     await waitFor(() => {
