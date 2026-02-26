@@ -8,7 +8,7 @@ import os
 import threading
 import tempfile
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -109,7 +109,7 @@ _ACP_CONTROL_RATE_LIMITER = _SlidingWindowLimiter()
 _ACP_AUDIT_LOCK = threading.Lock()
 _ACP_AUDIT_EVENTS: deque[dict[str, Any]] = deque(maxlen=5000)
 _ACP_RECONCILIATION_LOCK = threading.Lock()
-_ACP_RECONCILIATION: dict[str, dict[str, Any]] = {}
+_ACP_RECONCILIATION: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _ACP_DIAGNOSTIC_REASON_MAP: dict[str, str] = {
     "acp_governance_blocked": "blocked",
     "governance_blocked": "blocked",
@@ -144,6 +144,10 @@ def _acp_env_int(name: str, default: int) -> int:
 
 def _acp_control_rate_limit_per_minute() -> int:
     return _acp_env_int("ACP_CONTROL_RATE_LIMIT_PER_MINUTE", 240)
+
+
+def _acp_reconciliation_max_entries() -> int:
+    return max(1, _acp_env_int("ACP_RECONCILIATION_MAX_ENTRIES", 5000))
 
 
 def _acp_enforce_control_rate_limit(*, user_id: int, action: str) -> None:
@@ -203,15 +207,20 @@ def _acp_mark_reconciliation(
     reason_code: str,
     error: str | None = None,
 ) -> dict[str, Any]:
+    key = str(session_id)
     payload = {
-        "session_id": str(session_id),
+        "session_id": key,
         "status": str(status_value),
         "reason_code": str(reason_code),
         "error": str(error) if error else None,
         "updated_at": _now_iso(),
     }
     with _ACP_RECONCILIATION_LOCK:
-        _ACP_RECONCILIATION[str(session_id)] = payload
+        _ACP_RECONCILIATION.pop(key, None)
+        _ACP_RECONCILIATION[key] = payload
+        max_entries = _acp_reconciliation_max_entries()
+        while len(_ACP_RECONCILIATION) > max_entries:
+            _ACP_RECONCILIATION.popitem(last=False)
     return dict(payload)
 
 

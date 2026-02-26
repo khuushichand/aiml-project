@@ -241,3 +241,32 @@ def test_acp_control_surface_rate_limit(client_user_only, stub_acp_hardening, mo
     assert second.status_code == 429
     detail = second.json()["detail"]
     assert detail["code"] == "rate_limited"
+
+
+def test_acp_reconciliation_store_is_bounded(client_user_only, stub_acp_hardening, monkeypatch):
+    _store, _runner, acp_endpoints = stub_acp_hardening
+    monkeypatch.setenv("ACP_RECONCILIATION_MAX_ENTRIES", "2")
+
+    acp_endpoints._acp_mark_reconciliation(
+        session_id="session-1",
+        status_value="teardown_completed",
+        reason_code="teardown_completed",
+    )
+    acp_endpoints._acp_mark_reconciliation(
+        session_id="session-2",
+        status_value="teardown_completed",
+        reason_code="teardown_completed",
+    )
+    acp_endpoints._acp_mark_reconciliation(
+        session_id="session-3",
+        status_value="teardown_completed",
+        reason_code="teardown_completed",
+    )
+
+    with acp_endpoints._ACP_RECONCILIATION_LOCK:
+        assert len(acp_endpoints._ACP_RECONCILIATION) == 2
+        assert "session-1" not in acp_endpoints._ACP_RECONCILIATION
+        assert list(acp_endpoints._ACP_RECONCILIATION.keys()) == ["session-2", "session-3"]
+
+    evicted = acp_endpoints._acp_get_reconciliation("session-1")
+    assert evicted["status"] == "not_recorded"
