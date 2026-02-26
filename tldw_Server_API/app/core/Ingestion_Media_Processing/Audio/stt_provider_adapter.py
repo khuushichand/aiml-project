@@ -47,6 +47,11 @@ _STT_PROVIDER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 
 
+def _segment_text_value(segment: dict[str, Any]) -> str:
+    """Return segment text across legacy and normalized keys."""
+    return str(segment.get("text") or segment.get("Text") or "").strip()
+
+
 def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
     if cancel_check is None:
         return
@@ -250,7 +255,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
         # Strip Whisper metadata header so callers see only user content
         segments_for_response = strip_whisper_metadata_header(segments_list)
         text = " ".join(
-            str(seg.get("text") or "").strip()
+            _segment_text_value(seg)
             for seg in segments_for_response
             if isinstance(seg, dict)
         )
@@ -325,7 +330,7 @@ class ParakeetAdapter(SttProviderAdapter):
             cancel_check=cancel_check,
         )
         text = " ".join(
-            str(seg.get("text") or "").strip()
+            _segment_text_value(seg)
             for seg in segments_list
             if isinstance(seg, dict)
         )
@@ -470,7 +475,7 @@ class Qwen2AudioAdapter(SttProviderAdapter):
             cancel_check=cancel_check,
         )
         text = " ".join(
-            str(seg.get("text") or "").strip()
+            _segment_text_value(seg)
             for seg in segments_list
             if isinstance(seg, dict)
         )
@@ -914,6 +919,10 @@ def resolve_default_transcription_model(fallback_whisper_model: str) -> str:
         stt_cfg = get_stt_config() or {}
     except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
         stt_cfg = {}
+
+    configured_batch_model = str(stt_cfg.get("default_batch_transcription_model", "")).strip()
+    if configured_batch_model:
+        return configured_batch_model
 
     provider = registry.get_default_provider_name()
     model, _ = _resolve_default_model_for_provider(provider, stt_cfg)

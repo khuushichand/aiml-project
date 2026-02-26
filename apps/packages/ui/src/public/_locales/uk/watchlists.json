@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "У черзі на брифінг"
+  },
+  "items_includeInNextBriefing": {
+    "message": "Додати до наступного брифінгу"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "Видалити з черги брифінгу"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "Цей елемент уже включено до матеріалів брифінгу."
+  },
+  "items_briefingIncluded": {
+    "message": "Додано до черги наступного брифінгу."
+  },
+  "items_briefingRemoved": {
+    "message": "Видалено з черги брифінгу."
+  },
+  "items_briefingIncludeError": {
+    "message": "Не вдалося додати елемент до брифінгу."
+  },
+  "items_queuedTag": {
+    "message": "У черзі"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "Виберіть запуск"
+  },
+  "items_queue_runOption": {
+    "message": "Запуск #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "Виберіть запуск, щоб створити звіт із черги."
+  },
+  "items_queue_empty": {
+    "message": "Для цього запуску не знайдено елементів у черзі."
+  },
+  "items_queue_generated": {
+    "message": "Створено звіт із {{count}} елемент{{plural}} у черзі."
+  },
+  "items_queue_generateError": {
+    "message": "Не вдалося створити звіт з елементів у черзі."
+  },
+  "items_queue_generateReport": {
+    "message": "Створити звіт із черги"
+  }
+}

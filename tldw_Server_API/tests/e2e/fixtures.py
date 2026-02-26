@@ -115,17 +115,27 @@ def _build_inprocess_httpx_client() -> httpx.Client:
     except Exception:
         _ = None
     from tldw_Server_API.app.main import app
+    def _build_started_testclient():
+        # When using TestClient as a plain object (without a context manager),
+        # lifespan startup/shutdown hooks are not guaranteed to run. Entering
+        # the context eagerly ensures startup migrations/seeding execute before
+        # tests issue requests.
+        from starlette.testclient import TestClient
+
+        client = TestClient(app, base_url="http://testserver", follow_redirects=True)
+        client.__enter__()
+        return client
+
     try:
         transport = httpx.ASGITransport(app=app, lifespan="on")
     except TypeError:
-        # Older httpx releases do not accept the lifespan kwarg; prefer TestClient to
-        # ensure startup/shutdown hooks run (migrations, auth setup, etc.).
-        from starlette.testclient import TestClient
-        return TestClient(app, base_url="http://testserver", follow_redirects=True)
+        # Older httpx releases do not accept the lifespan kwarg; fall back to
+        # TestClient with lifespan started.
+        return _build_started_testclient()
     if not hasattr(transport, "handle_request"):
-        # Older httpx ASGITransport is async-only; fall back to TestClient.
-        from starlette.testclient import TestClient
-        return TestClient(app, base_url="http://testserver", follow_redirects=True)
+        # Older httpx ASGITransport is async-only; fall back to TestClient
+        # with lifespan started.
+        return _build_started_testclient()
     return httpx.Client(
         transport=transport,
         base_url="http://testserver",

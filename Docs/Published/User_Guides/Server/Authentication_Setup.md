@@ -8,7 +8,7 @@ For personal use, the simplest setup:
 
 ```bash
 # 1. Copy the authentication template
-cp .env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 
 # 2. Generate a secure API key (new format)
 python -m tldw_Server_API.app.core.AuthNZ.initialize
@@ -46,7 +46,7 @@ For team deployments with user management:
 
 ```bash
 # 1. Copy and configure authentication
-cp .env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 
 # 2. Generate secure keys
 python -c "import secrets; print('JWT_SECRET_KEY=' + secrets.token_urlsafe(32))"

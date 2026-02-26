@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "已加入簡報佇列",
+    "includeInNextBriefing": "加入下一次簡報",
+    "removeFromBriefingQueue": "從簡報佇列移除",
+    "briefingAlreadyIncluded": "此項目已包含在簡報輸出中。",
+    "briefingIncluded": "已加入下一次簡報佇列。",
+    "briefingRemoved": "已從簡報佇列移除。",
+    "briefingIncludeError": "無法將項目加入簡報。",
+    "queuedTag": "已排入佇列",
+    "queue": {
+      "runPlaceholder": "選擇執行",
+      "runOption": "執行 #{{id}}",
+      "runRequired": "請選擇一個執行以從佇列產生報告。",
+      "empty": "此執行找不到佇列項目。",
+      "generated": "已從 {{count}} 個佇列項目{{plural}}建立報告。",
+      "generateError": "無法從佇列項目產生報告。",
+      "generateReport": "從佇列產生報告"
+    }
+  }
+}

@@ -125,7 +125,7 @@ Transcribe audio into text.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | file | file | Yes | The audio file to transcribe (default max 25MB; actual limit may vary by quota tier) |
-| model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*`; Qwen3-ASR via `qwen3-asr-1.7b`, `qwen3-asr-0.6b`, or `qwen3-asr`; VibeVoice via `vibevoice-asr` (default: `whisper-1`). |
+| model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*`; Qwen3-ASR via `qwen3-asr-1.7b`, `qwen3-asr-0.6b`, or `qwen3-asr`; VibeVoice via `vibevoice-asr` (default when omitted: `[STT-Settings].default_batch_transcription_model`, shipping default `parakeet-onnx`). |
 | language | string | No | Language hint. ISO-639-1 codes are always accepted (for example `en`, `es`). BCP-47 locale hints (for example `en-US`, `pt-BR`) are accepted and normalized per provider: providers that require ISO-style hints receive base codes, providers with locale-capable routing keep locale hints. When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
@@ -282,13 +282,21 @@ Add the following section to your `config.txt`:
 
 ```ini
 [STT-Settings]
-# Default transcription provider
-default_transcriber = faster-whisper
-# Options: faster-whisper, parakeet, canary, qwen2audio
+# Explicit defaults when the client omits `model`
+default_batch_transcription_model = parakeet-onnx
+default_streaming_transcription_model = parakeet-onnx
 
 # Nemo model variant (for Parakeet)
 nemo_model_variant = standard
 # Options: standard, onnx, mlx
+
+# Parakeet ONNX model source
+parakeet_onnx_model_id = istupakov/parakeet-tdt-0.6b-v3-onnx
+# Optional: pin exact commit/tag for deterministic downloads
+parakeet_onnx_revision =
+
+# Streaming fallback policy (default fail-fast)
+streaming_fallback_to_whisper = false
 
 # Device for Nemo models
 nemo_device = cuda
@@ -317,7 +325,7 @@ or a JSON list (e.g., `["alpha","beta"]`).
 
 ### Environment Variables
 
-Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`). Environment overrides are limited; use `config.txt` to change default transcriber, Nemo device, model variant, and cache dir.
+Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`). Environment overrides are limited; use `config.txt` to change batch/streaming defaults, Nemo device/variant, fallback policy, and cache directories.
 
 Additional streaming quota/env controls:
 - `AUDIO_TIER_LIMITS_JSON`: JSON mapping to override per-tier limits, e.g. `{ "free": { "daily_minutes": 60, "concurrent_streams": 2 } }`
@@ -354,6 +362,8 @@ failopen_cap_minutes = 5.0
   - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
   - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
   - Optional finalize: `{ "type": "commit" }`
+- If no client `model` is provided, the server uses `[STT-Settings].default_streaming_transcription_model` (default: `parakeet-onnx`).
+- Streaming model-init fallback to Whisper is opt-in via `[STT-Settings].streaming_fallback_to_whisper=true`; default is fail-fast.
 - Server messages include:
     - `{ "type": "status", "message": "Authenticated" }` or `"Authenticated (JWT)"`
     - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false, "segment_id": 3, "segment_start": 12.5, "segment_end": 15.0 }`
@@ -454,7 +464,7 @@ The insight payload mirrors granola-style UX:
   - `4403` Forbidden (endpoint/path not allowed or key/JWT quota exceeded)
   - `4003` Application quota violation (daily minutes / concurrent streams)
   - `1008` Policy violation (e.g., IP not on allowlist)
-  - `1011` Internal error (e.g., no models available after fallback)
+  - `1011` Internal error (e.g., no models available, or fallback failed when explicitly enabled)
 
 
 #### Speaker Diarization & Audio Persistence

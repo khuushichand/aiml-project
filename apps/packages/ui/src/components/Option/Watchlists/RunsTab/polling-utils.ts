@@ -1,5 +1,10 @@
 import type { WatchlistRun } from "@/types/watchlists"
 
+const normalizeStatus = (status: unknown): string =>
+  String(status ?? "")
+    .trim()
+    .toLowerCase()
+
 const MIN_POLL_INTERVAL_MS = 100
 const IDLE_POLL_MIN_MS = 30_000
 const BACKGROUND_POLL_MIN_MS = 60_000

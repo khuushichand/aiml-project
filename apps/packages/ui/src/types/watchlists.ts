@@ -256,12 +256,23 @@ export interface ScrapedItem {
   tags: string[]
   status: ItemStatus
   reviewed: boolean
+  queued_for_briefing?: boolean
   created_at: string
+}
+
+export interface ScrapedItemSmartCounts {
+  all: number
+  today: number
+  today_unread: number
+  unread: number
+  reviewed: number
+  queued: number
 }
 
 export interface ScrapedItemUpdate {
   reviewed?: boolean
   status?: ItemStatus
+  queued_for_briefing?: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -332,6 +343,10 @@ export interface WatchlistTemplate {
   version?: number
   history_count?: number
   available_versions?: number[]
+  composer_ast?: Record<string, unknown> | null
+  composer_schema_version?: string | null
+  composer_sync_hash?: string | null
+  composer_sync_status?: "in_sync" | "needs_repair" | "recovered_from_code" | null
 }
 
 export interface WatchlistTemplateCreate {
@@ -340,6 +355,10 @@ export interface WatchlistTemplateCreate {
   content: string
   format?: "md" | "html"
   overwrite?: boolean
+  composer_ast?: Record<string, unknown> | null
+  composer_schema_version?: string | null
+  composer_sync_hash?: string | null
+  composer_sync_status?: "in_sync" | "needs_repair" | "recovered_from_code" | null
 }
 
 export interface WatchlistTemplateVersionSummary {

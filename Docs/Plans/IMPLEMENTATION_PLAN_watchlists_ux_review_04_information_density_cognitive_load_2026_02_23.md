@@ -80,32 +80,62 @@
 - Add benchmark tests for rendering with larger table datasets.
 **Status**: Complete
 
----
+## Execution Notes
 
-## Execution Notes (2026-02-23)
+### 2026-02-23 - Stage 1 and Stage 2 completion snapshot
 
-- Stage 1 completed with disclosure-state helper coverage and UI transition tests:
-  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
-- Stage 2 completed with Basic/Advanced monitor authoring flow guardrails and remediation coverage:
-  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
-- Stage 3 completed with compact-vs-advanced list profile behavior in Monitors, Activity, and Reports:
-  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx`
-  - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
-- Stage 4 completed with persistent live summaries and review-step confirmation on monitor setup:
-  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
-- Stage 5 completed with scale-path usability coverage and explicit QA checklist:
-  - 1/10/50 feed setup validation in monitor Basic mode:
+- Stage 1 disclosure baseline validated in monitor authoring:
+  - Basic vs advanced setup mode toggles with preserved hidden advanced settings notice.
+  - Decision-sequence ordering present via basic step flow (`scope -> schedule -> output -> review`).
+  - Disclosure transition and summary coverage validated in:
     - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
-  - High-density list rendering regressions:
-    - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx`
-    - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx`
-    - `apps/packages/ui/src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx`
-    - `apps/packages/ui/src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
-  - QA checklist artifact:
-    - `Docs/Plans/WATCHLISTS_MONITOR_DENSITY_SCALE_QA_CHECKLIST_2026_02_23.md`
-  - Validation evidence:
-    - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
-    - `/tmp/bandit_watchlists_group04_stage5_frontend_scope_2026_02_23.json`
+- Stage 2 monitor recomposition updated with configuration confidence surface:
+  - Added persistent confidence panel with readiness status and unresolved risk cues in:
+    - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobFormModal.tsx`
+  - Added confidence-specific red/green tests:
+    - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
+- Validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/job-summaries.test.ts src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx`
+  - `/tmp/bandit_watchlists_group04_stage2_2026_02_23.json`
+
+### 2026-02-23 - Stage 3 increment (Sources list profile)
+
+- Added core/advanced column profile toggle in Sources list:
+  - Compact default now surfaces per-feed summary chips (`group/tag` counts).
+  - Advanced mode reveals detailed tag column and persists disclosure preference.
+  - Implemented in:
+    - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/SourcesTab.tsx`
+- Added Stage 3 regression coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx`
+- Stage 3 completion validation across list surfaces:
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+- Stage 3 validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/job-summaries.test.ts src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/empty-state.test.ts src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+  - `bunx vitest run src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/empty-state.test.ts src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/job-summaries.test.ts src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx`
+  - `/tmp/bandit_watchlists_group04_stage3_2026_02_23.json`
+
+### 2026-02-23 - Stage 4 completion (summary + confirmation)
+
+- Extended monitor live summary coverage with delivery/audio consequences and hidden-advanced-state visibility:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/JobFormModal.tsx`
+- Added explicit recurring delivery confirmation gate before save/create when expensive operations are enabled:
+  - Email delivery, chatbook delivery, and audio generation now require explicit confirmation before submit.
+- Added Stage 4 test coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx`
+  - New assertions cover:
+    - delivery/audio consequence summaries
+    - hidden advanced-state summary visibility
+    - recurring delivery confirmation cancellation gate
+- Stage 4 validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobFormModal.live-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.scope-filter-summary.test.tsx src/components/Option/Watchlists/JobsTab/__tests__/job-summaries.test.ts src/components/Option/Watchlists/JobsTab/__tests__/SchedulePicker.help.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.bulk-move.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.load-error-retry.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/empty-state.test.ts src/components/Option/Watchlists/RunsTab/__tests__/RunsTab.advanced-filters.test.tsx src/components/Option/Watchlists/OutputsTab/__tests__/OutputsTab.advanced-filters.test.tsx`
+  - `/tmp/bandit_watchlists_group04_stage4_2026_02_23.json`
+
+### 2026-02-23 - Stage 5 completion (usability validation at scale)
+
+- Added scale-path regression coverage for compact/advanced density behavior at 1/10/50 dataset sizes:
+  - `apps/packages/ui/src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx`
+- Published explicit QA matrix for 1-feed, 10-feed, and 50-feed validation:
+  - `Docs/Plans/WATCHLISTS_MONITOR_DENSITY_SCALE_QA_CHECKLIST_2026_02_23.md`
+- Stage 5 validation evidence:
+  - `bunx vitest run src/components/Option/Watchlists/JobsTab/__tests__/JobsTab.advanced-details.test.tsx src/components/Option/Watchlists/SourcesTab/__tests__/SourcesTab.advanced-details.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/OverviewTab.quick-setup.test.tsx src/components/Option/Watchlists/OverviewTab/__tests__/quick-setup.test.ts --maxWorkers=1 --no-file-parallelism`

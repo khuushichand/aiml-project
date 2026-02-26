@@ -414,7 +414,7 @@ dev = [
 #    uvx black .                # Formatting without polluting environment
 #
 # 5. Set up environment variables:
-#    cp .env.example .env
+#    cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 #    # Edit .env with your configuration
 #
 # 6. Initialize the system:

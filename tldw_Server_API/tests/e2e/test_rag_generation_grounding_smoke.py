@@ -62,3 +62,28 @@ def test_rag_generation_grounding_smoke(api_client):
         syn = md.get("synthesis")
         gate = md.get("generation_gate")
         assert isinstance(syn, dict) or isinstance(gate, dict)
+
+
+@pytest.mark.requires_rag
+def test_rag_pre_retrieval_clarification_smoke(api_client):
+    payload = {
+        "query": "Can you fix this?",
+        "sources": ["media_db"],
+        "enable_generation": True,
+        "top_k": 5,
+    }
+
+    r = api_client.client.post(
+        f"{api_client.base_url}/api/v1/rag/search",
+        json=payload,
+        headers=api_client.get_auth_headers(),
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    md = data.get("metadata") or {}
+
+    clarification = md.get("clarification") or {}
+    assert clarification.get("required") is True
+    assert clarification.get("stage") == "pre_retrieval"
+    assert md.get("retrieval_bypassed", {}).get("reason") == "pre_retrieval_clarification"
+    assert isinstance(data.get("generated_answer"), str) and data["generated_answer"].strip()

@@ -86,9 +86,12 @@ interface UnifiedSearchRequest {
   sources?: ('media_db'|'notes'|'characters'|'chats')[]; // Default: ['media_db']
   keyword_filter?: string[];                  // Optional
   enable_generation?: boolean;                // Include model-generated answer
+  enable_pre_retrieval_clarification?: boolean | null; // Default: null (auto-on when enable_generation=true)
+  clarification_timeout_sec?: number;         // 0.05-10.0 seconds, optional
   enable_citations?: boolean;                 // Include citations
   enable_query_classification?: boolean;      // Search-Agent router toggle, Default: false
   enable_research_loop?: boolean;             // Iterative research mode, Default: false
+  enable_research_action_dedup?: boolean;     // Reuse duplicate research actions, Default: true
   search_depth_mode?: 'speed' | 'balanced' | 'quality'; // Default: 'balanced'
   enable_suggestions?: boolean;               // Follow-up suggestion generation, Default: false
   num_suggestions?: number;                   // 1-10, Default: 5
@@ -136,6 +139,13 @@ interface VideoResult {
 }
 ```
 
+Clarification response contract:
+- Ambiguous generation requests can return `200 OK` with a clarifying question in `generated_answer`.
+- In that case, metadata includes:
+  - `metadata.clarification.required=true`
+  - `metadata.clarification.stage="pre_retrieval"`
+  - `metadata.retrieval_bypassed.reason="pre_retrieval_clarification"`
+
 #### Example
 ```javascript
 const response = await fetch('http://localhost:8000/api/v1/rag/search', {
@@ -169,6 +179,7 @@ Search-Agent defaults for omitted request fields:
   - `enable_structured_response` ← `SEARCH_STRUCTURED_RESPONSE` / `search_structured_response` (default `false`)
   - `enable_image_search` ← `SEARCH_IMAGE_SEARCH` / `search_image_search` (default `false`)
   - `enable_video_search` ← `SEARCH_VIDEO_SEARCH` / `search_video_search` (default `false`)
+  - `enable_research_action_dedup` default is schema-level `true`
 
 ### 1a. Batch Search - `POST /batch`
 
@@ -516,7 +527,7 @@ Generates a hypothetical answer to improve semantic search:
 ## Capabilities & Features
 
 - `GET /capabilities`: Returns supported features, defaults, and limits for the unified pipeline.
-- `GET /features`: Lists feature groups and their parameters (query expansion, caching, security, citations, generation, reranking, feedback, monitoring, table processing, enhanced chunking, batch processing, resilience).
+- `GET /features`: Lists feature groups and their parameters (including generation clarification controls and research action dedup).
 
 ## Code Examples
 

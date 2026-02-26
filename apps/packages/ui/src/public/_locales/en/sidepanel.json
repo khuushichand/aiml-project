@@ -1234,5 +1234,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "You have unsaved state-doc changes. Discard local drafts?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "You have unsaved state-doc changes. Connect and discard local drafts?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "You have unsaved state-doc changes. Disconnect and discard local drafts?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "You have unsaved state-doc changes. Load state and discard local drafts?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "You have unsaved state-doc changes. Switch persona and discard local drafts?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "You have unsaved state-doc changes. Switch session and discard local drafts?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "You have unsaved state-doc changes. Restore this state version and discard local drafts?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "You have unsaved state-doc changes. Leave this page and discard local drafts?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "You have unsaved state-doc changes. Leave this page without saving?"
   }
 }

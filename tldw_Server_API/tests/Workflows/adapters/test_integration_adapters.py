@@ -1,19 +1,21 @@
 """Tests for integration adapters.
 
-This module tests all 11 integration adapters:
+This module tests all 12 integration adapters:
 1. run_webhook_adapter - Send webhook
 2. run_notify_adapter - Send notification
 3. run_mcp_tool_adapter - MCP tool execution
-4. run_s3_upload_adapter - S3 upload
-5. run_s3_download_adapter - S3 download
-6. run_github_create_issue_adapter - Create GitHub issue
-7. run_kanban_adapter - Kanban board operations
-8. run_chatbooks_adapter - Chatbooks operations
-9. run_character_chat_adapter - Character chat
-10. run_email_send_adapter - Send email
-11. run_podcast_rss_publish_adapter - Publish podcast RSS feed
+4. run_acp_stage_adapter - ACP-backed stage execution
+5. run_s3_upload_adapter - S3 upload
+6. run_s3_download_adapter - S3 download
+7. run_github_create_issue_adapter - Create GitHub issue
+8. run_kanban_adapter - Kanban board operations
+9. run_chatbooks_adapter - Chatbooks operations
+10. run_character_chat_adapter - Character chat
+11. run_email_send_adapter - Send email
+12. run_podcast_rss_publish_adapter - Publish podcast RSS feed
 """
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -345,6 +347,318 @@ async def test_mcp_tool_adapter_executes_tool():
         result = await run_mcp_tool_adapter(config, context)
         assert result.get("result") == {"data": "result"}
         assert result.get("module") == "test_module"
+
+
+# ==============================================================================
+# ACP Stage Adapter Tests
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_creates_session_and_prompts(monkeypatch):
+    """Test ACP stage adapter creates a session and executes prompt."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-1")
+            self.prompt = AsyncMock(
+                return_value={
+                    "stopReason": "end",
+                    "detail": "ok",
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                }
+            )
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    config = {"stage": "impl", "prompt_template": "Implement {{ inputs.task }}"}
+    context = {"inputs": {"task": "domain task"}, "user_id": "1"}
+    result = await run_acp_stage_adapter(config, context)
+
+    assert result.get("status") == "ok"
+    assert result.get("session_id") == "acp-session-1"
+    assert result.get("stage") == "impl"
+    assert isinstance(result.get("response"), dict)
+    assert isinstance(result.get("usage"), dict)
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_output_includes_schema_version(monkeypatch):
+    """Test ACP stage adapter emits output schema version."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-schema")
+            self.prompt = AsyncMock(return_value={"stopReason": "end", "detail": "ok"})
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    result = await run_acp_stage_adapter(
+        {"stage": "impl", "prompt_template": "Implement {{ inputs.task }}"},
+        {"inputs": {"task": "schema-check"}, "user_id": "9"},
+    )
+
+    assert result.get("acp_output_schema_version") == "1.0"
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_reuses_session_from_context(monkeypatch):
+    """Test ACP stage adapter reuses session id from context key."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-created")
+            self.prompt = AsyncMock(return_value={"stopReason": "end", "detail": "ok"})
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    config = {
+        "stage": "plan",
+        "prompt_template": "Plan: {{ inputs.task }}",
+        "session_context_key": "acp_session",
+    }
+    context = {"inputs": {"task": "reuse"}, "user_id": "2", "acp_session": "existing-session-9"}
+    result = await run_acp_stage_adapter(config, context)
+
+    assert result.get("status") == "ok"
+    assert result.get("session_id") == "existing-session-9"
+    stub.create_session.assert_not_called()
+    stub.verify_session_access.assert_awaited_once_with("existing-session-9", 2)
+    stub.prompt.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_normalizes_governance_block(monkeypatch):
+    """Test ACP stage adapter normalizes governance denied outcomes."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import ACPGovernanceDeniedError
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-2")
+            self.prompt = AsyncMock(
+                side_effect=ACPGovernanceDeniedError(governance={"action": "deny", "reason": "policy"})
+            )
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    result = await run_acp_stage_adapter(
+        {"stage": "impl_review", "prompt_template": "Review {{ inputs.task }}"},
+        {"inputs": {"task": "governance"}, "user_id": "3"},
+    )
+    assert result.get("status") == "blocked"
+    assert result.get("error_type") == "acp_governance_blocked"
+    assert result.get("error") == "acp_governance_blocked"
+    assert result.get("governance", {}).get("action") == "deny"
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_normalizes_timeout(monkeypatch):
+    """Test ACP stage adapter classifies prompt timeout errors."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-3")
+            self.prompt = AsyncMock(side_effect=asyncio.TimeoutError())
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    result = await run_acp_stage_adapter(
+        {"stage": "test", "prompt_template": "Test {{ inputs.task }}"},
+        {"inputs": {"task": "timeouts"}, "user_id": "4"},
+    )
+    assert result.get("status") == "error"
+    assert result.get("error_type") == "acp_timeout"
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_cancelled_passthrough():
+    """Test ACP stage adapter exits early when workflow is cancelled."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    result = await run_acp_stage_adapter(
+        {"stage": "impl", "prompt_template": "ignored"},
+        {"is_cancelled": lambda: True},
+    )
+    assert result.get("__status__") == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_review_loop_limit(monkeypatch):
+    """Test ACP stage adapter enforces configured review loop limits."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-4")
+            self.prompt = AsyncMock(return_value={"stopReason": "end", "detail": "ok"})
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    result = await run_acp_stage_adapter(
+        {
+            "stage": "impl_review",
+            "prompt_template": "Review",
+            "review_counter_key": "impl_review_count",
+            "max_review_loops": 3,
+        },
+        {"user_id": "7", "impl_review_count": 3},
+    )
+    assert result.get("status") == "blocked"
+    assert result.get("error_type") == "review_loop_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_fail_on_error_raises_adapter_error(monkeypatch):
+    """Test ACP stage adapter raises AdapterError when fail_on_error is enabled."""
+    from tldw_Server_API.app.core.exceptions import AdapterError
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-5")
+            self.prompt = AsyncMock(side_effect=asyncio.TimeoutError())
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    with pytest.raises(AdapterError):
+        await run_acp_stage_adapter(
+            {
+                "stage": "test",
+                "prompt_template": "Run test pass",
+                "fail_on_error": True,
+            },
+            {"user_id": "11"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_reused_session_denied_when_unowned(monkeypatch):
+    """Test ACP stage adapter blocks reused sessions not owned by workflow user."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="unused-session")
+            self.prompt = AsyncMock(return_value={"stopReason": "end", "content": "ok"})
+            self.verify_session_access = AsyncMock(return_value=False)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    result = await run_acp_stage_adapter(
+        {"stage": "impl", "prompt_template": "Implement {{ inputs.task }}"},
+        {"inputs": {"task": "domain task"}, "user_id": "7", "acp_session_id": "foreign-session"},
+    )
+    assert result.get("status") == "error"
+    assert result.get("error_type") == "acp_session_error"
+    assert result.get("error") == "session_access_denied"
+    stub.prompt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acp_stage_adapter_sanitizes_internal_prompt_exception(monkeypatch):
+    """Test ACP stage adapter does not expose raw internal exception text."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_acp_stage_adapter
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.create_session = AsyncMock(return_value="acp-session-6")
+            self.prompt = AsyncMock(side_effect=RuntimeError("private internal error detail"))
+            self.verify_session_access = AsyncMock(return_value=True)
+
+    stub = _StubRunner()
+
+    async def _get_runner_client():
+        return stub
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.acp.get_runner_client",
+        _get_runner_client,
+    )
+
+    result = await run_acp_stage_adapter(
+        {"stage": "impl", "prompt_template": "Implement {{ inputs.task }}"},
+        {"inputs": {"task": "domain task"}, "user_id": "7"},
+    )
+    assert result.get("status") == "error"
+    assert result.get("error_type") == "acp_prompt_error"
+    assert result.get("error") == "acp_prompt_failed"
+    assert "private internal error detail" not in str(result)
 
 
 # ==============================================================================
@@ -1474,6 +1788,7 @@ def test_all_integration_adapters_importable():
         run_webhook_adapter,
         run_notify_adapter,
         run_mcp_tool_adapter,
+        run_acp_stage_adapter,
         run_s3_upload_adapter,
         run_s3_download_adapter,
         run_github_create_issue_adapter,
@@ -1487,6 +1802,7 @@ def test_all_integration_adapters_importable():
     assert callable(run_webhook_adapter)
     assert callable(run_notify_adapter)
     assert callable(run_mcp_tool_adapter)
+    assert callable(run_acp_stage_adapter)
     assert callable(run_s3_upload_adapter)
     assert callable(run_s3_download_adapter)
     assert callable(run_github_create_issue_adapter)
@@ -1505,6 +1821,7 @@ def test_integration_adapters_are_async():
         run_webhook_adapter,
         run_notify_adapter,
         run_mcp_tool_adapter,
+        run_acp_stage_adapter,
         run_s3_upload_adapter,
         run_s3_download_adapter,
         run_github_create_issue_adapter,
@@ -1519,6 +1836,7 @@ def test_integration_adapters_are_async():
         run_webhook_adapter,
         run_notify_adapter,
         run_mcp_tool_adapter,
+        run_acp_stage_adapter,
         run_s3_upload_adapter,
         run_s3_download_adapter,
         run_github_create_issue_adapter,
@@ -1541,6 +1859,7 @@ def test_integration_adapters_registered():
         "webhook",
         "notify",
         "mcp_tool",
+        "acp_stage",
         "s3_upload",
         "s3_download",
         "github_create_issue",
@@ -1564,6 +1883,7 @@ def test_integration_adapters_in_category():
         "webhook",
         "notify",
         "mcp_tool",
+        "acp_stage",
         "s3_upload",
         "s3_download",
         "github_create_issue",

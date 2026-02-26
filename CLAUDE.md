@@ -215,7 +215,7 @@ The project is a FastAPI-first backend with a Next.js WebUI, mature AuthNZ (sing
 ### Required Setup
 1. **Dependencies**: `pip install -e .` (add extras as needed, e.g., `.[dev]`, `.[multiplayer]`)
 2. **FFmpeg**: Required for audio/video processing
-3. **Auth Setup**: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
+3. **Auth Setup**: `cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
 4. **Provider Keys**: Add to `.env` or `Config_Files/config.txt`
 5. **Optional**: CUDA for accelerated STT
 

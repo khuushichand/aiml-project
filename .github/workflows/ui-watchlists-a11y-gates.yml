@@ -1,0 +1,58 @@
+name: UI Watchlists Accessibility Gates
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - "apps/packages/ui/src/components/Option/Watchlists/**"
+      - "apps/packages/ui/src/assets/locale/en/watchlists.json"
+      - "apps/packages/ui/src/public/_locales/en/watchlists.json"
+      - "apps/packages/ui/src/services/watchlists.ts"
+      - "apps/packages/ui/package.json"
+      - "apps/bun.lock"
+      - ".github/workflows/ui-watchlists-a11y-gates.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/packages/ui/src/components/Option/Watchlists/**"
+      - "apps/packages/ui/src/assets/locale/en/watchlists.json"
+      - "apps/packages/ui/src/public/_locales/en/watchlists.json"
+      - "apps/packages/ui/src/services/watchlists.ts"
+      - "apps/packages/ui/package.json"
+      - "apps/bun.lock"
+      - ".github/workflows/ui-watchlists-a11y-gates.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-watchlists-a11y-gates-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  watchlists-a11y-gate:
+    name: Watchlists Accessibility Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install workspace dependencies
+        working-directory: apps
+        run: bun install --frozen-lockfile
+
+      - name: Run Watchlists accessibility regression gate
+        working-directory: apps/packages/ui
+        env:
+          CI: "true"
+        run: bun run test:watchlists:a11y

@@ -1,0 +1,93 @@
+{
+  "name": "pipeline_l3_acp",
+  "version": 1,
+  "description": "Domain-only ACP pipeline (L3): requirements, planning, review gates, implementation, testing, and completion.",
+  "tags": [
+    "acp",
+    "pipeline",
+    "domain",
+    "l3"
+  ],
+  "metadata": {
+    "scope": "domain-only",
+    "future_integration": [
+      "sandbox_module",
+      "acp_module"
+    ]
+  },
+  "steps": [
+    {
+      "id": "req",
+      "type": "acp_stage",
+      "config": {
+        "stage": "req",
+        "session_context_key": "pipeline_acp_session_id",
+        "prompt_template": "Capture clear domain requirements for: {{ inputs.task }}",
+        "workspace_id": "{{ inputs.workspace_id }}",
+        "workspace_group_id": "{{ inputs.workspace_group_id }}"
+      }
+    },
+    {
+      "id": "plan",
+      "type": "acp_stage",
+      "config": {
+        "stage": "plan",
+        "session_context_key": "pipeline_acp_session_id",
+        "prompt_template": "Produce an implementation and test plan for: {{ inputs.task }}",
+        "review_counter_key": "plan_review_count",
+        "max_review_loops": 3,
+        "workspace_id": "{{ inputs.workspace_id }}",
+        "workspace_group_id": "{{ inputs.workspace_group_id }}"
+      }
+    },
+    {
+      "id": "plan_review",
+      "type": "wait_for_approval",
+      "config": {
+        "instructions": "Review plan quality, risks, and sequencing.",
+        "assigned_to_user_id": "{{ inputs.reviewer_user_id }}"
+      },
+      "on_failure": "plan"
+    },
+    {
+      "id": "impl",
+      "type": "acp_stage",
+      "config": {
+        "stage": "impl",
+        "session_context_key": "pipeline_acp_session_id",
+        "prompt_template": "Implement the approved plan for: {{ inputs.task }}",
+        "review_counter_key": "impl_review_count",
+        "max_review_loops": 3,
+        "workspace_id": "{{ inputs.workspace_id }}",
+        "workspace_group_id": "{{ inputs.workspace_group_id }}"
+      }
+    },
+    {
+      "id": "impl_review",
+      "type": "wait_for_approval",
+      "config": {
+        "instructions": "Review implementation output and approve or reject.",
+        "assigned_to_user_id": "{{ inputs.reviewer_user_id }}"
+      },
+      "on_failure": "impl"
+    },
+    {
+      "id": "test",
+      "type": "acp_stage",
+      "config": {
+        "stage": "test",
+        "session_context_key": "pipeline_acp_session_id",
+        "prompt_template": "Run domain-only validation and summarize test outcomes for: {{ inputs.task }}",
+        "workspace_id": "{{ inputs.workspace_id }}",
+        "workspace_group_id": "{{ inputs.workspace_group_id }}"
+      }
+    },
+    {
+      "id": "done",
+      "type": "prompt",
+      "config": {
+        "template": "L3 ACP pipeline completed for {{ inputs.task }}"
+      }
+    }
+  ]
+}

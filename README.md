@@ -103,7 +103,7 @@ Latest release: 0.1.21 (2026-02-21). Beta. Expect rough edges; please report iss
     - `cp -a ./Databases ./Databases.backup`
 - Update configuration:
     - Copy provider keys to `.env`.
-    - For AuthNZ setup: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
+    - For AuthNZ setup: `cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
 - Database migration:
     - Inspect: `python -m tldw_Server_API.app.core.DB_Management.migrate_db status`
     - Migrate: `python -m tldw_Server_API.app.core.DB_Management.migrate_db migrate`
@@ -227,7 +227,7 @@ make quickstart-install
 
 This target:
 - Creates `.venv` if missing and installs dependencies.
-- Creates `tldw_Server_API/Config_Files/.env` from `.env.quickstart` if missing.
+- Creates `tldw_Server_API/Config_Files/.env` from `.env.example` if missing.
 - Initializes AuthNZ (non-interactive).
 - Starts the API server at `http://127.0.0.1:8000`.
 
@@ -248,7 +248,7 @@ API only (local Python, no Docker):
 API only (Docker):
 ```powershell
 # from repo root
-if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.quickstart" "tldw_Server_API/Config_Files/.env" }
+if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.example" "tldw_Server_API/Config_Files/.env" }
 docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
 curl http://localhost:8000/health
 ```
@@ -256,7 +256,7 @@ curl http://localhost:8000/health
 API + WebUI (Docker):
 ```powershell
 # from repo root
-if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.quickstart" "tldw_Server_API/Config_Files/.env" }
+if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.example" "tldw_Server_API/Config_Files/.env" }
 # Optional for non-localhost deployments:
 # $env:NEXT_PUBLIC_API_URL="http://YOUR_HOST_OR_DOMAIN:8000"
 docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d --build
@@ -310,10 +310,10 @@ pip install -e .
 2) **Configure environment**
 ```bash
 # macOS/Linux
-cp tldw_Server_API/Config_Files/.env.quickstart tldw_Server_API/Config_Files/.env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 
 # Windows (PowerShell)
-# Copy-Item tldw_Server_API/Config_Files/.env.quickstart tldw_Server_API/Config_Files/.env
+# Copy-Item tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 
 # Edit tldw_Server_API/Config_Files/.env and set:
 # SINGLE_USER_API_KEY=<at least 16 chars>
@@ -988,6 +988,9 @@ Notes:
 | Workflow | Status |
 | --- | --- |
 | E2E Critical Smoke (In-Process) | [![E2E Critical Smoke](https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml/badge.svg)](https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml) |
+
+Required gate policy and check-name contract:
+- `Docs/Development/CI_REQUIRED_GATES.md`
 
 Run locally
 

@@ -287,7 +287,7 @@ export const TemplatesTab: React.FC = () => {
 
       {/* Description */}
       <div className="text-sm text-text-muted">
-        {t("watchlists:templates.description", "Jinja2 templates for generating briefing outputs.")}
+        {t("watchlists:templates.description", "Templates for generating briefing outputs.")}
       </div>
 
       {/* Table */}

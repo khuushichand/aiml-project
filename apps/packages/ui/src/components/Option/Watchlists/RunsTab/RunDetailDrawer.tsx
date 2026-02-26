@@ -784,8 +784,8 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     onClose()
   }
 
-  const handleOpenRunOutputs = () => {
-    if (!data?.id) return
+  const handleOpenOutputs = () => {
+    if (!data) return
     setOutputsJobFilter(data.job_id)
     setOutputsRunFilter(data.id)
     setActiveTab("outputs")
@@ -821,7 +821,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
                     size="small"
                     type="primary"
                     loading={linkedOutputsLoading}
-                    onClick={handleOpenRunOutputs}
+                    onClick={handleOpenOutputs}
                   >
                     {t("watchlists:runs.detail.openRunOutputs", "Open reports for this run")}
                   </Button>
@@ -855,6 +855,22 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
               </Descriptions.Item>
               <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.errors", "Errors")}>
                 {data.stats?.items_errored ?? 0}
+              </Descriptions.Item>
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.monitor", "Monitor")}>
+                <Button size="small" type="link" className="px-0" onClick={handleEditMonitor}>
+                  {t("watchlists:runs.detail.openMonitor", "Open monitor settings")}
+                </Button>
+              </Descriptions.Item>
+              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.outputs", "Reports")}>
+                <Button
+                  size="small"
+                  type="link"
+                  className="px-0"
+                  onClick={handleOpenOutputs}
+                  data-testid="watchlists-run-detail-open-outputs"
+                >
+                  {t("watchlists:runs.detail.openOutputs", "Open reports for this run")}
+                </Button>
               </Descriptions.Item>
             </Descriptions>
           )}

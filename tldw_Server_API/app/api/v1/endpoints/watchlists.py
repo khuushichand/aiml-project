@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import csv
+import difflib
 import io
 import json
 import os
@@ -144,6 +145,7 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     RunDetail,
     RunsListResponse,
     ScrapedItem,
+    ScrapedItemSmartCountsResponse,
     ScrapedItemsListResponse,
     ScrapedItemUpdateRequest,
     Source,
@@ -186,6 +188,12 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     WatchlistTemplateVersionSummary,
     TemplatePreviewRequest,
     TemplatePreviewResponse,
+    TemplateComposerFlowCheckRequest,
+    TemplateComposerFlowCheckResponse,
+    TemplateComposerFlowIssue,
+    TemplateComposerFlowSection,
+    TemplateComposerSectionRequest,
+    TemplateComposerSectionResponse,
     TemplateValidateRequest,
     TemplateValidationResult,
     TemplateValidationErrorItem,
@@ -218,6 +226,9 @@ router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 DEFAULT_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS", "0") or 0)
 TEMP_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_TEMP_TTL_SECONDS", "86400") or 86400)
 DEFAULT_TTS_BRIEF_MAX_ITEMS = int(os.getenv("WATCHLIST_OUTPUT_TTS_BRIEF_MAX_ITEMS", "10") or 10)
+TEMPLATE_COMPOSER_FLOW_MAX_DIFF_CHARS = max(
+    1024, int(os.getenv("WATCHLIST_TEMPLATE_FLOW_CHECK_MAX_DIFF_CHARS", "50000") or 50000)
+)
 WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS = max(
     1, int(os.getenv("WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS", "10") or 10)
 )
@@ -840,6 +851,7 @@ def _row_to_scraped_item(row) -> ScrapedItem:
             except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
                 tags = []
     reviewed_flag = bool(getattr(row, "reviewed", 0))
+    queued_for_briefing = bool(getattr(row, "queued_for_briefing", 0))
     return ScrapedItem(
         id=row.id,
         run_id=row.run_id,
@@ -855,6 +867,7 @@ def _row_to_scraped_item(row) -> ScrapedItem:
         tags=tags,
         status=row.status,
         reviewed=reviewed_flag,
+        queued_for_briefing=queued_for_briefing,
         created_at=row.created_at,
     )
 
@@ -4337,6 +4350,45 @@ async def export_run_tallies_csv(
 # --------------------
 # Scraped items
 # --------------------
+@router.get("/items/smart-counts", response_model=ScrapedItemSmartCountsResponse, summary="Get smart feed counts")
+async def get_scraped_item_smart_counts(
+    run_id: int | None = Query(None),
+    job_id: int | None = Query(None),
+    source_id: int | None = Query(None),
+    status: str | None = Query(None),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: list item counts for another user ID.",
+    ),
+    q: str | None = Query(None, description="Search by title/summary/content substring"),
+    since: str | None = Query(None, description="ISO date filter (created_at >= since)"),
+    until: str | None = Query(None, description="ISO date filter (created_at <= until)"),
+    queue_run_id: int | None = Query(None, description="Optional queued-count run filter"),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
+    today_since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return ScrapedItemSmartCountsResponse(
+        **target_db.get_item_smart_counts(
+            run_id=run_id,
+            job_id=job_id,
+            source_id=source_id,
+            status=status,
+            search=q,
+            since=since,
+            until=until,
+            queue_run_id=queue_run_id,
+            today_since=today_since,
+        )
+    )
+
+
 @router.get("/items", response_model=ScrapedItemsListResponse, summary="List scraped items across runs")
 async def list_scraped_items(
     run_id: int | None = Query(None),
@@ -4344,6 +4396,7 @@ async def list_scraped_items(
     source_id: int | None = Query(None),
     status: str | None = Query(None),
     reviewed: bool | None = Query(None),
+    queued_for_briefing: bool | None = Query(None),
     target_user_id: int | None = Query(
         None,
         ge=1,
@@ -4370,6 +4423,7 @@ async def list_scraped_items(
         source_id=source_id,
         status=status,
         reviewed=reviewed,
+        queued_for_briefing=queued_for_briefing,
         search=q,
         since=since,
         until=until,
@@ -4414,6 +4468,7 @@ async def update_scraped_item(
             item_id,
             reviewed=payload.reviewed,
             status=payload.status,
+            queued_for_briefing=payload.queued_for_briefing,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="item_not_found") from None
@@ -5353,6 +5408,10 @@ async def list_templates(
             updated_at=rec.updated_at,
             version=rec.version,
             history_count=rec.history_count,
+            composer_ast=rec.composer_ast,
+            composer_schema_version=rec.composer_schema_version,
+            composer_sync_hash=rec.composer_sync_hash,
+            composer_sync_status=rec.composer_sync_status,
         )
         for rec in records
     ]
@@ -5444,6 +5503,189 @@ async def preview_template(
     )
 
 
+@router.post(
+    "/templates/compose/section",
+    response_model=TemplateComposerSectionResponse,
+    summary="Generate draft content for a composer section (manual preview mode)",
+    dependencies=[Depends(rbac_rate_limit("watchlists.run"))],
+)
+async def compose_template_section(
+    payload: TemplateComposerSectionRequest,
+    current_user: User = Depends(get_request_user),
+    db: WatchlistsDatabase = Depends(get_watchlists_db_for_user),
+) -> TemplateComposerSectionResponse:
+    """Build deterministic section draft text from run context for manual authoring."""
+    try:
+        run = db.get_run(payload.run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found") from None
+    try:
+        job = db.get_job(run.job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job_not_found") from None
+
+    items_raw, _ = db.list_items(run_id=payload.run_id, status="ingested", limit=1000, offset=0)
+    item_models = [_row_to_scraped_item(it) for it in items_raw]
+    title = getattr(job, "name", None) or f"Job-{job.id}"
+    context = _build_output_context(title, job, run, item_models)
+    context_items = list(context.get("items") or [])
+
+    length_limits = {"short": 3, "medium": 5, "long": 8}
+    selected_items = context_items[: length_limits.get(payload.length_target, 5)]
+
+    warnings: list[str] = []
+    if not selected_items:
+        warnings.append("No ingested items available for this run")
+
+    style = (payload.style or "").strip()
+    prompt = payload.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="invalid_prompt")
+    lines: list[str] = []
+    if style:
+        lines.append(f"Style: {style}")
+        lines.append("")
+    lines.append(prompt)
+    lines.append("")
+    if selected_items:
+        for item in selected_items:
+            raw_title = str(item.get("title") or "Untitled")
+            raw_summary = str(item.get("summary") or "").strip()
+            if raw_summary:
+                snippet = re.sub(r"\s+", " ", raw_summary)[:240]
+                lines.append(f"- {raw_title}: {snippet}")
+            else:
+                lines.append(f"- {raw_title}")
+    else:
+        lines.append("No items were available to draft from.")
+
+    content = "\n".join(lines).strip()
+    diagnostics: dict[str, Any] = {
+        "run_id": payload.run_id,
+        "block_id": payload.block_id,
+        "input_scope": payload.input_scope,
+        "length_target": payload.length_target,
+        "item_count": len(context_items),
+        "selected_item_count": len(selected_items),
+        "generation_mode": "manual_preview_stub",
+    }
+    if style:
+        diagnostics["style"] = style
+
+    return TemplateComposerSectionResponse(
+        block_id=payload.block_id,
+        content=content,
+        warnings=warnings,
+        diagnostics=diagnostics,
+    )
+
+
+@router.post(
+    "/templates/compose/flow-check",
+    response_model=TemplateComposerFlowCheckResponse,
+    summary="Check section-to-section flow and return suggestions (manual preview mode)",
+    dependencies=[Depends(rbac_rate_limit("watchlists.run"))],
+)
+async def compose_template_flow_check(
+    payload: TemplateComposerFlowCheckRequest,
+    current_user: User = Depends(get_request_user),
+    db: WatchlistsDatabase = Depends(get_watchlists_db_for_user),
+) -> TemplateComposerFlowCheckResponse:
+    """Return flow issues and suggested revisions without persisting changes."""
+    try:
+        db.get_run(payload.run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found") from None
+
+    original_sections: list[TemplateComposerFlowSection] = []
+    revised_sections: list[TemplateComposerFlowSection] = []
+    issues: list[TemplateComposerFlowIssue] = []
+
+    for index, section in enumerate(payload.sections):
+        section_id = section.id.strip()
+        if not section_id:
+            raise HTTPException(status_code=422, detail="invalid_section_id")
+        text = section.content.strip()
+        original_sections.append(TemplateComposerFlowSection(id=section_id, content=text))
+
+        if not text:
+            issues.append(
+                TemplateComposerFlowIssue(
+                    section_id=section_id,
+                    severity="warning",
+                    message="Section is empty",
+                )
+            )
+            revised_sections.append(TemplateComposerFlowSection(id=section_id, content=text))
+            continue
+
+        revised_text = text
+        is_markdown_header = bool(re.match(r"^\s{0,3}#{1,6}\s", text))
+        if text[-1] not in ".!?" and not is_markdown_header:
+            revised_text = f"{text}."
+            issues.append(
+                TemplateComposerFlowIssue(
+                    section_id=section_id,
+                    severity="info",
+                    message="Consider ending the section with terminal punctuation for smoother transitions",
+                )
+            )
+
+        if index > 0:
+            prev = original_sections[index - 1].content.strip().lower()
+            curr = text.lower()
+            if prev and curr and prev == curr:
+                issues.append(
+                    TemplateComposerFlowIssue(
+                        section_id=section_id,
+                        severity="warning",
+                        message="Section content duplicates the previous section",
+                    )
+                )
+
+        revised_sections.append(TemplateComposerFlowSection(id=section_id, content=revised_text))
+
+    if len(original_sections) < 2:
+        issues.append(
+            TemplateComposerFlowIssue(
+                section_id=None,
+                severity="info",
+                message="Add at least two sections to evaluate cross-section flow",
+            )
+        )
+
+    original_text = "\n\n".join(f"[{sec.id}]\n{sec.content}" for sec in original_sections)
+    revised_text = "\n\n".join(f"[{sec.id}]\n{sec.content}" for sec in revised_sections)
+    diff = "\n".join(
+        difflib.unified_diff(
+            original_text.splitlines(),
+            revised_text.splitlines(),
+            fromfile="original",
+            tofile="suggested",
+            lineterm="",
+        )
+    )
+    if len(diff) > TEMPLATE_COMPOSER_FLOW_MAX_DIFF_CHARS:
+        diff = (
+            f"{diff[:TEMPLATE_COMPOSER_FLOW_MAX_DIFF_CHARS].rstrip()}\n"
+            "... [flow-check diff truncated due to size]"
+        )
+        issues.append(
+            TemplateComposerFlowIssue(
+                section_id=None,
+                severity="info",
+                message="Flow-check diff was truncated due to size limits",
+            )
+        )
+
+    return TemplateComposerFlowCheckResponse(
+        mode=payload.mode,
+        issues=issues,
+        diff=diff,
+        sections=revised_sections if payload.mode == "auto_apply" else original_sections,
+    )
+
+
 @router.get(
     "/templates/{template_name}/versions",
     response_model=WatchlistTemplateVersionsResponse,
@@ -5496,6 +5738,10 @@ async def get_template(
         version=record.version,
         history_count=record.history_count,
         available_versions=record.available_versions or [record.version],
+        composer_ast=record.composer_ast,
+        composer_schema_version=record.composer_schema_version,
+        composer_sync_hash=record.composer_sync_hash,
+        composer_sync_status=record.composer_sync_status,
     )
 
 
@@ -5516,6 +5762,10 @@ async def create_template(
             content=payload.content,
             description=payload.description,
             overwrite=payload.overwrite,
+            composer_ast=payload.composer_ast,
+            composer_schema_version=payload.composer_schema_version,
+            composer_sync_hash=payload.composer_sync_hash,
+            composer_sync_status=payload.composer_sync_status,
         )
     except TemplateValidationError as exc:
         raise HTTPException(
@@ -5533,6 +5783,10 @@ async def create_template(
         version=record.version,
         history_count=record.history_count,
         available_versions=record.available_versions or [record.version],
+        composer_ast=record.composer_ast,
+        composer_schema_version=record.composer_schema_version,
+        composer_sync_hash=record.composer_sync_hash,
+        composer_sync_status=record.composer_sync_status,
     )
 
 

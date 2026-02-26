@@ -1,10 +1,6 @@
 import type { JobOutputPrefs, JobScope, WatchlistFilter } from "@/types/watchlists"
 
-type Translator = (
-  key: string,
-  defaultValue: string,
-  options?: Record<string, unknown>
-) => string
+type Translator = (...args: any[]) => string
 
 export interface ScopeNameCatalog {
   sources: Record<number, string>

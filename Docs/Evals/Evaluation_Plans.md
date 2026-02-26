@@ -150,6 +150,8 @@ https://huggingface.co/datasets/Tevatron/browsecomp-plus
 https://huggingface.co/spaces/Tevatron/BrowseComp-Plus
 https://github.com/Alibaba-NLP/DeepResearch
 https://www.kaggle.com/benchmarks/google/dsqa
+https://deepsource.com/benchmarks#methodology
+https://github.com/evaleval/every_eval_ever
 
 https://gepa-ai.github.io/gepa/blog/2026/02/18/introducing-optimize-anything/
 

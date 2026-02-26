@@ -10,25 +10,44 @@ const getNestedValue = (source: JsonObject, keyPath: string): unknown =>
   }, source)
 
 describe("Watchlists terminology contract", () => {
-  it("keeps top-level tab and page labels aligned for user-facing nouns", () => {
+  it("keeps a canonical terminology map aligned with tab and section labels", () => {
     const labels = watchlistsLocale as JsonObject
+    const aliases = getNestedValue(labels, "terminology.aliases") as JsonObject
+    const canonical = getNestedValue(labels, "terminology.canonical") as JsonObject
     const pairs: Array<[string, string, string]> = [
-      ["Feeds", "tabs.sources", "sources.title"],
-      ["Monitors", "tabs.jobs", "jobs.title"],
-      ["Activity", "tabs.runs", "runs.title"],
-      ["Articles", "tabs.items", "overview.cards.items.title"],
-      ["Reports", "tabs.outputs", "outputs.title"],
-      ["Activity", "tabs.runs", "overview.cards.runs.title"]
+      ["sources", "tabs.sources", "sources.title"],
+      ["jobs", "tabs.jobs", "jobs.title"],
+      ["runs", "tabs.runs", "runs.title"],
+      ["items", "tabs.items", "overview.cards.items.title"],
+      ["outputs", "tabs.outputs", "outputs.title"]
     ]
 
-    for (const [expected, tabKeyPath, sectionKeyPath] of pairs) {
+    expect(canonical.feeds).toBe("Feeds")
+    expect(canonical.monitors).toBe("Monitors")
+    expect(canonical.activity).toBe("Activity")
+    expect(canonical.articles).toBe("Articles")
+    expect(canonical.reports).toBe("Reports")
+
+    for (const [aliasKey, tabKeyPath, sectionKeyPath] of pairs) {
+      const expected = aliases[aliasKey]
+      expect(typeof expected).toBe("string")
       expect(getNestedValue(labels, tabKeyPath)).toBe(expected)
       expect(getNestedValue(labels, sectionKeyPath)).toBe(expected)
     }
+
+    expect(getNestedValue(labels, "overview.cards.runs.title")).toBe(aliases.runs)
   })
 
-  it("uses consistent help wording for Reports and Activity", () => {
+  it("uses canonical nouns in quick actions and help labels", () => {
     const labels = watchlistsLocale as JsonObject
+    expect(getNestedValue(labels, "quickActions.sources")).toBe("Set up feeds")
+    expect(getNestedValue(labels, "quickActions.jobs")).toBe("Configure monitors")
+    expect(getNestedValue(labels, "quickActions.runs")).toBe("Check activity")
+    expect(getNestedValue(labels, "quickActions.items")).toBe("Review articles")
+    expect(getNestedValue(labels, "quickActions.outputs")).toBe("View reports")
+
+    expect(getNestedValue(labels, "help.tabs.sources")).toBe("Feeds setup")
+    expect(getNestedValue(labels, "help.tabs.jobs")).toBe("Monitor scheduling")
     expect(getNestedValue(labels, "help.tabs.outputs")).toBe("Reports guidance")
     expect(getNestedValue(labels, "help.tabs.runs")).toBe("Activity guidance")
   })

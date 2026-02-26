@@ -67,7 +67,7 @@ pip install -e .
 ### 3.2 Configure auth + provider settings
 Start from the AuthNZ template, then edit it:
 ```bash
-cp tldw_Server_API/Config_Files/.env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 # Edit .env to set AUTH_MODE and your keys
 ```
 Key fields to set:
@@ -78,7 +78,7 @@ Key fields to set:
 
 For local multi-user SQLite, see `Docs/User_Guides/Multi-User_SQLite_Setup.md`.
 
-For a full provider list, see `tldw_Server_API/Config_Files/.env.template`. You can also keep large provider configs in `tldw_Server_API/Config_Files/config.txt`.
+For a full provider list, see `tldw_Server_API/Config_Files/.env.example`. You can also keep large provider configs in `tldw_Server_API/Config_Files/config.txt`.
 
 > Important: Replace placeholder values with strong random keys before continuing.
 > - Generate a key: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
@@ -136,7 +136,7 @@ List active providers/models via `GET /api/v1/llm/providers`.
 Once the server boots, you’ll likely tailor behaviour, credentials, and model lists. Two files drive most settings:
 
 ### 4.1 `.env`: secrets, auth, and DB targets
-- Location: `tldw_server2/.env` (same folder as `pyproject.toml`). Start from `tldw_Server_API/Config_Files/.env.authnz.template` or the full `tldw_Server_API/Config_Files/.env.template`.
+- Location: `tldw_Server_API/Config_Files/.env`. Start from `tldw_Server_API/Config_Files/.env.example`.
 - Best place for **secrets**: API keys, DB passwords, Postgres URLs, JWT secrets.
 - Common fields:
   - `AUTH_MODE` = `single_user` (API key header) or `multi_user` (JWT/auth endpoints).

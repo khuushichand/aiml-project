@@ -112,3 +112,26 @@ def test_llm_models_metadata_handles_local_discovery_policy_errors(monkeypatch, 
     names = {m.get("name") for m in payload.get("models", [])}
     assert "gpt-4o-mini" in names
     assert calls["count"] > 0
+
+
+def test_llm_models_metadata_includes_curated_qwen_models(monkeypatch, client_user_only):
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_providers
+
+    _patch_llm_providers(monkeypatch)
+    monkeypatch.setattr(
+        llm_providers,
+        "list_provider_models",
+        lambda provider: ["qwen-max", "qwen-plus", "qwen-turbo"] if provider == "qwen" else [],
+    )
+
+    client = client_user_only
+    response = client.get("/api/v1/llm/models/metadata")
+    assert response.status_code == 200
+    payload = response.json()
+    provider_and_name = {
+        (str(model.get("provider")), str(model.get("name")))
+        for model in payload.get("models", [])
+    }
+    assert ("qwen", "qwen-max") in provider_and_name
+    assert ("qwen", "qwen-plus") in provider_and_name
+    assert ("qwen", "qwen-turbo") in provider_and_name

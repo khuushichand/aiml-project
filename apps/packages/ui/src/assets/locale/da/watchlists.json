@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "I kø til briefing",
+    "includeInNextBriefing": "Inkluder i næste briefing",
+    "removeFromBriefingQueue": "Fjern fra briefingkø",
+    "briefingAlreadyIncluded": "Denne post er allerede inkluderet i briefing-output.",
+    "briefingIncluded": "Tilføjet til næste briefingkø.",
+    "briefingRemoved": "Fjernet fra briefingkøen.",
+    "briefingIncludeError": "Kunne ikke inkludere posten i briefing.",
+    "queuedTag": "I kø",
+    "queue": {
+      "runPlaceholder": "Vælg kørsel",
+      "runOption": "Kørsel #{{id}}",
+      "runRequired": "Vælg en kørsel for at generere en rapport fra køen.",
+      "empty": "Ingen køede poster fundet for denne kørsel.",
+      "generated": "Oprettede rapport fra {{count}} køet post{{plural}}.",
+      "generateError": "Kunne ikke generere rapport fra køede poster.",
+      "generateReport": "Generer rapport fra kø"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "Na fila para briefing"
+  },
+  "items_includeInNextBriefing": {
+    "message": "Incluir no próximo briefing"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "Remover da fila de briefing"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "Este item já está incluído nas saídas de briefing."
+  },
+  "items_briefingIncluded": {
+    "message": "Adicionado à fila do próximo briefing."
+  },
+  "items_briefingRemoved": {
+    "message": "Removido da fila de briefing."
+  },
+  "items_briefingIncludeError": {
+    "message": "Falha ao incluir item no briefing."
+  },
+  "items_queuedTag": {
+    "message": "Na fila"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "Selecionar execução"
+  },
+  "items_queue_runOption": {
+    "message": "Execução #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "Selecione uma execução para gerar um relatório da fila."
+  },
+  "items_queue_empty": {
+    "message": "Nenhum item na fila encontrado para esta execução."
+  },
+  "items_queue_generated": {
+    "message": "Relatório criado a partir de {{count}} item{{plural}} na fila."
+  },
+  "items_queue_generateError": {
+    "message": "Falha ao gerar relatório a partir dos itens na fila."
+  },
+  "items_queue_generateReport": {
+    "message": "Gerar relatório da fila"
+  }
+}

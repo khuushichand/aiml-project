@@ -83,4 +83,44 @@ describe("mapWatchlistsError", () => {
     expect(mapped.kind).toBe("tls")
     expect(mapped.description).toContain("TLS certificate settings")
   })
+
+  it("maps validation failures to warning severity and remediation guidance", () => {
+    const mapped = mapWatchlistsError(
+      {
+        status: 422,
+        details: {
+          detail: {
+            code: "watchlists_validation_error",
+            message: "Schedule is too frequent."
+          }
+        }
+      },
+      {
+        t,
+        context: "monitor setup",
+        operationLabel: "save"
+      }
+    )
+
+    expect(mapped.kind).toBe("validation")
+    expect(mapped.severity).toBe("warning")
+    expect(mapped.description).toContain("Review highlighted values")
+  })
+
+  it("maps gateway timeout statuses to timeout guidance", () => {
+    const mapped = mapWatchlistsError(
+      {
+        response: {
+          status: 504
+        }
+      },
+      {
+        t,
+        context: "activity refresh"
+      }
+    )
+
+    expect(mapped.kind).toBe("timeout")
+    expect(mapped.description).toContain("Retry now")
+  })
 })

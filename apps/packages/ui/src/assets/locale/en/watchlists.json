@@ -5,6 +5,26 @@
   "betaNotice": "Beta Feature",
   "betaDescription": "Watchlists is currently in beta. Some features may be incomplete or change.",
   "comingSoon": "Coming soon...",
+  "terminology": {
+    "canonical": {
+      "feed": "Feed",
+      "feeds": "Feeds",
+      "monitor": "Monitor",
+      "monitors": "Monitors",
+      "activity": "Activity",
+      "article": "Article",
+      "articles": "Articles",
+      "report": "Report",
+      "reports": "Reports"
+    },
+    "aliases": {
+      "sources": "Feeds",
+      "jobs": "Monitors",
+      "runs": "Activity",
+      "items": "Articles",
+      "outputs": "Reports"
+    }
+  },
   "tabs": {
     "overview": "Overview",
     "sources": "Feeds",
@@ -25,51 +45,57 @@
     "items": "Review articles",
     "outputs": "View reports"
   },
+  "taskViews": {
+    "label": "Task views",
+    "collect": "Collect",
+    "collectHint": "Feeds and monitors",
+    "review": "Review",
+    "reviewHint": "Activity and articles",
+    "briefings": "Briefings",
+    "briefingsHint": "Reports and templates"
+  },
   "orientation": {
-    "label": "Current view guide",
+    "showTabGuidance": "Show tab guidance",
     "actions": {
-      "openSources": "Open Feeds",
-      "openJobs": "Open Monitors",
-      "openRuns": "Open Activity",
-      "openItems": "Open Articles",
-      "openOutputs": "Open Reports",
-      "openTemplates": "Open Templates",
-      "openReportsFromRuns": "Open Reports (generated briefings)",
-      "openMonitorsFromItems": "Open Monitors (tune collection)"
+      "openOverview": "Open Overview",
+      "openFeeds": "Open Feeds",
+      "openMonitors": "Open Monitors",
+      "openActivity": "Open Activity",
+      "openArticles": "Open Articles",
+      "openReports": "Open Reports",
+      "openTemplates": "Open Templates"
     },
-    "tabs": {
-      "overview": {
-        "what": "Overview summarizes watchlist health, setup progress, and attention signals.",
-        "next": "Next: open Feeds to add sources, then create Monitors."
-      },
-      "sources": {
-        "what": "Feeds are your input sources for monitor runs.",
-        "next": "Next: create Monitors to schedule collection from selected feeds."
-      },
-      "jobs": {
-        "what": "Monitors combine feed scope, schedules, filters, and output settings.",
-        "next": "Next: check Activity after runs to confirm collection health."
-      },
-      "runs": {
-        "what": "Activity shows monitor run status, logs, and failures.",
-        "next": "Next: open Reports to verify generated briefing outputs."
-      },
-      "items": {
-        "what": "Articles are captured content for daily triage and briefing input.",
-        "next": "Next: adjust Monitors when article quality or volume needs tuning."
-      },
-      "outputs": {
-        "what": "Reports contains generated briefings, including delivery outcomes.",
-        "next": "Next: refine Templates or Monitors to improve future briefings."
-      },
-      "templates": {
-        "what": "Templates define formatting for generated report and briefing content.",
-        "next": "Next: apply template changes in Monitors, then rerun Activity."
-      },
-      "settings": {
-        "what": "Settings controls workspace defaults, retention, and integration options.",
-        "next": "Next: return to Feeds or Monitors to apply workspace changes."
-      }
+    "overview": {
+      "title": "Overview: watchlist health at a glance",
+      "description": "Review current health and attention signals, then start by adding or refining feeds."
+    },
+    "sources": {
+      "title": "Feeds: define what to collect",
+      "description": "Add or clean feed inputs here. Next, configure monitors to schedule collection."
+    },
+    "jobs": {
+      "title": "Monitors: control schedule and processing",
+      "description": "Monitors run your feed pipeline. Next, check Activity to confirm runs are healthy."
+    },
+    "runs": {
+      "title": "Activity: run health and history",
+      "description": "Inspect failures and logs here. Next, open Reports to view generated briefings."
+    },
+    "items": {
+      "title": "Articles: triage captured content",
+      "description": "Review and prioritize captured items. Next, tune monitor scope or open reports."
+    },
+    "outputs": {
+      "title": "Reports: generated briefing outputs",
+      "description": "Download, review, or regenerate briefings. Next, edit templates when format needs change."
+    },
+    "templates": {
+      "title": "Templates: define briefing format",
+      "description": "Template changes apply to future output generation. Next, run monitors or open reports."
+    },
+    "settings": {
+      "title": "Settings: workspace-level watchlists defaults",
+      "description": "Adjust watchlists defaults and integration settings. Return to overview to validate health."
     }
   },
   "overview": {
@@ -97,6 +123,13 @@
     "onboarding": {
       "title": "Quick setup",
       "pipeline": "Add Feed -> Configure Monitor -> Check Activity -> Review Articles -> View Reports",
+      "path": {
+        "label": "Onboarding mode",
+        "beginner": "Beginner (guided)",
+        "advanced": "Advanced (direct forms)",
+        "beginnerHint": "Guided setup keeps the flow simple. You can customize exact timing and template formatting later.",
+        "advancedHint": "Advanced mode opens full Feed and Monitor forms, including custom schedules and template options."
+      },
       "steps": {
         "addFeed": {
           "title": "Add your first feed",
@@ -108,7 +141,7 @@
         },
         "reviewResults": {
           "title": "Review results",
-          "description": "Open Activity for run health, Articles for captured content, and Reports for generated briefings."
+          "description": "Open Activity for monitor health, Articles for captured content, and Reports for generated briefings."
         }
       },
       "cta": {
@@ -256,46 +289,42 @@
     "finish": "Finish",
     "progress": "Step {{current}} of {{total}}",
     "completedTitle": "Guided tour complete",
-    "completedDescription": "Next: monitor Activity for run health, review Articles for captured content, and open Reports for generated briefings.",
+    "completedDescription": "Next: monitor Activity for monitor health, review Articles for captured content, and open Reports for generated briefings.",
     "openActivity": "Open Activity",
     "openArticles": "Open Articles",
     "steps": {
       "sources": {
         "title": "1. Add feeds",
-        "description": "Feeds are inputs for monitors. Add RSS/site feeds before scheduling checks."
+        "description": "Feeds are inputs for monitors. Add RSS/site feeds before scheduling Activity checks."
       },
       "jobs": {
         "title": "2. Create monitors",
-        "description": "Monitors connect feeds to schedule, briefing format, and optional audio briefing delivery."
+        "description": "Monitors define schedule, filters, and template-driven reports, including optional audio."
       },
       "runs": {
         "title": "3. Check activity",
-        "description": "Activity shows run status, logs, and failures for each monitor."
+        "description": "Activity shows monitor status, logs, and failures."
       },
       "items": {
         "title": "4. Review articles",
-        "description": "Articles are captured content from successful runs, ready for triage."
+        "description": "Articles are captured content from successful monitor checks, ready for triage."
       },
       "outputs": {
         "title": "5. Deliver reports",
-        "description": "Reports show text and audio briefings generated from monitor runs and template choices."
+        "description": "Reports contain generated briefings from monitor templates; regenerate with different template or audio settings."
       }
     }
   },
   "teachPoints": {
-    "label": "First-time tip",
-    "dismiss": "Got it",
-    "cron": {
-      "title": "Use schedule presets before custom cron",
-      "description": "Start with a preset schedule. Use custom cron only for uncommon timing."
-    },
-    "filters": {
-      "title": "Use filters to reduce noisy items",
-      "description": "Add include/exclude filters when monitors collect too much or irrelevant content."
+    "jobs": {
+      "title": "Monitor setup tip",
+      "description": "Start with schedule presets first. Use cron and advanced filters only after your first successful Activity check.",
+      "action": "Open Templates"
     },
     "templates": {
-      "title": "Start from a briefing template preset",
-      "description": "Pick a preset template first, then edit only the sections you need to customize."
+      "title": "Template setup tip",
+      "description": "Start from a preset template, preview changes, then regenerate reports to compare text and audio results.",
+      "action": "Open Reports"
     }
   },
   "notifications": {
@@ -329,7 +358,10 @@
       "load": "load",
       "save": "save",
       "test": "test",
-      "retry": "retry"
+      "retry": "retry",
+      "delete": "delete",
+      "cancel": "cancel",
+      "update": "update"
     },
     "title": "Could not {{operation}} {{context}}.",
     "details": "Details: {{message}}",
@@ -337,6 +369,7 @@
       "auth": "Verify your login/API key permissions for {{context}}, then retry.",
       "rateLimit": "Reduce monitor frequency or wait briefly before retrying.",
       "timeout": "Retry now. If this continues, reduce scope or schedule intensity.",
+      "validation": "Review highlighted values for {{context}}, then retry.",
       "dns": "Verify the source host resolves correctly and retry.",
       "tls": "Verify TLS certificate settings for the endpoint and retry.",
       "network": "Check server connection and try again.",
@@ -368,9 +401,9 @@
         "description": "Use OPML when moving feed lists from another reader so setup takes minutes instead of manual entry."
       },
       "cron": {
-        "label": "advanced schedule timing",
-        "title": "Choose preset schedules first",
-        "description": "Use preset timing for most monitors. Switch to custom cron only for uncommon timing windows."
+        "label": "cron scheduling",
+        "title": "Set a reliable monitor schedule",
+        "description": "Start with presets for daily or weekday runs. Use cron only when you need exact custom timing."
       },
       "ttl": {
         "label": "retention window",
@@ -378,9 +411,9 @@
         "description": "Set retention to keep briefings only as long as your review workflow needs before automatic cleanup."
       },
       "jinja2": {
-        "label": "briefing templates",
-        "title": "Shape briefing format with templates",
-        "description": "Start with a preset template to control sections and tone, then customize only if you need advanced formatting."
+        "label": "Jinja2 templates",
+        "title": "Customize briefing format",
+        "description": "Start from a preset report template, then edit sections to shape briefing tone, structure, and audio script text."
       },
       "claimClusters": {
         "label": "claim tracking",
@@ -413,8 +446,9 @@
     "undoRestoreError": "Could not restore this feed. Refresh Feeds and retry while the undo timer is active.",
     "enabled": "Feed enabled",
     "disabled": "Feed disabled",
+    "toggleActiveAria": "Toggle active for {{name}}",
     "deleteConfirm": "Delete this feed?",
-    "deleteConfirmDescription": "This action cannot be undone.",
+    "deleteConfirmDescription": "You can undo this deletion for {{seconds}} seconds.",
     "deleteConfirmForce": "Delete anyway",
     "deleteConfirmInUseTitle": "Feed is used by active monitors",
     "deleteConfirmInUseDescription": "This feed is referenced by {{count}} active monitor{{plural}}. Deleting it may break scheduled runs.",
@@ -483,7 +517,7 @@
     "bulkDelete": "Delete",
     "bulkDeleteConfirm": "Delete selected sources?",
     "bulkDeleteConfirmTitle": "Delete {{count}} selected feeds?",
-    "bulkDeleteConfirmDescription": "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive).",
+    "bulkDeleteConfirmDescription": "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive). Undo is available for {{seconds}} seconds.",
     "bulkDeleteConfirmInUseSummary": "{{sources}} selected feed{{sourcesPlural}} are referenced by {{jobs}} active monitor{{jobsPlural}}.",
     "bulkDeleteConfirmInUseMore": "+{{count}} more active monitor{{plural}}",
     "bulkUpdated": "{{count}} sources updated",
@@ -589,21 +623,19 @@
     "undoRestoreError": "Could not restore this monitor. Refresh Monitors and retry while the undo timer is active.",
     "enabled": "Monitor enabled",
     "disabled": "Monitor disabled",
+    "toggleActiveAria": "Toggle active for {{name}}",
     "runTriggered": "Run triggered",
     "deleteConfirm": "Delete this monitor?",
+    "deleteConfirmDescription": "You can undo this deletion for {{seconds}} seconds.",
+    "deleteConfirmActiveRunsWarning": "This monitor has {{count}} active or pending run{{plural}}. Deleting it will not cancel in-progress runs.",
+    "deleteConfirmDeliveryWarning": "This monitor has configured delivery settings (email, chatbook). Deleting it removes scheduled deliveries.",
     "runNow": "Run Now",
     "runNowDisabledHint": "Activate this monitor to run it manually",
     "showAdvancedDetails": "Show advanced details",
     "hideAdvancedDetails": "Hide advanced details",
     "metricsHint": "Showing core columns. Use advanced mode for scope, filters, and run timing.",
     "compactSummary": "{{scope}} • {{filters}} filters",
-    "outputLinkage": {
-      "label": "Output linkage",
-      "templateNamed": "Template: {{name}}",
-      "templateDefault": "Template: default",
-      "audioEnabled": "Audio: enabled",
-      "audioDisabled": "Audio: text only"
-    },
+    "audioEnabledChip": "Audio on",
     "never": "Never",
     "pending": "Pending",
     "notScheduled": "Not scheduled",
@@ -645,14 +677,24 @@
       "audioSpeed": "Speed",
       "audioTargetMinutes": "Target duration (minutes)",
       "audioHint": "Enable spoken briefings alongside text outputs. Keep defaults for fastest setup.",
+      "audioPracticalHint": "Practical default: Alloy voice at 1.0 speed and 8-minute target, then tune after your first run.",
+      "audioItemCapHint": "Audio briefings currently include up to 100 items per run. Tighten filters for more focused narration.",
       "showAudioAdvanced": "Show advanced audio options",
       "hideAudioAdvanced": "Hide advanced audio options",
       "audioBackgroundTrack": "Background track URI",
       "audioBackgroundTrackPlaceholder": "file:///path/to/bed.mp3",
+      "audioBackgroundTrackInvalid": "Background track must start with https://, http://, or file://.",
       "audioVoiceMap": "Voice map (JSON)",
       "audioVoiceMapPlaceholder": "{ \"HOST\": \"af_heart\", \"REPORTER\": \"am_adam\" }",
       "audioVoiceMapInvalid": "Voice map must be valid JSON with marker-to-voice string pairs.",
       "audioAdvancedHint": "Use advanced options only if you need soundtrack mixing or custom speaker-to-voice assignments.",
+      "audioTestButton": "Test audio settings",
+      "audioTestHint": "Generate a short sample so you can confirm voice and speed before saving.",
+      "audioTestLoading": "Generating sample audio...",
+      "audioTestReady": "Sample ready. Listen before saving.",
+      "audioTestError": "Could not generate audio sample. Check voice/speed settings and try again.",
+      "audioTestSampleText": "Top stories briefing sample. This is a quick audio check before saving your monitor.",
+      "audioTestContext": "audio sample",
       "filters": "Filters",
       "presetMeceMd": "Structured review (Markdown)",
       "retentionDefault": "Default retention",
@@ -828,6 +870,8 @@
     "triggerError": "Failed to trigger run",
     "runTriggered": "Run triggered successfully",
     "viewDetails": "View Details",
+    "openReports": "Open Reports",
+    "includedInBriefing": "Included in briefing",
     "cancelRun": "Cancel run",
     "cancelling": "Cancelling...",
     "cancelFailedRetry": "Cancel failed. Retry.",
@@ -895,7 +939,9 @@
         "itemsFound": "Items Found",
         "itemsIngested": "Items Ingested",
         "itemsFiltered": "Items Filtered",
-        "errors": "Errors"
+        "errors": "Errors",
+        "monitor": "Monitor",
+        "outputs": "Reports"
       },
       "logs": "Logs",
       "items": "Scraped Items",
@@ -909,6 +955,8 @@
       "remediationFallback": "Open logs and adjust source or monitor settings, then retry.",
       "retryRun": "Retry run",
       "editMonitor": "Edit monitor schedule",
+      "openMonitor": "Open monitor settings",
+      "openOutputs": "Open reports for this run",
       "openSources": "Review source settings",
       "itemsUntitled": "Untitled",
       "errorMessage": "Error Message",
@@ -963,6 +1011,7 @@
     "today": "Today",
     "unread": "All Unread",
     "reviewedOnly": "Reviewed",
+    "queuedForBriefing": "Queued for briefing",
     "unreadCount": "{{count}} unread",
     "sourceSearchPlaceholder": "Search feeds...",
     "sourceCatalogCapHint": "Showing first {{count}} feeds. Use Feeds tab filters to narrow your source list.",
@@ -970,6 +1019,7 @@
     "allFeeds": "All Feeds",
     "allFeedsHint": "Browse items from every source",
     "noFeeds": "No feeds found",
+    "sourceWindowHint": "Showing {{visible}} of {{total}} feeds. Scroll to load more.",
     "searchPlaceholder": "Search feed items...",
     "filters": {
       "all": "All",
@@ -1002,9 +1052,21 @@
     "openRunActivity": "Open Run",
     "openRunOutputs": "View Reports",
     "includeInNextBriefing": "Include in next briefing",
+    "removeFromBriefingQueue": "Remove from briefing queue",
     "briefingAlreadyIncluded": "This item is already included in briefing outputs.",
     "briefingIncluded": "Added to the next briefing queue.",
+    "briefingRemoved": "Removed from the briefing queue.",
     "briefingIncludeError": "Failed to include item in briefing.",
+    "queuedTag": "Queued",
+    "queue": {
+      "runPlaceholder": "Select run",
+      "runOption": "Run #{{id}}",
+      "runRequired": "Select a run to generate a queued report.",
+      "empty": "No queued items found for this run.",
+      "generated": "Created report from {{count}} queued item{{plural}}.",
+      "generateError": "Failed to generate report from queued items.",
+      "generateReport": "Generate report from queue"
+    },
     "markReviewed": "Mark as reviewed",
     "markUnreviewed": "Mark as unreviewed",
     "markedReviewed": "Marked as reviewed",
@@ -1012,6 +1074,12 @@
     "updateError": "Failed to update item",
     "noUrlHint": "This item does not include an original URL.",
     "pageSizeLabel": "Items per page",
+    "sort": {
+      "label": "Sort",
+      "newest": "Newest first",
+      "oldest": "Oldest first",
+      "unreadFirst": "Unread first"
+    },
     "batch": {
       "selectPage": "Select page",
       "selectedCount": "{{count}} selected",
@@ -1035,6 +1103,14 @@
       "completedScoped": "Marked {{count}} {{scope}} as reviewed.",
       "partialScoped": "Marked {{success}} {{scope}} as reviewed; {{failed}} failed.",
       "failedScoped": "Failed to mark {{scope}} as reviewed.",
+      "collectingAllFiltered": "Collecting unread items that match current filters...",
+      "progressLabel": "Batch review progress",
+      "progressRunning": "Processing {{processed}} of {{total}} items ({{succeeded}} succeeded, {{failed}} failed).",
+      "progressComplete": "Batch review complete: {{succeeded}} succeeded, {{failed}} failed.",
+      "progressPartial": "Batch review complete: {{succeeded}} succeeded, {{failed}} failed.",
+      "progressFailed": "Batch review failed: {{failed}} failed.",
+      "retryFailed": "Retry {{count}} failed",
+      "dismissProgress": "Dismiss",
       "completed": "Marked {{count}} item{{plural}} as reviewed.",
       "partial": "Marked {{success}} item{{successPlural}} as reviewed; {{failed}} failed.",
       "failed": "Failed to mark items as reviewed.",
@@ -1100,14 +1176,18 @@
     "download": "Download",
     "filterByJob": "Filter by monitor",
     "filterByRun": "Filter by run ID",
+    "filterByDelivery": "Filter by delivery status",
     "showAdvancedFilters": "Show advanced filters",
     "hideAdvancedFilters": "Hide advanced filters",
     "activeFilters": "Active filters",
     "activeFiltersJob": "Monitor: {{name}}",
     "activeFiltersRun": "Run: #{{id}}",
-    "jumpMonitor": "Open monitor",
-    "jumpRun": "Open run",
+    "activeFiltersDelivery": "Delivery: {{status}}",
     "metricsHint": "Showing core columns. Use advanced mode for format/run details.",
+    "deliveryIssuesBannerTitle": "Delivery issues detected in {{count}} report{{plural}}.",
+    "deliveryIssuesBannerDescription": "Review failed or partial deliveries and open Activity to investigate monitor/run failures.",
+    "deliveryIssuesShowFailed": "Show failed only",
+    "deliveryIssuesOpenRuns": "Open failed runs",
     "tableAria": "Reports table",
     "live": {
       "loadError": "Reports refresh failed.",
@@ -1121,6 +1201,13 @@
     "deliveryOverflowTitle": "Additional delivery statuses",
     "deliveryOverflowAria": "Show additional delivery statuses",
     "deliveryOverflowCount": "+{{count}} more",
+    "deliveryStatus": {
+      "failed": "Failed",
+      "partial": "Partial",
+      "pending": "Pending",
+      "sent": "Sent",
+      "stored": "Stored"
+    },
     "noContent": "No content available",
     "openInNewTab": "Open in new tab",
     "storagePath": "Stored file",
@@ -1133,6 +1220,13 @@
     "regenerateError": "Failed to regenerate output",
     "regenerateTitle": "Regenerate Output",
     "templateLabel": "Template",
+    "templateVersionLabel": "Template version",
+    "templateVersionPlaceholder": "Latest/default",
+    "templateUnknown": "Unknown",
+    "deliveryStatusLabel": "Delivery status",
+    "provenanceLabel": "Provenance",
+    "provenanceDescription": "Monitor #{{job}} • Run #{{run}} • Artifact: {{artifact}}",
+    "regenerateAudioTemplateHint": "Audio outputs regenerate using run audio settings. Template overrides are unavailable.",
     "templatePlaceholder": "Select a template",
     "titleLabel": "Title",
     "titlePlaceholder": "Optional title override",
@@ -1149,7 +1243,7 @@
   },
   "templates": {
     "title": "Templates",
-    "description": "Jinja2 templates for generating briefing outputs.",
+    "description": "Templates for generating briefing outputs.",
     "fetchError": "Failed to load templates",
     "loadError": "Failed to load template",
     "saveError": "Failed to save template",
@@ -1183,6 +1277,10 @@
     "modeHelpAdvanced": "Advanced mode adds Jinja2 snippets, variable docs, and version tools.",
     "modeHiddenToolsNotice": "Advanced template tools are hidden in Basic mode. Your content and version context are preserved.",
     "modeVersionToolsHidden": "Version tools are available in Advanced mode.",
+    "visualOutOfSyncTitle": "Visual layout may be out of sync",
+    "visualOutOfSyncDescription": "The template was edited in code mode and the visual block layout may need repair.",
+    "repairVisualLayout": "Repair layout",
+    "repairVisualLayoutSuccess": "Visual layout re-synced from the current template code.",
     "modeBasicEditorHint": "Start in Basic mode with plain text or Markdown. Switch to Advanced only if you need variables, loops, or version tools.",
     "syntaxErrorBeforeSave": "Could not save template. Fix syntax errors, then try again.",
     "recipe": {
@@ -1227,7 +1325,21 @@
     "preview": {
       "tab": "Preview",
       "note": "Preview shows rendered markup only; Jinja2 logic is not evaluated.",
-      "empty": "Nothing to preview yet."
+      "empty": "Nothing to preview yet.",
+      "mode": {
+        "static": "Static markup",
+        "live": "Live (render with run data)"
+      },
+      "runPlaceholder": "Select a run…",
+      "staticNote": "Static preview renders markdown/html locally and does not evaluate Jinja2 control flow.",
+      "liveNote": "Live preview renders with data from a completed run to validate loops, variables, and conditionals.",
+      "noRunsTitle": "No completed runs available for live preview.",
+      "noRunsDescription": "Run a monitor once from Activity, then return here to preview templates with real data.",
+      "selectRunTitle": "Select a run to preview the template with real data.",
+      "renderWarningsTitle": "Render warnings",
+      "renderErrorTitle": "Live preview failed",
+      "renderErrorHint": "Check template syntax or choose another run, then try live preview again.",
+      "liveEmpty": "No preview content yet. The template will render after a short delay."
     },
     "docs": {
       "tab": "Variables",
@@ -1243,6 +1355,16 @@
     "fetchError": "Failed to load settings",
     "unavailable": "Settings unavailable",
     "unavailableDesc": "Could not load server settings. Make sure the server is running.",
+    "onboarding": {
+      "title": "Onboarding",
+      "description": "Choose the default onboarding path shown in Overview.",
+      "modeLabel": "Default onboarding mode",
+      "modeBeginner": "Beginner (guided)",
+      "modeAdvanced": "Advanced (direct forms)",
+      "saved": "Onboarding mode saved.",
+      "beginnerHint": "Beginner keeps setup guided and avoids cron/template details at first.",
+      "advancedHint": "Advanced skips guided setup and prioritizes direct Feed and Monitor forms."
+    },
     "ttl": {
       "title": "Output Retention",
       "defaultOutput": "Default Output TTL",

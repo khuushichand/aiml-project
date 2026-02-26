@@ -44,6 +44,11 @@ const resetWorkspaceStore = () => {
     generatedArtifacts: [],
     notes: "",
     currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+    workspaceBanner: {
+      title: "",
+      subtitle: "",
+      image: null
+    },
     isGeneratingOutput: false,
     generatingOutputType: null,
     storeHydrated: false,
@@ -201,6 +206,65 @@ describe("workspace store snapshot persistence", () => {
       "Workspace One Notes"
     )
     expect(state.workspaceSnapshots[workspaceTwoId]?.sources).toHaveLength(0)
+  })
+
+  it("creates workspaces with empty workspaceBanner defaults", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Banner Test")
+    const state = useWorkspaceStore.getState()
+    const snapshot = state.workspaceSnapshots[state.workspaceId] as
+      | Record<string, unknown>
+      | undefined
+
+    expect(snapshot?.workspaceBanner).toEqual({
+      title: "",
+      subtitle: "",
+      image: null
+    })
+  })
+
+  it("preserves workspaceBanner when switching workspaces", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Workspace Banner Alpha")
+    const alphaId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Alpha Banner",
+        subtitle: "Alpha subtitle",
+        image: {
+          dataUrl: "data:image/webp;base64,alpha",
+          mimeType: "image/webp",
+          width: 1200,
+          height: 420,
+          bytes: 12288,
+          updatedAt: new Date("2026-02-25T00:00:00.000Z")
+        }
+      }
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().createNewWorkspace("Workspace Banner Beta")
+    const betaId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Beta Banner",
+        subtitle: "Beta subtitle",
+        image: null
+      }
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().switchWorkspace(alphaId)
+    let state = useWorkspaceStore.getState()
+    expect(state.workspaceBanner.title).toBe("Alpha Banner")
+    expect(state.workspaceBanner.subtitle).toBe("Alpha subtitle")
+    expect(state.workspaceBanner.image?.dataUrl).toBe(
+      "data:image/webp;base64,alpha"
+    )
+
+    useWorkspaceStore.getState().switchWorkspace(betaId)
+    state = useWorkspaceStore.getState()
+    expect(state.workspaceBanner.title).toBe("Beta Banner")
+    expect(state.workspaceBanner.subtitle).toBe("Beta subtitle")
+    expect(state.workspaceBanner.image).toBeNull()
   })
 
   it("rehydrates from active workspace snapshot and restores pane state", async () => {
@@ -489,6 +553,18 @@ describe("workspace store snapshot persistence", () => {
         ],
         notes: "workspace notes",
         currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+        workspaceBanner: {
+          title: "Metrics banner",
+          subtitle: "Banner subtitle",
+          image: {
+            dataUrl: "data:image/webp;base64,metrics-banner",
+            mimeType: "image/webp",
+            width: 1200,
+            height: 360,
+            bytes: 9000,
+            updatedAt: "2026-02-10T00:05:00.000Z"
+          }
+        },
         leftPaneCollapsed: false,
         rightPaneCollapsed: false,
         audioSettings: { ...DEFAULT_AUDIO_SETTINGS },
@@ -506,6 +582,11 @@ describe("workspace store snapshot persistence", () => {
             generatedArtifacts: [],
             notes: "",
             currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            workspaceBanner: {
+              title: "Metrics banner",
+              subtitle: "",
+              image: null
+            },
             leftPaneCollapsed: false,
             rightPaneCollapsed: false,
             audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
@@ -533,6 +614,7 @@ describe("workspace store snapshot persistence", () => {
     expect(metrics.totalBytes).toBeGreaterThan(0)
     expect(metrics.sections.workspaceSnapshots).toBeGreaterThan(0)
     expect(metrics.sections.workspaceChatSessions).toBeGreaterThan(0)
+    expect(metrics.sections.workspaceBanner).toBeGreaterThan(0)
     expect(metrics.sections.generatedArtifacts).toBeGreaterThan(0)
     expect(metrics.sections.notes).toBeGreaterThan(0)
     expect(metrics.sections.sources).toBeGreaterThan(0)
@@ -990,6 +1072,54 @@ describe("workspace store snapshot persistence", () => {
     expect(originalStateAfterMutation.notes).toBe("Original notes")
   })
 
+  it("duplicates workspaceBanner with isolated state", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Original Banner Workspace")
+    const originalId = useWorkspaceStore.getState().workspaceId
+
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Original Banner",
+        subtitle: "Original subtitle",
+        image: {
+          dataUrl: "data:image/jpeg;base64,original-banner",
+          mimeType: "image/jpeg",
+          width: 1400,
+          height: 460,
+          bytes: 24576,
+          updatedAt: new Date("2026-02-25T03:00:00.000Z")
+        }
+      }
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    const duplicateId = useWorkspaceStore.getState().duplicateWorkspace(originalId)
+    expect(duplicateId).toBeTruthy()
+
+    const duplicatedState = useWorkspaceStore.getState()
+    expect(duplicatedState.workspaceBanner.title).toBe("Original Banner")
+    expect(duplicatedState.workspaceBanner.subtitle).toBe("Original subtitle")
+    expect(duplicatedState.workspaceBanner.image?.dataUrl).toBe(
+      "data:image/jpeg;base64,original-banner"
+    )
+
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Duplicate Banner",
+        subtitle: "Duplicate subtitle",
+        image: null
+      }
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().switchWorkspace(originalId)
+    const originalState = useWorkspaceStore.getState()
+    expect(originalState.workspaceBanner.title).toBe("Original Banner")
+    expect(originalState.workspaceBanner.subtitle).toBe("Original subtitle")
+    expect(originalState.workspaceBanner.image?.dataUrl).toBe(
+      "data:image/jpeg;base64,original-banner"
+    )
+  })
+
   it("archives and restores workspaces without losing snapshot data", () => {
     useWorkspaceStore.getState().initializeWorkspace("Workspace A")
     const workspaceAId = useWorkspaceStore.getState().workspaceId
@@ -1415,6 +1545,18 @@ describe("workspace store snapshot persistence", () => {
         version: 7,
         isDirty: false
       },
+      workspaceBanner: {
+        title: "Export Banner",
+        subtitle: "Export subtitle",
+        image: {
+          dataUrl: "data:image/webp;base64,export-banner",
+          mimeType: "image/webp",
+          width: 1280,
+          height: 420,
+          bytes: 20480,
+          updatedAt: new Date("2026-02-25T06:00:00.000Z")
+        }
+      },
       leftPaneCollapsed: true,
       rightPaneCollapsed: true,
       audioSettings: {
@@ -1449,6 +1591,7 @@ describe("workspace store snapshot persistence", () => {
     expect(bundle?.workspace.snapshot.generatedArtifacts[0]?.previousVersionId).toBe(
       baseArtifact.id
     )
+    expect(bundle?.workspace.snapshot.workspaceBanner.title).toBe("Export Banner")
     expect(bundle?.workspace.snapshot.workspaceTag).toContain("workspace:")
     expect(bundle?.workspace.snapshot.workspaceCreatedAt).toBeTruthy()
 
@@ -1474,6 +1617,11 @@ describe("workspace store snapshot persistence", () => {
     )
     expect(importedState.notes).toBe("Workspace export notes")
     expect(importedState.currentNote.title).toBe("Workspace note")
+    expect(importedState.workspaceBanner.title).toBe("Export Banner")
+    expect(importedState.workspaceBanner.subtitle).toBe("Export subtitle")
+    expect(importedState.workspaceBanner.image?.dataUrl).toBe(
+      "data:image/webp;base64,export-banner"
+    )
     expect(importedState.leftPaneCollapsed).toBe(true)
     expect(importedState.rightPaneCollapsed).toBe(true)
     expect(importedState.audioSettings.model).toBe("tts-1")
@@ -1483,6 +1631,49 @@ describe("workspace store snapshot persistence", () => {
       .getWorkspaceChatSession(importedWorkspaceId as string)
     expect(importedSession?.historyId).toBe("history-export")
     expect(importedSession?.messages[0]?.message).toBe("Export this workspace")
+  })
+
+  it("clears invalid imported workspaceBanner image payload while preserving text", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Import Banner Workspace")
+    const workspaceId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.setState({
+      workspaceBanner: {
+        title: "Source Banner",
+        subtitle: "Source subtitle",
+        image: null
+      }
+    })
+
+    const bundle = useWorkspaceStore
+      .getState()
+      .exportWorkspaceBundle(workspaceId)
+    expect(bundle).not.toBeNull()
+
+    const bundleWithInvalidImage = JSON.parse(
+      JSON.stringify(bundle)
+    ) as NonNullable<typeof bundle>
+    bundleWithInvalidImage.workspace.snapshot.workspaceBanner = {
+      title: "Imported Banner",
+      subtitle: "Imported subtitle",
+      image: {
+        dataUrl: "data:image/gif;base64,invalid",
+        mimeType: "image/gif",
+        width: 1200,
+        height: 400,
+        bytes: 19000,
+        updatedAt: "2026-02-25T07:00:00.000Z"
+      } as unknown as (typeof bundleWithInvalidImage.workspace.snapshot.workspaceBanner)["image"]
+    }
+
+    const importedId = useWorkspaceStore
+      .getState()
+      .importWorkspaceBundle(bundleWithInvalidImage)
+    expect(importedId).toBeTruthy()
+
+    const importedState = useWorkspaceStore.getState()
+    expect(importedState.workspaceBanner.title).toBe("Imported Banner")
+    expect(importedState.workspaceBanner.subtitle).toBe("Imported subtitle")
+    expect(importedState.workspaceBanner.image).toBeNull()
   })
 
   it("captures and restores workspace state snapshot for destructive undo", () => {

@@ -15,9 +15,16 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
       key: string,
-      fallbackOrOptions?: string | { defaultValue?: string }
+      fallbackOrOptions?: string | { defaultValue?: string },
+      values?: Record<string, unknown>
     ) => {
-      if (typeof fallbackOrOptions === "string") return fallbackOrOptions
+      if (typeof fallbackOrOptions === "string") {
+        if (!values) return fallbackOrOptions
+        return fallbackOrOptions.replace(/\{\{(\w+)\}\}/g, (_match, token) => {
+          const value = values[token]
+          return value == null ? "" : String(value)
+        })
+      }
       if (
         fallbackOrOptions &&
         typeof fallbackOrOptions === "object" &&
@@ -84,6 +91,9 @@ describe("OutputPreviewDrawer audio support", () => {
 
     expect(serviceMocks.downloadWatchlistOutput).not.toHaveBeenCalled()
     expect(screen.getByText("Audio playback")).toBeInTheDocument()
+    expect(screen.getByTestId("output-preview-provenance")).toHaveTextContent(
+      "Monitor #7 • Run #9 • Artifact: Audio briefing"
+    )
     const audioElement = document.querySelector("audio")
     expect(audioElement).not.toBeNull()
     expect(audioElement?.getAttribute("src")).toBe("blob:audio-output")
@@ -103,6 +113,47 @@ describe("OutputPreviewDrawer audio support", () => {
     })
 
     expect(serviceMocks.downloadWatchlistOutputBinary).not.toHaveBeenCalled()
+    expect(screen.getByTestId("output-preview-provenance")).toHaveTextContent(
+      "Monitor #7 • Run #9 • Artifact: Markdown"
+    )
     expect(screen.getByText("# Briefing")).toBeInTheDocument()
+  })
+
+  it("restores focus to the launch control when the drawer closes", async () => {
+    const trigger = document.createElement("button")
+    trigger.type = "button"
+    trigger.textContent = "Open output preview"
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    const { rerender } = render(
+      <OutputPreviewDrawer
+        open
+        onClose={vi.fn()}
+        output={buildOutput({ type: "brief", format: "md" })}
+      />
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.downloadWatchlistOutput).toHaveBeenCalledWith(42)
+    })
+
+    const drawerButton = document.querySelector(".ant-drawer button")
+    expect(drawerButton).not.toBeNull()
+    ;(drawerButton as HTMLButtonElement).focus()
+
+    rerender(
+      <OutputPreviewDrawer
+        open={false}
+        onClose={vi.fn()}
+        output={buildOutput({ type: "brief", format: "md" })}
+      />
+    )
+
+    await waitFor(() => {
+      expect(trigger).toHaveFocus()
+    })
+
+    trigger.remove()
   })
 })

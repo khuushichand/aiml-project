@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react"
-import { Button, Collapse, Form, Input, InputNumber, Modal, Radio, Select, Switch, message } from "antd"
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { Button, Collapse, Form, Input, InputNumber, Modal, Radio, Select, Switch, Tag, message } from "antd"
 import { useTranslation } from "react-i18next"
 import {
   createWatchlistJob,
@@ -8,6 +8,7 @@ import {
   fetchWatchlistSources,
   fetchWatchlistTemplates,
   previewWatchlistJob,
+  testWatchlistAudioSettings,
   updateWatchlistJob
 } from "@/services/watchlists"
 import type {
@@ -21,6 +22,10 @@ import type {
 } from "@/types/watchlists"
 import { CronDisplay, WatchlistsHelpTooltip } from "../shared"
 import { mapWatchlistsError } from "../shared/watchlists-error"
+import {
+  getFocusableActiveElement,
+  restoreFocusToElement
+} from "../shared/focus-management"
 import {
   buildScopeTooltipLines,
   summarizeScopeCounts
@@ -67,11 +72,21 @@ const AUDIO_SPEED_MIN = 0.25
 const AUDIO_SPEED_MAX = 4
 const AUDIO_TARGET_MINUTES_MIN = 1
 const AUDIO_TARGET_MINUTES_MAX = 60
+const AUDIO_TEST_SAMPLE_TEXT =
+  "Top stories briefing sample. This is a quick audio check before saving your monitor."
 const RETENTION_UNITS: DurationUnit[] = ["minutes", "hours", "days", "weeks", "seconds"]
 const JOB_PREVIEW_LIMIT = 60
 const JOB_PREVIEW_PER_SOURCE = 12
 const JOB_SCOPE_CATALOG_PAGE_SIZE = 500
 const BASIC_STEPS: BasicStepId[] = ["scope", "schedule", "output", "review"]
+
+type ConfidenceRiskLevel = "blocking" | "warning"
+
+interface ConfidenceRisk {
+  id: string
+  level: ConfidenceRiskLevel
+  message: string
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -150,6 +165,17 @@ const normalizeAudioTargetMinutes = (value: unknown): number => {
   )
 }
 
+const isValidBackgroundAudioUri = (value: string): boolean => {
+  const trimmedValue = value.trim()
+  if (trimmedValue.length === 0) return true
+  try {
+    const parsed = new URL(trimmedValue)
+    return parsed.protocol === "https:" || parsed.protocol === "http:" || parsed.protocol === "file:"
+  } catch {
+    return false
+  }
+}
+
 const normalizeAudioVoiceMap = (
   value: unknown
 ): { value: Record<string, string> | null; valid: boolean } => {
@@ -220,6 +246,23 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   const [submitting, setSubmitting] = useState(false)
 
   const isEditing = !!initialValues
+  const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
+
+  useLayoutEffect(() => {
+    if (open) {
+      if (!wasOpenRef.current) {
+        restoreFocusTargetRef.current = getFocusableActiveElement()
+      }
+      wasOpenRef.current = true
+      return
+    }
+
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusToElement(restoreFocusTargetRef.current)
+    }
+  }, [open])
 
   // Managed state for complex fields
   const [scope, setScope] = useState<JobScope>({})
@@ -262,6 +305,9 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   const [previewCandidates, setPreviewCandidates] = useState<PreviewItem[]>([])
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [audioTestLoading, setAudioTestLoading] = useState(false)
+  const [audioTestError, setAudioTestError] = useState<string | null>(null)
+  const [audioTestUrl, setAudioTestUrl] = useState<string | null>(null)
   const authoringContext = isEditing ? "edit" : "create"
 
   const watchedName = Form.useWatch("name", form)
@@ -527,9 +573,130 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
     message.success(t("watchlists:jobs.form.presetApplied", "Preset applied"))
   }
 
+  const clearAudioTestPreview = () => {
+    setAudioTestError(null)
+    setAudioTestLoading(false)
+    setAudioTestUrl((previous) => {
+      if (previous && typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+        URL.revokeObjectURL(previous)
+      }
+      return null
+    })
+  }
+
+  const parseAudioVoiceMapForValidation = (): Record<string, string> | null | undefined => {
+    const trimmedAudioVoiceMap = audioVoiceMapText.trim()
+    if (trimmedAudioVoiceMap.length === 0) return null
+    try {
+      const parsedVoiceMap = JSON.parse(trimmedAudioVoiceMap)
+      const normalized = normalizeAudioVoiceMap(parsedVoiceMap)
+      if (!normalized.valid) {
+        message.error(
+          t(
+            "watchlists:jobs.form.audioVoiceMapInvalid",
+            "Voice map must be valid JSON with marker-to-voice string pairs."
+          )
+        )
+        return undefined
+      }
+      return normalized.value
+    } catch {
+      message.error(
+        t(
+          "watchlists:jobs.form.audioVoiceMapInvalid",
+          "Voice map must be valid JSON with marker-to-voice string pairs."
+        )
+      )
+      return undefined
+    }
+  }
+
+  const handleAudioBriefingToggle = (enabled: boolean) => {
+    setAudioBriefingEnabled(enabled)
+    if (!enabled) {
+      clearAudioTestPreview()
+    } else {
+      setAudioTestError(null)
+    }
+  }
+
+  const handleTestAudioSettings = async () => {
+    if (!audioBriefingEnabled) return
+
+    const trimmedBackgroundUri = audioBackgroundUri.trim()
+    if (!isValidBackgroundAudioUri(trimmedBackgroundUri)) {
+      message.error(
+        t(
+          "watchlists:jobs.form.audioBackgroundTrackInvalid",
+          "Background track must start with https://, http://, or file://."
+        )
+      )
+      return
+    }
+
+    const parsedVoiceMap = parseAudioVoiceMapForValidation()
+    if (parsedVoiceMap === undefined) return
+
+    setAudioTestLoading(true)
+    setAudioTestError(null)
+
+    try {
+      const audioBuffer = await testWatchlistAudioSettings({
+        text: t("watchlists:jobs.form.audioTestSampleText", AUDIO_TEST_SAMPLE_TEXT),
+        voice: audioVoice.trim() || DEFAULT_AUDIO_VOICE,
+        speed: normalizeAudioSpeed(audioSpeed),
+        response_format: "mp3"
+      })
+      if (!(audioBuffer instanceof ArrayBuffer) || audioBuffer.byteLength === 0) {
+        throw new Error("Audio preview did not return playable data.")
+      }
+      if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
+        throw new Error("Audio preview playback is unavailable in this environment.")
+      }
+      const audioBlob = new Blob([audioBuffer], { type: "audio/mpeg" })
+      const nextUrl = URL.createObjectURL(audioBlob)
+      setAudioTestUrl((previous) => {
+        if (previous && typeof URL.revokeObjectURL === "function") {
+          URL.revokeObjectURL(previous)
+        }
+        return nextUrl
+      })
+      if (parsedVoiceMap && Object.keys(parsedVoiceMap).length > 0) {
+        setShowAdvancedAudioOptions(true)
+      }
+    } catch (err) {
+      const mapped = mapWatchlistsError(err, {
+        t,
+        context: t("watchlists:jobs.form.audioTestContext", "audio sample"),
+        fallbackMessage: t(
+          "watchlists:jobs.form.audioTestError",
+          "Could not generate audio sample. Check voice/speed settings and try again."
+        ),
+        operationLabel: "generate"
+      })
+      setAudioTestError(`${mapped.title} ${mapped.description}`.trim())
+      setAudioTestUrl((previous) => {
+        if (previous && typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+          URL.revokeObjectURL(previous)
+        }
+        return null
+      })
+    } finally {
+      setAudioTestLoading(false)
+    }
+  }
+
   // Reset form when modal opens/closes or initialValues change
   useEffect(() => {
     if (open) {
+      setAudioTestError(null)
+      setAudioTestLoading(false)
+      setAudioTestUrl((previous) => {
+        if (previous && typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+          URL.revokeObjectURL(previous)
+        }
+        return null
+      })
       if (initialValues) {
         form.setFieldsValue({
           name: initialValues.name,
@@ -574,6 +741,14 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
       }
     }
   }, [open, initialValues, form])
+
+  useEffect(() => {
+    return () => {
+      if (audioTestUrl && typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+        URL.revokeObjectURL(audioTestUrl)
+      }
+    }
+  }, [audioTestUrl])
 
   useEffect(() => {
     if (!open) {
@@ -787,33 +962,23 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         return
       }
 
-      setSubmitting(true)
+      if (audioBriefingEnabled && !isValidBackgroundAudioUri(audioBackgroundUri)) {
+        message.error(
+          t(
+            "watchlists:jobs.form.audioBackgroundTrackInvalid",
+            "Background track must start with https://, http://, or file://."
+          )
+        )
+        return
+      }
 
       let parsedAudioVoiceMap: Record<string, string> | null = null
-      const trimmedAudioVoiceMap = audioVoiceMapText.trim()
-      if (audioBriefingEnabled && trimmedAudioVoiceMap.length > 0) {
-        try {
-          const parsedVoiceMap = JSON.parse(trimmedAudioVoiceMap)
-          const normalized = normalizeAudioVoiceMap(parsedVoiceMap)
-          if (!normalized.valid) {
-            message.error(
-              t(
-                "watchlists:jobs.form.audioVoiceMapInvalid",
-                "Voice map must be valid JSON with marker-to-voice string pairs."
-              )
-            )
-            return
-          }
-          parsedAudioVoiceMap = normalized.value
-        } catch {
-          message.error(
-            t(
-              "watchlists:jobs.form.audioVoiceMapInvalid",
-              "Voice map must be valid JSON with marker-to-voice string pairs."
-            )
-          )
+      if (audioBriefingEnabled) {
+        const parsedAudioVoiceMapResult = parseAudioVoiceMapForValidation()
+        if (parsedAudioVoiceMapResult === undefined) {
           return
         }
+        parsedAudioVoiceMap = parsedAudioVoiceMapResult
       }
 
       const outputPrefs = buildOutputPrefs({ audioVoiceMap: parsedAudioVoiceMap })
@@ -828,6 +993,73 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         output_prefs: isEditing ? (outputPrefs || {}) : outputPrefs,
         job_filters: filters.length > 0 ? { filters } : undefined
       }
+
+      const confirmationItems: string[] = []
+      if (deliveryEmailEnabled) {
+        confirmationItems.push(
+          t(
+            "watchlists:jobs.form.confirmationEmail",
+            "Email delivery will send each run to {{count}} recipient{{plural}}.",
+            {
+              count: deliveryEmailRecipients.length,
+              plural: deliveryEmailRecipients.length === 1 ? "" : "s"
+            }
+          )
+        )
+      }
+      if (deliveryChatbookEnabled) {
+        confirmationItems.push(
+          t(
+            "watchlists:jobs.form.confirmationChatbook",
+            "Chatbook delivery will publish output artifacts on each run."
+          )
+        )
+      }
+      if (audioBriefingEnabled) {
+        confirmationItems.push(
+          t(
+            "watchlists:jobs.form.confirmationAudio",
+            "Audio briefing will generate on each run ({{voice}}, {{minutes}} min target).",
+            {
+              voice: audioVoice,
+              minutes: audioTargetMinutes
+            }
+          )
+        )
+      }
+
+      if (confirmationItems.length > 0) {
+        const confirmed = await new Promise<boolean>((resolve) => {
+          Modal.confirm({
+            title: t(
+              "watchlists:jobs.form.confirmationTitle",
+              "Confirm recurring delivery settings"
+            ),
+            content: (
+              <div className="space-y-2">
+                <div className="text-sm text-text-muted">
+                  {t(
+                    "watchlists:jobs.form.confirmationDescription",
+                    "Review these recurring actions before saving this monitor."
+                  )}
+                </div>
+                <ul className="list-disc pl-5 space-y-1">
+                  {confirmationItems.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ),
+            okText: isEditing ? t("common:save", "Save") : t("common:create", "Create"),
+            cancelText: t("common:cancel", "Cancel"),
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false)
+          })
+        })
+        if (!confirmed) return
+      }
+
+      setSubmitting(true)
 
       if (isEditing && initialValues) {
         await updateWatchlistJob(initialValues.id, jobData)
@@ -940,6 +1172,119 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
     (scope.tags?.length ?? 0) > 0
   const hasScheduleSelection = Boolean(schedule && schedule.trim().length > 0)
   const basicStepIndex = Math.max(0, BASIC_STEPS.indexOf(basicStep))
+  const watchedNameValue = String(watchedName || "").trim()
+
+  const confidenceChecks = [
+    {
+      id: "name",
+      passed: watchedNameValue.length > 0,
+    },
+    {
+      id: "scope",
+      passed: hasScopeSelection,
+    },
+    {
+      id: "schedule",
+      passed: hasScheduleSelection,
+    },
+    {
+      id: "delivery",
+      passed: invalidEmailRecipients.length === 0,
+    },
+  ]
+  const confidenceCompletedChecks = confidenceChecks.filter((check) => check.passed).length
+  const confidenceRisks: ConfidenceRisk[] = []
+
+  if (watchedNameValue.length === 0) {
+    confidenceRisks.push({
+      id: "name",
+      level: "blocking",
+      message: t("watchlists:jobs.form.confidenceRiskName", "Add a monitor name.")
+    })
+  }
+
+  if (!hasScopeSelection) {
+    confidenceRisks.push({
+      id: "scope",
+      level: "blocking",
+      message: t(
+        "watchlists:jobs.form.confidenceRiskScope",
+        "Select at least one feed, group, or tag."
+      )
+    })
+  }
+
+  if (!hasScheduleSelection) {
+    confidenceRisks.push({
+      id: "schedule",
+      level: "warning",
+      message: t(
+        "watchlists:jobs.form.confidenceRiskSchedule",
+        "Schedule is not set; this monitor will only run manually."
+      )
+    })
+  }
+
+  if (invalidEmailRecipients.length > 0) {
+    confidenceRisks.push({
+      id: "email",
+      level: "blocking",
+      message: t(
+        "watchlists:jobs.form.confidenceRiskEmail",
+        "Fix invalid email recipients before saving."
+      )
+    })
+  }
+
+  if (authoringMode === "basic" && hasAdvancedConfiguration) {
+    confidenceRisks.push({
+      id: "hidden-advanced",
+      level: "warning",
+      message: t(
+        "watchlists:jobs.form.confidenceRiskHiddenAdvanced",
+        "Advanced settings are preserved and hidden in Basic mode."
+      )
+    })
+  }
+
+  const confidenceHasBlockingRisk = confidenceRisks.some((risk) => risk.level === "blocking")
+  const confidenceStatusLabel = confidenceHasBlockingRisk
+    ? t("watchlists:jobs.form.confidenceNeedsAttention", "Needs attention")
+    : t("watchlists:jobs.form.confidenceReady", "Ready to save")
+  const confidenceStatusColor = confidenceHasBlockingRisk ? "orange" : "green"
+  const deliverySummaryParts: string[] = []
+  if (deliveryEmailEnabled) {
+    deliverySummaryParts.push(
+      t(
+        "watchlists:jobs.form.liveSummary.deliveryEmail",
+        "Email ({{count}} recipient{{plural}})",
+        {
+          count: deliveryEmailRecipients.length,
+          plural: deliveryEmailRecipients.length === 1 ? "" : "s"
+        }
+      )
+    )
+  }
+  if (deliveryChatbookEnabled) {
+    deliverySummaryParts.push(
+      t("watchlists:jobs.form.liveSummary.deliveryChatbook", "Chatbook export enabled")
+    )
+  }
+  const deliverySummaryText =
+    deliverySummaryParts.length > 0
+      ? deliverySummaryParts.join(" + ")
+      : t("watchlists:jobs.form.liveSummary.deliveryNone", "No automatic delivery")
+  const audioSummaryText = audioBriefingEnabled
+    ? t(
+      "watchlists:jobs.form.liveSummary.audioEnabled",
+      "Enabled ({{voice}}, {{minutes}} min target)",
+      {
+        voice: audioVoice,
+        minutes: audioTargetMinutes
+      }
+    )
+    : t("watchlists:jobs.form.liveSummary.audioDisabled", "Disabled")
+  const hasHiddenAdvancedInBasic = authoringMode === "basic" && hasAdvancedConfiguration
 
   const handleAuthoringModeChange = (nextMode: AuthoringMode) => {
     if (nextMode === authoringMode) return
@@ -1427,7 +1772,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
               </div>
               <Switch
                 checked={audioBriefingEnabled}
-                onChange={setAudioBriefingEnabled}
+                onChange={handleAudioBriefingToggle}
                 data-testid="job-form-audio-enabled-switch"
               />
             </div>
@@ -1486,6 +1831,58 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
               {t(
                 "watchlists:jobs.form.audioHint",
                 "Enable spoken briefings alongside text outputs. Keep defaults for fastest setup."
+              )}
+            </div>
+            <div className="mt-1 text-xs text-text-muted" data-testid="job-form-audio-practical-hint">
+              {t(
+                "watchlists:jobs.form.audioPracticalHint",
+                "Practical default: Alloy voice at 1.0 speed and 8-minute target, then tune after your first run."
+              )}
+            </div>
+            <div className="mt-1 text-xs text-text-muted" data-testid="job-form-audio-item-cap-hint">
+              {t(
+                "watchlists:jobs.form.audioItemCapHint",
+                "Audio briefings currently include up to 100 items per run. Tighten filters for more focused narration."
+              )}
+            </div>
+            <div className="mt-2 space-y-2 rounded-md border border-border bg-surface p-3">
+              <Button
+                type="default"
+                onClick={handleTestAudioSettings}
+                disabled={!audioBriefingEnabled || audioTestLoading}
+                loading={audioTestLoading}
+                data-testid="job-form-audio-test-button"
+              >
+                {t("watchlists:jobs.form.audioTestButton", "Test audio settings")}
+              </Button>
+              <div className="text-xs text-text-muted" data-testid="job-form-audio-test-hint">
+                {t(
+                  "watchlists:jobs.form.audioTestHint",
+                  "Generate a short sample so you can confirm voice and speed before saving."
+                )}
+              </div>
+              {audioTestLoading && (
+                <div className="text-xs text-text-muted" data-testid="job-form-audio-test-loading">
+                  {t("watchlists:jobs.form.audioTestLoading", "Generating sample audio...")}
+                </div>
+              )}
+              {audioTestError && (
+                <div className="text-xs text-danger" data-testid="job-form-audio-test-error">
+                  {audioTestError}
+                </div>
+              )}
+              {audioTestUrl && !audioTestError && (
+                <div className="space-y-2" data-testid="job-form-audio-test-success">
+                  <div className="text-xs text-text-muted">
+                    {t("watchlists:jobs.form.audioTestReady", "Sample ready. Listen before saving.")}
+                  </div>
+                  <audio controls preload="none" src={audioTestUrl} data-testid="job-form-audio-test-player">
+                    {t(
+                      "watchlists:outputs.audioPlayerUnsupported",
+                      "Your browser does not support audio playback."
+                    )}
+                  </audio>
+                </div>
               )}
             </div>
             {authoringMode === "advanced" && (
@@ -1715,6 +2112,65 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         <div className="text-xs text-text-muted" data-testid="job-form-summary-preview">
           {filterPreviewSummaryText}
         </div>
+        <div className="text-xs text-text-muted" data-testid="job-form-summary-output">
+          {t("watchlists:jobs.form.liveSummary.output", "Output template")}:{" "}
+          {outputTemplateName || t("watchlists:jobs.form.defaultTemplateVersionAuto", "Latest")}
+        </div>
+        <div className="text-xs text-text-muted" data-testid="job-form-summary-delivery">
+          {t("watchlists:jobs.form.liveSummary.delivery", "Delivery")}: {deliverySummaryText}
+        </div>
+        <div className="text-xs text-text-muted" data-testid="job-form-summary-audio">
+          {t("watchlists:jobs.form.liveSummary.audio", "Audio briefing")}: {audioSummaryText}
+        </div>
+        {hasHiddenAdvancedInBasic && (
+          <div className="text-xs text-text-muted" data-testid="job-form-summary-hidden-advanced">
+            {t(
+              "watchlists:jobs.form.liveSummary.hiddenAdvanced",
+              "Advanced settings are active and hidden in Basic mode."
+            )}
+          </div>
+        )}
+      </div>
+
+      <div
+        className="mt-3 rounded-lg border border-border bg-surface p-3 space-y-2"
+        data-testid="job-form-confidence-panel"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-medium">
+            {t("watchlists:jobs.form.confidenceTitle", "Configuration confidence")}
+          </div>
+          <Tag color={confidenceStatusColor} data-testid="job-form-confidence-status">
+            {confidenceStatusLabel}
+          </Tag>
+        </div>
+        <div className="text-xs text-text-muted" data-testid="job-form-confidence-checks">
+          {t(
+            "watchlists:jobs.form.confidenceChecks",
+            "{{complete}}/{{total}} checks complete",
+            {
+              complete: confidenceCompletedChecks,
+              total: confidenceChecks.length
+            }
+          )}
+        </div>
+        {confidenceRisks.length > 0 ? (
+          <div className="space-y-1">
+            {confidenceRisks.map((risk) => (
+              <div
+                key={risk.id}
+                className="text-xs text-text-muted"
+                data-testid={`job-form-confidence-risk-${risk.id}`}
+              >
+                {risk.message}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-text-muted" data-testid="job-form-confidence-no-risks">
+            {t("watchlists:jobs.form.confidenceNoRisks", "No unresolved risks.")}
+          </div>
+        )}
       </div>
 
       {authoringMode === "advanced" ? (
@@ -1776,6 +2232,17 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                   ? t("common:enabled", "Enabled")
                   : t("common:disabled", "Disabled")}
               </div>
+              <div>
+                {t("watchlists:jobs.form.steps.reviewDelivery", "Delivery")}: {deliverySummaryText}
+              </div>
+              {hasHiddenAdvancedInBasic && (
+                <div className="text-xs text-text-muted mt-1">
+                  {t(
+                    "watchlists:jobs.form.liveSummary.hiddenAdvanced",
+                    "Advanced settings are active and hidden in Basic mode."
+                  )}
+                </div>
+              )}
             </div>
           )}
 

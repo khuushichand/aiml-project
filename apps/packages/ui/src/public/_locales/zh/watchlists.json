@@ -1,0 +1,47 @@
+{
+  "items_queuedForBriefing": {
+    "message": "已加入简报队列"
+  },
+  "items_includeInNextBriefing": {
+    "message": "加入下一次简报"
+  },
+  "items_removeFromBriefingQueue": {
+    "message": "从简报队列中移除"
+  },
+  "items_briefingAlreadyIncluded": {
+    "message": "此条目已包含在简报输出中。"
+  },
+  "items_briefingIncluded": {
+    "message": "已加入下一次简报队列。"
+  },
+  "items_briefingRemoved": {
+    "message": "已从简报队列中移除。"
+  },
+  "items_briefingIncludeError": {
+    "message": "无法将条目加入简报。"
+  },
+  "items_queuedTag": {
+    "message": "已排队"
+  },
+  "items_queue_runPlaceholder": {
+    "message": "选择运行"
+  },
+  "items_queue_runOption": {
+    "message": "运行 #{{id}}"
+  },
+  "items_queue_runRequired": {
+    "message": "请选择一个运行以从队列生成报告。"
+  },
+  "items_queue_empty": {
+    "message": "此运行未找到排队条目。"
+  },
+  "items_queue_generated": {
+    "message": "已从 {{count}} 个排队条目{{plural}}创建报告。"
+  },
+  "items_queue_generateError": {
+    "message": "无法从排队条目生成报告。"
+  },
+  "items_queue_generateReport": {
+    "message": "从队列生成报告"
+  }
+}

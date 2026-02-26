@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react"
 import {
   Alert,
   Button,
-  Popconfirm,
+  Modal,
   Space,
   Switch,
   Table,
@@ -17,6 +17,7 @@ import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
   deleteWatchlistJob,
+  fetchJobRuns,
   fetchWatchlistGroups,
   fetchWatchlistJobs,
   fetchWatchlistSources,
@@ -64,6 +65,14 @@ const persistDisclosureState = (key: string, value: boolean): void => {
   } catch {
     // Ignore storage access errors and keep UI functional.
   }
+}
+
+const isAudioBriefingEnabled = (outputPrefs: unknown): boolean => {
+  if (!outputPrefs || typeof outputPrefs !== "object" || Array.isArray(outputPrefs)) {
+    return false
+  }
+  const value = (outputPrefs as Record<string, unknown>).generate_audio
+  return value === true
 }
 
 export const JobsTab: React.FC = () => {
@@ -180,8 +189,8 @@ export const JobsTab: React.FC = () => {
     }
   }
 
-  // Handle delete
-  const handleDelete = async (jobId: number) => {
+  // Handle delete with impact assessment
+  const executeDelete = async (jobId: number) => {
     const deletedJob = jobs.find((job) => job.id === jobId)
     try {
       const deleteResult = await deleteWatchlistJob(jobId)
@@ -231,6 +240,77 @@ export const JobsTab: React.FC = () => {
     }
   }
 
+  const requestDeleteConfirmation = async (job: WatchlistJob) => {
+    const warnings: string[] = []
+
+    try {
+      const runsResult = await fetchJobRuns(job.id, { page: 1, size: 10 })
+      const activeRuns = (runsResult.items || []).filter(
+        (run) => {
+          const normalized = String(run.status || "").toLowerCase()
+          return normalized === "running" || normalized === "pending" || normalized === "queued"
+        }
+      )
+      if (activeRuns.length > 0) {
+        warnings.push(
+          t(
+            "watchlists:jobs.deleteConfirmActiveRunsWarning",
+            "This monitor has {{count}} active or pending run{{plural}}. Deleting it will not cancel in-progress runs.",
+            { count: activeRuns.length, plural: activeRuns.length === 1 ? "" : "s" }
+          )
+        )
+      }
+    } catch {
+      // Non-critical: proceed with delete confirmation without run info.
+    }
+
+    const outputPrefs = job.output_prefs as Record<string, unknown> | undefined
+    const hasDelivery =
+      outputPrefs &&
+      (Array.isArray(outputPrefs.email_recipients) && (outputPrefs.email_recipients as unknown[]).length > 0 ||
+        outputPrefs.chatbook_path)
+    if (hasDelivery) {
+      warnings.push(
+        t(
+          "watchlists:jobs.deleteConfirmDeliveryWarning",
+          "This monitor has configured delivery settings (email, chatbook). Deleting it removes scheduled deliveries."
+        )
+      )
+    }
+
+    Modal.confirm({
+      title: t("watchlists:jobs.deleteConfirm", "Delete this monitor?"),
+      content: warnings.length > 0 ? (
+        <div className="space-y-2">
+          {warnings.map((warning, index) => (
+            <p key={index} className="text-sm text-warning">
+              {warning}
+            </p>
+          ))}
+          <p className="text-sm text-text-muted">
+            {t(
+              "watchlists:jobs.deleteConfirmDescription",
+              "You can undo this deletion for {{seconds}} seconds.",
+              { seconds: JOB_DELETE_UNDO_WINDOW_SECONDS }
+            )}
+          </p>
+        </div>
+      ) : (
+        <p className="text-sm text-text-muted">
+          {t(
+            "watchlists:jobs.deleteConfirmDescription",
+            "You can undo this deletion for {{seconds}} seconds.",
+            { seconds: JOB_DELETE_UNDO_WINDOW_SECONDS }
+          )}
+        </p>
+      ),
+      okText: t("common:delete", "Delete"),
+      okButtonProps: { danger: true },
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => executeDelete(job.id)
+    })
+  }
+
   // Handle manual run trigger
   const handleTriggerRun = async (jobId: number) => {
     setTriggeringJobId(jobId)
@@ -261,7 +341,14 @@ export const JobsTab: React.FC = () => {
       ellipsis: true,
       render: (name: string, record) => (
         <div>
-          <span className="font-medium">{name}</span>
+          <span className="inline-flex items-center gap-2">
+            <span className="font-medium">{name}</span>
+            {isAudioBriefingEnabled(record.output_prefs) && (
+              <Tag color="purple" data-testid={`job-audio-enabled-chip-${record.id}`}>
+                {t("watchlists:jobs.audioEnabledChip", "Audio on")}
+              </Tag>
+            )}
+          </span>
           {record.description && (
             <div className="text-xs text-text-muted truncate">
               {record.description}
@@ -401,14 +488,22 @@ export const JobsTab: React.FC = () => {
       title: t("watchlists:jobs.columns.active", "Active"),
       dataIndex: "active",
       key: "active",
-      width: 80,
+      width: 140,
       align: "center",
       render: (active: boolean, record) => (
-        <Switch
-          checked={active}
-          size="small"
-          onChange={() => handleToggleActive(record)}
-        />
+        <span className="inline-flex items-center gap-2">
+          <Switch
+            checked={active}
+            size="small"
+            aria-label={t("watchlists:jobs.toggleActiveAria", "Toggle active for {{name}}", { name: record.name })}
+            onChange={() => handleToggleActive(record)}
+          />
+          <span className="text-xs text-text-muted">
+            {active
+              ? t("common:enabled", "Enabled")
+              : t("common:disabled", "Disabled")}
+          </span>
+        </span>
       )
     },
     {
@@ -454,30 +549,33 @@ export const JobsTab: React.FC = () => {
               onClick={() => openJobForm(record.id)}
             />
           </Tooltip>
-          <Popconfirm
-            title={t("watchlists:jobs.deleteConfirm", "Delete this monitor?")}
-            onConfirm={() => handleDelete(record.id)}
-            okText={t("common:yes", "Yes")}
-            cancelText={t("common:no", "No")}
-          >
-            <Tooltip title={t("common:delete", "Delete")}>
-              <Button
-                type="text"
-                size="small"
-                danger
-                aria-label={t("common:delete", "Delete")}
-                icon={<Trash2 className="h-4 w-4" />}
-              />
-            </Tooltip>
-          </Popconfirm>
+          <Tooltip title={t("common:delete", "Delete")}>
+            <Button
+              type="text"
+              size="small"
+              danger
+              aria-label={t("common:delete", "Delete")}
+              icon={<Trash2 className="h-4 w-4" />}
+              onClick={() => requestDeleteConfirmation(record)}
+            />
+          </Tooltip>
         </Space>
       )}
     }
   ]
+  const resolveColumnKey = (column: ColumnsType<WatchlistJob>[number]): string => {
+    if (column.key != null) return String(column.key)
+    if ("dataIndex" in column && column.dataIndex != null) {
+      return Array.isArray(column.dataIndex)
+        ? column.dataIndex.map((entry) => String(entry)).join(".")
+        : String(column.dataIndex)
+    }
+    return ""
+  }
   const defaultColumnKeys = new Set(["name", "schedule_expr", "active", "actions"])
   const columns = showAdvancedColumns
     ? allColumns
-    : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
+    : allColumns.filter((column) => defaultColumnKeys.has(resolveColumnKey(column)))
 
   return (
     <div className="space-y-4">
@@ -542,6 +640,7 @@ export const JobsTab: React.FC = () => {
         dataSource={Array.isArray(jobs) ? jobs : []}
         columns={columns}
         rowKey="id"
+        aria-label={t("watchlists:jobs.tableAria", "Monitors table")}
         loading={jobsLoading}
         pagination={{
           current: jobsPage,

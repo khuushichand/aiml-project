@@ -3300,7 +3300,7 @@
     "message": "Compatibile con SillyTavern"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "Riga uno\\nRiga due con ||spoiler in linea||\\n\\n[spoiler]Contenuto spoiler a blocco[/spoiler]"
+    "message": "Riga uno\nRiga due con ||spoiler in linea||\n\n[spoiler]Contenuto spoiler a blocco[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "Stili degli elementi di testo avanzato"

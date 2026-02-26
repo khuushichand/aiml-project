@@ -3,7 +3,7 @@
 
 ## Introduction
 
-
+https://hub.vroid.com/en
 RSS
     https://feedparser.readthedocs.io/en/latest/
     https://github.com/kurtmckee/feedparser
@@ -17,7 +17,11 @@ https://gist.github.com/emschwartz/e6d2bf860ccc367fe37ff953ba6de66b
 https://talkback.sh/
 https://github.com/Olshansk/rss-feeds
 https://themeisle.com/blog/rss-feeds-list/
-
+https://github.com/muchdogesec/history4feed?tab=readme-ov-file
+https://www.dogesec.com/blog/full_text_full_history_rss_atom_blog_feeds/
+https://github.com/muchdogesec/history4feed?tab=readme-ov-file
+https://github.com/TimmyOVO/freshrss-filter
+https://github.com/piqoni/matcha
 
 https://www.dogesec.com/blog/full_text_rss_atom_blog_feeds/
 https://engineering.fyi/?utm_source=www.hivefive.community&utm_medium=newsletter&utm_campaign=hive-five-237-different-kinds-of-smart

@@ -2760,7 +2760,7 @@
     "message": "No cards are due for review. Great job!"
   },
   "flashcards_reviewedToday": {
-    "message": "{{count}} cards reviewed this session"
+    "message": "Reviewed today"
   },
   "flashcards_retentionRate": {
     "message": "Retention rate"

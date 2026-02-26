@@ -767,6 +767,41 @@ class MCPProtocol:
                 return prefix
         return "general"
 
+    @staticmethod
+    def _resolve_governance_rollout_mode(metadata: Optional[dict[str, Any]] = None) -> str:
+        """Resolve governance rollout mode from metadata override and server config."""
+        raw_mode = None
+        if isinstance(metadata, dict):
+            raw_mode = metadata.get("governance_rollout_mode")
+
+        try:
+            from tldw_Server_API.app.core import config as app_config
+
+            return app_config.resolve_governance_rollout_mode(
+                str(raw_mode) if raw_mode is not None else None
+            )
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"Unable to resolve governance rollout mode from config: {exc}")
+            candidate = str(raw_mode or "").strip().lower()
+            return candidate if candidate in {"off", "shadow", "enforce"} else "off"
+
+    def _record_governance_check(
+        self,
+        *,
+        surface: str,
+        category: str,
+        status: str,
+        rollout_mode: str,
+    ) -> None:
+        """Emit one governance check metric entry, failing open on metric errors."""
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+            self.metrics.record_governance_check(
+                surface=surface,
+                category=category,
+                status=status,
+                rollout_mode=rollout_mode,
+            )
+
     @classmethod
     def _serialize_governance_decision(cls, decision: Any) -> dict[str, Any]:
         if decision is None:
@@ -832,23 +867,48 @@ class MCPProtocol:
         if self._governance_preflight_bypassed(tool_name, context):
             return None
 
+        metadata = context.metadata if isinstance(getattr(context, "metadata", None), dict) else {}
+        rollout_mode = self._resolve_governance_rollout_mode(metadata)
+        category = self._resolve_governance_category(tool_name, tool_def)
+
+        if rollout_mode == "off":
+            self._record_governance_check(
+                surface="mcp_tool",
+                category=category,
+                status="unknown",
+                rollout_mode=rollout_mode,
+            )
+            return {"status": "unknown", "rollout_mode": rollout_mode}
+
         service = await self._ensure_governance_service()
         if service is None:
+            self._record_governance_check(
+                surface="mcp_tool",
+                category=category,
+                status="error",
+                rollout_mode=rollout_mode,
+            )
             return None
 
-        metadata = context.metadata if isinstance(getattr(context, "metadata", None), dict) else {}
         try:
             decision = await service.validate_change(
                 surface="mcp_tool",
                 summary=self._governance_summary(tool_name, tool_args),
-                category=self._resolve_governance_category(tool_name, tool_def),
+                category=category,
                 metadata=metadata,
             )
             payload = self._serialize_governance_decision(decision)
+            payload.setdefault("rollout_mode", rollout_mode)
             if isinstance(context.metadata, dict):
                 context.metadata["governance_preflight"] = payload
-            action = str(payload.get("action") or payload.get("status") or "").strip().lower()
-            if action == "deny":
+            action = str(payload.get("action") or payload.get("status") or "").strip().lower() or "unknown"
+            self._record_governance_check(
+                surface="mcp_tool",
+                category=category,
+                status=action,
+                rollout_mode=rollout_mode,
+            )
+            if action == "deny" and rollout_mode == "enforce":
                 raise GovernanceDeniedError(
                     "Permission denied by governance policy",
                     governance=payload,
@@ -857,6 +917,12 @@ class MCPProtocol:
         except GovernanceDeniedError:
             raise
         except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+            self._record_governance_check(
+                surface="mcp_tool",
+                category=category,
+                status="error",
+                rollout_mode=rollout_mode,
+            )
             try:
                 context.logger.debug(f"Governance preflight failed open: {exc}")
             except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:

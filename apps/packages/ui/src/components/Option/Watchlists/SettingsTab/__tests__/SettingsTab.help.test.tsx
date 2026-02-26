@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { SettingsTab } from "../SettingsTab"
 import { WATCHLISTS_HELP_DOCS } from "../../shared/help-docs"
 
+const ONBOARDING_PATH_STORAGE_KEY = "watchlists:onboarding-path:v1"
+
 const mocks = vi.hoisted(() => ({
   getWatchlistSettingsMock: vi.fn(),
   fetchWatchlistJobsMock: vi.fn(),
@@ -61,8 +63,9 @@ vi.mock("antd", () => {
       />
     )
   }
-  const Select = ({ options = [], value, onChange }: any) => (
+  const Select = ({ options = [], value, onChange, ...rest }: any) => (
     <select
+      data-testid={rest["data-testid"]}
       value={value ?? ""}
       onChange={(event) => onChange?.(event.currentTarget.value || null)}
     >
@@ -180,6 +183,7 @@ describe("SettingsTab contextual help", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.removeItem(ONBOARDING_PATH_STORAGE_KEY)
     delete process.env.NEXT_PUBLIC_WATCHLISTS_SHOW_INTERNAL_DIAGNOSTICS
     mocks.getWatchlistSettingsMock.mockResolvedValue({
       default_output_ttl_seconds: 86400,
@@ -238,29 +242,19 @@ describe("SettingsTab contextual help", () => {
     })
   })
 
-  it("exposes descriptive switch labels for cluster subscriptions", async () => {
-    mocks.fetchWatchlistJobsMock.mockResolvedValue({
-      items: [{ id: 99, name: "Market Monitor" }],
-      total: 1,
-      has_more: false
-    })
-    mocks.fetchClaimClustersMock.mockResolvedValue([
-      {
-        id: 42,
-        summary: "Model updates",
-        canonical_claim_text: null,
-        member_count: 3,
-        updated_at: "2026-02-20T00:00:00Z"
-      }
-    ])
-    mocks.fetchJobClaimClustersMock.mockResolvedValue([])
-
+  it("persists onboarding path selection from settings", async () => {
     render(<SettingsTab />)
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("switch", { name: "Toggle subscription for Model updates" })
-      ).toBeInTheDocument()
+      expect(screen.getByText("Onboarding")).toBeInTheDocument()
     })
+
+    const select = screen.getByTestId("watchlists-settings-onboarding-path-select")
+    expect(select).toBeInTheDocument()
+
+    ;(select as HTMLSelectElement).value = "advanced"
+    select.dispatchEvent(new Event("change", { bubbles: true }))
+
+    expect(localStorage.getItem(ONBOARDING_PATH_STORAGE_KEY)).toBe("advanced")
   })
 })

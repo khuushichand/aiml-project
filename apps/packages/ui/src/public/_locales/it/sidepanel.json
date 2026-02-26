@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "Hai modifiche non salvate nel documento di stato. Vuoi scartare le bozze locali?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "Hai modifiche non salvate nel documento di stato. Vuoi connetterti e scartare le bozze locali?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "Hai modifiche non salvate nel documento di stato. Vuoi disconnetterti e scartare le bozze locali?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "Hai modifiche non salvate nel documento di stato. Vuoi caricare lo stato e scartare le bozze locali?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "Hai modifiche non salvate nel documento di stato. Vuoi cambiare persona e scartare le bozze locali?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "Hai modifiche non salvate nel documento di stato. Vuoi cambiare sessione e scartare le bozze locali?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "Hai modifiche non salvate nel documento di stato. Vuoi ripristinare questa versione dello stato e scartare le bozze locali?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "Hai modifiche non salvate nel documento di stato. Vuoi lasciare questa pagina e scartare le bozze locali?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "Hai modifiche non salvate nel documento di stato. Vuoi lasciare questa pagina senza salvare?"
   }
 }

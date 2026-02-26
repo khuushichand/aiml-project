@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "ブリーフィングキュー",
+    "includeInNextBriefing": "次のブリーフィングに含める",
+    "removeFromBriefingQueue": "ブリーフィングキューから削除",
+    "briefingAlreadyIncluded": "この項目はすでにブリーフィング出力に含まれています。",
+    "briefingIncluded": "次のブリーフィングキューに追加しました。",
+    "briefingRemoved": "ブリーフィングキューから削除しました。",
+    "briefingIncludeError": "項目をブリーフィングに含められませんでした。",
+    "queuedTag": "キュー済み",
+    "queue": {
+      "runPlaceholder": "実行を選択",
+      "runOption": "実行 #{{id}}",
+      "runRequired": "キューからレポートを生成するには実行を選択してください。",
+      "empty": "この実行にはキュー済み項目がありません。",
+      "generated": "{{count}} 件のキュー済み項目{{plural}}からレポートを作成しました。",
+      "generateError": "キュー済み項目からレポートを生成できませんでした。",
+      "generateReport": "キューからレポートを生成"
+    }
+  }
+}

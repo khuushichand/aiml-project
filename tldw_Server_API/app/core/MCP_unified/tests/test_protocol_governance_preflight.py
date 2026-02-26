@@ -114,7 +114,11 @@ async def test_non_governance_tool_invokes_preflight():
 
     proto._ensure_governance_service = _fake_ensure_service  # type: ignore[attr-defined]
 
-    ctx = RequestContext(request_id="gov-preflight-1", user_id="1", metadata={})
+    ctx = RequestContext(
+        request_id="gov-preflight-1",
+        user_id="1",
+        metadata={"governance_rollout_mode": "enforce"},
+    )
     result = await proto._handle_tools_call({"name": "stub.echo", "arguments": {"x": 1}}, ctx)
 
     assert result["tool"] == "stub.echo"
@@ -168,7 +172,11 @@ async def test_wire_compat_adds_governance_details_in_error_data_only():
     proto._ensure_governance_service = _fake_ensure_service  # type: ignore[attr-defined]
 
     req = MCPRequest(method="tools/call", params={"name": "stub.echo", "arguments": {"x": 1}}, id="gov-deny")
-    ctx = RequestContext(request_id="gov-preflight-3", user_id="1", metadata={})
+    ctx = RequestContext(
+        request_id="gov-preflight-3",
+        user_id="1",
+        metadata={"governance_rollout_mode": "enforce"},
+    )
 
     resp = await proto.process_request(req, ctx)
 
@@ -176,3 +184,77 @@ async def test_wire_compat_adds_governance_details_in_error_data_only():
     assert resp.error.code == -32001
     assert isinstance(resp.error.data, dict)
     assert "governance" in resp.error.data
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_shadow_rollout_deny_does_not_block_and_records_metrics(monkeypatch):
+    proto = MCPProtocol()
+    proto.rbac_policy = _AllowAllRBAC()
+    proto.module_registry = _RegistryStub(_ToolModuleStub())
+
+    service = _GovernanceServiceStub(action="deny")
+
+    async def _fake_ensure_service():
+        return service
+
+    proto._ensure_governance_service = _fake_ensure_service  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        proto,
+        "_resolve_governance_rollout_mode",
+        lambda _metadata=None: "shadow",
+        raising=False,
+    )
+
+    metric_calls: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        proto.metrics,
+        "record_governance_check",
+        lambda **kwargs: metric_calls.append({k: str(v) for k, v in kwargs.items()}),
+    )
+
+    ctx = RequestContext(request_id="gov-shadow-1", user_id="1", metadata={})
+    result = await proto._handle_tools_call({"name": "stub.echo", "arguments": {"x": 1}}, ctx)
+
+    assert result["tool"] == "stub.echo"
+    assert service.called is True
+    assert metric_calls
+    assert metric_calls[-1]["rollout_mode"] == "shadow"
+    assert metric_calls[-1]["status"] == "deny"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_off_rollout_skips_governance_service_and_records_metrics(monkeypatch):
+    proto = MCPProtocol()
+    proto.rbac_policy = _AllowAllRBAC()
+    proto.module_registry = _RegistryStub(_ToolModuleStub())
+
+    service = _GovernanceServiceStub(action="deny")
+
+    async def _fake_ensure_service():
+        return service
+
+    proto._ensure_governance_service = _fake_ensure_service  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        proto,
+        "_resolve_governance_rollout_mode",
+        lambda _metadata=None: "off",
+        raising=False,
+    )
+
+    metric_calls: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        proto.metrics,
+        "record_governance_check",
+        lambda **kwargs: metric_calls.append({k: str(v) for k, v in kwargs.items()}),
+    )
+
+    ctx = RequestContext(request_id="gov-off-1", user_id="1", metadata={})
+    result = await proto._handle_tools_call({"name": "stub.echo", "arguments": {"x": 1}}, ctx)
+
+    assert result["tool"] == "stub.echo"
+    assert service.called is False
+    assert metric_calls
+    assert metric_calls[-1]["rollout_mode"] == "off"
+    assert metric_calls[-1]["status"] == "unknown"

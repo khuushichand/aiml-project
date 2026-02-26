@@ -134,6 +134,9 @@
     "command-r": { "prompt": 0.0015, "completion": 0.003 }
   },
   "qwen": {
+    "qwen-max": { "prompt": 0.0, "completion": 0.0, "placeholder": true, "note": "Verify latest Model Studio pricing before billing use." },
+    "qwen-plus": { "prompt": 0.0, "completion": 0.0, "placeholder": true, "note": "Verify latest Model Studio pricing before billing use." },
+    "qwen-turbo": { "prompt": 0.0, "completion": 0.0, "placeholder": true, "note": "Verify latest Model Studio pricing before billing use." },
     "qwen2.5-7b": { "prompt": 0.0002, "completion": 0.0002 },
     "qwen2.5-72b": { "prompt": 0.0005, "completion": 0.0005 }
   },

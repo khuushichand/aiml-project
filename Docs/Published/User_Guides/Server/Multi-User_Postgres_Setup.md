@@ -26,7 +26,7 @@ See `Docs/Deployment/Postgres_Migration_Guide.md` if you want to migrate content
 
 1) Create `.env`:
 ```bash
-cp tldw_Server_API/Config_Files/.env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 ```
 
 2) Set environment variables:

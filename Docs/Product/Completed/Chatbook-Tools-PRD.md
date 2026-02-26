@@ -483,7 +483,7 @@ This implementation plan breaks delivery into clear engineering stages with flag
 ### Stage 6 — Hardening, Metrics, Docs
 - Files
   - Add metrics counters/histograms and log lines as specified
-  - Docs updates: `Docs/API-related/Chatbook_Features_API_Documentation.md` and `Docs/Published/API-related/Chatbook_Features_API_Documentation.md` (append endpoints and tools interplay), `Docs/Product/Chatbooks_PRD.md` alignment notes, WebUI notes, `.env.authnz.template`/config.txt knobs
+  - Docs updates: `Docs/API-related/Chatbook_Features_API_Documentation.md` and `Docs/Published/API-related/Chatbook_Features_API_Documentation.md` (append endpoints and tools interplay), `Docs/Product/Chatbooks_PRD.md` alignment notes, WebUI notes, `.env.example`/config.txt knobs
 - Tests
   - Smoke: run selected integration flows with flags on/off
 - Acceptance

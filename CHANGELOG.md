@@ -5,6 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+
+## [0.1.25] 2026-02-X
+
+### Added
+
+- Alibaba Model Studio image backend support for `/api/v1/files/create` image generation via the new `modelstudio` backend.
+- Model Studio adapter support for sync generation, async task submission/polling, and `auto` mode.
+- Model Studio image configuration fields in `[Image-Generation]`:
+  `modelstudio_image_base_url`, `modelstudio_image_api_key`, `modelstudio_image_default_model`, `modelstudio_image_region`, `modelstudio_image_mode`, `modelstudio_image_poll_interval_seconds`, `modelstudio_image_timeout_seconds`, `modelstudio_image_allowed_extra_params`.
+- Qwen region-based endpoint presets for native HTTP chat routing (`sg`, `us`, `cn`) plus `qwen_api_region` config support.
+- Curated Qwen model entries (`qwen-max`, `qwen-plus`, `qwen-turbo`) in model pricing/catalog metadata.
+- Qwen provider mapping in LLM provider metadata endpoint wiring so Qwen models appear correctly.
+- Regression coverage for Model Studio adapter behavior, config defaults, image allowlist behavior, image model listing, and Qwen base URL precedence/region routing.
+- Workspace banners
+  - Per-workspace custom header banner support in Research Workspace (`/workspace-playground`) with title, subtitle, and image.
+  - New banner rendering surface in Workspace UI (`WorkspaceBanner`) with graceful no-image fallback styling.
+  - “Customize banner” modal in Workspace header menu with upload, preview, save, remove-image, and reset flows.
+  - Banner image normalization utility for local uploads (JPEG/PNG/WebP validation, resize, encoding, and byte-cap enforcement).
+  - Extension parity route support for `/workspace-playground`.
+  - Regression coverage for banner defaults, lifecycle persistence, bundle round-trip, header modal behavior, quota eviction, conflict labeling, and extension route parity.
+- Skills authoring + seed UX
+  - Added built-in `feynman-technique` skill under `tldw_Server_API/app/core/Skills/builtin/`.
+  - Added importable `feynman-technique-template` skill under `Docs/Prompts/Skills/`.
+  - Added Feynman prompt template at `Docs/Prompts/Academic-or-Studying/Feynman_Technique.md`.
+  - Added Skills Manager built-ins seeding dropdown actions for both `Seed Missing Only` (`overwrite=false`) and `Seed and Overwrite Existing` (`overwrite=true`).
+  - Added protocol-sync regression coverage for Feynman skill/prompt assets in `tldw_Server_API/tests/Skills/unit/test_feynman_assets_sync.py`.
+- Added regression coverage ensuring Watchlists pipeline setup propagates HTML template format into generated job and output payloads.
+- Watchlists guardrails and release-gate coverage:
+  - Added static duplicate guard coverage for Watchlists source files (`useWatchlistsStore` selector reuse, duplicate top-level identifiers, duplicate interface keys).
+  - Added `test:watchlists:typecheck` package script and wired it into the Watchlists scale gate workflow to prevent silent duplicate/type-regression drift.
+  - Added/updated regression coverage for quick-setup candidate preview mocking, accessibility toggle labeling contracts, and run-notification polling harness consistency.
+- RAG pipeline parity improvements:
+  - Added pre-retrieval clarification gating (`clarification_gate.py`) with heuristic-first ambiguity detection and timeout-bounded fallback behavior.
+  - Added unified request fields for clarification/dedup controls: `enable_pre_retrieval_clarification`, `clarification_timeout_sec`, and `enable_research_action_dedup`.
+  - Added unified-pipeline clarification short-circuit for ambiguous generation requests (`200 OK` with clarifying prompt in `generated_answer` plus clarification metadata).
+  - Added research-loop action-signature dedup (web/academic/discussion/local DB) with result reuse and `action_dedup` metadata reporting.
+  - Added regression coverage for schema acceptance, clarification short-circuit behavior, clarification metric emission, action-signature dedup (unit + integration), and `/api/v1/rag/features` contract updates.
+
+### Changed
+- Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
+- Workspace bundle schema now includes `workspaceBanner` and preserves banner state on zip/json import/export.
+- Cross-tab conflict detection now tracks `workspaceBanner` as an explicit conflict field.
+- Storage recovery logic now evicts archived banner images before more destructive workspace eviction steps.
+- Persistence diagnostics now surface a dedicated `workspaceBanner` byte section.
+- ZIP import parsing now supports environments without `File.arrayBuffer()` via a safe fallback reader path.
+- Qwen base URL resolution precedence is now explicitly ordered as:
+  request `base_url` -> `QWEN_BASE_URL` -> config `qwen_api.api_base_url` -> region preset.
+- Model Studio base URL resolution now uses region presets when explicit base URL overrides are unset.
+- Model Studio payload construction was refactored to remove duplicate model/extra-parameter logic across sync and async builders.
+- Env-var and image setup docs were updated for Model Studio and Qwen routing, including grouped readability improvements for `[Image-Generation]` key listings.
+- Feynman skill/prompt assets now use a shared `protocol_version` marker key (replacing mixed legacy markers).
+- Importable `feynman-technique-template` now defaults to `disable-model-invocation: true` to avoid duplicate auto-invocable behavior after import.
+- Watchlists pipeline contract now carries selected template format (`md` or `html`) through job defaults and output-create payload construction instead of forcing Markdown.
+- Watchlists source delete confirmation copy now reuses a single locale key across standard and in-use delete flows to reduce translation-key duplication.
+- Watchlists guided quick setup now uses a single audio preference field (`includeAudioBriefing`) across telemetry, preview copy, and submission flow instead of dual field state.
+- RAG features/capabilities surfaces now advertise pre-retrieval clarification and research action-dedup support (`/api/v1/rag/features`, `/api/v1/rag/capabilities`, API guide, and capabilities docs).
+
+### Removed
+- No removals in this session.
+
+### Fixed
+- Fixed `modelstudio_image_mode=auto` to actually do sync-first fallback to async.
+- Fixed validation so `payload.extra_params.mode` is accepted for Model Studio control flow without requiring passthrough allowlisting.
+- Fixed user-facing error hygiene by sanitizing Model Studio transport exception details while logging internals.
+- Fixed potential SSRF path by validating response-provided remote image URLs against egress policy/allowlist before fetch.
+- Fixed `modelstudio_image_region` no-op behavior by wiring it into endpoint selection.
+- Fixed missing docstring on `_coerce_choice` in image generation config helpers.
+- Fixed bundle import compatibility in environments lacking `File.arrayBuffer()`.
+- Fixed invalid imported banner image payload handling to fail soft (drop bad image, preserve banner text fields).
+- Fixed a Watchlists UC2 mismatch where selecting an HTML template could still generate Markdown outputs due to hardcoded `default_format`/`format`.
+- Fixed duplicate English locale maintenance drift for source delete undo-window messaging by consolidating copy to `sources.deleteConfirmDescription`.
+- Fixed newly added Watchlists API audio-briefing tests to comply with typing/docstring standards by adding explicit fixture type hints, return annotations, and test docstrings.
+- Fixed Watchlists static-guard false positives by distinguishing type/value namespaces and limiting interface-property scans to top-level declarations.
+- Fixed Watchlists quick-setup review/test-flow regressions caused by stale CTA label assumptions and missing source-preview service mocks in the Overview test suite.
+- Fixed Watchlists a11y/load-retry test drift for Sources/Monitors toggles by aligning assertions with row-context ARIA labels and current table-render behavior.
+- Fixed redundant iterative research-loop calls for equivalent action/query signatures by reusing previously successful action outputs.
+
+
 ## [0.1.24] 2026-02-22
 
 ### Added

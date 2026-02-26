@@ -10,18 +10,24 @@ import {
   isSystemItemsViewPresetId,
   ITEM_PAGE_SIZE,
   ITEMS_PAGE_SIZE_STORAGE_KEY,
+  ITEMS_SORT_MODE_STORAGE_KEY,
   ITEMS_VIEW_PRESETS_STORAGE_KEY,
+  loadPersistedItemsSortMode,
   loadPersistedItemsViewPresets,
   loadPersistedItemPageSize,
   normalizeItemsSortMode,
   normalizeItemPageSize,
+  normalizeReaderSortMode,
   orderSourcesForReader,
+  persistItemsSortMode,
   persistItemsViewPresets,
   persistItemPageSize,
   provisionItemsViewPresets,
   resolveSelectedItemId,
-  shouldExpandSourceRenderWindow,
   sortItemsForReader,
+  SOURCE_LIST_INITIAL_RENDER_COUNT,
+  SOURCE_LIST_SCROLL_EXPAND_THRESHOLD_PX,
+  shouldExpandSourceRenderWindow,
   shouldReloadItemsAfterReviewMutation,
   stripHtmlToText
 } from "../items-utils"
@@ -78,25 +84,43 @@ describe("filterSourcesForReader", () => {
   })
 })
 
-describe("source render window helpers", () => {
-  it("uses a bounded initial render count unless a search query is active", () => {
+describe("source rendering window helpers", () => {
+  it("caps initial source render count for large datasets and expands full set during search", () => {
     expect(getInitialSourceRenderCount(0, "")).toBe(0)
-    expect(getInitialSourceRenderCount(50, "")).toBe(50)
-    expect(getInitialSourceRenderCount(300, "")).toBe(120)
-    expect(getInitialSourceRenderCount(300, "tech")).toBe(300)
+    expect(getInitialSourceRenderCount(5, "")).toBe(5)
+    expect(getInitialSourceRenderCount(200, "")).toBe(SOURCE_LIST_INITIAL_RENDER_COUNT)
+    expect(getInitialSourceRenderCount(200, "security")).toBe(200)
   })
 
-  it("expands render count in bounded chunks", () => {
-    expect(getNextSourceRenderCount(0, 300)).toBe(120)
-    expect(getNextSourceRenderCount(120, 300)).toBe(240)
-    expect(getNextSourceRenderCount(240, 300)).toBe(300)
-    expect(getNextSourceRenderCount(350, 300)).toBe(300)
+  it("increments source render count in chunks without exceeding total", () => {
+    expect(getNextSourceRenderCount(0, 200)).toBe(SOURCE_LIST_INITIAL_RENDER_COUNT)
+    expect(getNextSourceRenderCount(120, 200)).toBe(200)
+    expect(getNextSourceRenderCount(200, 200)).toBe(200)
   })
 
-  it("expands when the source list scroll reaches the threshold", () => {
-    expect(shouldExpandSourceRenderWindow(0, 0, 0)).toBe(false)
-    expect(shouldExpandSourceRenderWindow(40, 1000, 300)).toBe(false)
-    expect(shouldExpandSourceRenderWindow(520, 1000, 300)).toBe(true)
+  it("expands source window only when scroll nears the lower threshold", () => {
+    expect(
+      shouldExpandSourceRenderWindow(
+        780,
+        1000,
+        100
+      )
+    ).toBe(true)
+    expect(
+      shouldExpandSourceRenderWindow(
+        600,
+        1000,
+        100
+      )
+    ).toBe(false)
+
+    expect(
+      shouldExpandSourceRenderWindow(
+        710,
+        1000,
+        100
+      )
+    ).toBe(1000 - (710 + 100) <= SOURCE_LIST_SCROLL_EXPAND_THRESHOLD_PX)
   })
 })
 
@@ -150,8 +174,8 @@ describe("sortItemsForReader", () => {
     expect(sortItemsForReader(fixture, "unreadFirst").map((item) => item.id)).toEqual([2, 3, 1])
   })
 
-  it("prioritizes reviewed items first while keeping recency within groups", () => {
-    expect(sortItemsForReader(fixture, "reviewedFirst").map((item) => item.id)).toEqual([1, 2, 3])
+  it("falls back to newest ordering for unsupported reader sort modes", () => {
+    expect(sortItemsForReader(fixture, "reviewedFirst" as any).map((item) => item.id)).toEqual([2, 1, 3])
   })
 })
 
@@ -216,6 +240,62 @@ describe("item page-size persistence helpers", () => {
       ITEMS_PAGE_SIZE_STORAGE_KEY,
       String(ITEM_PAGE_SIZE)
     )
+  })
+})
+
+describe("items sort persistence helpers", () => {
+  it("normalizes supported and unsupported sort values", () => {
+    expect(normalizeReaderSortMode("newest")).toBe("newest")
+    expect(normalizeReaderSortMode("oldest")).toBe("oldest")
+    expect(normalizeReaderSortMode("unreadFirst")).toBe("unreadFirst")
+    expect(normalizeReaderSortMode("unknown")).toBe("newest")
+    expect(normalizeReaderSortMode(null)).toBe("newest")
+  })
+
+  it("loads persisted sort mode from storage when valid", () => {
+    const storage = {
+      getItem: (key: string) => (key === ITEMS_SORT_MODE_STORAGE_KEY ? "unreadFirst" : null)
+    }
+    expect(loadPersistedItemsSortMode(storage)).toBe("unreadFirst")
+  })
+
+  it("falls back to default sort mode when storage is invalid", () => {
+    const invalidStorage = {
+      getItem: () => "invalid-sort"
+    }
+    const throwingStorage = {
+      getItem: () => {
+        throw new Error("blocked")
+      }
+    }
+    expect(loadPersistedItemsSortMode(invalidStorage)).toBe("newest")
+    expect(loadPersistedItemsSortMode(throwingStorage)).toBe("newest")
+  })
+
+  it("persists normalized sort mode safely", () => {
+    const setItem = vi.fn()
+    persistItemsSortMode({ setItem }, "unreadFirst")
+    expect(setItem).toHaveBeenCalledWith(ITEMS_SORT_MODE_STORAGE_KEY, "unreadFirst")
+  })
+})
+
+describe("sortItemsForReader", () => {
+  const items = [
+    makeItem({ id: 1, reviewed: true, published_at: "2026-01-01T10:00:00Z" }),
+    makeItem({ id: 2, reviewed: false, published_at: "2026-01-01T09:00:00Z" }),
+    makeItem({ id: 3, reviewed: false, published_at: "2026-01-01T08:00:00Z" })
+  ]
+
+  it("sorts newest first by default", () => {
+    expect(sortItemsForReader(items, "newest").map((item) => item.id)).toEqual([1, 2, 3])
+  })
+
+  it("sorts oldest first when requested", () => {
+    expect(sortItemsForReader(items, "oldest").map((item) => item.id)).toEqual([3, 2, 1])
+  })
+
+  it("sorts unread first, then newest within unread/read groups", () => {
+    expect(sortItemsForReader(items, "unreadFirst").map((item) => item.id)).toEqual([2, 3, 1])
   })
 })
 
@@ -329,7 +409,11 @@ describe("items view preset persistence helpers", () => {
       "system-high-priority",
       "system-needs-review"
     ])
-    expect(provisioned.every((preset) => preset.sortMode === DEFAULT_ITEMS_SORT_MODE)).toBe(true)
+    expect(provisioned.map((preset) => preset.sortMode ?? DEFAULT_ITEMS_SORT_MODE)).toEqual([
+      "unreadFirst",
+      "unreadFirst",
+      "newest"
+    ])
   })
 
   it("keeps custom presets sorted after system defaults", () => {

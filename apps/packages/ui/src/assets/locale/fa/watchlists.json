@@ -1,0 +1,21 @@
+{
+  "items": {
+    "queuedForBriefing": "در صف گزارش",
+    "includeInNextBriefing": "افزودن به گزارش بعدی",
+    "removeFromBriefingQueue": "حذف از صف گزارش",
+    "briefingAlreadyIncluded": "این مورد قبلاً در خروجی‌های گزارش قرار گرفته است.",
+    "briefingIncluded": "به صف گزارش بعدی اضافه شد.",
+    "briefingRemoved": "از صف گزارش حذف شد.",
+    "briefingIncludeError": "افزودن مورد به گزارش ناموفق بود.",
+    "queuedTag": "در صف",
+    "queue": {
+      "runPlaceholder": "انتخاب اجرا",
+      "runOption": "اجرا #{{id}}",
+      "runRequired": "برای تولید گزارش از موارد صف‌شده، یک اجرا انتخاب کنید.",
+      "empty": "برای این اجرا موردی در صف یافت نشد.",
+      "generated": "گزارش از {{count}} مورد صف‌شده{{plural}} ایجاد شد.",
+      "generateError": "تولید گزارش از موارد صف‌شده ناموفق بود.",
+      "generateReport": "تولید گزارش از صف"
+    }
+  }
+}

@@ -1,3 +1,0 @@
-{"query": "Summarize the main ideas of the tldw_server project.", "expect": "High-level overview; mentions media ingestion, RAG, AuthNZ, and OpenAI-compatible APIs.", "namespace": null}
-{"query": "How does the unified RAG pipeline combine FTS and vector search?", "expect": "Explanation of hybrid retrieval and reranking.", "namespace": null}
-{"query": "What safety features are enabled by default in production mode?", "expect": "Mentions guardrails such as citations, numeric checks, or security filters.", "namespace": null}

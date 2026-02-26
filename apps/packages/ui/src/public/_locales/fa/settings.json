@@ -3279,7 +3279,7 @@
     "message": "سازگار با SillyTavern"
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
-    "message": "خط اول\\nخط دوم با ||اسپویلر درون‌خطی||\\n\\n[spoiler]محتوای اسپویلر بلوکی[/spoiler]"
+    "message": "خط اول\nخط دوم با ||اسپویلر درون‌خطی||\n\n[spoiler]محتوای اسپویلر بلوکی[/spoiler]"
   },
   "generalSettings_settings_chatRichTextStyles_title": {
     "message": "سبک عناصر متن غنی"

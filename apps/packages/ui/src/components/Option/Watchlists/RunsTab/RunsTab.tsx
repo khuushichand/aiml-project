@@ -31,11 +31,12 @@ import {
   getRunFailureHint,
   resolveStalledRunNotification
 } from "./run-notifications"
+import { fetchFilteredJobRuns, RUNS_CLIENT_FILTER_PAGE_SIZE } from "./runs-filter-fetch"
 import { hasActiveWatchlistRuns } from "./polling-utils"
 
 const POLL_INTERVAL_MS = 5000
 const DEFAULT_RUNS_CSV_SERVER_THRESHOLD = 2000
-const RUNS_API_PAGE_SIZE = 200
+const RUNS_API_PAGE_SIZE = RUNS_CLIENT_FILTER_PAGE_SIZE
 const RUNS_CSV_SERVER_PAGE_SIZE = 1000
 const RUNS_ADVANCED_FILTERS_STORAGE_KEY = "watchlists:runs:advanced-filters:v1"
 const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
@@ -107,6 +108,7 @@ export const RunsTab: React.FC = () => {
   const runs = useWatchlistsStore((s) => s.runs)
   const runsLoading = useWatchlistsStore((s) => s.runsLoading)
   const runsTotal = useWatchlistsStore((s) => s.runsTotal)
+  const activeTab = useWatchlistsStore((s) => s.activeTab)
   const runsPage = useWatchlistsStore((s) => s.runsPage)
   const runsPageSize = useWatchlistsStore((s) => s.runsPageSize)
   const runsJobFilter = useWatchlistsStore((s) => s.runsJobFilter)
@@ -127,6 +129,10 @@ export const RunsTab: React.FC = () => {
     const stored = readStoredDisclosureState(RUNS_ADVANCED_FILTERS_STORAGE_KEY)
     return stored ?? hasActiveRunsFilters
   })
+  const [documentVisible, setDocumentVisible] = useState<boolean>(() => {
+    if (typeof document === "undefined") return true
+    return document.visibilityState !== "hidden"
+  })
 
   // Store actions
   const setRuns = useWatchlistsStore((s) => s.setRuns)
@@ -135,10 +141,10 @@ export const RunsTab: React.FC = () => {
   const setRunsPageSize = useWatchlistsStore((s) => s.setRunsPageSize)
   const setRunsJobFilter = useWatchlistsStore((s) => s.setRunsJobFilter)
   const setRunsStatusFilter = useWatchlistsStore((s) => s.setRunsStatusFilter)
-  const setPollingActive = useWatchlistsStore((s) => s.setPollingActive)
-  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
   const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const setPollingActive = useWatchlistsStore((s) => s.setPollingActive)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const closeRunDetail = useWatchlistsStore((s) => s.closeRunDetail)
   const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
@@ -152,30 +158,44 @@ export const RunsTab: React.FC = () => {
   const loadRuns = useCallback(async (showLoading = true) => {
     if (showLoading) setRunsLoading(true)
     try {
-      const useClientFilter = Boolean(runsJobFilter && runsStatusFilter)
-      let result
-      if (runsJobFilter) {
-        result = await fetchJobRuns(runsJobFilter, {
-          page: useClientFilter ? 1 : runsPage,
-          size: useClientFilter ? 200 : runsPageSize
+      let items: WatchlistRun[] = []
+      let total = 0
+      let pagedItems: WatchlistRun[] = []
+
+      if (runsJobFilter && runsStatusFilter) {
+        const filtered = await fetchFilteredJobRuns({
+          jobId: runsJobFilter,
+          statusFilter: runsStatusFilter,
+          currentPage: runsPage,
+          pageSize: runsPageSize,
+          fetchPage: fetchJobRuns
         })
+
+        const start = (runsPage - 1) * runsPageSize
+        const end = runsPage * runsPageSize
+        items = filtered.filteredItems
+        total = filtered.exactTotal
+          ? items.length
+          : Math.max(items.length, end + (filtered.hasMoreInSource ? 1 : 0))
+        pagedItems = items.slice(start, end)
+      } else if (runsJobFilter) {
+        const result = await fetchJobRuns(runsJobFilter, {
+          page: runsPage,
+          size: runsPageSize
+        })
+        items = result.items || []
+        total = result.total || items.length
+        pagedItems = items
       } else {
-        result = await fetchWatchlistRuns({
+        const result = await fetchWatchlistRuns({
           q: runsStatusFilter || undefined,
           page: runsPage,
           size: runsPageSize
         })
+        items = result.items || []
+        total = result.total || items.length
+        pagedItems = items
       }
-
-      let items = result.items || []
-      if (useClientFilter && runsStatusFilter) {
-        items = items.filter((run) => run.status === runsStatusFilter)
-      }
-
-      const total = useClientFilter ? items.length : result.total
-      const pagedItems = useClientFilter
-        ? items.slice((runsPage - 1) * runsPageSize, runsPage * runsPageSize)
-        : items
 
       setRuns(pagedItems, total)
       setRunsLoadError(null)
@@ -238,6 +258,17 @@ export const RunsTab: React.FC = () => {
     persistDisclosureState(RUNS_ADVANCED_FILTERS_STORAGE_KEY, showAdvancedFilters)
   }, [showAdvancedFilters])
 
+  useEffect(() => {
+    if (typeof document === "undefined") return
+    const handleVisibilityChange = () => {
+      setDocumentVisible(document.visibilityState !== "hidden")
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [])
+
   const getRunStatusLabel = useCallback((status: string) => {
     const normalized = normalizeRunStatus(status)
     if (!normalized) {
@@ -249,9 +280,11 @@ export const RunsTab: React.FC = () => {
     )
   }, [t])
 
+  const shouldAutoRefreshRuns = pollingActive && activeTab === "runs" && documentVisible
+
   // Polling for active runs
   useEffect(() => {
-    if (pollingActive) {
+    if (shouldAutoRefreshRuns) {
       pollIntervalRef.current = setInterval(() => {
         loadRuns(false)
       }, POLL_INTERVAL_MS)
@@ -265,7 +298,7 @@ export const RunsTab: React.FC = () => {
         clearInterval(pollIntervalRef.current)
       }
     }
-  }, [pollingActive, loadRuns])
+  }, [loadRuns, shouldAutoRefreshRuns])
 
   useEffect(() => {
     const visibleRuns = Array.isArray(runs) ? runs : []
@@ -544,6 +577,12 @@ export const RunsTab: React.FC = () => {
       key: "status",
       width: 120,
       render: (status: string, record) => {
+        const statusNormalized = normalizeRunStatus(status)
+        const ingestedCount = Number(record.stats?.items_ingested || 0)
+        const hasBriefingOutputSignal =
+          statusNormalized === "completed" &&
+          Number.isFinite(ingestedCount) &&
+          ingestedCount > 0
         const progressPercent = Math.round(
           ((record.stats?.items_ingested || 0) /
             Math.max(record.stats?.items_found || 1, 1)) *
@@ -562,6 +601,14 @@ export const RunsTab: React.FC = () => {
                   percent: progressPercent
                 })}
               />
+            )}
+            {hasBriefingOutputSignal && (
+              <span
+                className="text-xs text-text-muted"
+                data-testid={`watchlists-run-briefing-included-${record.id}`}
+              >
+                {t("watchlists:runs.includedInBriefing", "Included in briefing")}
+              </span>
             )}
           </div>
         )
@@ -647,24 +694,24 @@ export const RunsTab: React.FC = () => {
         const cancelFailed = failedCancelRunIds.includes(record.id)
         return (
           <Space size={4}>
-          <Tooltip title={t("watchlists:runs.viewDetails", "View Details")}>
-            <Button
-              type="text"
-              size="small"
-              aria-label={t("watchlists:runs.viewDetails", "View Details")}
-              icon={<Eye className="h-4 w-4" />}
-              onClick={() => openRunDetail(record.id)}
-            />
-          </Tooltip>
-            <Tooltip title={t("watchlists:runs.openRunOutputs", "View reports for this run")}>
+            <Tooltip title={t("watchlists:runs.viewDetails", "View Details")}>
               <Button
                 type="text"
                 size="small"
-                onClick={() => openRunOutputs(record.id, record.job_id)}
+                aria-label={t("watchlists:runs.viewDetails", "View Details")}
+                icon={<Eye className="h-4 w-4" />}
+                onClick={() => openRunDetail(record.id)}
+              />
+            </Tooltip>
+            <Tooltip title={t("watchlists:runs.openReports", "Open Reports")}>
+              <Button
+                type="text"
+                size="small"
+                aria-label={t("watchlists:runs.openReports", "Open Reports")}
+                icon={<Download className="h-4 w-4" />}
                 data-testid={`watchlists-run-open-outputs-${record.id}`}
-              >
-                {t("watchlists:runs.openOutputsShort", "Reports")}
-              </Button>
+                onClick={() => openRunOutputs(record.id, record.job_id)}
+              />
             </Tooltip>
             {isCancellable && (
               <Tooltip
@@ -739,10 +786,19 @@ export const RunsTab: React.FC = () => {
       }
     }
   ]
+  const resolveColumnKey = (column: ColumnsType<WatchlistRun>[number]): string => {
+    if (column.key != null) return String(column.key)
+    if ("dataIndex" in column && column.dataIndex != null) {
+      return Array.isArray(column.dataIndex)
+        ? column.dataIndex.map((entry) => String(entry)).join(".")
+        : String(column.dataIndex)
+    }
+    return ""
+  }
   const defaultColumnKeys = new Set(["job", "status", "started_at", "actions"])
   const columns = showAdvancedFilters
     ? allColumns
-    : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
+    : allColumns.filter((column) => defaultColumnKeys.has(resolveColumnKey(column)))
 
   // Status options for filter
   const statusOptions = useMemo(() => ([
@@ -899,15 +955,21 @@ export const RunsTab: React.FC = () => {
               </span>
             </Tooltip>
           )}
-          {pollingActive && (
-            <span className="text-sm text-primary flex items-center gap-1">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
-              </span>
-              {t("watchlists:runs.autoRefreshing", "Auto-refreshing")}
-            </span>
-          )}
+          <span
+            role="status"
+            aria-live="polite"
+            className="text-sm text-primary flex items-center gap-1"
+          >
+            {pollingActive && (
+              <>
+                <span className="relative flex h-2 w-2" aria-hidden="true">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+                </span>
+                {t("watchlists:runs.autoRefreshing", "Auto-refreshing")}
+              </>
+            )}
+          </span>
           <Button
             icon={<RefreshCw className="h-4 w-4" />}
             onClick={() => loadRuns()}

@@ -35,7 +35,7 @@ class ConfigMigrator:
 
         self.config_file = self.config_dir / "config.txt"
         self.env_file = self.config_dir / ".env"
-        self.env_template = self.config_dir / ".env.template"
+        self.env_template = self.config_dir / ".env.example"
         self.backup_dir = self.config_dir / "backups"
 
         # Mapping of config.txt keys to .env keys

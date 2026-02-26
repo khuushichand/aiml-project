@@ -77,60 +77,66 @@
 - Run performance-oriented tests for item rendering and selection operations.
 **Status**: Complete
 
----
+## Execution Notes
 
-## Execution Notes (2026-02-23)
+### 2026-02-23 - Stage 1 completion (reader prioritization baseline)
 
-- Stage 1 completed with explicit reader prioritization/sorting controls and persisted view support:
-  - Added reader sort modes (`newest`, `oldest`, `unreadFirst`, `reviewedFirst`) in:
+- Added explicit triage sort controls in Articles reader:
+  - `newest`, `oldest`, and `unread-first`
+  - persisted via local storage and included in saved view preset contracts
+  - implemented in:
     - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx`
-  - Extended saved-view contract to persist and restore sort mode:
     - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/items-utils.ts`
-  - Added localization for sort labels/options:
-    - `apps/packages/ui/src/assets/locale/en/watchlists.json`
-- Stage 1 test coverage added/updated:
-  - Sort helper and sort-mode normalization coverage:
-    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts`
-  - Sort-change row ordering and smart-filter + saved-view persistence coverage:
-    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
-  - Keyboard shortcut regression adjusted for deterministic newest-first baseline:
-    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-- Validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `/tmp/bandit_watchlists_group06_stage1_frontend_scope_2026_02_23.json`
+- Added smart-feed transition coverage and reader sort transition coverage:
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
+  - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts`
+- Added localization copy for sort controls:
+  - `apps/packages/ui/src/assets/locale/en/watchlists.json`
+- Stage 1 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx --maxWorkers=1 --no-file-parallelism`
 
-- Stage 2 completed with explicit scale/recovery batch-review coverage:
-  - Added all-filtered scope confirmation and completion behavior coverage:
-    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
-  - Added partial-failure reconciliation coverage (warning copy + retained failed selections):
+### 2026-02-23 - Stage 2 completion (batch scale and feedback)
+
+- Added explicit scope/reconciliation regression coverage for batch flows:
+  - selected/page/all-filtered confirmation scope assertions
+  - partial success/failure warning and row-state reconciliation assertions
+  - implemented in:
     - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
 - Stage 2 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `/tmp/bandit_watchlists_group06_stage2_frontend_scope_2026_02_23.json`
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx --maxWorkers=1 --no-file-parallelism`
 
-- Stage 3 completed with shortcut discoverability/accessibility regression reinforcement:
-  - Added explicit keyboard-behavior coverage ensuring list navigation shortcuts are blocked while shortcut help is open:
-    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - Existing coverage for hint visibility/dismiss/restore lifecycle and help-panel focus restoration remains active.
-- Stage 3 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `/tmp/bandit_watchlists_group06_stage3_frontend_scope_2026_02_23.json`
+### 2026-02-23 - Stage 3 and Stage 4 validation snapshot
 
-- Stage 4 completed with cross-action/statefulness reinforcement in reader:
-  - Added include-in-briefing state-transition coverage (disabled for already-ingested items, enabled for eligible items, disabled after successful inclusion):
+- Stage 3 (shortcut discoverability/accessibility) validated by:
+  - shortcut hint dismiss/restore lifecycle
+  - keyboard conflict guard for editable targets
+  - shortcuts modal focus restore behavior
+  - file: `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
+- Stage 4 (content value and cross-action flow) validated by:
+  - include-in-next-briefing action availability and feedback
+  - monitor/run/reports cross-jump routing assertions
+  - file: `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
+- Stage 3/4 validation evidence:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts --maxWorkers=1 --no-file-parallelism`
+
+### 2026-02-24 - Stage 5 completion (mobile + high-volume validation)
+
+- Added source-list rendering window behavior to protect high-volume feed profiles:
+  - initial render cap + scroll-driven expansion using source window helpers
+  - explicit rendered-source hint for collapsed large lists
+  - implemented in:
+    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/ItemsTab.tsx`
+    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/items-utils.ts`
+- Added Stage 5 responsive/scale coverage:
+  - new responsive + source-profile dataset tests (5, 50, 200 source contexts):
+    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx`
+  - high-volume all-filtered pagination/throughput coverage (1200-item batch operation):
     - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
-  - Existing cross-jump routing coverage (Monitor/Run/Reports) remains active.
-- Stage 4 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `/tmp/bandit_watchlists_group06_stage4_frontend_scope_2026_02_23.json`
-
-- Stage 5 completed with mobile/high-volume validation coverage and QA checklist:
-  - Added narrow-viewport operability regression for core panes and controls:
-    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - Added high-volume all-filtered batch regression coverage (240-item operation):
-    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx`
-  - Added 5/50/200 profile QA checklist artifact:
-    - `Docs/Plans/WATCHLISTS_ARTICLES_READER_SCALE_QA_CHECKLIST_2026_02_23.md`
+  - source render-window helper coverage:
+    - `apps/packages/ui/src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts`
+- Added Stage 5 reader QA checklist:
+  - `Docs/Plans/WATCHLISTS_READER_SCALE_MOBILE_QA_CHECKLIST_2026_02_24.md`
 - Stage 5 validation evidence:
-  - `bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx`
-  - `/tmp/bandit_watchlists_group06_stage5_frontend_scope_2026_02_23.json`
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/Watchlists/ItemsTab/__tests__/items-utils.test.ts src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.batch-controls.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.keyboard-shortcuts.test.tsx src/components/Option/Watchlists/ItemsTab/__tests__/ItemsTab.scale-responsive.test.tsx --maxWorkers=1 --no-file-parallelism`
+  - `/tmp/bandit_watchlists_group06_stage5_2026_02_24.json`

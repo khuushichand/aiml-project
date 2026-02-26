@@ -58,7 +58,7 @@ Notes:
 Start from the AuthNZ template:
 
 ```bash
-cp tldw_Server_API/Config_Files/.env.authnz.template .env
+cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
 ```
 
 Then update `.env` (or export in your shell):

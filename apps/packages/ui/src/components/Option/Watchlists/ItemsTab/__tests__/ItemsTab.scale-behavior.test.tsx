@@ -7,7 +7,10 @@ import { ItemsTab } from "../ItemsTab"
 import { useWatchlistsStore } from "@/store/watchlists"
 
 const serviceMocks = vi.hoisted(() => ({
+  createWatchlistOutput: vi.fn(),
+  fetchScrapedItemSmartCounts: vi.fn(),
   fetchWatchlistSources: vi.fn(),
+  fetchWatchlistRuns: vi.fn(),
   fetchScrapedItems: vi.fn(),
   updateScrapedItem: vi.fn()
 }))
@@ -64,7 +67,11 @@ vi.mock("antd", async () => {
 })
 
 vi.mock("@/services/watchlists", () => ({
+  createWatchlistOutput: (...args: unknown[]) => serviceMocks.createWatchlistOutput(...args),
+  fetchScrapedItemSmartCounts: (...args: unknown[]) =>
+    serviceMocks.fetchScrapedItemSmartCounts(...args),
   fetchWatchlistSources: (...args: unknown[]) => serviceMocks.fetchWatchlistSources(...args),
+  fetchWatchlistRuns: (...args: unknown[]) => serviceMocks.fetchWatchlistRuns(...args),
   fetchScrapedItems: (...args: unknown[]) => serviceMocks.fetchScrapedItems(...args),
   updateScrapedItem: (...args: unknown[]) => serviceMocks.updateScrapedItem(...args)
 }))
@@ -98,6 +105,7 @@ const itemsFixture = [
     tags: ["tech"],
     status: "ingested",
     reviewed: false,
+    queued_for_briefing: false,
     created_at: "2026-02-18T08:00:00Z",
     published_at: "2026-02-18T08:00:00Z"
   },
@@ -112,6 +120,7 @@ const itemsFixture = [
     tags: ["tech"],
     status: "ingested",
     reviewed: false,
+    queued_for_briefing: false,
     created_at: "2026-02-18T08:10:00Z",
     published_at: "2026-02-18T08:10:00Z"
   }
@@ -122,6 +131,14 @@ describe("ItemsTab scale behavior", () => {
     vi.clearAllMocks()
     window.localStorage.clear()
     useWatchlistsStore.getState().resetStore()
+    ;(serviceMocks.fetchScrapedItemSmartCounts as Mock).mockResolvedValue({
+      all: 2,
+      today: 2,
+      today_unread: 2,
+      unread: 2,
+      reviewed: 0,
+      queued: 0
+    })
 
     ;(serviceMocks.fetchScrapedItems as Mock).mockImplementation(async (params?: Record<string, unknown>) => {
       if (params?.size === 1) {
@@ -142,6 +159,15 @@ describe("ItemsTab scale behavior", () => {
       id: itemId,
       reviewed: true
     }))
+
+    ;(serviceMocks.fetchWatchlistRuns as Mock).mockResolvedValue({
+      items: [{ id: 1, job_id: 1, status: "completed" }],
+      total: 1,
+      page: 1,
+      size: 200,
+      has_more: false
+    })
+    ;(serviceMocks.createWatchlistOutput as Mock).mockResolvedValue({ id: 1, run_id: 1 })
   })
 
   afterEach(() => {
@@ -175,7 +201,7 @@ describe("ItemsTab scale behavior", () => {
       "Showing 120 of 260 feeds. Scroll to load more."
     )
 
-    const list = screen.getByTestId("watchlists-items-sources-scroll")
+    const list = screen.getByTestId("watchlists-items-source-list")
     let scrollTop = 0
     Object.defineProperty(list, "scrollHeight", { configurable: true, get: () => 2600 })
     Object.defineProperty(list, "clientHeight", { configurable: true, get: () => 420 })
@@ -245,7 +271,7 @@ describe("ItemsTab scale behavior", () => {
     expect(serviceMocks.fetchScrapedItems).toHaveBeenCalledTimes(0)
 
     await waitFor(() => {
-      expect(serviceMocks.fetchScrapedItems).toHaveBeenCalledTimes(6)
+      expect(serviceMocks.fetchScrapedItems).toHaveBeenCalledTimes(1)
     })
 
     ;(serviceMocks.fetchScrapedItems as Mock).mockClear()

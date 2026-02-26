@@ -162,21 +162,23 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
   })
 
-  it("shows a reduced top-level tab set and exposes hidden routes via More views", () => {
+  it("shows task-centered primary tabs and exposes implementation tabs via More views", () => {
     render(<WatchlistsPlaygroundPage />)
 
     expect(screen.getByTestId("watchlists-tab-overview")).toBeInTheDocument()
     expect(screen.getByTestId("watchlists-tab-sources")).toBeInTheDocument()
-    expect(screen.getByTestId("watchlists-tab-runs")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-tab-items")).toBeInTheDocument()
     expect(screen.getByTestId("watchlists-tab-outputs")).toBeInTheDocument()
     expect(screen.getByTestId("watchlists-tab-settings")).toBeInTheDocument()
 
     expect(screen.queryByTestId("watchlists-tab-jobs")).not.toBeInTheDocument()
-    expect(screen.queryByTestId("watchlists-tab-items")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("watchlists-tab-runs")).not.toBeInTheDocument()
     expect(screen.queryByTestId("watchlists-tab-templates")).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId("watchlists-experimental-tab-jobs"))
     expect(mocks.state.setActiveTab).toHaveBeenCalledWith("jobs")
+    fireEvent.click(screen.getByTestId("watchlists-experimental-tab-runs"))
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("runs")
   })
 
   it("keeps hidden tabs reachable when currently selected", () => {
@@ -187,16 +189,26 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     expect(screen.getByTestId("watchlists-tab-templates")).toBeInTheDocument()
   })
 
-  it("keeps task shortcuts visible and opens hidden tabs from those shortcuts", () => {
+  it("routes task views to user outcomes and keeps legacy tabs mapped to the active task", () => {
     render(<WatchlistsPlaygroundPage />)
 
-    fireEvent.click(screen.getByTestId("watchlists-task-open-jobs"))
-    fireEvent.click(screen.getByTestId("watchlists-task-open-items"))
-    fireEvent.click(screen.getByTestId("watchlists-task-open-outputs"))
+    fireEvent.click(screen.getByTestId("watchlists-task-view-collect"))
+    fireEvent.click(screen.getByTestId("watchlists-task-view-review"))
+    fireEvent.click(screen.getByTestId("watchlists-task-view-briefings"))
 
-    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("jobs")
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("sources")
     expect(mocks.state.setActiveTab).toHaveBeenCalledWith("items")
     expect(mocks.state.setActiveTab).toHaveBeenCalledWith("outputs")
+
+    cleanup()
+    mocks.state.activeTab = "runs"
+    render(<WatchlistsPlaygroundPage />)
+    expect(screen.getByTestId("watchlists-task-view-review")).toHaveAttribute("aria-pressed", "true")
+
+    cleanup()
+    mocks.state.activeTab = "templates"
+    render(<WatchlistsPlaygroundPage />)
+    expect(screen.getByTestId("watchlists-task-view-briefings")).toHaveAttribute("aria-pressed", "true")
   })
 
   it("records tab transition telemetry when experiment mode is active", () => {

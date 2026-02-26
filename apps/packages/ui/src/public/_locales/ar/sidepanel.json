@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تجاهل المسودات المحلية؟"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد الاتصال وتجاهل المسودات المحلية؟"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد قطع الاتصال وتجاهل المسودات المحلية؟"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تحميل الحالة وتجاهل المسودات المحلية؟"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تبديل الشخصية وتجاهل المسودات المحلية؟"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تبديل الجلسة وتجاهل المسودات المحلية؟"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد استعادة هذا الإصدار من الحالة وتجاهل المسودات المحلية؟"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد مغادرة هذه الصفحة وتجاهل المسودات المحلية؟"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد مغادرة هذه الصفحة بدون حفظ؟"
   }
 }

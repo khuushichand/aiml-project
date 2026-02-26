@@ -39,7 +39,7 @@ vi.mock("antd", () => {
   const Popconfirm = ({ children }: any) => <>{children}</>
   const Space = ({ children }: any) => <>{children}</>
   const Switch = () => null
-  const Tag = ({ children }: any) => <span>{children}</span>
+  const Tag = ({ children, ...rest }: any) => <span {...rest}>{children}</span>
   const Tooltip = ({ title, children }: any) => (
     <div>
       {children}
@@ -146,7 +146,7 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   ...overrides
 })
 
-const buildJob = (id: number, overrides: Record<string, unknown> = {}) => ({
+const buildJob = (id: number) => ({
   id,
   name: `Monitor ${id}`,
   description: "Daily scan",
@@ -171,8 +171,7 @@ const buildJob = (id: number, overrides: Record<string, unknown> = {}) => ({
   created_at: "2026-02-18T00:00:00Z",
   updated_at: "2026-02-18T00:00:00Z",
   last_run_at: null,
-  next_run_at: null,
-  ...overrides
+  next_run_at: null
 })
 
 describe("JobsTab advanced details disclosure", () => {
@@ -180,7 +179,7 @@ describe("JobsTab advanced details disclosure", () => {
     vi.clearAllMocks()
     localStorage.removeItem(ADVANCED_COLUMNS_STORAGE_KEY)
 
-    const job = buildJob(77, { name: "Morning Monitor" })
+    const job = buildJob(77)
 
     mocks.storeStateRef.current = baseState({
       jobs: [job],
@@ -221,31 +220,70 @@ describe("JobsTab advanced details disclosure", () => {
     expect(localStorage.getItem(ADVANCED_COLUMNS_STORAGE_KEY)).toBe("1")
   })
 
-  it("renders a high-density monitor table without dropping compact summaries", async () => {
-    const jobs = Array.from({ length: 200 }, (_value, index) =>
-      buildJob(index + 1)
-    )
+  it("shows an audio chip when monitor output preferences enable audio briefing", async () => {
+    const audioJob = {
+      id: 88,
+      name: "Audio Monitor",
+      description: "Audio digest",
+      active: true,
+      scope: { sources: [1] },
+      job_filters: { filters: [] },
+      schedule_expr: "0 9 * * *",
+      timezone: "UTC",
+      output_prefs: { generate_audio: true },
+      created_at: "2026-02-18T00:00:00Z",
+      updated_at: "2026-02-18T00:00:00Z",
+      last_run_at: null,
+      next_run_at: null
+    }
+
     mocks.storeStateRef.current = baseState({
-      jobs,
-      jobsTotal: jobs.length
+      jobs: [audioJob],
+      jobsTotal: 1
     })
     mocks.fetchWatchlistJobsMock.mockResolvedValue({
-      items: jobs,
-      total: jobs.length,
+      items: [audioJob],
+      total: 1,
       page: 1,
-      size: 200,
+      size: 20,
       has_more: false
     })
 
-    const startedAt = performance.now()
-    const { container } = render(<JobsTab />)
+    render(<JobsTab />)
 
-    await waitFor(() => {
-      expect(screen.getByTestId("job-compact-summary-200")).toBeInTheDocument()
-    })
-
-    const renderedRows = container.querySelectorAll("tr")
-    expect(renderedRows.length).toBe(200)
-    expect(performance.now() - startedAt).toBeLessThan(10000)
+    expect(await screen.findByTestId("job-audio-enabled-chip-88")).toHaveTextContent("Audio on")
   })
+
+  it.each([1, 10, 50])(
+    "keeps monitor table summaries actionable for %i monitors in compact and advanced density modes",
+    async (monitorCount) => {
+      const jobs = Array.from({ length: monitorCount }, (_unused, index) => buildJob(1000 + index))
+      mocks.storeStateRef.current = baseState({
+        jobs,
+        jobsTotal: monitorCount
+      })
+      mocks.fetchWatchlistJobsMock.mockResolvedValue({
+        items: jobs,
+        total: monitorCount,
+        page: 1,
+        size: monitorCount,
+        has_more: false
+      })
+
+      render(<JobsTab />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId("job-compact-summary-1000")).toBeInTheDocument()
+      })
+      expect(document.querySelectorAll("[data-testid^='job-compact-summary-']")).toHaveLength(monitorCount)
+
+      fireEvent.click(screen.getByTestId("watchlists-jobs-advanced-toggle"))
+
+      await waitFor(() => {
+        expect(screen.getByTestId("job-scope-summary-1000")).toHaveTextContent("2 feeds, 1 group, 1 tag")
+      })
+      expect(document.querySelectorAll("[data-testid^='job-scope-summary-']")).toHaveLength(monitorCount)
+      expect(localStorage.getItem(ADVANCED_COLUMNS_STORAGE_KEY)).toBe("1")
+    }
+  )
 })

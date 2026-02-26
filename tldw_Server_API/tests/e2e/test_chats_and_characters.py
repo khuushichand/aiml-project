@@ -140,9 +140,12 @@ def test_character_persona_influences_context_and_sender_name(authenticated_clie
         "stream": False,
     }
     resp = api.client.post(f"/api/v1/chats/{chat_id}/complete-v2", json=complete_body)
-    if resp.status_code in (502, 503):
-        pytest.skip(f"LLM provider unavailable for /chats/{chat_id}/complete-v2: {resp.text}")
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (502, 503):
+            pytest.skip(f"LLM provider unavailable for /complete-v2: {e.response.text}")
+        raise
     comp = resp.json()
     assert comp.get("chat_id") == chat_id
     assert comp.get("assistant_content") is not None

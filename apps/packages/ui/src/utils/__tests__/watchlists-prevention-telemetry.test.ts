@@ -91,6 +91,27 @@ describe("watchlists-prevention-telemetry", () => {
       mode: "basic",
       context: "create"
     })
+    await telemetry.trackWatchlistsPreventionTelemetry({
+      type: "watchlists_template_preview_mode_changed",
+      surface: "template_editor",
+      mode: "live"
+    })
+    await telemetry.trackWatchlistsPreventionTelemetry({
+      type: "watchlists_template_preview_rendered",
+      surface: "template_editor",
+      mode: "live",
+      status: "success",
+      warning_count: 2,
+      run_id: 101
+    })
+    await telemetry.trackWatchlistsPreventionTelemetry({
+      type: "watchlists_template_preview_rendered",
+      surface: "template_editor",
+      mode: "live",
+      status: "error",
+      warning_count: 0,
+      run_id: 102
+    })
 
     const state = storageMap.get(STORAGE_KEY) as Record<string, any>
 
@@ -105,6 +126,8 @@ describe("watchlists-prevention-telemetry", () => {
     expect(state.counters.watchlists_authoring_saved).toBe(2)
     expect(state.counters.watchlists_basic_step_completed).toBe(2)
     expect(state.counters.watchlists_template_recipe_applied).toBe(1)
+    expect(state.counters.watchlists_template_preview_mode_changed).toBe(1)
+    expect(state.counters.watchlists_template_preview_rendered).toBe(2)
 
     expect(state.authoring.started_by_surface.job_form).toBe(1)
     expect(state.authoring.started_by_surface.template_editor).toBe(1)
@@ -117,7 +140,11 @@ describe("watchlists-prevention-telemetry", () => {
     expect(state.authoring.basic_step_completed.scope).toBe(1)
     expect(state.authoring.basic_step_completed.schedule).toBe(1)
     expect(state.authoring.template_recipe_applied.newsletter_html).toBe(1)
-    expect(state.recent_events).toHaveLength(10)
+    expect(state.authoring.template_preview.mode_selected.live).toBe(1)
+    expect(state.authoring.template_preview.live_rendered.success).toBe(1)
+    expect(state.authoring.template_preview.live_rendered.error).toBe(1)
+    expect(state.authoring.template_preview.live_warning_total).toBe(2)
+    expect(state.recent_events).toHaveLength(13)
   })
 
   it("caps recent events to the configured maximum", async () => {

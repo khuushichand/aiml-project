@@ -1648,6 +1648,7 @@ export const PlaygroundMessage = (props: Props) => {
     "playground:composer.compareSelectedTag",
     "Compared"
   )
+  const compareErrorLabel = t("playground:composer.error.label", "Error")
   const systemLabel = t("playground:systemPrompt", "System prompt")
   const messageRole = isSystemMessage
     ? "system"
@@ -1881,7 +1882,9 @@ export const PlaygroundMessage = (props: Props) => {
                       </span>
                     )}
                     {props.compareError && (
-                      <div className="flex items-center gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2">
+                      <div
+                        aria-label={compareErrorLabel}
+                        className="flex items-center gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2">
                         <AlertTriangle className="h-4 w-4 flex-shrink-0 text-danger" aria-hidden="true" />
                         <div className="min-w-0 flex-1">
                           <p className="text-xs font-medium text-danger">

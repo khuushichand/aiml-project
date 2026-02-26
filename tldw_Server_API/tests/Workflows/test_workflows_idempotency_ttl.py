@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.Workflows.engine import WorkflowEngine
 
 
 pytestmark = pytest.mark.unit
@@ -51,3 +52,26 @@ def test_workflow_idempotency_ttl_expiry(monkeypatch, tmp_path):
     refreshed = db.get_run_by_idempotency("default", "user", "idem-key")
     assert refreshed is not None
     assert refreshed.run_id == run_id_new
+
+
+def test_lifecycle_cancel_is_idempotent(tmp_path):
+    db = WorkflowsDatabase(str(tmp_path / "wf.db"))
+    run_id = "run-cancel-idem"
+    db.create_run(
+        run_id=run_id,
+        tenant_id="default",
+        user_id="user",
+        inputs={},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot={"name": "cancel-idem", "version": 1, "steps": []},
+    )
+    engine = WorkflowEngine(db)
+
+    first = engine.cancel(run_id)
+    second = engine.cancel(run_id)
+
+    assert first == "applied"
+    assert second == "already_applied"
+    cancelled_events = db.get_events(run_id, types=["run_cancelled"])
+    assert len(cancelled_events) == 1

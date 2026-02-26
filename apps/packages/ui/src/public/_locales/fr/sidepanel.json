@@ -460,5 +460,32 @@
   },
   "fileSearch_mediaType_xml": {
     "message": "XML"
+  },
+  "persona_unsavedStateDiscardPrompt": {
+    "message": "Vous avez des modifications non enregistrées dans les documents d’état. Ignorer les brouillons locaux ?"
+  },
+  "persona_unsavedStateDiscardPromptConnect": {
+    "message": "Vous avez des modifications non enregistrées dans les documents d’état. Vous connecter et ignorer les brouillons locaux ?"
+  },
+  "persona_unsavedStateDiscardPromptDisconnect": {
+    "message": "Vous avez des modifications non enregistrées dans les documents d’état. Vous déconnecter et ignorer les brouillons locaux ?"
+  },
+  "persona_unsavedStateDiscardPromptReloadState": {
+    "message": "Vous avez des modifications non enregistrées dans les documents d’état. Charger l’état et ignorer les brouillons locaux ?"
+  },
+  "persona_unsavedStateDiscardPromptPersonaSwitch": {
+    "message": "Vous avez des modifications non enregistrées dans les documents d’état. Changer de persona et ignorer les brouillons locaux ?"
+  },
+  "persona_unsavedStateDiscardPromptSessionSwitch": {
+    "message": "Vous avez des modifications non enregistrées dans les documents d’état. Changer de session et ignorer les brouillons locaux ?"
+  },
+  "persona_unsavedStateDiscardPromptRestoreState": {
+    "message": "Vous avez des modifications non enregistrées dans les documents d’état. Restaurer cette version de l’état et ignorer les brouillons locaux ?"
+  },
+  "persona_unsavedStateDiscardPromptRouteTransition": {
+    "message": "Vous avez des modifications non enregistrées dans les documents d’état. Quitter cette page et ignorer les brouillons locaux ?"
+  },
+  "persona_unsavedStateBeforeUnloadPrompt": {
+    "message": "Vous avez des modifications non enregistrées dans les documents d’état. Quitter cette page sans enregistrer ?"
   }
 }

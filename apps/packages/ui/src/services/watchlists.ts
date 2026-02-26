@@ -10,6 +10,7 @@ import type {
   PaginatedResponse,
   RunDetailResponse,
   ScrapedItem,
+  ScrapedItemSmartCounts,
   ScrapedItemUpdate,
   SourceSeenResetResponse,
   SourceSeenStats,
@@ -369,6 +370,35 @@ export const previewWatchlistJob = async (
   })
 }
 
+export interface WatchlistAudioSettingsTestRequest {
+  text: string
+  voice: string
+  speed: number
+  model?: string
+  response_format?: "mp3" | "wav" | "ogg" | "opus" | "flac" | "aac" | "webm"
+}
+
+export const testWatchlistAudioSettings = async (
+  payload: WatchlistAudioSettingsTestRequest
+): Promise<ArrayBuffer> => {
+  return bgRequest<ArrayBuffer>({
+    path: "/api/v1/audio/speech",
+    method: "POST",
+    headers: {
+      Accept: "audio/mpeg"
+    },
+    body: {
+      input: payload.text,
+      text: payload.text,
+      voice: payload.voice,
+      speed: payload.speed,
+      ...(payload.model ? { model: payload.model } : {}),
+      ...(payload.response_format ? { response_format: payload.response_format } : {})
+    },
+    responseType: "arrayBuffer"
+  })
+}
+
 export const updateJobFilters = async (
   jobId: number,
   filters: WatchlistFilter[]
@@ -491,6 +521,7 @@ export interface FetchItemsParams {
   source_id?: number
   status?: string
   reviewed?: boolean
+  queued_for_briefing?: boolean
   q?: string
   since?: string
   until?: string
@@ -504,6 +535,27 @@ export const fetchScrapedItems = async (
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<ScrapedItem>>({
     path: `/api/v1/watchlists/items${qs}` as any,
+    method: "GET"
+  })
+}
+
+export interface FetchItemSmartCountsParams {
+  run_id?: number
+  job_id?: number
+  source_id?: number
+  status?: string
+  q?: string
+  since?: string
+  until?: string
+  queue_run_id?: number
+}
+
+export const fetchScrapedItemSmartCounts = async (
+  params?: FetchItemSmartCountsParams
+): Promise<ScrapedItemSmartCounts> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<ScrapedItemSmartCounts>({
+    path: `/api/v1/watchlists/items/smart-counts${qs}` as any,
     method: "GET"
   })
 }
@@ -793,6 +845,42 @@ export interface TemplatePreviewResult {
   warnings: string[]
 }
 
+export interface TemplateComposerSectionRequest {
+  run_id: number
+  block_id: string
+  prompt: string
+  input_scope?: "all_items" | "top_items" | "selected_items"
+  style?: string
+  length_target?: "short" | "medium" | "long"
+}
+
+export interface TemplateComposerSectionResult {
+  block_id: string
+  content: string
+  warnings: string[]
+  diagnostics: Record<string, unknown>
+}
+
+export interface TemplateComposerFlowSection {
+  id: string
+  content: string
+}
+
+export type TemplateComposerFlowCheckMode = "suggest_only" | "auto_apply"
+
+export interface TemplateComposerFlowIssue {
+  section_id?: string | null
+  severity: "info" | "warning"
+  message: string
+}
+
+export interface TemplateComposerFlowCheckResult {
+  mode: TemplateComposerFlowCheckMode
+  issues: TemplateComposerFlowIssue[]
+  diff: string
+  sections: TemplateComposerFlowSection[]
+}
+
 export const validateWatchlistTemplate = async (
   content: string,
   format: "md" | "html" = "md"
@@ -815,5 +903,27 @@ export const previewWatchlistTemplate = async (
     method: "POST",
     body: { content, format, run_id: runId },
     abortSignal: signal
+  })
+}
+
+export const composeWatchlistTemplateSection = async (
+  payload: TemplateComposerSectionRequest
+): Promise<TemplateComposerSectionResult> => {
+  return bgRequest<TemplateComposerSectionResult>({
+    path: "/api/v1/watchlists/templates/compose/section" as any,
+    method: "POST",
+    body: payload
+  })
+}
+
+export const flowCheckWatchlistTemplateSections = async (payload: {
+  run_id: number
+  mode: TemplateComposerFlowCheckMode
+  sections: TemplateComposerFlowSection[]
+}): Promise<TemplateComposerFlowCheckResult> => {
+  return bgRequest<TemplateComposerFlowCheckResult>({
+    path: "/api/v1/watchlists/templates/compose/flow-check" as any,
+    method: "POST",
+    body: payload
   })
 }
