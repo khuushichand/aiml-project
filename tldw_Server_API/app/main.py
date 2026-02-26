@@ -5262,6 +5262,18 @@ elif _MINIMAL_TEST_APP:
         app.include_router(items_router, prefix=f"{API_V1_PREFIX}", tags=["items"])
     except _IMPORT_EXCEPTIONS as _items_min_err:
         logger.debug(f"Skipping items router in minimal test app: {_items_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.reminders import router as reminders_router
+
+        app.include_router(reminders_router, prefix=f"{API_V1_PREFIX}", tags=["tasks"])
+    except _IMPORT_EXCEPTIONS as _reminders_min_err:
+        logger.debug(f"Skipping reminders router in minimal test app: {_reminders_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.notifications import router as notifications_router
+
+        app.include_router(notifications_router, prefix=f"{API_V1_PREFIX}", tags=["notifications"])
+    except _IMPORT_EXCEPTIONS as _notifications_min_err:
+        logger.debug(f"Skipping notifications router in minimal test app: {_notifications_min_err}")
     # Chatbooks endpoints (export/import, jobs, download)
     try:
         from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
@@ -5828,6 +5840,18 @@ else:
         _include_if_enabled("items", _items_router, prefix=f"{API_V1_PREFIX}", tags=["items"])
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Items endpoint not available: {_e}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.reminders import router as _reminders_router
+
+        _include_if_enabled("tasks", _reminders_router, prefix=f"{API_V1_PREFIX}", tags=["tasks"])
+    except _IMPORT_EXCEPTIONS as _e:
+        logger.warning(f"Reminders endpoint not available: {_e}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.notifications import router as _notifications_router
+
+        _include_if_enabled("notifications", _notifications_router, prefix=f"{API_V1_PREFIX}", tags=["notifications"])
+    except _IMPORT_EXCEPTIONS as _e:
+        logger.warning(f"Notifications endpoint not available: {_e}")
     _reading_import_enabled = True
     if _EXPLICIT_PYTEST_RUNTIME and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING"):
         _reading_import_enabled = False

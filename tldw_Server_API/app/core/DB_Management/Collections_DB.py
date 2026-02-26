@@ -4074,6 +4074,15 @@ class CollectionsDatabase:
         rows = self.backend.execute(q, tuple(params)).rows
         return [self._notification_row_from_db(row) for row in rows]
 
+    def get_user_notification(self, notification_id: int) -> UserNotificationRow:
+        row = self.backend.execute(
+            "SELECT * FROM user_notifications WHERE id = ? AND user_id = ?",
+            (notification_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("user_notification_not_found")
+        return self._notification_row_from_db(row)
+
     def mark_user_notifications_read(self, ids: list[int]) -> int:
         if not ids:
             return 0
