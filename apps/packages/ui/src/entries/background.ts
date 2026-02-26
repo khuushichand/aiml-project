@@ -33,6 +33,14 @@ import {
   normalizeUrlForDedupe,
   resolveContextMenuTargetUrl
 } from "@/entries/shared/ingest-payloads"
+import {
+  createQuickIngestSessionRuntime,
+  type QuickIngestSessionRunContext
+} from "@/entries/shared/quick-ingest-session-runtime"
+import {
+  createIngestJobsTracker,
+  pollTrackedIngestJobs
+} from "@/services/tldw/ingest-jobs-orchestrator"
 
 type BackgroundDiagnostics = {
   startedAt: number
@@ -92,6 +100,7 @@ type IngestSession = {
   normalizedUrl: string
   tabId?: number
   status: IngestLifecycleStatus
+  batchId?: string
   jobIds: number[]
   createdAt: number
   retryCount: number
@@ -99,6 +108,12 @@ type IngestSession = {
   mediaId?: number
   lastError?: string
   timestampSeconds?: number | null
+}
+
+type QuickIngestModalSession = {
+  sessionId: string
+  cancelled: boolean
+  abortControllers: Set<AbortController>
 }
 
 const warmModels = async (
@@ -237,6 +252,7 @@ export default defineBackground({
     let streamDebugEnabled = false
     const ingestSessions = new Map<string, IngestSession>()
     const pendingAuthReplay = new Set<string>()
+    const quickIngestModalSessions = new Map<string, QuickIngestModalSession>()
 
     const INGEST_FUNNEL_METRICS_KEY = "tldw:ingestFunnelMetrics"
     const INGEST_FUNNEL_METRICS_LIMIT = 200
@@ -257,6 +273,42 @@ export default defineBackground({
 
     const createFunnelId = (): string =>
       `ingest-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+    const createQuickIngestSessionId = (): string =>
+      `qi-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+    const getQuickIngestModalSession = (
+      sessionId: string | null | undefined
+    ): QuickIngestModalSession | null => {
+      const normalized = String(sessionId || "").trim()
+      if (!normalized) return null
+      return quickIngestModalSessions.get(normalized) || null
+    }
+
+    const isQuickIngestCancelled = (
+      sessionId: string | null | undefined
+    ): boolean => {
+      const session = getQuickIngestModalSession(sessionId)
+      return Boolean(session?.cancelled)
+    }
+
+    const registerQuickIngestAbortController = (
+      sessionId: string | null | undefined,
+      controller: AbortController
+    ) => {
+      const session = getQuickIngestModalSession(sessionId)
+      if (!session) return
+      session.abortControllers.add(controller)
+    }
+
+    const unregisterQuickIngestAbortController = (
+      sessionId: string | null | undefined,
+      controller: AbortController
+    ) => {
+      const session = getQuickIngestModalSession(sessionId)
+      if (!session) return
+      session.abortControllers.delete(controller)
+    }
 
     const isLikelyAuthError = (status: number, error?: string): boolean => {
       if (status === 401) return true
@@ -727,6 +779,7 @@ export default defineBackground({
       file?: { name?: string; type?: string; data?: ArrayBuffer | Uint8Array | { data?: number[] } | number[] | string }
       fileFieldName?: string
       timeoutMs?: number
+      quickIngestSessionId?: string
     }) => {
       console.log('[HANDLE_UPLOAD] Called', { path: payload?.path, hasFile: !!payload?.file })
       const { path, method = 'POST', fields = {}, file, fileFieldName } = payload || {}
@@ -804,6 +857,8 @@ export default defineBackground({
           headers['X-TLDW-Org-Id'] = String(cfg.orgId)
         }
         const controller = new AbortController()
+        const quickIngestSessionId = String(payload?.quickIngestSessionId || "").trim()
+        registerQuickIngestAbortController(quickIngestSessionId, controller)
         const timeoutMs =
           Number(payload?.timeoutMs) > 0
             ? Number(payload?.timeoutMs)
@@ -821,6 +876,7 @@ export default defineBackground({
           resp = await fetch(url, { method, headers, body: form, signal: controller.signal })
         } finally {
           clearTimeout(timeout)
+          unregisterQuickIngestAbortController(quickIngestSessionId, controller)
         }
         console.log('[HANDLE_UPLOAD] Fetch completed', { status: resp.status, ok: resp.ok })
         const contentType = resp.headers.get('content-type') || ''
@@ -835,6 +891,13 @@ export default defineBackground({
         console.log('[HANDLE_UPLOAD] Fetch error', { message: e?.message, name: e?.name })
         const raw = String(e?.message || "")
         const isAbort = raw.toLowerCase().includes("abort")
+        if (isAbort && isQuickIngestCancelled(payload?.quickIngestSessionId)) {
+          return {
+            ok: false,
+            status: 499,
+            error: "Cancelled by user."
+          }
+        }
         return {
           ok: false,
           status: 0,
@@ -1097,16 +1160,28 @@ export default defineBackground({
         canCancel: false,
         canRetry: true
       })
-      for (const jobId of session.jobIds) {
+      if (session.batchId) {
         await handleTldwRequest({
-          path: `/api/v1/media/ingest/jobs/${jobId}?reason=${encodeURIComponent(
-            reason || "user_cancelled"
-          )}`,
-          method: "DELETE",
-          timeoutMs: 8000
+          path: `/api/v1/media/ingest/jobs/cancel?batch_id=${encodeURIComponent(
+            session.batchId
+          )}&reason=${encodeURIComponent(reason || "user_cancelled")}`,
+          method: "POST",
+          timeoutMs: 10_000
         }).catch((error) => {
-          logBackgroundError(`cancel ingest job ${jobId}`, error)
+          logBackgroundError(`cancel ingest batch ${session.batchId}`, error)
         })
+      } else {
+        for (const jobId of session.jobIds) {
+          await handleTldwRequest({
+            path: `/api/v1/media/ingest/jobs/${jobId}?reason=${encodeURIComponent(
+              reason || "user_cancelled"
+            )}`,
+            method: "DELETE",
+            timeoutMs: 8000
+          }).catch((error) => {
+            logBackgroundError(`cancel ingest job ${jobId}`, error)
+          })
+        }
       }
       await emitIngestStatus(session, {
         status: "cancelled",
@@ -1129,6 +1204,7 @@ export default defineBackground({
       session.lastError = undefined
       session.mediaId = undefined
       session.jobIds = []
+      session.batchId = undefined
 
       if (options?.trackContextClick) {
         await appendIngestFunnelMetric("context_click", session.funnelId, {
@@ -1265,6 +1341,10 @@ export default defineBackground({
       }
 
       session.jobIds = extractIngestJobIds(jobsResp.data)
+      session.batchId =
+        typeof jobsResp.data?.batch_id === "string"
+          ? jobsResp.data.batch_id
+          : undefined
       if (session.jobIds.length === 0) {
         const msg = "Ingest job submission returned no job IDs."
         session.lastError = msg
@@ -1394,6 +1474,469 @@ export default defineBackground({
       }
     }
 
+    const runQuickIngestBatch = async (
+      payload: any,
+      runtimeContext?: QuickIngestSessionRunContext
+    ): Promise<{ ok: boolean; results: any[] }> => {
+      const entries = Array.isArray(payload?.entries) ? payload.entries : []
+      const files = Array.isArray(payload?.files) ? payload.files : []
+      const storeRemote = Boolean(payload?.storeRemote)
+      const processOnly = Boolean(payload?.processOnly)
+      const common = payload?.common || {}
+      const advancedValues =
+        payload?.advancedValues && typeof payload.advancedValues === "object"
+          ? payload.advancedValues
+          : {}
+      const fileDefaults =
+        payload?.fileDefaults && typeof payload.fileDefaults === "object"
+          ? payload.fileDefaults
+          : {}
+      const chunkingTemplateName =
+        typeof payload?.chunkingTemplateName === "string"
+          ? payload.chunkingTemplateName
+          : undefined
+      const autoApplyTemplate = Boolean(payload?.autoApplyTemplate)
+      const shouldStoreRemote = storeRemote && !processOnly
+      const sessionId = String(runtimeContext?.sessionId || payload?.__quickIngestSessionId || "").trim() || undefined
+
+      const cfg = await storage.get<any>("tldwConfig")
+      const ingestTimeoutMs = Math.max(
+        Number(cfg?.uploadRequestTimeoutMs) || 0,
+        Number(cfg?.mediaRequestTimeoutMs) || 0,
+        Number(cfg?.requestTimeoutMs) || 0,
+        5 * 60 * 1000
+      )
+      const totalCount = entries.length + files.length
+      let processedCount = 0
+      const out: any[] = []
+      type QuickIngestRemoteResultMeta = {
+        id: string
+        type: string
+        url?: string
+        fileName?: string
+      }
+      const queuedRemoteJobs = createIngestJobsTracker<QuickIngestRemoteResultMeta>()
+
+      const isCancelled = () =>
+        Boolean(runtimeContext?.isCancelled?.() || isQuickIngestCancelled(sessionId))
+
+      const assignPath = (obj: any, path: string[], val: any) => {
+        let cur = obj
+        for (let i = 0; i < path.length; i++) {
+          const seg = path[i]
+          if (i === path.length - 1) cur[seg] = val
+          else cur = (cur[seg] = cur[seg] || {})
+        }
+      }
+
+      const buildFields = (rawType: string, entry?: any, defaults?: any) => {
+        const mediaType = normalizeMediaType(rawType)
+        const fields: Record<string, any> = {
+          media_type: mediaType,
+          perform_analysis: Boolean(common.perform_analysis),
+          perform_chunking: Boolean(common.perform_chunking),
+          overwrite_existing: Boolean(common.overwrite_existing)
+        }
+        const resolvedDefaults: {
+          audio?: { language?: string; diarize?: boolean }
+          document?: { ocr?: boolean }
+          video?: { captions?: boolean }
+        } = (() => {
+          if (!defaults || typeof defaults !== "object") return {}
+          if (mediaType === "audio") return { audio: defaults.audio }
+          if (mediaType === "video") {
+            return { audio: defaults.audio, video: defaults.video }
+          }
+          if (mediaType === "document" || mediaType === "pdf" || mediaType === "ebook") {
+            return { document: defaults.document }
+          }
+          return {}
+        })()
+        const nested: Record<string, any> = {}
+        for (const [k, v] of Object.entries(advancedValues as Record<string, any>)) {
+          if (k.includes(".")) assignPath(nested, k.split("."), v)
+          else fields[k] = v
+        }
+        for (const [k, v] of Object.entries(nested)) fields[k] = v
+        if (typeof entry?.keywords === "string") {
+          const trimmed = entry.keywords.trim()
+          if (trimmed) {
+            fields.keywords = trimmed
+          }
+        }
+        const audio = { ...(resolvedDefaults.audio || {}), ...(entry?.audio || {}) }
+        const video = { ...(resolvedDefaults.video || {}), ...(entry?.video || {}) }
+        const document = { ...(resolvedDefaults.document || {}), ...(entry?.document || {}) }
+        if (audio.language && fields.transcription_language == null) {
+          fields.transcription_language = audio.language
+        }
+        if (typeof audio.diarize === "boolean" && fields.diarize == null) {
+          fields.diarize = audio.diarize
+        }
+        if (typeof video.captions === "boolean" && fields.timestamp_option == null) {
+          fields.timestamp_option = video.captions
+        }
+        if (typeof document.ocr === "boolean" && fields.pdf_parsing_engine == null) {
+          fields.pdf_parsing_engine = document.ocr ? "pymupdf4llm" : ""
+        }
+        if (chunkingTemplateName) {
+          fields.chunking_template_name = chunkingTemplateName
+        }
+        if (autoApplyTemplate) {
+          fields.auto_apply_template = true
+        }
+        return fields
+      }
+
+      const processWebScrape = async (url: string, entry?: any) => {
+        const nestedBody: Record<string, any> = {}
+        for (const [k, v] of Object.entries(advancedValues as Record<string, any>)) {
+          if (k.includes(".")) assignPath(nestedBody, k.split("."), v)
+          else nestedBody[k] = v
+        }
+        const normalizeJsonField = (value: unknown) => {
+          if (typeof value !== "string") return value
+          const trimmed = value.trim()
+          if (!trimmed) return value
+          const looksJson =
+            (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+            (trimmed.startsWith("[") && trimmed.endsWith("]"))
+          if (!looksJson) return value
+          try {
+            return JSON.parse(trimmed)
+          } catch {
+            return value
+          }
+        }
+        const normalizedBody: Record<string, any> = { ...nestedBody }
+        for (const key of ["custom_headers", "custom_cookies", "custom_titles"]) {
+          if (key in normalizedBody) {
+            normalizedBody[key] = normalizeJsonField(normalizedBody[key])
+          }
+        }
+        const body: any = {
+          scrape_method: "Individual URLs",
+          url_input: url,
+          mode: "ephemeral",
+          summarize_checkbox: Boolean(common.perform_analysis),
+          ...normalizedBody
+        }
+        if (typeof entry?.keywords === "string") {
+          const trimmed = entry.keywords.trim()
+          if (trimmed) {
+            body.keywords = trimmed
+          }
+        }
+        const controller = new AbortController()
+        registerQuickIngestAbortController(sessionId, controller)
+        runtimeContext?.registerAbortController(controller)
+        try {
+          const resp = (await handleTldwRequest({
+            path: "/api/v1/media/process-web-scraping",
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body,
+            timeoutMs: ingestTimeoutMs,
+            abortSignal: controller.signal
+          })) as { ok: boolean; error?: string; status?: number; data?: any } | undefined
+          if (!resp?.ok) {
+            const msg = resp?.error || `Request failed: ${resp?.status}`
+            throw new Error(msg)
+          }
+          return resp.data
+        } finally {
+          unregisterQuickIngestAbortController(sessionId, controller)
+        }
+      }
+
+      const emitProgress = (result: any) => {
+        processedCount += 1
+        const progressPayload = {
+          result,
+          processedCount,
+          totalCount
+        }
+        if (runtimeContext) {
+          void runtimeContext.emitProgress(progressPayload)
+          return
+        }
+
+        try {
+          void browser.runtime
+            .sendMessage({
+              type: "tldw:quick-ingest-progress",
+              payload: {
+                ...progressPayload,
+                sessionId
+              }
+            })
+            .catch((error) => {
+              logBackgroundError("quick ingest progress message", error)
+            })
+        } catch (error) {
+          logBackgroundError("quick ingest progress message", error)
+        }
+      }
+
+      const trackRemoteJobs = (
+        submitData: any,
+        resultTemplate: QuickIngestRemoteResultMeta
+      ): number => {
+        const trackedJobIds = queuedRemoteJobs.trackSubmit(submitData, resultTemplate)
+        runtimeContext?.setJobIds(queuedRemoteJobs.getJobIds())
+        return trackedJobIds.length
+      }
+
+      const cancelQueuedRemoteBatches = async (reason: string) => {
+        await queuedRemoteJobs.cancelTrackedBatches(async (batchId) => {
+          try {
+            await handleTldwRequest({
+              path: `/api/v1/media/ingest/jobs/cancel?batch_id=${encodeURIComponent(
+                batchId
+              )}&reason=${encodeURIComponent(reason || "user_cancelled")}`,
+              method: "POST",
+              timeoutMs: 10_000
+            })
+          } catch (error) {
+            logBackgroundError(`cancel quick ingest batch ${batchId}`, error)
+          }
+        })
+      }
+
+      const pollQueuedRemoteJobs = async (): Promise<any[]> => {
+        return await pollTrackedIngestJobs({
+          tracker: queuedRemoteJobs,
+          timeoutMs: ingestTimeoutMs,
+          pollIntervalMs: 1200,
+          isCancelled,
+          onCancel: async () => {
+            await cancelQueuedRemoteBatches("user_cancelled")
+          },
+          onPendingJobIds: (jobIds) => {
+            runtimeContext?.setJobIds(jobIds)
+          },
+          fetchJob: async (jobId) =>
+            (await handleTldwRequest({
+              path: `/api/v1/media/ingest/jobs/${jobId}`,
+              method: "GET",
+              timeoutMs: 4200
+            })) as { ok: boolean; status?: number; data?: any; error?: string } | undefined,
+          mapRequestError: (item, response) => {
+            if (isLikelyAuthError(Number(response?.status || 0), response?.error)) {
+              return {
+                id: item.meta.id,
+                status: "error",
+                url: item.meta.url,
+                fileName: item.meta.fileName,
+                type: item.meta.type,
+                error: response?.error || "Authentication required.",
+                data: undefined
+              }
+            }
+            return undefined
+          },
+          mapCompleted: (item, data) => ({
+            id: item.meta.id,
+            status: "ok",
+            url: item.meta.url,
+            fileName: item.meta.fileName,
+            type: item.meta.type,
+            data
+          }),
+          mapCancelled: (item) => ({
+            id: item.meta.id,
+            status: "error",
+            url: item.meta.url,
+            fileName: item.meta.fileName,
+            type: item.meta.type,
+            error: "Cancelled by user.",
+            data: undefined
+          }),
+          mapFailure: (item, details) => ({
+            id: item.meta.id,
+            status: "error",
+            url: item.meta.url,
+            fileName: item.meta.fileName,
+            type: item.meta.type,
+            error: String(details.error || `Ingest ${details.status || "failed"}`),
+            data: details.data
+          })
+        })
+      }
+
+      for (const r of entries) {
+        if (isCancelled()) break
+        const url = String(r?.url || "").trim()
+        if (!url) continue
+        const explicitType = r?.type && typeof r.type === "string" ? r.type : "auto"
+        const t = explicitType === "auto" ? inferMediaTypeFromUrl(url) : explicitType
+        try {
+          let data: any
+          if (shouldStoreRemote) {
+            const resolvedDefaults =
+              r?.defaults && typeof r.defaults === "object" ? r.defaults : fileDefaults
+            const fields: Record<string, any> = buildFields(t, r, resolvedDefaults)
+            fields.urls = [url]
+            const resp = await handleUpload({
+              path: "/api/v1/media/ingest/jobs",
+              method: "POST",
+              fields,
+              timeoutMs: ingestTimeoutMs,
+              quickIngestSessionId: sessionId
+            })
+            if (!resp?.ok) {
+              const msg = resp?.error || `Upload failed: ${resp?.status}`
+              throw new Error(msg)
+            }
+            trackRemoteJobs(resp.data, {
+              id: String(r.id || crypto.randomUUID()),
+              url,
+              type: t
+            })
+            continue
+          } else if (t === "html") {
+            data = await processWebScrape(url, r)
+          } else {
+            const resolvedDefaults =
+              r?.defaults && typeof r.defaults === "object" ? r.defaults : fileDefaults
+            const fields = buildFields(t, r, resolvedDefaults)
+            fields.urls = [url]
+            const resp = await handleUpload({
+              path: getProcessPathForType(t),
+              method: "POST",
+              fields,
+              timeoutMs: ingestTimeoutMs,
+              quickIngestSessionId: sessionId
+            })
+            if (!resp?.ok) {
+              const msg = resp?.error || `Upload failed: ${resp?.status}`
+              throw new Error(msg)
+            }
+            data = resp.data
+          }
+          const result = { id: r.id, status: "ok", url, type: t, data }
+          out.push(result)
+          emitProgress(result)
+        } catch (e: any) {
+          if (isCancelled()) break
+          const result = {
+            id: r.id,
+            status: "error",
+            url,
+            type: t,
+            error: e?.message || "Request failed"
+          }
+          out.push(result)
+          emitProgress(result)
+        }
+      }
+
+      for (const f of files) {
+        if (isCancelled()) break
+        const id = f?.id || crypto.randomUUID()
+        const name = f?.name || "upload"
+        const mediaType = inferUploadMediaTypeFromFile(name, f?.type)
+        const resolvedFileDefaults =
+          f?.defaults && typeof f.defaults === "object"
+            ? f.defaults
+            : fileDefaults
+        try {
+          let data: any
+          if (shouldStoreRemote) {
+            const fields: Record<string, any> = buildFields(
+              mediaType,
+              undefined,
+              resolvedFileDefaults
+            )
+            const resp = await handleUpload({
+              path: "/api/v1/media/ingest/jobs",
+              method: "POST",
+              fields,
+              file: { name, type: f?.type || "application/octet-stream", data: f?.data },
+              timeoutMs: ingestTimeoutMs,
+              quickIngestSessionId: sessionId
+            })
+            if (!resp?.ok) {
+              const msg = resp?.error || `Upload failed: ${resp?.status}`
+              throw new Error(msg)
+            }
+            trackRemoteJobs(resp.data, {
+              id: String(id),
+              fileName: name,
+              type: mediaType
+            })
+            continue
+          } else {
+            const fields: Record<string, any> = buildFields(
+              mediaType,
+              undefined,
+              resolvedFileDefaults
+            )
+            const resp = await handleUpload({
+              path: getProcessPathForType(mediaType),
+              method: "POST",
+              fields,
+              file: { name, type: f?.type || "application/octet-stream", data: f?.data },
+              timeoutMs: ingestTimeoutMs,
+              quickIngestSessionId: sessionId
+            })
+            if (!resp?.ok) {
+              const msg = resp?.error || `Upload failed: ${resp?.status}`
+              throw new Error(msg)
+            }
+            data = resp.data
+          }
+          const result = { id, status: "ok", fileName: name, type: mediaType, data }
+          out.push(result)
+          emitProgress(result)
+        } catch (e: any) {
+          if (isCancelled()) break
+          const result = {
+            id,
+            status: "error",
+            fileName: name,
+            type: "file",
+            error: e?.message || "Upload failed"
+          }
+          out.push(result)
+          emitProgress(result)
+        }
+      }
+
+      if (shouldStoreRemote && queuedRemoteJobs.hasItems()) {
+        const remoteResults = await pollQueuedRemoteJobs()
+        for (const result of remoteResults) {
+          out.push(result)
+          emitProgress(result)
+        }
+      }
+
+      return { ok: true, results: out }
+    }
+
+    const quickIngestSessionRuntime = createQuickIngestSessionRuntime({
+      run: async (payload, context) => {
+        const result = await runQuickIngestBatch(payload, context)
+        return {
+          results: result.results
+        }
+      },
+      emit: async (type, payload) => {
+        await emitBackgroundMessage(undefined, type, payload)
+        if (
+          type === "tldw:quick-ingest/completed" ||
+          type === "tldw:quick-ingest/failed" ||
+          type === "tldw:quick-ingest/cancelled"
+        ) {
+          const sessionId = String((payload as any)?.sessionId || "").trim()
+          if (sessionId) {
+            quickIngestModalSessions.delete(sessionId)
+          }
+        }
+      },
+      createSessionId: createQuickIngestSessionId
+    })
+
     const handleRuntimeMessage = async (message: any, sender: any) => {
       // Simple ping for E2E tests - verifies message handler is working
       if (message.type === "tldw:ping") {
@@ -1419,353 +1962,47 @@ export default defineBackground({
         const tabId = sender?.tab?.id ?? null
         return { ok: tabId != null, tabId }
       }
-      if (message.type === 'tldw:quick-ingest-batch') {
-        console.log('[QUICK_INGEST] Message received')
-        const payload = message.payload || {}
-        const entries = Array.isArray(payload.entries) ? payload.entries : []
-        const files = Array.isArray(payload.files) ? payload.files : []
-        console.log('[QUICK_INGEST] Parsed payload', { entriesCount: entries.length, filesCount: files.length })
-        const storeRemote = Boolean(payload.storeRemote)
-        const processOnly = Boolean(payload.processOnly)
-        const common = payload.common || {}
-        const advancedValues = payload.advancedValues && typeof payload.advancedValues === 'object'
-          ? payload.advancedValues
-          : {}
-        const fileDefaults = payload.fileDefaults && typeof payload.fileDefaults === 'object'
-          ? payload.fileDefaults
-          : {}
-        // Chunking template options
-        const chunkingTemplateName = typeof payload.chunkingTemplateName === 'string'
-          ? payload.chunkingTemplateName
-          : undefined
-        const autoApplyTemplate = Boolean(payload.autoApplyTemplate)
-        // processOnly=true forces local-only processing even if storeRemote was requested
-        const shouldStoreRemote = storeRemote && !processOnly
-        console.log('[QUICK_INGEST] Options', { storeRemote, processOnly, shouldStoreRemote })
-        const cfg = await storage.get<any>('tldwConfig')
-        console.log('[QUICK_INGEST] Config loaded', { serverUrl: cfg?.serverUrl, authMode: cfg?.authMode })
-        const ingestTimeoutMs = Math.max(
-          Number(cfg?.uploadRequestTimeoutMs) || 0,
-          Number(cfg?.mediaRequestTimeoutMs) || 0,
-          Number(cfg?.requestTimeoutMs) || 0,
-          5 * 60 * 1000
+      if (message.type === "tldw:quick-ingest/start") {
+        const startAck = quickIngestSessionRuntime.start(
+          (message.payload || {}) as Record<string, unknown>
         )
-        const totalCount = entries.length + files.length
-        let processedCount = 0
-
-        const assignPath = (obj: any, path: string[], val: any) => {
-          let cur = obj
-          for (let i = 0; i < path.length; i++) {
-            const seg = path[i]
-            if (i === path.length - 1) cur[seg] = val
-            else cur = (cur[seg] = cur[seg] || {})
-          }
+        if (startAck?.ok && startAck.sessionId) {
+          quickIngestModalSessions.set(startAck.sessionId, {
+            sessionId: startAck.sessionId,
+            cancelled: false,
+            abortControllers: new Set()
+          })
+        }
+        return startAck
+      }
+      if (message.type === "tldw:quick-ingest/cancel") {
+        const sessionId = String(message?.payload?.sessionId || "").trim()
+        const reason = String(message?.payload?.reason || "user_cancelled")
+        if (!sessionId) {
+          return { ok: false, error: "Missing sessionId." }
         }
 
-        const buildFields = (rawType: string, entry?: any, defaults?: any) => {
-          const mediaType = normalizeMediaType(rawType)
-          const fields: Record<string, any> = {
-            media_type: mediaType,
-            perform_analysis: Boolean(common.perform_analysis),
-            perform_chunking: Boolean(common.perform_chunking),
-            overwrite_existing: Boolean(common.overwrite_existing)
-          }
-          const resolvedDefaults: {
-            audio?: { language?: string; diarize?: boolean }
-            document?: { ocr?: boolean }
-            video?: { captions?: boolean }
-          } = (() => {
-            if (!defaults || typeof defaults !== 'object') return {}
-            if (mediaType === 'audio') return { audio: defaults.audio }
-            if (mediaType === 'video') {
-              return { audio: defaults.audio, video: defaults.video }
-            }
-            if (mediaType === 'document' || mediaType === 'pdf' || mediaType === 'ebook') {
-              return { document: defaults.document }
-            }
-            return {}
-          })()
-          const nested: Record<string, any> = {}
-          for (const [k, v] of Object.entries(advancedValues as Record<string, any>)) {
-            if (k.includes('.')) assignPath(nested, k.split('.'), v)
-            else fields[k] = v
-          }
-          for (const [k, v] of Object.entries(nested)) fields[k] = v
-          if (typeof entry?.keywords === "string") {
-            const trimmed = entry.keywords.trim()
-            if (trimmed) {
-              fields.keywords = trimmed
-            }
-          }
-          const audio = { ...(resolvedDefaults.audio || {}), ...(entry?.audio || {}) }
-          const video = { ...(resolvedDefaults.video || {}), ...(entry?.video || {}) }
-          const document = { ...(resolvedDefaults.document || {}), ...(entry?.document || {}) }
-          if (audio.language && fields.transcription_language == null) {
-            fields.transcription_language = audio.language
-          }
-          if (typeof audio.diarize === 'boolean' && fields.diarize == null) {
-            fields.diarize = audio.diarize
-          }
-          if (typeof video.captions === 'boolean' && fields.timestamp_option == null) {
-            fields.timestamp_option = video.captions
-          }
-          if (typeof document.ocr === 'boolean' && fields.pdf_parsing_engine == null) {
-            fields.pdf_parsing_engine = document.ocr ? 'pymupdf4llm' : ''
-          }
-          // Add chunking template fields if provided
-          if (chunkingTemplateName) {
-            fields.chunking_template_name = chunkingTemplateName
-          }
-          if (autoApplyTemplate) {
-            fields.auto_apply_template = true
-          }
-          return fields
-        }
-
-        const processWebScrape = async (url: string, entry?: any) => {
-          const nestedBody: Record<string, any> = {}
-          for (const [k, v] of Object.entries(advancedValues as Record<string, any>)) {
-            if (k.includes('.')) assignPath(nestedBody, k.split('.'), v)
-            else nestedBody[k] = v
-          }
-          const normalizeJsonField = (value: unknown) => {
-            if (typeof value !== 'string') return value
-            const trimmed = value.trim()
-            if (!trimmed) return value
-            const looksJson =
-              (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-              (trimmed.startsWith('[') && trimmed.endsWith(']'))
-            if (!looksJson) return value
+        const session = getQuickIngestModalSession(sessionId)
+        if (session) {
+          session.cancelled = true
+          for (const controller of Array.from(session.abortControllers)) {
             try {
-              return JSON.parse(trimmed)
+              controller.abort()
             } catch {
-              return value
+              // best effort
             }
           }
-          const normalizedBody: Record<string, any> = { ...nestedBody }
-          for (const key of ['custom_headers', 'custom_cookies', 'custom_titles']) {
-            if (key in normalizedBody) {
-              normalizedBody[key] = normalizeJsonField(normalizedBody[key])
-            }
-          }
-          const body: any = {
-            scrape_method: 'Individual URLs',
-            url_input: url,
-            mode: 'ephemeral',
-            summarize_checkbox: Boolean(common.perform_analysis),
-            ...normalizedBody
-          }
-          if (typeof entry?.keywords === "string") {
-            const trimmed = entry.keywords.trim()
-            if (trimmed) {
-              body.keywords = trimmed
-            }
-          }
-          const resp = await handleTldwRequest({
-            path: '/api/v1/media/process-web-scraping',
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body,
-            timeoutMs: ingestTimeoutMs
-          }) as { ok: boolean; error?: string; status?: number; data?: any } | undefined
-          if (!resp?.ok) {
-            const msg = resp?.error || `Request failed: ${resp?.status}`
-            throw new Error(msg)
-          }
-          return resp.data
+          session.abortControllers.clear()
         }
 
-        const out: any[] = []
-
-        const emitProgress = (result: any) => {
-          processedCount += 1
-          // Best-effort OS notification
-          try {
-            const label =
-              result?.url ||
-              result?.fileName ||
-              (result?.type === 'file' ? 'File' : 'Item')
-            const statusLabel =
-              result?.status === 'ok'
-                ? 'Completed'
-                : result?.status === 'error'
-                  ? 'Failed'
-                  : 'Processed'
-            const chromeNotifications = (
-              globalThis as {
-                chrome?: {
-                  notifications?: {
-                    create?: (options: {
-                      type: string
-                      iconUrl: string
-                      title: string
-                      message: string
-                    }) => void
-                  }
-                }
-              }
-            ).chrome?.notifications
-            chromeNotifications?.create?.({
-              type: 'basic',
-              iconUrl: '/icon.png',
-              title: 'Quick Ingest',
-              message: `${processedCount}/${totalCount}: ${label} – ${statusLabel}`
-            })
-          } catch (error) {
-            logBackgroundError("quick ingest notification", error)
-          }
-
-          // In-app progress event for any open UI
-          try {
-            void browser.runtime
-              .sendMessage({
-                type: 'tldw:quick-ingest-progress',
-                payload: {
-                  result,
-                  processedCount,
-                  totalCount
-                }
-              })
-              .catch((error) => {
-                logBackgroundError("quick ingest progress message", error)
-              })
-          } catch (error) {
-            logBackgroundError("quick ingest progress message", error)
-          }
+        const runtimeCancel = quickIngestSessionRuntime.cancel(sessionId, reason)
+        if (!runtimeCancel.ok && !session) {
+          return runtimeCancel
         }
-
-        // Process URL entries
-        for (const r of entries) {
-          const url = String(r?.url || '').trim()
-          if (!url) continue
-          const explicitType = r?.type && typeof r.type === 'string' ? r.type : 'auto'
-          const t = explicitType === 'auto' ? inferMediaTypeFromUrl(url) : explicitType
-          try {
-            let data: any
-            if (shouldStoreRemote) {
-              // Ingest & store via multipart form
-              const resolvedDefaults =
-                r?.defaults && typeof r.defaults === 'object' ? r.defaults : fileDefaults
-              const fields: Record<string, any> = buildFields(t, r, resolvedDefaults)
-              fields.urls = [url]
-              const resp = await handleUpload({
-                path: '/api/v1/media/add',
-                method: 'POST',
-                fields,
-                timeoutMs: ingestTimeoutMs
-              })
-              if (!resp?.ok) {
-                const msg = resp?.error || `Upload failed: ${resp?.status}`
-                throw new Error(msg)
-              }
-              data = resp.data
-            } else {
-              // Process only (no store)
-              if (t === 'html') {
-                data = await processWebScrape(url, r)
-              } else {
-                const resolvedDefaults =
-                  r?.defaults && typeof r.defaults === 'object' ? r.defaults : fileDefaults
-                const fields = buildFields(t, r, resolvedDefaults)
-                fields.urls = [url]
-                const resp = await handleUpload({
-                  path: getProcessPathForType(t),
-                  method: 'POST',
-                  fields,
-                  timeoutMs: ingestTimeoutMs
-                })
-                if (!resp?.ok) {
-                  const msg = resp?.error || `Upload failed: ${resp?.status}`
-                  throw new Error(msg)
-                }
-                data = resp.data
-              }
-            }
-            const result = { id: r.id, status: 'ok', url, type: t, data }
-            out.push(result)
-            emitProgress(result)
-          } catch (e: any) {
-            const result = {
-              id: r.id,
-              status: 'error',
-              url,
-              type: t,
-              error: e?.message || 'Request failed'
-            }
-            out.push(result)
-            emitProgress(result)
-          }
-        }
-
-        // Process local files (upload or process)
-        console.log('[QUICK_INGEST] Starting file processing loop', { fileCount: files.length })
-        for (const f of files) {
-          const id = f?.id || crypto.randomUUID()
-          const name = f?.name || 'upload'
-          const mediaType = inferUploadMediaTypeFromFile(name, f?.type)
-          console.log('[QUICK_INGEST] Processing file', { id, name, mediaType, dataLength: f?.data?.length })
-          const resolvedFileDefaults =
-            f?.defaults && typeof f.defaults === 'object'
-              ? f.defaults
-              : fileDefaults
-          try {
-            let data: any
-            if (shouldStoreRemote) {
-              const fields: Record<string, any> = buildFields(
-                mediaType,
-                undefined,
-                resolvedFileDefaults
-              )
-              console.log('[QUICK_INGEST] Calling handleUpload', { path: '/api/v1/media/add', name, mediaType })
-              const resp = await handleUpload({
-                path: '/api/v1/media/add',
-                method: 'POST',
-                fields,
-                file: { name, type: f?.type || 'application/octet-stream', data: f?.data },
-                timeoutMs: ingestTimeoutMs
-              })
-              console.log('[QUICK_INGEST] handleUpload returned', { ok: resp?.ok, status: resp?.status, error: resp?.error })
-              if (!resp?.ok) {
-                const msg = resp?.error || `Upload failed: ${resp?.status}`
-                throw new Error(msg)
-              }
-              data = resp.data
-            } else {
-              const fields: Record<string, any> = buildFields(
-                mediaType,
-                undefined,
-                resolvedFileDefaults
-              )
-              const resp = await handleUpload({
-                path: getProcessPathForType(mediaType),
-                method: 'POST',
-                fields,
-                file: { name, type: f?.type || 'application/octet-stream', data: f?.data },
-                timeoutMs: ingestTimeoutMs
-              })
-              if (!resp?.ok) {
-                const msg = resp?.error || `Upload failed: ${resp?.status}`
-                throw new Error(msg)
-              }
-              data = resp.data
-            }
-            const result = { id, status: 'ok', fileName: name, type: mediaType, data }
-            out.push(result)
-            emitProgress(result)
-          } catch (e: any) {
-            const result = {
-              id,
-              status: 'error',
-              fileName: name,
-              type: 'file',
-              error: e?.message || 'Upload failed'
-            }
-            out.push(result)
-            emitProgress(result)
-          }
-        }
-
-        return { ok: true, results: out }
+        return { ok: true }
+      }
+      if (message.type === "tldw:quick-ingest-batch") {
+        return await runQuickIngestBatch(message.payload || {})
       }
       if (message.type === "sidepanel") {
         try {

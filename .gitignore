@@ -36,6 +36,10 @@ postgresql:/
 !admin-ui/lib/**
 !tldw-frontend/lib/
 !tldw-frontend/lib/**
+!apps/tldw-frontend/lib/
+!apps/tldw-frontend/lib/**
+!apps/packages/ui/src/lib/
+!apps/packages/ui/src/lib/**
 
 # PyInstaller
 *.manifest

@@ -7,7 +7,7 @@ describe("MentionsDropdown guard", () => {
     const sourcePath = path.resolve(__dirname, "../MentionsDropdown.tsx")
     const source = fs.readFileSync(sourcePath, "utf8")
 
-    expect(source).toContain("if (tabs.length === 0) return")
+    expect(source).toMatch(/if \((tabs|orderedTabs)\.length === 0\) return/)
     expect(source).toContain("playground:mentions.noTabsHint")
     expect(source).toContain('role="listbox"')
   })

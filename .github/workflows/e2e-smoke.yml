@@ -30,7 +30,7 @@ jobs:
       SINGLE_USER_API_KEY: test-api-key-for-e2e-testing-12345
       SINGLE_USER_TEST_API_KEY: test-api-key-for-e2e-testing-12345
       # Avoid matplotlib cache permission issues during imports
-      MPLCONFIGDIR: ${{ runner.temp }}/mpl
+      MPLCONFIGDIR: ${{ github.workspace }}/.mpl-cache
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PYTHONUNBUFFERED: "1"
       WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
@@ -58,6 +58,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-${{ matrix.python-version }}-
             ${{ runner.os }}-pip-
+
+      - name: Install FFmpeg and PortAudio deps
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
 
       - name: Install dependencies
         run: |

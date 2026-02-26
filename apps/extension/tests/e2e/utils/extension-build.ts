@@ -104,6 +104,17 @@ function resolveChromiumExecutablePath(explicitPath?: string): string | undefine
   return undefined
 }
 
+function resolvePlaywrightChannel(): string | undefined {
+  const explicitChannel = String(
+    process.env.TLDW_E2E_PLAYWRIGHT_CHANNEL || ""
+  ).trim()
+  if (explicitChannel) {
+    return explicitChannel
+  }
+
+  return process.env.CI ? "chromium" : undefined
+}
+
 const projectRoot = path.resolve(__dirname, '..', '..', '..')
 
 export async function launchWithBuiltExtension(
@@ -139,9 +150,11 @@ export async function launchWithBuiltExtension(
   const executablePath = resolveChromiumExecutablePath(
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
   )
+  const channel = resolvePlaywrightChannel()
   const context = await chromium.launchPersistentContext(userDataDir, {
     timeout: effectiveLaunchTimeoutMs,
     headless: !!process.env.CI,
+    channel,
     env: {
       ...process.env,
       HOME: homeDir
@@ -392,7 +405,7 @@ export async function launchWithBuiltExtension(
     }, seedLocalStorage)
   }
 
-  const extensionId = await resolveExtensionId(context)
+  const extensionId = await resolveExtensionId(context, { userDataDir })
   const optionsUrl = `chrome-extension://${extensionId}/options.html`
   const sidepanelUrl = `chrome-extension://${extensionId}/sidepanel.html`
 

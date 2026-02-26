@@ -68,6 +68,8 @@ For comprehensive documentation, see:
 - `GET /api/v1/media/ingest/jobs?batch_id=...` - list jobs for a batch
 - `GET /api/v1/media/ingest/jobs/{job_id}` - job status
 - `DELETE /api/v1/media/ingest/jobs/{job_id}` - cancel job
+- `POST /api/v1/media/ingest/jobs/cancel?batch_id=...` - cancel jobs for a batch (supports `session_id` alias)
+- `GET /api/v1/media/ingest/jobs/events/stream` - SSE stream for ingest events (supports `batch_id`, `after_id`)
 
 See: [Media Ingest Jobs API](Media_Ingest_Jobs_API.md)
 

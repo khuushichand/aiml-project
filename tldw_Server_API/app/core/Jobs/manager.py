@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sqlite3
 import time
 import uuid as _uuid
@@ -272,7 +273,8 @@ class JobManager:
     def _sqlite_missing_column_error(exc: Exception, column: str) -> bool:
         if not isinstance(exc, sqlite3.OperationalError):
             return False
-        return f"no column named {column}" in str(exc).lower()
+        msg = str(exc).lower()
+        return f"no column named {column}" in msg or f"no such column: {column}" in msg
 
     def _sqlite_ensure_batch_group(self, conn: sqlite3.Connection) -> bool:
         try:
@@ -1854,6 +1856,7 @@ class JobManager:
         status: str | None = None,
         owner_user_id: str | None = None,
         job_type: str | None = None,
+        batch_group: str | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
         before_id: int | None = None,
@@ -1868,6 +1871,7 @@ class JobManager:
             queue: Filter by queue.
             status: Filter by status (queued|processing|completed|failed|cancelled).
             owner_user_id: Filter by owner id.
+            batch_group: Optional indexed batch grouping key.
             limit: Max rows to return (default 100).
             before_id: Optional cursor id for stable pagination with created_before.
         """
@@ -1897,6 +1901,9 @@ class JobManager:
                 if job_type:
                     query += " AND job_type = %s"
                     params.append(job_type)
+                if batch_group:
+                    query += " AND batch_group = %s"
+                    params.append(batch_group)
                 if created_after:
                     query += " AND created_at >= %s"
                     params.append(created_after)
@@ -1942,6 +1949,9 @@ class JobManager:
                 if job_type:
                     query += " AND job_type = ?"
                     params.append(job_type)
+                if batch_group:
+                    query += " AND batch_group = ?"
+                    params.append(batch_group)
 
                 def _sqlite_dt(dt_val: datetime) -> str:
                     if dt_val.tzinfo is not None:
@@ -1964,7 +1974,17 @@ class JobManager:
                 else:
                     query += f" ORDER BY {sort_col} {sort_ord} LIMIT ?"
                 params.append(limit)
-                rows = conn.execute(query, params).fetchall()
+                try:
+                    rows = conn.execute(query, params).fetchall()
+                except sqlite3.OperationalError as exc:
+                    if (
+                        batch_group
+                        and self._sqlite_missing_column_error(exc, "batch_group")
+                        and self._sqlite_ensure_batch_group(conn)
+                    ):
+                        rows = conn.execute(query, params).fetchall()
+                    else:
+                        raise
                 out: list[dict[str, Any]] = []
                 for r in rows:
                     d = dict(r)
@@ -3754,8 +3774,6 @@ class JobManager:
             and not completion_token
         ):
             raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
-        import random
-
         if enforce is None:
             enforce = self._should_enforce_ack()
         conn = self._connect()
@@ -3786,7 +3804,11 @@ class JobManager:
                             current = int(row["retry_count"]) if row else 0
                             exp_backoff = max(1, int(backoff_seconds * (2**current)))
                             test_mode = _is_test_mode()
-                            jitter = 0 if exp_backoff <= 2 or test_mode else random.randint(0, max(1, exp_backoff // 4))
+                            jitter = (
+                                0
+                                if exp_backoff <= 2 or test_mode
+                                else secrets.randbelow(max(1, exp_backoff // 4) + 1)
+                            )
                             delay = exp_backoff + jitter
                             # In tests, enforce a generous minimum when the caller requested
                             # immediate retry (backoff_seconds=0) so that newer jobs can be
@@ -4179,7 +4201,11 @@ class JobManager:
                         current = int(row[0]) if row else 0
                         exp_backoff = max(1, int(backoff_seconds * (2**current)))
                         test_mode = _is_test_mode()
-                        jitter = 0 if exp_backoff <= 2 or test_mode else random.randint(0, max(1, exp_backoff // 4))
+                        jitter = (
+                            0
+                            if exp_backoff <= 2 or test_mode
+                            else secrets.randbelow(max(1, exp_backoff // 4) + 1)
+                        )
                         delay = exp_backoff + jitter
                         base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
                         thresh = base_thresh
