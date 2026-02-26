@@ -4222,6 +4222,72 @@ class CollectionsDatabase:
         rows = self.backend.execute(q, tuple(params)).rows
         return [self._notification_row_from_db(row) for row in rows]
 
+    def list_user_notifications_after_id(
+        self,
+        *,
+        after_id: int,
+        limit: int = 100,
+        include_archived: bool = False,
+    ) -> list[UserNotificationRow]:
+        bounded_limit = max(1, min(1000, int(limit)))
+        if include_archived:
+            q = (
+                "SELECT * FROM user_notifications "
+                "WHERE user_id = ? AND id > ? "
+                "ORDER BY id ASC LIMIT ?"
+            )
+            params = (self.user_id, int(after_id), bounded_limit)
+        else:
+            q = (
+                "SELECT * FROM user_notifications "
+                "WHERE user_id = ? AND archived_at IS NULL AND id > ? "
+                "ORDER BY id ASC LIMIT ?"
+            )
+            params = (self.user_id, int(after_id), bounded_limit)
+        rows = self.backend.execute(q, params).rows
+        return [self._notification_row_from_db(row) for row in rows]
+
+    def get_user_notifications_latest_id(self, *, include_archived: bool = False) -> int:
+        if include_archived:
+            q = "SELECT MAX(id) AS max_id FROM user_notifications WHERE user_id = ?"
+            row = self.backend.execute(q, (self.user_id,)).first
+        else:
+            q = "SELECT MAX(id) AS max_id FROM user_notifications WHERE user_id = ? AND archived_at IS NULL"
+            row = self.backend.execute(q, (self.user_id,)).first
+        if not row:
+            return 0
+        max_id = row.get("max_id")
+        return int(max_id or 0)
+
+    def get_user_notifications_window_floor_id(
+        self,
+        *,
+        window_size: int,
+        include_archived: bool = False,
+    ) -> int | None:
+        bounded_window = max(1, int(window_size))
+        offset = bounded_window - 1
+        if include_archived:
+            q = (
+                "SELECT id FROM user_notifications "
+                "WHERE user_id = ? "
+                "ORDER BY id DESC LIMIT 1 OFFSET ?"
+            )
+            row = self.backend.execute(q, (self.user_id, offset)).first
+        else:
+            q = (
+                "SELECT id FROM user_notifications "
+                "WHERE user_id = ? AND archived_at IS NULL "
+                "ORDER BY id DESC LIMIT 1 OFFSET ?"
+            )
+            row = self.backend.execute(q, (self.user_id, offset)).first
+        if not row:
+            return None
+        raw_id = row.get("id")
+        if raw_id is None:
+            return None
+        return int(raw_id)
+
     def get_user_notification(self, notification_id: int) -> UserNotificationRow:
         row = self.backend.execute(
             "SELECT * FROM user_notifications WHERE id = ? AND user_id = ?",
