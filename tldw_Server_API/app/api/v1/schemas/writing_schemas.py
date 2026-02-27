@@ -212,6 +212,16 @@ class WritingTokenizerSupport(BaseModel):
     error: str | None = None
 
 
+class WritingExtraBodyCompat(BaseModel):
+    supported: bool
+    effective_reason: str | None = None
+    known_params: list[str] = Field(default_factory=list)
+    param_groups: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    example: dict[str, Any] = Field(default_factory=dict)
+    source: str = "catalog+runtime"
+
+
 class WritingServerCapabilities(BaseModel):
     sessions: bool
     templates: bool
@@ -228,6 +238,8 @@ class WritingProviderCapabilities(BaseModel):
     supported_fields: list[str]
     features: dict[str, bool]
     tokenizers: dict[str, WritingTokenizerSupport] | None = None
+    extra_body_compat: WritingExtraBodyCompat | None = None
+    model_extra_body_compat: dict[str, WritingExtraBodyCompat] | None = None
 
 
 class WritingRequestedCapabilities(BaseModel):
@@ -238,6 +250,7 @@ class WritingRequestedCapabilities(BaseModel):
     tokenizer_available: bool
     tokenizer: str | None = None
     tokenization_error: str | None = None
+    extra_body_compat: WritingExtraBodyCompat | None = None
 
 
 class WritingCapabilitiesResponse(BaseModel):

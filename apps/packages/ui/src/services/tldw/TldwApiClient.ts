@@ -212,6 +212,8 @@ export interface ChatCompletionRequest {
   model: string
   stream?: boolean
   temperature?: number
+  logprobs?: boolean
+  top_logprobs?: number
   max_tokens?: number
   top_p?: number
   frequency_penalty?: number

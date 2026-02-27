@@ -15,11 +15,12 @@ The decision is to keep advanced controls in `extra_body` and enrich discovery m
 ## Goals
 
 1. Keep `extra_body` as the compatibility channel for advanced/non-standard sampler params.
-2. Add explicit metadata so clients can discover known `extra_body` params per provider.
-3. Mirror this metadata on both:
+2. Add explicit metadata so clients can discover known `extra_body` params per provider and model.
+3. Ensure `supported` means effective runtime support for this deployment (not just static catalog presence).
+4. Mirror this metadata on both:
    - `GET /api/v1/writing/capabilities`
    - `GET /api/v1/llm/providers`
-4. Make only additive response changes.
+5. Make only additive response changes.
 
 ## Non-Goals
 
@@ -30,7 +31,7 @@ The decision is to keep advanced controls in `extra_body` and enrich discovery m
 
 ## Decision Summary
 
-Implement a shared provider compatibility catalog that declares known `extra_body` parameters and associated metadata, then attach this metadata to writing and provider listing endpoints.
+Implement a shared compatibility catalog plus a runtime-effectiveness resolver that evaluates provider/model support for this deployment (for example strict OpenAI-compatible filtering). Attach provider-default and model-level metadata to writing and provider listing endpoints.
 
 This keeps runtime generation behavior unchanged while making advanced support discoverable for writing UI parity.
 
@@ -46,9 +47,9 @@ This keeps runtime generation behavior unchanged while making advanced support d
 - Pros: Lower manual upkeep in theory.
 - Cons: Unstable API shape, brittle coupling to adapter internals.
 
-### Option 3: Shared static catalog mirrored on both endpoints (selected)
+### Option 3: Shared catalog + runtime evaluation mirrored on both endpoints (selected)
 
-- Pros: Stable additive API contract, quick to ship, easy to test, reused across endpoints.
+- Pros: Stable additive API contract, deployment-accurate `supported`, easy to test, reused across endpoints.
 - Cons: Manual updates when provider support evolves.
 
 ## Detailed Design
@@ -61,14 +62,16 @@ Add a new module:
 
 Responsibilities:
 
-1. Normalize provider name (lowercase + trim).
-2. Return a stable compatibility object for a provider.
-3. Provide a safe fallback for unknown providers.
+1. Normalize provider/model identity.
+2. Return provider-default and model-level compatibility objects.
+3. Evaluate deployment runtime constraints (for example `strict_openai_compat`) before setting `supported`.
+4. Provide a safe fallback for unknown providers/models.
 
 Proposed API:
 
-- `get_extra_body_compat(provider: str) -> dict[str, Any]`
-- `list_known_extra_body_params(provider: str) -> list[str]`
+- `get_provider_extra_body_compat(provider: str, *, runtime_context: dict[str, Any] | None = None) -> dict[str, Any]`
+- `get_model_extra_body_compat(provider: str, model: str, *, runtime_context: dict[str, Any] | None = None) -> dict[str, Any]`
+- `list_known_extra_body_params(provider: str, model: str | None = None) -> list[str]`
 
 ### 2) Metadata contract (additive)
 
@@ -77,6 +80,7 @@ Attach `extra_body_compat` with this shape:
 ```json
 {
   "supported": true,
+  "effective_reason": "supported in current deployment",
   "known_params": ["mirostat", "mirostat_tau", "mirostat_eta", "typical_p"],
   "param_groups": ["sampling", "penalties", "constraints"],
   "notes": "Provider-specific parameters should be sent under extra_body.",
@@ -87,20 +91,23 @@ Attach `extra_body_compat` with this shape:
       "mirostat_eta": 0.1
     }
   },
-  "source": "catalog"
+  "source": "catalog+runtime"
 }
 ```
 
-Fallback for unknown provider:
+`supported` semantics: effective runtime support for this provider/model in the current deployment.
+
+Fallback for unknown provider/model:
 
 ```json
 {
   "supported": false,
+  "effective_reason": "unsupported for deployment/runtime configuration",
   "known_params": [],
   "param_groups": [],
   "notes": "No extra_body compatibility metadata registered for this provider.",
   "example": {"extra_body": {}},
-  "source": "catalog"
+  "source": "catalog+runtime"
 }
 ```
 
@@ -108,13 +115,18 @@ Fallback for unknown provider:
 
 Update `tldw_Server_API/app/api/v1/endpoints/writing.py`:
 
-1. For each provider in `providers[]`, include `extra_body_compat` from catalog.
-2. For `requested` block (when provider/model query params are used), include provider-specific `extra_body_compat`.
+1. For each provider in `providers[]`, include provider-default `extra_body_compat`.
+2. For each provider in `providers[]`, include `model_extra_body_compat` keyed by model name.
+3. For `requested` block:
+   - include provider-default `extra_body_compat` when only provider is provided.
+   - include model-specific `extra_body_compat` when provider+model are provided.
+4. Compute runtime context per provider (for example strict OpenAI-compatible filtering flags) and feed it to resolver.
 
 Update `tldw_Server_API/app/api/v1/schemas/writing_schemas.py`:
 
 1. Add a typed model for `extra_body_compat`.
-2. Add optional `extra_body_compat` field to:
+2. Add optional `model_extra_body_compat: dict[str, WritingExtraBodyCompat]` where model granularity is returned.
+3. Add optional `extra_body_compat` field to:
    - `WritingProviderCapabilities`
    - `WritingRequestedCapabilities`
 
@@ -122,8 +134,9 @@ Update `tldw_Server_API/app/api/v1/schemas/writing_schemas.py`:
 
 Update `tldw_Server_API/app/api/v1/endpoints/llm_providers.py`:
 
-1. For each provider object in `providers[]`, include `extra_body_compat` using the same catalog.
-2. Keep payload additive and backward-compatible.
+1. For each provider object in `providers[]`, include provider-default `extra_body_compat`.
+2. For each model entry in `models_info`, include model-level `extra_body_compat`.
+3. Keep payload additive and backward-compatible.
 
 ### 5) Behavior invariants
 
@@ -160,8 +173,8 @@ Initial known param set (provider-specific subsets, not universally supported):
 ## Error Handling
 
 1. Catalog lookup must never fail endpoint responses.
-2. Unknown provider returns default `supported=false` object.
-3. If catalog logic throws unexpectedly, endpoint should degrade gracefully by omitting/using fallback metadata rather than failing the request.
+2. Unknown provider/model returns default `supported=false` object.
+3. If resolver logic throws unexpectedly, endpoints must still return a fallback metadata object (never omit the field).
 
 ## Test Plan
 
@@ -169,16 +182,19 @@ Initial known param set (provider-specific subsets, not universally supported):
 
 Update `tests/Writing/test_writing_endpoint_integration.py` to verify:
 
-1. `GET /api/v1/writing/capabilities` includes `extra_body_compat` for providers.
-2. `requested` includes `extra_body_compat` when provider is requested.
-3. Unknown provider returns safe fallback shape.
+1. `GET /api/v1/writing/capabilities` includes provider-default `extra_body_compat`.
+2. `GET /api/v1/writing/capabilities` includes `model_extra_body_compat` map for provider models.
+3. `requested` includes model-level `extra_body_compat` when provider+model are requested.
+4. Unknown provider/model returns safe fallback shape.
+5. Runtime strict-compat deployment flags set `supported=false` for non-standard param pass-through.
 
 ### LLM providers endpoint tests
 
 Add or extend endpoint tests to verify:
 
-1. `GET /api/v1/llm/providers` returns `extra_body_compat` per provider object.
-2. Shape is stable and additive.
+1. `GET /api/v1/llm/providers` returns provider-default `extra_body_compat` per provider object.
+2. `GET /api/v1/llm/providers` returns model-level `extra_body_compat` within `models_info`.
+3. Shape is stable and additive.
 
 ### Regression confidence
 
@@ -194,13 +210,14 @@ Add or extend endpoint tests to verify:
 ## Risks And Mitigations
 
 1. **Risk**: Metadata drift from real provider behavior.
-   - **Mitigation**: Keep catalog conservative; document params as "known/compat" not guaranteed.
+   - **Mitigation**: Keep catalog conservative and apply runtime-effectiveness overlays before returning `supported`.
 2. **Risk**: Client assumes metadata implies strict server validation support.
    - **Mitigation**: Include notes clarifying these are `extra_body` compatibility hints.
 
 ## Acceptance Criteria
 
-1. Both endpoints expose mirrored `extra_body_compat` metadata.
-2. No new top-level chat param enforcement for advanced sampler fields.
-3. Existing clients continue working without changes.
-4. Tests cover new metadata fields and unknown-provider fallback.
+1. Both endpoints expose mirrored provider-default and model-level `extra_body_compat` metadata.
+2. `supported` is deployment-effective for the evaluated provider/model.
+3. No new top-level chat param enforcement for advanced sampler fields.
+4. Existing clients continue working without changes.
+5. Tests cover model-level metadata, runtime-effective support, and unknown-provider/model fallback.
