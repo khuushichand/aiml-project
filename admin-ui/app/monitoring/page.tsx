@@ -36,6 +36,7 @@ import {
   type MonitoringMetricsSeriesVisibility,
   type MonitoringTimeRangeOption,
 } from '@/lib/monitoring-metrics';
+import { buildMetricsFromSnapshot, normalizeWatchlistsPayload } from './metrics-state-utils';
 import {
   buildMonitoringSystemStatus,
   measureTimedEndpoint,
@@ -115,17 +116,6 @@ const toDatetimeLocalInputValue = (value: Date): string => {
 
 export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
   return normalizeMonitoringHealthStatus(status);
-};
-
-const normalizeWatchlistsPayload = (value: unknown): Watchlist[] => {
-  if (Array.isArray(value)) return value as Watchlist[];
-  if (value && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    if (Array.isArray(obj.watchlists)) {
-      return obj.watchlists as Watchlist[];
-    }
-  }
-  return [];
 };
 
 export default function MonitoringPage() {
@@ -317,24 +307,11 @@ export default function MonitoringPage() {
 
       // Process metrics
       if (metricsData.status === 'fulfilled' && metricsData.value) {
-        const rawMetrics = metricsData.value;
-        const metricsArray: Metric[] = [];
-        if (typeof rawMetrics === 'object') {
-          Object.entries(rawMetrics).forEach(([key, value]) => {
-            if (typeof value === 'number' || typeof value === 'string') {
-              metricsArray.push({
-                name: key,
-                value,
-                status: typeof value === 'number' && value > METRIC_CRITICAL_THRESHOLD
-                  ? 'critical'
-                  : typeof value === 'number' && value > METRIC_WARNING_THRESHOLD
-                    ? 'warning'
-                    : 'healthy',
-              });
-            }
-          });
-        }
-        setMetrics(metricsArray);
+        setMetrics(buildMetricsFromSnapshot(
+          metricsData.value,
+          METRIC_WARNING_THRESHOLD,
+          METRIC_CRITICAL_THRESHOLD
+        ));
       }
 
       // Process watchlists
