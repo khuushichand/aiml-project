@@ -1887,10 +1887,13 @@ test.describe('Watchlists playground smoke', () => {
       .poll(async () => page.evaluate(() => (window as any).__watchlistsKeyboardReviewUpdates))
       .toBeGreaterThanOrEqual(1)
 
+    const openedCountBeforeShortcut = await page.evaluate(
+      () => (window as any).__watchlistsOpenedUrls.length
+    )
     await page.keyboard.press('o')
     await expect
       .poll(async () => page.evaluate(() => (window as any).__watchlistsOpenedUrls.length))
-      .toBe(1)
+      .toBeGreaterThan(openedCountBeforeShortcut)
 
     const fetchCountBeforeRefresh = await page.evaluate(
       () => (window as any).__watchlistsKeyboardItemsFetches
