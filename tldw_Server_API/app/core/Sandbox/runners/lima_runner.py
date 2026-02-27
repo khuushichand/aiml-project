@@ -17,8 +17,10 @@ from pathlib import Path
 from loguru import logger
 
 from tldw_Server_API.app.core.testing import is_truthy
-from ..models import RunPhase, RunSpec, RunStatus
+from ..models import RunPhase, RunSpec, RunStatus, RuntimeType
+from ..runtime_capabilities import RuntimePreflightResult
 from ..streams import get_hub
+from .lima_enforcer import build_lima_enforcer
 
 _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -156,6 +158,31 @@ class LimaRunner:
 
     def __init__(self) -> None:
         pass
+
+    def preflight(self, network_policy: str | None = None) -> RuntimePreflightResult:
+        """Probe host/runtime capabilities for Lima strict policy admission."""
+        enforcer = build_lima_enforcer()
+        host = enforcer.host_facts()
+        ready = enforcer.preflight_capabilities()
+        net_policy = str(network_policy or "deny_all").strip().lower()
+
+        reasons: list[str] = []
+        if not lima_available():
+            reasons.append("limactl_missing")
+            ready = {"deny_all": False, "allowlist": False}
+        else:
+            if net_policy == "deny_all" and not bool(ready.get("deny_all")):
+                reasons.append("strict_deny_all_not_supported")
+            if net_policy == "allowlist" and not bool(ready.get("allowlist")):
+                reasons.append("strict_allowlist_not_supported")
+
+        return RuntimePreflightResult(
+            runtime=RuntimeType.lima,
+            available=(len(reasons) == 0),
+            reasons=reasons,
+            host=host,
+            enforcement_ready=ready,
+        )
 
     @staticmethod
     def _lima_version() -> str | None:
