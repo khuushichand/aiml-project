@@ -168,9 +168,12 @@ const clickPipelineNext = () => {
 }
 
 const selectPipelineFeed = async (label: string) => {
-  fireEvent.click(pipelineQueries().getByLabelText(label))
   await waitFor(() => {
-    expect(pipelineQueries().getByLabelText(label)).toBeChecked()
+    const checkbox = pipelineQueries().getByRole("checkbox", { name: label }) as HTMLInputElement
+    if (!checkbox.checked) {
+      fireEvent.click(checkbox)
+    }
+    expect(checkbox).toBeChecked()
   })
 }
 
