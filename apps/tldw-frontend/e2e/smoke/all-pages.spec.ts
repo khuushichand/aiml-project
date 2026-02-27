@@ -217,6 +217,13 @@ function hasTransientRuntimeOverlaySignal(input: string): boolean {
   return TRANSIENT_RUNTIME_OVERLAY_PATTERNS.some((pattern) => pattern.test(input));
 }
 
+function isTransientNavigationTimeout(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /page\.goto/i.test(error.message) && /timeout/i.test(error.message);
+}
+
 function resetDiagnostics(diagnostics: DiagnosticsData): void {
   diagnostics.console.length = 0;
   diagnostics.pageErrors.length = 0;
@@ -252,10 +259,28 @@ async function visitRouteWithTransientRetry(
 
   for (let attempt = 0; attempt <= TRANSIENT_RUNTIME_RETRY_ATTEMPTS; attempt += 1) {
     resetDiagnostics(diagnostics);
-    response = await page.goto(routePath, {
-      waitUntil: 'domcontentloaded',
-      timeout: LOAD_TIMEOUT,
-    });
+    try {
+      response = await page.goto(routePath, {
+        waitUntil: 'domcontentloaded',
+        timeout: LOAD_TIMEOUT,
+      });
+    } catch (error) {
+      const shouldRetryNavigationTimeout =
+        isTransientNavigationTimeout(error) && attempt < TRANSIENT_RUNTIME_RETRY_ATTEMPTS;
+      if (!shouldRetryNavigationTimeout) {
+        throw error;
+      }
+
+      retriesUsed = attempt + 1;
+      console.warn(
+        `[smoke-transient-navigation-retry] ${routePath} retry ${retriesUsed}/${TRANSIENT_RUNTIME_RETRY_ATTEMPTS} after timeout: ${error instanceof Error ? error.message : String(error)}`
+      );
+      if (TRANSIENT_RUNTIME_RETRY_DELAY_MS > 0) {
+        await page.waitForTimeout(TRANSIENT_RUNTIME_RETRY_DELAY_MS);
+      }
+      continue;
+    }
+
     await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
 
     issues = getCriticalIssues(diagnostics);
