@@ -163,6 +163,8 @@ export default function MonitoringPage() {
   const [assignableUsers, setAssignableUsers] = useState<AlertAssignableUser[]>([]);
   const [showSnoozedAlerts, setShowSnoozedAlerts] = useState(false);
   const [alertHistory, setAlertHistory] = useState<AlertHistoryEntry[]>([]);
+  const alertsRef = useRef<SystemAlert[]>([]);
+  const alertHistoryRef = useRef<AlertHistoryEntry[]>([]);
 
   const loadMetricsHistoryForRange = useCallback(async (
     selectedRange: MonitoringTimeRangeOption,
@@ -289,8 +291,8 @@ export default function MonitoringPage() {
 
       const resolvedState = resolveMonitoringLoadState({
         settledResults,
-        previousAlerts: alerts,
-        previousAlertHistory: alertHistory,
+        previousAlerts: alertsRef.current,
+        previousAlertHistory: alertHistoryRef.current,
         metricWarningThreshold: METRIC_WARNING_THRESHOLD,
         metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
       });
@@ -305,9 +307,11 @@ export default function MonitoringPage() {
         setWatchlists(resolvedState.watchlists);
       }
       if (resolvedState.alerts) {
+        alertsRef.current = resolvedState.alerts;
         setAlerts(resolvedState.alerts);
       }
       if (resolvedState.alertHistory) {
+        alertHistoryRef.current = resolvedState.alertHistory;
         setAlertHistory(resolvedState.alertHistory);
       }
       setAssignableUsers(resolvedState.assignableUsers);
@@ -323,7 +327,7 @@ export default function MonitoringPage() {
     } finally {
       setLoading(false);
     }
-  }, [alerts, alertHistory, customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
+  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
 
   useEffect(() => {
     setAlertRules(readStoredAlertRules());
@@ -339,6 +343,14 @@ export default function MonitoringPage() {
   useEffect(() => {
     if (!alertStorageHydratedRef.current) return;
     writeStoredAlertHistory(alertHistory);
+  }, [alertHistory]);
+
+  useEffect(() => {
+    alertsRef.current = alerts;
+  }, [alerts]);
+
+  useEffect(() => {
+    alertHistoryRef.current = alertHistory;
   }, [alertHistory]);
 
   useEffect(() => {

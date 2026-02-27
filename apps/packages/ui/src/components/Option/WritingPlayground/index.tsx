@@ -4969,19 +4969,36 @@ export const WritingPlayground = () => {
   const templateSaveDisabled =
     templateSaveLoading || !templateForm.name.trim()
   const templateExportDisabled = !editingTemplate
+  const templateDuplicateDisabled =
+    !editingTemplate || templateSaveLoading || deleteTemplateMutation.isPending
+  const templateRestoreDefaultsDisabled =
+    templateSaveLoading ||
+    deleteTemplateMutation.isPending ||
+    templateImporting ||
+    templateRestoringDefaults
   const templateDeleteDisabled =
     !editingTemplate || deleteTemplateMutation.isPending
   const templateFormDisabled =
-    templateSaveLoading || deleteTemplateMutation.isPending
+    templateSaveLoading ||
+    deleteTemplateMutation.isPending ||
+    templateRestoringDefaults
   const themeSelectDisabled =
     settingsDisabled || !hasThemes || themesLoading || Boolean(themesError)
   const themeSaveLoading =
     createThemeMutation.isPending || updateThemeMutation.isPending
   const themeSaveDisabled = themeSaveLoading || !themeForm.name.trim()
   const themeExportDisabled = !editingTheme
+  const themeDuplicateDisabled =
+    !editingTheme || themeSaveLoading || deleteThemeMutation.isPending
+  const themeRestoreDefaultsDisabled =
+    themeSaveLoading ||
+    deleteThemeMutation.isPending ||
+    themeImporting ||
+    themeRestoringDefaults
   const themeDeleteDisabled =
     !editingTheme || deleteThemeMutation.isPending
-  const themeFormDisabled = themeSaveLoading || deleteThemeMutation.isPending
+  const themeFormDisabled =
+    themeSaveLoading || deleteThemeMutation.isPending || themeRestoringDefaults
   const canCreateSession = newSessionName.trim().length > 0
   const sessionImportDisabled =
     !hasWriting || sessionsLoading || sessionImporting
@@ -7963,6 +7980,12 @@ export const WritingPlayground = () => {
               </Button>
               <Button
                 size="small"
+                disabled={templateDuplicateDisabled}
+                onClick={handleTemplateDuplicate}>
+                {t("option:writingPlayground.templateDuplicateAction", "Duplicate")}
+              </Button>
+              <Button
+                size="small"
                 onClick={() => templateFileInputRef.current?.click()}
                 loading={templateImporting}>
                 {t("option:writingPlayground.templateImportAction", "Import")}
@@ -7974,6 +7997,18 @@ export const WritingPlayground = () => {
                   if (editingTemplate) exportTemplate(editingTemplate)
                 }}>
                 {t("option:writingPlayground.templateExportAction", "Export")}
+              </Button>
+              <Button
+                size="small"
+                disabled={templateRestoreDefaultsDisabled}
+                loading={templateRestoringDefaults}
+                onClick={() => {
+                  void handleTemplateRestoreDefaults()
+                }}>
+                {t(
+                  "option:writingPlayground.templateRestoreDefaultsAction",
+                  "Restore defaults"
+                )}
               </Button>
             </div>
           </div>
@@ -8257,6 +8292,12 @@ export const WritingPlayground = () => {
               </Button>
               <Button
                 size="small"
+                disabled={themeDuplicateDisabled}
+                onClick={handleThemeDuplicate}>
+                {t("option:writingPlayground.themeDuplicateAction", "Duplicate")}
+              </Button>
+              <Button
+                size="small"
                 onClick={() => themeFileInputRef.current?.click()}
                 loading={themeImporting}>
                 {t("option:writingPlayground.themeImportAction", "Import")}
@@ -8268,6 +8309,18 @@ export const WritingPlayground = () => {
                   if (editingTheme) exportTheme(editingTheme)
                 }}>
                 {t("option:writingPlayground.themeExportAction", "Export")}
+              </Button>
+              <Button
+                size="small"
+                disabled={themeRestoreDefaultsDisabled}
+                loading={themeRestoringDefaults}
+                onClick={() => {
+                  void handleThemeRestoreDefaults()
+                }}>
+                {t(
+                  "option:writingPlayground.themeRestoreDefaultsAction",
+                  "Restore defaults"
+                )}
               </Button>
             </div>
           </div>
