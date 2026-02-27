@@ -59,6 +59,11 @@ runs:
         cache: pip
         cache-dependency-path: ${{ steps.resolve-cache-paths.outputs.paths }}
 
+    - name: Ensure pip cache directory exists
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.cache/pip"
+
     - name: Setup uv
       if: inputs.use-uv == 'true'
       uses: astral-sh/setup-uv@v3

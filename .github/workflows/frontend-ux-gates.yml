@@ -202,9 +202,13 @@ jobs:
         working-directory: apps/tldw-frontend
         run: bun run e2e:smoke:stage4
 
-      - name: Run Stage 5 critical UX release gate
+      - name: Run Stage 5 critical UX release gate (shard 1/2)
         working-directory: apps/tldw-frontend
-        run: bun run e2e:smoke:stage5
+        run: bun run e2e:smoke:stage5 -- --shard=1/2
+
+      - name: Run Stage 5 critical UX release gate (shard 2/2)
+        working-directory: apps/tldw-frontend
+        run: bun run e2e:smoke:stage5 -- --shard=2/2
 
       - name: Run Stage 6 interaction regression gate
         working-directory: apps/tldw-frontend
