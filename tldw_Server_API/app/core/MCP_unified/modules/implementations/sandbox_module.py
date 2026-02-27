@@ -43,11 +43,11 @@ class SandboxModule(BaseModule):
         return [
             {
                 "name": "sandbox.run",
-                "description": "Execute a run in the code sandbox (Docker/Firecracker).",
+                "description": "Execute a run in the code sandbox (Docker/Firecracker/Lima).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "runtime": {"type": "string", "enum": ["docker", "firecracker"]},
+                        "runtime": {"type": "string", "enum": ["docker", "firecracker", "lima"]},
                         "session_id": {"type": "string"},
                         "base_image": {"type": "string"},
                         "command": {"type": "array", "items": {"type": "string"}},
@@ -92,7 +92,7 @@ class SandboxModule(BaseModule):
         # Prepare RunSpec
         runtime_raw = (args.get("runtime") or "").strip().lower()
         runtime: SbxRuntimeType | None = None
-        if runtime_raw in ("docker", "firecracker"):
+        if runtime_raw in ("docker", "firecracker", "lima"):
             runtime = SbxRuntimeType(runtime_raw)
         # files (inline)
         files_inline: list[tuple[str, bytes]] = []
@@ -211,8 +211,8 @@ class SandboxModule(BaseModule):
         if (isinstance(sess, str) and sess) and (isinstance(img, str) and img):
             raise ValueError("Provide only one of session_id or base_image, not both")
         rt = arguments.get("runtime")
-        if rt is not None and str(rt).lower() not in {"docker", "firecracker"}:
-            raise ValueError("runtime must be docker|firecracker when provided")
+        if rt is not None and str(rt).lower() not in {"docker", "firecracker", "lima"}:
+            raise ValueError("runtime must be docker|firecracker|lima when provided")
         if arguments.get("timeout_sec") is not None:
             try:
                 ts = int(arguments.get("timeout_sec"))
