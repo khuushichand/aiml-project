@@ -433,7 +433,15 @@ type ExportProgressState = {
   fetchedPages: number
   failedBatches: number
 }
-type NotesListViewMode = 'list' | 'timeline'
+type NotesListViewMode = 'list' | 'timeline' | 'moodboard'
+type MoodboardSummary = {
+  id: number
+  name: string
+  description?: string | null
+  smart_rule?: Record<string, any> | null
+  version?: number
+  last_modified?: string
+}
 type NotebookFilterOption = NotesNotebookSetting
 type ImportFormat = 'json' | 'markdown'
 type ImportDuplicateStrategy = 'skip' | 'overwrite' | 'create_copy'
@@ -1122,6 +1130,8 @@ const NotesManagerPage: React.FC = () => {
   const [sortOption, setSortOption] = React.useState<NotesSortOption>('modified_desc')
   const [listMode, setListMode] = React.useState<'active' | 'trash'>('active')
   const [listViewMode, setListViewMode] = React.useState<NotesListViewMode>('list')
+  const [moodboards, setMoodboards] = React.useState<MoodboardSummary[]>([])
+  const [selectedMoodboardId, setSelectedMoodboardId] = React.useState<number | null>(null)
   const [notebookOptions, setNotebookOptions] = React.useState<NotebookFilterOption[]>([])
   const [selectedNotebookId, setSelectedNotebookId] = React.useState<number | null>(null)
   const [bulkSelectedIds, setBulkSelectedIds] = React.useState<string[]>([])
@@ -1829,6 +1839,147 @@ const NotesManagerPage: React.FC = () => {
     return deduped
   }, [keywordTokens, notebookKeywordTokens])
 
+  const fetchMoodboards = React.useCallback(async (): Promise<MoodboardSummary[]> => {
+    const res = await bgRequest<any>({
+      path: "/api/v1/notes/moodboards?limit=200&offset=0" as any,
+      method: "GET" as any
+    })
+    const rows = Array.isArray(res?.moodboards)
+      ? res.moodboards
+      : Array.isArray(res?.items)
+        ? res.items
+        : Array.isArray(res)
+          ? res
+          : []
+    return rows
+      .map((item: any) => {
+        const id = Number(item?.id)
+        if (!Number.isFinite(id)) return null
+        return {
+          id: Math.floor(id),
+          name: String(item?.name || "").trim() || `Moodboard ${id}`,
+          description: item?.description ?? null,
+          smart_rule: item?.smart_rule ?? null,
+          version:
+            typeof item?.version === "number"
+              ? item.version
+              : Number.isFinite(Number(item?.version))
+                ? Number(item.version)
+                : undefined,
+          last_modified:
+            typeof item?.last_modified === "string" ? item.last_modified : undefined
+        } as MoodboardSummary
+      })
+      .filter((item): item is MoodboardSummary => item != null)
+  }, [])
+
+  const {
+    data: moodboardData,
+    isFetching: isMoodboardsFetching,
+    refetch: refetchMoodboards
+  } = useQuery({
+    queryKey: ["notes-moodboards"],
+    queryFn: fetchMoodboards,
+    enabled: isOnline && listMode === "active"
+  })
+
+  React.useEffect(() => {
+    const nextMoodboards = Array.isArray(moodboardData) ? moodboardData : []
+    setMoodboards(nextMoodboards)
+    if (nextMoodboards.length === 0) {
+      setSelectedMoodboardId(null)
+      return
+    }
+    setSelectedMoodboardId((current) => {
+      if (current != null && nextMoodboards.some((item) => item.id === current)) return current
+      return nextMoodboards[0].id
+    })
+  }, [moodboardData])
+
+  const selectedMoodboard = React.useMemo(() => {
+    if (selectedMoodboardId == null) return null
+    return moodboards.find((item) => item.id === selectedMoodboardId) || null
+  }, [moodboards, selectedMoodboardId])
+
+  const createMoodboard = React.useCallback(async () => {
+    const name = String(window.prompt("Moodboard name") || "").trim()
+    if (!name) return
+    try {
+      const created = await bgRequest<any>({
+        path: "/api/v1/notes/moodboards" as any,
+        method: "POST" as any,
+        body: { name }
+      })
+      const createdId = Number(created?.id)
+      await refetchMoodboards()
+      if (Number.isFinite(createdId)) {
+        setSelectedMoodboardId(Math.floor(createdId))
+      }
+      setListViewMode("moodboard")
+      setPage(1)
+      message.success(`Created moodboard "${name}"`)
+    } catch {
+      message.error("Could not create moodboard")
+    }
+  }, [message, refetchMoodboards])
+
+  const renameMoodboard = React.useCallback(async () => {
+    if (!selectedMoodboard) {
+      message.warning("Select a moodboard first")
+      return
+    }
+    const nextName = String(window.prompt("Rename moodboard", selectedMoodboard.name) || "").trim()
+    if (!nextName || nextName === selectedMoodboard.name) return
+    const expectedVersion =
+      selectedMoodboard.version ??
+      (typeof (selectedMoodboard as any).version === "number"
+        ? (selectedMoodboard as any).version
+        : 1)
+    try {
+      await bgRequest({
+        path: `/api/v1/notes/moodboards/${selectedMoodboard.id}` as any,
+        method: "PATCH" as any,
+        headers: { "expected-version": String(expectedVersion) } as any,
+        body: { name: nextName }
+      })
+      await refetchMoodboards()
+      message.success(`Renamed moodboard to "${nextName}"`)
+    } catch {
+      message.error("Could not rename moodboard")
+    }
+  }, [message, refetchMoodboards, selectedMoodboard])
+
+  const deleteMoodboard = React.useCallback(async () => {
+    if (!selectedMoodboard) {
+      message.warning("Select a moodboard first")
+      return
+    }
+    const ok = await confirmDanger({
+      title: "Delete moodboard?",
+      content: `Delete "${selectedMoodboard.name}"?`,
+      okText: "Delete",
+      cancelText: "Cancel"
+    })
+    if (!ok) return
+    const expectedVersion =
+      selectedMoodboard.version ??
+      (typeof (selectedMoodboard as any).version === "number"
+        ? (selectedMoodboard as any).version
+        : 1)
+    try {
+      await bgRequest({
+        path: `/api/v1/notes/moodboards/${selectedMoodboard.id}` as any,
+        method: "DELETE" as any,
+        headers: { "expected-version": String(expectedVersion) } as any
+      })
+      await refetchMoodboards()
+      setPage(1)
+      message.success("Moodboard deleted")
+    } catch {
+      message.error("Could not delete moodboard")
+    }
+  }, [confirmDanger, message, refetchMoodboards, selectedMoodboard])
+
   const fetchFilteredNotesRaw = async (
     q: string,
     toks: string[],
@@ -1892,12 +2043,23 @@ const NotesManagerPage: React.FC = () => {
       return {
         id: n?.id,
         title: n?.title,
-        content: n?.content,
+        content: n?.content ?? n?.content_preview,
+        content_preview: n?.content_preview ?? null,
         updated_at: n?.updated_at ?? n?.last_modified ?? n?.lastModified,
         deleted: Boolean(n?.deleted),
         conversation_id: links.conversation_id,
         message_id: links.message_id,
         keywords,
+        cover_image_url:
+          typeof n?.cover_image_url === 'string' && n.cover_image_url.trim().length > 0
+            ? n.cover_image_url
+            : null,
+        membership_source:
+          n?.membership_source === 'manual' ||
+          n?.membership_source === 'smart' ||
+          n?.membership_source === 'both'
+            ? n.membership_source
+            : undefined,
         version: toNoteVersion(n) ?? undefined
       }
     }
@@ -1926,6 +2088,37 @@ const NotesManagerPage: React.FC = () => {
       return sortNoteRows(items, sortOption).map(mapNoteListItem)
     }
 
+    if (listViewMode === 'moodboard') {
+      if (selectedMoodboardId == null) {
+        setTotal(0)
+        return []
+      }
+      const params = new URLSearchParams()
+      params.set('limit', String(pageSize))
+      params.set('offset', String((page - 1) * pageSize))
+      const res = await bgRequest<any>({
+        path: `/api/v1/notes/moodboards/${selectedMoodboardId}/notes?${params.toString()}` as any,
+        method: 'GET' as any
+      })
+      const items = Array.isArray(res?.notes)
+        ? res.notes
+        : Array.isArray(res?.items)
+          ? res.items
+          : Array.isArray(res)
+            ? res
+            : []
+      const totalItems =
+        Number(
+          res?.total ??
+            res?.count ??
+            res?.pagination?.total_items ??
+            items.length ??
+            0
+        ) || 0
+      setTotal(totalItems)
+      return items.map(mapNoteListItem)
+    }
+
     const q = query.trim()
     const toks = effectiveKeywordTokens.map((k) => k.toLowerCase())
     // Prefer search when query or keyword filters are present
@@ -1952,6 +2145,8 @@ const NotesManagerPage: React.FC = () => {
     queryKey: [
       'notes',
       listMode,
+      listViewMode,
+      selectedMoodboardId ?? 'none',
       query,
       page,
       pageSize,
@@ -1968,8 +2163,9 @@ const NotesManagerPage: React.FC = () => {
   const visibleNotes = React.useMemo(() => {
     if (!Array.isArray(data)) return []
     if (listMode !== 'active') return data
+    if (listViewMode === 'moodboard') return data
     return sortNotesByPinnedIds(data, pinnedNoteIdSet)
-  }, [data, listMode, pinnedNoteIdSet])
+  }, [data, listMode, listViewMode, pinnedNoteIdSet])
 
   const filteredCount = visibleNotes.length
   const orderedVisibleNoteIds = React.useMemo(
@@ -2010,9 +2206,12 @@ const NotesManagerPage: React.FC = () => {
     [message, pinnedNoteIdSet, pinnedNoteIds]
   )
   const showLargeListPaginationHint =
-    listMode === 'active' && total >= LARGE_NOTES_PAGINATION_THRESHOLD
+    listMode === 'active' &&
+    listViewMode !== 'moodboard' &&
+    total >= LARGE_NOTES_PAGINATION_THRESHOLD
   const hasActiveFilters =
     listMode === 'active' &&
+    listViewMode !== 'moodboard' &&
     (queryInput.trim().length > 0 || effectiveKeywordTokens.length > 0 || selectedNotebookId != null)
   const activeFilterSummary = React.useMemo(() => {
     if (!hasActiveFilters || listMode !== 'active') return null
@@ -6207,7 +6406,7 @@ const NotesManagerPage: React.FC = () => {
 	                  })}
 		                </Button>
 		              </div>
-		              <div className="grid grid-cols-2 gap-2">
+		              <div className="grid grid-cols-3 gap-2">
 		                <Button
 		                  size="small"
 		                  type={listViewMode === 'list' ? 'primary' : 'default'}
@@ -6230,7 +6429,112 @@ const NotesManagerPage: React.FC = () => {
 		                    defaultValue: 'Timeline'
 		                  })}
 		                </Button>
+		                <Button
+		                  size="small"
+		                  type={listViewMode === 'moodboard' ? 'primary' : 'default'}
+		                  onClick={() => setListViewMode('moodboard')}
+		                  disabled={listMode !== 'active'}
+		                  data-testid="notes-view-mode-moodboard"
+		                >
+		                  {t('option:notesSearch.viewModeMoodboard', {
+		                    defaultValue: 'Moodboard'
+		                  })}
+		                </Button>
 		              </div>
+		              {listMode === 'active' && listViewMode === 'moodboard' && (
+		                <div
+		                  className="space-y-2 rounded border border-border bg-surface2 p-2"
+		                  data-testid="notes-moodboard-controls"
+		                >
+		                  <div className="flex items-center justify-between">
+		                    <Typography.Text className="text-[11px] uppercase tracking-[0.08em] text-text-muted">
+		                      {t('option:notesSearch.moodboardLabel', {
+		                        defaultValue: 'Moodboard'
+		                      })}
+		                    </Typography.Text>
+		                    {isMoodboardsFetching && <Spin size="small" />}
+		                  </div>
+		                  <select
+		                    value={selectedMoodboardId == null ? '' : String(selectedMoodboardId)}
+		                    onChange={(event) => {
+		                      const value = String(event.target.value || '').trim()
+		                      if (!value) {
+		                        setSelectedMoodboardId(null)
+		                        setPage(1)
+		                        return
+		                      }
+		                      const parsed = Number(value)
+		                      if (!Number.isFinite(parsed)) return
+		                      setSelectedMoodboardId(Math.floor(parsed))
+		                      setPage(1)
+		                    }}
+		                    className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+		                    data-testid="notes-moodboard-select"
+		                  >
+		                    {moodboards.length === 0 ? (
+		                      <option value="">
+		                        {t('option:notesSearch.moodboardEmptyOption', {
+		                          defaultValue: 'No moodboards yet'
+		                        })}
+		                      </option>
+		                    ) : null}
+		                    {moodboards.map((board) => (
+		                      <option key={board.id} value={board.id}>
+		                        {board.name}
+		                      </option>
+		                    ))}
+		                  </select>
+		                  <div className="grid grid-cols-3 gap-2">
+		                    <Button
+		                      size="small"
+		                      onClick={() => {
+		                        void createMoodboard()
+		                      }}
+		                      data-testid="notes-moodboard-create"
+		                    >
+		                      {t('option:notesSearch.moodboardCreate', {
+		                        defaultValue: 'New'
+		                      })}
+		                    </Button>
+		                    <Button
+		                      size="small"
+		                      onClick={() => {
+		                        void renameMoodboard()
+		                      }}
+		                      disabled={selectedMoodboard == null}
+		                      data-testid="notes-moodboard-rename"
+		                    >
+		                      {t('option:notesSearch.moodboardRename', {
+		                        defaultValue: 'Rename'
+		                      })}
+		                    </Button>
+		                    <Button
+		                      size="small"
+		                      danger
+		                      onClick={() => {
+		                        void deleteMoodboard()
+		                      }}
+		                      disabled={selectedMoodboard == null}
+		                      data-testid="notes-moodboard-delete"
+		                    >
+		                      {t('option:notesSearch.moodboardDelete', {
+		                        defaultValue: 'Delete'
+		                      })}
+		                    </Button>
+		                  </div>
+		                  <Typography.Text
+		                    type="secondary"
+		                    className="block text-[11px] text-text-muted"
+		                  >
+		                    {selectedMoodboard?.description
+		                      ? String(selectedMoodboard.description)
+		                      : t('option:notesSearch.moodboardHelperDefault', {
+		                          defaultValue:
+		                            'Pin notes manually or use smart rules to populate this board.'
+		                        })}
+		                  </Typography.Text>
+		                </div>
+		              )}
 		              {listMode === 'active' ? (
 		                <>
 	                  <Input
@@ -6686,6 +6990,100 @@ const NotesManagerPage: React.FC = () => {
 	                        </div>
 	                      </section>
 	                    ))}
+	                  </div>
+	                )}
+	              </div>
+	            ) : listMode === 'active' && listViewMode === 'moodboard' ? (
+	              <div className="h-full overflow-y-auto px-3 py-3" data-testid="notes-moodboard-view">
+	                {selectedMoodboard == null ? (
+	                  <div
+	                    className="rounded-md border border-dashed border-border bg-surface2 px-3 py-4 text-sm text-text-muted"
+	                    data-testid="notes-moodboard-empty-selection"
+	                  >
+	                    {t('option:notesSearch.moodboardSelectPrompt', {
+	                      defaultValue: 'Create or select a moodboard to start.'
+	                    })}
+	                  </div>
+	                ) : isFetching ? (
+	                  <div className="mb-3 inline-flex items-center gap-2 text-xs text-text-muted">
+	                    <Spin size="small" />
+	                    <span>
+	                      {t('option:notesSearch.moodboardLoading', {
+	                        defaultValue: 'Loading moodboard...'
+	                      })}
+	                    </span>
+	                  </div>
+	                ) : visibleNotes.length === 0 ? (
+	                  <div
+	                    className="rounded-md border border-dashed border-border bg-surface2 px-3 py-4 text-sm text-text-muted"
+	                    data-testid="notes-moodboard-empty"
+	                  >
+	                    {t('option:notesSearch.moodboardEmpty', {
+	                      defaultValue: 'No notes in this moodboard yet.'
+	                    })}
+	                  </div>
+	                ) : (
+	                  <div className="columns-1 gap-3 sm:columns-2 xl:columns-3">
+	                    {visibleNotes.map((note) => {
+	                      const noteId = String(note.id)
+	                      const isSelected = selectedId != null && String(selectedId) === noteId
+	                      const preview = String(note.content_preview || note.content || '').trim()
+	                      const membership = String(note.membership_source || 'manual')
+	                      const membershipLabel =
+	                        membership === 'both'
+	                          ? t('option:notesSearch.moodboardMembershipBoth', { defaultValue: 'Manual + Smart' })
+	                          : membership === 'smart'
+	                            ? t('option:notesSearch.moodboardMembershipSmart', { defaultValue: 'Smart' })
+	                            : t('option:notesSearch.moodboardMembershipManual', { defaultValue: 'Manual' })
+	                      return (
+	                        <button
+	                          key={noteId}
+	                          type="button"
+	                          data-testid={`notes-moodboard-card-${noteId.replace(/[^a-z0-9_-]/gi, '_')}`}
+	                          onClick={() => {
+	                            void handleSelectNote(note.id)
+	                          }}
+	                          className={`mb-3 w-full break-inside-avoid overflow-hidden rounded-lg border text-left transition-colors ${
+	                            isSelected
+	                              ? 'border-primary bg-primary/10'
+	                              : 'border-border bg-surface hover:bg-surface2'
+	                          }`}
+	                        >
+	                          {note.cover_image_url ? (
+	                            <img
+	                              src={note.cover_image_url}
+	                              alt={String(note.title || `Note ${noteId}`)}
+	                              className="h-32 w-full object-cover"
+	                            />
+	                          ) : (
+	                            <div className="flex h-24 w-full items-center justify-center bg-surface3 text-xl font-semibold text-text-muted">
+	                              {String(note.title || '').trim().slice(0, 1).toUpperCase() || '#'}
+	                            </div>
+	                          )}
+	                          <div className="space-y-2 p-3">
+	                            <div className="line-clamp-2 text-sm font-medium text-text">
+	                              {String(note.title || `Note ${noteId}`)}
+	                            </div>
+	                            {preview ? (
+	                              <div className="line-clamp-4 text-xs text-text-muted">{preview}</div>
+	                            ) : null}
+	                            <div className="flex flex-wrap items-center gap-1.5">
+	                              <span className="rounded-full bg-surface3 px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-text-muted">
+	                                {membershipLabel}
+	                              </span>
+	                              {(note.keywords || []).slice(0, 2).map((keyword) => (
+	                                <span
+	                                  key={`${noteId}-${keyword}`}
+	                                  className="rounded-full border border-border px-2 py-0.5 text-[10px] text-text-muted"
+	                                >
+	                                  {keyword}
+	                                </span>
+	                              ))}
+	                            </div>
+	                          </div>
+	                        </button>
+	                      )
+	                    })}
 	                  </div>
 	                )}
 	              </div>
