@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import React from "react"
+import axe from "axe-core"
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WatchlistsPlaygroundPage } from "../WatchlistsPlaygroundPage"
@@ -296,7 +297,10 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     const { rerender } = render(<WatchlistsPlaygroundPage />)
 
     expect(screen.getByText("Beta Feature")).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
+    const betaBanner = screen.getByText("Beta Feature").parentElement
+    expect(betaBanner).not.toBeNull()
+    if (!betaBanner) throw new Error("Expected beta banner container to exist")
+    fireEvent.click(within(betaBanner).getByRole("button", { name: "Dismiss" }))
 
     expect(screen.queryByText("Beta Feature")).not.toBeInTheDocument()
     expect(localStorage.getItem("beta-dismissed:watchlists")).toBe("1")
