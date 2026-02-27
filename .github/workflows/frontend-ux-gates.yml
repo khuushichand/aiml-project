@@ -202,13 +202,21 @@ jobs:
         working-directory: apps/tldw-frontend
         run: bun run e2e:smoke:stage4
 
-      - name: Run Stage 5 critical UX release gate (shard 1/2)
+      - name: Run Stage 5 critical UX release gate (shard 1/4)
         working-directory: apps/tldw-frontend
-        run: bun run e2e:smoke:stage5 -- --shard=1/2
+        run: bun run e2e:smoke:stage5 -- --shard=1/4
 
-      - name: Run Stage 5 critical UX release gate (shard 2/2)
+      - name: Run Stage 5 critical UX release gate (shard 2/4)
         working-directory: apps/tldw-frontend
-        run: bun run e2e:smoke:stage5 -- --shard=2/2
+        run: bun run e2e:smoke:stage5 -- --shard=2/4
+
+      - name: Run Stage 5 critical UX release gate (shard 3/4)
+        working-directory: apps/tldw-frontend
+        run: bun run e2e:smoke:stage5 -- --shard=3/4
+
+      - name: Run Stage 5 critical UX release gate (shard 4/4)
+        working-directory: apps/tldw-frontend
+        run: bun run e2e:smoke:stage5 -- --shard=4/4
 
       - name: Run Stage 6 interaction regression gate
         working-directory: apps/tldw-frontend
@@ -218,13 +226,21 @@ jobs:
         working-directory: apps/tldw-frontend
         run: bun run e2e:smoke:audio
 
-      - name: Run all-pages UX smoke gate (shard 1/2)
+      - name: Run all-pages UX smoke gate (shard 1/4)
         working-directory: apps/tldw-frontend
-        run: bun run e2e:smoke:all-pages:gate -- --shard=1/2
+        run: bun run e2e:smoke:all-pages:gate -- --shard=1/4
 
-      - name: Run all-pages UX smoke gate (shard 2/2)
+      - name: Run all-pages UX smoke gate (shard 2/4)
         working-directory: apps/tldw-frontend
-        run: bun run e2e:smoke:all-pages:gate -- --shard=2/2
+        run: bun run e2e:smoke:all-pages:gate -- --shard=2/4
+
+      - name: Run all-pages UX smoke gate (shard 3/4)
+        working-directory: apps/tldw-frontend
+        run: bun run e2e:smoke:all-pages:gate -- --shard=3/4
+
+      - name: Run all-pages UX smoke gate (shard 4/4)
+        working-directory: apps/tldw-frontend
+        run: bun run e2e:smoke:all-pages:gate -- --shard=4/4
 
       - name: Upload smoke artifacts
         if: always()
