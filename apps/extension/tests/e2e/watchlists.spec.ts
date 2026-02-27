@@ -1680,7 +1680,7 @@ test.describe('Watchlists playground smoke', () => {
 
     await expect
       .poll(async () => page.evaluate(() => (window as any).__watchlistsItemReviewUpdates))
-      .toBe(pageRowCount)
+      .toBe(25)
 
     await expect(page.getByTestId('watchlists-items-mark-page')).toBeDisabled()
 

@@ -167,6 +167,13 @@ const clickPipelineNext = () => {
   fireEvent.click(pipelineQueries().getByRole("button", { name: "Next" }))
 }
 
+const selectPipelineFeed = async (label: string) => {
+  fireEvent.click(pipelineQueries().getByLabelText(label))
+  await waitFor(() => {
+    expect(pipelineQueries().getByLabelText(label)).toBeChecked()
+  })
+}
+
 describe("OverviewTab quick setup flow", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -613,8 +620,8 @@ describe("OverviewTab quick setup flow", () => {
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(pipelineQueries().getByLabelText("AI Feed"))
-    fireEvent.click(pipelineQueries().getByLabelText("Security Feed"))
+    await selectPipelineFeed("AI Feed")
+    await selectPipelineFeed("Security Feed")
     clickPipelineNext()
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("Monitor name")).toBeInTheDocument()
@@ -694,7 +701,7 @@ describe("OverviewTab quick setup flow", () => {
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(pipelineQueries().getByLabelText("AI Feed"))
+    await selectPipelineFeed("AI Feed")
     clickPipelineNext()
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("Monitor name")).toBeInTheDocument()
@@ -761,7 +768,7 @@ describe("OverviewTab quick setup flow", () => {
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(pipelineQueries().getByLabelText("AI Feed"))
+    await selectPipelineFeed("AI Feed")
     clickPipelineNext()
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("Monitor name")).toBeInTheDocument()
@@ -818,7 +825,7 @@ describe("OverviewTab quick setup flow", () => {
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(pipelineQueries().getByLabelText("AI Feed"))
+    await selectPipelineFeed("AI Feed")
     clickPipelineNext()
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("Monitor name")).toBeInTheDocument()
@@ -865,7 +872,7 @@ describe("OverviewTab quick setup flow", () => {
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(pipelineQueries().getByLabelText("AI Feed"))
+    await selectPipelineFeed("AI Feed")
     clickPipelineNext()
     await waitFor(() => {
       expect(pipelineQueries().getByLabelText("Run immediately")).toBeInTheDocument()
