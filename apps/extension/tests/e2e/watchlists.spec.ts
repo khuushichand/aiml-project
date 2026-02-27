@@ -1669,6 +1669,7 @@ test.describe('Watchlists playground smoke', () => {
     const visibleItemRows = page.locator('[data-testid^="watchlists-item-row-"]')
     const firstPageCount = await visibleItemRows.count()
     expect(firstPageCount).toBeGreaterThan(0)
+    const expectedBatchReviewCount = Math.min(firstPageCount, 25)
 
     await page.getByTestId('watchlists-items-mark-page').click()
     const firstConfirm = page.locator('.ant-modal-confirm').last()
@@ -1676,7 +1677,7 @@ test.describe('Watchlists playground smoke', () => {
 
     await expect
       .poll(async () => page.evaluate(() => (window as any).__watchlistsItemReviewUpdates))
-      .toBe(firstPageCount)
+      .toBe(expectedBatchReviewCount)
 
     await expect(page.getByTestId('watchlists-items-mark-page')).toBeDisabled()
 
