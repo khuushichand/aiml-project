@@ -56,6 +56,17 @@ describe("writing session import utils", () => {
     })
   })
 
+  it("parses explicit payload_json strings", () => {
+    const payload = parseImportedSessionPayload({
+      payload_json: '{"prompt":"Hello","settings":{"temperature":0.4}}'
+    })
+
+    expect(payload).toEqual({
+      prompt: "Hello",
+      settings: { temperature: 0.4 }
+    })
+  })
+
   it("parses mikupad-style stringified session fields", () => {
     const payload = parseImportedSessionPayload({
       name: "Miku Session",
@@ -291,6 +302,18 @@ describe("writing session import utils", () => {
     expect(getImportedSessionProviderHint(payload)).toBe("openai")
   })
 
+  it("maps selectedTemplate and chatAPI into writing payload fields", () => {
+    const payload = parseImportedSessionPayload({
+      selectedTemplate: "Mistral",
+      chatAPI: "true"
+    })
+
+    expect(payload).toEqual({
+      template_name: "Mistral",
+      chat_mode: true
+    })
+  })
+
   it("extracts normalized hints from mixed payload keys", () => {
     expect(
       getImportedSessionModelHint({ model_id: "  mistral-small  " })
@@ -305,7 +328,19 @@ describe("writing session import utils", () => {
       getImportedSessionProviderHint({ provider: "llamacpp" })
     ).toBe("llama.cpp")
     expect(
+      getImportedSessionProviderHint({ provider: "tabbyapi" })
+    ).toBe("tabby")
+    expect(
+      getImportedSessionProviderHint({ provider: "oobabooga" })
+    ).toBe("ooba")
+    expect(
+      getImportedSessionProviderHint({ provider: "koboldcpp" })
+    ).toBe("kobold")
+    expect(
       getImportedSessionProviderHint({ endpointAPI: 2 })
     ).toBe("kobold")
+    expect(
+      getImportedSessionProviderHint({ endpointAPI: 4 })
+    ).toBeNull()
   })
 })

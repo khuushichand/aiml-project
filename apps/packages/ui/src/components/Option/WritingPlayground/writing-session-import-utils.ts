@@ -110,10 +110,12 @@ const normalizeProviderHint = (value: unknown): string | undefined => {
     custom_openai_api2: "custom-openai-api-2",
     "custom-openai-api2": "custom-openai-api-2",
     llamacpp: "llama.cpp",
+    llama_cpp: "llama.cpp",
+    koboldcpp: "kobold",
+    tabbyapi: "tabby",
+    oobabooga: "ooba",
     local_llm: "local-llm",
-    localllm: "local-llm",
-    aihorde: "ai-horde",
-    ai_horde: "ai-horde"
+    localllm: "local-llm"
   }
   const aliased = providerAliases[compact] ?? providerAliases[trimmed]
   if (aliased) return aliased
@@ -128,8 +130,7 @@ const normalizeEndpointApiProviderHint = (value: unknown): string | undefined =>
   const endpointApiProviderMap: Record<string, string> = {
     "0": "llama.cpp",
     "2": "kobold",
-    "3": "openai",
-    "4": "ai-horde"
+    "3": "openai"
   }
   const normalizedKey = String(Math.trunc(parsed))
   const mapped = endpointApiProviderMap[normalizedKey]
@@ -672,6 +673,7 @@ const RECOGNIZED_INPUT_KEYS = new Set([
   "prompt",
   "text",
   "template",
+  "selectedTemplate",
   "template_name",
   "templateName",
   "theme",
@@ -679,6 +681,8 @@ const RECOGNIZED_INPUT_KEYS = new Set([
   "themeName",
   "chat_mode",
   "chatMode",
+  "chatAPI",
+  "useChatAPI",
   "enabledSamplers",
   "enabled_samplers",
   "openaiPresets",
@@ -739,11 +743,13 @@ for (const mapping of ADVANCED_PARAM_MAP) {
 export const parseImportedSessionPayload = (
   item: Record<string, unknown>
 ): Record<string, unknown> => {
-  if (isRecord(item.payload)) {
-    return item.payload
+  const parsedPayload = parseMaybeJsonValue(item.payload)
+  if (isRecord(parsedPayload)) {
+    return parsedPayload
   }
-  if (isRecord(item.payload_json)) {
-    return item.payload_json
+  const parsedPayloadJson = parseMaybeJsonValue(item.payload_json)
+  if (isRecord(parsedPayloadJson)) {
+    return parsedPayloadJson
   }
 
   const source = isRecord(item.session) ? item.session : item
@@ -772,7 +778,8 @@ export const parseImportedSessionPayload = (
   const templateName = readString(parsedSource, [
     "template_name",
     "templateName",
-    "template"
+    "template",
+    "selectedTemplate"
   ])
   if (templateName !== undefined) {
     payload.template_name = templateName.trim()
@@ -783,7 +790,12 @@ export const parseImportedSessionPayload = (
     payload.theme_name = themeName.trim()
   }
 
-  const chatMode = readBoolean(parsedSource, ["chat_mode", "chatMode"])
+  const chatMode = readBoolean(parsedSource, [
+    "chat_mode",
+    "chatMode",
+    "chatAPI",
+    "useChatAPI"
+  ])
   if (chatMode !== undefined) {
     payload.chat_mode = chatMode
   }

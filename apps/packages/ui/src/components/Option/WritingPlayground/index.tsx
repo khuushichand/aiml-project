@@ -152,6 +152,7 @@ import {
   parseImportedSessionPayload
 } from "./writing-session-import-utils"
 import { extractImportedTemplateItems } from "./writing-template-import-utils"
+import { extractImportedThemeItems } from "./writing-theme-import-utils"
 
 const { Title, Paragraph } = Typography
 
@@ -3483,14 +3484,8 @@ export const WritingPlayground = () => {
       try {
         const raw = await file.text()
         const parsed = JSON.parse(raw)
-        const items = Array.isArray(parsed)
-          ? parsed
-          : Array.isArray(parsed?.themes)
-            ? parsed.themes
-            : parsed
-              ? [parsed]
-              : []
-        if (!Array.isArray(items) || items.length === 0) {
+        const items = extractImportedThemeItems(parsed)
+        if (items.length === 0) {
           message.error(
             t(
               "option:writingPlayground.themeImportInvalid",
@@ -3500,36 +3495,14 @@ export const WritingPlayground = () => {
           return
         }
         for (const item of items) {
-          if (!item || typeof item !== "object") continue
-          const name = String((item as { name?: string }).name || "").trim()
-          if (!name) continue
+          const name = item.name
           const existing = themes.find((theme) => theme.name === name)
-          const rawClassName = (item as { class_name?: string; className?: string })
-            .class_name ?? (item as { className?: string }).className
-          const rawIsDefault = (item as { is_default?: boolean; isDefault?: boolean })
-            .is_default ?? (item as { isDefault?: boolean }).isDefault
           const payload = {
-            class_name:
-              typeof rawClassName === "string"
-                ? rawClassName
-                : null,
-            css:
-              typeof (item as { css?: string }).css === "string"
-                ? (item as { css?: string }).css
-                : null,
-            schema_version:
-              typeof (item as { schema_version?: number }).schema_version ===
-              "number"
-                ? (item as { schema_version?: number }).schema_version
-                : 1,
-            is_default:
-              typeof rawIsDefault === "boolean"
-                ? rawIsDefault
-                : false,
-            order:
-              typeof (item as { order?: number }).order === "number"
-                ? (item as { order?: number }).order
-                : 0
+            class_name: item.className,
+            css: item.css,
+            schema_version: item.schemaVersion,
+            is_default: item.isDefault,
+            order: item.order
           }
           if (existing) {
             await updateWritingTheme(existing.name, payload, existing.version)
