@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
 import { RefreshCw, Wallet, Pencil } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
@@ -775,7 +776,10 @@ function BudgetsPageContent() {
                   <TableSkeleton rows={5} columns={7} />
                 </div>
               ) : budgets.length === 0 ? (
-                <div className="text-muted-foreground">No budgets found for the selected scope.</div>
+                <EmptyState
+                  title="No budgets found for the selected scope."
+                  description="Try adjusting your filters or create budgets for additional organizations."
+                />
               ) : (
                 <>
                   <div className="overflow-x-auto">

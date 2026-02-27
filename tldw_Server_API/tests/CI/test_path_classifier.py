@@ -11,6 +11,22 @@ def test_ui_only_change_disables_backend_and_coverage() -> None:
     assert flags["backend_changed"] is False
     assert flags["coverage_required"] is False
     assert flags["frontend_changed"] is True
+    assert flags["tldw_frontend_changed"] is True
+    assert flags["admin_ui_changed"] is False
+    assert flags["e2e_changed"] is True
+
+
+def test_admin_ui_change_enables_frontend_without_e2e() -> None:
+    flags = classify_paths(
+        [
+            "admin-ui/app/monitoring/page.tsx",
+            "admin-ui/lib/api-client.ts",
+        ]
+    )
+    assert flags["frontend_changed"] is True
+    assert flags["admin_ui_changed"] is True
+    assert flags["tldw_frontend_changed"] is False
+    assert flags["e2e_changed"] is False
 
 
 def test_api_schema_change_enables_e2e() -> None:

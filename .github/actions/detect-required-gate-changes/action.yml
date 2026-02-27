@@ -8,6 +8,12 @@ outputs:
   frontend_changed:
     description: Whether frontend-relevant paths changed.
     value: ${{ steps.classify.outputs.frontend_changed }}
+  tldw_frontend_changed:
+    description: Whether the primary web frontend paths changed.
+    value: ${{ steps.classify.outputs.tldw_frontend_changed }}
+  admin_ui_changed:
+    description: Whether admin-ui paths changed.
+    value: ${{ steps.classify.outputs.admin_ui_changed }}
   e2e_changed:
     description: Whether e2e-triggering paths changed.
     value: ${{ steps.classify.outputs.e2e_changed }}

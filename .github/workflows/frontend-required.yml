@@ -21,6 +21,8 @@ jobs:
     outputs:
       backend_changed: ${{ steps.detect.outputs.backend_changed }}
       frontend_changed: ${{ steps.detect.outputs.frontend_changed }}
+      tldw_frontend_changed: ${{ steps.detect.outputs.tldw_frontend_changed }}
+      admin_ui_changed: ${{ steps.detect.outputs.admin_ui_changed }}
       e2e_changed: ${{ steps.detect.outputs.e2e_changed }}
       security_relevant_changed: ${{ steps.detect.outputs.security_relevant_changed }}
       coverage_required: ${{ steps.detect.outputs.coverage_required }}
@@ -60,17 +62,17 @@ jobs:
           bun-version: "1.3.2"
 
       - name: Install frontend dependencies
-        if: needs.changes.outputs.frontend_changed == 'true'
+        if: needs.changes.outputs.tldw_frontend_changed == 'true'
         working-directory: apps
         run: bun install
 
       - name: Run frontend lint
-        if: needs.changes.outputs.frontend_changed == 'true'
+        if: needs.changes.outputs.tldw_frontend_changed == 'true'
         working-directory: apps/tldw-frontend
         run: bun run lint
 
       - name: Run frontend unit tests
-        if: needs.changes.outputs.frontend_changed == 'true'
+        if: needs.changes.outputs.tldw_frontend_changed == 'true'
         working-directory: apps/tldw-frontend
         shell: bash
         run: |
@@ -93,3 +95,23 @@ jobs:
             echo "No base SHA found; running full frontend unit suite."
             bun run test:run
           fi
+
+      - name: Install admin-ui dependencies
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        working-directory: admin-ui
+        run: bun install
+
+      - name: Run admin-ui lint
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        working-directory: admin-ui
+        run: bun run lint
+
+      - name: Run admin-ui unit tests
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        working-directory: admin-ui
+        run: bun run test
+
+      - name: Run admin-ui build
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        working-directory: admin-ui
+        run: bun run build

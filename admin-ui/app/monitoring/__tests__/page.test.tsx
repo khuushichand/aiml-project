@@ -562,10 +562,12 @@ describe('MonitoringPage', () => {
     render(<MonitoringPage />);
     await screen.findByText('Monitoring');
 
-    expect(screen.getByTestId('system-status-card-tts').textContent).toContain('metrics fallback');
-    expect(screen.getByTestId('system-status-card-stt').textContent).toContain('metrics fallback');
-    expect(screen.getByTestId('system-status-card-embeddings').textContent).toContain('metrics fallback');
-    expect(screen.getByTestId('system-status-card-queue').textContent).toContain('Depth 91');
+    await waitFor(() => {
+      expect(screen.getByTestId('system-status-card-tts').textContent).toContain('metrics fallback');
+      expect(screen.getByTestId('system-status-card-stt').textContent).toContain('metrics fallback');
+      expect(screen.getByTestId('system-status-card-embeddings').textContent).toContain('metrics fallback');
+      expect(screen.getByTestId('system-status-card-queue').textContent).toContain('Depth 91');
+    });
   });
 
   it('renders notification delivery dashboard and retries failed notifications', async () => {
