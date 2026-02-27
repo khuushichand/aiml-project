@@ -38,6 +38,9 @@ Lima provides full VM isolation via Virtualization.framework (macOS) or QEMU (Li
 - Workspace mounted at `/workspace` inside VM
 - Slower startup than containers (~10-30s vs ~1s for Docker)
 - Recommended for macOS development or when maximum isolation is required
+- Runtime parity: REST, MCP `sandbox.run`, and ACP all accept `docker|firecracker|lima`
+- Strict fail-closed mode: Lima accepts only `deny_all|allowlist` network policies; unsupported requirements are rejected
+- Platform constraint: Windows/WSL strict Lima enforcement is not supported yet and fails closed
 
 ## Trust-Level Tiers
 
@@ -104,6 +107,11 @@ Response (example):
   ]
 }
 ```
+For `lima`, runtime discovery also includes:
+- `strict_deny_all_supported`
+- `strict_allowlist_supported`
+- `enforcement_ready` (object with `deny_all`/`allowlist`)
+- `host` (host capability facts for troubleshooting)
 
 ## Create a session
 POST `/api/v1/sandbox/sessions`
@@ -213,6 +221,25 @@ Content-Range: bytes */10
     "code": "idempotency_conflict",
     "message": "Idempotency-Key replay with different body",
     "details": { "prior_id": "<id>", "key": "<Idempotency-Key>", "prior_created_at": "<ISO8601>" }
+  }
+}
+```
+
+## Strict Lima failure contracts
+- `503 runtime_unavailable` when `limactl`/runtime is unavailable. For explicit `runtime=lima`, `error.details.suggested` is an empty list (no fallback).
+- `422 policy_unsupported` when strict requirements cannot be proven (for example `strict_allowlist_not_supported` or unsupported `network_policy`).
+
+Example `422`:
+```
+{
+  "error": {
+    "code": "policy_unsupported",
+    "message": "Runtime 'lima' does not satisfy requirement 'allowlist'",
+    "details": {
+      "runtime": "lima",
+      "requirement": "allowlist",
+      "reasons": ["strict_allowlist_not_supported"]
+    }
   }
 }
 ```

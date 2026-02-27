@@ -113,11 +113,12 @@ startup_timeout_ms = 10000
 [ACP-SANDBOX]
 # Enable ACP sandbox mode (runs ACP in container/VM and exposes web SSH).
 enabled = false
-# Sandbox runtime (docker|firecracker|lima). Docker only is supported initially.
+# Sandbox runtime (docker|firecracker|lima).
 runtime = docker
 # Base image for ACP sandbox (must include sshd + tldw-agent-acp).
 base_image = tldw/acp-agent:latest
-# Network policy for ACP sandbox (allow_all|allowlist|deny_all).
+# Network policy for ACP sandbox (deny_all|allowlist). In strict Lima mode,
+# allow_all is rejected and requests fail closed unless strict guarantees are provable.
 network_policy = deny_all
 # Security hardening defaults (override only for trusted debug workflows).
 run_as_root = false
