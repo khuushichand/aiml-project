@@ -50,6 +50,14 @@ import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
 import WatchlistsPanel from './components/WatchlistsPanel';
 import {
+  escalateAlertSeverity,
+  markAlertAcknowledged,
+  mergeAlertsWithLocalState,
+  removeAlertById,
+  setAlertAssignment,
+  setAlertSnoozeUntil,
+} from './alert-state-utils';
+import {
   buildNotificationSettingsUpdate,
   normalizeNotificationSettings,
   normalizeRecentNotifications,
@@ -118,22 +126,6 @@ const normalizeWatchlistsPayload = (value: unknown): Watchlist[] => {
     }
   }
   return [];
-};
-
-const mergeAlertsWithLocalState = (
-  incoming: SystemAlert[],
-  existing: SystemAlert[]
-): SystemAlert[] => {
-  const existingById = new Map(existing.map((alert) => [alert.id, alert]));
-  return incoming.map((alert) => {
-    const prev = existingById.get(alert.id);
-    return {
-      ...alert,
-      assigned_to: prev?.assigned_to ?? alert.assigned_to,
-      snoozed_until: prev?.snoozed_until ?? alert.snoozed_until,
-      metadata: prev?.metadata ?? alert.metadata,
-    };
-  });
 };
 
 export default function MonitoringPage() {
@@ -544,15 +536,7 @@ export default function MonitoringPage() {
     try {
       setError('');
       await api.acknowledgeAlert(alert.id);
-      setAlerts((prev) => prev.map((item) => (
-        item.id === alert.id
-          ? {
-            ...item,
-            acknowledged: true,
-            acknowledged_at: new Date().toISOString(),
-          }
-          : item
-      )));
+      setAlerts((prev) => markAlertAcknowledged(prev, alert.id, new Date().toISOString()));
       appendAlertHistory(alert.id, 'acknowledged', 'Alert acknowledged');
       setSuccess('Alert acknowledged');
       loadData();
@@ -576,7 +560,7 @@ export default function MonitoringPage() {
       setError('');
       await api.dismissAlert(alert.id);
       appendAlertHistory(alert.id, 'dismissed', 'Alert dismissed');
-      setAlerts((prev) => prev.filter((item) => item.id !== alert.id));
+      setAlerts((prev) => removeAlertById(prev, alert.id));
       setSuccess('Alert dismissed');
       loadData();
     } catch (err: unknown) {
@@ -586,11 +570,7 @@ export default function MonitoringPage() {
   };
 
   const handleAssignAlert = (alert: SystemAlert, userId: string) => {
-    setAlerts((prev) => prev.map((item) => (
-      item.id === alert.id
-        ? { ...item, assigned_to: userId || undefined }
-        : item
-    )));
+    setAlerts((prev) => setAlertAssignment(prev, alert.id, userId || undefined));
     const assignedLabel = userId
       ? (assignableUsers.find((user) => user.id === userId)?.label ?? userId)
       : 'Unassigned';
@@ -600,11 +580,7 @@ export default function MonitoringPage() {
 
   const handleSnoozeAlert = (alert: SystemAlert, duration: SnoozeDurationOption) => {
     const snoozedUntil = resolveSnoozedUntil(duration);
-    setAlerts((prev) => prev.map((item) => (
-      item.id === alert.id
-        ? { ...item, snoozed_until: snoozedUntil }
-        : item
-    )));
+    setAlerts((prev) => setAlertSnoozeUntil(prev, alert.id, snoozedUntil));
     appendAlertHistory(alert.id, 'snoozed', `Snoozed for ${duration}`);
     setSuccess(`Alert snoozed for ${duration}`);
   };
@@ -613,11 +589,7 @@ export default function MonitoringPage() {
     if (alert.severity === 'critical') {
       return;
     }
-    setAlerts((prev) => prev.map((item) => (
-      item.id === alert.id
-        ? { ...item, severity: 'critical' }
-        : item
-    )));
+    setAlerts((prev) => escalateAlertSeverity(prev, alert.id));
     appendAlertHistory(alert.id, 'escalated', 'Severity escalated to critical');
     setSuccess('Alert escalated to critical');
   };
