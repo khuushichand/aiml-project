@@ -74,6 +74,22 @@ Add `LimaSecurityEnforcer` with host backends:
 - `MacOSLimaEnforcer`
 - `WindowsLimaEnforcer` (initially unsupported/fail-closed)
 
+Enforcement identity model (required for strict mode):
+
+- Every run must bind policy rules to a stable Lima identity tuple captured at runtime start:
+  - `run_id`
+  - `instance_name`
+  - `guest_ip` (or equivalent unique network identity)
+  - `host_network_iface`/bridge identifier
+- Rule labels/anchors must be namespaced by `run_id` and include deterministic verify/cleanup markers.
+- Strict verification must prove that installed deny/allowlist rules target only the current run identity before command execution begins.
+
+Host backend expectations:
+
+- Linux backend binds nftables/iptables rules to the resolved Lima guest network identity and verifies chain/target materialization.
+- macOS backend binds pf anchors/tables to the resolved Lima network identity and verifies anchor state before run start.
+- Windows backend returns unsupported in phase 1 (strict fail-closed).
+
 Each backend must implement:
 
 1. `preflight_capabilities()`
@@ -90,22 +106,43 @@ Each backend must implement:
 - MCP module: schema/validation/runtime parsing includes `lima`.
 - ACP manager: runtime requests validated against same capability gates.
 
+### 4.4 Host Privilege Model (Strict Mode)
+
+Strict Lima enforcement requires explicit host privilege readiness and must never rely on interactive privilege escalation.
+
+Accepted execution models:
+
+1. Privileged helper/daemon model: sandbox service calls a constrained local control plane to apply/verify/revoke network rules.
+2. Direct capability model: sandbox worker process has required host firewall privileges/capabilities.
+
+Required preflight behavior:
+
+- If privilege model is not available, preflight returns unavailable with reason `permission_denied_host_enforcement`.
+- Admission fails closed; no best-effort run start is allowed in strict mode.
+
 ## 5. Request/Execution Data Flow
 
 1. Parse request into `SessionSpec`/`RunSpec`.
 2. Resolve runtime (explicit request or default).
-3. Run provider preflight to produce `RuntimePreflightResult`.
-4. Evaluate strict policy requirements:
+3. Run provider preflight to produce `RuntimePreflightResult` (admission snapshot).
+4. Re-run provider preflight on the claim-owning execution worker immediately before enforcement/apply (authoritative check in multi-worker mode).
+5. Evaluate strict policy requirements:
    - deny-all requires strict deny-all capability + enforcement readiness.
    - allowlist requires strict allowlist capability + enforcement readiness.
-5. If checks fail: return deterministic failure (`runtime_unavailable` or `policy_unsupported`).
-6. If checks pass:
+6. If checks fail: return deterministic failure (`runtime_unavailable` or `policy_unsupported`).
+7. If checks pass:
    - apply network enforcement
    - verify enforcement
    - execute run
-7. In `finally`: revoke/cleanup all enforcement artifacts.
+8. In `finally`: revoke/cleanup all enforcement artifacts.
 
 No runtime fallback is allowed at any step.
+
+Multi-worker consistency rule:
+
+- Admission-time preflight is informative for UX/diagnostics.
+- Execution-time preflight on the claim-owning worker is authoritative.
+- If execution-time preflight diverges from admission-time snapshot, execution-time result wins and run must fail closed.
 
 ## 6. API and Contract Changes
 
@@ -130,18 +167,19 @@ No runtime fallback is allowed at any step.
 - `ACP_SANDBOX_RUNTIME=lima` supported as first-class.
 - Session bootstrap and run start require capability validation.
 - If strict guarantees not available for Lima on host: fail closed.
+- `ACP_SANDBOX_NETWORK_POLICY=allow_all` is not compatible with strict Lima mode and must return `policy_unsupported` (422) for Lima requests.
 
 ## 7. Error Semantics
 
-Unify error taxonomy across surfaces:
+Unify error taxonomy across surfaces with fixed HTTP semantics:
 
 1. `runtime_unavailable` (503)
    - runtime binary missing, host unsupported, enforcement backend unavailable.
-2. `policy_unsupported` (4xx)
+2. `policy_unsupported` (422)
    - runtime exists but cannot satisfy strict requested network policy.
-3. `permission_denied_host_enforcement` (5xx/503)
+3. `permission_denied_host_enforcement` (503)
    - required host privileges/capabilities unavailable.
-4. `runtime_execution_failed` (5xx)
+4. `runtime_execution_failed` (500)
    - runtime execution path failed after admission.
 
 All failures should include structured details:
@@ -180,6 +218,7 @@ All failures should include structured details:
 2. Strict deny-all/allowlist reject path when enforcer not ready.
 3. No-fallback assertions when Lima selected but strict guarantees unavailable.
 4. Runtimes discovery payload includes Lima capability/readiness fields.
+5. Cluster mode test ensures execution-worker preflight is re-evaluated and authoritative over admission snapshot.
 
 ### Security/cleanup
 
