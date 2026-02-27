@@ -11,11 +11,13 @@ _MIKUPAD_KNOWN_PARAMS = [
     "dynatemp_exponent",
     "repeat_penalty",
     "repeat_last_n",
+    "penalize_nl",
     "ignore_eos",
     "mirostat",
     "mirostat_tau",
     "mirostat_eta",
     "typical_p",
+    "min_p",
     "tfs_z",
     "xtc_threshold",
     "xtc_probability",
@@ -26,6 +28,7 @@ _MIKUPAD_KNOWN_PARAMS = [
     "dry_sequence_breakers",
     "banned_tokens",
     "grammar",
+    "logit_bias",
 ]
 
 _PARAM_GROUPS = ["sampling", "penalties", "constraints"]
@@ -53,6 +56,7 @@ _OPENAI_COMPAT_BASE = {
 _CATALOG: dict[str, dict[str, Any]] = {
     "openai": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "custom_openai_api": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
+    "custom_openai_api_2": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "llama": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "kobold": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "ooba": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
@@ -60,6 +64,20 @@ _CATALOG: dict[str, dict[str, Any]] = {
     "vllm": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "aphrodite": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "ollama": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
+}
+
+_PROVIDER_ALIASES: dict[str, str] = {
+    "custom-openai-api": "custom_openai_api",
+    "custom_openai_api": "custom_openai_api",
+    "custom-openai-api-2": "custom_openai_api_2",
+    "custom_openai_api_2": "custom_openai_api_2",
+    "custom_openai_api2": "custom_openai_api_2",
+    "llama.cpp": "llama",
+    "llama_cpp": "llama",
+    "llamacpp": "llama",
+    "koboldcpp": "kobold",
+    "oobabooga": "ooba",
+    "tabbyapi": "tabby",
 }
 
 
@@ -74,7 +92,12 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _normalize_provider(provider: str | None) -> str:
-    return str(provider or "").strip().lower()
+    raw = str(provider or "").strip().lower()
+    if not raw:
+        return ""
+    compact = raw.replace(" ", "")
+    normalized = compact.replace("-", "_")
+    return _PROVIDER_ALIASES.get(compact) or _PROVIDER_ALIASES.get(normalized) or normalized
 
 
 def _normalize_model(model: str | None) -> str:

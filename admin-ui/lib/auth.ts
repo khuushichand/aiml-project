@@ -7,6 +7,19 @@ let inMemoryApiKey: string | null = null;
 const API_KEY_STORAGE_KEY = 'x_api_key';
 const AUTH_CHANGE_EVENT = 'tldw-admin-auth-change';
 
+const clearApiKeyStorage = (): void => {
+  inMemoryApiKey = null;
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.removeItem(API_KEY_STORAGE_KEY);
+  }
+};
+
+const clearJwtStorage = (): void => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem('access_token');
+  }
+};
+
 const emitAuthChange = () => {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
@@ -116,6 +129,8 @@ export async function loginWithPassword(
 
     if (response.ok) {
       const data: LoginResponse = await response.json();
+      // Auth mode exclusivity: password/JWT login clears single-user API key state.
+      clearApiKeyStorage();
       // Store JWT token
       localStorage.setItem('access_token', data.access_token);
       emitAuthChange();
@@ -148,6 +163,8 @@ export async function loginWithApiKey(apiKey: string): Promise<boolean> {
 
     if (response.ok) {
       const user = await response.json();
+      // Auth mode exclusivity: API key login clears JWT auth state.
+      clearJwtStorage();
       setApiKey(apiKey);
       localStorage.setItem('user', JSON.stringify(user));
       return true;
@@ -203,11 +220,8 @@ export async function logout(): Promise<void> {
   } finally {
     // Always clear local storage
     localStorage.removeItem('user');
-    localStorage.removeItem('access_token');
-    if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.removeItem('x_api_key');
-    }
-    inMemoryApiKey = null;
+    clearJwtStorage();
+    clearApiKeyStorage();
     emitAuthChange();
   }
 }

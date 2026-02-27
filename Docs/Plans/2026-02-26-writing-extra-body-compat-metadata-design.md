@@ -159,6 +159,7 @@ Initial known param set (provider-specific subsets, not universally supported):
 - `mirostat_tau`
 - `mirostat_eta`
 - `typical_p`
+- `min_p`
 - `tfs_z`
 - `xtc_threshold`
 - `xtc_probability`
@@ -169,6 +170,7 @@ Initial known param set (provider-specific subsets, not universally supported):
 - `dry_sequence_breakers`
 - `banned_tokens`
 - `grammar`
+- `logit_bias`
 
 ## Error Handling
 

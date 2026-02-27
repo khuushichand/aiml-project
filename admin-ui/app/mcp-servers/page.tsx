@@ -9,7 +9,6 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { useToast } from '@/components/ui/toast';
 import { RefreshCw, Server, Activity, Wrench, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
@@ -66,7 +65,6 @@ export default function MCPServersPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'modules' | 'tools'>('overview');
-  const toast = useToast();
 
   const loadData = useCallback(async () => {
     setLoading(true);

@@ -98,9 +98,9 @@ _CATALOG: dict[str, dict[str, Any]] = {
             "known_params": [
                 "dynatemp_range", "dynatemp_exponent", "repeat_penalty", "repeat_last_n",
                 "ignore_eos", "mirostat", "mirostat_tau", "mirostat_eta", "typical_p",
-                "tfs_z", "xtc_threshold", "xtc_probability", "dry_multiplier", "dry_base",
-                "dry_allowed_length", "dry_penalty_last_n", "dry_sequence_breakers",
-                "banned_tokens", "grammar",
+                "min_p", "tfs_z", "xtc_threshold", "xtc_probability", "dry_multiplier",
+                "dry_base", "dry_allowed_length", "dry_penalty_last_n", "dry_sequence_breakers",
+                "banned_tokens", "grammar", "logit_bias",
             ],
             "param_groups": ["sampling", "penalties", "constraints"],
             "notes": "Provider-specific advanced params should be sent under extra_body.",

@@ -18,11 +18,14 @@ export type WritingWorldInfoEntry = {
   content: string
   use_regex: boolean
   case_sensitive: boolean
+  search_range?: number
 }
 
 export type WritingWorldInfoSettings = {
   enabled: boolean
   search_range: number
+  prefix: string
+  suffix: string
   entries: WritingWorldInfoEntry[]
 }
 
@@ -69,17 +72,24 @@ export const getTriggeredWorldInfoEntries = (
   worldInfo: WritingWorldInfoSettings
 ): WritingWorldInfoEntry[] => {
   if (!worldInfo.enabled || !Array.isArray(worldInfo.entries)) return []
-  const searchRange = normalizeSearchRange(worldInfo.search_range)
-  const haystack =
-    searchRange > 0 && promptText.length > searchRange
-      ? promptText.slice(-searchRange)
-      : promptText
-  if (!haystack.trim()) return []
+  const baseText = String(promptText || "")
+  if (!baseText.trim()) return []
+  const defaultSearchRange = normalizeSearchRange(worldInfo.search_range)
 
   return worldInfo.entries.filter((entry) => {
     if (!entry?.enabled) return false
     const content = String(entry.content || "").trim()
     if (!content) return false
+    const entrySearchRange =
+      entry.search_range == null
+        ? defaultSearchRange
+        : normalizeSearchRange(entry.search_range)
+    if (entrySearchRange <= 0) return false
+    const haystack =
+      entrySearchRange > 0 && baseText.length > entrySearchRange
+        ? baseText.slice(-entrySearchRange)
+        : baseText
+    if (!haystack.trim()) return false
     const keys = Array.isArray(entry.keys)
       ? entry.keys.map((key) => String(key || "").trim()).filter(Boolean)
       : []
@@ -105,11 +115,14 @@ export const buildContextSystemMessages = (
     settings.world_info
   )
   if (triggeredWorldInfo.length > 0) {
+    const worldInfoPrefix = settings.world_info.prefix || ""
+    const worldInfoSuffix = settings.world_info.suffix || ""
     const body = triggeredWorldInfo
       .map((entry, index) => {
         const keys = entry.keys.join(", ")
         const content = entry.content.trim()
-        return `${index + 1}. Keys: ${keys}\n${content}`
+        const withAffixes = `${worldInfoPrefix}${content}${worldInfoSuffix}`.trim()
+        return `${index + 1}. Keys: ${keys}\n${withAffixes}`
       })
       .join("\n\n")
     messages.push({

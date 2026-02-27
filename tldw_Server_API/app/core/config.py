@@ -2851,7 +2851,11 @@ def _route_toggle_policy() -> dict:
     # rely on route toggling without mutating shared config files.
     allow_env_overrides = False
     try:
-        allow_env_overrides = bool(is_explicit_pytest_runtime())
+        # Route toggles are frequently consumed at import-time during test
+        # collection, before PYTEST_CURRENT_TEST is set. Honor env overrides
+        # whenever explicit pytest runtime is active OR server-side test mode
+        # is enabled.
+        allow_env_overrides = bool(is_explicit_pytest_runtime() or is_test_mode())
     except _CONFIG_NONCRITICAL_EXCEPTIONS:
         allow_env_overrides = False
 

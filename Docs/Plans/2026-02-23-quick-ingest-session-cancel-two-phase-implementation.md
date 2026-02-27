@@ -396,7 +396,7 @@ Expected: PASS for new cancel scenarios.
 
 **Step 3: Run Bandit for touched backend scope (if backend files changed)**
 
-If no backend files touched in Phase 1, document N/A.  
+If no backend files touched in Phase 1, document N/A.
 If touched:
 
 ```bash

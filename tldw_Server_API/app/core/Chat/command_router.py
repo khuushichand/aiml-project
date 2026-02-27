@@ -4,7 +4,7 @@ command_router.py
 Lightweight slash-command router for chat pre-processing.
 
 Scope:
-- Registry with /time and /weather commands
+- Registry with built-in slash commands (/time, /weather, /skills, /skill)
 - Per-user + global per-command rate limits using TokenBucket
 - Optional RBAC enforcement hooks
 - Command output truncation for safe injection paths
@@ -27,6 +27,7 @@ import contextlib
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from loguru import logger
@@ -579,6 +580,291 @@ def _weather_handler(ctx: CommandContext, args: str | None) -> CommandResult:
         return CommandResult(ok=False, command="weather", content=f"Weather unavailable: {e}", metadata={"error": "exception"})
 
 
+def _request_meta(ctx: CommandContext) -> dict[str, Any]:
+    meta = getattr(ctx, "request_meta", None)
+    return meta if isinstance(meta, dict) else {}
+
+
+def _extract_user_id(ctx: CommandContext, meta: dict[str, Any]) -> int | None:
+    candidate = meta.get("auth_user_id")
+    if isinstance(candidate, int) and candidate > 0:
+        return candidate
+
+    if isinstance(ctx.auth_user_id, int) and ctx.auth_user_id > 0:
+        return int(ctx.auth_user_id)
+
+    raw_user_id = str(ctx.user_id or "").strip()
+    if raw_user_id.isdigit():
+        return int(raw_user_id)
+
+    if is_single_user_mode():
+        try:
+            from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+            return int(DatabasePaths.get_single_user_id())
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    return None
+
+
+async def _resolve_skills_runtime(ctx: CommandContext) -> tuple[int, Path, Any]:
+    meta = _request_meta(ctx)
+    user_id = _extract_user_id(ctx, meta)
+    if user_id is None:
+        raise ValueError("Unable to resolve user identity for skills command execution")
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    raw_base_path = meta.get("user_base_dir")
+    if isinstance(raw_base_path, Path):
+        base_path = raw_base_path
+    elif isinstance(raw_base_path, str) and raw_base_path.strip():
+        base_path = Path(raw_base_path)
+    else:
+        base_path = DatabasePaths.get_user_base_directory(user_id)
+
+    db = meta.get("chat_db")
+    if db is None:
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user_id
+
+        db = await get_chacha_db_for_user_id(user_id, client_id=str(ctx.user_id or user_id))
+
+    return user_id, base_path, db
+
+
+def _filter_skills_for_query(skills: list[dict[str, Any]], query: str | None) -> list[dict[str, Any]]:
+    if not query:
+        return list(skills)
+    q = query.strip().lower()
+    if not q:
+        return list(skills)
+    return [
+        skill for skill in skills
+        if (
+            q in str(skill.get("name") or "").lower()
+            or q in str(skill.get("description") or "").lower()
+            or q in str(skill.get("argument_hint") or "").lower()
+        )
+    ]
+
+
+async def _list_invocable_skills(ctx: CommandContext, filter_text: str | None = None) -> list[dict[str, Any]]:
+    from tldw_Server_API.app.core.Skills.skills_service import SkillsService
+
+    user_id, base_path, db = await _resolve_skills_runtime(ctx)
+    service = SkillsService(user_id=user_id, base_path=base_path, db=db)
+    payload = await service.get_context_payload_async()
+    skills = [
+        skill
+        for skill in list(payload.get("available_skills") or [])
+        if isinstance(skill, dict) and str(skill.get("name") or "").strip()
+    ]
+    filtered = _filter_skills_for_query(skills, filter_text)
+    return sorted(filtered, key=lambda skill: str(skill.get("name") or ""))
+
+
+def _split_skill_invocation(raw_args: str) -> tuple[str, str]:
+    payload = str(raw_args or "").strip()
+    if not payload:
+        return "", ""
+    parts = payload.split(maxsplit=1)
+    skill_name = str(parts[0] or "").strip().lower()
+    skill_args = str(parts[1] or "").strip() if len(parts) > 1 else ""
+    return skill_name, skill_args
+
+
+def _tool_names_from_definitions(tool_defs: list[Any]) -> list[str]:
+    names: list[str] = []
+    for tool in tool_defs:
+        if not isinstance(tool, dict):
+            continue
+        name = tool.get("name")
+        if isinstance(name, str) and name.strip():
+            names.append(name.strip())
+            continue
+        function = tool.get("function")
+        if isinstance(function, dict):
+            fn_name = function.get("name")
+            if isinstance(fn_name, str) and fn_name.strip():
+                names.append(fn_name.strip())
+    return names
+
+
+def _build_skill_request_context(ctx: CommandContext, user_id: int):
+    from tldw_Server_API.app.core.Skills.skill_executor import RequestContext
+
+    meta = _request_meta(ctx)
+    raw_tool_defs = meta.get("tools")
+    tool_defs = raw_tool_defs if isinstance(raw_tool_defs, list) else None
+    available_tools = _tool_names_from_definitions(tool_defs or [])
+    selected_provider = meta.get("selected_provider")
+    selected_model = meta.get("selected_model")
+    conversation_id = meta.get("conversation_id")
+
+    return RequestContext(
+        user_id=user_id,
+        default_provider=str(selected_provider) if isinstance(selected_provider, str) and selected_provider else None,
+        default_model=str(selected_model) if isinstance(selected_model, str) and selected_model else None,
+        conversation_id=str(conversation_id) if isinstance(conversation_id, str) and conversation_id else None,
+        client_id=str(ctx.user_id or user_id),
+        available_tools=available_tools,
+        tool_definitions=tool_defs,
+    )
+
+
+async def _execute_skill(ctx: CommandContext, skill_name: str, skill_args: str) -> dict[str, Any]:
+    from tldw_Server_API.app.core.Skills.exceptions import SkillNotFoundError, SkillsError
+    from tldw_Server_API.app.core.Skills.skill_executor import SkillExecutor
+    from tldw_Server_API.app.core.Skills.skills_service import SkillsService
+
+    normalized_name = str(skill_name or "").strip().lower()
+    if not normalized_name:
+        return {"success": False, "error": "missing_name"}
+
+    try:
+        user_id, base_path, db = await _resolve_skills_runtime(ctx)
+        service = SkillsService(user_id=user_id, base_path=base_path, db=db)
+        skill_data = await service.get_skill(normalized_name)
+    except SkillNotFoundError:
+        return {"success": False, "error": "skill_not_found"}
+    except SkillsError as e:
+        return {"success": False, "error": "skills_error", "detail": str(e)}
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
+        return {"success": False, "error": "runtime_error", "detail": str(e)}
+    except Exception as e:  # pragma: no cover - defensive guard for uncommon dependency errors
+        return {"success": False, "error": "runtime_error", "detail": str(e)}
+
+    user_invocable = bool(skill_data.get("user_invocable", True))
+    disable_model_invocation = bool(skill_data.get("disable_model_invocation", False))
+    if not user_invocable or disable_model_invocation:
+        return {"success": False, "error": "skill_not_invocable"}
+
+    try:
+        executor = SkillExecutor()
+        execution_ctx = _build_skill_request_context(ctx, user_id)
+        result = await executor.execute(
+            skill_data=skill_data,
+            arguments=skill_args or "",
+            context=execution_ctx,
+        )
+        return {
+            "success": True,
+            "execution_mode": result.execution_mode,
+            "rendered_prompt": result.rendered_prompt,
+            "fork_output": result.fork_output,
+        }
+    except SkillsError as e:
+        return {"success": False, "error": "execution_failed", "detail": str(e)}
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
+        return {"success": False, "error": "execution_failed", "detail": str(e)}
+    except Exception as e:  # pragma: no cover - defensive guard for uncommon dependency errors
+        return {"success": False, "error": "execution_failed", "detail": str(e)}
+
+
+async def _skills_handler(ctx: CommandContext, args: str | None) -> CommandResult:
+    filter_text = str(args or "").strip() or None
+    try:
+        skills = await _list_invocable_skills(ctx, filter_text=filter_text)
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
+        return CommandResult(
+            ok=False,
+            command="skills",
+            content=f"Unable to list skills: {e}",
+            metadata={"error": "skills_unavailable"},
+        )
+    except Exception as e:  # pragma: no cover - defensive guard for uncommon dependency errors
+        return CommandResult(
+            ok=False,
+            command="skills",
+            content=f"Unable to list skills: {e}",
+            metadata={"error": "skills_unavailable"},
+        )
+
+    if not skills:
+        if filter_text:
+            message = f"No invocable skills matched '{filter_text}'."
+        else:
+            message = "No invocable skills are available."
+        return CommandResult(
+            ok=True,
+            command="skills",
+            content=message,
+            metadata={"count": 0, "filter": filter_text},
+        )
+
+    lines = [f"Available skills ({len(skills)}):"]
+    for skill in skills:
+        name = str(skill.get("name") or "").strip()
+        if not name:
+            continue
+        hint = str(skill.get("argument_hint") or "").strip()
+        description = str(skill.get("description") or "No description").strip()
+        suffix = f" {hint}" if hint else ""
+        lines.append(f"- {name}{suffix}: {description}")
+
+    return CommandResult(
+        ok=True,
+        command="skills",
+        content="\n".join(lines),
+        metadata={"count": len(skills), "filter": filter_text},
+    )
+
+
+async def _skill_handler(ctx: CommandContext, args: str | None) -> CommandResult:
+    payload = str(args or "").strip()
+    if not payload:
+        return CommandResult(
+            ok=False,
+            command="skill",
+            content="Usage: /skill <name> [args]",
+            metadata={"error": "missing_name"},
+        )
+
+    skill_name, skill_args = _split_skill_invocation(payload)
+    if not skill_name:
+        return CommandResult(
+            ok=False,
+            command="skill",
+            content="Usage: /skill <name> [args]",
+            metadata={"error": "missing_name"},
+        )
+
+    result = await _execute_skill(ctx, skill_name, skill_args)
+    if not result.get("success"):
+        error = str(result.get("error") or "execution_failed")
+        if error == "missing_name":
+            message = "Usage: /skill <name> [args]"
+        elif error == "skill_not_found":
+            message = f"Skill '{skill_name}' not found."
+        elif error == "skill_not_invocable":
+            message = f"Skill '{skill_name}' is not invocable."
+        else:
+            detail = str(result.get("detail") or "Skill execution failed.")
+            message = f"Skill execution failed: {detail}"
+        return CommandResult(
+            ok=False,
+            command="skill",
+            content=message,
+            metadata={"error": error, "skill_name": skill_name},
+        )
+
+    execution_mode = str(result.get("execution_mode") or "inline").strip().lower() or "inline"
+    if execution_mode == "fork":
+        output = str(result.get("fork_output") or "")
+    else:
+        output = str(result.get("rendered_prompt") or "")
+    if not output:
+        output = f"Skill '{skill_name}' executed."
+
+    return CommandResult(
+        ok=True,
+        command="skill",
+        content=output,
+        metadata={"skill_name": skill_name, "execution_mode": execution_mode},
+    )
+
+
 # Register built-in commands on import
 register_command(
     "time",
@@ -597,6 +883,26 @@ register_command(
     required_permission="chat.commands.weather",
     usage="/weather [location]",
     args=["location"],
+    requires_api_key=True,
+    rbac_required=True,
+)
+register_command(
+    "skills",
+    "List invocable skills for this user.",
+    _skills_handler,
+    required_permission="chat.commands.skills",
+    usage="/skills [filter]",
+    args=["filter"],
+    requires_api_key=True,
+    rbac_required=True,
+)
+register_command(
+    "skill",
+    "Execute an invocable skill by name.",
+    _skill_handler,
+    required_permission="chat.commands.skill",
+    usage="/skill <name> [args]",
+    args=["name", "args"],
     requires_api_key=True,
     rbac_required=True,
 )

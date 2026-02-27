@@ -79,6 +79,7 @@ import { useStoreChatModelSettings } from "@/store/model"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
 import { cn } from "@/libs/utils"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import { markdownToText } from "@/utils/markdown-to-text"
 import {
   buildExtraBodyPayload,
   parseExtraBodyJsonObject,
@@ -93,7 +94,7 @@ import {
   type WritingWorldInfoEntry,
   type WritingWorldInfoSettings
 } from "./writing-context-utils"
-import { buildTokenPreviewRows } from "./writing-token-utils"
+import { buildTokenPreviewRows, joinTokenStrings } from "./writing-token-utils"
 import {
   resolveGenerationStopStrings,
   type BasicStoppingModeType
@@ -103,6 +104,15 @@ import {
   type WritingLogprobEntry
 } from "./writing-logprob-utils"
 import {
+  formatLogitBiasValue,
+  normalizeLogitBiasValue,
+  parseLogitBiasInput,
+  withLogitBiasEntry,
+  withTokenIdsPresetLogitBias,
+  withTokenIdPresetLogitBias,
+  withoutLogitBiasEntry
+} from "./writing-logit-bias-utils"
+import {
   buildResponseInspectorCsv,
   selectResponseInspectorRows,
   type ResponseInspectorSort
@@ -111,10 +121,37 @@ import {
   normalizeWordcloudWords,
   parseWordcloudStopwordsInput
 } from "./writing-wordcloud-utils"
+import { buildWorldInfoExportPayload } from "./writing-world-info-transfer-utils"
 import {
   computeTokensPerSecond,
   estimateTokenCountFromText
 } from "./writing-generation-stats-utils"
+import { WritingWorldInfoImportControls } from "./WritingWorldInfoImportControls"
+import {
+  buildSpeechVoiceOptions,
+  clampSpeechRate,
+  resolvePauseResumeAction,
+  resolveSpeechVoice
+} from "./writing-speech-utils"
+import {
+  normalizeWritingSpeechPreferences,
+  type WritingSpeechPreferences
+} from "./writing-speech-settings-utils"
+import {
+  applyPlaceholderAtRange,
+  applyTextAtRange
+} from "./writing-editor-actions-utils"
+import {
+  buildContextPreviewFilename,
+  serializeContextPreviewJson
+} from "./writing-context-preview-utils"
+import {
+  extractImportedSessionItems,
+  getImportedSessionModelHint,
+  getImportedSessionProviderHint,
+  parseImportedSessionPayload
+} from "./writing-session-import-utils"
+import { extractImportedTemplateItems } from "./writing-template-import-utils"
 
 const { Title, Paragraph } = Typography
 
@@ -124,6 +161,8 @@ type SessionUsage = {
 }
 
 type SessionUsageMap = Record<string, SessionUsage>
+
+const WRITING_SPEECH_PREFS_STORAGE_KEY = "writing:speech-preferences"
 
 type WritingSessionPayload = Record<string, unknown> & {
   prompt?: string
@@ -291,6 +330,8 @@ const DEFAULT_AUTHOR_NOTE: WritingAuthorNote = {
 const DEFAULT_WORLD_INFO: WritingWorldInfoSettings = {
   enabled: false,
   search_range: 2000,
+  prefix: "",
+  suffix: "",
   entries: []
 }
 
@@ -328,6 +369,7 @@ const ADVANCED_EXTRA_BODY_PARAM_KEYS = [
   "dynatemp_exponent",
   "repeat_penalty",
   "repeat_last_n",
+  "penalize_nl",
   "ignore_eos",
   "mirostat",
   "mirostat_tau",
@@ -343,7 +385,8 @@ const ADVANCED_EXTRA_BODY_PARAM_KEYS = [
   "dry_penalty_last_n",
   "dry_sequence_breakers",
   "banned_tokens",
-  "grammar"
+  "grammar",
+  "logit_bias"
 ] as const
 
 type AdvancedNumberParamConfig = {
@@ -458,6 +501,10 @@ const normalizeWorldInfoEntries = (value: unknown): WritingWorldInfoEntry[] => {
       const content = toStringValue(entry.content).trim()
       if (!content) return null
       if (keys.length === 0) return null
+      const entrySearchRange = toNullableNumber(
+        entry.search_range ?? entry.searchRange,
+        null
+      )
       return {
         id: String(entry.id || createWorldInfoId()),
         enabled: toBoolean(entry.enabled, true),
@@ -467,7 +514,11 @@ const normalizeWorldInfoEntries = (value: unknown): WritingWorldInfoEntry[] => {
         case_sensitive: toBoolean(
           entry.case_sensitive ?? entry.caseSensitive,
           false
-        )
+        ),
+        search_range:
+          entrySearchRange == null
+            ? undefined
+            : Math.max(0, Math.floor(entrySearchRange))
       } as WritingWorldInfoEntry
     })
     .filter(Boolean) as WritingWorldInfoEntry[]
@@ -510,6 +561,8 @@ const normalizeWorldInfoSettings = (raw: unknown): WritingWorldInfoSettings => {
       0,
       Math.floor(toNumber(value.search_range ?? value.searchRange, 2000))
     ),
+    prefix: toStringValue(value.prefix, DEFAULT_WORLD_INFO.prefix),
+    suffix: toStringValue(value.suffix, DEFAULT_WORLD_INFO.suffix),
     entries: normalizeWorldInfoEntries(value.entries)
   }
 }
@@ -977,6 +1030,9 @@ const getSettingsFromPayload = (
     settings.top_logprobs ?? settings.topLogprobs,
     DEFAULT_SETTINGS.top_logprobs
   )
+  const rawBasicStoppingModeType = String(
+    settings.basic_stopping_mode_type ?? settings.basicStoppingModeType ?? ""
+  )
   return {
     temperature: toNumber(settings.temperature, DEFAULT_SETTINGS.temperature),
     top_p: toNumber(settings.top_p, DEFAULT_SETTINGS.top_p),
@@ -993,14 +1049,8 @@ const getSettingsFromPayload = (
       "max_tokens",
       "new_line",
       "fill_suffix"
-    ].includes(
-      String(
-        settings.basic_stopping_mode_type ?? settings.basicStoppingModeType || ""
-      )
-    )
-      ? (String(
-          settings.basic_stopping_mode_type ?? settings.basicStoppingModeType
-        ) as BasicStoppingModeType)
+    ].includes(rawBasicStoppingModeType)
+      ? (rawBasicStoppingModeType as BasicStoppingModeType)
       : DEFAULT_SETTINGS.basic_stopping_mode_type,
     logprobs: toBoolean(settings.logprobs, DEFAULT_SETTINGS.logprobs),
     top_logprobs:
@@ -1122,14 +1172,20 @@ export const WritingPlayground = () => {
     setActiveSessionId,
     setActiveSessionName
   } = useWritingPlaygroundStore()
-  const [selectedModel] = useStorage<string>("selectedModel")
+  const [selectedModel, setSelectedModel] = useStorage<string>("selectedModel")
   const apiProviderOverride = useStoreChatModelSettings(
     (state) => state.apiProvider
   )
+  const setApiProvider = useStoreChatModelSettings((state) => state.setApiProvider)
   const [sessionUsageMap, setSessionUsageMap] = useStorage<SessionUsageMap>(
     "writing:session-usage",
     {}
   )
+  const [storedSpeechPreferences, setStoredSpeechPreferences] =
+    useStorage<WritingSpeechPreferences>(WRITING_SPEECH_PREFS_STORAGE_KEY, {
+      rate: 1,
+      voiceURI: null
+    })
   const [createModalOpen, setCreateModalOpen] = React.useState(false)
   const [newSessionName, setNewSessionName] = React.useState("")
   const [sessionImporting, setSessionImporting] = React.useState(false)
@@ -1145,6 +1201,12 @@ export const WritingPlayground = () => {
   const [bannedTokensInput, setBannedTokensInput] = React.useState("")
   const [drySequenceBreakersInput, setDrySequenceBreakersInput] =
     React.useState("")
+  const [logitBiasInput, setLogitBiasInput] = React.useState("")
+  const [logitBiasError, setLogitBiasError] =
+    React.useState<string | null>(null)
+  const [logitBiasTokenInput, setLogitBiasTokenInput] = React.useState("")
+  const [logitBiasValueInput, setLogitBiasValueInput] =
+    React.useState<number | null>(null)
   const [extraBodyJsonModalOpen, setExtraBodyJsonModalOpen] =
     React.useState(false)
   const [extraBodyJsonDraft, setExtraBodyJsonDraft] = React.useState("{}")
@@ -1167,6 +1229,8 @@ export const WritingPlayground = () => {
   const [editingTheme, setEditingTheme] =
     React.useState<WritingThemeResponse | null>(null)
   const [themeImporting, setThemeImporting] = React.useState(false)
+  const [contextPreviewModalOpen, setContextPreviewModalOpen] =
+    React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState("")
   const [replaceQuery, setReplaceQuery] = React.useState("")
@@ -1178,6 +1242,19 @@ export const WritingPlayground = () => {
   const [isGenerating, setIsGenerating] = React.useState(false)
   const [canUndoGeneration, setCanUndoGeneration] = React.useState(false)
   const [canRedoGeneration, setCanRedoGeneration] = React.useState(false)
+  const [isSpeaking, setIsSpeaking] = React.useState(false)
+  const [isSpeechPaused, setIsSpeechPaused] = React.useState(false)
+  const normalizedStoredSpeechPreferences = React.useMemo(
+    () => normalizeWritingSpeechPreferences(storedSpeechPreferences),
+    [storedSpeechPreferences]
+  )
+  const [speechRate, setSpeechRate] = React.useState(
+    normalizedStoredSpeechPreferences.rate
+  )
+  const [speechVoiceURI, setSpeechVoiceURI] = React.useState<string | null>(
+    normalizedStoredSpeechPreferences.voiceURI
+  )
+  const [speechVoices, setSpeechVoices] = React.useState<SpeechSynthesisVoice[]>([])
   const [tokenCountResult, setTokenCountResult] =
     React.useState<WritingTokenCountResponse | null>(null)
   const [tokenizeResult, setTokenizeResult] =
@@ -1234,6 +1311,7 @@ export const WritingPlayground = () => {
   const generationRedoRef = React.useRef<GenerationHistoryEntry[]>([])
   const generationSessionIdRef = React.useRef<string | null>(null)
   const generationCancelledRef = React.useRef(false)
+  const speechUtteranceRef = React.useRef<SpeechSynthesisUtterance | null>(null)
   const editorRef = React.useRef<TextAreaRef | null>(null)
   const previewRef = React.useRef<HTMLDivElement | null>(null)
   const isSyncingScrollRef = React.useRef(false)
@@ -1681,13 +1759,7 @@ export const WritingPlayground = () => {
       try {
         const raw = await file.text()
         const parsed = JSON.parse(raw)
-        const items = Array.isArray(parsed)
-          ? parsed
-          : Array.isArray(parsed?.sessions)
-            ? parsed.sessions
-            : parsed
-              ? [parsed]
-              : []
+        const items = extractImportedSessionItems(parsed)
         if (!Array.isArray(items) || items.length === 0) {
           message.error(
             t(
@@ -1698,6 +1770,8 @@ export const WritingPlayground = () => {
           return
         }
         const existingNames = new Set(sessions.map((session) => session.name))
+        let importedModelHint: string | null = null
+        let importedProviderHint: string | null = null
         const resolveName = (base: string) => {
           if (!existingNames.has(base)) return base
           let idx = 1
@@ -1713,11 +1787,13 @@ export const WritingPlayground = () => {
           const rawName = String(item.name || item.title || "").trim()
           const name = resolveName(rawName || `Imported session ${Date.now()}`)
           existingNames.add(name)
-          const payload = isRecord(item.payload)
-            ? item.payload
-            : isRecord(item.payload_json)
-              ? item.payload_json
-              : {}
+          const payload = parseImportedSessionPayload(item)
+          if (!importedModelHint) {
+            importedModelHint = getImportedSessionModelHint(payload)
+          }
+          if (!importedProviderHint) {
+            importedProviderHint = getImportedSessionProviderHint(payload)
+          }
           const schemaVersion =
             typeof item.schema_version === "number" ? item.schema_version : 1
           await createWritingSession({
@@ -1725,6 +1801,12 @@ export const WritingPlayground = () => {
             payload,
             schema_version: schemaVersion
           })
+        }
+        if (!selectedModel && importedModelHint) {
+          void setSelectedModel(importedModelHint)
+        }
+        if (!apiProviderOverride && importedProviderHint) {
+          setApiProvider(importedProviderHint)
         }
         queryClient.invalidateQueries({ queryKey: ["writing-sessions"] })
         message.success(
@@ -1748,8 +1830,116 @@ export const WritingPlayground = () => {
         event.target.value = ""
       }
     },
-    [queryClient, sessions, t]
+    [
+      apiProviderOverride,
+      queryClient,
+      selectedModel,
+      sessions,
+      setApiProvider,
+      setSelectedModel,
+      t
+    ]
   )
+
+  const stopSpeech = React.useCallback(() => {
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+    speechUtteranceRef.current = null
+    setIsSpeaking(false)
+    setIsSpeechPaused(false)
+  }, [])
+
+  const pauseSpeech = React.useCallback(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return
+    const synthesis = window.speechSynthesis
+    if (!synthesis.speaking || synthesis.paused) return
+    synthesis.pause()
+    setIsSpeechPaused(true)
+  }, [])
+
+  const resumeSpeech = React.useCallback(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return
+    const synthesis = window.speechSynthesis
+    if (!synthesis.paused) return
+    synthesis.resume()
+    setIsSpeechPaused(false)
+  }, [])
+
+  const updateSpeechPreferences = React.useCallback(
+    (patch: Partial<WritingSpeechPreferences>) => {
+      const next = normalizeWritingSpeechPreferences({
+        rate: speechRate,
+        voiceURI: speechVoiceURI,
+        ...patch
+      })
+      setSpeechRate(next.rate)
+      setSpeechVoiceURI(next.voiceURI)
+      setStoredSpeechPreferences(next)
+    },
+    [setStoredSpeechPreferences, speechRate, speechVoiceURI]
+  )
+
+  const speechVoiceOptions = React.useMemo(
+    () => buildSpeechVoiceOptions(speechVoices),
+    [speechVoices]
+  )
+  const pauseResumeAction = resolvePauseResumeAction(isSpeaking, isSpeechPaused)
+
+  const handleSpeakEditor = React.useCallback(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      message.warning(
+        t(
+          "option:writingPlayground.speechUnavailable",
+          "Browser speech synthesis is not available."
+        )
+      )
+      return
+    }
+    const editorEl = editorRef.current?.resizableTextArea?.textArea
+    const selectionStart = editorEl?.selectionStart ?? 0
+    const selectionEnd = editorEl?.selectionEnd ?? 0
+    const selectedText =
+      selectionEnd > selectionStart
+        ? editorText.slice(selectionStart, selectionEnd)
+        : ""
+    const sourceText = selectedText.trim().length > 0 ? selectedText : editorText
+    const utteranceText = markdownToText(sourceText).trim()
+    if (!utteranceText) {
+      message.info(
+        t(
+          "option:writingPlayground.speechEmpty",
+          "Write or select text in the editor first."
+        )
+      )
+      return
+    }
+    const selectedVoice = resolveSpeechVoice(speechVoices, speechVoiceURI)
+    const utterance = new SpeechSynthesisUtterance(utteranceText)
+    utterance.rate = clampSpeechRate(speechRate)
+    if (selectedVoice) {
+      utterance.voice = selectedVoice
+    }
+    utterance.onend = () => {
+      if (speechUtteranceRef.current === utterance) {
+        speechUtteranceRef.current = null
+        setIsSpeaking(false)
+        setIsSpeechPaused(false)
+      }
+    }
+    utterance.onerror = () => {
+      if (speechUtteranceRef.current === utterance) {
+        speechUtteranceRef.current = null
+        setIsSpeaking(false)
+        setIsSpeechPaused(false)
+      }
+    }
+    window.speechSynthesis.cancel()
+    speechUtteranceRef.current = utterance
+    setIsSpeaking(true)
+    setIsSpeechPaused(false)
+    window.speechSynthesis.speak(utterance)
+  }, [editorText, speechRate, speechVoiceURI, speechVoices, t])
 
   React.useEffect(() => {
     return () => {
@@ -1766,6 +1956,40 @@ export const WritingPlayground = () => {
   }, [])
 
   React.useEffect(() => {
+    return () => {
+      stopSpeech()
+    }
+  }, [stopSpeech])
+
+  React.useEffect(() => {
+    const next = normalizeWritingSpeechPreferences(storedSpeechPreferences)
+    setSpeechRate(next.rate)
+    setSpeechVoiceURI(next.voiceURI)
+  }, [storedSpeechPreferences])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return
+    const synthesis = window.speechSynthesis
+    const syncVoices = () => {
+      const voices = synthesis.getVoices()
+      setSpeechVoices(voices)
+      if (speechVoiceURI && voices.some((voice) => voice.voiceURI === speechVoiceURI)) {
+        return
+      }
+      updateSpeechPreferences({
+        voiceURI:
+          voices.find((voice) => voice.default)?.voiceURI ?? voices[0]?.voiceURI ?? null
+      })
+    }
+
+    syncVoices()
+    synthesis.addEventListener("voiceschanged", syncVoices)
+    return () => {
+      synthesis.removeEventListener("voiceschanged", syncVoices)
+    }
+  }, [speechVoiceURI, updateSpeechPreferences])
+
+  React.useEffect(() => {
     wordcloudUnmountedRef.current = false
     return () => {
       wordcloudUnmountedRef.current = true
@@ -1773,6 +1997,7 @@ export const WritingPlayground = () => {
   }, [])
 
   React.useEffect(() => {
+    stopSpeech()
     generationUndoRef.current = []
     generationRedoRef.current = []
     generationSessionIdRef.current = null
@@ -1791,7 +2016,7 @@ export const WritingPlayground = () => {
     setWordcloudMeta(null)
     setWordcloudError(null)
     setIsGeneratingWordcloud(false)
-  }, [activeSessionId])
+  }, [activeSessionId, stopSpeech])
 
   const templates = templatesData?.templates ?? []
   const themes = themesData?.themes ?? []
@@ -1895,6 +2120,10 @@ export const WritingPlayground = () => {
       setStopStringsInput("")
       setBannedTokensInput("")
       setDrySequenceBreakersInput("")
+      setLogitBiasInput("")
+      setLogitBiasError(null)
+      setLogitBiasTokenInput("")
+      setLogitBiasValueInput(null)
       setSelectedTemplateName(null)
       setSelectedThemeName(null)
       setChatMode(false)
@@ -1925,6 +2154,10 @@ export const WritingPlayground = () => {
     const nextTemplateName = getTemplateNameFromPayload(activeSessionDetail.payload)
     const nextThemeName = getThemeNameFromPayload(activeSessionDetail.payload)
     const nextChatMode = getChatModeFromPayload(activeSessionDetail.payload)
+    const nextModelHint = getImportedSessionModelHint(activeSessionDetail.payload)
+    const nextProviderHint = getImportedSessionProviderHint(
+      activeSessionDetail.payload
+    )
     const lastLoadedId = lastLoadedSessionIdRef.current
     if (activeSessionDetail.id !== lastLoadedId) {
       setEditorText(nextPrompt)
@@ -1940,6 +2173,12 @@ export const WritingPlayground = () => {
           nextSettings.advanced_extra_body.dry_sequence_breakers
         ).join("\n")
       )
+      setLogitBiasInput(
+        formatLogitBiasValue(nextSettings.advanced_extra_body.logit_bias)
+      )
+      setLogitBiasError(null)
+      setLogitBiasTokenInput("")
+      setLogitBiasValueInput(null)
       setSelectedTemplateName(nextTemplateName)
       setSelectedThemeName(nextThemeName)
       setChatMode(nextChatMode)
@@ -1965,6 +2204,12 @@ export const WritingPlayground = () => {
       lastSavedTemplateNameRef.current[activeSessionDetail.id] = nextTemplateName
       lastSavedThemeNameRef.current[activeSessionDetail.id] = nextThemeName
       lastSavedChatModeRef.current[activeSessionDetail.id] = nextChatMode
+      if (nextModelHint && nextModelHint !== selectedModel) {
+        void setSelectedModel(nextModelHint)
+      }
+      if (nextProviderHint && nextProviderHint !== apiProviderOverride) {
+        setApiProvider(nextProviderHint)
+      }
       lastLoadedSessionIdRef.current = activeSessionDetail.id
       return
     }
@@ -1985,6 +2230,12 @@ export const WritingPlayground = () => {
             nextSettings.advanced_extra_body.dry_sequence_breakers
           ).join("\n")
         )
+        setLogitBiasInput(
+          formatLogitBiasValue(nextSettings.advanced_extra_body.logit_bias)
+        )
+        setLogitBiasError(null)
+        setLogitBiasTokenInput("")
+        setLogitBiasValueInput(null)
       }
       if (selectedTemplateName !== nextTemplateName) {
         setSelectedTemplateName(nextTemplateName)
@@ -2007,8 +2258,12 @@ export const WritingPlayground = () => {
     chatMode,
     editorText,
     isDirty,
+    apiProviderOverride,
     selectedTemplateName,
     selectedThemeName,
+    selectedModel,
+    setApiProvider,
+    setSelectedModel,
     settings
   ])
 
@@ -2301,6 +2556,8 @@ export const WritingPlayground = () => {
     },
     [advancedExtraBody, knownExtraBodyParamSet]
   )
+  const tokenInspectorSupportsLogitBias =
+    supportsAdvancedCompat && shouldShowAdvancedParam("logit_bias")
 
   const updateAdvancedExtraBodyField = React.useCallback(
     (key: string, value: unknown) => {
@@ -2334,6 +2591,50 @@ export const WritingPlayground = () => {
     [advancedExtraBody]
   )
 
+  const applyLogitBiasObject = React.useCallback(
+    (nextLogitBias: Record<string, number>) => {
+      updateAdvancedExtraBodyField(
+        "logit_bias",
+        Object.keys(nextLogitBias).length > 0 ? nextLogitBias : null
+      )
+      setLogitBiasInput(formatLogitBiasValue(nextLogitBias))
+      setLogitBiasError(null)
+    },
+    [updateAdvancedExtraBodyField]
+  )
+
+  const applyTokenInspectorLogitBiasPreset = React.useCallback(
+    (tokenId: number, preset: "ban" | "favor") => {
+      const next = withTokenIdPresetLogitBias(
+        advancedExtraBody.logit_bias,
+        tokenId,
+        preset
+      )
+      applyLogitBiasObject(next)
+    },
+    [advancedExtraBody.logit_bias, applyLogitBiasObject]
+  )
+
+  const applyTokenInspectorLogitBiasPresetBatch = React.useCallback(
+    (tokenIds: number[], preset: "ban" | "favor") => {
+      const next = withTokenIdsPresetLogitBias(
+        advancedExtraBody.logit_bias,
+        tokenIds,
+        preset
+      )
+      applyLogitBiasObject(next)
+    },
+    [advancedExtraBody.logit_bias, applyLogitBiasObject]
+  )
+
+  const logitBiasEntries = React.useMemo(
+    () =>
+      Object.entries(normalizeLogitBiasValue(advancedExtraBody.logit_bias)).sort(
+        ([left], [right]) => left.localeCompare(right)
+      ),
+    [advancedExtraBody.logit_bias]
+  )
+
   const openExtraBodyJsonEditor = React.useCallback(() => {
     setExtraBodyJsonDraft(
       JSON.stringify(advancedExtraBody || {}, null, 2) || "{}"
@@ -2348,6 +2649,20 @@ export const WritingPlayground = () => {
       setExtraBodyJsonError(parsed.error)
       return
     }
+    if (Object.prototype.hasOwnProperty.call(parsed.value, "logit_bias")) {
+      const normalized = parseLogitBiasInput(
+        JSON.stringify(parsed.value.logit_bias)
+      )
+      if (normalized.error) {
+        setExtraBodyJsonError(`Invalid logit_bias: ${normalized.error}`)
+        return
+      }
+      if (normalized.value) {
+        parsed.value.logit_bias = normalized.value
+      } else {
+        delete parsed.value.logit_bias
+      }
+    }
     updateSetting({
       advanced_extra_body: parsed.value
     })
@@ -2357,6 +2672,10 @@ export const WritingPlayground = () => {
     setDrySequenceBreakersInput(
       normalizeStringArrayValue(parsed.value.dry_sequence_breakers).join("\n")
     )
+    setLogitBiasInput(formatLogitBiasValue(parsed.value.logit_bias))
+    setLogitBiasError(null)
+    setLogitBiasTokenInput("")
+    setLogitBiasValueInput(null)
     setExtraBodyJsonError(null)
     setExtraBodyJsonModalOpen(false)
   }, [extraBodyJsonDraft, updateSetting])
@@ -2427,7 +2746,8 @@ export const WritingPlayground = () => {
       keys: [],
       content: "",
       use_regex: false,
-      case_sensitive: false
+      case_sensitive: false,
+      search_range: undefined
     }
     updateWorldInfo({
       entries: [...worldInfoEntries, entry]
@@ -2457,6 +2777,67 @@ export const WritingPlayground = () => {
       })
     },
     [updateWorldInfo, worldInfoEntries]
+  )
+
+  const handleWorldInfoExport = React.useCallback(() => {
+    const payload = buildWorldInfoExportPayload(worldInfo)
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json"
+    })
+    const now = new Date()
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}-${String(now.getDate()).padStart(2, "0")}`
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = `writing-world-info-${stamp}.json`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }, [worldInfo])
+
+  const handleWorldInfoImported = React.useCallback(
+    (
+      nextWorldInfo: WritingWorldInfoSettings,
+      mode: "append" | "replace"
+    ) => {
+      updateWorldInfo(nextWorldInfo)
+      message.success(
+        t(
+          "option:writingPlayground.worldInfoImportSuccess",
+          "World info imported ({{mode}}).",
+          {
+            mode:
+              mode === "append"
+                ? t(
+                    "option:writingPlayground.worldInfoImportModeAppendShort",
+                    "append"
+                  )
+                : t(
+                    "option:writingPlayground.worldInfoImportModeReplaceShort",
+                    "replace"
+                  )
+          }
+        )
+      )
+    },
+    [t, updateWorldInfo]
+  )
+
+  const handleWorldInfoImportError = React.useCallback(
+    (detail: string) => {
+      message.error(
+        t(
+          "option:writingPlayground.worldInfoImportError",
+          "World info import failed: {{detail}}",
+          { detail }
+        )
+      )
+    },
+    [t]
   )
 
   const handleTemplateChange = React.useCallback(
@@ -3015,20 +3396,7 @@ export const WritingPlayground = () => {
       try {
         const text = await file.text()
         const parsed = JSON.parse(text)
-        const items: Array<{
-          name?: unknown
-          payload?: unknown
-          schema_version?: unknown
-          schemaVersion?: unknown
-          is_default?: unknown
-          isDefault?: unknown
-        }> = Array.isArray(parsed)
-          ? parsed
-          : Array.isArray(parsed?.templates)
-            ? parsed.templates
-            : parsed && typeof parsed === "object"
-              ? [parsed]
-              : []
+        const items = extractImportedTemplateItems(parsed)
         if (!items.length) {
           throw new Error(
             t(
@@ -3038,22 +3406,7 @@ export const WritingPlayground = () => {
           )
         }
         for (const item of items) {
-          const name =
-            typeof item?.name === "string" ? item.name.trim() : ""
-          if (!name) continue
-          const payload = isRecord(item?.payload) ? item.payload : {}
-          const schemaVersion =
-            typeof item?.schema_version === "number"
-              ? item.schema_version
-              : typeof item?.schemaVersion === "number"
-                ? item.schemaVersion
-                : 1
-          const isDefault =
-            typeof item?.is_default === "boolean"
-              ? item.is_default
-              : typeof item?.isDefault === "boolean"
-                ? item.isDefault
-                : false
+          const { name, payload, schemaVersion, isDefault } = item
           const existing = templates.find((tmpl) => tmpl.name === name)
           if (existing) {
             await updateWritingTemplate(
@@ -3222,12 +3575,65 @@ export const WritingPlayground = () => {
       }
       const start = editorEl.selectionStart ?? currentValue.length
       const end = editorEl.selectionEnd ?? currentValue.length
-      const nextValue =
-        currentValue.slice(0, start) + placeholder + currentValue.slice(end)
-      const cursor = start + placeholder.length
+      const { nextValue, cursor } = applyPlaceholderAtRange(
+        currentValue,
+        start,
+        end,
+        placeholder
+      )
       applyPromptValue(nextValue, { start: cursor, end: cursor })
     },
     [applyPromptValue, editorText]
+  )
+
+  const fillSelectionAtCursor = React.useCallback(() => {
+    const editorEl = editorRef.current?.resizableTextArea?.textArea
+    const currentValue = editorText
+    const start = editorEl?.selectionStart ?? currentValue.length
+    const end = editorEl?.selectionEnd ?? currentValue.length
+    if (end <= start) {
+      message.info(
+        t(
+          "option:writingPlayground.fillSelectionRequired",
+          "Select text to replace with {fill}."
+        )
+      )
+      return
+    }
+    const { nextValue, cursor } = applyPlaceholderAtRange(
+      currentValue,
+      start,
+      end,
+      "{fill}"
+    )
+    applyPromptValue(nextValue, { start: cursor, end: cursor })
+  }, [applyPromptValue, editorText, t])
+
+  const insertTokenTextAtCursor = React.useCallback(
+    (tokenText: string) => {
+      const editorEl = editorRef.current?.resizableTextArea?.textArea
+      const currentValue = editorText
+      if (!editorEl) {
+        applyPromptValue(currentValue + tokenText, {
+          start: currentValue.length + tokenText.length,
+          end: currentValue.length + tokenText.length
+        })
+        return
+      }
+      const start = editorEl.selectionStart ?? currentValue.length
+      const end = editorEl.selectionEnd ?? currentValue.length
+      const { nextValue, cursor } = applyTextAtRange(
+        currentValue,
+        start,
+        end,
+        tokenText
+      )
+      applyPromptValue(nextValue, { start: cursor, end: cursor })
+      message.success(
+        t("option:writingPlayground.tokenInspectorInsertSuccess", "Token text inserted.")
+      )
+    },
+    [applyPromptValue, editorText, t]
   )
 
   const insertTemplateBlock = React.useCallback(
@@ -3280,6 +3686,41 @@ export const WritingPlayground = () => {
     [applyPromptValue, editorText, effectiveTemplate, t]
   )
 
+  const templateInsertMenuItems: NonNullable<MenuProps["items"]> =
+    React.useMemo(
+      () => [
+        {
+          key: "template-system",
+          label: t(
+            "option:writingPlayground.templateInsertSystem",
+            "System"
+          ),
+          disabled:
+            !effectiveTemplate.systemPrefix && !effectiveTemplate.systemSuffix,
+          onClick: () => insertTemplateBlock("system")
+        },
+        {
+          key: "template-user",
+          label: t("option:writingPlayground.templateInsertUser", "User"),
+          disabled:
+            !effectiveTemplate.userPrefix && !effectiveTemplate.userSuffix,
+          onClick: () => insertTemplateBlock("user")
+        },
+        {
+          key: "template-assistant",
+          label: t(
+            "option:writingPlayground.templateInsertAssistant",
+            "Assistant"
+          ),
+          disabled:
+            !effectiveTemplate.assistantPrefix &&
+            !effectiveTemplate.assistantSuffix,
+          onClick: () => insertTemplateBlock("assistant")
+        }
+      ],
+      [effectiveTemplate, insertTemplateBlock, t]
+    )
+
   const insertMenuItems: NonNullable<MenuProps["items"]> = React.useMemo(
     () => [
       {
@@ -3296,40 +3737,31 @@ export const WritingPlayground = () => {
         onClick: () => insertPlaceholder("{fill}")
       },
       { type: "divider" },
-      {
-        key: "template-system",
-        label: t(
-          "option:writingPlayground.templateInsertSystem",
-          "System"
-        ),
-        disabled:
-          !effectiveTemplate.systemPrefix && !effectiveTemplate.systemSuffix,
-        onClick: () => insertTemplateBlock("system")
-      },
-      {
-        key: "template-user",
-        label: t("option:writingPlayground.templateInsertUser", "User"),
-        disabled: !effectiveTemplate.userPrefix && !effectiveTemplate.userSuffix,
-        onClick: () => insertTemplateBlock("user")
-      },
-      {
-        key: "template-assistant",
-        label: t(
-          "option:writingPlayground.templateInsertAssistant",
-          "Assistant"
-        ),
-        disabled:
-          !effectiveTemplate.assistantPrefix &&
-          !effectiveTemplate.assistantSuffix,
-        onClick: () => insertTemplateBlock("assistant")
-      }
+      ...templateInsertMenuItems
     ],
-    [effectiveTemplate, insertPlaceholder, insertTemplateBlock, t]
+    [insertPlaceholder, t, templateInsertMenuItems]
   )
 
   const editorMenuItems: MenuProps["items"] = React.useMemo(
     () => [
-      ...insertMenuItems,
+      {
+        key: "predict-here",
+        label: t(
+          "option:writingPlayground.predictHereAction",
+          "Predict here"
+        ),
+        onClick: () => insertPlaceholder("{predict}")
+      },
+      {
+        key: "fill-here",
+        label: t(
+          "option:writingPlayground.fillInMiddleAction",
+          "Fill in middle here"
+        ),
+        onClick: fillSelectionAtCursor
+      },
+      { type: "divider" },
+      ...templateInsertMenuItems,
       { type: "divider" },
       {
         key: "search",
@@ -3340,7 +3772,7 @@ export const WritingPlayground = () => {
         onClick: () => setSearchOpen(true)
       }
     ],
-    [insertMenuItems, t]
+    [fillSelectionAtCursor, insertPlaceholder, t, templateInsertMenuItems]
   )
 
   const searchData = React.useMemo(() => {
@@ -3797,6 +4229,76 @@ export const WritingPlayground = () => {
     }
   }, [editorText])
 
+  const contextPreviewMessages = React.useMemo(() => {
+    const plan = resolveGenerationPlan(editorText)
+    const fimPrompt =
+      plan.mode === "fill"
+        ? applyFimTemplate(effectiveTemplate, plan.prefix, plan.suffix)
+        : null
+    const promptText =
+      plan.mode === "fill"
+        ? fimPrompt ?? buildFillPrompt(plan.prefix, plan.suffix)
+        : plan.prefix
+    const baseMessages = buildChatMessages(
+      promptText,
+      effectiveTemplate,
+      chatMode
+    )
+    const contextMessages = buildContextSystemMessages(editorText, {
+      memory_block: settings.memory_block,
+      author_note: settings.author_note,
+      world_info: settings.world_info
+    })
+    return injectSystemMessages(baseMessages, contextMessages)
+  }, [
+    chatMode,
+    editorText,
+    effectiveTemplate,
+    settings.author_note,
+    settings.memory_block,
+    settings.world_info
+  ])
+  const contextPreviewJson = React.useMemo(
+    () => serializeContextPreviewJson(contextPreviewMessages),
+    [contextPreviewMessages]
+  )
+
+  const handleCopyContextPreview = React.useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(contextPreviewJson)
+      message.success(
+        t(
+          "option:writingPlayground.contextPreviewCopySuccess",
+          "Context preview copied."
+        )
+      )
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : t("option:error", "Error")
+      message.error(
+        t(
+          "option:writingPlayground.contextPreviewCopyError",
+          "Failed to copy context preview: {{detail}}",
+          { detail }
+        )
+      )
+    }
+  }, [contextPreviewJson, t])
+
+  const handleExportContextPreview = React.useCallback(() => {
+    const blob = new Blob([contextPreviewJson], {
+      type: "application/json"
+    })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = buildContextPreviewFilename(new Date())
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }, [contextPreviewJson])
+
   const clearTokenInspector = React.useCallback(() => {
     setTokenCountResult(null)
     setTokenizeResult(null)
@@ -4065,6 +4567,10 @@ export const WritingPlayground = () => {
   const tokenPreviewRows = React.useMemo(
     () => buildTokenPreviewRows(tokenizeResult?.ids ?? [], tokenizeResult?.strings, 200),
     [tokenizeResult]
+  )
+  const tokenPreviewRawText = React.useMemo(
+    () => joinTokenStrings(tokenizeResult?.strings),
+    [tokenizeResult?.strings]
   )
   const responseInspectorRowsAll = React.useMemo(
     () =>
@@ -4588,6 +5094,35 @@ export const WritingPlayground = () => {
                           onClick={handleRedoGeneration}>
                           {t("option:writingPlayground.redoGeneration", "Redo")}
                         </Button>
+                        <Button
+                          size="small"
+                          disabled={isGenerating && !isSpeaking}
+                          onClick={() => {
+                            if (isSpeaking) {
+                              stopSpeech()
+                            } else {
+                              handleSpeakEditor()
+                            }
+                          }}>
+                          {isSpeaking
+                            ? t("option:writingPlayground.speechStopAction", "Stop reading")
+                            : t("option:writingPlayground.speechReadAction", "Read aloud")}
+                        </Button>
+                        {pauseResumeAction ? (
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              if (pauseResumeAction === "pause") {
+                                pauseSpeech()
+                              } else {
+                                resumeSpeech()
+                              }
+                            }}>
+                            {pauseResumeAction === "pause"
+                              ? t("option:writingPlayground.speechPauseAction", "Pause")
+                              : t("option:writingPlayground.speechResumeAction", "Resume")}
+                          </Button>
+                        ) : null}
                         <Dropdown
                           menu={{ items: insertMenuItems }}
                           trigger={["click"]}
@@ -4653,6 +5188,45 @@ export const WritingPlayground = () => {
                         "option:writingPlayground.shortcutsHint",
                         "Shortcuts: Ctrl/Cmd+Enter to generate, Esc to stop."
                       )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-2">
+                      <span className="text-xs text-text-muted">
+                        {t("option:writingPlayground.speechVoiceLabel", "Read voice")}
+                      </span>
+                      <Select
+                        size="small"
+                        value={speechVoiceURI ?? undefined}
+                        disabled={isGenerating || speechVoiceOptions.length === 0}
+                        options={speechVoiceOptions}
+                        placeholder={t(
+                          "option:writingPlayground.speechVoicePlaceholder",
+                          "Default voice"
+                        )}
+                        popupMatchSelectWidth={false}
+                        allowClear
+                        onChange={(value) =>
+                          updateSpeechPreferences({
+                            voiceURI: typeof value === "string" ? value : null
+                          })
+                        }
+                        className="min-w-[200px]"
+                      />
+                      <span className="text-xs text-text-muted">
+                        {t("option:writingPlayground.speechRateLabel", "Rate")}
+                      </span>
+                      <InputNumber
+                        size="small"
+                        min={0.5}
+                        max={2}
+                        step={0.1}
+                        value={speechRate}
+                        disabled={isGenerating}
+                        onChange={(value) =>
+                          updateSpeechPreferences({
+                            rate: clampSpeechRate(value == null ? 1 : value)
+                          })
+                        }
+                      />
                     </div>
                     {searchOpen && (
                       <div className="rounded-md border border-border bg-surface p-3">
@@ -5234,8 +5808,61 @@ export const WritingPlayground = () => {
                                     ) : null}
                                     {tokenizeResult ? (
                                       <div className="flex flex-col gap-2">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <Button
+                                            size="small"
+                                            disabled={
+                                              isGenerating || tokenPreviewRawText.length === 0
+                                            }
+                                            onClick={() =>
+                                              insertTokenTextAtCursor(tokenPreviewRawText)
+                                            }>
+                                            {t(
+                                              "option:writingPlayground.tokenInspectorUseAllAction",
+                                              "Use all token text"
+                                            )}
+                                          </Button>
+                                          {tokenInspectorSupportsLogitBias ? (
+                                            <>
+                                              <Button
+                                                size="small"
+                                                disabled={
+                                                  settingsDisabled ||
+                                                  tokenizeResult.ids.length === 0
+                                                }
+                                                onClick={() =>
+                                                  applyTokenInspectorLogitBiasPresetBatch(
+                                                    tokenizeResult.ids,
+                                                    "ban"
+                                                  )
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.tokenInspectorBiasBanAllAction",
+                                                  "Ban all IDs"
+                                                )}
+                                              </Button>
+                                              <Button
+                                                size="small"
+                                                disabled={
+                                                  settingsDisabled ||
+                                                  tokenizeResult.ids.length === 0
+                                                }
+                                                onClick={() =>
+                                                  applyTokenInspectorLogitBiasPresetBatch(
+                                                    tokenizeResult.ids,
+                                                    "favor"
+                                                  )
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.tokenInspectorBiasFavorAllAction",
+                                                  "Favor all IDs"
+                                                )}
+                                              </Button>
+                                            </>
+                                          ) : null}
+                                        </div>
                                         <div className="max-h-56 overflow-y-auto rounded-md border border-border bg-surface">
-                                          <div className="grid grid-cols-[auto_auto_1fr] gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                                          <div className="grid grid-cols-[auto_auto_1fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
                                             <span className="font-medium text-text-muted">
                                               #
                                             </span>
@@ -5246,6 +5873,12 @@ export const WritingPlayground = () => {
                                               {t(
                                                 "option:writingPlayground.tokenInspectorTextLabel",
                                                 "Text"
+                                              )}
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              {t(
+                                                "option:writingPlayground.tokenInspectorActionLabel",
+                                                "Action"
                                               )}
                                             </span>
                                             {tokenPreviewRows.map((row) => (
@@ -5260,6 +5893,51 @@ export const WritingPlayground = () => {
                                                 <span className="whitespace-pre-wrap text-text">
                                                   {row.text}
                                                 </span>
+                                                <div className="flex flex-wrap gap-1">
+                                                  <Button
+                                                    size="small"
+                                                    disabled={isGenerating}
+                                                    onClick={() =>
+                                                      insertTokenTextAtCursor(row.rawText)
+                                                    }>
+                                                    {t(
+                                                      "option:writingPlayground.tokenInspectorUseAction",
+                                                      "Use"
+                                                    )}
+                                                  </Button>
+                                                  {tokenInspectorSupportsLogitBias ? (
+                                                    <>
+                                                      <Button
+                                                        size="small"
+                                                        disabled={settingsDisabled}
+                                                        onClick={() =>
+                                                          applyTokenInspectorLogitBiasPreset(
+                                                            row.id,
+                                                            "ban"
+                                                          )
+                                                        }>
+                                                        {t(
+                                                          "option:writingPlayground.tokenInspectorBiasBanAction",
+                                                          "Ban"
+                                                        )}
+                                                      </Button>
+                                                      <Button
+                                                        size="small"
+                                                        disabled={settingsDisabled}
+                                                        onClick={() =>
+                                                          applyTokenInspectorLogitBiasPreset(
+                                                            row.id,
+                                                            "favor"
+                                                          )
+                                                        }>
+                                                        {t(
+                                                          "option:writingPlayground.tokenInspectorBiasFavorAction",
+                                                          "Favor"
+                                                        )}
+                                                      </Button>
+                                                    </>
+                                                  ) : null}
+                                                </div>
                                               </React.Fragment>
                                             ))}
                                           </div>
@@ -5966,6 +6644,17 @@ export const WritingPlayground = () => {
                           ),
                           children: (
                             <div className="flex flex-col gap-4">
+                              <div className="flex items-center justify-end">
+                                <Button
+                                  size="small"
+                                  disabled={settingsDisabled}
+                                  onClick={() => setContextPreviewModalOpen(true)}>
+                                  {t(
+                                    "option:writingPlayground.contextPreviewAction",
+                                    "Show context preview"
+                                  )}
+                                </Button>
+                              </div>
                               <div className="rounded-md border border-border bg-surface p-3">
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="text-xs font-medium text-text">
@@ -6141,6 +6830,22 @@ export const WritingPlayground = () => {
                                         "Add entry"
                                       )}
                                     </Button>
+                                    <WritingWorldInfoImportControls
+                                      disabled={settingsDisabled}
+                                      worldInfo={worldInfo}
+                                      onImported={handleWorldInfoImported}
+                                      onImportError={handleWorldInfoImportError}
+                                      t={t}
+                                    />
+                                    <Button
+                                      size="small"
+                                      disabled={settingsDisabled}
+                                      onClick={handleWorldInfoExport}>
+                                      {t(
+                                        "option:writingPlayground.worldInfoExportAction",
+                                        "Export"
+                                      )}
+                                    </Button>
                                   </div>
                                 </div>
                                 <div className="mt-3 flex flex-col gap-3">
@@ -6163,6 +6868,34 @@ export const WritingPlayground = () => {
                                             value == null
                                               ? 0
                                               : Math.max(0, Math.floor(value))
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                    <Input
+                                      value={worldInfo.prefix}
+                                      disabled={settingsDisabled}
+                                      placeholder={t(
+                                        "option:writingPlayground.worldInfoPrefixLabel",
+                                        "World info prefix"
+                                      )}
+                                      onChange={(event) =>
+                                        updateWorldInfo({
+                                          prefix: event.target.value
+                                        })
+                                      }
+                                    />
+                                    <Input
+                                      value={worldInfo.suffix}
+                                      disabled={settingsDisabled}
+                                      placeholder={t(
+                                        "option:writingPlayground.worldInfoSuffixLabel",
+                                        "World info suffix"
+                                      )}
+                                      onChange={(event) =>
+                                        updateWorldInfo({
+                                          suffix: event.target.value
                                         })
                                       }
                                     />
@@ -6238,6 +6971,48 @@ export const WritingPlayground = () => {
                                                   "Case sensitive"
                                                 )}
                                               </Checkbox>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <span className="text-xs text-text-muted">
+                                                {t(
+                                                  "option:writingPlayground.worldInfoEntrySearchRange",
+                                                  "Entry search range (chars)"
+                                                )}
+                                              </span>
+                                              <InputNumber
+                                                size="small"
+                                                min={0}
+                                                step={100}
+                                                value={
+                                                  entry.search_range ??
+                                                  worldInfo.search_range
+                                                }
+                                                disabled={settingsDisabled}
+                                                onChange={(value) =>
+                                                  updateWorldInfoEntry(entry.id, {
+                                                    search_range:
+                                                      value == null
+                                                        ? undefined
+                                                        : Math.max(
+                                                            0,
+                                                            Math.floor(value)
+                                                          )
+                                                  })
+                                                }
+                                              />
+                                              <Button
+                                                size="small"
+                                                disabled={settingsDisabled}
+                                                onClick={() =>
+                                                  updateWorldInfoEntry(entry.id, {
+                                                    search_range: undefined
+                                                  })
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.worldInfoUseGlobalRange",
+                                                  "Use global"
+                                                )}
+                                              </Button>
                                             </div>
                                             <Input.TextArea
                                               value={entry.keys.join("\n")}
@@ -6341,6 +7116,10 @@ export const WritingPlayground = () => {
                                         })
                                         setBannedTokensInput("")
                                         setDrySequenceBreakersInput("")
+                                        setLogitBiasInput("")
+                                        setLogitBiasError(null)
+                                        setLogitBiasTokenInput("")
+                                        setLogitBiasValueInput(null)
                                       }}>
                                       {t(
                                         "option:writingPlayground.clearAdvancedSettings",
@@ -6425,6 +7204,24 @@ export const WritingPlayground = () => {
                                     )}
                                   </Checkbox>
                                 )}
+                                {shouldShowAdvancedParam("penalize_nl") && (
+                                  <Checkbox
+                                    checked={Boolean(advancedExtraBody.penalize_nl)}
+                                    disabled={
+                                      settingsDisabled || !supportsAdvancedCompat
+                                    }
+                                    onChange={(event) =>
+                                      updateAdvancedExtraBodyField(
+                                        "penalize_nl",
+                                        event.target.checked ? true : null
+                                      )
+                                    }>
+                                    {t(
+                                      "option:writingPlayground.penalizeNewlineLabel",
+                                      "Penalize newline"
+                                    )}
+                                  </Checkbox>
+                                )}
                                 {shouldShowAdvancedParam("banned_tokens") && (
                                   <div className="flex flex-col gap-1">
                                     <span className="text-xs text-text-muted">
@@ -6502,6 +7299,108 @@ export const WritingPlayground = () => {
                                     />
                                   </div>
                                 )}
+                                {shouldShowAdvancedParam("logit_bias") && (
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.logitBiasLabel",
+                                        "Logit bias (JSON object)"
+                                      )}
+                                    </span>
+                                    <Input.TextArea
+                                      value={logitBiasInput}
+                                      rows={4}
+                                      disabled={
+                                        settingsDisabled || !supportsAdvancedCompat
+                                      }
+                                      placeholder='{"50256": -100, "198": -1.5}'
+                                      onChange={(event) => {
+                                        const nextInput = event.target.value
+                                        setLogitBiasInput(nextInput)
+                                        const parsed = parseLogitBiasInput(nextInput)
+                                        if (parsed.error) {
+                                          setLogitBiasError(parsed.error)
+                                          return
+                                        }
+                                        applyLogitBiasObject(parsed.value ?? {})
+                                      }}
+                                    />
+                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_140px_auto]">
+                                      <Input
+                                        value={logitBiasTokenInput}
+                                        disabled={
+                                          settingsDisabled || !supportsAdvancedCompat
+                                        }
+                                        placeholder={t(
+                                          "option:writingPlayground.logitBiasTokenPlaceholder",
+                                          "Token id (e.g. 50256)"
+                                        )}
+                                        onChange={(event) =>
+                                          setLogitBiasTokenInput(event.target.value)
+                                        }
+                                      />
+                                      <InputNumber
+                                        min={-100}
+                                        max={100}
+                                        step={0.1}
+                                        value={logitBiasValueInput}
+                                        disabled={
+                                          settingsDisabled || !supportsAdvancedCompat
+                                        }
+                                        placeholder={"0"}
+                                        onChange={(value) =>
+                                          setLogitBiasValueInput(
+                                            value == null ? null : value
+                                          )
+                                        }
+                                      />
+                                      <Button
+                                        disabled={
+                                          settingsDisabled ||
+                                          !supportsAdvancedCompat ||
+                                          !logitBiasTokenInput.trim() ||
+                                          logitBiasValueInput == null
+                                        }
+                                        onClick={() => {
+                                          const next = withLogitBiasEntry(
+                                            advancedExtraBody.logit_bias,
+                                            logitBiasTokenInput,
+                                            logitBiasValueInput
+                                          )
+                                          applyLogitBiasObject(next)
+                                          setLogitBiasTokenInput("")
+                                          setLogitBiasValueInput(null)
+                                        }}>
+                                        {t(
+                                          "option:writingPlayground.logitBiasAddAction",
+                                          "Add"
+                                        )}
+                                      </Button>
+                                    </div>
+                                    {logitBiasEntries.length > 0 ? (
+                                      <div className="flex flex-wrap gap-1">
+                                        {logitBiasEntries.map(([token, bias]) => (
+                                          <Tag
+                                            key={token}
+                                            closable
+                                            onClose={(event) => {
+                                              event.preventDefault()
+                                              const next = withoutLogitBiasEntry(
+                                                advancedExtraBody.logit_bias,
+                                                token
+                                              )
+                                              applyLogitBiasObject(next)
+                                            }}>
+                                            {`${token}: ${bias}`}
+                                          </Tag>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                    {logitBiasError ? (
+                                      <Alert type="error" showIcon message={logitBiasError} />
+                                    ) : null}
+                                  </div>
+                                )}
                               </div>
                             )
                           }
@@ -6558,6 +7457,46 @@ export const WritingPlayground = () => {
                 setExtraBodyJsonError(null)
               }
             }}
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        title={t(
+          "option:writingPlayground.contextPreviewTitle",
+          "Context preview"
+        )}
+        open={contextPreviewModalOpen}
+        onCancel={() => setContextPreviewModalOpen(false)}
+        footer={[
+          <Button
+            key="copy"
+            size="small"
+            onClick={() => {
+              void handleCopyContextPreview()
+            }}>
+            {t("option:writingPlayground.contextPreviewCopyAction", "Copy JSON")}
+          </Button>,
+          <Button
+            key="export"
+            size="small"
+            onClick={handleExportContextPreview}>
+            {t("option:writingPlayground.contextPreviewExportAction", "Export JSON")}
+          </Button>
+        ]}
+        width={820}>
+        <div className="flex flex-col gap-3">
+          <span className="text-xs text-text-muted">
+            {t(
+              "option:writingPlayground.contextPreviewHint",
+              "Preview of assembled messages after template parsing and context injection."
+            )}
+          </span>
+          <Input.TextArea
+            value={contextPreviewJson}
+            readOnly
+            rows={18}
+            className="font-mono"
           />
         </div>
       </Modal>

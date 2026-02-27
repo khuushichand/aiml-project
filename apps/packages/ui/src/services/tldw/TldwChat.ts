@@ -559,7 +559,7 @@ export class TldwChatService {
     // Add messages from the end (most recent first)
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i]
-      
+
       // Skip system prompt if already added
       if (msg.role === 'system' && result.length > 0 && result[0].role === 'system') {
         continue
