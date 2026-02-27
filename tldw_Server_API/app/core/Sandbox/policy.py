@@ -72,7 +72,10 @@ class SandboxPolicyConfig:
             rt_raw = str(getattr(app_settings, "SANDBOX_DEFAULT_RUNTIME", "docker")).strip().lower()
         except _POLICY_NONCRITICAL_EXCEPTIONS:
             rt_raw = "docker"
-        runtime = RuntimeType.firecracker if rt_raw == "firecracker" else RuntimeType.docker
+        try:
+            runtime = RuntimeType(rt_raw)
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
+            runtime = RuntimeType.docker
         try:
             network_default = str(getattr(app_settings, "SANDBOX_NETWORK_DEFAULT", "deny_all")).strip().lower()
         except _POLICY_NONCRITICAL_EXCEPTIONS:
