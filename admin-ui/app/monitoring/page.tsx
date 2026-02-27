@@ -13,11 +13,8 @@ import { api } from '@/lib/api-client';
 import {
   buildAlertHistoryEntry,
   buildAlertRuleFromDraft,
-  buildAssignableUsers,
   DEFAULT_ALERT_RULE_DRAFT,
-  ensureTriggeredHistoryEntries,
   isAlertSnoozed,
-  normalizeMonitoringAlertsPayload,
   readStoredAlertHistory,
   readStoredAlertRules,
   resolveSnoozedUntil,
@@ -36,13 +33,12 @@ import {
   type MonitoringMetricsSeriesVisibility,
   type MonitoringTimeRangeOption,
 } from '@/lib/monitoring-metrics';
-import { buildMetricsFromSnapshot, normalizeWatchlistsPayload } from './metrics-state-utils';
 import {
-  buildMonitoringSystemStatus,
   measureTimedEndpoint,
   MONITORING_SUBSYSTEMS,
   normalizeMonitoringHealthStatus,
 } from '@/lib/monitoring-health';
+import { monitoringLoadResultEntries, resolveMonitoringLoadState } from './load-state-utils';
 import AlertRulesPanel from './components/AlertRulesPanel';
 import AlertsPanel from './components/AlertsPanel';
 import MetricsChart from './components/MetricsChart';
@@ -53,7 +49,6 @@ import WatchlistsPanel from './components/WatchlistsPanel';
 import {
   escalateAlertSeverity,
   markAlertAcknowledged,
-  mergeAlertsWithLocalState,
   removeAlertById,
   setAlertAssignment,
   setAlertSnoozeUntil,
@@ -270,79 +265,53 @@ export default function MonitoringPage() {
         api.getUsers({ limit: '100' }),
       ]);
 
-      [
-        { name: 'metrics', result: metricsData },
-        { name: 'watchlists', result: watchlistsData },
-        { name: 'alerts', result: alertsData },
-        { name: 'health', result: healthTimedResult },
-        { name: 'llmHealth', result: llmHealthTimedResult },
-        { name: 'ragHealth', result: ragHealthTimedResult },
-        { name: 'ttsHealth', result: ttsHealthTimedResult },
-        { name: 'sttHealth', result: sttHealthTimedResult },
-        { name: 'embeddingsHealth', result: embeddingsHealthTimedResult },
-        { name: 'metricsText', result: metricsTextData },
-        { name: 'notificationSettings', result: notificationSettingsData },
-        { name: 'recentNotifications', result: recentNotificationsData },
-        { name: 'users', result: usersData },
-      ].forEach(({ name, result }) => {
+      const settledResults = {
+        metricsData,
+        watchlistsData,
+        alertsData,
+        healthTimedResult,
+        llmHealthTimedResult,
+        ragHealthTimedResult,
+        ttsHealthTimedResult,
+        sttHealthTimedResult,
+        embeddingsHealthTimedResult,
+        metricsTextData,
+        notificationSettingsData,
+        recentNotificationsData,
+        usersData,
+      };
+
+      monitoringLoadResultEntries(settledResults).forEach(({ name, result }) => {
         if (result.status === 'rejected') {
           console.warn(`Failed to load ${name}:`, result.reason);
         }
       });
 
-      // Process notification settings
-      setNotificationSettingsStatus(notificationSettingsData.status);
-      if (notificationSettingsData.status === 'fulfilled') {
-        setNotificationSettings(normalizeNotificationSettings(notificationSettingsData.value));
-      } else {
-        setNotificationSettings(null);
-      }
+      const resolvedState = resolveMonitoringLoadState({
+        settledResults,
+        previousAlerts: alerts,
+        previousAlertHistory: alertHistory,
+        metricWarningThreshold: METRIC_WARNING_THRESHOLD,
+        metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
+      });
 
-      // Process recent notifications
-      if (recentNotificationsData.status === 'fulfilled') {
-        setRecentNotifications(normalizeRecentNotifications(recentNotificationsData.value));
-      } else {
-        setRecentNotifications([]);
+      setNotificationSettingsStatus(resolvedState.notificationSettingsStatus);
+      setNotificationSettings(resolvedState.notificationSettings);
+      setRecentNotifications(resolvedState.recentNotifications);
+      if (resolvedState.metrics) {
+        setMetrics(resolvedState.metrics);
       }
-
-      // Process metrics
-      if (metricsData.status === 'fulfilled' && metricsData.value) {
-        setMetrics(buildMetricsFromSnapshot(
-          metricsData.value,
-          METRIC_WARNING_THRESHOLD,
-          METRIC_CRITICAL_THRESHOLD
-        ));
+      if (resolvedState.watchlists) {
+        setWatchlists(resolvedState.watchlists);
       }
-
-      // Process watchlists
-      if (watchlistsData.status === 'fulfilled') {
-        setWatchlists(normalizeWatchlistsPayload(watchlistsData.value));
+      if (resolvedState.alerts) {
+        setAlerts(resolvedState.alerts);
       }
-
-      // Process alerts
-      if (alertsData.status === 'fulfilled') {
-        const normalizedAlerts = normalizeMonitoringAlertsPayload(alertsData.value);
-        setAlerts((prev) => mergeAlertsWithLocalState(normalizedAlerts, prev));
-        setAlertHistory((prev) => ensureTriggeredHistoryEntries(prev, normalizedAlerts));
+      if (resolvedState.alertHistory) {
+        setAlertHistory(resolvedState.alertHistory);
       }
-
-      // Process assignable users
-      if (usersData.status === 'fulfilled') {
-        setAssignableUsers(buildAssignableUsers(usersData.value));
-      } else {
-        setAssignableUsers([]);
-      }
-
-      setSystemStatus(buildMonitoringSystemStatus({
-        healthResult: healthTimedResult,
-        llmHealthResult: llmHealthTimedResult,
-        ragHealthResult: ragHealthTimedResult,
-        ttsHealthResult: ttsHealthTimedResult,
-        sttHealthResult: sttHealthTimedResult,
-        embeddingsHealthResult: embeddingsHealthTimedResult,
-        metricsSnapshotResult: metricsData,
-        metricsTextResult: metricsTextData,
-      }));
+      setAssignableUsers(resolvedState.assignableUsers);
+      setSystemStatus(resolvedState.systemStatus);
 
       void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);
       setLastUpdated(new Date());
@@ -354,7 +323,7 @@ export default function MonitoringPage() {
     } finally {
       setLoading(false);
     }
-  }, [customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
+  }, [alerts, alertHistory, customRangeEnd, customRangeStart, loadMetricsHistoryForRange, timeRange]);
 
   useEffect(() => {
     setAlertRules(readStoredAlertRules());

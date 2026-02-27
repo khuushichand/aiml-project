@@ -116,6 +116,7 @@ import {
 import {
   buildRerollPromptFromRows,
   buildResponseInspectorCsv,
+  normalizeInspectorToken,
   selectResponseInspectorRows,
   type ResponseInspectorSort
 } from "./writing-response-inspector-utils"
@@ -155,6 +156,11 @@ import {
 } from "./writing-session-import-utils"
 import { extractImportedTemplateItems } from "./writing-template-import-utils"
 import { extractImportedThemeItems } from "./writing-theme-import-utils"
+import {
+  DEFAULT_TEMPLATE_CATALOG,
+  DEFAULT_THEME_CATALOG,
+  buildDuplicateName
+} from "./writing-template-theme-utils"
 
 const { Title, Paragraph } = Typography
 
@@ -1266,12 +1272,16 @@ export const WritingPlayground = () => {
   const [editingTemplate, setEditingTemplate] =
     React.useState<WritingTemplateResponse | null>(null)
   const [templateImporting, setTemplateImporting] = React.useState(false)
+  const [templateRestoringDefaults, setTemplateRestoringDefaults] =
+    React.useState(false)
   const [themesModalOpen, setThemesModalOpen] = React.useState(false)
   const [themeForm, setThemeForm] =
     React.useState<ThemeFormState>(EMPTY_THEME_FORM)
   const [editingTheme, setEditingTheme] =
     React.useState<WritingThemeResponse | null>(null)
   const [themeImporting, setThemeImporting] = React.useState(false)
+  const [themeRestoringDefaults, setThemeRestoringDefaults] =
+    React.useState(false)
   const [contextPreviewModalOpen, setContextPreviewModalOpen] =
     React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
@@ -3268,6 +3278,71 @@ export const WritingPlayground = () => {
     setTemplateForm({ ...EMPTY_TEMPLATE_FORM })
   }, [])
 
+  const handleTemplateDuplicate = React.useCallback(() => {
+    const sourceName = templateForm.name.trim() || editingTemplate?.name || ""
+    if (!sourceName) return
+    const duplicateName = buildDuplicateName(
+      sourceName,
+      templates.map((item) => item.name)
+    )
+    createTemplateMutation.mutate({
+      name: duplicateName,
+      payload: buildTemplatePayload(templateForm),
+      schema_version: editingTemplate?.schema_version ?? 1,
+      is_default: false
+    })
+  }, [createTemplateMutation, editingTemplate, templateForm, templates])
+
+  const handleTemplateRestoreDefaults = React.useCallback(async () => {
+    if (templateRestoringDefaults) return
+    setTemplateRestoringDefaults(true)
+    try {
+      for (const item of DEFAULT_TEMPLATE_CATALOG) {
+        const existing = templates.find((template) => template.name === item.name)
+        if (existing) {
+          await updateWritingTemplate(
+            existing.name,
+            {
+              name: item.name,
+              payload: item.payload,
+              schema_version: item.schema_version,
+              is_default: item.is_default
+            },
+            existing.version
+          )
+        } else {
+          await createWritingTemplate(item)
+        }
+      }
+      await queryClient.invalidateQueries({ queryKey: ["writing-templates"] })
+      handleTemplateChange(DEFAULT_TEMPLATE_CATALOG[0]?.name ?? null)
+      message.success(
+        t(
+          "option:writingPlayground.templateRestoreDefaultsSuccess",
+          "Default templates restored."
+        )
+      )
+    } catch (err) {
+      const detail =
+        err instanceof Error ? err.message : t("option:error", "Error")
+      message.error(
+        t(
+          "option:writingPlayground.templateRestoreDefaultsError",
+          "Failed to restore template defaults: {{detail}}",
+          { detail }
+        )
+      )
+    } finally {
+      setTemplateRestoringDefaults(false)
+    }
+  }, [
+    handleTemplateChange,
+    queryClient,
+    t,
+    templateRestoringDefaults,
+    templates
+  ])
+
   const handleOpenTemplatesModal = React.useCallback(() => {
     const baseTemplate =
       selectedTemplate ?? defaultTemplate ?? templates[0] ?? null
@@ -3290,6 +3365,66 @@ export const WritingPlayground = () => {
     setEditingTheme(null)
     setThemeForm({ ...EMPTY_THEME_FORM })
   }, [])
+
+  const handleThemeDuplicate = React.useCallback(() => {
+    const sourceName = themeForm.name.trim() || editingTheme?.name || ""
+    if (!sourceName) return
+    const duplicateName = buildDuplicateName(
+      sourceName,
+      themes.map((item) => item.name)
+    )
+    createThemeMutation.mutate({
+      name: duplicateName,
+      ...buildThemePayload(themeForm),
+      schema_version: editingTheme?.schema_version ?? 1,
+      is_default: false
+    })
+  }, [createThemeMutation, editingTheme, themeForm, themes])
+
+  const handleThemeRestoreDefaults = React.useCallback(async () => {
+    if (themeRestoringDefaults) return
+    setThemeRestoringDefaults(true)
+    try {
+      for (const item of DEFAULT_THEME_CATALOG) {
+        const existing = themes.find((theme) => theme.name === item.name)
+        if (existing) {
+          await updateWritingTheme(
+            existing.name,
+            {
+              class_name: item.class_name,
+              css: item.css,
+              schema_version: item.schema_version,
+              is_default: item.is_default,
+              order: item.order
+            },
+            existing.version
+          )
+        } else {
+          await createWritingTheme(item)
+        }
+      }
+      await queryClient.invalidateQueries({ queryKey: ["writing-themes"] })
+      handleThemeChange(DEFAULT_THEME_CATALOG[0]?.name ?? null)
+      message.success(
+        t(
+          "option:writingPlayground.themeRestoreDefaultsSuccess",
+          "Default themes restored."
+        )
+      )
+    } catch (err) {
+      const detail =
+        err instanceof Error ? err.message : t("option:error", "Error")
+      message.error(
+        t(
+          "option:writingPlayground.themeRestoreDefaultsError",
+          "Failed to restore theme defaults: {{detail}}",
+          { detail }
+        )
+      )
+    } finally {
+      setThemeRestoringDefaults(false)
+    }
+  }, [handleThemeChange, queryClient, t, themeRestoringDefaults, themes])
 
   const handleOpenThemesModal = React.useCallback(() => {
     const baseTheme = selectedTheme ?? defaultTheme ?? themes[0] ?? null
@@ -4393,7 +4528,7 @@ export const WritingPlayground = () => {
   }, [responseLogprobs, t])
 
   const handleRerollFromResponseToken = React.useCallback(
-    (sequence: number) => {
+    (sequence: number, replacementToken?: string) => {
       if (isGenerating) return
       if (responseLogprobs.length === 0) return
       const context = lastGenerationContextRef.current
@@ -4410,6 +4545,7 @@ export const WritingPlayground = () => {
         prefix: context.prefix,
         suffix: context.suffix,
         sequence,
+        replacementToken,
         placeholder: PREDICT_PLACEHOLDER
       })
       void handleGenerate(rerollPrompt)
@@ -4669,6 +4805,21 @@ export const WritingPlayground = () => {
   )
   const responseLogprobTruncated =
     responseInspectorRowsAll.length > responseLogprobRows.length
+  const inlineResponseTokens = React.useMemo(
+    () =>
+      responseLogprobs.slice(0, MAX_RESPONSE_LOGPROBS).map((entry, sequence) => ({
+        sequence,
+        displayToken: normalizeInspectorToken(entry.token) || " ",
+        topLogprobs: entry.topLogprobs.slice(0, 10).map((alt) => ({
+          token: alt.token,
+          displayToken: normalizeInspectorToken(alt.token) || " ",
+          probability: Math.exp(alt.logprob)
+        }))
+      })),
+    [responseLogprobs]
+  )
+  const inlineResponseTokensTruncated =
+    responseLogprobs.length > inlineResponseTokens.length
   const handleExportResponseInspectorCsv = React.useCallback(() => {
     if (responseInspectorRowsAll.length === 0) return
     const csv = buildResponseInspectorCsv(responseInspectorRowsAll)
@@ -5505,6 +5656,88 @@ export const WritingPlayground = () => {
                         </div>
                       </div>
                     )}
+                    {responseLogprobs.length > 0 ? (
+                      <div className="rounded-md border border-border bg-surface p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs text-text-muted">
+                            {t(
+                              "option:writingPlayground.inlineTokenInspectorHint",
+                              "Inline token probabilities: hover token chips to inspect alternatives, click a token or alternative to reroll from that point."
+                            )}
+                          </span>
+                          <Tag color="blue">
+                            {t(
+                              "option:writingPlayground.inlineTokenInspectorCount",
+                              "{{count}} tokens",
+                              { count: inlineResponseTokens.length }
+                            )}
+                          </Tag>
+                        </div>
+                        <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-border bg-background p-2">
+                          <div className="flex flex-wrap gap-1">
+                            {inlineResponseTokens.map((row) => (
+                              <Tooltip
+                                key={`inline-token-${row.sequence}`}
+                                placement="top"
+                                title={
+                                  <div className="flex max-w-[360px] flex-col gap-1">
+                                    <span className="text-[11px] text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.inlineTokenAlternativesLabel",
+                                        "Top alternatives"
+                                      )}
+                                    </span>
+                                    {row.topLogprobs.length === 0 ? (
+                                      <span className="text-[11px] text-text-muted">
+                                        {t(
+                                          "option:writingPlayground.inlineTokenAlternativesEmpty",
+                                          "No alternatives."
+                                        )}
+                                      </span>
+                                    ) : (
+                                      row.topLogprobs.map((alt, idx) => (
+                                        <Button
+                                          key={`inline-alt-${row.sequence}-${idx}`}
+                                          size="small"
+                                          type="text"
+                                          className="!h-auto !justify-start !px-1.5 !py-0.5 font-mono text-[11px]"
+                                          onClick={(event) => {
+                                            event.preventDefault()
+                                            event.stopPropagation()
+                                            handleRerollFromResponseToken(
+                                              row.sequence,
+                                              alt.token
+                                            )
+                                          }}>
+                                          {`${alt.displayToken} (${alt.probability >= 0.001 ? alt.probability.toFixed(3) : alt.probability.toExponential(2)})`}
+                                        </Button>
+                                      ))
+                                    )}
+                                  </div>
+                                }>
+                                <button
+                                  type="button"
+                                  className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[11px] text-text transition hover:bg-surface-hover"
+                                  onClick={() =>
+                                    handleRerollFromResponseToken(row.sequence)
+                                  }>
+                                  {row.displayToken}
+                                </button>
+                              </Tooltip>
+                            ))}
+                          </div>
+                        </div>
+                        {inlineResponseTokensTruncated ? (
+                          <span className="mt-2 block text-xs text-text-muted">
+                            {t(
+                              "option:writingPlayground.inlineTokenInspectorTruncated",
+                              "Showing first {{count}} tokens.",
+                              { count: inlineResponseTokens.length }
+                            )}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <Collapse
                       ghost
                       size="small"

@@ -118,6 +118,7 @@ export const buildRerollPromptFromRows = (
     prefix: string
     suffix: string
     sequence: number
+    replacementToken?: string
     placeholder?: string
   }
 ): string => {
@@ -128,5 +129,7 @@ export const buildRerollPromptFromRows = (
     .map((row) => row.token)
     .join("")
   const placeholder = options.placeholder ?? "{predict}"
-  return `${options.prefix}${generatedPrefix}${placeholder}${options.suffix}`
+  const replacementToken =
+    typeof options.replacementToken === "string" ? options.replacementToken : ""
+  return `${options.prefix}${generatedPrefix}${replacementToken}${placeholder}${options.suffix}`
 }

@@ -104,4 +104,15 @@ describe("writing response inspector utils", () => {
       })
     ).toBe(" hello\nworld{predict}")
   })
+
+  it("supports replacing the selected token when rerolling", () => {
+    expect(
+      buildRerollPromptFromRows(SAMPLE_ROWS, {
+        prefix: "PRE-",
+        suffix: "-SUF",
+        sequence: 2,
+        replacementToken: "word"
+      })
+    ).toBe("PRE- hello\nword{predict}-SUF")
+  })
 })
