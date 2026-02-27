@@ -24,6 +24,10 @@ class SandboxRuntimeInfo(BaseModel):
     supported_spec_versions: list[str] = Field(default_factory=lambda: ["1.0"], description="Supported spec versions (e.g., ['1.0','1.1'] when 1.1 features are enabled)")
     interactive_supported: bool | None = Field(default=None, description="Whether stdin-over-WS interactive runs are supported")
     egress_allowlist_supported: bool | None = Field(default=None, description="Whether egress allowlisting is supported by the runtime")
+    strict_deny_all_supported: bool | None = Field(default=None, description="Whether strict deny-all network enforcement is supported")
+    strict_allowlist_supported: bool | None = Field(default=None, description="Whether strict allowlist network enforcement is supported")
+    enforcement_ready: dict[str, bool] | None = Field(default=None, description="Runtime enforcement readiness by network policy mode")
+    host: dict[str, str] | None = Field(default=None, description="Runtime host capability facts for troubleshooting")
     store_mode: str | None = Field(default=None, description="Current store backend mode (memory|sqlite|cluster)")
     notes: str | None = None
 

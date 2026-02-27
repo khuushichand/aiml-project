@@ -559,6 +559,13 @@ class SandboxService:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             execute_enabled = False
+        try:
+            lima_preflight = LimaRunner().preflight(network_policy="deny_all")
+            lima_enforcement_ready = dict(lima_preflight.enforcement_ready or {})
+            lima_host = dict(lima_preflight.host or {})
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            lima_enforcement_ready = {"deny_all": False, "allowlist": False}
+            lima_host = {}
 
         return [
             {
@@ -635,7 +642,11 @@ class SandboxService:
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
                 "interactive_supported": False,  # Not implemented for Lima yet
-                "egress_allowlist_supported": False,  # Lima uses VM-level network isolation
+                "egress_allowlist_supported": bool(lima_enforcement_ready.get("allowlist")),
+                "strict_deny_all_supported": bool(lima_enforcement_ready.get("deny_all")),
+                "strict_allowlist_supported": bool(lima_enforcement_ready.get("allowlist")),
+                "enforcement_ready": lima_enforcement_ready,
+                "host": lima_host,
                 "store_mode": store_mode,
                 "notes": "Full VM isolation via Lima; recommended for macOS",
             },
