@@ -155,6 +155,27 @@ class SandboxService:
         if spec_version not in self._supported_specs:
             raise SandboxService.InvalidSpecVersion(spec_version, self._supported_specs)
 
+    def _validate_lima_policy(
+        self,
+        *,
+        runtime: RuntimeType | None,
+        network_policy: str | None,
+    ) -> None:
+        if runtime != RuntimeType.lima:
+            return
+        requested_policy = str(network_policy or self.policy.cfg.network_default or "deny_all")
+        preflight = LimaRunner().preflight(network_policy=requested_policy)
+        if preflight.available:
+            return
+        reasons = list(preflight.reasons or [])
+        if "limactl_missing" in reasons:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.lima)
+        raise SandboxPolicy.PolicyUnsupported(
+            RuntimeType.lima,
+            requirement=requested_policy,
+            reasons=reasons,
+        )
+
     def _effective_claim_lease_seconds(self) -> int:
         try:
             raw = os.getenv("SANDBOX_RUN_CLAIM_LEASE_SEC")
@@ -700,6 +721,7 @@ class SandboxService:
         fc_ok = firecracker_available()
         lima_ok = lima_available()
         spec = self.policy.apply_to_session(spec, firecracker_available=fc_ok, lima_available=lima_ok)
+        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
         # delegate to orchestrator (with idempotency)
@@ -797,6 +819,7 @@ class SandboxService:
         fc_ok = firecracker_available()
         lima_ok = lima_available()
         spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok, lima_available=lima_ok)
+        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
         status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)

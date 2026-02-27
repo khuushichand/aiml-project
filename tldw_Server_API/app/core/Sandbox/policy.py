@@ -140,6 +140,13 @@ class SandboxPolicy:
             super().__init__(f"Requested runtime '{runtime.value}' is unavailable")
             self.runtime = runtime
 
+    class PolicyUnsupported(Exception):
+        def __init__(self, runtime: RuntimeType, requirement: str, reasons: list[str] | None = None) -> None:
+            super().__init__(f"Runtime '{runtime.value}' does not satisfy requirement '{requirement}'")
+            self.runtime = runtime
+            self.requirement = str(requirement)
+            self.reasons = list(reasons or [])
+
     def select_runtime(
         self,
         requested: RuntimeType | None,
