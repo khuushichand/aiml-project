@@ -31,6 +31,11 @@ and this project adheres to Some kind of Versioning
   - Added Feynman prompt template at `Docs/Prompts/Academic-or-Studying/Feynman_Technique.md`.
   - Added Skills Manager built-ins seeding dropdown actions for both `Seed Missing Only` (`overwrite=false`) and `Seed and Overwrite Existing` (`overwrite=true`).
   - Added protocol-sync regression coverage for Feynman skill/prompt assets in `tldw_Server_API/tests/Skills/unit/test_feynman_assets_sync.py`.
+- Chat slash Skills commands
+  - Added backend `/skills` slash command to list available skills with optional filter support.
+  - Added backend `/skill <name> [args]` slash command to execute a specific skill from chat.
+  - Added privilege catalog scopes for `/skills` and `/skill` command execution.
+  - Added command injection coverage for `/skill` and `/skills` system-mode behavior in `tldw_Server_API/tests/Chat_NEW/integration/test_chat_skill_commands_injection.py`.
 - Added regression coverage ensuring Watchlists pipeline setup propagates HTML template format into generated job and output payloads.
 - Watchlists guardrails and release-gate coverage:
   - Added static duplicate guard coverage for Watchlists source files (`useWatchlistsStore` selector reuse, duplicate top-level identifiers, duplicate interface keys).
@@ -61,6 +66,8 @@ and this project adheres to Some kind of Versioning
 - Watchlists source delete confirmation copy now reuses a single locale key across standard and in-use delete flows to reduce translation-key duplication.
 - Watchlists guided quick setup now uses a single audio preference field (`includeAudioBriefing`) across telemetry, preview copy, and submission flow instead of dual field state.
 - RAG features/capabilities surfaces now advertise pre-retrieval clarification and research action-dedup support (`/api/v1/rag/features`, `/api/v1/rag/capabilities`, API guide, and capabilities docs).
+- Chat command routing now passes Skills command context from the chat endpoint into the command router so `/skill` execution can resolve and run skills consistently.
+- Route-toggle policy now allows environment override application during test mode (`is_test_mode()`), preventing collection-order drift between explicit pytest runtime markers and test-mode configuration.
 
 ### Removed
 - No removals in this session.
@@ -81,6 +88,8 @@ and this project adheres to Some kind of Versioning
 - Fixed Watchlists quick-setup review/test-flow regressions caused by stale CTA label assumptions and missing source-preview service mocks in the Overview test suite.
 - Fixed Watchlists a11y/load-retry test drift for Sources/Monitors toggles by aligning assertions with row-context ARIA labels and current table-render behavior.
 - Fixed redundant iterative research-loop calls for equivalent action/query signatures by reusing previously successful action outputs.
+- Fixed `/skill` command error handling to convert unexpected skill-resolution/runtime exceptions into a structured command error response instead of bubbling unhandled exceptions.
+- Fixed `tldw_Server_API/tests/Skills/integration/test_skills_api.py` startup abort risk by setting minimal test-route env toggles early and lazily importing `app.main` within the fixture, avoiding heavy module side effects at collection time.
 
 
 ## [0.1.24] 2026-02-22
