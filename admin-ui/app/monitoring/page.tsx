@@ -38,7 +38,11 @@ import {
   MONITORING_SUBSYSTEMS,
   normalizeMonitoringHealthStatus,
 } from '@/lib/monitoring-health';
-import { monitoringLoadResultEntries, resolveMonitoringLoadState } from './load-state-utils';
+import {
+  fetchMonitoringSettledResults,
+  monitoringLoadResultEntries,
+  resolveMonitoringLoadState,
+} from './load-state-utils';
 import AlertRulesPanel from './components/AlertRulesPanel';
 import AlertsPanel from './components/AlertsPanel';
 import MetricsChart from './components/MetricsChart';
@@ -237,51 +241,10 @@ export default function MonitoringPage() {
       setError('');
       setNotificationSettingsStatus('pending');
 
-      const [
-        metricsData,
-        watchlistsData,
-        alertsData,
-        healthTimedResult,
-        llmHealthTimedResult,
-        ragHealthTimedResult,
-        ttsHealthTimedResult,
-        sttHealthTimedResult,
-        embeddingsHealthTimedResult,
-        metricsTextData,
-        notificationSettingsData,
-        recentNotificationsData,
-        usersData,
-      ] = await Promise.allSettled([
-        api.getMetrics(),
-        api.getWatchlists(),
-        api.getAlerts(),
-        measureTimedEndpoint(() => api.getHealth()),
-        measureTimedEndpoint(() => api.getLlmHealth()),
-        measureTimedEndpoint(() => api.getRagHealth()),
-        measureTimedEndpoint(() => api.getTtsHealth()),
-        measureTimedEndpoint(() => api.getSttHealth()),
-        measureTimedEndpoint(() => api.getEmbeddingsHealth()),
-        api.getMetricsText(),
-        api.getNotificationSettings(),
-        api.getRecentNotifications(),
-        api.getUsers({ limit: '100' }),
-      ]);
-
-      const settledResults = {
-        metricsData,
-        watchlistsData,
-        alertsData,
-        healthTimedResult,
-        llmHealthTimedResult,
-        ragHealthTimedResult,
-        ttsHealthTimedResult,
-        sttHealthTimedResult,
-        embeddingsHealthTimedResult,
-        metricsTextData,
-        notificationSettingsData,
-        recentNotificationsData,
-        usersData,
-      };
+      const settledResults = await fetchMonitoringSettledResults({
+        apiClient: api,
+        measureTimedRequest: measureTimedEndpoint,
+      });
 
       monitoringLoadResultEntries(settledResults).forEach(({ name, result }) => {
         if (result.status === 'rejected') {

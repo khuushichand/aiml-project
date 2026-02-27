@@ -34,6 +34,84 @@ export type MonitoringSettledResults = {
   usersData: PromiseSettledResult<unknown>;
 };
 
+export type MonitoringApiClient = {
+  getMetrics: () => Promise<unknown>;
+  getWatchlists: () => Promise<unknown>;
+  getAlerts: () => Promise<unknown>;
+  getHealth: () => Promise<unknown>;
+  getLlmHealth: () => Promise<unknown>;
+  getRagHealth: () => Promise<unknown>;
+  getTtsHealth: () => Promise<unknown>;
+  getSttHealth: () => Promise<unknown>;
+  getEmbeddingsHealth: () => Promise<unknown>;
+  getMetricsText: () => Promise<unknown>;
+  getNotificationSettings: () => Promise<unknown>;
+  getRecentNotifications: () => Promise<unknown>;
+  getUsers: (params: { limit: string }) => Promise<unknown>;
+};
+
+type TimedRequestLoader = <T>(loader: () => Promise<T>) => Promise<{
+  payload: T;
+  checkedAt: string;
+  responseTimeMs: number;
+}>;
+
+type FetchMonitoringSettledResultsArgs = {
+  apiClient: MonitoringApiClient;
+  measureTimedRequest: TimedRequestLoader;
+};
+
+export const fetchMonitoringSettledResults = async ({
+  apiClient,
+  measureTimedRequest,
+}: FetchMonitoringSettledResultsArgs): Promise<MonitoringSettledResults> => {
+  const [
+    metricsData,
+    watchlistsData,
+    alertsData,
+    healthTimedResult,
+    llmHealthTimedResult,
+    ragHealthTimedResult,
+    ttsHealthTimedResult,
+    sttHealthTimedResult,
+    embeddingsHealthTimedResult,
+    metricsTextData,
+    notificationSettingsData,
+    recentNotificationsData,
+    usersData,
+  ] = await Promise.allSettled([
+    apiClient.getMetrics(),
+    apiClient.getWatchlists(),
+    apiClient.getAlerts(),
+    measureTimedRequest(() => apiClient.getHealth()),
+    measureTimedRequest(() => apiClient.getLlmHealth()),
+    measureTimedRequest(() => apiClient.getRagHealth()),
+    measureTimedRequest(() => apiClient.getTtsHealth()),
+    measureTimedRequest(() => apiClient.getSttHealth()),
+    measureTimedRequest(() => apiClient.getEmbeddingsHealth()),
+    apiClient.getMetricsText(),
+    apiClient.getNotificationSettings(),
+    apiClient.getRecentNotifications(),
+    apiClient.getUsers({ limit: '100' }),
+  ]);
+
+  return {
+    metricsData,
+    watchlistsData,
+    alertsData,
+    healthTimedResult,
+    llmHealthTimedResult,
+    ragHealthTimedResult,
+    ttsHealthTimedResult,
+    sttHealthTimedResult,
+    embeddingsHealthTimedResult,
+    metricsTextData,
+    notificationSettingsData,
+    recentNotificationsData,
+    usersData,
+  };
+};
+
 export type MonitoringNamedResult = {
   name: string;
   result: PromiseSettledResult<unknown>;

@@ -300,8 +300,9 @@ describe('MonitoringPage', () => {
 
     render(<MonitoringPage />);
     await flushPromises();
+    await flushPromises();
     const baselineCalls = apiMock.getMonitoringMetrics.mock.calls.length;
-    expect(baselineCalls).toBeGreaterThan(0);
+    expect(baselineCalls).toBeGreaterThanOrEqual(2);
 
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     await flushPromises();

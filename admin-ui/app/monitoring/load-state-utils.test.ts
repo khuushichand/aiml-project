@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { monitoringLoadResultEntries, resolveMonitoringLoadState } from './load-state-utils';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  fetchMonitoringSettledResults,
+  monitoringLoadResultEntries,
+  resolveMonitoringLoadState,
+  type MonitoringApiClient,
+} from './load-state-utils';
 import type { AlertHistoryEntry, SystemAlert } from './types';
 
 const fulfilledTimed = (payload: unknown): PromiseFulfilledResult<{
@@ -31,6 +36,52 @@ const baseAlert = (overrides: Partial<SystemAlert> = {}): SystemAlert => ({
 });
 
 describe('load-state-utils', () => {
+  it('fetches all monitoring domains through a single settled request batch', async () => {
+    const apiClient: MonitoringApiClient = {
+      getMetrics: vi.fn().mockResolvedValue({ ok: true }),
+      getWatchlists: vi.fn().mockResolvedValue({ items: [] }),
+      getAlerts: vi.fn().mockResolvedValue({ items: [] }),
+      getHealth: vi.fn().mockResolvedValue({ status: 'ok' }),
+      getLlmHealth: vi.fn().mockResolvedValue({ status: 'ok' }),
+      getRagHealth: vi.fn().mockResolvedValue({ status: 'ok' }),
+      getTtsHealth: vi.fn().mockResolvedValue({ status: 'ok' }),
+      getSttHealth: vi.fn().mockResolvedValue({ status: 'ok' }),
+      getEmbeddingsHealth: vi.fn().mockResolvedValue({ status: 'ok' }),
+      getMetricsText: vi.fn().mockResolvedValue('queue_depth 2'),
+      getNotificationSettings: vi.fn().mockResolvedValue({ enabled: true }),
+      getRecentNotifications: vi.fn().mockResolvedValue({ items: [] }),
+      getUsers: vi.fn().mockResolvedValue([]),
+    };
+
+    const measureTimedRequest = vi.fn(async <T,>(loader: () => Promise<T>) => ({
+      payload: await loader(),
+      checkedAt: '2026-02-27T12:00:00.000Z',
+      responseTimeMs: 4,
+    }));
+
+    const result = await fetchMonitoringSettledResults({
+      apiClient,
+      measureTimedRequest,
+    });
+
+    expect(result.metricsData.status).toBe('fulfilled');
+    expect(result.watchlistsData.status).toBe('fulfilled');
+    expect(result.alertsData.status).toBe('fulfilled');
+    expect(result.healthTimedResult.status).toBe('fulfilled');
+    expect(result.llmHealthTimedResult.status).toBe('fulfilled');
+    expect(result.ragHealthTimedResult.status).toBe('fulfilled');
+    expect(result.ttsHealthTimedResult.status).toBe('fulfilled');
+    expect(result.sttHealthTimedResult.status).toBe('fulfilled');
+    expect(result.embeddingsHealthTimedResult.status).toBe('fulfilled');
+    expect(result.metricsTextData.status).toBe('fulfilled');
+    expect(result.notificationSettingsData.status).toBe('fulfilled');
+    expect(result.recentNotificationsData.status).toBe('fulfilled');
+    expect(result.usersData.status).toBe('fulfilled');
+
+    expect(measureTimedRequest).toHaveBeenCalledTimes(6);
+    expect(apiClient.getUsers).toHaveBeenCalledWith({ limit: '100' });
+  });
+
   it('produces merged state for fulfilled monitoring data', () => {
     const previousAlerts = [baseAlert({ id: 'alert-1', assigned_to: 'u2' })];
     const previousHistory: AlertHistoryEntry[] = [];
