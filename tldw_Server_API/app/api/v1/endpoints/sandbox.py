@@ -571,12 +571,26 @@ async def create_session(
                     rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     rt = str(rt_attr) if rt_attr is not None else "unknown"
+            suggestions: list[str] = []
+            try:
+                from tldw_Server_API.app.core.Sandbox.runners.docker_runner import docker_available as _dock_avail
+                from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import (
+                    firecracker_available as _fc_avail,
+                )
+                if str(rt) == "firecracker":
+                    if _dock_avail() or True:
+                        suggestions.append("docker")
+                elif str(rt) == "docker" and _fc_avail():
+                    suggestions.append("firecracker")
+                suggestions = sorted(set(suggestions))
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+                suggestions = []
             logger.exception("RuntimeUnavailable error occurred on sandbox session creation: {}", str(e))
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",
                     "message": "The requested runtime is currently unavailable.",
-                    "details": {"runtime": rt, "available": False, "suggested": ["docker"]}
+                    "details": {"runtime": rt, "available": False, "suggested": suggestions}
                 }
             })
         if isinstance(e, SandboxPolicy.PolicyUnsupported):
