@@ -27,6 +27,10 @@ class WorldBookEntryBase(BaseModel):
         None,
         description="Whether this entry can be concatenated with other appendable blocks",
     )
+    recursive_scanning: Optional[bool] = Field(
+        None,
+        description="Whether this entry should be used as a recursive matching source",
+    )
     priority: int = Field(0, description="Priority for ordering (higher = more important)")
     enabled: bool = Field(True, description="Whether entry is active")
     case_sensitive: bool = Field(False, description="Whether keyword matching is case-sensitive")
@@ -46,6 +50,7 @@ class WorldBookEntryUpdate(BaseModel):
     content: Optional[str] = Field(None, description="New content (empty string allowed; validated server-side)")
     group: Optional[str] = Field(None, max_length=120, description="New entry group/category label")
     appendable: Optional[bool] = Field(None, description="New appendable flag")
+    recursive_scanning: Optional[bool] = Field(None, description="New recursive source flag")
     priority: Optional[int] = Field(None, description="New priority")
     enabled: Optional[bool] = Field(None, description="New enabled status")
     case_sensitive: Optional[bool] = Field(None, description="New case sensitivity")

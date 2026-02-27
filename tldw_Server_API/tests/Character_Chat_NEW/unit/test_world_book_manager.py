@@ -154,6 +154,18 @@ class TestWorldBookManagement:
         entries = service.get_entries(wb_id)
         assert len(entries) == 0
 
+    @pytest.mark.unit
+    def test_invalidate_cache_reinitializes_bounded_caches(self, world_book_service):
+        """Cache invalidation keeps bounded cache structures."""
+        service = world_book_service
+        service._entry_cache = {}
+        service._book_cache = {}
+
+        service._invalidate_cache()
+
+        assert hasattr(service._entry_cache, "_max_size")
+        assert hasattr(service._book_cache, "_max_size")
+
 # ========================================================================
 # Entry Management Tests
 # ========================================================================
@@ -179,6 +191,26 @@ class TestEntryManagement:
         entries = service.get_entries(wb_id)
         assert len(entries) == 1
         assert 'dragon' in entries[0]['keywords']
+
+    @pytest.mark.unit
+    def test_get_entry_returns_single_entry_by_id(self, world_book_service):
+        """Single-entry lookup should return the expected entry without scanning callers."""
+        service = world_book_service
+
+        wb_id = service.create_world_book(name="Single Entry Lookup")
+        entry_id = service.add_entry(
+            world_book_id=wb_id,
+            keywords=["hero"],
+            content="Hero lore",
+            priority=25,
+        )
+
+        entry = service.get_entry(entry_id)
+
+        assert entry is not None
+        assert int(entry["id"]) == int(entry_id)
+        assert entry["keywords"] == ["hero"]
+        assert entry["content"] == "Hero lore"
 
     @pytest.mark.unit
     def test_entry_group_roundtrip_and_backfill_behavior(self, world_book_service):
@@ -209,6 +241,160 @@ class TestEntryManagement:
         ]
         assert len(ungrouped_entries) == 1
         assert ungrouped_entries[0]["group"] is None
+
+    @pytest.mark.unit
+    def test_get_entries_supports_group_appendable_recursive_filters(self, world_book_service):
+        """Server-side entry filters should narrow results by group/appendable/recursive flags."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Entry Filter Test")
+
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=["hero"],
+            content="Hero lore",
+            metadata={"group": "Characters", "appendable": True, "recursive_scanning": True},
+        )
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=["city"],
+            content="City lore",
+            metadata={"group": "Locations", "appendable": False, "recursive_scanning": False},
+        )
+
+        filtered = service.get_entries(
+            world_book_id=wb_id,
+            group="characters",
+            appendable=True,
+            recursive_scanning=True,
+        )
+
+        assert len(filtered) == 1
+        assert filtered[0]["group"] == "Characters"
+        assert filtered[0]["appendable"] is True
+        assert filtered[0]["recursive_scanning"] is True
+
+    @pytest.mark.unit
+    def test_get_entries_coerces_string_filter_booleans(self, world_book_service):
+        """Entry filters should accept string boolean compatibility values."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Entry String Filter Args")
+
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=["hero"],
+            content="Hero lore",
+            metadata={"group": "Characters", "appendable": False, "recursive_scanning": True},
+        )
+
+        filtered = service.get_entries(
+            world_book_id=wb_id,
+            group="characters",
+            appendable="false",
+            recursive_scanning="true",
+        )
+
+        assert len(filtered) == 1
+        assert filtered[0]["appendable"] is False
+        assert filtered[0]["recursive_scanning"] is True
+
+    @pytest.mark.unit
+    def test_get_entries_cache_filters_coerce_string_boolean_metadata(self, world_book_service):
+        """Cache-path filtering should coerce string booleans in metadata."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Entry String Bool Filter Test")
+
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=["hero"],
+            content="Hero lore",
+            metadata={"group": "Characters", "appendable": "false", "recursive_scanning": "true"},
+        )
+
+        # Warm the full per-book cache first so filter read uses cache path.
+        _ = service.get_entries(world_book_id=wb_id, enabled_only=False)
+
+        filtered = service.get_entries(
+            world_book_id=wb_id,
+            group="characters",
+            appendable=False,
+            recursive_scanning=True,
+        )
+
+        assert len(filtered) == 1
+        assert filtered[0]["appendable"] is False
+        assert filtered[0]["recursive_scanning"] is True
+
+    @pytest.mark.unit
+    def test_get_entries_db_filters_coerce_string_boolean_metadata(self, world_book_service):
+        """Cold-cache DB filtering should treat string booleans as native booleans."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Entry String Bool DB Filter Test")
+
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=["hero"],
+            content="Hero lore",
+            metadata={"group": "Characters", "appendable": "false", "recursive_scanning": "true"},
+        )
+
+        # No cache priming: force DB metadata filter path.
+        filtered = service.get_entries(
+            world_book_id=wb_id,
+            group="characters",
+            appendable=False,
+            recursive_scanning=True,
+        )
+
+        assert len(filtered) == 1
+        assert filtered[0]["appendable"] is False
+        assert filtered[0]["recursive_scanning"] is True
+
+    @pytest.mark.unit
+    def test_get_entries_enabled_only_respects_disabled_world_book_with_cache(self, world_book_service):
+        """Enabled-only cache reads should return no entries when the world book is disabled."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Cache Disabled Book", enabled=False)
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=["hero"],
+            content="Hero lore",
+            enabled=True,
+        )
+
+        # Prime cache using non-enabled-only read.
+        all_entries = service.get_entries(world_book_id=wb_id, enabled_only=False)
+        assert len(all_entries) == 1
+
+        enabled_only_entries = service.get_entries(world_book_id=wb_id, enabled_only=True)
+        assert enabled_only_entries == []
+
+    @pytest.mark.unit
+    def test_get_entries_does_not_cache_enabled_only_or_filtered_reads(self, world_book_service):
+        """Partial reads should not populate the canonical per-book cache."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Partial Read Cache Control", enabled=True)
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=["hero"],
+            content="Hero lore",
+            enabled=True,
+            metadata={"group": "Characters"},
+        )
+
+        # Partial read: enabled_only
+        enabled_entries = service.get_entries(world_book_id=wb_id, enabled_only=True)
+        assert len(enabled_entries) == 1
+        assert wb_id not in service._entry_cache
+
+        # Partial read: filtered
+        filtered_entries = service.get_entries(world_book_id=wb_id, group="Characters")
+        assert len(filtered_entries) == 1
+        assert wb_id not in service._entry_cache
+
+        # Full read should populate cache.
+        full_entries = service.get_entries(world_book_id=wb_id, enabled_only=False)
+        assert len(full_entries) == 1
+        assert wb_id in service._entry_cache
 
     @pytest.mark.unit
     def test_add_recursive_entry(self, world_book_service):
@@ -464,6 +650,72 @@ class TestContextProcessing:
         # With depth=2, might also get smiths entry
 
     @pytest.mark.unit
+    def test_recursive_scanning_respects_per_entry_recursive_flags(self, world_book_service):
+        """Recursive expansion should only chain through entries flagged as recursive sources."""
+        service = world_book_service
+
+        wb_id = service.create_world_book(name="Recursive Source Control", recursive_scanning=True)
+        service.add_entry(
+            wb_id,
+            ["hero"],
+            "The hero has a sword.",
+            priority=100,
+            recursive_scanning=True,
+        )
+        service.add_entry(
+            wb_id,
+            ["sword"],
+            "The sword was forged by ancient smiths.",
+            priority=90,
+        )
+        service.add_entry(
+            wb_id,
+            ["smiths"],
+            "Ancient smiths lived in mountain forges.",
+            priority=80,
+        )
+
+        activated = service.process_context("The hero arrives.", wb_id, recursive_depth=3)
+        contents = [entry["content"] for entry in activated]
+
+        assert any("sword was forged" in content for content in contents)
+        assert not any("Ancient smiths lived" in content for content in contents)
+
+    @pytest.mark.unit
+    def test_recursive_scanning_preserves_legacy_behavior_without_entry_flags(self, world_book_service):
+        """When no entry has recursive metadata, recursive chaining should remain enabled."""
+        service = world_book_service
+
+        wb_id = service.create_world_book(name="Recursive Legacy", recursive_scanning=True)
+        service.add_entry(wb_id, ["hero"], "The hero has a sword.", priority=100)
+        service.add_entry(wb_id, ["sword"], "The sword is magical.", priority=90)
+
+        activated = service.process_context("The hero arrives.", wb_id, recursive_depth=1)
+        contents = [entry["content"] for entry in activated]
+
+        assert any("The sword is magical." == content for content in contents)
+
+    @pytest.mark.unit
+    def test_keyword_lookup_fallback_keeps_regex_matching(self, world_book_service):
+        """Regex entries should still match when quick keyword lookup cannot index them."""
+        service = world_book_service
+
+        wb_id = service.create_world_book(name="Regex Lookup Fallback", recursive_scanning=False)
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=[r"hero.*"],
+            content="Regex hero lore",
+            regex_match=True,
+            case_sensitive=False,
+            whole_word_match=True,
+            priority=100,
+        )
+
+        activated = service.process_context("heroic tale", wb_id)
+        contents = [entry["content"] for entry in activated]
+        assert "Regex hero lore" in contents
+
+    @pytest.mark.unit
     def test_token_budget_limit(self, world_book_service, mock_tokenizer):
         """Test respecting token budget."""
         service = world_book_service
@@ -582,6 +834,45 @@ class TestImportExport:
 
         entries = service.get_entries(wb_id)
         assert len(entries) == len(sample_world_book['entries'])
+
+    @pytest.mark.unit
+    def test_import_world_book_coerces_string_booleans(self, world_book_service):
+        """Import should coerce string boolean flags for compatibility payloads."""
+        service = world_book_service
+
+        payload = {
+            "world_book": {
+                "name": "Imported String Bool Flags",
+                "description": "compat test",
+                "recursive_scanning": "false",
+                "enabled": "false",
+            },
+            "entries": [
+                {
+                    "keywords": ["hero"],
+                    "content": "Hero lore",
+                    "enabled": "false",
+                    "recursive_scanning": "false",
+                    "metadata": {"appendable": "false"},
+                }
+            ],
+        }
+
+        wb_id = service.import_world_book(payload)
+
+        world_book = service.get_world_book(wb_id)
+        assert world_book is not None
+        assert world_book["enabled"] in (0, False)
+        assert world_book["recursive_scanning"] in (0, False)
+
+        entries = service.get_entries(wb_id, enabled_only=False)
+        assert len(entries) == 1
+        assert entries[0]["enabled"] is False
+        assert entries[0]["recursive_scanning"] is False
+        assert entries[0]["appendable"] is False
+
+        enabled_only_entries = service.get_entries(wb_id, enabled_only=True)
+        assert enabled_only_entries == []
 
     @pytest.mark.unit
     def test_export_to_lorebook_format(self, world_book_service, sample_world_book):

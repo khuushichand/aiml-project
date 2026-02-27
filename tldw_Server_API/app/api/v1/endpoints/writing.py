@@ -19,6 +19,9 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
 from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingCapabilitiesResponse,
+    WritingContextCapabilities,
+    WritingDetokenizeRequest,
+    WritingDetokenizeResponse,
     WritingProviderCapabilities,
     WritingRequestedCapabilities,
     WritingServerCapabilities,
@@ -41,6 +44,7 @@ from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingTokenizeMeta,
     WritingTokenizeRequest,
     WritingTokenizeResponse,
+    WritingTokenProbabilitiesCapabilities,
     WritingTokenizerSupport,
     WritingVersionResponse,
     WritingWordcloudMeta,
@@ -174,6 +178,35 @@ def _resolve_tokenizer(provider: str, model: str) -> tuple[Any, str]:
     return encoding, f"tiktoken:{tokenizer_name}"
 
 
+def _resolve_tokenizer_details(
+    provider: str,
+    model: str,
+) -> tuple[Any, str, str, str, bool]:
+    """Resolve tokenizer plus compatibility metadata.
+
+    Keeps backward compatibility with tests that monkeypatch `_resolve_tokenizer`
+    to return a 2-tuple `(encoding, tokenizer_name)`.
+    """
+    resolved = _resolve_tokenizer(provider, model)
+    if not isinstance(resolved, tuple) or len(resolved) < 2:
+        raise TokenizerUnavailable("Tokenizer resolver returned invalid payload")
+
+    encoding = resolved[0]
+    tokenizer_name = str(resolved[1])
+    tokenizer_kind = "tiktoken"
+    tokenizer_source = "tiktoken.encoding_for_model"
+    detokenize_available = True
+
+    if len(resolved) >= 3 and isinstance(resolved[2], str) and resolved[2].strip():
+        tokenizer_kind = resolved[2].strip()
+    if len(resolved) >= 4 and isinstance(resolved[3], str) and resolved[3].strip():
+        tokenizer_source = resolved[3].strip()
+    if len(resolved) >= 5:
+        detokenize_available = bool(resolved[4])
+
+    return encoding, tokenizer_name, tokenizer_kind, tokenizer_source, detokenize_available
+
+
 def _provider_features(provider: str) -> dict[str, bool]:
     """Build a provider feature map from allowed capability fields."""
     fields = get_allowed_fields(provider)
@@ -268,8 +301,20 @@ def _normalize_theme_response(theme: dict[str, Any]) -> dict[str, Any]:
 def _tokenizer_support(provider: str, model: str) -> WritingTokenizerSupport:
     """Build tokenizer support metadata for a provider/model pair."""
     try:
-        _, tokenizer_name = _resolve_tokenizer(provider, model)
-        return WritingTokenizerSupport(available=True, tokenizer=tokenizer_name)
+        (
+            _encoding,
+            tokenizer_name,
+            tokenizer_kind,
+            tokenizer_source,
+            detokenize_available,
+        ) = _resolve_tokenizer_details(provider, model)
+        return WritingTokenizerSupport(
+            available=True,
+            tokenizer=tokenizer_name,
+            kind=tokenizer_kind,
+            source=tokenizer_source,
+            detokenize=detokenize_available,
+        )
     except TokenizerUnavailable as exc:
         return WritingTokenizerSupport(available=False, error=str(exc))
 
@@ -562,8 +607,17 @@ async def get_writing_capabilities(
         templates=True,
         themes=True,
         tokenize=True,
+        detokenize=True,
         token_count=True,
         wordclouds=True,
+        token_probabilities=WritingTokenProbabilitiesCapabilities(
+            inline_reroll=True,
+        ),
+        context=WritingContextCapabilities(
+            author_note_depth_mode="insertion",
+            context_order=True,
+            context_budget=True,
+        ),
     )
 
     providers_payload: list[WritingProviderCapabilities] | None = None
@@ -611,11 +665,20 @@ async def get_writing_capabilities(
         features = _provider_features(provider_name) if provider_name else {}
         tokenizer_available = False
         tokenizer_name = None
+        tokenizer_kind = None
+        tokenizer_source = None
+        detokenize_available = False
         tokenization_error = None
         extra_body_compat = None
         if provider_name and model_name:
             try:
-                _, tokenizer_name = _resolve_tokenizer(provider_name, model_name)
+                (
+                    _encoding,
+                    tokenizer_name,
+                    tokenizer_kind,
+                    tokenizer_source,
+                    detokenize_available,
+                ) = _resolve_tokenizer_details(provider_name, model_name)
                 tokenizer_available = True
             except TokenizerUnavailable as exc:
                 tokenization_error = str(exc)
@@ -629,6 +692,9 @@ async def get_writing_capabilities(
             features=features,
             tokenizer_available=tokenizer_available,
             tokenizer=tokenizer_name,
+            tokenizer_kind=tokenizer_kind,
+            tokenizer_source=tokenizer_source,
+            detokenize_available=detokenize_available,
             tokenization_error=tokenization_error,
             extra_body_compat=extra_body_compat,
         )
@@ -1158,7 +1224,13 @@ async def tokenize_writing_text(
     if payload.options is not None:
         include_strings = bool(payload.options.include_strings)
     try:
-        encoding, tokenizer_name = _resolve_tokenizer(payload.provider, payload.model)
+        (
+            encoding,
+            tokenizer_name,
+            tokenizer_kind,
+            tokenizer_source,
+            detokenize_available,
+        ) = _resolve_tokenizer_details(payload.provider, payload.model)
     except TokenizerUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     token_ids = encoding.encode(payload.text, disallowed_special=())
@@ -1169,11 +1241,69 @@ async def tokenize_writing_text(
         provider=payload.provider,
         model=payload.model,
         tokenizer=tokenizer_name,
+        tokenizer_kind=tokenizer_kind,
+        tokenizer_source=tokenizer_source,
+        detokenize_available=detokenize_available,
         input_chars=len(payload.text),
         token_count=len(token_ids),
         warnings=[],
     )
     return WritingTokenizeResponse(ids=token_ids, strings=token_strings, meta=meta)
+
+
+@router.post(
+    "/detokenize",
+    response_model=WritingDetokenizeResponse,
+    summary="Detokenize token IDs for a provider/model",
+    description="Decodes token IDs into text fragments using the provider/model tokenizer.",
+    tags=["writing"],
+)
+async def detokenize_writing_tokens(
+    payload: WritingDetokenizeRequest,
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("writing.tokenize")),
+) -> WritingDetokenizeResponse:
+    """Detokenize IDs for the requested provider/model."""
+    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.tokenize")
+    try:
+        (
+            encoding,
+            tokenizer_name,
+            tokenizer_kind,
+            tokenizer_source,
+            detokenize_available,
+        ) = _resolve_tokenizer_details(payload.provider, payload.model)
+    except TokenizerUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    if not detokenize_available:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Detokenize not available for provider/model",
+        )
+
+    try:
+        token_strings = [encoding.decode([int(token_id)]) for token_id in payload.ids]
+    except Exception as exc:  # noqa: BLE001 - return a clean 422 for invalid IDs
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unable to detokenize ids: {exc}",
+        ) from exc
+
+    text = "".join(token_strings)
+    meta = WritingTokenizeMeta(
+        provider=payload.provider,
+        model=payload.model,
+        tokenizer=tokenizer_name,
+        tokenizer_kind=tokenizer_kind,
+        tokenizer_source=tokenizer_source,
+        detokenize_available=detokenize_available,
+        input_chars=len(text),
+        token_count=len(payload.ids),
+        warnings=[],
+    )
+    return WritingDetokenizeResponse(text=text, strings=token_strings, meta=meta)
 
 
 @router.post(
@@ -1192,7 +1322,13 @@ async def count_writing_tokens(
     """Count tokens for the requested provider/model."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.token_count")
     try:
-        encoding, tokenizer_name = _resolve_tokenizer(payload.provider, payload.model)
+        (
+            encoding,
+            tokenizer_name,
+            tokenizer_kind,
+            tokenizer_source,
+            detokenize_available,
+        ) = _resolve_tokenizer_details(payload.provider, payload.model)
     except TokenizerUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     token_ids = encoding.encode(payload.text, disallowed_special=())
@@ -1200,6 +1336,9 @@ async def count_writing_tokens(
         provider=payload.provider,
         model=payload.model,
         tokenizer=tokenizer_name,
+        tokenizer_kind=tokenizer_kind,
+        tokenizer_source=tokenizer_source,
+        detokenize_available=detokenize_available,
         input_chars=len(payload.text),
         token_count=len(token_ids),
         warnings=[],

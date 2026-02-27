@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { WritingLogprobEntry } from "../writing-logprob-utils"
 import {
+  buildRerollPromptFromRows,
   buildResponseInspectorCsv,
   selectResponseInspectorRows
 } from "../writing-response-inspector-utils"
@@ -74,5 +75,33 @@ describe("writing response inspector utils", () => {
     expect(csv).toContain("index,token,logprob,probability,top_alternatives")
     expect(csv).toContain("\"\\n\"")
     expect(csv).toContain("\" hello (-0.200) |  hi (-0.800)\"")
+  })
+
+  it("builds reroll prompts from a selected token sequence", () => {
+    expect(
+      buildRerollPromptFromRows(SAMPLE_ROWS, {
+        prefix: "PRE-",
+        suffix: "-SUF",
+        sequence: 0
+      })
+    ).toBe("PRE-{predict}-SUF")
+
+    expect(
+      buildRerollPromptFromRows(SAMPLE_ROWS, {
+        prefix: "PRE-",
+        suffix: "-SUF",
+        sequence: 2
+      })
+    ).toBe("PRE- hello\n{predict}-SUF")
+  })
+
+  it("clamps reroll sequence to available rows", () => {
+    expect(
+      buildRerollPromptFromRows(SAMPLE_ROWS, {
+        prefix: "",
+        suffix: "",
+        sequence: 999
+      })
+    ).toBe(" hello\nworld{predict}")
   })
 })

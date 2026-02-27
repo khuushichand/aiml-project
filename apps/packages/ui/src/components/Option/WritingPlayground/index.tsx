@@ -87,6 +87,7 @@ import {
 } from "./extra-body-utils"
 import {
   buildContextSystemMessages,
+  composeContextPrompt,
   injectSystemMessages,
   parseWorldInfoKeysInput,
   type WritingAuthorNote,
@@ -113,6 +114,7 @@ import {
   withoutLogitBiasEntry
 } from "./writing-logit-bias-utils"
 import {
+  buildRerollPromptFromRows,
   buildResponseInspectorCsv,
   selectResponseInspectorRows,
   type ResponseInspectorSort
@@ -199,6 +201,9 @@ type WritingSessionSettings = {
   memory_block: WritingContextBlock
   author_note: WritingAuthorNote
   world_info: WritingWorldInfoSettings
+  context_order: string
+  context_length: number
+  author_note_depth_mode: "insertion" | "annotation"
 }
 
 type EditorViewMode = "edit" | "preview" | "split"
@@ -215,6 +220,11 @@ type GenerationPlan = {
 type GenerationHistoryEntry = {
   before: string
   after: string
+}
+
+type LastGenerationContext = {
+  prefix: string
+  suffix: string
 }
 
 type NormalizedTemplate = {
@@ -335,6 +345,8 @@ const DEFAULT_WORLD_INFO: WritingWorldInfoSettings = {
   suffix: "",
   entries: []
 }
+const DEFAULT_CONTEXT_ORDER =
+  "{memPrefix}{wiPrefix}{wiText}{wiSuffix}{memText}{memSuffix}{prompt}"
 
 const DEFAULT_SETTINGS: WritingSessionSettings = {
   temperature: 0.7,
@@ -353,7 +365,10 @@ const DEFAULT_SETTINGS: WritingSessionSettings = {
   advanced_extra_body: {},
   memory_block: DEFAULT_MEMORY_BLOCK,
   author_note: DEFAULT_AUTHOR_NOTE,
-  world_info: DEFAULT_WORLD_INFO
+  world_info: DEFAULT_WORLD_INFO,
+  context_order: DEFAULT_CONTEXT_ORDER,
+  context_length: 8192,
+  author_note_depth_mode: "insertion"
 }
 
 const cloneDefaultSettings = (): WritingSessionSettings => ({
@@ -362,7 +377,10 @@ const cloneDefaultSettings = (): WritingSessionSettings => ({
   advanced_extra_body: {},
   memory_block: { ...DEFAULT_MEMORY_BLOCK },
   author_note: { ...DEFAULT_AUTHOR_NOTE },
-  world_info: { ...DEFAULT_WORLD_INFO, entries: [] }
+  world_info: { ...DEFAULT_WORLD_INFO, entries: [] },
+  context_order: DEFAULT_CONTEXT_ORDER,
+  context_length: 8192,
+  author_note_depth_mode: "insertion"
 })
 
 const ADVANCED_EXTRA_BODY_PARAM_KEYS = [
@@ -1035,6 +1053,9 @@ const getSettingsFromPayload = (
   const rawBasicStoppingModeType = String(
     settings.basic_stopping_mode_type ?? settings.basicStoppingModeType ?? ""
   )
+  const rawAuthorDepthMode = String(
+    settings.author_note_depth_mode ?? settings.authorNoteDepthMode ?? ""
+  )
   return {
     temperature: toNumber(settings.temperature, DEFAULT_SETTINGS.temperature),
     top_p: toNumber(settings.top_p, DEFAULT_SETTINGS.top_p),
@@ -1076,7 +1097,23 @@ const getSettingsFromPayload = (
     advanced_extra_body: advancedExtraBody,
     memory_block: memoryBlock,
     author_note: authorNote,
-    world_info: worldInfo
+    world_info: worldInfo,
+    context_order:
+      typeof (settings.context_order ?? settings.contextOrder) === "string" &&
+      String(settings.context_order ?? settings.contextOrder).trim()
+        ? String(settings.context_order ?? settings.contextOrder)
+        : DEFAULT_CONTEXT_ORDER,
+    context_length: Math.max(
+      0,
+      Math.floor(
+        toNumber(
+          settings.context_length ?? settings.contextLength,
+          DEFAULT_SETTINGS.context_length
+        )
+      )
+    ),
+    author_note_depth_mode:
+      rawAuthorDepthMode === "annotation" ? "annotation" : "insertion"
   }
 }
 
@@ -1160,7 +1197,11 @@ const areSettingsEqual = (
   if (leftAuthor !== rightAuthor) return false
   const leftWorldInfo = JSON.stringify(left.world_info || {})
   const rightWorldInfo = JSON.stringify(right.world_info || {})
-  return leftWorldInfo === rightWorldInfo
+  if (leftWorldInfo !== rightWorldInfo) return false
+  if (left.context_order !== right.context_order) return false
+  if (left.context_length !== right.context_length) return false
+  if (left.author_note_depth_mode !== right.author_note_depth_mode) return false
+  return true
 }
 
 export const WritingPlayground = () => {
@@ -1311,6 +1352,9 @@ export const WritingPlayground = () => {
   const generationServiceRef = React.useRef(new TldwChatService())
   const generationUndoRef = React.useRef<GenerationHistoryEntry[]>([])
   const generationRedoRef = React.useRef<GenerationHistoryEntry[]>([])
+  const lastGenerationContextRef = React.useRef<LastGenerationContext | null>(
+    null
+  )
   const generationSessionIdRef = React.useRef<string | null>(null)
   const generationCancelledRef = React.useRef(false)
   const speechUtteranceRef = React.useRef<SpeechSynthesisUtterance | null>(null)
@@ -3934,7 +3978,8 @@ export const WritingPlayground = () => {
     generationServiceRef.current.cancelStream()
   }, [isGenerating])
 
-  const handleGenerate = React.useCallback(async () => {
+  const handleGenerate = React.useCallback(
+    async (overrideText?: string) => {
     if (isGenerating) return
     if (!activeSessionDetail) {
       message.info(
@@ -3964,7 +4009,7 @@ export const WritingPlayground = () => {
       return
     }
 
-    const beforeText = editorText
+    const beforeText = typeof overrideText === "string" ? overrideText : editorText
     const plan = resolveGenerationPlan(beforeText)
     const fimPrompt =
       plan.mode === "fill"
@@ -3982,16 +4027,25 @@ export const WritingPlayground = () => {
       plan.mode === "fill"
         ? fimPrompt ?? buildFillPrompt(plan.prefix, plan.suffix)
         : plan.prefix
+    const contextSettings = {
+      memory_block: settings.memory_block,
+      author_note: settings.author_note,
+      world_info: settings.world_info,
+      context_order: settings.context_order,
+      context_length: settings.context_length,
+      author_note_depth_mode: settings.author_note_depth_mode
+    }
+    const contextComposedPrompt = chatMode
+      ? promptText
+      : composeContextPrompt(promptText, contextSettings)
     const baseMessages = buildChatMessages(
-      promptText,
+      contextComposedPrompt,
       effectiveTemplate,
       chatMode
     )
-    const contextMessages = buildContextSystemMessages(beforeText, {
-      memory_block: settings.memory_block,
-      author_note: settings.author_note,
-      world_info: settings.world_info
-    })
+    const contextMessages = chatMode
+      ? buildContextSystemMessages(beforeText, contextSettings)
+      : []
     const messages = injectSystemMessages(baseMessages, contextMessages)
     const stopStrings = resolveGenerationStopStrings({
       useBasicMode: settings.use_basic_stopping_mode,
@@ -4112,6 +4166,14 @@ export const WritingPlayground = () => {
       applyHistoryText(finalText)
       pushGenerationHistory(beforeText, finalText)
       setResponseLogprobs(streamedLogprobs)
+      if (streamedLogprobs.length > 0) {
+        lastGenerationContextRef.current = {
+          prefix: plan.prefix,
+          suffix: plan.suffix
+        }
+      } else {
+        lastGenerationContextRef.current = null
+      }
     }
 
     generationSessionIdRef.current = null
@@ -4131,22 +4193,24 @@ export const WritingPlayground = () => {
         )
       )
     }
-  }, [
-    activeSessionDetail,
-    applyHistoryText,
-    chatMode,
-    editorText,
-    effectiveTemplate,
-    hasChat,
-    isGenerating,
-    isOnline,
-    pushGenerationHistory,
-    selectedModel,
-    settings,
-    requestedLogprobsExplicitlyUnsupported,
-    supportsAdvancedCompat,
-    t
-  ])
+    },
+    [
+      activeSessionDetail,
+      applyHistoryText,
+      chatMode,
+      editorText,
+      effectiveTemplate,
+      hasChat,
+      isGenerating,
+      isOnline,
+      pushGenerationHistory,
+      selectedModel,
+      settings,
+      requestedLogprobsExplicitlyUnsupported,
+      supportsAdvancedCompat,
+      t
+    ]
+  )
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -4213,22 +4277,34 @@ export const WritingPlayground = () => {
       plan.mode === "fill"
         ? fimPrompt ?? buildFillPrompt(plan.prefix, plan.suffix)
         : plan.prefix
+    const contextSettings = {
+      memory_block: settings.memory_block,
+      author_note: settings.author_note,
+      world_info: settings.world_info,
+      context_order: settings.context_order,
+      context_length: settings.context_length,
+      author_note_depth_mode: settings.author_note_depth_mode
+    }
+    const contextComposedPrompt = chatMode
+      ? promptText
+      : composeContextPrompt(promptText, contextSettings)
     const baseMessages = buildChatMessages(
-      promptText,
+      contextComposedPrompt,
       effectiveTemplate,
       chatMode
     )
-    const contextMessages = buildContextSystemMessages(editorText, {
-      memory_block: settings.memory_block,
-      author_note: settings.author_note,
-      world_info: settings.world_info
-    })
+    const contextMessages = chatMode
+      ? buildContextSystemMessages(editorText, contextSettings)
+      : []
     return injectSystemMessages(baseMessages, contextMessages)
   }, [
     chatMode,
     editorText,
     effectiveTemplate,
     settings.author_note,
+    settings.author_note_depth_mode,
+    settings.context_length,
+    settings.context_order,
     settings.memory_block,
     settings.world_info
   ])
@@ -4284,6 +4360,7 @@ export const WritingPlayground = () => {
     setResponseInspectorQuery("")
     setResponseInspectorSort("sequence")
     setResponseInspectorHideWhitespace(false)
+    lastGenerationContextRef.current = null
   }, [])
 
   const handleCopyResponseInspectorJson = React.useCallback(async () => {
@@ -4314,6 +4391,31 @@ export const WritingPlayground = () => {
       )
     }
   }, [responseLogprobs, t])
+
+  const handleRerollFromResponseToken = React.useCallback(
+    (sequence: number) => {
+      if (isGenerating) return
+      if (responseLogprobs.length === 0) return
+      const context = lastGenerationContextRef.current
+      if (!context) {
+        message.info(
+          t(
+            "option:writingPlayground.responseInspectorRerollUnavailable",
+            "Generate once with logprobs enabled before rerolling from a token."
+          )
+        )
+        return
+      }
+      const rerollPrompt = buildRerollPromptFromRows(responseLogprobs, {
+        prefix: context.prefix,
+        suffix: context.suffix,
+        sequence,
+        placeholder: PREDICT_PLACEHOLDER
+      })
+      void handleGenerate(rerollPrompt)
+    },
+    [handleGenerate, isGenerating, responseLogprobs, t]
+  )
 
   const resolveTokenInspectorTarget = React.useCallback(async () => {
     const model = String(selectedModel || "").trim()
@@ -5028,7 +5130,9 @@ export const WritingPlayground = () => {
                           <Button
                             type="primary"
                             size="small"
-                            onClick={handleGenerate}
+                            onClick={() => {
+                              void handleGenerate()
+                            }}
                             loading={isGenerating}
                             disabled={!canGenerate}>
                             {t(
@@ -5599,7 +5703,7 @@ export const WritingPlayground = () => {
                                     {responseLogprobRows.length > 0 ? (
                                       <div className="flex flex-col gap-2">
                                         <div className="max-h-64 overflow-y-auto rounded-md border border-border bg-surface">
-                                          <div className="grid grid-cols-[auto_1fr_auto_auto_2fr] gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                                          <div className="grid grid-cols-[auto_1fr_auto_auto_2fr_auto] gap-x-3 gap-y-1 px-3 py-2 text-xs">
                                             <span className="font-medium text-text-muted">
                                               #
                                             </span>
@@ -5625,6 +5729,12 @@ export const WritingPlayground = () => {
                                               {t(
                                                 "option:writingPlayground.responseInspectorTopLabel",
                                                 "Top alternatives"
+                                              )}
+                                            </span>
+                                            <span className="font-medium text-text-muted">
+                                              {t(
+                                                "option:writingPlayground.responseInspectorActionLabel",
+                                                "Action"
                                               )}
                                             </span>
                                             {responseLogprobRows.map((row) => {
@@ -5655,6 +5765,21 @@ export const WritingPlayground = () => {
                                                   <span className="whitespace-pre-wrap text-text-muted">
                                                     {alternatives || "(none)"}
                                                   </span>
+                                                  <div>
+                                                    <Button
+                                                      size="small"
+                                                      disabled={settingsDisabled}
+                                                      onClick={() =>
+                                                        handleRerollFromResponseToken(
+                                                          row.sequence
+                                                        )
+                                                      }>
+                                                      {t(
+                                                        "option:writingPlayground.responseInspectorRerollAction",
+                                                        "Reroll"
+                                                      )}
+                                                    </Button>
+                                                  </div>
                                                 </React.Fragment>
                                               )
                                             })}
@@ -6628,6 +6753,95 @@ export const WritingPlayground = () => {
                                     "Show context preview"
                                   )}
                                 </Button>
+                              </div>
+                              <div className="rounded-md border border-border bg-surface p-3">
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.contextLengthLabel",
+                                        "Context length (tokens)"
+                                      )}
+                                    </span>
+                                    <InputNumber
+                                      size="small"
+                                      min={0}
+                                      step={128}
+                                      value={settings.context_length}
+                                      disabled={settingsDisabled}
+                                      onChange={(value) =>
+                                        updateSetting({
+                                          context_length:
+                                            value == null
+                                              ? DEFAULT_SETTINGS.context_length
+                                              : Math.max(0, Math.floor(value))
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-text-muted">
+                                      {t(
+                                        "option:writingPlayground.authorDepthModeLabel",
+                                        "Author note depth mode"
+                                      )}
+                                    </span>
+                                    <Select
+                                      size="small"
+                                      value={settings.author_note_depth_mode}
+                                      disabled={settingsDisabled}
+                                      onChange={(value) =>
+                                        updateSetting({
+                                          author_note_depth_mode:
+                                            value === "annotation"
+                                              ? "annotation"
+                                              : "insertion"
+                                        })
+                                      }
+                                      options={[
+                                        {
+                                          value: "insertion",
+                                          label: t(
+                                            "option:writingPlayground.authorDepthModeInsertion",
+                                            "Insertion"
+                                          )
+                                        },
+                                        {
+                                          value: "annotation",
+                                          label: t(
+                                            "option:writingPlayground.authorDepthModeAnnotation",
+                                            "Annotation"
+                                          )
+                                        }
+                                      ]}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="mt-3 flex flex-col gap-1">
+                                  <span className="text-xs text-text-muted">
+                                    {t(
+                                      "option:writingPlayground.contextOrderLabel",
+                                      "Context order"
+                                    )}
+                                  </span>
+                                  <Input.TextArea
+                                    value={settings.context_order}
+                                    rows={2}
+                                    disabled={settingsDisabled}
+                                    placeholder={DEFAULT_CONTEXT_ORDER}
+                                    onChange={(event) =>
+                                      updateSetting({
+                                        context_order: event.target.value
+                                      })
+                                    }
+                                  />
+                                  <span className="text-[11px] text-text-muted">
+                                    {t(
+                                      "option:writingPlayground.contextOrderHint",
+                                      "Placeholders: {memPrefix}, {wiPrefix}, {wiText}, {wiSuffix}, {memText}, {memSuffix}, {prompt}"
+                                    )}
+                                  </span>
+                                </div>
                               </div>
                               <div className="rounded-md border border-border bg-surface p-3">
                                 <div className="flex items-center justify-between gap-2">

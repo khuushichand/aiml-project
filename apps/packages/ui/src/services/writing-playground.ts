@@ -33,13 +33,25 @@ export type WritingServerCapabilities = {
   templates: boolean
   themes: boolean
   tokenize: boolean
+  detokenize?: boolean
   token_count: boolean
   wordclouds?: boolean
+  token_probabilities?: {
+    inline_reroll?: boolean
+  }
+  context?: {
+    author_note_depth_mode?: "insertion" | "annotation" | string
+    context_order?: boolean
+    context_budget?: boolean
+  }
 }
 
 export type WritingTokenizerSupport = {
   available: boolean
   tokenizer?: string | null
+  kind?: string | null
+  source?: string | null
+  detokenize?: boolean
   error?: string | null
 }
 
@@ -71,6 +83,9 @@ export type WritingRequestedCapabilities = {
   features: Record<string, boolean>
   tokenizer_available: boolean
   tokenizer?: string | null
+  tokenizer_kind?: string | null
+  tokenizer_source?: string | null
+  detokenize_available?: boolean
   tokenization_error?: string | null
   extra_body_compat?: WritingExtraBodyCompat
 }
@@ -214,6 +229,9 @@ export type WritingTokenizeMeta = {
   provider: string
   model: string
   tokenizer: string
+  tokenizer_kind?: string | null
+  tokenizer_source?: string | null
+  detokenize_available?: boolean
   input_chars: number
   token_count: number
   warnings: string[]
@@ -233,6 +251,18 @@ export type WritingTokenCountRequest = {
 
 export type WritingTokenCountResponse = {
   count: number
+  meta: WritingTokenizeMeta
+}
+
+export type WritingDetokenizeRequest = {
+  provider: string
+  model: string
+  ids: number[]
+}
+
+export type WritingDetokenizeResponse = {
+  text: string
+  strings?: string[]
   meta: WritingTokenizeMeta
 }
 
@@ -453,6 +483,17 @@ export async function countWritingTokens(
 ): Promise<WritingTokenCountResponse> {
   return await bgRequest<WritingTokenCountResponse>({
     path: "/api/v1/writing/token-count",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
+export async function detokenizeWritingTokens(
+  input: WritingDetokenizeRequest
+): Promise<WritingDetokenizeResponse> {
+  return await bgRequest<WritingDetokenizeResponse>({
+    path: "/api/v1/writing/detokenize",
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: input

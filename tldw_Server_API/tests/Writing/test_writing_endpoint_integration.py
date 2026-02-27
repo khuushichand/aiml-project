@@ -189,6 +189,11 @@ def test_writing_capabilities_basic(client_with_writing_db: TestClient):
     assert data["version"] == 1
     assert data["server"]["sessions"] is True
     assert data["server"]["wordclouds"] is True
+    assert data["server"]["detokenize"] is True
+    assert data["server"]["token_probabilities"]["inline_reroll"] is True
+    assert data["server"]["context"]["author_note_depth_mode"] == "insertion"
+    assert data["server"]["context"]["context_order"] is True
+    assert data["server"]["context"]["context_budget"] is True
     assert data["providers"] is None
 
 
@@ -270,6 +275,9 @@ def test_writing_capabilities_provider_tokenizers(client_with_writing_db: TestCl
     if _has_tiktoken():
         assert tokenizers["gpt-3.5-turbo"]["available"] is True
         assert tokenizers["gpt-3.5-turbo"]["tokenizer"].startswith("tiktoken:")
+        assert tokenizers["gpt-3.5-turbo"]["kind"] == "tiktoken"
+        assert tokenizers["gpt-3.5-turbo"]["source"] == "tiktoken.encoding_for_model"
+        assert tokenizers["gpt-3.5-turbo"]["detokenize"] is True
     else:
         assert tokenizers["gpt-3.5-turbo"]["available"] is False
         assert "unavailable" in tokenizers["gpt-3.5-turbo"]["error"].lower()
@@ -370,6 +378,9 @@ def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     assert count_resp.status_code == 200, count_resp.text
     count_payload = count_resp.json()
     assert count_payload["count"] >= 1
+    assert count_payload["meta"]["tokenizer_kind"] == "tiktoken"
+    assert count_payload["meta"]["tokenizer_source"] == "tiktoken.encoding_for_model"
+    assert count_payload["meta"]["detokenize_available"] is True
 
     tokenize_resp = client.post(
         "/api/v1/writing/tokenize",
@@ -383,6 +394,54 @@ def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     assert tokenize_resp.status_code == 200, tokenize_resp.text
     tokens = tokenize_resp.json()
     assert tokens["strings"] is None
+    assert tokens["meta"]["tokenizer_kind"] == "tiktoken"
+    assert tokens["meta"]["tokenizer_source"] == "tiktoken.encoding_for_model"
+    assert tokens["meta"]["detokenize_available"] is True
+
+
+def test_writing_detokenize_roundtrip(client_with_writing_db: TestClient):
+    if not _has_tiktoken():
+        pytest.skip("tiktoken not available")
+
+    client = client_with_writing_db
+    source_text = "Hello world"
+    tokenize_resp = client.post(
+        "/api/v1/writing/tokenize",
+        json={
+            "provider": "openai",
+            "model": "gpt-3.5-turbo",
+            "text": source_text,
+            "options": {"include_strings": False},
+        },
+    )
+    assert tokenize_resp.status_code == 200, tokenize_resp.text
+    token_ids = tokenize_resp.json()["ids"]
+    assert token_ids
+
+    detok_resp = client.post(
+        "/api/v1/writing/detokenize",
+        json={
+            "provider": "openai",
+            "model": "gpt-3.5-turbo",
+            "ids": token_ids,
+        },
+    )
+    assert detok_resp.status_code == 200, detok_resp.text
+    payload = detok_resp.json()
+    assert payload["text"] == source_text
+    assert isinstance(payload["strings"], list)
+    assert payload["meta"]["tokenizer_kind"] == "tiktoken"
+    assert payload["meta"]["tokenizer_source"] == "tiktoken.encoding_for_model"
+    assert payload["meta"]["detokenize_available"] is True
+
+
+def test_writing_detokenize_unavailable(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+    resp = client.post(
+        "/api/v1/writing/detokenize",
+        json={"provider": "openai", "model": "definitely-not-a-real-model", "ids": [1, 2]},
+    )
+    assert resp.status_code == 422, resp.text
 
 
 def test_writing_tokenize_provider_model_mismatch(client_with_writing_db: TestClient):

@@ -164,6 +164,7 @@ export type ClientPath =
   | "/api/v1/writing/themes"
   | "/api/v1/writing/themes/{name}"
   | "/api/v1/writing/tokenize"
+  | "/api/v1/writing/detokenize"
   | "/api/v1/writing/token-count"
   | "/api/v1/writing/wordclouds"
   | "/api/v1/writing/wordclouds/{wordcloud_id}"

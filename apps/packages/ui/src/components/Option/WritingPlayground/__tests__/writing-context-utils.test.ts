@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   buildContextSystemMessages,
+  composeContextPrompt,
   getTriggeredWorldInfoEntries,
   injectSystemMessages,
   parseWorldInfoKeysInput,
@@ -191,5 +192,80 @@ describe("writing context utils", () => {
       "city",
       "villain"
     ])
+  })
+
+  it("composes prompt with context order placeholders", () => {
+    const settings = makeSettings({
+      memory_block: {
+        enabled: true,
+        prefix: "MEM:\n",
+        text: "Keep tone noir.",
+        suffix: "\n/MEM"
+      },
+      world_info: {
+        enabled: true,
+        search_range: 100,
+        prefix: "WI:\n",
+        suffix: "\n/WI",
+        entries: [
+          {
+            id: "wi-1",
+            enabled: true,
+            keys: ["detective"],
+            content: "City is always raining.",
+            use_regex: false,
+            case_sensitive: false
+          }
+        ]
+      },
+      context_order:
+        "{memPrefix}{wiPrefix}{wiText}{wiSuffix}{memText}{memSuffix}\n{prompt}"
+    })
+
+    const composed = composeContextPrompt(
+      "The detective lights a cigarette.",
+      settings,
+      { tokenRatio: 1 }
+    )
+
+    expect(composed).toContain("MEM:")
+    expect(composed).toContain("WI:")
+    expect(composed).toContain("City is always raining.")
+    expect(composed).toContain("Keep tone noir.")
+    expect(composed).toContain("The detective lights a cigarette.")
+  })
+
+  it("inserts author note by depth from bottom of truncated prompt", () => {
+    const settings = makeSettings({
+      author_note: {
+        enabled: true,
+        prefix: "AN:\n",
+        text: "Raise tension.",
+        suffix: "",
+        insertion_depth: 1
+      },
+      context_order: "{prompt}",
+      context_length: 100
+    })
+
+    const composed = composeContextPrompt("line1\nline2\nline3", settings, {
+      tokenRatio: 1
+    })
+
+    expect(composed).toContain("AN:\nRaise tension.")
+    expect(composed.indexOf("AN:\nRaise tension.")).toBeLessThan(
+      composed.indexOf("line3")
+    )
+  })
+
+  it("respects context budget when composing prompt", () => {
+    const settings = makeSettings({
+      context_order: "{prompt}",
+      context_length: 10
+    })
+    const prompt = "0123456789ABCDEFGHIJ"
+    const composed = composeContextPrompt(prompt, settings, { tokenRatio: 1 })
+
+    expect(composed).toBe("ABCDEFGHIJ")
   })
 })
