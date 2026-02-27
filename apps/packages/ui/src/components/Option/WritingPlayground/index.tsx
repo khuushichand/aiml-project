@@ -995,7 +995,9 @@ const getSettingsFromPayload = (
       "fill_suffix"
     ].includes(
       String(
-        settings.basic_stopping_mode_type ?? settings.basicStoppingModeType || ""
+        settings.basic_stopping_mode_type ??
+          settings.basicStoppingModeType ??
+          ""
       )
     )
       ? (String(
