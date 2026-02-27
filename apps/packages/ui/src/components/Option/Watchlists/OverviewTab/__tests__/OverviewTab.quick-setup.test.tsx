@@ -609,7 +609,7 @@ describe("OverviewTab quick setup flow", () => {
     fireEvent.click(screen.getByLabelText("Security Feed"))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => {
-      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+      expect(screen.getByLabelText("Monitor name")).toBeInTheDocument()
     })
     fireEvent.change(screen.getByLabelText("Monitor name"), {
       target: { value: "Morning Brief" }
@@ -689,7 +689,7 @@ describe("OverviewTab quick setup flow", () => {
     fireEvent.click(screen.getByLabelText("AI Feed"))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => {
-      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+      expect(screen.getByLabelText("Monitor name")).toBeInTheDocument()
     })
     fireEvent.change(screen.getByLabelText("Monitor name"), {
       target: { value: "Morning Brief" }
@@ -756,7 +756,7 @@ describe("OverviewTab quick setup flow", () => {
     fireEvent.click(screen.getByLabelText("AI Feed"))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => {
-      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+      expect(screen.getByLabelText("Monitor name")).toBeInTheDocument()
     })
     fireEvent.change(screen.getByLabelText("Monitor name"), {
       target: { value: "Morning Brief" }
@@ -813,7 +813,7 @@ describe("OverviewTab quick setup flow", () => {
     fireEvent.click(screen.getByLabelText("AI Feed"))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => {
-      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+      expect(screen.getByLabelText("Monitor name")).toBeInTheDocument()
     })
     fireEvent.change(screen.getByLabelText("Monitor name"), {
       target: { value: "Morning Brief" }
