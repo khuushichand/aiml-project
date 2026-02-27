@@ -214,9 +214,13 @@ jobs:
         working-directory: apps/tldw-frontend
         run: bun run e2e:smoke:audio
 
-      - name: Run all-pages UX smoke gate
+      - name: Run all-pages UX smoke gate (shard 1/2)
         working-directory: apps/tldw-frontend
-        run: bun run e2e:smoke:all-pages:gate
+        run: bun run e2e:smoke:all-pages:gate -- --shard=1/2
+
+      - name: Run all-pages UX smoke gate (shard 2/2)
+        working-directory: apps/tldw-frontend
+        run: bun run e2e:smoke:all-pages:gate -- --shard=2/2
 
       - name: Upload smoke artifacts
         if: always()
