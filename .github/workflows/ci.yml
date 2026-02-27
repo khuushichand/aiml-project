@@ -15,6 +15,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+
 concurrency:
   # Ensure push and PR for the same commit share one slot
   group: ci-${{ github.event.pull_request.head.sha || github.sha }}
