@@ -81,3 +81,22 @@ def test_postgres_statement_conversion_includes_persona_profile_state_context_de
     assert "ALTER TABLE persona_profiles" in full
     assert "use_persona_state_context_default BOOLEAN NOT NULL DEFAULT TRUE" in full
     assert re.search(r"SET\s+version\s*=\s*28", full, flags=re.IGNORECASE)
+
+
+def test_postgres_statement_conversion_includes_moodboard_tables_migration(
+    char_rag_db: CharactersRAGDB,
+) -> None:
+    """Verify v29 conversion output includes moodboard tables and indexes."""
+
+    sql = char_rag_db._MIGRATION_SQL_V28_TO_V29
+    assert isinstance(sql, str) and "moodboards" in sql
+
+    stmts = char_rag_db._convert_sqlite_schema_to_postgres_statements(sql)
+    assert isinstance(stmts, list) and len(stmts) > 0
+
+    full = "\n".join(stmts)
+    assert "CREATE TABLE IF NOT EXISTS moodboards" in full
+    assert "CREATE TABLE IF NOT EXISTS moodboard_notes" in full
+    assert "idx_moodboard_notes_board" in full
+    assert "idx_moodboard_notes_note" in full
+    assert re.search(r"SET\s+version\s*=\s*29", full, flags=re.IGNORECASE)

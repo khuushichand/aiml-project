@@ -432,7 +432,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 28  # Schema v28 adds persona profile state-context defaults
+    _CURRENT_SCHEMA_VERSION = 29  # Schema v29 adds moodboards + moodboard note membership tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -501,6 +501,7 @@ class CharactersRAGDB:
         ("keywords", "id"),
         ("keyword_collections", "id"),
         ("sync_log", "change_id"),
+        ("moodboards", "id"),
         ("decks", "id"),
         ("flashcards", "id"),
         ("flashcard_reviews", "id"),
@@ -2852,6 +2853,43 @@ UPDATE db_schema_version
    AND version < 28;
 """
 
+    _MIGRATION_SQL_V28_TO_V29 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 29 - Notes moodboards and board memberships (2026-02-26)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS moodboards(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  smart_rule_json TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_moodboards_last_modified ON moodboards(last_modified);
+CREATE INDEX IF NOT EXISTS idx_moodboards_deleted ON moodboards(deleted);
+
+CREATE TABLE IF NOT EXISTS moodboard_notes(
+  moodboard_id INTEGER NOT NULL REFERENCES moodboards(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(moodboard_id, note_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_moodboard_notes_board ON moodboard_notes(moodboard_id);
+CREATE INDEX IF NOT EXISTS idx_moodboard_notes_note ON moodboard_notes(note_id);
+
+UPDATE db_schema_version
+   SET version = 29
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 29;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4248,6 +4286,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V27->V28: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V28 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v28_to_v29(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V28 to V29 (notes moodboards + board memberships)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V28 to V29 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V28_TO_V29)
+            final_version = self._get_db_version(conn)
+            if final_version != 29:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V28->V29 failed version check. Expected 29, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V29 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V28->V29 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V28->V29 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V28->V29: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V29 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4469,6 +4527,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 28 and current_db_version == 27:
                         self._migrate_from_v27_to_v28(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 29 and current_db_version == 28:
+                        self._migrate_from_v28_to_v29(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4695,14 +4756,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         if target_version >= 28 and current_db_version == 27:
                             self._migrate_from_v27_to_v28(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 29 and current_db_version == 28:
+                            self._migrate_from_v28_to_v29(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 26 and target_version >= 27:
                         self._migrate_from_v26_to_v27(conn)
                         current_db_version = self._get_db_version(conn)
                         if target_version >= 28 and current_db_version == 27:
                             self._migrate_from_v27_to_v28(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 29 and current_db_version == 28:
+                            self._migrate_from_v28_to_v29(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 27 and target_version >= 28:
                         self._migrate_from_v27_to_v28(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 29 and current_db_version == 28:
+                            self._migrate_from_v28_to_v29(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 28 and target_version >= 29:
+                        self._migrate_from_v28_to_v29(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         # Fallback: attempt linear migrations for known versions.
@@ -4756,6 +4829,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v26_to_v27(conn)
                             elif fallback_version == 27:
                                 self._migrate_from_v27_to_v28(conn)
+                            elif fallback_version == 28:
+                                self._migrate_from_v28_to_v29(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -4815,6 +4890,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 28 and current_db_version == 27:
                     self._migrate_from_v27_to_v28(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 29 and current_db_version == 28:
+                    self._migrate_from_v28_to_v29(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -5088,6 +5166,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 28:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V27_TO_V28, conn, expected_version=28)
                 current_version = 28
+            if current_version < 29:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V28_TO_V29, conn, expected_version=29)
+                current_version = 29
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -13421,6 +13502,453 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError as exc:
             logger.error("SQLite FTS count failed for notes term '{}': {}", search_term, exc)
             raise
+
+    # Moodboards
+    @staticmethod
+    def _normalize_moodboard_name(name: str) -> str:
+        text = str(name or "").strip()
+        if not text:
+            raise InputError("Moodboard name cannot be empty.")  # noqa: TRY003
+        return text
+
+    @staticmethod
+    def _serialize_moodboard_smart_rule(smart_rule: Any) -> str | None:
+        if smart_rule is None:
+            return None
+        if isinstance(smart_rule, str):
+            text = smart_rule.strip()
+            if not text:
+                return None
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise InputError("smart_rule must be valid JSON if provided as a string.") from exc  # noqa: TRY003
+            return json.dumps(parsed, ensure_ascii=False)
+        if not isinstance(smart_rule, (dict, list)):
+            raise InputError("smart_rule must be a JSON object/array or JSON string.")  # noqa: TRY003
+
+        def _json_default(value: Any) -> str:
+            if isinstance(value, datetime):
+                if value.tzinfo is None:
+                    return value.replace(tzinfo=timezone.utc).isoformat()
+                return value.astimezone(timezone.utc).isoformat()
+            return str(value)
+
+        return json.dumps(smart_rule, ensure_ascii=False, default=_json_default)
+
+    def _deserialize_moodboard_row(self, row: Any) -> dict[str, Any] | None:
+        item = self._deserialize_row_fields(row, ["smart_rule_json"])
+        if not item:
+            return None
+        item["smart_rule"] = item.pop("smart_rule_json", None)
+        return item
+
+    def add_moodboard(
+        self,
+        name: str,
+        description: str | None = None,
+        smart_rule: Any = None,
+    ) -> int | None:
+        moodboard_name = self._normalize_moodboard_name(name)
+        now = self._get_current_utc_timestamp_iso()
+        smart_rule_json = self._serialize_moodboard_smart_rule(smart_rule)
+        description_value = self._normalize_nullable_text(description)
+        deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+
+        query = (
+            "INSERT INTO moodboards(name, description, smart_rule_json, created_at, last_modified, deleted, client_id, version) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            moodboard_name,
+            description_value,
+            smart_rule_json,
+            now,
+            now,
+            deleted_value,
+            self.client_id,
+            1,
+        )
+        try:
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(query + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    moodboard_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(query, params)
+                    moodboard_id = int(cursor.lastrowid)
+                if moodboard_id is None:
+                    raise CharactersRAGDBError("Failed to determine moodboard ID after insert.")  # noqa: TRY003
+                return moodboard_id
+        except sqlite3.IntegrityError as exc:
+            raise CharactersRAGDBError(f"Database integrity error adding moodboard: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Backend error adding moodboard: {exc}") from exc  # noqa: TRY003
+
+    def get_moodboard_by_id(self, moodboard_id: int, include_deleted: bool = False) -> dict[str, Any] | None:
+        params: list[Any] = [moodboard_id]
+        where_deleted = ""
+        if not include_deleted:
+            where_deleted = " AND deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        query = f"SELECT * FROM moodboards WHERE id = ?{where_deleted}"  # nosec B608
+        cursor = self.execute_query(query, tuple(params))
+        return self._deserialize_moodboard_row(cursor.fetchone())
+
+    def list_moodboards(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        include_deleted: bool = False,
+        only_deleted: bool = False,
+    ) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+
+        where_clause = ""
+        params: list[Any] = []
+        if only_deleted:
+            where_clause = " WHERE deleted = ?"
+            params.append(True if self.backend_type == BackendType.POSTGRESQL else 1)
+        elif not include_deleted:
+            where_clause = " WHERE deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+
+        query = (
+            f"SELECT * FROM moodboards{where_clause} "  # nosec B608
+            "ORDER BY last_modified DESC, id DESC "
+            "LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
+        cursor = self.execute_query(query, tuple(params))
+        rows = cursor.fetchall()
+        return [self._deserialize_moodboard_row(row) for row in rows if row]
+
+    def update_moodboard(self, moodboard_id: int, update_data: dict[str, Any], expected_version: int) -> bool | None:
+        if not update_data:
+            raise InputError("No data provided for moodboard update.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        fields_to_update_sql: list[str] = []
+        params_for_set_clause: list[Any] = []
+
+        for key, value in update_data.items():
+            if key == "name":
+                fields_to_update_sql.append("name = ?")
+                params_for_set_clause.append(self._normalize_moodboard_name(str(value or "")))
+            elif key == "description":
+                fields_to_update_sql.append("description = ?")
+                params_for_set_clause.append(self._normalize_nullable_text(value))
+            elif key in {"smart_rule", "smart_rule_json"}:
+                fields_to_update_sql.append("smart_rule_json = ?")
+                params_for_set_clause.append(self._serialize_moodboard_smart_rule(value))
+            elif key not in {"id", "created_at", "last_modified", "version", "client_id", "deleted"}:
+                logger.warning(
+                    "Attempted to update immutable or unknown field '{}' in moodboard ID {}, skipping.",
+                    key,
+                    moodboard_id,
+                )
+
+        if not fields_to_update_sql:
+            logger.info("No updatable fields provided for moodboard ID {}.", moodboard_id)
+            return True
+
+        next_version_val = expected_version + 1
+        fields_to_update_sql.extend(["last_modified = ?", "version = ?", "client_id = ?"])
+
+        all_set_values = params_for_set_clause[:]
+        all_set_values.extend([now, next_version_val, self.client_id])
+        where_values = [moodboard_id, expected_version]
+        final_params_for_execute = tuple(all_set_values + where_values)
+        deleted_false = "FALSE" if self.backend_type == BackendType.POSTGRESQL else "0"
+
+        query = (
+            f"UPDATE moodboards SET {', '.join(fields_to_update_sql)} "  # nosec B608
+            f"WHERE id = ? AND version = ? AND deleted = {deleted_false}"
+        )
+
+        try:
+            with self.transaction() as conn:
+                current_db_version = self._get_current_db_version(conn, "moodboards", "id", moodboard_id)
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Moodboard ID {moodboard_id} update failed: version mismatch "
+                        f"(db has {current_db_version}, client expected {expected_version}).",
+                        entity="moodboards",
+                        entity_id=moodboard_id,
+                    )
+
+                cursor = conn.execute(query, final_params_for_execute)
+                if cursor.rowcount == 0:
+                    check_cursor = conn.execute("SELECT version, deleted FROM moodboards WHERE id = ?", (moodboard_id,))
+                    final_state = check_cursor.fetchone()
+                    if not final_state:
+                        msg = f"Moodboard ID {moodboard_id} disappeared."
+                    elif final_state["deleted"]:
+                        msg = f"Moodboard ID {moodboard_id} was soft-deleted concurrently."
+                    elif final_state["version"] != expected_version:
+                        msg = (
+                            f"Moodboard ID {moodboard_id} version changed "
+                            f"to {final_state['version']} concurrently."
+                        )
+                    else:
+                        msg = (
+                            f"Update for moodboard ID {moodboard_id} "
+                            f"(expected v{expected_version}) affected 0 rows."
+                        )
+                    raise ConflictError(msg, entity="moodboards", entity_id=moodboard_id)  # noqa: TRY301
+                return True
+        except ConflictError:
+            raise
+        except sqlite3.IntegrityError as exc:
+            raise CharactersRAGDBError(f"Database integrity error updating moodboard: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Backend error updating moodboard: {exc}") from exc  # noqa: TRY003
+
+    def delete_moodboard(self, moodboard_id: int, expected_version: int | None = None, hard_delete: bool = False) -> bool:
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT id, version, deleted FROM moodboards WHERE id = ?", (moodboard_id,)).fetchone()
+                if not row:
+                    return False
+                current_version = int(row["version"])
+                deleted = bool(row["deleted"])
+                if hard_delete:
+                    conn.execute("DELETE FROM moodboards WHERE id = ?", (moodboard_id,))
+                    return True
+                if deleted:
+                    return True
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003
+                        "Version mismatch deleting moodboard",
+                        entity="moodboards",
+                        identifier=moodboard_id,
+                    )
+                deleted_val = True if self.backend_type == BackendType.POSTGRESQL else 1
+                rowcount = conn.execute(
+                    "UPDATE moodboards SET deleted = ?, last_modified = ?, version = ?, client_id = ? "
+                    "WHERE id = ? AND deleted = 0",
+                    (deleted_val, now, current_version + 1, self.client_id, moodboard_id),
+                ).rowcount
+                return rowcount > 0
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to delete moodboard: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to delete moodboard: {exc}") from exc  # noqa: TRY003
+
+    def link_note_to_moodboard(self, moodboard_id: int, note_id: str) -> bool:
+        moodboard = self.get_moodboard_by_id(moodboard_id)
+        if not moodboard:
+            raise ConflictError("Moodboard not found.", entity="moodboards", entity_id=moodboard_id)  # noqa: TRY003
+        note = self.get_note_by_id(note_id=note_id)
+        if not note:
+            raise ConflictError("Note not found.", entity="notes", entity_id=note_id)  # noqa: TRY003
+        return self._manage_link("moodboard_notes", "moodboard_id", moodboard_id, "note_id", note_id, "link")
+
+    def unlink_note_from_moodboard(self, moodboard_id: int, note_id: str) -> bool:
+        moodboard = self.get_moodboard_by_id(moodboard_id)
+        if not moodboard:
+            raise ConflictError("Moodboard not found.", entity="moodboards", entity_id=moodboard_id)  # noqa: TRY003
+        return self._manage_link("moodboard_notes", "moodboard_id", moodboard_id, "note_id", note_id, "unlink")
+
+    @staticmethod
+    def _moodboard_content_preview_expr(note_alias: str = "n") -> str:
+        return (
+            f"CASE "
+            f"WHEN {note_alias}.content IS NULL OR {note_alias}.content = '' THEN NULL "
+            f"WHEN LENGTH({note_alias}.content) <= 280 THEN {note_alias}.content "
+            f"ELSE SUBSTR({note_alias}.content, 1, 277) || '...' "
+            f"END"
+        )
+
+    def _build_moodboard_smart_rule_sql_parts(
+        self,
+        smart_rule: dict[str, Any],
+        note_alias: str = "n",
+    ) -> tuple[list[str], list[str], list[Any]]:
+        if not isinstance(smart_rule, dict):
+            return [], [], []
+
+        query_text = self._normalize_nullable_text(smart_rule.get("query"))
+        keyword_tokens = [
+            str(token).strip().lower()
+            for token in (smart_rule.get("keyword_tokens") or [])
+            if str(token).strip()
+        ]
+        sources = [
+            str(source).strip().lower()
+            for source in (smart_rule.get("sources") or [])
+            if str(source).strip()
+        ]
+
+        updated_after = None
+        updated_before = None
+        updated = smart_rule.get("updated")
+        if isinstance(updated, dict):
+            updated_after = self._normalize_nullable_text(updated.get("after"))
+            updated_before = self._normalize_nullable_text(updated.get("before"))
+        if not updated_after:
+            updated_after = self._normalize_nullable_text(smart_rule.get("updated_after"))
+        if not updated_before:
+            updated_before = self._normalize_nullable_text(smart_rule.get("updated_before"))
+
+        joins: list[str] = []
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        deleted_false = "FALSE" if self.backend_type == BackendType.POSTGRESQL else "0"
+        where_clauses.append(f"{note_alias}.deleted = {deleted_false}")
+
+        if query_text:
+            like_value = f"%{query_text.lower()}%"
+            where_clauses.append(f"(LOWER({note_alias}.title) LIKE ? OR LOWER({note_alias}.content) LIKE ?)")
+            params.extend([like_value, like_value])
+
+        if sources:
+            joins.append(f"JOIN conversations c ON c.id = {note_alias}.conversation_id")
+            placeholders = ",".join(["?"] * len(sources))
+            where_clauses.append(f"LOWER(COALESCE(c.source, '')) IN ({placeholders})")
+            params.extend(sources)
+
+        if keyword_tokens:
+            keyword_table = self._map_table_for_backend("keywords")
+            joins.append(f"JOIN note_keywords nk ON nk.note_id = {note_alias}.id")
+            joins.append(f"JOIN {keyword_table} k ON k.id = nk.keyword_id")  # nosec B608
+            where_clauses.append(f"k.deleted = {deleted_false}")
+            keyword_match = " OR ".join(["LOWER(k.keyword) LIKE ?"] * len(keyword_tokens))
+            where_clauses.append(f"({keyword_match})")
+            params.extend([f"%{token}%" for token in keyword_tokens])
+
+        if updated_after:
+            where_clauses.append(f"{note_alias}.last_modified >= ?")
+            params.append(updated_after)
+        if updated_before:
+            where_clauses.append(f"{note_alias}.last_modified <= ?")
+            params.append(updated_before)
+
+        return joins, where_clauses, params
+
+    def _build_moodboard_note_union_query(
+        self,
+        moodboard_id: int,
+        smart_rule: dict[str, Any] | None,
+    ) -> tuple[str, tuple[Any, ...]]:
+        preview_expr = self._moodboard_content_preview_expr("n")
+        deleted_false_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+
+        # preview_expr is derived from a fixed internal alias and does not include user input.
+        manual_select = (  # nosec B608
+            "SELECT n.id AS id, n.title AS title, n.last_modified AS last_modified, "
+            f"{preview_expr} AS content_preview, "  # nosec B608
+            "1 AS manual_hit, 0 AS smart_hit "
+            "FROM moodboard_notes mn "
+            "JOIN notes n ON n.id = mn.note_id "
+            "WHERE mn.moodboard_id = ? AND n.deleted = ?"
+        )
+        select_queries: list[str] = [manual_select]
+        params: list[Any] = [moodboard_id, deleted_false_value]
+
+        if isinstance(smart_rule, dict) and smart_rule:
+            joins, where_clauses, smart_params = self._build_moodboard_smart_rule_sql_parts(smart_rule, note_alias="n")
+            if where_clauses:
+                smart_select = (
+                    "SELECT DISTINCT n.id AS id, n.title AS title, n.last_modified AS last_modified, "
+                    f"{preview_expr} AS content_preview, "
+                    "0 AS manual_hit, 1 AS smart_hit "
+                    f"FROM notes n {' '.join(joins)} "  # nosec B608
+                    f"WHERE {' AND '.join(where_clauses)}"  # nosec B608
+                )
+                select_queries.append(smart_select)
+                params.extend(smart_params)
+
+        union_query = " UNION ALL ".join(select_queries)
+        return union_query, tuple(params)
+
+    def _list_notes_matching_moodboard_rule(self, smart_rule: dict[str, Any]) -> list[dict[str, Any]]:
+        joins, where_clauses, params = self._build_moodboard_smart_rule_sql_parts(smart_rule, note_alias="n")
+        if not where_clauses:
+            return []
+
+        query = (
+            f"SELECT DISTINCT n.* FROM notes n {' '.join(joins)} "  # nosec B608
+            f"WHERE {' AND '.join(where_clauses)} "
+            "ORDER BY n.last_modified DESC, n.id DESC"
+        )
+        cursor = self.execute_query(query, tuple(params))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def count_moodboard_notes(self, moodboard_id: int) -> int:
+        moodboard = self.get_moodboard_by_id(moodboard_id)
+        if not moodboard:
+            raise ConflictError("Moodboard not found.", entity="moodboards", entity_id=moodboard_id)  # noqa: TRY003
+
+        union_query, union_params = self._build_moodboard_note_union_query(
+            moodboard_id=moodboard_id,
+            smart_rule=moodboard.get("smart_rule"),
+        )
+        count_query = (
+            f"WITH combined AS ({union_query}) "  # nosec B608
+            "SELECT COUNT(DISTINCT id) AS total FROM combined"
+        )
+        cursor = self.execute_query(count_query, union_params)
+        row = cursor.fetchone()
+        return int(row["total"]) if row and row["total"] is not None else 0
+
+    def list_moodboard_notes(self, moodboard_id: int, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+
+        moodboard = self.get_moodboard_by_id(moodboard_id)
+        if not moodboard:
+            raise ConflictError("Moodboard not found.", entity="moodboards", entity_id=moodboard_id)  # noqa: TRY003
+
+        union_query, union_params = self._build_moodboard_note_union_query(
+            moodboard_id=moodboard_id,
+            smart_rule=moodboard.get("smart_rule"),
+        )
+        page_query = (
+            f"WITH combined AS ({union_query}), "  # nosec B608
+            "collapsed AS ("
+            "    SELECT "
+            "      id, "
+            "      MAX(title) AS title, "
+            "      MAX(last_modified) AS last_modified, "
+            "      MAX(content_preview) AS content_preview, "
+            "      MAX(manual_hit) AS manual_hit, "
+            "      MAX(smart_hit) AS smart_hit "
+            "    FROM combined "
+            "    GROUP BY id"
+            ") "
+            "SELECT "
+            "  id, "
+            "  title, "
+            "  content_preview, "
+            "  last_modified, "
+            "  CASE "
+            "    WHEN manual_hit = 1 AND smart_hit = 1 THEN 'both' "
+            "    WHEN smart_hit = 1 THEN 'smart' "
+            "    ELSE 'manual' "
+            "  END AS membership_source "
+            "FROM collapsed "
+            "ORDER BY last_modified DESC, id DESC "
+            "LIMIT ? OFFSET ?"
+        )
+        page_params = (*union_params, limit, offset)
+        cursor = self.execute_query(page_query, page_params)
+        paged = [dict(row) for row in cursor.fetchall()]
+
+        note_ids = [str(item.get("id")) for item in paged if item.get("id") is not None]
+        keywords_by_note = self.get_keywords_for_notes(note_ids) if note_ids else {}
+        for row in paged:
+            note_id = str(row.get("id"))
+            keywords = keywords_by_note.get(note_id, [])
+            row["keywords"] = [str(item.get("keyword")) for item in keywords if item.get("keyword")]
+            preview = row.get("content_preview")
+            row["content_preview"] = preview if isinstance(preview, str) and preview else None
+            row["updated_at"] = row.get("last_modified")
+            row["cover_image_url"] = None
+        return paged
 
 
     # --- Linking Table Methods (with manual sync_log entries) ---
