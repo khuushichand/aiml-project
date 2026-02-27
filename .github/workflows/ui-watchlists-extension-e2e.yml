@@ -51,6 +51,7 @@ jobs:
       DISABLE_HEAVY_STARTUP: "1"
       MINIMAL_TEST_APP: "1"
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: "0"
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       AUTH_MODE: single_user
       SINGLE_USER_API_KEY: watchlists-e2e-key-12345
       SERVER_LABEL: watchlists-extension-e2e
