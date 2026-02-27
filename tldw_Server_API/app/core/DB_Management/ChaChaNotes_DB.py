@@ -13753,9 +13753,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise ConflictError("Moodboard not found.", entity="moodboards", entity_id=moodboard_id)  # noqa: TRY003
         return self._manage_link("moodboard_notes", "moodboard_id", moodboard_id, "note_id", note_id, "unlink")
 
-    def _list_notes_matching_moodboard_rule(self, smart_rule: dict[str, Any]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _moodboard_content_preview_expr(note_alias: str = "n") -> str:
+        return (
+            f"CASE "
+            f"WHEN {note_alias}.content IS NULL OR {note_alias}.content = '' THEN NULL "
+            f"WHEN LENGTH({note_alias}.content) <= 280 THEN {note_alias}.content "
+            f"ELSE SUBSTR({note_alias}.content, 1, 277) || '...' "
+            f"END"
+        )
+
+    def _build_moodboard_smart_rule_sql_parts(
+        self,
+        smart_rule: dict[str, Any],
+        note_alias: str = "n",
+    ) -> tuple[list[str], list[str], list[Any]]:
         if not isinstance(smart_rule, dict):
-            return []
+            return [], [], []
 
         query_text = self._normalize_nullable_text(smart_rule.get("query"))
         keyword_tokens = [
@@ -13784,22 +13798,22 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         where_clauses: list[str] = []
         params: list[Any] = []
         deleted_false = "FALSE" if self.backend_type == BackendType.POSTGRESQL else "0"
-        where_clauses.append(f"n.deleted = {deleted_false}")
+        where_clauses.append(f"{note_alias}.deleted = {deleted_false}")
 
         if query_text:
             like_value = f"%{query_text.lower()}%"
-            where_clauses.append("(LOWER(n.title) LIKE ? OR LOWER(n.content) LIKE ?)")
+            where_clauses.append(f"(LOWER({note_alias}.title) LIKE ? OR LOWER({note_alias}.content) LIKE ?)")
             params.extend([like_value, like_value])
 
         if sources:
-            joins.append("JOIN conversations c ON c.id = n.conversation_id")
+            joins.append(f"JOIN conversations c ON c.id = {note_alias}.conversation_id")
             placeholders = ",".join(["?"] * len(sources))
             where_clauses.append(f"LOWER(COALESCE(c.source, '')) IN ({placeholders})")
             params.extend(sources)
 
         if keyword_tokens:
             keyword_table = self._map_table_for_backend("keywords")
-            joins.append("JOIN note_keywords nk ON nk.note_id = n.id")
+            joins.append(f"JOIN note_keywords nk ON nk.note_id = {note_alias}.id")
             joins.append(f"JOIN {keyword_table} k ON k.id = nk.keyword_id")  # nosec B608
             where_clauses.append(f"k.deleted = {deleted_false}")
             keyword_match = " OR ".join(["LOWER(k.keyword) LIKE ?"] * len(keyword_tokens))
@@ -13807,11 +13821,54 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             params.extend([f"%{token}%" for token in keyword_tokens])
 
         if updated_after:
-            where_clauses.append("n.last_modified >= ?")
+            where_clauses.append(f"{note_alias}.last_modified >= ?")
             params.append(updated_after)
         if updated_before:
-            where_clauses.append("n.last_modified <= ?")
+            where_clauses.append(f"{note_alias}.last_modified <= ?")
             params.append(updated_before)
+
+        return joins, where_clauses, params
+
+    def _build_moodboard_note_union_query(
+        self,
+        moodboard_id: int,
+        smart_rule: dict[str, Any] | None,
+    ) -> tuple[str, tuple[Any, ...]]:
+        preview_expr = self._moodboard_content_preview_expr("n")
+        deleted_false_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+
+        # preview_expr is derived from a fixed internal alias and does not include user input.
+        manual_select = (  # nosec B608
+            "SELECT n.id AS id, n.title AS title, n.last_modified AS last_modified, "
+            f"{preview_expr} AS content_preview, "  # nosec B608
+            "1 AS manual_hit, 0 AS smart_hit "
+            "FROM moodboard_notes mn "
+            "JOIN notes n ON n.id = mn.note_id "
+            "WHERE mn.moodboard_id = ? AND n.deleted = ?"
+        )
+        select_queries: list[str] = [manual_select]
+        params: list[Any] = [moodboard_id, deleted_false_value]
+
+        if isinstance(smart_rule, dict) and smart_rule:
+            joins, where_clauses, smart_params = self._build_moodboard_smart_rule_sql_parts(smart_rule, note_alias="n")
+            if where_clauses:
+                smart_select = (
+                    "SELECT DISTINCT n.id AS id, n.title AS title, n.last_modified AS last_modified, "
+                    f"{preview_expr} AS content_preview, "
+                    "0 AS manual_hit, 1 AS smart_hit "
+                    f"FROM notes n {' '.join(joins)} "  # nosec B608
+                    f"WHERE {' AND '.join(where_clauses)}"  # nosec B608
+                )
+                select_queries.append(smart_select)
+                params.extend(smart_params)
+
+        union_query = " UNION ALL ".join(select_queries)
+        return union_query, tuple(params)
+
+    def _list_notes_matching_moodboard_rule(self, smart_rule: dict[str, Any]) -> list[dict[str, Any]]:
+        joins, where_clauses, params = self._build_moodboard_smart_rule_sql_parts(smart_rule, note_alias="n")
+        if not where_clauses:
+            return []
 
         query = (
             f"SELECT DISTINCT n.* FROM notes n {' '.join(joins)} "  # nosec B608
@@ -13821,6 +13878,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, tuple(params))
         return [dict(row) for row in cursor.fetchall()]
 
+    def count_moodboard_notes(self, moodboard_id: int) -> int:
+        moodboard = self.get_moodboard_by_id(moodboard_id)
+        if not moodboard:
+            raise ConflictError("Moodboard not found.", entity="moodboards", entity_id=moodboard_id)  # noqa: TRY003
+
+        union_query, union_params = self._build_moodboard_note_union_query(
+            moodboard_id=moodboard_id,
+            smart_rule=moodboard.get("smart_rule"),
+        )
+        count_query = (
+            f"WITH combined AS ({union_query}) "  # nosec B608
+            "SELECT COUNT(DISTINCT id) AS total FROM combined"
+        )
+        cursor = self.execute_query(count_query, union_params)
+        row = cursor.fetchone()
+        return int(row["total"]) if row and row["total"] is not None else 0
+
     def list_moodboard_notes(self, moodboard_id: int, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         if limit <= 0:
             return []
@@ -13829,52 +13903,49 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not moodboard:
             raise ConflictError("Moodboard not found.", entity="moodboards", entity_id=moodboard_id)  # noqa: TRY003
 
-        deleted_false = False if self.backend_type == BackendType.POSTGRESQL else 0
-        manual_query = (
-            "SELECT n.* "
-            "FROM moodboard_notes mn "
-            "JOIN notes n ON n.id = mn.note_id "
-            "WHERE mn.moodboard_id = ? AND n.deleted = ? "
-            "ORDER BY n.last_modified DESC, n.id DESC"
+        union_query, union_params = self._build_moodboard_note_union_query(
+            moodboard_id=moodboard_id,
+            smart_rule=moodboard.get("smart_rule"),
         )
-        manual_cursor = self.execute_query(manual_query, (moodboard_id, deleted_false))
-        manual_rows = [dict(row) for row in manual_cursor.fetchall()]
-
-        merged: dict[str, dict[str, Any]] = {}
-        for row in manual_rows:
-            row["membership_source"] = "manual"
-            merged[str(row["id"])] = row
-
-        smart_rule = moodboard.get("smart_rule")
-        if isinstance(smart_rule, dict) and smart_rule:
-            smart_rows = self._list_notes_matching_moodboard_rule(smart_rule)
-            for row in smart_rows:
-                note_id = str(row["id"])
-                existing = merged.get(note_id)
-                if existing:
-                    existing["membership_source"] = "both"
-                else:
-                    row["membership_source"] = "smart"
-                    merged[note_id] = row
-
-        ordered = sorted(
-            merged.values(),
-            key=lambda item: (str(item.get("last_modified") or ""), str(item.get("id") or "")),
-            reverse=True,
+        page_query = (
+            f"WITH combined AS ({union_query}), "  # nosec B608
+            "collapsed AS ("
+            "    SELECT "
+            "      id, "
+            "      MAX(title) AS title, "
+            "      MAX(last_modified) AS last_modified, "
+            "      MAX(content_preview) AS content_preview, "
+            "      MAX(manual_hit) AS manual_hit, "
+            "      MAX(smart_hit) AS smart_hit "
+            "    FROM combined "
+            "    GROUP BY id"
+            ") "
+            "SELECT "
+            "  id, "
+            "  title, "
+            "  content_preview, "
+            "  last_modified, "
+            "  CASE "
+            "    WHEN manual_hit = 1 AND smart_hit = 1 THEN 'both' "
+            "    WHEN smart_hit = 1 THEN 'smart' "
+            "    ELSE 'manual' "
+            "  END AS membership_source "
+            "FROM collapsed "
+            "ORDER BY last_modified DESC, id DESC "
+            "LIMIT ? OFFSET ?"
         )
-        paged = ordered[offset: offset + limit]
+        page_params = (*union_params, limit, offset)
+        cursor = self.execute_query(page_query, page_params)
+        paged = [dict(row) for row in cursor.fetchall()]
 
-        note_ids = [str(item.get("id")) for item in paged if item.get("id")]
+        note_ids = [str(item.get("id")) for item in paged if item.get("id") is not None]
         keywords_by_note = self.get_keywords_for_notes(note_ids) if note_ids else {}
         for row in paged:
             note_id = str(row.get("id"))
             keywords = keywords_by_note.get(note_id, [])
             row["keywords"] = [str(item.get("keyword")) for item in keywords if item.get("keyword")]
-            content = row.get("content")
-            if isinstance(content, str) and content:
-                row["content_preview"] = content if len(content) <= 280 else f"{content[:277]}..."
-            else:
-                row["content_preview"] = None
+            preview = row.get("content_preview")
+            row["content_preview"] = preview if isinstance(preview, str) and preview else None
             row["updated_at"] = row.get("last_modified")
             row["cover_image_url"] = None
         return paged

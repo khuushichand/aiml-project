@@ -125,3 +125,38 @@ def test_moodboard_manual_and_smart_union_sources(moodboard_db: CharactersRAGDB)
     assert by_id[note_manual]["membership_source"] == "manual"
     assert by_id[note_smart]["membership_source"] == "smart"
     assert by_id[note_both]["membership_source"] == "both"
+
+
+def test_moodboard_pagination_and_total_count(moodboard_db: CharactersRAGDB):
+    moodboard_id = moodboard_db.add_moodboard(name="Paged board")
+    assert moodboard_id is not None
+
+    note_ids: list[str] = []
+    for idx in range(5):
+        note_id = moodboard_db.add_note(
+            title=f"Paged note {idx + 1}",
+            content=("x" * 400) + f"-{idx}",
+        )
+        assert note_id
+        assert moodboard_db.link_note_to_moodboard(moodboard_id=moodboard_id, note_id=note_id) is True
+        note_ids.append(note_id)
+
+    total = moodboard_db.count_moodboard_notes(moodboard_id=moodboard_id)
+    assert total == 5
+
+    first_page = moodboard_db.list_moodboard_notes(moodboard_id=moodboard_id, limit=2, offset=0)
+    second_page = moodboard_db.list_moodboard_notes(moodboard_id=moodboard_id, limit=2, offset=2)
+    third_page = moodboard_db.list_moodboard_notes(moodboard_id=moodboard_id, limit=2, offset=4)
+
+    assert len(first_page) == 2
+    assert len(second_page) == 2
+    assert len(third_page) == 1
+
+    seen_ids = [row["id"] for row in first_page + second_page + third_page]
+    assert len(seen_ids) == 5
+    assert len(set(seen_ids)) == 5
+
+    for row in first_page + second_page + third_page:
+        assert row["membership_source"] == "manual"
+        preview = row.get("content_preview")
+        assert isinstance(preview, str) and len(preview) <= 280

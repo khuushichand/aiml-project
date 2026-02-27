@@ -1840,18 +1840,46 @@ const NotesManagerPage: React.FC = () => {
   }, [keywordTokens, notebookKeywordTokens])
 
   const fetchMoodboards = React.useCallback(async (): Promise<MoodboardSummary[]> => {
-    const res = await bgRequest<any>({
-      path: "/api/v1/notes/moodboards?limit=200&offset=0" as any,
-      method: "GET" as any
-    })
-    const rows = Array.isArray(res?.moodboards)
-      ? res.moodboards
-      : Array.isArray(res?.items)
-        ? res.items
-        : Array.isArray(res)
-          ? res
-          : []
-    return rows
+    const pageLimit = 200
+    const maxPages = 50
+    const collected: any[] = []
+    let offset = 0
+
+    for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+      const res = await bgRequest<any>({
+        path: `/api/v1/notes/moodboards?limit=${pageLimit}&offset=${offset}` as any,
+        method: "GET" as any
+      })
+      const rows = Array.isArray(res?.moodboards)
+        ? res.moodboards
+        : Array.isArray(res?.items)
+          ? res.items
+          : Array.isArray(res)
+            ? res
+            : []
+
+      if (!Array.isArray(rows) || rows.length === 0) break
+      collected.push(...rows)
+
+      const paginationTotalRaw = Number(
+        res?.total ??
+          res?.pagination?.total_items ??
+          NaN
+      )
+      if (Number.isFinite(paginationTotalRaw) && collected.length >= paginationTotalRaw) break
+      if (rows.length < pageLimit) break
+
+      offset += pageLimit
+    }
+
+    const deduped = new Map<number, any>()
+    for (const row of collected) {
+      const id = Number(row?.id)
+      if (!Number.isFinite(id)) continue
+      deduped.set(Math.floor(id), row)
+    }
+
+    return Array.from(deduped.values())
       .map((item: any) => {
         const id = Number(item?.id)
         if (!Number.isFinite(id)) return null
@@ -1878,9 +1906,9 @@ const NotesManagerPage: React.FC = () => {
     isFetching: isMoodboardsFetching,
     refetch: refetchMoodboards
   } = useQuery({
-    queryKey: ["notes-moodboards"],
+    queryKey: ["notes-moodboards", listMode, listViewMode],
     queryFn: fetchMoodboards,
-    enabled: isOnline && listMode === "active"
+    enabled: isOnline && listMode === "active" && listViewMode === "moodboard"
   })
 
   React.useEffect(() => {
@@ -1930,11 +1958,7 @@ const NotesManagerPage: React.FC = () => {
     }
     const nextName = String(window.prompt("Rename moodboard", selectedMoodboard.name) || "").trim()
     if (!nextName || nextName === selectedMoodboard.name) return
-    const expectedVersion =
-      selectedMoodboard.version ??
-      (typeof (selectedMoodboard as any).version === "number"
-        ? (selectedMoodboard as any).version
-        : 1)
+    const expectedVersion = selectedMoodboard.version ?? 1
     try {
       await bgRequest({
         path: `/api/v1/notes/moodboards/${selectedMoodboard.id}` as any,
@@ -1961,11 +1985,7 @@ const NotesManagerPage: React.FC = () => {
       cancelText: "Cancel"
     })
     if (!ok) return
-    const expectedVersion =
-      selectedMoodboard.version ??
-      (typeof (selectedMoodboard as any).version === "number"
-        ? (selectedMoodboard as any).version
-        : 1)
+    const expectedVersion = selectedMoodboard.version ?? 1
     try {
       await bgRequest({
         path: `/api/v1/notes/moodboards/${selectedMoodboard.id}` as any,
@@ -2168,6 +2188,21 @@ const NotesManagerPage: React.FC = () => {
   }, [data, listMode, listViewMode, pinnedNoteIdSet])
 
   const filteredCount = visibleNotes.length
+  const moodboardTotalPages = React.useMemo(() => {
+    const normalizedPageSize = Math.max(1, Number(pageSize) || 1)
+    return Math.max(1, Math.ceil(Math.max(0, Number(total) || 0) / normalizedPageSize))
+  }, [pageSize, total])
+  const moodboardCanGoPrev = page > 1
+  const moodboardCanGoNext = page < moodboardTotalPages
+  const moodboardRangeStart = total <= 0 ? 0 : (page - 1) * pageSize + 1
+  const moodboardRangeEnd = total <= 0 ? 0 : Math.min(total, page * pageSize)
+
+  React.useEffect(() => {
+    if (listMode !== 'active' || listViewMode !== 'moodboard') return
+    if (page <= moodboardTotalPages) return
+    setPage(moodboardTotalPages)
+  }, [listMode, listViewMode, moodboardTotalPages, page])
+
   const orderedVisibleNoteIds = React.useMemo(
     () => visibleNotes.map((note) => String(note.id)),
     [visibleNotes]
@@ -6429,13 +6464,16 @@ const NotesManagerPage: React.FC = () => {
 		                    defaultValue: 'Timeline'
 		                  })}
 		                </Button>
-		                <Button
-		                  size="small"
-		                  type={listViewMode === 'moodboard' ? 'primary' : 'default'}
-		                  onClick={() => setListViewMode('moodboard')}
-		                  disabled={listMode !== 'active'}
-		                  data-testid="notes-view-mode-moodboard"
-		                >
+	                <Button
+	                  size="small"
+	                  type={listViewMode === 'moodboard' ? 'primary' : 'default'}
+	                  onClick={() => {
+	                    setListViewMode('moodboard')
+	                    setPage(1)
+	                  }}
+	                  disabled={listMode !== 'active'}
+	                  data-testid="notes-view-mode-moodboard"
+	                >
 		                  {t('option:notesSearch.viewModeMoodboard', {
 		                    defaultValue: 'Moodboard'
 		                  })}
@@ -7023,68 +7061,142 @@ const NotesManagerPage: React.FC = () => {
 	                    })}
 	                  </div>
 	                ) : (
-	                  <div className="columns-1 gap-3 sm:columns-2 xl:columns-3">
-	                    {visibleNotes.map((note) => {
-	                      const noteId = String(note.id)
-	                      const isSelected = selectedId != null && String(selectedId) === noteId
-	                      const preview = String(note.content_preview || note.content || '').trim()
-	                      const membership = String(note.membership_source || 'manual')
-	                      const membershipLabel =
-	                        membership === 'both'
-	                          ? t('option:notesSearch.moodboardMembershipBoth', { defaultValue: 'Manual + Smart' })
-	                          : membership === 'smart'
-	                            ? t('option:notesSearch.moodboardMembershipSmart', { defaultValue: 'Smart' })
-	                            : t('option:notesSearch.moodboardMembershipManual', { defaultValue: 'Manual' })
-	                      return (
-	                        <button
-	                          key={noteId}
-	                          type="button"
-	                          data-testid={`notes-moodboard-card-${noteId.replace(/[^a-z0-9_-]/gi, '_')}`}
-	                          onClick={() => {
-	                            void handleSelectNote(note.id)
-	                          }}
-	                          className={`mb-3 w-full break-inside-avoid overflow-hidden rounded-lg border text-left transition-colors ${
-	                            isSelected
-	                              ? 'border-primary bg-primary/10'
-	                              : 'border-border bg-surface hover:bg-surface2'
-	                          }`}
-	                        >
-	                          {note.cover_image_url ? (
-	                            <img
-	                              src={note.cover_image_url}
-	                              alt={String(note.title || `Note ${noteId}`)}
-	                              className="h-32 w-full object-cover"
-	                            />
-	                          ) : (
-	                            <div className="flex h-24 w-full items-center justify-center bg-surface3 text-xl font-semibold text-text-muted">
-	                              {String(note.title || '').trim().slice(0, 1).toUpperCase() || '#'}
-	                            </div>
-	                          )}
-	                          <div className="space-y-2 p-3">
-	                            <div className="line-clamp-2 text-sm font-medium text-text">
-	                              {String(note.title || `Note ${noteId}`)}
-	                            </div>
-	                            {preview ? (
-	                              <div className="line-clamp-4 text-xs text-text-muted">{preview}</div>
-	                            ) : null}
-	                            <div className="flex flex-wrap items-center gap-1.5">
-	                              <span className="rounded-full bg-surface3 px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-text-muted">
-	                                {membershipLabel}
-	                              </span>
-	                              {(note.keywords || []).slice(0, 2).map((keyword) => (
-	                                <span
-	                                  key={`${noteId}-${keyword}`}
-	                                  className="rounded-full border border-border px-2 py-0.5 text-[10px] text-text-muted"
-	                                >
-	                                  {keyword}
+	                  <>
+	                    <div className="columns-1 gap-3 sm:columns-2 xl:columns-3">
+	                      {visibleNotes.map((note) => {
+	                        const noteId = String(note.id)
+	                        const isSelected = selectedId != null && String(selectedId) === noteId
+	                        const preview = String(note.content_preview || note.content || '').trim()
+	                        const membership = String(note.membership_source || 'manual')
+	                        const membershipLabel =
+	                          membership === 'both'
+	                            ? t('option:notesSearch.moodboardMembershipBoth', { defaultValue: 'Manual + Smart' })
+	                            : membership === 'smart'
+	                              ? t('option:notesSearch.moodboardMembershipSmart', { defaultValue: 'Smart' })
+	                              : t('option:notesSearch.moodboardMembershipManual', { defaultValue: 'Manual' })
+	                        return (
+	                          <button
+	                            key={noteId}
+	                            type="button"
+	                            data-testid={`notes-moodboard-card-${noteId.replace(/[^a-z0-9_-]/gi, '_')}`}
+	                            onClick={() => {
+	                              void handleSelectNote(note.id)
+	                            }}
+	                            className={`mb-3 w-full break-inside-avoid overflow-hidden rounded-lg border text-left transition-colors ${
+	                              isSelected
+	                                ? 'border-primary bg-primary/10'
+	                                : 'border-border bg-surface hover:bg-surface2'
+	                            }`}
+	                          >
+	                            {note.cover_image_url ? (
+	                              <img
+	                                src={note.cover_image_url}
+	                                alt={String(note.title || `Note ${noteId}`)}
+	                                className="h-32 w-full object-cover"
+	                              />
+	                            ) : (
+	                              <div className="flex h-24 w-full items-center justify-center bg-surface3 text-xl font-semibold text-text-muted">
+	                                {String(note.title || '').trim().slice(0, 1).toUpperCase() || '#'}
+	                              </div>
+	                            )}
+	                            <div className="space-y-2 p-3">
+	                              <div className="line-clamp-2 text-sm font-medium text-text">
+	                                {String(note.title || `Note ${noteId}`)}
+	                              </div>
+	                              {preview ? (
+	                                <div className="line-clamp-4 text-xs text-text-muted">{preview}</div>
+	                              ) : null}
+	                              <div className="flex flex-wrap items-center gap-1.5">
+	                                <span className="rounded-full bg-surface3 px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-text-muted">
+	                                  {membershipLabel}
 	                                </span>
-	                              ))}
+	                                {(note.keywords || []).slice(0, 2).map((keyword) => (
+	                                  <span
+	                                    key={`${noteId}-${keyword}`}
+	                                    className="rounded-full border border-border px-2 py-0.5 text-[10px] text-text-muted"
+	                                  >
+	                                    {keyword}
+	                                  </span>
+	                                ))}
+	                              </div>
 	                            </div>
-	                          </div>
-	                        </button>
-	                      )
-	                    })}
-	                  </div>
+	                          </button>
+	                        )
+	                      })}
+	                    </div>
+	                    <div
+	                      className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded border border-border bg-surface px-3 py-2"
+	                      data-testid="notes-moodboard-pagination"
+	                    >
+	                      <Typography.Text
+	                        type="secondary"
+	                        className="text-xs text-text-muted"
+	                        data-testid="notes-moodboard-page-summary"
+	                      >
+	                        {t('option:notesSearch.moodboardPageSummary', {
+	                          defaultValue: 'Showing {{start}}-{{end}} of {{total}}',
+	                          start: moodboardRangeStart,
+	                          end: moodboardRangeEnd,
+	                          total
+	                        })}
+	                      </Typography.Text>
+	                      <div className="flex items-center gap-2">
+	                        <select
+	                          value={String(pageSize)}
+	                          onChange={(event) => {
+	                            const parsed = Number(event.target.value)
+	                            if (!Number.isFinite(parsed) || parsed <= 0) return
+	                            setPageSize(Math.floor(parsed))
+	                            setPage(1)
+	                          }}
+	                          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text"
+	                          data-testid="notes-moodboard-page-size"
+	                          aria-label={t('option:notesSearch.moodboardPageSizeAria', {
+	                            defaultValue: 'Moodboard page size'
+	                          })}
+	                        >
+	                          {[10, 20, 50, 100].map((size) => (
+	                            <option key={size} value={size}>
+	                              {t('option:notesSearch.pageSizeValue', {
+	                                defaultValue: '{{size}} / page',
+	                                size
+	                              })}
+	                            </option>
+	                          ))}
+	                        </select>
+	                        <Button
+	                          size="small"
+	                          onClick={() => setPage((current) => Math.max(1, current - 1))}
+	                          disabled={!moodboardCanGoPrev}
+	                          data-testid="notes-moodboard-page-prev"
+	                        >
+	                          {t('option:notesSearch.pagePrev', {
+	                            defaultValue: 'Prev'
+	                          })}
+	                        </Button>
+	                        <Typography.Text
+	                          className="text-xs text-text"
+	                          data-testid="notes-moodboard-page-index"
+	                        >
+	                          {t('option:notesSearch.pageIndexLabel', {
+	                            defaultValue: 'Page {{page}} / {{pages}}',
+	                            page,
+	                            pages: moodboardTotalPages
+	                          })}
+	                        </Typography.Text>
+	                        <Button
+	                          size="small"
+	                          onClick={() => setPage((current) => Math.min(moodboardTotalPages, current + 1))}
+	                          disabled={!moodboardCanGoNext}
+	                          data-testid="notes-moodboard-page-next"
+	                        >
+	                          {t('option:notesSearch.pageNext', {
+	                            defaultValue: 'Next'
+	                          })}
+	                        </Button>
+	                      </div>
+	                    </div>
+	                  </>
 	                )}
 	              </div>
 	            ) : (

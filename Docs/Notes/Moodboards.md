@@ -29,7 +29,7 @@ Schema migration version: `v29`.
 
 ## Note Membership Semantics
 
-`GET /moodboards/{id}/notes` returns a merged set of:
+`GET /moodboards/{moodboard_id}/notes` returns a merged set of:
 
 - Manual pins (`moodboard_notes`)
 - Smart-rule matches (`smart_rule_json`)

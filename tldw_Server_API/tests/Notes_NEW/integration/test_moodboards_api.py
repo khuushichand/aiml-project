@@ -103,6 +103,12 @@ def test_moodboard_crud_and_membership_flow(moodboard_client: TestClient):
     assert by_id[note_manual["id"]]["membership_source"] == "manual"
     assert by_id[note_both["id"]]["membership_source"] == "both"
 
+    paged = client.get(f"/api/v1/notes/moodboards/{moodboard_id}/notes?limit=1&offset=0")
+    assert paged.status_code == 200
+    paged_body = paged.json()
+    assert paged_body["count"] == 1
+    assert paged_body["total"] == 2
+
     unpin_both = client.delete(f"/api/v1/notes/moodboards/{moodboard_id}/notes/{note_both['id']}")
     assert unpin_both.status_code == 200
     assert unpin_both.json()["success"] is True

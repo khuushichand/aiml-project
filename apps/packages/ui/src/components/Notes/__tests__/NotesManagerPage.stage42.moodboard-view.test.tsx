@@ -144,46 +144,78 @@ const renderPage = () => {
 }
 
 let seededMoodboards: Array<{ id: number; name: string; description?: string | null; version: number }> = []
+let allowMoodboardFetch = false
 
 describe("NotesManagerPage stage 42 moodboard view", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
     seededMoodboards = [{ id: 7, name: "Inspiration", description: "Visual ideas", version: 1 }]
+    allowMoodboardFetch = false
     mockConfirmDanger.mockResolvedValue(true)
     mockGetSetting.mockResolvedValue(null)
     mockSetSetting.mockResolvedValue(undefined)
     mockClearSetting.mockResolvedValue(undefined)
+
+    const moodboardNotes = [
+      {
+        id: 1,
+        title: "Manual card",
+        content_preview: "manual preview",
+        membership_source: "manual",
+        keywords: ["alpha"]
+      },
+      {
+        id: 2,
+        title: "Smart card",
+        content_preview: "smart preview",
+        membership_source: "both",
+        keywords: ["palette"]
+      },
+      {
+        id: 3,
+        title: "Third card",
+        content_preview: "third preview",
+        membership_source: "smart",
+        keywords: ["gamma"]
+      },
+      ...Array.from({ length: 22 }, (_, index) => {
+        const noteId = index + 4
+        return {
+          id: noteId,
+          title: `Card ${noteId}`,
+          content_preview: `preview ${noteId}`,
+          membership_source: noteId % 2 === 0 ? "manual" : "smart",
+          keywords: [`kw-${noteId}`]
+        }
+      })
+    ]
 
     mockBgRequest.mockImplementation(async (request: { path?: string; method?: string; body?: any }) => {
       const path = String(request.path || "")
       const method = String(request.method || "GET").toUpperCase()
 
       if (path.startsWith("/api/v1/notes/moodboards?") && method === "GET") {
+        if (!allowMoodboardFetch) {
+          throw new Error("unexpected eager moodboard fetch")
+        }
         return {
           moodboards: seededMoodboards
         }
       }
 
       if (path.startsWith("/api/v1/notes/moodboards/7/notes?") && method === "GET") {
+        const queryString = path.split("?")[1] || ""
+        const params = new URLSearchParams(queryString)
+        const limit = Number(params.get("limit") || "20")
+        const offset = Number(params.get("offset") || "0")
+        const boundedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 20
+        const boundedOffset = Number.isFinite(offset) && offset >= 0 ? Math.floor(offset) : 0
+        const notes = moodboardNotes.slice(boundedOffset, boundedOffset + boundedLimit)
         return {
-          notes: [
-            {
-              id: 1,
-              title: "Manual card",
-              content_preview: "manual preview",
-              membership_source: "manual",
-              keywords: ["alpha"]
-            },
-            {
-              id: 2,
-              title: "Smart card",
-              content_preview: "smart preview",
-              membership_source: "both",
-              keywords: ["palette"]
-            }
-          ],
-          count: 2
+          notes,
+          count: notes.length,
+          total: moodboardNotes.length
         }
       }
 
@@ -258,6 +290,7 @@ describe("NotesManagerPage stage 42 moodboard view", () => {
   it("renders moodboard cards and opens selected note from masonry wall", async () => {
     renderPage()
 
+    allowMoodboardFetch = true
     fireEvent.click(screen.getByTestId("notes-view-mode-moodboard"))
 
     await waitFor(() => {
@@ -267,6 +300,7 @@ describe("NotesManagerPage stage 42 moodboard view", () => {
     await waitFor(() => {
       expect(screen.getByTestId("notes-moodboard-card-1")).toBeInTheDocument()
       expect(screen.getByTestId("notes-moodboard-card-2")).toBeInTheDocument()
+      expect(screen.getByTestId("notes-moodboard-card-3")).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByTestId("notes-moodboard-card-2"))
@@ -288,6 +322,7 @@ describe("NotesManagerPage stage 42 moodboard view", () => {
 
     renderPage()
 
+    allowMoodboardFetch = true
     fireEvent.click(screen.getByTestId("notes-view-mode-moodboard"))
 
     await waitFor(() => {
@@ -328,5 +363,42 @@ describe("NotesManagerPage stage 42 moodboard view", () => {
     })
 
     promptSpy.mockRestore()
+  })
+
+  it("supports moodboard pagination controls and page navigation", async () => {
+    renderPage()
+
+    allowMoodboardFetch = true
+    fireEvent.click(screen.getByTestId("notes-view-mode-moodboard"))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-moodboard-pagination")).toBeInTheDocument()
+    })
+
+    const pageSizeSelect = screen.getByTestId("notes-moodboard-page-size")
+    fireEvent.change(pageSizeSelect, { target: { value: "10" } })
+
+    const hasMoodboardPageRequest = (limit: number, offset: number) =>
+      mockBgRequest.mock.calls.some(([arg]) => {
+        const path = String(arg?.path || "")
+        if (!path.startsWith("/api/v1/notes/moodboards/7/notes?")) return false
+        const queryString = path.split("?")[1] || ""
+        const params = new URLSearchParams(queryString)
+        return params.get("limit") === String(limit) && params.get("offset") === String(offset)
+      })
+
+    await waitFor(() => {
+      expect(hasMoodboardPageRequest(10, 0)).toBe(true)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-moodboard-page-next")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("notes-moodboard-page-next"))
+
+    await waitFor(() => {
+      expect(hasMoodboardPageRequest(10, 10)).toBe(true)
+    })
   })
 })

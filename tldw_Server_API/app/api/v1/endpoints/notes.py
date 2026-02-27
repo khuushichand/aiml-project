@@ -8,7 +8,7 @@ import hashlib
 import json
 import mimetypes
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 from urllib.parse import quote
 
 #
@@ -978,13 +978,23 @@ def handle_db_errors(e: Exception, entity_type: str = "resource"):
     raise HTTPException(status_code=http_status_code, detail=detail_message)
 
 
+_T = TypeVar("_T")
+
+
+async def _run_db_call(func: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
+    """Run synchronous Notes DB calls off the event loop thread."""
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
 def _normalize_moodboard_payload(moodboard_row: dict[str, Any]) -> dict[str, Any]:
+    """Ensure moodboard payloads expose stable optional fields for API responses."""
     payload = dict(moodboard_row)
     payload.setdefault("smart_rule", None)
     return payload
 
 
 def _build_moodboard_update_data(moodboard_in: MoodboardUpdate) -> dict[str, Any]:
+    """Serialize moodboard update inputs into DB-ready partial update fields."""
     data = moodboard_in.model_dump(exclude_unset=True, mode="json")
     if "smart_rule" in data and data["smart_rule"] is None:
         data["smart_rule"] = None
@@ -2332,12 +2342,12 @@ async def list_keywords_for_conversation_endpoint(
     include_in_schema=False,
 )
 async def create_moodboard(
-        moodboard_in: MoodboardCreate,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("moodboards.create")),
-):
+    moodboard_in: MoodboardCreate,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("moodboards.create")),
+) -> MoodboardResponse:
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "moodboards.create")
@@ -2349,12 +2359,18 @@ async def create_moodboard(
                 detail="Rate limit exceeded for moodboards.create",
                 headers={"Retry-After": str(meta.get("retry_after", 60))},
             )
-        moodboard_id = db.add_moodboard(
+        moodboard_id = await _run_db_call(
+            db.add_moodboard,
             name=moodboard_in.name,
             description=moodboard_in.description,
             smart_rule=moodboard_in.smart_rule.model_dump(mode="json") if moodboard_in.smart_rule else None,
         )
-        moodboard_row = db.get_moodboard_by_id(int(moodboard_id))
+        if moodboard_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Moodboard created but could not be retrieved.",
+            )
+        moodboard_row = await _run_db_call(db.get_moodboard_by_id, int(moodboard_id))
         if not moodboard_row:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2379,14 +2395,14 @@ async def create_moodboard(
     include_in_schema=False,
 )
 async def list_moodboards_endpoint(
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        limit: int = Query(100, ge=1, le=500),
-        offset: int = Query(0, ge=0),
-        include_deleted: bool = Query(False),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("moodboards.list")),
-):
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    include_deleted: bool = Query(False),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("moodboards.list")),
+) -> MoodboardListResponse:
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "moodboards.list")
@@ -2398,7 +2414,7 @@ async def list_moodboards_endpoint(
                 detail="Rate limit exceeded for moodboards.list",
                 headers={"Retry-After": str(meta.get("retry_after", 60))},
             )
-        rows = db.list_moodboards(limit=limit, offset=offset, include_deleted=include_deleted)
+        rows = await _run_db_call(db.list_moodboards, limit=limit, offset=offset, include_deleted=include_deleted)
         payload = [_normalize_moodboard_payload(row) for row in rows]
         return MoodboardListResponse(
             items=payload,
@@ -2419,12 +2435,12 @@ async def list_moodboards_endpoint(
     responses={status.HTTP_404_NOT_FOUND: {"model": DetailResponse}},
 )
 async def get_moodboard_endpoint(
-        moodboard_id: int,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("moodboards.get")),
-):
+    moodboard_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("moodboards.get")),
+) -> MoodboardResponse:
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "moodboards.get")
@@ -2436,7 +2452,7 @@ async def get_moodboard_endpoint(
                 detail="Rate limit exceeded for moodboards.get",
                 headers={"Retry-After": str(meta.get("retry_after", 60))},
             )
-        row = db.get_moodboard_by_id(moodboard_id=moodboard_id)
+        row = await _run_db_call(db.get_moodboard_by_id, moodboard_id=moodboard_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Moodboard not found")
         return _normalize_moodboard_payload(row)
@@ -2457,14 +2473,14 @@ async def get_moodboard_endpoint(
     },
 )
 async def update_moodboard_endpoint(
-        moodboard_id: int,
-        moodboard_in: MoodboardUpdate,
-        expected_version: int = Header(..., description="Expected moodboard version for optimistic locking"),
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("moodboards.update")),
-):
+    moodboard_id: int,
+    moodboard_in: MoodboardUpdate,
+    expected_version: int = Header(..., description="Expected moodboard version for optimistic locking"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("moodboards.update")),
+) -> MoodboardResponse:
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "moodboards.update")
@@ -2480,12 +2496,13 @@ async def update_moodboard_endpoint(
         if not update_data:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No data provided for update.")
 
-        db.update_moodboard(
+        await _run_db_call(
+            db.update_moodboard,
             moodboard_id=moodboard_id,
             update_data=update_data,
             expected_version=expected_version,
         )
-        row = db.get_moodboard_by_id(moodboard_id=moodboard_id)
+        row = await _run_db_call(db.get_moodboard_by_id, moodboard_id=moodboard_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Moodboard not found")
         return _normalize_moodboard_payload(row)
@@ -2507,12 +2524,12 @@ async def update_moodboard_endpoint(
     },
 )
 async def delete_moodboard_endpoint(
-        moodboard_id: int,
-        expected_version: int = Header(..., description="Expected moodboard version for optimistic locking"),
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("moodboards.delete")),
+    moodboard_id: int,
+    expected_version: int = Header(..., description="Expected moodboard version for optimistic locking"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("moodboards.delete")),
 ) -> Response:
     try:
         try:
@@ -2525,7 +2542,11 @@ async def delete_moodboard_endpoint(
                 detail="Rate limit exceeded for moodboards.delete",
                 headers={"Retry-After": str(meta.get("retry_after", 60))},
             )
-        deleted = db.delete_moodboard(moodboard_id=moodboard_id, expected_version=expected_version)
+        deleted = await _run_db_call(
+            db.delete_moodboard,
+            moodboard_id=moodboard_id,
+            expected_version=expected_version,
+        )
         if not deleted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Moodboard not found")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -2542,13 +2563,13 @@ async def delete_moodboard_endpoint(
     tags=["Moodboards"],
 )
 async def pin_note_to_moodboard_endpoint(
-        moodboard_id: int,
-        note_id: str,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("moodboards.pin")),
-):
+    moodboard_id: int,
+    note_id: str,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("moodboards.pin")),
+) -> MoodboardPinResponse:
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "moodboards.pin")
@@ -2560,7 +2581,7 @@ async def pin_note_to_moodboard_endpoint(
                 detail="Rate limit exceeded for moodboards.pin",
                 headers={"Retry-After": str(meta.get("retry_after", 60))},
             )
-        success = db.link_note_to_moodboard(moodboard_id=moodboard_id, note_id=note_id)
+        success = await _run_db_call(db.link_note_to_moodboard, moodboard_id=moodboard_id, note_id=note_id)
         return MoodboardPinResponse(success=success, moodboard_id=moodboard_id, note_id=note_id)
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "moodboard")
@@ -2573,13 +2594,13 @@ async def pin_note_to_moodboard_endpoint(
     tags=["Moodboards"],
 )
 async def unpin_note_from_moodboard_endpoint(
-        moodboard_id: int,
-        note_id: str,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("moodboards.unpin")),
-):
+    moodboard_id: int,
+    note_id: str,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("moodboards.unpin")),
+) -> MoodboardPinResponse:
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "moodboards.unpin")
@@ -2591,7 +2612,7 @@ async def unpin_note_from_moodboard_endpoint(
                 detail="Rate limit exceeded for moodboards.unpin",
                 headers={"Retry-After": str(meta.get("retry_after", 60))},
             )
-        success = db.unlink_note_from_moodboard(moodboard_id=moodboard_id, note_id=note_id)
+        success = await _run_db_call(db.unlink_note_from_moodboard, moodboard_id=moodboard_id, note_id=note_id)
         return MoodboardPinResponse(success=success, moodboard_id=moodboard_id, note_id=note_id)
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "moodboard")
@@ -2612,14 +2633,14 @@ async def unpin_note_from_moodboard_endpoint(
     include_in_schema=False,
 )
 async def list_moodboard_notes_endpoint(
-        moodboard_id: int,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        limit: int = Query(100, ge=1, le=500),
-        offset: int = Query(0, ge=0),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("moodboards.notes.list")),
-):
+    moodboard_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("moodboards.notes.list")),
+) -> MoodboardNotesListResponse:
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "moodboards.notes.list")
@@ -2631,16 +2652,18 @@ async def list_moodboard_notes_endpoint(
                 detail="Rate limit exceeded for moodboards.notes.list",
                 headers={"Retry-After": str(meta.get("retry_after", 60))},
             )
-        board = db.get_moodboard_by_id(moodboard_id=moodboard_id)
+        board = await _run_db_call(db.get_moodboard_by_id, moodboard_id=moodboard_id)
         if not board:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Moodboard not found")
-        notes = db.list_moodboard_notes(moodboard_id=moodboard_id, limit=limit, offset=offset)
+        notes = await _run_db_call(db.list_moodboard_notes, moodboard_id=moodboard_id, limit=limit, offset=offset)
+        total = await _run_db_call(db.count_moodboard_notes, moodboard_id=moodboard_id)
         return MoodboardNotesListResponse(
             items=notes,
             notes=notes,
             count=len(notes),
             limit=limit,
             offset=offset,
+            total=total,
         )
     except HTTPException:
         raise
