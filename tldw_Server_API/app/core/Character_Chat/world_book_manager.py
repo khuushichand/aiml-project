@@ -565,7 +565,7 @@ class WorldBookService:
         Args:
             name: Unique name for the world book
             description: Optional description
-            scan_depth: How many messages to scan for keywords
+            scan_depth: Maximum matched entries per world book during processing
             token_budget: Maximum tokens to use for world info
             recursive_scanning: Whether to scan matched entries for more keywords
             enabled: Whether the world book is active
@@ -1006,7 +1006,7 @@ class WorldBookService:
             entries = self._entry_cache[world_book_id]
             if enabled_only:
                 entries = [e for e in entries if e.enabled]
-            return [e.to_api_dict() for e in entries]
+            return [WorldBookEntryView(e.to_api_dict()) for e in entries]
 
         try:
             with self.db.get_connection() as conn:
@@ -1071,11 +1071,15 @@ class WorldBookService:
         try:
             updates = []
             params = []
+            effective_regex_match: Optional[bool] = (
+                bool(regex_match) if regex_match is not None else None
+            )
 
             if keywords is not None:
                 if not keywords:
                     raise InputError("Entry must have at least one keyword")
-                if regex_match:
+                # If regex_match is explicitly set, validate immediately.
+                if effective_regex_match is True:
                     for keyword in keywords:
                         # Validate regex safety (ReDoS prevention)
                         is_safe, reason = _validate_regex_safety(keyword)
@@ -1129,6 +1133,29 @@ class WorldBookService:
             params.append(entry_id)
 
             with self.db.get_connection() as conn:
+                # If keywords are being updated but regex_match is omitted, inherit
+                # current regex mode from DB so invalid patterns are still blocked.
+                if keywords is not None and effective_regex_match is None:
+                    row = conn.execute(
+                        "SELECT regex_match FROM world_book_entries WHERE id = ?",
+                        (entry_id,),
+                    ).fetchone()
+                    existing_regex = False
+                    if row is not None:
+                        if hasattr(row, "keys") and "regex_match" in row.keys():
+                            existing_regex = bool(row["regex_match"])
+                        else:
+                            existing_regex = bool(row[0])
+                    if existing_regex:
+                        for keyword in keywords:
+                            is_safe, reason = _validate_regex_safety(keyword)
+                            if not is_safe:
+                                raise InputError(f"Unsafe regex pattern '{keyword}': {reason}")
+                            try:
+                                re.compile(keyword)
+                            except re.error as e:
+                                raise InputError(f"Invalid regex pattern '{keyword}': {e}") from e
+
                 set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_ENTRY_UPDATE_FIELDS)
                 cursor = conn.execute(
                     f"UPDATE world_book_entries SET {set_clause} WHERE id = ?",  # nosec B608
@@ -1321,7 +1348,7 @@ class WorldBookService:
         character_id: Optional[int] = None,
         scan_depth: int = 3,
         token_budget: int = 500,
-        recursive_scanning: bool = False,
+        recursive_scanning: Optional[bool] = None,
         **kwargs
     ) -> Union[dict[str, Any], list[dict[str, Any]]]:
         """
@@ -1331,9 +1358,10 @@ class WorldBookService:
             text: Text to scan for keywords (usually recent messages)
             world_book_ids: Specific world books to use (optional)
             character_id: Character whose world books to use (optional)
-            scan_depth: Override for scan depth
+            scan_depth: Override maximum matched entries per world book
             token_budget: Maximum tokens to inject
-            recursive_scanning: Whether to scan matched entries for more keywords
+            recursive_scanning: Whether to scan matched entries for more keywords.
+                If None, inherits from selected world-book settings.
 
         Returns:
             Dictionary with processed_context and statistics
@@ -1376,6 +1404,9 @@ class WorldBookService:
                 unique_books[book_id] = book
             books_to_use = list(unique_books.values())
 
+        if recursive_scanning is None:
+            recursive_scanning = any(bool(book.get("recursive_scanning", False)) for book in books_to_use)
+
         if not books_to_use:
             empty = {
                 "processed_context": "",
@@ -1411,6 +1442,7 @@ class WorldBookService:
                 _ = self.get_entries(book['id'], enabled_only=True)
                 book_entries = self._entry_cache.get(book['id'], [])
             all_entries.extend(book_entries)
+            # scan_depth is currently treated as a per-book match cap.
             book_depth = _normalize_depth(book.get('scan_depth'))
             book_id = book.get('id')
             if book_id is None:

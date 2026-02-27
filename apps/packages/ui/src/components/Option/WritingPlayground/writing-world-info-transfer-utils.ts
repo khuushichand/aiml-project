@@ -47,13 +47,22 @@ const normalizeEntry = (
 ): WritingWorldInfoEntry | null => {
   if (!isRecord(raw)) return null
 
-  const keys = parseKeys(raw.keys ?? raw.key)
+  const keys = [
+    ...parseKeys(raw.keys ?? raw.key),
+    ...parseKeys(raw.keysecondary ?? raw.keys_secondary)
+  ].filter(Boolean)
   const content = toString(raw.content ?? raw.text).trim()
   if (!content || keys.length === 0) return null
 
+  const disableFlag = toBoolean(raw.disable, false)
+  const enabled = toBoolean(raw.enabled, !disableFlag)
+
   return {
-    id: toString(raw.id).trim() || `imported-${index + 1}`,
-    enabled: toBoolean(raw.enabled, true),
+    id:
+      toString(raw.id).trim() ||
+      toString(raw.uid).trim() ||
+      `imported-${index + 1}`,
+    enabled,
     keys,
     content,
     use_regex: toBoolean(raw.use_regex ?? raw.useRegex ?? raw.regex, false),
@@ -110,9 +119,13 @@ const extractEntriesSource = (value: unknown): unknown[] => {
     return Object.values(entries).map((entry) => {
       if (!isRecord(entry)) return entry
       return {
+        uid: entry.uid,
+        id: entry.id,
         content: entry.content,
         keys: entry.key,
+        keysecondary: entry.keysecondary,
         search: entry.scanDepth,
+        disable: entry.disable,
         enabled: entry.enabled,
         use_regex: entry.use_regex,
         case_sensitive: entry.case_sensitive

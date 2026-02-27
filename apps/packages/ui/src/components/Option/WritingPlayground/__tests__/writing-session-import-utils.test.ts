@@ -29,6 +29,25 @@ describe("writing session import utils", () => {
     ])
   })
 
+  it("extracts session items from mikupad database exports", () => {
+    const items = extractImportedSessionItems({
+      Sessions: [
+        { key: "nextSessionId", value: 3 },
+        { key: 1, value: { prompt: "First prompt", temperature: "0.7" } },
+        { key: 2, value: { prompt: "Second prompt", topP: "0.9" } }
+      ],
+      Names: [
+        { key: 1, value: "Session 1" },
+        { key: 2, value: "Session 2" }
+      ]
+    })
+
+    expect(items).toEqual([
+      { name: "Session 1", prompt: "First prompt", temperature: "0.7" },
+      { name: "Session 2", prompt: "Second prompt", topP: "0.9" }
+    ])
+  })
+
   it("extracts session items from direct object maps", () => {
     const items = extractImportedSessionItems({
       "0": { name: "A", prompt: "x" },
@@ -64,6 +83,16 @@ describe("writing session import utils", () => {
     expect(payload).toEqual({
       prompt: "Hello",
       settings: { temperature: 0.4 }
+    })
+  })
+
+  it("parses explicit payload strings", () => {
+    const payload = parseImportedSessionPayload({
+      payload: '{"prompt":"From payload"}'
+    })
+
+    expect(payload).toEqual({
+      prompt: "From payload"
     })
   })
 
@@ -136,6 +165,7 @@ describe("writing session import utils", () => {
   it("maps mikupad dry penalty range and nested logit bias shape", () => {
     const payload = parseImportedSessionPayload({
       dryPenaltyRange: "1024",
+      postSamplingProbs: "true",
       logitBias:
         '{"bias":{"ban":{"ids":["50256"],"power":"-100"},"favor":{"ids":[198],"power":"2.5"}},"model":"none"}'
     })
@@ -144,6 +174,7 @@ describe("writing session import utils", () => {
       settings: {
         advanced_extra_body: {
           dry_penalty_last_n: 1024,
+          post_sampling_probs: true,
           logit_bias: {
             "198": 2.5,
             "50256": -100
@@ -274,6 +305,20 @@ describe("writing session import utils", () => {
     })
   })
 
+  it("drops known endpoint credential fields from imports", () => {
+    const payload = parseImportedSessionPayload({
+      endpoint: "https://example.com/v1",
+      endpointAPIKey: "secret",
+      endpoint_api_key: "secret2",
+      apiKey: "secret3",
+      prompt: "safe"
+    })
+
+    expect(payload).toEqual({
+      prompt: "safe"
+    })
+  })
+
   it("keeps plain strings that are not valid json", () => {
     const payload = parseImportedSessionPayload({
       name: "Imported",
@@ -310,6 +355,17 @@ describe("writing session import utils", () => {
 
     expect(payload).toEqual({
       template_name: "Mistral",
+      chat_mode: true
+    })
+  })
+
+  it("prefers chat mode enabled when chatMode and chatAPI conflict", () => {
+    const payload = parseImportedSessionPayload({
+      chatMode: "false",
+      chatAPI: "true"
+    })
+
+    expect(payload).toEqual({
       chat_mode: true
     })
   })

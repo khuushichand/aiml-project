@@ -57,19 +57,30 @@ describe("writing world info transfer utils", () => {
     const parsed = parseWorldInfoImportPayload({
       entries: {
         a: {
+          uid: "42",
           comment: "Entry A",
           content: "Lore A",
           key: ["alpha", "beta"],
+          keysecondary: ["gamma"],
           scanDepth: 250
+        },
+        b: {
+          uid: "99",
+          content: "Disabled entry",
+          key: ["disabled"],
+          disable: true
         }
       }
     })
 
     expect(parsed.error).toBeNull()
-    expect(parsed.value?.entries).toHaveLength(1)
+    expect(parsed.value?.entries).toHaveLength(2)
+    expect(parsed.value?.entries?.[0]?.id).toBe("42")
     expect(parsed.value?.entries?.[0]?.content).toBe("Lore A")
-    expect(parsed.value?.entries?.[0]?.keys).toEqual(["alpha", "beta"])
+    expect(parsed.value?.entries?.[0]?.keys).toEqual(["alpha", "beta", "gamma"])
     expect(parsed.value?.entries?.[0]?.search_range).toBe(250)
+    expect(parsed.value?.entries?.[1]?.id).toBe("99")
+    expect(parsed.value?.entries?.[1]?.enabled).toBe(false)
   })
 
   it("rejects payloads with no usable entries", () => {

@@ -53,11 +53,16 @@ _OPENAI_COMPAT_BASE = {
     "source": "catalog+runtime",
 }
 
+_LLAMA_COMPAT_BASE = {
+    **_OPENAI_COMPAT_BASE,
+    "known_params": [*_MIKUPAD_KNOWN_PARAMS, "post_sampling_probs"],
+}
+
 _CATALOG: dict[str, dict[str, Any]] = {
     "openai": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "custom_openai_api": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "custom_openai_api_2": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
-    "llama": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
+    "llama": {"provider_default": _LLAMA_COMPAT_BASE, "models": {}},
     "kobold": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "ooba": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},
     "tabby": {"provider_default": _OPENAI_COMPAT_BASE, "models": {}},

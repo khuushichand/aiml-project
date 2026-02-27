@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch, call
 from datetime import datetime
 
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService, WorldBookEntry
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError
 
 
 @pytest.fixture
@@ -132,6 +132,28 @@ class TestWorldBookService:
         assert wb_result["name"] == "Fantasy World"
         assert len(entries) == 1
         assert entries[0].keywords == ["dragon", "castle"]
+
+    def test_get_entries_cached_results_keep_hybrid_shape(self, service):
+        """Cached entry reads should preserve both dict-style and attr-style access."""
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["dragon"],
+                    content="Dragon lore",
+                    priority=10,
+                    enabled=True,
+                )
+            ]
+        }
+
+        entries = service.get_entries(world_book_id=1)
+
+        assert len(entries) == 1
+        assert entries[0]["keywords"] == ["dragon"]
+        assert entries[0].keywords == ["dragon"]
+        assert entries[0].get("content") == "Dragon lore"
 
     def test_add_entry(self, service, mock_db):
         """Test adding an entry to a world book."""
@@ -337,6 +359,85 @@ class TestWorldBookService:
         # Should match "hero" first, then "sword" from the hero entry
         assert result["entries_matched"] >= 1
 
+    def test_recursive_scanning_inherits_book_setting_when_not_overridden(self, service):
+        """Book-level recursive_scanning should apply when call-level override is omitted."""
+        service.get_world_book = MagicMock(
+            return_value={
+                "id": 1,
+                "name": "Test",
+                "token_budget": 500,
+                "recursive_scanning": 1,
+                "enabled": 1,
+            }
+        )
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["hero"],
+                    content="The hero has a sword",
+                    priority=100,
+                    enabled=True,
+                ),
+                WorldBookEntry(
+                    entry_id=2,
+                    world_book_id=1,
+                    keywords=["sword"],
+                    content="The sword is magical",
+                    priority=50,
+                    enabled=True,
+                ),
+            ]
+        }
+
+        result = service.process_context(text="Story about a hero", world_book_ids=[1], token_budget=1000)
+
+        assert result["entries_matched"] >= 2
+        assert "The sword is magical" in result["processed_context"]
+
+    def test_recursive_scanning_explicit_false_overrides_book_setting(self, service):
+        """Call-level recursive_scanning=False should disable recursive expansion."""
+        service.get_world_book = MagicMock(
+            return_value={
+                "id": 1,
+                "name": "Test",
+                "token_budget": 500,
+                "recursive_scanning": 1,
+                "enabled": 1,
+            }
+        )
+        service._entry_cache = {
+            1: [
+                WorldBookEntry(
+                    entry_id=1,
+                    world_book_id=1,
+                    keywords=["hero"],
+                    content="The hero has a sword",
+                    priority=100,
+                    enabled=True,
+                ),
+                WorldBookEntry(
+                    entry_id=2,
+                    world_book_id=1,
+                    keywords=["sword"],
+                    content="The sword is magical",
+                    priority=50,
+                    enabled=True,
+                ),
+            ]
+        }
+
+        result = service.process_context(
+            text="Story about a hero",
+            world_book_ids=[1],
+            token_budget=1000,
+            recursive_scanning=False,
+        )
+
+        assert result["entries_matched"] == 1
+        assert "The sword is magical" not in result["processed_context"]
+
     def test_import_world_book(self, service, mock_db):
         """Test importing a world book from JSON."""
         world_book_data = {
@@ -413,6 +514,27 @@ class TestWorldBookService:
         call_args = mock_conn.execute.call_args[0]
         assert "UPDATE world_book_entries SET" in call_args[0]
         assert '["new", "keywords"]' in call_args[1]
+
+    def test_update_entry_validates_keywords_when_existing_entry_is_regex(
+        self, service, mock_db
+    ):
+        """Updating keywords should still validate regex patterns when regex mode is already enabled."""
+        mock_conn = mock_db.get_connection().__enter__()
+        update_cursor = mock_conn.execute.return_value
+        update_cursor.rowcount = 1
+
+        select_cursor = MagicMock()
+        select_cursor.fetchone.return_value = {"regex_match": 1}
+
+        def execute_side_effect(sql, params=()):
+            if "SELECT regex_match FROM world_book_entries" in sql:
+                return select_cursor
+            return update_cursor
+
+        mock_conn.execute.side_effect = execute_side_effect
+
+        with pytest.raises(InputError):
+            service.update_entry(entry_id=1, keywords=["[invalid"])
 
     def test_get_statistics(self, service, mock_db):
         """Test getting world book statistics."""

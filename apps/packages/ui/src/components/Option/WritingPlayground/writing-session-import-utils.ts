@@ -363,6 +363,11 @@ const ADVANCED_PARAM_MAP: AdvancedParamMap[] = [
     target: "logit_bias",
     keys: ["logit_bias", "logitBias"],
     kind: "record"
+  },
+  {
+    target: "post_sampling_probs",
+    keys: ["post_sampling_probs", "postSamplingProbs"],
+    kind: "boolean"
   }
 ]
 
@@ -725,9 +730,19 @@ const RECOGNIZED_INPUT_KEYS = new Set([
   "model_id",
   "modelId",
   "endpointModel",
+  "endpoint",
   "endpointAPI",
   "endpointApi",
   "endpoint_api",
+  "endpointAPIKey",
+  "endpointApiKey",
+  "endpoint_api_key",
+  "apiKey",
+  "api_key",
+  "proxyEndpoint",
+  "proxy_endpoint",
+  "sessionEndpoint",
+  "session_endpoint",
   "provider",
   "api_provider",
   "apiProvider",
@@ -790,12 +805,12 @@ export const parseImportedSessionPayload = (
     payload.theme_name = themeName.trim()
   }
 
-  const chatMode = readBoolean(parsedSource, [
-    "chat_mode",
-    "chatMode",
-    "chatAPI",
-    "useChatAPI"
-  ])
+  const directChatMode = readBoolean(parsedSource, ["chat_mode", "chatMode"])
+  const chatApiMode = readBoolean(parsedSource, ["chatAPI", "useChatAPI"])
+  const chatMode =
+    directChatMode === true || chatApiMode === true
+      ? true
+      : firstDefined(directChatMode, chatApiMode)
   if (chatMode !== undefined) {
     payload.chat_mode = chatMode
   }
@@ -834,6 +849,69 @@ const toRecordList = (value: unknown): Record<string, unknown>[] => {
   return []
 }
 
+const toStoreRows = (value: unknown): Array<{ key: unknown; value: unknown }> => {
+  if (!Array.isArray(value)) return []
+  const out: Array<{ key: unknown; value: unknown }> = []
+  for (const entry of value) {
+    if (!isRecord(entry)) continue
+    out.push({
+      key: entry.key,
+      value: entry.value
+    })
+  }
+  return out
+}
+
+const resolveDbStoreRows = (
+  root: Record<string, unknown>,
+  storeName: string
+): Array<{ key: unknown; value: unknown }> => {
+  const direct = root[storeName]
+  if (direct !== undefined) {
+    return toStoreRows(direct)
+  }
+  const lower = storeName.toLowerCase()
+  for (const [key, value] of Object.entries(root)) {
+    if (key.toLowerCase() !== lower) continue
+    return toStoreRows(value)
+  }
+  return []
+}
+
+const extractSessionsFromDatabaseExport = (
+  root: Record<string, unknown>
+): Record<string, unknown>[] => {
+  const sessionRows = resolveDbStoreRows(root, "Sessions")
+  if (sessionRows.length === 0) return []
+
+  const nameRows = resolveDbStoreRows(root, "Names")
+  const namesByKey = new Map<string, string>()
+  for (const row of nameRows) {
+    const key = String(row.key ?? "").trim()
+    const name = typeof row.value === "string" ? row.value.trim() : ""
+    if (!key || !name) continue
+    namesByKey.set(key, name)
+  }
+
+  const out: Record<string, unknown>[] = []
+  for (const row of sessionRows) {
+    const key = String(row.key ?? "").trim()
+    if (!key || key === "nextSessionId" || key === "selectedSessionId") {
+      continue
+    }
+    if (!isRecord(row.value)) continue
+    const name = namesByKey.get(key)
+    const item: Record<string, unknown> = {
+      ...row.value
+    }
+    if (name) {
+      item.name = name
+    }
+    out.push(item)
+  }
+  return out
+}
+
 const isSessionLikeObject = (value: Record<string, unknown>): boolean => {
   const sessionKeys = [
     "prompt",
@@ -858,6 +936,11 @@ export const extractImportedSessionItems = (
   }
   if (!isRecord(value)) {
     return []
+  }
+
+  const dbExportSessions = extractSessionsFromDatabaseExport(value)
+  if (dbExportSessions.length > 0) {
+    return dbExportSessions
   }
 
   if (Array.isArray(value.sessions)) {

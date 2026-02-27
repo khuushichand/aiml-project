@@ -68,7 +68,12 @@ class WorldBookBase(BaseModel):
     """Base schema for world books."""
     name: str = Field(..., min_length=1, max_length=200, description="Unique world book name")
     description: Optional[str] = Field(None, max_length=1000, description="World book description")
-    scan_depth: int = Field(3, ge=1, le=20, description="How many messages to scan for keywords")
+    scan_depth: int = Field(
+        3,
+        ge=1,
+        le=20,
+        description="Maximum matched entries per world book during a processing call",
+    )
     token_budget: int = Field(500, ge=50, le=5000, description="Maximum tokens to use for world info")
     recursive_scanning: bool = Field(False, description="Whether to scan matched entries for more keywords")
     enabled: bool = Field(True, description="Whether the world book is active")
@@ -78,7 +83,12 @@ class WorldBookCreate(BaseModel):
     """Schema for creating a world book."""
     name: str = Field(..., min_length=1, max_length=200, description="Unique world book name")
     description: Optional[str] = Field(None, max_length=1000, description="World book description")
-    scan_depth: int = Field(3, ge=1, le=20, description="How many messages to scan")
+    scan_depth: int = Field(
+        3,
+        ge=1,
+        le=20,
+        description="Maximum matched entries per world book during a processing call",
+    )
     token_budget: int = Field(500, ge=50, le=5000, description="Maximum tokens to use")
     recursive_scanning: bool = Field(False, description="Enable recursive scanning")
     enabled: bool = Field(True, description="Whether the world book is active")
@@ -129,9 +139,17 @@ class ProcessContextRequest(BaseModel):
     text: str = Field(..., description="Text to scan for keywords")
     world_book_ids: Optional[list[int]] = Field(None, description="Specific world books to use")
     character_id: Optional[int] = Field(None, description="Character whose world books to use")
-    scan_depth: int = Field(3, ge=1, le=20, description="Override for scan depth")
+    scan_depth: int = Field(
+        3,
+        ge=1,
+        le=20,
+        description="Override maximum matched entries per world book for this processing call",
+    )
     token_budget: int = Field(500, ge=50, le=5000, description="Maximum tokens to inject")
-    recursive_scanning: bool = Field(False, description="Enable recursive scanning")
+    recursive_scanning: Optional[bool] = Field(
+        None,
+        description="Enable recursive scanning override; omit to inherit world-book setting",
+    )
 
 
 class ProcessContextDiagnostic(BaseModel):

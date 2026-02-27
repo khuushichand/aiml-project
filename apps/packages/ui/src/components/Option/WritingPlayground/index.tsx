@@ -387,7 +387,8 @@ const ADVANCED_EXTRA_BODY_PARAM_KEYS = [
   "dry_sequence_breakers",
   "banned_tokens",
   "grammar",
-  "logit_bias"
+  "logit_bias",
+  "post_sampling_probs"
 ] as const
 
 type AdvancedNumberParamConfig = {
@@ -7192,6 +7193,24 @@ export const WritingPlayground = () => {
                                     {t(
                                       "option:writingPlayground.penalizeNewlineLabel",
                                       "Penalize newline"
+                                    )}
+                                  </Checkbox>
+                                )}
+                                {shouldShowAdvancedParam("post_sampling_probs") && (
+                                  <Checkbox
+                                    checked={Boolean(advancedExtraBody.post_sampling_probs)}
+                                    disabled={
+                                      settingsDisabled || !supportsAdvancedCompat
+                                    }
+                                    onChange={(event) =>
+                                      updateAdvancedExtraBodyField(
+                                        "post_sampling_probs",
+                                        event.target.checked ? true : null
+                                      )
+                                    }>
+                                    {t(
+                                      "option:writingPlayground.postSamplingProbsLabel",
+                                      "Post-sampling probabilities"
                                     )}
                                   </Checkbox>
                                 )}
