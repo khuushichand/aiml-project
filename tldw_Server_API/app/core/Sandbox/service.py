@@ -163,7 +163,13 @@ class SandboxService:
     ) -> None:
         if runtime != RuntimeType.lima:
             return
-        requested_policy = str(network_policy or self.policy.cfg.network_default or "deny_all")
+        requested_policy = str(network_policy or self.policy.cfg.network_default or "deny_all").strip().lower()
+        if requested_policy not in {"deny_all", "allowlist"}:
+            raise SandboxPolicy.PolicyUnsupported(
+                RuntimeType.lima,
+                requirement=requested_policy,
+                reasons=["unsupported_network_policy"],
+            )
         preflight = LimaRunner().preflight(network_policy=requested_policy)
         if preflight.available:
             return

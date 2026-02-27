@@ -27,3 +27,21 @@ async def test_acp_lima_runtime_fails_closed_when_strict_not_supported(monkeypat
     with pytest.raises(ACPResponseError, match="strict"):
         await manager.create_session(cwd="/workspace", user_id=7)
 
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_acp_lima_runtime_rejects_allow_all_policy(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="lima",
+            network_policy="allow_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_LIMA_AVAILABLE", "1")
+
+    with pytest.raises(ACPResponseError, match="deny_all or allowlist"):
+        await manager.create_session(cwd="/workspace", user_id=7)

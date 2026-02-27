@@ -371,7 +371,11 @@ class ACPSandboxRunnerManager:
         runtime = str(self.config.runtime or "").strip().lower()
         if runtime != RuntimeType.lima.value:
             return
-        network_policy = str(self.config.network_policy or "deny_all")
+        network_policy = str(self.config.network_policy or "deny_all").strip().lower()
+        if network_policy not in {"deny_all", "allowlist"}:
+            raise ACPResponseError(
+                "ACP lima strict policy requires network_policy to be deny_all or allowlist"
+            )
         preflight = LimaRunner().preflight(network_policy=network_policy)
         if preflight.available:
             return
