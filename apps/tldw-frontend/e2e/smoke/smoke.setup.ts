@@ -631,7 +631,7 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "Dense smoke sweeps can rate-limit model metadata probes; treated as environment noise for these routes.",
     owner: "Platform",
     expiresOn: "2026-03-31",
-    routes: ["/content-review", "/claims-review"]
+    routes: ["/content-review", "/claims-review", "/workspace-playground"]
   },
   {
     id: "m5-chatbooks-evaluations-cors-noise",
