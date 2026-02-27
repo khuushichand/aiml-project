@@ -105,6 +105,7 @@ _SANDBOX_NONCRITICAL_EXCEPTIONS = (
     IdempotencyConflict,
     QueueFull,
     SandboxPolicy.RuntimeUnavailable,
+    SandboxPolicy.PolicyUnsupported,
     SandboxService.InvalidSpecVersion,
     SandboxService.InvalidFirecrackerConfig,
 )
@@ -578,6 +579,31 @@ async def create_session(
                     "details": {"runtime": rt, "available": False, "suggested": ["docker"]}
                 }
             })
+        if isinstance(e, SandboxPolicy.PolicyUnsupported):
+            rt_attr = getattr(e, "runtime", None)
+            if rt_attr is None:
+                rt = "unknown"
+            else:
+                try:
+                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+                    rt = str(rt_attr) if rt_attr is not None else "unknown"
+            requirement = str(getattr(e, "requirement", "unknown"))
+            reasons = list(getattr(e, "reasons", []) or [])
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "policy_unsupported",
+                        "message": str(e),
+                        "details": {
+                            "runtime": rt,
+                            "requirement": requirement,
+                            "reasons": reasons,
+                        },
+                    }
+                },
+            )
         if isinstance(e, IdempotencyConflict):
             raise HTTPException(status_code=409, detail={
                 "error": {
@@ -1089,6 +1115,31 @@ async def start_run(
                     "details": {"runtime": rt, "available": False, "suggested": suggestions}
                 }
             })
+        if isinstance(e, SandboxPolicy.PolicyUnsupported):
+            rt_attr = getattr(e, "runtime", None)
+            if rt_attr is None:
+                rt = "unknown"
+            else:
+                try:
+                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+                    rt = str(rt_attr) if rt_attr is not None else "unknown"
+            requirement = str(getattr(e, "requirement", "unknown"))
+            reasons = list(getattr(e, "reasons", []) or [])
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "policy_unsupported",
+                        "message": str(e),
+                        "details": {
+                            "runtime": rt,
+                            "requirement": requirement,
+                            "reasons": reasons,
+                        },
+                    }
+                },
+            )
         if isinstance(e, IdempotencyConflict):
             return JSONResponse(status_code=409, content={
                 "error": {
