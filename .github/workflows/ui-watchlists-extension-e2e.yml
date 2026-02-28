@@ -45,13 +45,9 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-      TEST_MODE: "false"
-      TLDW_TEST_MODE: "0"
-      TESTING: "0"
+      TEST_MODE: "true"
       DISABLE_HEAVY_STARTUP: "1"
-      # Work around protobuf/opentelemetry runtime incompatibilities in CI runners.
-      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
-      MINIMAL_TEST_APP: "0"
+      MINIMAL_TEST_APP: "1"
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: "0"
       AUTH_MODE: single_user
       SINGLE_USER_API_KEY: watchlists-e2e-key-12345
@@ -82,12 +78,6 @@ jobs:
       - name: Install Playwright Chromium
         working-directory: apps/extension
         run: bunx playwright install --with-deps chromium
-
-      - name: Install PortAudio build deps
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y portaudio19-dev
 
       - name: Setup Python and server dependencies
         uses: ./.github/actions/setup-python-deps
