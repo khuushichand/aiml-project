@@ -385,15 +385,15 @@ See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details
 
 | I want to... | Guide |
 |--------------|-------|
-| Try it in 5 minutes with hand-holding | [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) |
-| Start from Tire Kicker, then launch the WebUI | [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui) |
-| Build apps against the API locally | [Local Development Guide](Docs/Getting_Started/Local_Development.md) |
-| Run on my home server with Docker | [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) |
-| Deploy for a team with proper security | [Production Guide](Docs/Getting_Started/Production.md) |
+| Choose the right onboarding path | [Getting Started Index](Docs/Getting_Started/README.md) |
+| Start from local single-user, then launch the WebUI | [Local Profile: Add the WebUI](#local-profile-add-the-webui) |
+| Build apps against the API locally | [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) |
+| Run on my home server with Docker | [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) |
+| Deploy for a team with proper security | [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) |
 
-### Tire Kicker: Add the WebUI
+### Local Profile: Add the WebUI
 
-If you already completed the [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) and your API is running at `http://127.0.0.1:8000`, this is the shortest add-on path:
+If you already completed the [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) and your API is running at `http://127.0.0.1:8000`, this is the shortest add-on path:
 
 ```bash
 # from the repo root
@@ -528,7 +528,7 @@ Then open `http://YOUR_SERVER_IP:8080` from your mobile device on the same netwo
 
 Tip: http://127.0.0.1:8000/api/v1/config/quickstart redirects to your configured quickstart target.
 
-Security note: avoid exposing this quickstart setup directly to the public internet. For internet-facing access, use HTTPS with a reverse proxy and follow `Docs/Getting_Started/Production.md`.
+Security note: avoid exposing this quickstart setup directly to the public internet. For internet-facing access, use HTTPS with a reverse proxy and follow `Docs/Deployment/First_Time_Production_Setup.md`.
 
 ### Docker Compose
 
@@ -1024,10 +1024,11 @@ Run locally
 <summary>Documentation and resources</summary>
 
 **Getting Started Guides:**
-- [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) - 5-minute setup with hand-holding
-- [Local Development Guide](Docs/Getting_Started/Local_Development.md) - building against the API
-- [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) - running on your server
-- [Production Guide](Docs/Getting_Started/Production.md) - team deployment with security
+- [Getting Started Index](Docs/Getting_Started/README.md) - choose the right setup path
+- [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) - local API development path
+- [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) - self-host with Docker
+- [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) - team deployment baseline
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) - optional acceleration and speech-to-text setup
 
 **Reference:**
 - `Docs/Documentation.md` - documentation index and developer guide links

@@ -172,7 +172,7 @@ class TestMediaEndpointContextualIntegration:
             "contextual_llm_model": "gpt-3.5-turbo"
         }
 
-        with patch('tldw_Server_API.app.api.v1.endpoints.media._process_uploaded_files') as mock_upload:
+        with patch('tldw_Server_API.app.api.v1.endpoints.media._save_uploaded_files') as mock_upload:
             with patch('tldw_Server_API.app.api.v1.endpoints.media.process_document_content') as mock_process:
                 mock_upload.return_value = (["/tmp/test.txt"], [])  # nosec B108
                 mock_process.return_value = {"success": True, "media_id": 124}

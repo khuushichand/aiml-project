@@ -28,6 +28,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
+    save_uploaded_files as core_save_uploaded_files,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
+    download_url_async as core_download_url_async,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
@@ -36,10 +40,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
 from tldw_Server_API.app.api.v1.endpoints.media.input_contracts import (
     normalize_urls_field,
     validate_media_inputs,
-)
-from tldw_Server_API.app.api.v1.endpoints.media.compat_patchpoints import (
-    get_download_url_async,
-    get_save_uploaded_files,
 )
 from tldw_Server_API.app.api.v1.endpoints.media.deprecation_signals import (
     apply_media_legacy_headers,
@@ -81,8 +81,9 @@ async def process_documents_endpoint(
 
     This is a modularized version of the original legacy implementation in
     `_legacy_media.process_documents_endpoint`, preserving behavior while
-    routing through the `media` package and using the media shim for helpers
-    that tests monkeypatch (e.g. `_save_uploaded_files`, `_download_url_async`).
+    routing through the `media` package and resolving compatibility patch
+    targets directly from `media` (e.g. `_save_uploaded_files`,
+    `_download_url_async`).
     """
 
     logger.info("Request received for /process-documents (no persistence).")
@@ -149,8 +150,12 @@ async def process_documents_endpoint(
         # --- Handle Uploads ---
         if files:
             # Preserve test-time monkeypatching of `media.file_validator_instance`
-            # and `_save_uploaded_files` via the compatibility patchpoint shim.
-            save_uploaded_files = get_save_uploaded_files(media_mod)
+            # and `media._save_uploaded_files` via direct media-module resolution.
+            save_uploaded_files = getattr(
+                media_mod,
+                "_save_uploaded_files",
+                core_save_uploaded_files,
+            )
             validator = getattr(
                 media_mod,
                 "file_validator_instance",
@@ -214,9 +219,13 @@ async def process_documents_endpoint(
 
             allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
 
-            # Preserve test-time monkeypatching of `_download_url_async`
-            # via the compatibility patchpoint shim.
-            download_url_async = get_download_url_async(media_mod)
+            # Preserve test-time monkeypatching of `media._download_url_async`
+            # without an intermediate compatibility adapter.
+            download_url_async = getattr(
+                media_mod,
+                "_download_url_async",
+                core_download_url_async,
+            )
 
             download_tasks = [
                 download_url_async(

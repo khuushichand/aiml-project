@@ -38,6 +38,9 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
+    download_url_async as core_download_url_async,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
     run_batch_processor,
@@ -49,9 +52,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import File
 from tldw_Server_API.app.api.v1.endpoints.media.input_contracts import (
     normalize_urls_field,
     validate_media_inputs,
-)
-from tldw_Server_API.app.api.v1.endpoints.media.compat_patchpoints import (
-    get_download_url_async,
 )
 from tldw_Server_API.app.api.v1.endpoints.media.deprecation_signals import (
     apply_media_legacy_headers,
@@ -187,7 +187,11 @@ async def process_pdfs_endpoint(
 
         # ---- Handle URL inputs via shared downloader ----
         if form_data.urls:
-            download_url_async = get_download_url_async(media_mod)
+            download_url_async = getattr(
+                media_mod,
+                "_download_url_async",
+                core_download_url_async,
+            )
             download_tasks = [
                 download_url_async(
                     client=None,

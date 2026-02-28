@@ -178,7 +178,6 @@ for _module_name in _MEDIA_ENDPOINT_MODULES:
 
 # Helpers/exported patch points
 _save_uploaded_files = core_save_uploaded_files
-_process_uploaded_files = _save_uploaded_files  # backward-compat alias for tests
 TempDirManager = CoreTempDirManager
 
 
@@ -216,8 +215,6 @@ class _DummyCache(dict):
 
 
 cache = _DummyCache()
-LEGACY_MEDIA_SHIM_MODE = "adapter_only"
-_legacy_media = None  # Backwards-compat attribute for tests expecting it.
 smart_download = _smart_download  # Backwards-compat for tests monkeypatching media.smart_download
 MEDIA_CACHE_EXCEPTIONS = (
     RuntimeError,
@@ -373,14 +370,12 @@ __all__ = [
     "router",
     "_download_url_async",
     "_save_uploaded_files",
-    "_process_uploaded_files",
     "_process_document_like_item",
     "_validate_inputs",
     "TempDirManager",
     "cache",
     "cache_response",
     "invalidate_cache",
-    "LEGACY_MEDIA_SHIM_MODE",
     "get_request_user",
     "get_media_db_for_user",
     "get_usage_event_logger",

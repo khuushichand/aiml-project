@@ -15,8 +15,8 @@ from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import WebScrapingRequest
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.api.v1.endpoints.media.compat_patchpoints import (
-    get_process_web_scraping_task,
+from tldw_Server_API.app.services.web_scraping_service import (
+    process_web_scraping_task,
 )
 
 router = APIRouter()
@@ -40,7 +40,8 @@ async def process_web_scraping_endpoint(
 
     This is the modular implementation of `/process-web-scraping`, mirroring
     the legacy behavior while routing through the `media` package and using
-    the `media` shim so tests can continue to patch `process_web_scraping_task`.
+    direct media/service task resolution so tests can patch
+    `media.process_web_scraping_task`.
     """
     try:
         # Usage logging is best-effort; never fail the request.
@@ -55,9 +56,9 @@ async def process_web_scraping_endpoint(
                 },
             )
 
-        # Resolve the scraping task via the media shim so tests that
-        # monkeypatch `media.process_web_scraping_task` continue to work.
-        task = get_process_web_scraping_task(media_mod)
+        # Resolve the scraping task from media first so tests can monkeypatch
+        # `media.process_web_scraping_task` without a separate shim module.
+        task = getattr(media_mod, "process_web_scraping_task", process_web_scraping_task)
 
         result = await task(
             scrape_method=payload.scrape_method,

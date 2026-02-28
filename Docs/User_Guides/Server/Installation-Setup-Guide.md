@@ -1,10 +1,10 @@
 # Installation & Setup Guide
 
 > **Note:** This guide is being replaced by the new Getting Started guides:
-> - [Tire Kicker Guide](../../Getting_Started/Tire_Kicker.md) - 5-minute setup
-> - [Local Development Guide](../../Getting_Started/Local_Development.md) - building against the API
-> - [Docker Self-Host Guide](../../Getting_Started/Docker_Self_Host.md) - running on your server
-> - [Production Guide](../../Getting_Started/Production.md) - team deployment
+> - [Getting Started Index](../../Getting_Started/README.md) - choose your setup path
+> - [Local Single-User Profile](../../Getting_Started/Profile_Local_Single_User.md) - local API setup
+> - [Docker Single-User Profile](../../Getting_Started/Profile_Docker_Single_User.md) - self-hosting with Docker
+> - [Docker Multi-User + Postgres Profile](../../Getting_Started/Profile_Docker_Multi_User_Postgres.md) - production/team baseline
 >
 > The content below remains valid but may not be actively maintained.
 
