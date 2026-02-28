@@ -23,17 +23,33 @@ from tldw_Server_API.app.core.config import get_stt_config
 from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 
-try:
-    # Reuse the central model-name parser so HTTP/OpenAI-style model
-    # identifiers resolve consistently across REST, ingestion, and jobs.
-    from .Audio_Transcription_Lib import parse_transcription_model
-except ImportError:  # pragma: no cover - defensive fallback for minimal envs
+def _fallback_parse_transcription_model(
+    model_name: str,
+) -> tuple[str, str, str | None]:
+    model_name = (model_name or "").strip()
+    lowered = model_name.lower() or "whisper-1"
+    # Default everything to Whisper when the real parser is unavailable.
+    return "whisper", lowered, None
 
-    def parse_transcription_model(model_name: str) -> tuple[str, str, str | None]:  # type: ignore[override]
-        model_name = (model_name or "").strip()
-        lowered = model_name.lower() or "whisper-1"
-        # Default everything to Whisper when the real parser is unavailable.
-        return "whisper", lowered, None
+
+def _parse_transcription_model(model_name: str) -> tuple[str, str, str | None]:
+    """
+    Resolve model names without importing heavy STT modules at import time.
+
+    Importing Audio_Transcription_Lib can pull in torch/ctranslate stacks in
+    some environments; keep that dependency lazy so API module import remains
+    stable for lightweight endpoints and tests.
+    """
+    try:
+        # Reuse the central model-name parser so HTTP/OpenAI-style model
+        # identifiers resolve consistently across REST, ingestion, and jobs.
+        from .Audio_Transcription_Lib import parse_transcription_model as _real_parser
+    except Exception:
+        return _fallback_parse_transcription_model(model_name)
+    try:
+        return _real_parser(model_name)
+    except Exception:
+        return _fallback_parse_transcription_model(model_name)
 
 
 _SUPPORTED_PARAKEET_VARIANTS = {"standard", "onnx", "mlx", "cuda"}
@@ -877,7 +893,7 @@ class SttProviderRegistry:
                 provider = SttProviderName.EXTERNAL.value
                 return provider, normalized_name, None
 
-            raw_provider, model, variant = parse_transcription_model(normalized_name)
+            raw_provider, model, variant = _parse_transcription_model(normalized_name)
         except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
             # Defensive: treat unknown models as Whisper-family
             raw_provider, model, variant = "whisper", (model_name or "").strip(), None
