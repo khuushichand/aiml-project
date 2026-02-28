@@ -426,6 +426,36 @@ def _normalize_reason(outcome: str, message: str | None) -> str:
         return "other"
 
 
+def _runtime_name_from_policy_exception(exc: Exception) -> str:
+    rt_attr = getattr(exc, "runtime", None)
+    if rt_attr is None:
+        return "unknown"
+    try:
+        return rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        return str(rt_attr) if rt_attr is not None else "unknown"
+
+
+def _runtime_unavailable_suggestions(runtime_name: str) -> list[str]:
+    suggestions: list[str] = []
+    try:
+        from tldw_Server_API.app.core.Sandbox.runners.docker_runner import docker_available as _dock_avail
+        from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import (
+            firecracker_available as _fc_avail,
+        )
+
+        rt = str(runtime_name or "").strip().lower()
+        if rt == "lima":
+            return []
+        if rt == "firecracker" and _dock_avail():
+            suggestions.append("docker")
+        elif rt == "docker" and _fc_avail():
+            suggestions.append("firecracker")
+        return sorted(set(suggestions))
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        return []
+
+
 @router.get("/runtimes", response_model=SandboxRuntimesResponse, summary="Discover available runtimes")
 async def get_runtimes(current_user: User = Depends(get_request_user)) -> SandboxRuntimesResponse:
     info = _service.feature_discovery()
@@ -563,28 +593,8 @@ async def create_session(
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         if isinstance(e, SandboxPolicy.RuntimeUnavailable):
             # Map to 503 with details per PRD; read runtime from exception with safe fallback
-            rt_attr = getattr(e, "runtime", None)
-            if rt_attr is None:
-                rt = "unknown"
-            else:
-                try:
-                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                    rt = str(rt_attr) if rt_attr is not None else "unknown"
-            suggestions: list[str] = []
-            try:
-                from tldw_Server_API.app.core.Sandbox.runners.docker_runner import docker_available as _dock_avail
-                from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import (
-                    firecracker_available as _fc_avail,
-                )
-                if str(rt) == "firecracker":
-                    if _dock_avail() or True:
-                        suggestions.append("docker")
-                elif str(rt) == "docker" and _fc_avail():
-                    suggestions.append("firecracker")
-                suggestions = sorted(set(suggestions))
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                suggestions = []
+            rt = _runtime_name_from_policy_exception(e)
+            suggestions = _runtime_unavailable_suggestions(rt)
             reasons = list(getattr(e, "reasons", []) or [])
             logger.exception("RuntimeUnavailable error occurred on sandbox session creation: {}", str(e))
             return JSONResponse(status_code=503, content={
@@ -595,14 +605,7 @@ async def create_session(
                 }
             })
         if isinstance(e, SandboxPolicy.PolicyUnsupported):
-            rt_attr = getattr(e, "runtime", None)
-            if rt_attr is None:
-                rt = "unknown"
-            else:
-                try:
-                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                    rt = str(rt_attr) if rt_attr is not None else "unknown"
+            rt = _runtime_name_from_policy_exception(e)
             requirement = str(getattr(e, "requirement", "unknown"))
             reasons = list(getattr(e, "reasons", []) or [])
             return JSONResponse(
@@ -1097,32 +1100,8 @@ async def start_run(
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         if isinstance(e, SandboxPolicy.RuntimeUnavailable):
             # Use runtime from exception; fallback only if missing/None
-            rt_attr = getattr(e, "runtime", None)
-            if rt_attr is None:
-                rt = "unknown"
-            else:
-                try:
-                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                    rt = str(rt_attr) if rt_attr is not None else "unknown"
-            # Build dynamic suggestions based on availability
-            suggestions = []
-            try:
-                # Prefer suggesting Docker when Firecracker unavailable
-                from tldw_Server_API.app.core.Sandbox.runners.docker_runner import docker_available as _dock_avail
-                from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import (
-                    firecracker_available as _fc_avail,
-                )
-                if str(rt) == "firecracker":
-                    # Suggest docker even if availability is unknown (tests expect this)
-                    if _dock_avail() or True:
-                        suggestions.append("docker")
-                elif str(rt) == "docker" and _fc_avail():
-                    suggestions.append("firecracker")
-                # Ensure uniqueness
-                suggestions = sorted(set(suggestions))
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                suggestions = ["docker"]
+            rt = _runtime_name_from_policy_exception(e)
+            suggestions = _runtime_unavailable_suggestions(rt)
             reasons = list(getattr(e, "reasons", []) or [])
             return JSONResponse(status_code=503, content={
                 "error": {
@@ -1132,14 +1111,7 @@ async def start_run(
                 }
             })
         if isinstance(e, SandboxPolicy.PolicyUnsupported):
-            rt_attr = getattr(e, "runtime", None)
-            if rt_attr is None:
-                rt = "unknown"
-            else:
-                try:
-                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                    rt = str(rt_attr) if rt_attr is not None else "unknown"
+            rt = _runtime_name_from_policy_exception(e)
             requirement = str(getattr(e, "requirement", "unknown"))
             reasons = list(getattr(e, "reasons", []) or [])
             return JSONResponse(

@@ -373,6 +373,8 @@ class LimaRunner:
         cpu = int(spec.cpu) if spec.cpu else 2
         memory_mb = int(spec.memory_mb) if spec.memory_mb else 2048
         net_policy = (spec.network_policy or "deny_all").lower()
+        if net_policy == "allowlist":
+            raise RuntimeError("strict_allowlist_not_supported")
 
         lima_config = _generate_lima_config(
             workspace_host_path=workspace,

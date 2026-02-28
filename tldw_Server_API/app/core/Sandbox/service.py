@@ -170,6 +170,13 @@ class SandboxService:
                 requirement=requested_policy,
                 reasons=["unsupported_network_policy"],
             )
+        if requested_policy == "allowlist":
+            # Lima allowlist is not yet enforced by the runtime path; fail closed.
+            raise SandboxPolicy.PolicyUnsupported(
+                RuntimeType.lima,
+                requirement=requested_policy,
+                reasons=["strict_allowlist_not_supported"],
+            )
         preflight = LimaRunner().preflight(network_policy=requested_policy)
         if preflight.available:
             return
@@ -579,6 +586,8 @@ class SandboxService:
         try:
             lima_preflight = LimaRunner().preflight(network_policy="deny_all")
             lima_enforcement_ready = dict(lima_preflight.enforcement_ready or {})
+            # Allowlist enforcement is not implemented for Lima runtime execution.
+            lima_enforcement_ready["allowlist"] = False
             lima_host = dict(lima_preflight.host or {})
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             lima_enforcement_ready = {"deny_all": False, "allowlist": False}
@@ -1167,10 +1176,20 @@ class SandboxService:
                     if admitted.phase != RunPhase.starting:
                         return admitted
                     self._apply_admitted_status(status, admitted)
-                    real = self._run_with_claim_lease(
-                        status.id,
-                        lambda: self._start_lima_run_with_execution_preflight(status.id, spec, ws),
-                    )
+                    try:
+                        real = self._run_with_claim_lease(
+                            status.id,
+                            lambda: self._start_lima_run_with_execution_preflight(status.id, spec, ws),
+                        )
+                    except (SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported) as e:
+                        logger.warning(f"Lima execution preflight rejected run: {e}")
+                        status.phase = RunPhase.failed
+                        status.message = "lima_policy_failed"
+                        status.finished_at = datetime.utcnow()
+                        self._orch.update_run(status.id, status)
+                        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                            get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "lima_policy_failed"})
+                        return status
                     real.id = status.id
                     status.phase = real.phase
                     status.exit_code = real.exit_code

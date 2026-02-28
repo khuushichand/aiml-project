@@ -38,3 +38,18 @@ def test_lima_preflight_permission_override_returns_permission_reason(monkeypatc
     assert result.available is False
     assert result.enforcement_ready == {"deny_all": False, "allowlist": False}
     assert "permission_denied_host_enforcement" in result.reasons
+
+
+def test_lima_preflight_wsl_overrides_cannot_bypass_fail_closed(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_LIMA_AVAILABLE", "1")
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    monkeypatch.setenv("TLDW_SANDBOX_LIMA_ENFORCER_DENY_ALL_READY", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_LIMA_ENFORCER_ALLOWLIST_READY", "1")
+
+    result = LimaRunner().preflight(network_policy="deny_all")
+
+    assert result.runtime == RuntimeType.lima
+    assert result.available is False
+    assert result.enforcement_ready == {"deny_all": False, "allowlist": False}
+    assert "permission_denied_host_enforcement" in result.reasons
