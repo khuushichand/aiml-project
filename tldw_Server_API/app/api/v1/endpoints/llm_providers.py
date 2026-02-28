@@ -1271,6 +1271,9 @@ def _resolve_model_tokenizer_support(
             model_name,
             strict_mode_effective=_strict_token_counting_enabled_shared(default=False),
             config_parser=config_parser,
+            runtime_probe_exact=True,
+            runtime_probe_timeout_seconds=2.0,
+            runtime_probe_text="",
         )
     except Exception:  # noqa: BLE001 - metadata path should fail open
         return {

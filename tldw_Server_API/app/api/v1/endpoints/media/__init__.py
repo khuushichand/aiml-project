@@ -216,6 +216,7 @@ class _DummyCache(dict):
 
 
 cache = _DummyCache()
+LEGACY_MEDIA_SHIM_MODE = "adapter_only"
 _legacy_media = None  # Backwards-compat attribute for tests expecting it.
 smart_download = _smart_download  # Backwards-compat for tests monkeypatching media.smart_download
 MEDIA_CACHE_EXCEPTIONS = (
@@ -379,6 +380,7 @@ __all__ = [
     "cache",
     "cache_response",
     "invalidate_cache",
+    "LEGACY_MEDIA_SHIM_MODE",
     "get_request_user",
     "get_media_db_for_user",
     "get_usage_event_logger",

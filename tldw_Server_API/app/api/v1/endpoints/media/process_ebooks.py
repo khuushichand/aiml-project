@@ -39,6 +39,17 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     run_batch_processor,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
+from tldw_Server_API.app.api.v1.endpoints.media.input_contracts import (
+    normalize_urls_field,
+    validate_media_inputs,
+)
+from tldw_Server_API.app.api.v1.endpoints.media.compat_patchpoints import (
+    get_download_url_async,
+)
+from tldw_Server_API.app.api.v1.endpoints.media.deprecation_signals import (
+    apply_media_legacy_headers,
+    build_media_legacy_signal,
+)
 
 router = APIRouter()
 
@@ -149,15 +160,29 @@ async def process_ebooks_endpoint(
         logger.debug("Ebook process endpoint usage logging failed", exc_info=usage_log_error)
 
     # Legacy endpoint treats urls=[""] as "no URLs".
-    if form_data.urls and form_data.urls == [""]:
+    legacy_urls_empty_sentinel_used = bool(form_data.urls and form_data.urls == [""])
+    if legacy_urls_empty_sentinel_used:
         logger.info(
             "Received urls=[''], treating as no URLs provided for ebook processing."
         )
-        form_data.urls = None
+    form_data.urls = normalize_urls_field(form_data.urls)
+    legacy_signal = (
+        build_media_legacy_signal(
+            successor="/api/v1/media/process-ebooks",
+            warning_code="legacy_urls_empty_sentinel",
+        )
+        if legacy_urls_empty_sentinel_used
+        else None
+    )
 
     # Reuse shared validation so that error messages and 400 semantics match
     # the legacy implementation (including the "At least one 'url'..." detail).
-    media_mod._validate_inputs("ebook", form_data.urls, files)  # type: ignore[arg-type]
+    validate_media_inputs(
+        media_mod._validate_inputs,
+        "ebook",
+        form_data.urls,
+        files,
+    )
 
     batch: dict[str, Any] = {"results": [], "errors": []}
     items: list[ProcessItem] = []
@@ -231,7 +256,7 @@ async def process_ebooks_endpoint(
                 'Attempting to download {} EPUB URL(s) asynchronously...',
                 len(form_data.urls),
             )
-            download_url_async = media_mod._download_url_async
+            download_url_async = get_download_url_async(media_mod)
             download_tasks = [
                 download_url_async(
                     client=None,
@@ -295,7 +320,10 @@ async def process_ebooks_endpoint(
                 if batch.get("results")
                 else status.HTTP_400_BAD_REQUEST
             )
-            return JSONResponse(status_code=status_code, content=batch)
+            response = JSONResponse(status_code=status_code, content=batch)
+            if legacy_signal is not None:
+                apply_media_legacy_headers(response, legacy_signal)
+            return response
 
         # Prepare chunking options (with optional templates/hierarchical rules).
         if form_data.perform_chunking:
@@ -485,7 +513,10 @@ async def process_ebooks_endpoint(
     except Exception as rechunk_err:
         logger.debug("Ebook post-processing re-chunking skipped/failed: {}", rechunk_err)
 
-    return JSONResponse(status_code=final_status_code, content=batch)
+    response = JSONResponse(status_code=final_status_code, content=batch)
+    if legacy_signal is not None:
+        apply_media_legacy_headers(response, legacy_signal)
+    return response
 
 
 __all__ = ["router"]

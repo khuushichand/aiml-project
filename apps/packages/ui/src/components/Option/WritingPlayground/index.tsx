@@ -1074,6 +1074,11 @@ const getSettingsFromPayload = (
   const rawAuthorDepthMode = String(
     settings.author_note_depth_mode ?? settings.authorNoteDepthMode ?? ""
   )
+  const supportedBasicStoppingModes: readonly BasicStoppingModeType[] = [
+    "max_tokens",
+    "new_line",
+    "fill_suffix"
+  ]
   return {
     temperature: toNumber(settings.temperature, DEFAULT_SETTINGS.temperature),
     top_p: toNumber(settings.top_p, DEFAULT_SETTINGS.top_p),
@@ -1086,8 +1091,8 @@ const getSettingsFromPayload = (
       settings.use_basic_stopping_mode ?? settings.useBasicStoppingMode,
       DEFAULT_SETTINGS.use_basic_stopping_mode
     ),
-    basic_stopping_mode_type: ["max_tokens", "new_line", "fill_suffix"].includes(
-      rawBasicStoppingModeType
+    basic_stopping_mode_type: supportedBasicStoppingModes.includes(
+      rawBasicStoppingModeType as BasicStoppingModeType
     )
       ? (rawBasicStoppingModeType as BasicStoppingModeType)
       : DEFAULT_SETTINGS.basic_stopping_mode_type,

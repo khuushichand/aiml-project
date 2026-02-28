@@ -10,8 +10,14 @@ def _fake_config() -> configparser.ConfigParser:
     cfg.set("API", "anthropic_model", "claude-opus-4-20250514")
     cfg.set("API", "google_api_key", "google-test-key")
     cfg.set("API", "google_model", "gemini-2.5-flash")
+    cfg.set("API", "groq_api_key", "groq-test-key")
+    cfg.set("API", "groq_model", "openai/gpt-4o-mini")
     cfg.set("API", "cohere_api_key", "cohere-test-key")
     cfg.set("API", "cohere_model", "command-a-03-2025")
+    cfg.set("API", "deepseek_api_key", "deepseek-test-key")
+    cfg.set("API", "deepseek_model", "deepseek-chat")
+    cfg.set("API", "mistral_api_key", "mistral-test-key")
+    cfg.set("API", "mistral_model", "mistral-large-latest")
     cfg.set("API", "bedrock_api_key", "bedrock-test-key")
     cfg.set("API", "bedrock_model", "anthropic.claude-3-5-sonnet-20240620-v1:0")
     cfg.set("API", "bedrock_region", "us-west-2")
@@ -122,19 +128,62 @@ def test_llm_providers_tokenizer_metadata_reflects_strict_runtime_env(monkeypatc
         assert model_info["strict_mode_effective"] is True
 
 
-def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock(monkeypatch):
+def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock_groq(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+    import tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver as resolver_module
     from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
         resolve_tokenizer_metadata as resolve_tokenizer_metadata_shared,
     )
 
     monkeypatch.delenv("STRICT_TOKEN_COUNTING", raising=False)
+    monkeypatch.delenv("BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    monkeypatch.delenv("BEDROCK_API_BASE_URL", raising=False)
+    monkeypatch.delenv("BEDROCK_OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("BEDROCK_REGION", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE123")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-example-key")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
     monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config)
     monkeypatch.setattr(llm_endpoints, "list_provider_models", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(llm_endpoints, "apply_llm_provider_overrides_to_listing", lambda result: result)
     monkeypatch.setattr(llm_endpoints, "get_api_keys", lambda: {})
     monkeypatch.setattr(llm_endpoints, "list_image_models_for_catalog", lambda: [])
     monkeypatch.setattr(llm_endpoints, "_llm_registry_capability_envelopes", lambda: {})
+
+    class _FakeTokenizer:
+        name = "o200k_base"
+
+        def encode(self, text: str, disallowed_special=()):  # noqa: ARG002
+            return [ord(ch) for ch in text]
+
+        def decode(self, token_ids):
+            return "".join(chr(int(token_id)) for token_id in token_ids)
+
+    monkeypatch.setattr(resolver_module, "resolve_tiktoken_encoding", lambda _model: _FakeTokenizer())
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    def _fake_post(*, url: str, payload, headers, timeout):  # noqa: ANN001, ARG001
+        lowered = str(url).lower()
+        if "api.anthropic.com" in lowered and "count_tokens" in lowered:
+            return _FakeResponse(200, {"input_tokens": 11})
+        if "generativelanguage.googleapis.com" in lowered and "counttokens" in lowered:
+            return _FakeResponse(200, {"totalTokens": 9})
+        if "api.cohere.ai" in lowered and "tokenize" in lowered:
+            return _FakeResponse(200, {"tokens": [1, 2, 3]})
+        if "api.cohere.ai" in lowered and "detokenize" in lowered:
+            return _FakeResponse(200, {"text": "ok"})
+        if "bedrock-runtime.us-west-2.amazonaws.com" in lowered and "count-tokens" in lowered:
+            return _FakeResponse(200, {"inputTokens": 8})
+        return _FakeResponse(404, {})
+
+    monkeypatch.setattr(resolver_module, "_http_post", _fake_post)
 
     # Avoid local env crashes from MLX artifact fallback importing transformers/torch in this test process.
     def _safe_resolve_metadata(provider, model, **kwargs):
@@ -179,3 +228,19 @@ def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock(m
     assert bedrock_tok["count_accuracy"] == "exact"
     assert bedrock_tok["kind"] == "provider-native-count"
     assert bedrock_tok["detokenize"] is False
+
+    groq_model = providers["groq"]["models"][0]
+    groq_tok = providers["groq"]["tokenizers"][groq_model]
+    assert groq_tok["count_accuracy"] == "exact"
+    assert groq_tok["kind"] == "tiktoken"
+    assert groq_tok["detokenize"] is True
+
+    deepseek_model = providers["deepseek"]["models"][0]
+    deepseek_tok = providers["deepseek"]["tokenizers"][deepseek_model]
+    assert deepseek_tok["count_accuracy"] == "unavailable"
+    assert deepseek_tok["kind"] == "tiktoken"
+
+    mistral_model = providers["mistral"]["models"][0]
+    mistral_tok = providers["mistral"]["tokenizers"][mistral_model]
+    assert mistral_tok["count_accuracy"] == "unavailable"
+    assert mistral_tok["kind"] == "tiktoken"

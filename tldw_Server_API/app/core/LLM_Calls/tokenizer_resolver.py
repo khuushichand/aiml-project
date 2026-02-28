@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-import os
+import hashlib
+import hmac
+import ipaddress
+import json
 import math
+import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, quote_plus
+from urllib.parse import parse_qsl, quote, quote_plus, urlparse
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
@@ -155,6 +160,13 @@ class TokenizerResolution:
         if self.error:
             payload["error"] = self.error
         return payload
+
+
+@dataclass(frozen=True)
+class BedrockSigV4Credentials:
+    access_key_id: str
+    secret_access_key: str
+    session_token: str | None = None
 
 
 class ProviderNativeTokenizerHTTPAdapter:
@@ -502,17 +514,16 @@ class BedrockCountOnlyHTTPAdapter(_HTTPJSONAdapterBase):
         *,
         base_url: str,
         model: str,
-        api_key: str,
+        api_key: str | None,
+        region: str | None,
+        aws_credentials: BedrockSigV4Credentials | None,
         timeout_seconds: float = 10.0,
     ) -> None:
         super().__init__(base_url=base_url, timeout_seconds=timeout_seconds)
         self.model = model.strip()
         self.api_key = api_key
-
-    def _headers(self) -> dict[str, str]:
-        headers = super()._headers()
-        headers["Authorization"] = f"Bearer {self.api_key}"
-        return headers
+        self.region = str(region or "").strip() or None
+        self.aws_credentials = aws_credentials
 
     def _candidate_paths(self) -> tuple[str, ...]:
         model_id = quote(self.model, safe="")
@@ -520,6 +531,54 @@ class BedrockCountOnlyHTTPAdapter(_HTTPJSONAdapterBase):
             f"/model/{model_id}/count-tokens",
             f"/bedrock-runtime/model/{model_id}/count-tokens",
         )
+
+    def _should_use_local_proxy_auth(self) -> bool:
+        host = _url_hostname(self.base_url)
+        return _is_local_or_private_host(host)
+
+    def _request_json(self, paths: tuple[str, ...], payload: dict[str, Any]) -> dict[str, Any]:
+        last_error: Exception | None = None
+        for path in paths:
+            url = f"{self.base_url}{path}"
+            headers = {"Content-Type": "application/json"}
+            try:
+                if self._should_use_local_proxy_auth():
+                    if self.api_key:
+                        headers["Authorization"] = f"Bearer {self.api_key}"
+                else:
+                    credentials = self.aws_credentials or _resolve_bedrock_sigv4_credentials(parser=None)
+                    if credentials is None:
+                        raise TokenizerUnavailable("Bedrock SigV4 credentials are not configured")
+                    self.aws_credentials = credentials
+                    signed_headers = _build_bedrock_sigv4_headers(
+                        url=url,
+                        payload=payload,
+                        region=self.region,
+                        credentials=credentials,
+                    )
+                    headers.update(signed_headers)
+                response = _http_post(url=url, payload=payload, headers=headers, timeout=self.timeout_seconds)
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            if response.status_code == 404:
+                continue
+            if response.status_code >= 400:
+                raise TokenizerUnavailable(
+                    f"Provider tokenizer endpoint error ({response.status_code})"
+                )
+            try:
+                data = response.json()
+            except Exception as exc:
+                raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid JSON") from exc
+            if not isinstance(data, dict):
+                raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid payload")
+            return data
+
+        if last_error is not None:
+            raise TokenizerUnavailable("Provider tokenizer endpoint unavailable") from last_error
+        raise TokenizerUnavailable("Provider tokenizer endpoint not found")
 
     def count_tokens(self, text: str) -> int:
         payload = {
@@ -584,6 +643,221 @@ def normalize_native_tokenizer_base_url(base_url: str) -> str:
             normalized = normalized[: -len(suffix)]
             break
     return normalized
+
+
+def _url_hostname(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or "").strip())
+        return str(parsed.hostname or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _is_openai_host_url(url: str) -> bool:
+    host = _url_hostname(url)
+    if not host:
+        return False
+    return host == "api.openai.com" or host.endswith(".openai.com") or host.endswith(".openai.azure.com")
+
+
+def _is_local_or_private_host(host: str) -> bool:
+    lowered = str(host or "").strip().lower()
+    if not lowered:
+        return False
+    if lowered in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    if lowered.endswith(".local"):
+        return True
+    try:
+        addr = ipaddress.ip_address(lowered)
+    except Exception:
+        return False
+    return bool(addr.is_loopback or addr.is_private)
+
+
+def _is_bedrock_runtime_base_url(url: str) -> bool:
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    path = str(parsed.path or "").strip()
+    if path and path != "/":
+        return False
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if _is_local_or_private_host(host):
+        return True
+    if "bedrock-runtime" not in host:
+        return False
+    return host.endswith(".amazonaws.com") or host.endswith(".amazonaws.com.cn")
+
+
+def _sigv4_hash_hex(payload: str) -> str:
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _sigv4_hmac(key: bytes, value: str) -> bytes:
+    return hmac.new(key, value.encode("utf-8"), hashlib.sha256).digest()
+
+
+def _canonical_query_string(raw_query: str) -> str:
+    if not raw_query:
+        return ""
+    pairs = parse_qsl(raw_query, keep_blank_values=True)
+    encoded: list[tuple[str, str]] = []
+    for key, value in pairs:
+        encoded.append(
+            (
+                quote(str(key), safe="-_.~"),
+                quote(str(value), safe="-_.~"),
+            )
+        )
+    encoded.sort()
+    return "&".join(f"{key}={value}" for key, value in encoded)
+
+
+def _canonical_header_value(value: Any) -> str:
+    return " ".join(str(value or "").strip().split())
+
+
+def _build_bedrock_sigv4_headers(
+    *,
+    url: str,
+    payload: dict[str, Any],
+    region: str | None,
+    credentials: BedrockSigV4Credentials,
+) -> dict[str, str]:
+    parsed = urlparse(str(url or "").strip())
+    host = str(parsed.netloc or "").strip()
+    if not host:
+        raise TokenizerUnavailable("Bedrock SigV4 signing requires an absolute URL")
+    canonical_uri = quote(str(parsed.path or "/"), safe="/-_.~%")
+    canonical_query = _canonical_query_string(str(parsed.query or ""))
+    payload_json = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    payload_hash = _sigv4_hash_hex(payload_json)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = timestamp[:8]
+    signing_region = (
+        str(region or "").strip()
+        or _infer_bedrock_region_from_base_url(url)
+        or "us-west-2"
+    )
+    canonical_headers_map = {
+        "content-type": "application/json",
+        "host": host,
+        "x-amz-content-sha256": payload_hash,
+        "x-amz-date": timestamp,
+    }
+    if credentials.session_token:
+        canonical_headers_map["x-amz-security-token"] = credentials.session_token
+    signed_header_keys = sorted(canonical_headers_map.keys())
+    canonical_headers = "".join(
+        f"{key}:{_canonical_header_value(canonical_headers_map[key])}\n"
+        for key in signed_header_keys
+    )
+    signed_headers = ";".join(signed_header_keys)
+    canonical_request = "\n".join(
+        (
+            "POST",
+            canonical_uri,
+            canonical_query,
+            canonical_headers,
+            signed_headers,
+            payload_hash,
+        )
+    )
+    credential_scope = f"{date_stamp}/{signing_region}/bedrock/aws4_request"
+    string_to_sign = "\n".join(
+        (
+            "AWS4-HMAC-SHA256",
+            timestamp,
+            credential_scope,
+            hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+        )
+    )
+    signing_key = _sigv4_hmac(("AWS4" + credentials.secret_access_key).encode("utf-8"), date_stamp)
+    signing_key = _sigv4_hmac(signing_key, signing_region)
+    signing_key = _sigv4_hmac(signing_key, "bedrock")
+    signing_key = _sigv4_hmac(signing_key, "aws4_request")
+    signature = hmac.new(signing_key, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+    authorization = (
+        "AWS4-HMAC-SHA256 "
+        f"Credential={credentials.access_key_id}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, "
+        f"Signature={signature}"
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "X-Amz-Date": timestamp,
+        "X-Amz-Content-Sha256": payload_hash,
+        "Authorization": authorization,
+    }
+    if credentials.session_token:
+        headers["X-Amz-Security-Token"] = credentials.session_token
+    return headers
+
+
+def _runtime_probe_exact_resolution(
+    resolution: TokenizerResolution,
+    *,
+    timeout_seconds: float = 2.0,
+    probe_text: str = "",
+) -> TokenizerResolution:
+    if not resolution.available or resolution.encoding is None:
+        return resolution
+    if str(resolution.count_accuracy or "").strip().lower() != "exact":
+        return resolution
+    if str(resolution.kind or "").strip() not in {"provider-native", "provider-native-count"}:
+        return resolution
+
+    encoding = resolution.encoding
+    original_timeout: float | None = None
+    try:
+        current_timeout = getattr(encoding, "timeout_seconds", None)
+        if isinstance(current_timeout, (int, float)) and math.isfinite(float(current_timeout)):
+            original_timeout = float(current_timeout)
+            bounded_timeout = max(0.5, float(timeout_seconds))
+            if original_timeout > bounded_timeout:
+                setattr(encoding, "timeout_seconds", bounded_timeout)
+    except Exception:
+        original_timeout = None
+
+    try:
+        count_fn = getattr(encoding, "count_tokens", None)
+        if callable(count_fn):
+            counted = count_fn(str(probe_text or ""))
+            parsed = _coerce_int(counted)
+            if parsed is None or parsed < 0:
+                raise TokenizerUnavailable("Provider tokenizer runtime probe returned invalid count payload")
+        else:
+            encode_fn = getattr(encoding, "encode", None)
+            if not callable(encode_fn):
+                raise TokenizerUnavailable("Provider tokenizer runtime probe missing encode/count method")
+            try:
+                encoded = encode_fn(str(probe_text or ""), disallowed_special=())
+            except TypeError:
+                encoded = encode_fn(str(probe_text or ""))
+            if not isinstance(encoded, list):
+                encoded = list(encoded)
+            for token_id in encoded[:16]:
+                if _coerce_int(token_id) is None:
+                    raise TokenizerUnavailable("Provider tokenizer runtime probe returned invalid token ids")
+    except Exception as exc:
+        return _unavailable_resolution(
+            strict_mode_effective=bool(resolution.strict_mode_effective),
+            error=f"Provider tokenizer runtime probe failed: {exc}",
+        )
+    finally:
+        if original_timeout is not None:
+            try:
+                setattr(encoding, "timeout_seconds", original_timeout)
+            except Exception:
+                pass
+
+    return resolution
 
 
 @lru_cache(maxsize=128)
@@ -670,6 +944,14 @@ def _resolve_bedrock_api_key(parser: Any) -> str | None:
     return _safe_config_string(parser, "API", "bedrock_api_key")
 
 
+def _resolve_bedrock_region(parser: Any) -> str:
+    return (
+        str(os.getenv("BEDROCK_REGION", "") or "").strip()
+        or str(_safe_config_string(parser, "API", "bedrock_region") or "").strip()
+        or "us-west-2"
+    )
+
+
 def _normalize_bedrock_runtime_base_url(base_url: str) -> str:
     normalized = str(base_url or "").strip().rstrip("/")
     lowered = normalized.lower()
@@ -695,12 +977,83 @@ def _resolve_bedrock_runtime_base_url(parser: Any) -> str:
             if normalized:
                 return normalized
 
-    region = (
-        str(os.getenv("BEDROCK_REGION", "") or "").strip()
-        or str(_safe_config_string(parser, "API", "bedrock_region") or "").strip()
-        or "us-west-2"
-    )
+    region = _resolve_bedrock_region(parser)
     return f"https://bedrock-runtime.{region}.amazonaws.com"
+
+
+def _infer_bedrock_region_from_base_url(base_url: str) -> str | None:
+    host = _url_hostname(base_url)
+    if not host:
+        return None
+    marker = "bedrock-runtime."
+    if marker not in host:
+        return None
+    suffixes = (".amazonaws.com", ".amazonaws.com.cn")
+    for suffix in suffixes:
+        if host.endswith(suffix):
+            prefix = host.split(marker, 1)[1]
+            region = prefix[: -len(suffix)] if suffix else prefix
+            region = str(region or "").strip().strip(".")
+            if region:
+                return region
+    return None
+
+
+def _resolve_bedrock_sigv4_credentials(parser: Any) -> BedrockSigV4Credentials | None:
+    def _first_nonempty(*values: str | None) -> str | None:
+        for value in values:
+            normalized = str(value or "").strip()
+            if normalized and not normalized.startswith("<"):
+                return normalized
+        return None
+
+    access_key_id = _first_nonempty(
+        os.getenv("AWS_ACCESS_KEY_ID"),
+        os.getenv("AWS_ACCESS_KEY"),
+        _safe_config_string(parser, "API", "bedrock_aws_access_key_id"),
+        _safe_config_string(parser, "API", "aws_access_key_id"),
+    )
+    secret_access_key = _first_nonempty(
+        os.getenv("AWS_SECRET_ACCESS_KEY"),
+        os.getenv("AWS_SECRET_KEY"),
+        _safe_config_string(parser, "API", "bedrock_aws_secret_access_key"),
+        _safe_config_string(parser, "API", "aws_secret_access_key"),
+    )
+    session_token = _first_nonempty(
+        os.getenv("AWS_SESSION_TOKEN"),
+        os.getenv("AWS_SECURITY_TOKEN"),
+        _safe_config_string(parser, "API", "bedrock_aws_session_token"),
+        _safe_config_string(parser, "API", "aws_session_token"),
+    )
+    if access_key_id and secret_access_key:
+        return BedrockSigV4Credentials(
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
+            session_token=session_token,
+        )
+
+    try:
+        from botocore.session import Session as _BotocoreSession  # type: ignore
+    except Exception:
+        return None
+
+    try:
+        creds = _BotocoreSession().get_credentials()
+        if creds is None:
+            return None
+        frozen = creds.get_frozen_credentials()
+        access = str(getattr(frozen, "access_key", "") or "").strip()
+        secret = str(getattr(frozen, "secret_key", "") or "").strip()
+        if not access or not secret:
+            return None
+        token = str(getattr(frozen, "token", "") or "").strip() or None
+        return BedrockSigV4Credentials(
+            access_key_id=access,
+            secret_access_key=secret,
+            session_token=token,
+        )
+    except Exception:
+        return None
 
 
 def _bedrock_model_supports_exact_count(model: str) -> bool:
@@ -740,6 +1093,9 @@ def resolve_provider_native_tokenizer(
     config_parser: Any | None = None,
     config_loader: Callable[[], Any] | None = None,
     adapter_cls: type[ProviderNativeTokenizerHTTPAdapter] = ProviderNativeTokenizerHTTPAdapter,
+    runtime_probe_exact: bool = False,
+    runtime_probe_timeout_seconds: float = 2.0,
+    runtime_probe_text: str = "",
 ) -> TokenizerResolution:
     strict_flag = strict_token_counting_enabled() if strict_mode_effective is None else bool(strict_mode_effective)
 
@@ -790,13 +1146,19 @@ def resolve_provider_native_tokenizer(
             error="Provider-native tokenizer endpoint is invalid",
         )
 
+    if provider_key == "custom_openai_api" and _is_openai_host_url(base_url):
+        return _unavailable_resolution(
+            strict_mode_effective=strict_flag,
+            error="custom_openai_api endpoint points to OpenAI-hosted API; provider-native tokenizer endpoint is unavailable",
+        )
+
     adapter = adapter_cls(
         base_url=base_url,
         model=str(model or "").strip() or None,
         api_key=api_key,
     )
 
-    return TokenizerResolution(
+    resolution = TokenizerResolution(
         available=True,
         tokenizer=f"{label}:remote",
         kind="provider-native",
@@ -807,6 +1169,13 @@ def resolve_provider_native_tokenizer(
         encoding=adapter,
         error=None,
     )
+    if runtime_probe_exact:
+        return _runtime_probe_exact_resolution(
+            resolution,
+            timeout_seconds=runtime_probe_timeout_seconds,
+            probe_text=runtime_probe_text,
+        )
+    return resolution
 
 
 def resolve_commercial_exact_tokenizer(
@@ -816,6 +1185,9 @@ def resolve_commercial_exact_tokenizer(
     strict_mode_effective: bool | None = None,
     config_parser: Any | None = None,
     config_loader: Callable[[], Any] | None = None,
+    runtime_probe_exact: bool = False,
+    runtime_probe_timeout_seconds: float = 2.0,
+    runtime_probe_text: str = "",
 ) -> TokenizerResolution:
     strict_flag = strict_token_counting_enabled() if strict_mode_effective is None else bool(strict_mode_effective)
 
@@ -851,24 +1223,39 @@ def resolve_commercial_exact_tokenizer(
                 strict_mode_effective=strict_flag,
                 error="Bedrock exact tokenizer unavailable for provider/model",
             )
-        api_key = _resolve_bedrock_api_key(parser)
-        if not api_key:
-            return _unavailable_resolution(
-                strict_mode_effective=strict_flag,
-                error="Provider tokenizer API key is not configured",
-            )
         base_url = _resolve_bedrock_runtime_base_url(parser)
         if not base_url:
             return _unavailable_resolution(
                 strict_mode_effective=strict_flag,
                 error="Provider tokenizer endpoint is not configured",
             )
+        if _is_openai_host_url(base_url):
+            return _unavailable_resolution(
+                strict_mode_effective=strict_flag,
+                error="Bedrock runtime endpoint points to OpenAI-hosted API",
+            )
+        if not _is_bedrock_runtime_base_url(base_url):
+            return _unavailable_resolution(
+                strict_mode_effective=strict_flag,
+                error="Bedrock runtime endpoint must target a bedrock-runtime host and must not include a path",
+            )
+        host = _url_hostname(base_url)
+        region = _infer_bedrock_region_from_base_url(base_url) or _resolve_bedrock_region(parser)
+        aws_credentials = _resolve_bedrock_sigv4_credentials(parser)
+        api_key = _resolve_bedrock_api_key(parser)
+        if not _is_local_or_private_host(host) and aws_credentials is None:
+            return _unavailable_resolution(
+                strict_mode_effective=strict_flag,
+                error="Bedrock SigV4 credentials are not configured",
+            )
         adapter = BedrockCountOnlyHTTPAdapter(
             base_url=base_url,
             model=normalized_model,
             api_key=api_key,
+            region=region,
+            aws_credentials=aws_credentials,
         )
-        return TokenizerResolution(
+        resolution = TokenizerResolution(
             available=True,
             tokenizer=f"{label}:remote-count",
             kind="provider-native-count",
@@ -879,6 +1266,13 @@ def resolve_commercial_exact_tokenizer(
             encoding=adapter,
             error=None,
         )
+        if runtime_probe_exact:
+            return _runtime_probe_exact_resolution(
+                resolution,
+                timeout_seconds=runtime_probe_timeout_seconds,
+                probe_text=runtime_probe_text,
+            )
+        return resolution
 
     api_key = _resolve_commercial_api_key(
         parser,
@@ -923,7 +1317,7 @@ def resolve_commercial_exact_tokenizer(
                 strict_mode_effective=strict_flag,
                 error="Commercial tokenizer mode is not supported",
             )
-        return TokenizerResolution(
+        resolution = TokenizerResolution(
             available=True,
             tokenizer=f"{label}:remote-count",
             kind="provider-native-count",
@@ -934,6 +1328,13 @@ def resolve_commercial_exact_tokenizer(
             encoding=adapter,
             error=None,
         )
+        if runtime_probe_exact:
+            return _runtime_probe_exact_resolution(
+                resolution,
+                timeout_seconds=runtime_probe_timeout_seconds,
+                probe_text=runtime_probe_text,
+            )
+        return resolution
 
     if mode == "tokenize" and provider_key == "cohere":
         adapter = CohereTokenizerHTTPAdapter(
@@ -941,7 +1342,7 @@ def resolve_commercial_exact_tokenizer(
             model=normalized_model,
             api_key=api_key,
         )
-        return TokenizerResolution(
+        resolution = TokenizerResolution(
             available=True,
             tokenizer=f"{label}:remote",
             kind="provider-native",
@@ -952,6 +1353,13 @@ def resolve_commercial_exact_tokenizer(
             encoding=adapter,
             error=None,
         )
+        if runtime_probe_exact:
+            return _runtime_probe_exact_resolution(
+                resolution,
+                timeout_seconds=runtime_probe_timeout_seconds,
+                probe_text=runtime_probe_text,
+            )
+        return resolution
 
     return _unavailable_resolution(
         strict_mode_effective=strict_flag,
@@ -972,6 +1380,19 @@ def _openrouter_canonical_model(model: str) -> str | None:
     return canonical or None
 
 
+def _groq_canonical_model(model: str) -> str | None:
+    normalized = str(model or "").strip()
+    if not normalized:
+        return None
+    if "/" not in normalized:
+        return None
+    provider_hint, _, model_id = normalized.partition("/")
+    if provider_hint.strip().lower() != "openai":
+        return None
+    canonical = model_id.strip()
+    return canonical or None
+
+
 def _exact_tiktoken_model_for_provider(provider_key: str, model: str) -> str | None:
     normalized_model = str(model or "").strip()
     if not normalized_model:
@@ -980,6 +1401,8 @@ def _exact_tiktoken_model_for_provider(provider_key: str, model: str) -> str | N
         return normalized_model
     if provider_key == "openrouter":
         return _openrouter_canonical_model(normalized_model)
+    if provider_key == "groq":
+        return _groq_canonical_model(normalized_model)
     return None
 
 
@@ -1115,6 +1538,9 @@ def resolve_tokenizer(
     config_parser: Any | None = None,
     config_loader: Callable[[], Any] | None = None,
     adapter_cls: type[ProviderNativeTokenizerHTTPAdapter] = ProviderNativeTokenizerHTTPAdapter,
+    runtime_probe_exact: bool = False,
+    runtime_probe_timeout_seconds: float = 2.0,
+    runtime_probe_text: str = "",
 ) -> TokenizerResolution:
     strict_flag = strict_token_counting_enabled() if strict_mode_effective is None else bool(strict_mode_effective)
 
@@ -1135,6 +1561,9 @@ def resolve_tokenizer(
             config_parser=config_parser,
             config_loader=config_loader,
             adapter_cls=adapter_cls,
+            runtime_probe_exact=runtime_probe_exact,
+            runtime_probe_timeout_seconds=runtime_probe_timeout_seconds,
+            runtime_probe_text=runtime_probe_text,
         )
         if native_resolution.available:
             return native_resolution
@@ -1152,6 +1581,9 @@ def resolve_tokenizer(
             strict_mode_effective=strict_flag,
             config_parser=config_parser,
             config_loader=config_loader,
+            runtime_probe_exact=runtime_probe_exact,
+            runtime_probe_timeout_seconds=runtime_probe_timeout_seconds,
+            runtime_probe_text=runtime_probe_text,
         )
         if commercial_resolution.available:
             return commercial_resolution
@@ -1200,6 +1632,9 @@ def resolve_tokenizer_metadata(
     config_parser: Any | None = None,
     config_loader: Callable[[], Any] | None = None,
     adapter_cls: type[ProviderNativeTokenizerHTTPAdapter] = ProviderNativeTokenizerHTTPAdapter,
+    runtime_probe_exact: bool = False,
+    runtime_probe_timeout_seconds: float = 2.0,
+    runtime_probe_text: str = "",
 ) -> dict[str, Any]:
     resolution = resolve_tokenizer(
         provider,
@@ -1208,5 +1643,8 @@ def resolve_tokenizer_metadata(
         config_parser=config_parser,
         config_loader=config_loader,
         adapter_cls=adapter_cls,
+        runtime_probe_exact=runtime_probe_exact,
+        runtime_probe_timeout_seconds=runtime_probe_timeout_seconds,
+        runtime_probe_text=runtime_probe_text,
     )
     return resolution.as_support_dict()

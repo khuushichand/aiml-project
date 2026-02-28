@@ -155,6 +155,51 @@ class SandboxService:
         if spec_version not in self._supported_specs:
             raise SandboxService.InvalidSpecVersion(spec_version, self._supported_specs)
 
+    def _validate_lima_policy(
+        self,
+        *,
+        runtime: RuntimeType | None,
+        network_policy: str | None,
+    ) -> None:
+        if runtime != RuntimeType.lima:
+            return
+        requested_policy = str(network_policy or self.policy.cfg.network_default or "deny_all").strip().lower()
+        if requested_policy not in {"deny_all", "allowlist"}:
+            raise SandboxPolicy.PolicyUnsupported(
+                RuntimeType.lima,
+                requirement=requested_policy,
+                reasons=["unsupported_network_policy"],
+            )
+        if requested_policy == "allowlist":
+            # Lima allowlist is not yet enforced by the runtime path; fail closed.
+            raise SandboxPolicy.PolicyUnsupported(
+                RuntimeType.lima,
+                requirement=requested_policy,
+                reasons=["strict_allowlist_not_supported"],
+            )
+        preflight = LimaRunner().preflight(network_policy=requested_policy)
+        if preflight.available:
+            return
+        reasons = list(preflight.reasons or [])
+        if "limactl_missing" in reasons or "permission_denied_host_enforcement" in reasons:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.lima, reasons=reasons)
+        raise SandboxPolicy.PolicyUnsupported(
+            RuntimeType.lima,
+            requirement=requested_policy,
+            reasons=reasons,
+        )
+
+    def _start_lima_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        # Authoritative execution-time admission check (after claim ownership)
+        # to ensure strict Lima guarantees still hold on the executing worker.
+        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
+        return LimaRunner().start_run(run_id, spec, workspace_path)
+
     def _effective_claim_lease_seconds(self) -> int:
         try:
             raw = os.getenv("SANDBOX_RUN_CLAIM_LEASE_SEC")
@@ -538,6 +583,15 @@ class SandboxService:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             execute_enabled = False
+        try:
+            lima_preflight = LimaRunner().preflight(network_policy="deny_all")
+            lima_enforcement_ready = dict(lima_preflight.enforcement_ready or {})
+            # Allowlist enforcement is not implemented for Lima runtime execution.
+            lima_enforcement_ready["allowlist"] = False
+            lima_host = dict(lima_preflight.host or {})
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            lima_enforcement_ready = {"deny_all": False, "allowlist": False}
+            lima_host = {}
 
         return [
             {
@@ -614,7 +668,11 @@ class SandboxService:
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
                 "interactive_supported": False,  # Not implemented for Lima yet
-                "egress_allowlist_supported": False,  # Lima uses VM-level network isolation
+                "egress_allowlist_supported": bool(lima_enforcement_ready.get("allowlist")),
+                "strict_deny_all_supported": bool(lima_enforcement_ready.get("deny_all")),
+                "strict_allowlist_supported": bool(lima_enforcement_ready.get("allowlist")),
+                "enforcement_ready": lima_enforcement_ready,
+                "host": lima_host,
                 "store_mode": store_mode,
                 "notes": "Full VM isolation via Lima; recommended for macOS",
             },
@@ -700,6 +758,7 @@ class SandboxService:
         fc_ok = firecracker_available()
         lima_ok = lima_available()
         spec = self.policy.apply_to_session(spec, firecracker_available=fc_ok, lima_available=lima_ok)
+        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
         # delegate to orchestrator (with idempotency)
@@ -797,6 +856,7 @@ class SandboxService:
         fc_ok = firecracker_available()
         lima_ok = lima_available()
         spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok, lima_available=lima_ok)
+        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
         status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
@@ -1066,11 +1126,10 @@ class SandboxService:
                             self._apply_admitted_status(status, admitted)
                             with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 get_hub().publish_event(status.id, "start", {"bg": True})
-                            lr = LimaRunner()
                             ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
                             real = self._run_with_claim_lease(
                                 status.id,
-                                lambda: lr.start_run(status.id, spec, ws),
+                                lambda: self._start_lima_run_with_execution_preflight(status.id, spec, ws),
                             )
                             real.id = status.id
                             status.phase = real.phase
@@ -1090,6 +1149,17 @@ class SandboxService:
                             self._orch.update_run(status.id, status)
                             with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
+                        except (SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported) as e:
+                            logger.warning(f"Lima execution preflight rejected run: {e}")
+                            try:
+                                status.phase = RunPhase.failed
+                                status.message = "lima_policy_failed"
+                                status.finished_at = datetime.utcnow()
+                                self._orch.update_run(status.id, status)
+                                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                                    get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "lima_policy_failed"})
+                            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+                                pass
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Lima background execution failed: {e}")
                     try:
@@ -1098,7 +1168,6 @@ class SandboxService:
                         logger.warning(f"Lima background submission failed: {e}")
                 else:
                     # Foreground
-                    lr = LimaRunner()
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
                     admitted = self._admit_run_starting(status.id)
                     if admitted is None:
@@ -1107,10 +1176,20 @@ class SandboxService:
                     if admitted.phase != RunPhase.starting:
                         return admitted
                     self._apply_admitted_status(status, admitted)
-                    real = self._run_with_claim_lease(
-                        status.id,
-                        lambda: lr.start_run(status.id, spec, ws),
-                    )
+                    try:
+                        real = self._run_with_claim_lease(
+                            status.id,
+                            lambda: self._start_lima_run_with_execution_preflight(status.id, spec, ws),
+                        )
+                    except (SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported) as e:
+                        logger.warning(f"Lima execution preflight rejected run: {e}")
+                        status.phase = RunPhase.failed
+                        status.message = "lima_policy_failed"
+                        status.finished_at = datetime.utcnow()
+                        self._orch.update_run(status.id, status)
+                        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                            get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "lima_policy_failed"})
+                        return status
                     real.id = status.id
                     status.phase = real.phase
                     status.exit_code = real.exit_code

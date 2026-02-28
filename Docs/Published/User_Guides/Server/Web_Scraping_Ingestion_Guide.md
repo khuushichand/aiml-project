@@ -35,6 +35,9 @@ Auth note: examples use `X-API-KEY`. For multi-user JWTs, use `Authorization: Be
 
 If `/api/v1/web-scraping/*` returns 404, enable the `web-scraping` route group in config (see `tldw_Server_API/Config_Files/README.md`).
 
+Compatibility note:
+- Media processing routes are in a one-release compatibility window for legacy behaviors. During this window, additive deprecation headers may be present while response payload/status semantics remain stable.
+
 ## Scrape methods and inputs
 
 `/process-web-scraping` expects UI-style labels:
