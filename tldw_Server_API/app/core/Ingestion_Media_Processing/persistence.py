@@ -1933,19 +1933,12 @@ async def add_media_orchestrate(
     from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (  # type: ignore  # noqa: E501
         file_validator_instance as core_file_validator_instance,
     )
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (  # type: ignore  # noqa: E501
-        TempDirManager as CoreTempDirManager,
+    from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore  # noqa: E501
+        input_sourcing as input_sourcing_mod,
     )
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
-        save_uploaded_files as core_save_uploaded_files,
-    )
+    CoreTempDirManager = input_sourcing_mod.TempDirManager
 
     if media_mod is not None:
-        _save_uploaded_files = getattr(  # type: ignore[assignment]
-            media_mod,
-            "_save_uploaded_files",
-            core_save_uploaded_files,
-        )
         file_validator_instance = getattr(  # type: ignore[assignment]
             media_mod,
             "file_validator_instance",
@@ -1962,7 +1955,6 @@ async def add_media_orchestrate(
             CoreTempDirManager,
         )
     else:  # pragma: no cover - fallback for minimal profiles
-        _save_uploaded_files = core_save_uploaded_files  # type: ignore[assignment]
         file_validator_instance = core_file_validator_instance  # type: ignore[assignment]
         TemplateClassifier = None  # type: ignore[assignment]
         TempDirManagerCls = CoreTempDirManager  # type: ignore[assignment]
@@ -2119,7 +2111,7 @@ async def add_media_orchestrate(
             }
             allowed_exts = allowed_ext_map.get(str(form_data.media_type).lower())
 
-            saved_files_info, file_save_errors = await _save_uploaded_files(
+            saved_files_info, file_save_errors = await input_sourcing_mod.save_uploaded_files(
                 files or [],
                 temp_dir_path,
                 validator=file_validator_instance,
@@ -4080,9 +4072,8 @@ async def process_document_like_item(
     This mirrors the behaviour of the legacy `_process_document_like_item`
     implementation while living in the core ingestion module.
     """
-    # Resolve shimmed helpers via the modular `media` package when
-    # available so tests that patch `endpoints.media.*` continue to
-    # observe calls, while keeping this implementation canonical.
+    # Resolve media-module exports when available so validator monkeypatching
+    # (`endpoints.media.file_validator_instance`) continues to apply.
     try:  # type: ignore[assignment]
         from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
             media as _media_mod,
@@ -4156,19 +4147,7 @@ async def process_document_like_item(
                 download_url_async as _core_download_url_async,
             )
 
-            # Allow tests to patch `media._download_url_async` while falling
-            # back to the core helper in normal operation.
-            if _media_mod is not None:
-                try:
-                    download_url_async = getattr(  # type: ignore[assignment]
-                        _media_mod,
-                        "_download_url_async",
-                        _core_download_url_async,
-                    )
-                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive fallback
-                    download_url_async = _core_download_url_async
-            else:  # pragma: no cover - minimal profiles
-                download_url_async = _core_download_url_async
+            download_url_async = _core_download_url_async
 
             allowed_extensions = _allowed_url_extensions(media_type, form_data)
             check_extension = bool(allowed_extensions)

@@ -6,17 +6,15 @@ from typing import Any
 
 import pytest
 
-from tldw_Server_API.app.core.Ingestion_Media_Processing import persistence
+from tldw_Server_API.app.core.Ingestion_Media_Processing import download_utils, persistence
 
 
 @pytest.mark.asyncio
 async def test_process_document_like_item_logs_prep_error_context(tmp_path, monkeypatch):
-    from tldw_Server_API.app.api.v1.endpoints import media as media_endpoints
-
     async def _boom_download(**_kwargs: Any):
         raise FileNotFoundError(2, "No such file or directory")
 
-    monkeypatch.setattr(media_endpoints, "_download_url_async", _boom_download, raising=True)
+    monkeypatch.setattr(download_utils, "download_url_async", _boom_download, raising=True)
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Security.url_validation.assert_url_safe",
         lambda _url: None,

@@ -81,9 +81,7 @@ async def process_documents_endpoint(
 
     This is a modularized version of the original legacy implementation,
     preserving behavior while
-    routing through the `media` package and resolving compatibility patch
-    targets directly from `media` (e.g. `_save_uploaded_files`,
-    `_download_url_async`).
+    routing through the `media` package with core ingestion helpers.
     """
 
     logger.info("Request received for /process-documents (no persistence).")
@@ -150,12 +148,8 @@ async def process_documents_endpoint(
         # --- Handle Uploads ---
         if files:
             # Preserve test-time monkeypatching of `media.file_validator_instance`
-            # and `media._save_uploaded_files` via direct media-module resolution.
-            save_uploaded_files = getattr(
-                media_mod,
-                "_save_uploaded_files",
-                core_save_uploaded_files,
-            )
+            # while using the canonical core upload helper.
+            save_uploaded_files = core_save_uploaded_files
             validator = getattr(
                 media_mod,
                 "file_validator_instance",
@@ -219,13 +213,7 @@ async def process_documents_endpoint(
 
             allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
 
-            # Preserve test-time monkeypatching of `media._download_url_async`
-            # without an intermediate compatibility adapter.
-            download_url_async = getattr(
-                media_mod,
-                "_download_url_async",
-                core_download_url_async,
-            )
+            download_url_async = core_download_url_async
 
             download_tasks = [
                 download_url_async(
