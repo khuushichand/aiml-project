@@ -355,6 +355,8 @@ async function assertNoRuntimeOverlay(
 }
 
 test.describe('Smoke Tests - All Pages', () => {
+  test.describe.configure({ mode: 'parallel' });
+
   test.beforeEach(async ({ page }) => {
     await seedAuth(page);
   });
