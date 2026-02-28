@@ -136,9 +136,10 @@ class SandboxPolicy:
         self.cfg = cfg or SandboxPolicyConfig.from_settings()
 
     class RuntimeUnavailable(Exception):
-        def __init__(self, runtime: RuntimeType) -> None:
+        def __init__(self, runtime: RuntimeType, reasons: list[str] | None = None) -> None:
             super().__init__(f"Requested runtime '{runtime.value}' is unavailable")
             self.runtime = runtime
+            self.reasons = list(reasons or [])
 
     class PolicyUnsupported(Exception):
         def __init__(self, runtime: RuntimeType, requirement: str, reasons: list[str] | None = None) -> None:

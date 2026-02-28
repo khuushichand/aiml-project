@@ -585,12 +585,13 @@ async def create_session(
                 suggestions = sorted(set(suggestions))
             except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 suggestions = []
+            reasons = list(getattr(e, "reasons", []) or [])
             logger.exception("RuntimeUnavailable error occurred on sandbox session creation: {}", str(e))
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",
                     "message": "The requested runtime is currently unavailable.",
-                    "details": {"runtime": rt, "available": False, "suggested": suggestions}
+                    "details": {"runtime": rt, "available": False, "suggested": suggestions, "reasons": reasons}
                 }
             })
         if isinstance(e, SandboxPolicy.PolicyUnsupported):
@@ -1122,11 +1123,12 @@ async def start_run(
                 suggestions = sorted(set(suggestions))
             except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 suggestions = ["docker"]
+            reasons = list(getattr(e, "reasons", []) or [])
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",
                     "message": str(e),
-                    "details": {"runtime": rt, "available": False, "suggested": suggestions}
+                    "details": {"runtime": rt, "available": False, "suggested": suggestions, "reasons": reasons}
                 }
             })
         if isinstance(e, SandboxPolicy.PolicyUnsupported):

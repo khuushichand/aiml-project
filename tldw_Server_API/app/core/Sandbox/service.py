@@ -174,13 +174,24 @@ class SandboxService:
         if preflight.available:
             return
         reasons = list(preflight.reasons or [])
-        if "limactl_missing" in reasons:
-            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.lima)
+        if "limactl_missing" in reasons or "permission_denied_host_enforcement" in reasons:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.lima, reasons=reasons)
         raise SandboxPolicy.PolicyUnsupported(
             RuntimeType.lima,
             requirement=requested_policy,
             reasons=reasons,
         )
+
+    def _start_lima_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        # Authoritative execution-time admission check (after claim ownership)
+        # to ensure strict Lima guarantees still hold on the executing worker.
+        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
+        return LimaRunner().start_run(run_id, spec, workspace_path)
 
     def _effective_claim_lease_seconds(self) -> int:
         try:
@@ -1106,11 +1117,10 @@ class SandboxService:
                             self._apply_admitted_status(status, admitted)
                             with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 get_hub().publish_event(status.id, "start", {"bg": True})
-                            lr = LimaRunner()
                             ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
                             real = self._run_with_claim_lease(
                                 status.id,
-                                lambda: lr.start_run(status.id, spec, ws),
+                                lambda: self._start_lima_run_with_execution_preflight(status.id, spec, ws),
                             )
                             real.id = status.id
                             status.phase = real.phase
@@ -1130,6 +1140,17 @@ class SandboxService:
                             self._orch.update_run(status.id, status)
                             with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
+                        except (SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported) as e:
+                            logger.warning(f"Lima execution preflight rejected run: {e}")
+                            try:
+                                status.phase = RunPhase.failed
+                                status.message = "lima_policy_failed"
+                                status.finished_at = datetime.utcnow()
+                                self._orch.update_run(status.id, status)
+                                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                                    get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "lima_policy_failed"})
+                            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+                                pass
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Lima background execution failed: {e}")
                     try:
@@ -1138,7 +1159,6 @@ class SandboxService:
                         logger.warning(f"Lima background submission failed: {e}")
                 else:
                     # Foreground
-                    lr = LimaRunner()
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
                     admitted = self._admit_run_starting(status.id)
                     if admitted is None:
@@ -1149,7 +1169,7 @@ class SandboxService:
                     self._apply_admitted_status(status, admitted)
                     real = self._run_with_claim_lease(
                         status.id,
-                        lambda: lr.start_run(status.id, spec, ws),
+                        lambda: self._start_lima_run_with_execution_preflight(status.id, spec, ws),
                     )
                     real.id = status.id
                     status.phase = real.phase

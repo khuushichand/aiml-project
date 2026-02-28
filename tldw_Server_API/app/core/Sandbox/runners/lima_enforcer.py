@@ -33,6 +33,9 @@ class LimaSecurityEnforcer:
         }
 
     def _default_ready(self) -> bool:
+        host = self.host_facts()
+        if str(host.get("variant", "")).lower() == "wsl":
+            return False
         return sys.platform.startswith("linux") or sys.platform == "darwin"
 
     def preflight_capabilities(self) -> dict[str, bool]:
@@ -80,4 +83,3 @@ def build_lima_enforcer() -> LimaSecurityEnforcer:
     if sys.platform.startswith("linux"):
         return LinuxLimaEnforcer()
     return WindowsLimaEnforcer()
-

@@ -226,7 +226,8 @@ Content-Range: bytes */10
 ```
 
 ## Strict Lima failure contracts
-- `503 runtime_unavailable` when `limactl`/runtime is unavailable. For explicit `runtime=lima`, `error.details.suggested` is an empty list (no fallback).
+- `503 runtime_unavailable` when `limactl`/runtime is unavailable or strict host enforcement permissions are unavailable. For explicit `runtime=lima`, `error.details.suggested` is an empty list (no fallback).
+  - `error.details.reasons` includes provider preflight reasons (for example `limactl_missing` or `permission_denied_host_enforcement`).
 - `422 policy_unsupported` when strict requirements cannot be proven (for example `strict_allowlist_not_supported` or unsupported `network_policy`).
 
 Example `422`:
