@@ -128,6 +128,10 @@ and this project adheres to Some kind of Versioning
   - Notifications endpoint handlers and reminders/notifications schemas now include expanded docstrings and explicit SSE generator return typing for stronger API-contract readability.
 - Jobs notifications bridge:
   - `jobs_notifications_service` now consumes Jobs manager event-list APIs instead of in-service raw `job_events` SQL queries.
+- Frontend/watchlists CI gate execution paths were re-baselined for deterministic branch runs:
+  - Frontend UX gates now use a stable Bun-based dependency/install + Playwright invocation flow with a single all-pages smoke gate entrypoint.
+  - Watchlists extension strict gate flow now preserves explicit launch/target wait timeout controls and aligns with the stable extension-launch helper contract.
+  - All-pages smoke gate behavior now follows the stabilized route traversal baseline used by the current release-gate suite.
 
 ### Removed
 - No removals in this session.
@@ -165,6 +169,9 @@ and this project adheres to Some kind of Versioning
 - Fixed reminder task PATCH safety by removing scheduler-owned fields (`last_status`, `next_run_at`, `last_run_at`) from public update schema to prevent user-driven scheduler state corruption.
 - Fixed dismissed-notification inbox consistency by excluding dismissed rows from non-archived list/stream query paths, aligning unread-count semantics with visible inbox rows.
 - Fixed hidden scheduler-sync failures in reminders task endpoints by surfacing non-critical reconcile/unschedule exceptions in warning logs.
+- Fixed strict watchlists no-skip gate regressions caused by stale/undefined local assertions in E2E specs and aligned those checks to deterministic harness behavior.
+- Fixed extension E2E launch instability in CI by removing unsupported forced Playwright channel behavior and retaining explicit timeout override controls in workflow env.
+- Fixed UX smoke gate branch instability by restoring the stabilized all-pages gate command path and traversal behavior expected by current frontend release gates.
 
 
 ## [0.1.24] 2026-02-22
