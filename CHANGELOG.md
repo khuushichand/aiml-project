@@ -16,6 +16,7 @@ and this project adheres to Some kind of Versioning
   - Added exact tokenizer resolution paths for `ollama` (provider-native HTTP tokenize/detokenize probing) and `mlx` (active registry tokenizer with artifact fallback).
   - Added Bedrock `CountTokens` exact-count path (Anthropic-on-Bedrock model family) with model-level strict classification and mirrored metadata on `/api/v1/llm/providers`.
   - Added model-level exact classification for `groq` OpenAI-routed models (`openai/<model>`) via canonical `tiktoken` mapping.
+  - Added explicit regression coverage that `deepseek` and `mistral` remain non-exact (`count_accuracy=unavailable`) until a verified provider-native exact tokenizer path is available.
   - Added strict writing token endpoint gate: when `STRICT_TOKEN_COUNTING=true`, non-exact tokenizer resolutions return HTTP `422`.
   - Added regression coverage for strict runtime propagation and tokenizer metadata mirroring across Writing and provider metadata tests.
 - Alibaba Model Studio image backend support for `/api/v1/files/create` image generation via the new `modelstudio` backend.

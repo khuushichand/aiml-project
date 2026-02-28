@@ -67,6 +67,23 @@ def test_resolve_tokenizer_non_exact_best_effort_classified_unavailable(monkeypa
     assert resolution.kind == "tiktoken"
 
 
+def test_resolve_tokenizer_mistral_best_effort_classified_unavailable(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.setattr(resolver, "resolve_tiktoken_encoding", lambda model: _FakeTokenizer("cl100k_base"))
+
+    resolution = resolver.resolve_tokenizer(
+        "mistral",
+        "mistral-large-latest",
+        strict_mode_effective=True,
+    )
+
+    assert resolution.available is True
+    assert resolution.count_accuracy == "unavailable"
+    assert resolution.tokenizer == "tiktoken:cl100k_base"
+    assert resolution.kind == "tiktoken"
+
+
 def test_resolve_tokenizer_openai_unavailable_error_not_masked_by_native_config(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
 

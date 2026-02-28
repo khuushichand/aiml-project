@@ -14,6 +14,10 @@ def _fake_config() -> configparser.ConfigParser:
     cfg.set("API", "groq_model", "openai/gpt-4o-mini")
     cfg.set("API", "cohere_api_key", "cohere-test-key")
     cfg.set("API", "cohere_model", "command-a-03-2025")
+    cfg.set("API", "deepseek_api_key", "deepseek-test-key")
+    cfg.set("API", "deepseek_model", "deepseek-chat")
+    cfg.set("API", "mistral_api_key", "mistral-test-key")
+    cfg.set("API", "mistral_model", "mistral-large-latest")
     cfg.set("API", "bedrock_api_key", "bedrock-test-key")
     cfg.set("API", "bedrock_model", "anthropic.claude-3-5-sonnet-20240620-v1:0")
     cfg.set("API", "bedrock_region", "us-west-2")
@@ -199,3 +203,13 @@ def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock_g
     assert groq_tok["count_accuracy"] == "exact"
     assert groq_tok["kind"] == "tiktoken"
     assert groq_tok["detokenize"] is True
+
+    deepseek_model = providers["deepseek"]["models"][0]
+    deepseek_tok = providers["deepseek"]["tokenizers"][deepseek_model]
+    assert deepseek_tok["count_accuracy"] == "unavailable"
+    assert deepseek_tok["kind"] == "tiktoken"
+
+    mistral_model = providers["mistral"]["models"][0]
+    mistral_tok = providers["mistral"]["tokenizers"][mistral_model]
+    assert mistral_tok["count_accuracy"] == "unavailable"
+    assert mistral_tok["kind"] == "tiktoken"
