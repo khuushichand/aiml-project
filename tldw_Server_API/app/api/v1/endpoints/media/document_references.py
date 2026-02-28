@@ -568,15 +568,15 @@ def _split_references_with_meta(
             candidate,
         ):
             return False
-        # Unicode-aware surname token (supports diacritics like Gaztanaga).
-        surname_token = r"[^\W\d_][\w'’.\-]*"
+        # Unicode-aware surname pattern (supports diacritics like Gaztanaga).
+        surname_pattern = r"[^\W\d_][\w'’.\-]*"
         # Surname + initials list: "Abazajian K. N., ..." / "Smith, J. ..."
-        if re.match(rf"^{surname_token}(?:\s+[A-Z]\.){{1,3}},", candidate):
+        if re.match(rf"^{surname_pattern}(?:\s+[A-Z]\.){{1,3}},", candidate):
             return True
-        if re.match(rf"^{surname_token},\s*[^\W\d_]", candidate):
+        if re.match(rf"^{surname_pattern},\s*[^\W\d_]", candidate):
             return True
         # "Surname et al." style
-        return bool(re.match(rf"^{surname_token}(?:\s+et\s+al\.)\b", candidate))
+        return bool(re.match(rf"^{surname_pattern}(?:\s+et\s+al\.)\b", candidate))
 
     def _looks_like_new_reference(line: str) -> bool:
         if _is_markdown_url_fragment_line(line) and _extract_markdown_link_text(line) is None:

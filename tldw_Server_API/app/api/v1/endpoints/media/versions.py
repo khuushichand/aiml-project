@@ -961,7 +961,11 @@ async def create_or_update_version_advanced(
             latest_sm = {}
 
         if body.safe_metadata is not None:
-            assert normalized is not None
+            if normalized is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="safe_metadata normalization failed",
+                )
             if body.merge:
                 merged_sm = dict(latest_sm)
                 merged_sm.update(normalized)

@@ -52,6 +52,9 @@ preserve_and_copy "$SRC_DIR/Deployment/Monitoring" "$DEST_DIR/Monitoring"
 # Evaluations
 preserve_and_copy "$SRC_DIR/Evaluations" "$DEST_DIR/Evaluations"
 
+# Getting Started (canonical onboarding profiles)
+preserve_and_copy "$SRC_DIR/Getting_Started" "$DEST_DIR/Getting_Started"
+
 # User Guides
 preserve_and_copy "$SRC_DIR/User_Guides" "$DEST_DIR/User_Guides"
 

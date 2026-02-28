@@ -70,6 +70,12 @@ copyright: |
 nav:
   - Home: index.md
   - Overview: Overview/Feature_Status.md
+  - Getting Started:
+      - Overview: Getting_Started/README.md
+      - Local single-user: Getting_Started/Profile_Local_Single_User.md
+      - Docker single-user: Getting_Started/Profile_Docker_Single_User.md
+      - Docker multi-user + Postgres: Getting_Started/Profile_Docker_Multi_User_Postgres.md
+      - GPU/STT Add-on: Getting_Started/GPU_STT_Addon.md
   - Workflows:
       - Workflows PRD: Workflows_PRD.md
       - Runbook: Workflows_Runbook.md
