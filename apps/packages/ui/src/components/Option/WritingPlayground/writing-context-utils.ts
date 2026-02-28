@@ -13,6 +13,7 @@ export type WritingAuthorNote = WritingContextBlock & {
 
 export type WritingWorldInfoEntry = {
   id: string
+  display_name?: string
   enabled: boolean
   keys: string[]
   content: string

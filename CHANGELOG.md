@@ -47,6 +47,11 @@ and this project adheres to Some kind of Versioning
   - Added unified-pipeline clarification short-circuit for ambiguous generation requests (`200 OK` with clarifying prompt in `generated_answer` plus clarification metadata).
   - Added research-loop action-signature dedup (web/academic/discussion/local DB) with result reuse and `action_dedup` metadata reporting.
   - Added regression coverage for schema acceptance, clarification short-circuit behavior, clarification metric emission, action-signature dedup (unit + integration), and `/api/v1/rag/features` contract updates.
+- Notes moodboard remediation coverage:
+  - Added backend regression assertions for paged moodboard note listing and true `total` reporting in:
+    - `tldw_Server_API/tests/Notes_NEW/unit/test_notes_moodboard_db.py`
+    - `tldw_Server_API/tests/Notes_NEW/integration/test_moodboards_api.py`
+  - Added/expanded frontend stage42 moodboard tests covering lazy moodboard fetch behavior and moodboard pagination controls/navigation.
 
 ### Changed
 - Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
@@ -68,6 +73,16 @@ and this project adheres to Some kind of Versioning
 - RAG features/capabilities surfaces now advertise pre-retrieval clarification and research action-dedup support (`/api/v1/rag/features`, `/api/v1/rag/capabilities`, API guide, and capabilities docs).
 - Chat command routing now passes Skills command context from the chat endpoint into the command router so `/skill` execution can resolve and run skills consistently.
 - Route-toggle policy now allows environment override application during test mode (`is_test_mode()`), preventing collection-order drift between explicit pytest runtime markers and test-mode configuration.
+- Notes moodboard API/DB behavior:
+  - Moodboard note listing now performs SQL-level union/collapse/pagination for manual + smart-rule membership instead of full in-memory merge/sort/slice.
+  - Moodboard notes endpoint now reports a true `total` via `count_moodboard_notes(...)` while preserving `count` for the current page.
+  - Moodboard endpoint signatures now include explicit return type hints, helper docstrings, and normalized function signature formatting.
+  - Async moodboard endpoints now offload synchronous DB operations via `asyncio.to_thread` to avoid event-loop blocking.
+- Notes moodboard WebUI behavior:
+  - Moodboard query fetching is now gated to active moodboard view (`listMode=active` + `listViewMode=moodboard`) instead of eager active-mode fetches.
+  - Moodboard list retrieval now iterates paged API requests and deduplicates IDs, removing the practical fixed-size fetch cap behavior.
+  - Moodboard view now includes local pagination controls (page-size selector, prev/next, summary/index) backed by paged API requests.
+  - Moodboard rename/delete expected-version handling now uses the simplified `selectedMoodboard.version ?? 1` path.
 
 ### Removed
 - No removals in this session.
@@ -90,6 +105,8 @@ and this project adheres to Some kind of Versioning
 - Fixed redundant iterative research-loop calls for equivalent action/query signatures by reusing previously successful action outputs.
 - Fixed `/skill` command error handling to convert unexpected skill-resolution/runtime exceptions into a structured command error response instead of bubbling unhandled exceptions.
 - Fixed `tldw_Server_API/tests/Skills/integration/test_skills_api.py` startup abort risk by setting minimal test-route env toggles early and lazily importing `app.main` within the fixture, avoiding heavy module side effects at collection time.
+- Fixed moodboard create endpoint robustness by handling unexpected `None` ID returns before integer conversion.
+- Fixed moodboard docs path placeholder inconsistency by using `{moodboard_id}` for `GET /moodboards/{moodboard_id}/notes`.
 
 
 ## [0.1.24] 2026-02-22

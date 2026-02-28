@@ -56,12 +56,16 @@ const normalizeEntry = (
 
   const disableFlag = toBoolean(raw.disable, false)
   const enabled = toBoolean(raw.enabled, !disableFlag)
+  const displayName = toString(
+    raw.display_name ?? raw.displayName ?? raw.comment ?? raw.name
+  ).trim()
 
   return {
     id:
       toString(raw.id).trim() ||
       toString(raw.uid).trim() ||
       `imported-${index + 1}`,
+    display_name: displayName || undefined,
     enabled,
     keys,
     content,
@@ -105,8 +109,12 @@ const extractEntriesSource = (value: unknown): unknown[] => {
       return Object.values(nestedEntries).map((entry) => {
         if (!isRecord(entry)) return entry
         return {
+          uid: entry.uid,
+          id: entry.id,
+          display_name: entry.display_name ?? entry.displayName ?? entry.comment,
           content: entry.content,
           keys: entry.key,
+          keysecondary: entry.keysecondary,
           search: entry.scanDepth
         }
       })
@@ -121,6 +129,7 @@ const extractEntriesSource = (value: unknown): unknown[] => {
       return {
         uid: entry.uid,
         id: entry.id,
+        display_name: entry.display_name ?? entry.displayName ?? entry.comment,
         content: entry.content,
         keys: entry.key,
         keysecondary: entry.keysecondary,
@@ -188,6 +197,7 @@ export const buildWorldInfoExportPayload = (
     search_range: number
     entries: Array<{
       id: string
+      display_name?: string
       enabled: boolean
       keys: string[]
       content: string
@@ -207,6 +217,11 @@ export const buildWorldInfoExportPayload = (
       entries: (Array.isArray(worldInfo.entries) ? worldInfo.entries : []).map(
         (entry, index) => ({
           id: toString(entry.id).trim() || `entry-${index + 1}`,
+          display_name:
+            typeof entry.display_name === "string" &&
+            entry.display_name.trim() !== ""
+              ? entry.display_name
+              : undefined,
           enabled: Boolean(entry.enabled),
           keys: parseKeys(entry.keys),
           content: toString(entry.content),

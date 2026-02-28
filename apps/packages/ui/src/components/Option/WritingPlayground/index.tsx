@@ -53,9 +53,12 @@ import {
   deleteWritingSession,
   deleteWritingTemplate,
   deleteWritingTheme,
+  exportWritingSnapshot,
   getWritingCapabilities,
+  getWritingDefaults,
   getWritingWordcloud,
   getWritingSession,
+  importWritingSnapshot,
   listWritingSessions,
   listWritingTemplates,
   listWritingThemes,
@@ -125,6 +128,7 @@ import {
   parseWordcloudStopwordsInput
 } from "./writing-wordcloud-utils"
 import { buildWorldInfoExportPayload } from "./writing-world-info-transfer-utils"
+import { moveWorldInfoEntry } from "./writing-world-info-utils"
 import {
   computeTokensPerSecond,
   estimateTokenCountFromText
@@ -156,6 +160,10 @@ import {
 } from "./writing-session-import-utils"
 import { extractImportedTemplateItems } from "./writing-template-import-utils"
 import { extractImportedThemeItems } from "./writing-theme-import-utils"
+import {
+  resolveSnapshotImportAction,
+  type SnapshotImportMode
+} from "./writing-snapshot-import-utils"
 import {
   DEFAULT_TEMPLATE_CATALOG,
   DEFAULT_THEME_CATALOG,
@@ -533,6 +541,10 @@ const normalizeWorldInfoEntries = (value: unknown): WritingWorldInfoEntry[] => {
       )
       return {
         id: String(entry.id || createWorldInfoId()),
+        display_name: toStringValue(
+          entry.display_name ?? entry.displayName ?? entry.comment,
+          ""
+        ).trim(),
         enabled: toBoolean(entry.enabled, true),
         keys,
         content,
@@ -1238,6 +1250,10 @@ export const WritingPlayground = () => {
   const [createModalOpen, setCreateModalOpen] = React.useState(false)
   const [newSessionName, setNewSessionName] = React.useState("")
   const [sessionImporting, setSessionImporting] = React.useState(false)
+  const [snapshotImporting, setSnapshotImporting] = React.useState(false)
+  const [snapshotExporting, setSnapshotExporting] = React.useState(false)
+  const [snapshotImportMode, setSnapshotImportMode] =
+    React.useState<SnapshotImportMode>("merge")
   const [renameModalOpen, setRenameModalOpen] = React.useState(false)
   const [renameSessionName, setRenameSessionName] = React.useState("")
   const [renameTarget, setRenameTarget] =
@@ -1358,6 +1374,7 @@ export const WritingPlayground = () => {
   const lastSavedChatModeRef = React.useRef<Record<string, boolean>>({})
   const templateFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const sessionFileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const snapshotFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const themeFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const generationServiceRef = React.useRef(new TldwChatService())
   const generationUndoRef = React.useRef<GenerationHistoryEntry[]>([])
@@ -1384,7 +1401,53 @@ export const WritingPlayground = () => {
   const hasWriting = Boolean(writingCaps?.server?.sessions)
   const hasTemplates = Boolean(writingCaps?.server?.templates)
   const hasThemes = Boolean(writingCaps?.server?.themes)
+  const hasServerDefaultsCatalog = Boolean(
+    writingCaps?.server?.defaults_catalog
+  )
+  const hasSnapshots = Boolean(writingCaps?.server?.snapshots)
   const hasChat = capabilities?.hasChat !== false
+
+  const { data: writingDefaultsData } = useQuery({
+    queryKey: ["writing-defaults"],
+    queryFn: () => getWritingDefaults(),
+    enabled: isOnline && hasWriting && hasServerDefaultsCatalog,
+    staleTime: 5 * 60 * 1000
+  })
+
+  const templateDefaultCatalog = React.useMemo(() => {
+    if (
+      Array.isArray(writingDefaultsData?.templates) &&
+      writingDefaultsData.templates.length > 0
+    ) {
+      return writingDefaultsData.templates.map((item) => ({
+        name: String(item.name || "").trim() || "default",
+        payload: isRecord(item.payload) ? item.payload : {},
+        schema_version:
+          typeof item.schema_version === "number" ? item.schema_version : 1,
+        is_default: item.is_default !== false
+      }))
+    }
+    return DEFAULT_TEMPLATE_CATALOG
+  }, [writingDefaultsData?.templates])
+
+  const themeDefaultCatalog = React.useMemo(() => {
+    if (
+      Array.isArray(writingDefaultsData?.themes) &&
+      writingDefaultsData.themes.length > 0
+    ) {
+      return writingDefaultsData.themes.map((item) => ({
+        name: String(item.name || "").trim() || "default",
+        class_name:
+          typeof item.class_name === "string" ? item.class_name : "",
+        css: typeof item.css === "string" ? item.css : "",
+        schema_version:
+          typeof item.schema_version === "number" ? item.schema_version : 1,
+        is_default: item.is_default !== false,
+        order: typeof item.order === "number" ? item.order : 0
+      }))
+    }
+    return DEFAULT_THEME_CATALOG
+  }, [writingDefaultsData?.themes])
 
   const { data: requestedCaps, isLoading: requestedCapsLoading } = useQuery({
     queryKey: [
@@ -1805,6 +1868,255 @@ export const WritingPlayground = () => {
       }
     },
     [t]
+  )
+
+  const exportSnapshot = React.useCallback(async () => {
+    setSnapshotExporting(true)
+    try {
+      const snapshot = await exportWritingSnapshot()
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+      const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
+        type: "application/json"
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `writing-snapshot-${stamp}.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      message.success(
+        t(
+          "option:writingPlayground.snapshotExportSuccess",
+          "Snapshot exported."
+        )
+      )
+    } catch (err) {
+      const detail =
+        err instanceof Error ? err.message : t("option:error", "Error")
+      message.error(
+        t(
+          "option:writingPlayground.snapshotExportError",
+          "Failed to export snapshot: {{detail}}",
+          { detail }
+        )
+      )
+    } finally {
+      setSnapshotExporting(false)
+    }
+  }, [t])
+
+  const openSnapshotImportPicker = React.useCallback(
+    (mode: SnapshotImportMode) => {
+      const action = resolveSnapshotImportAction(mode, {
+        title: t(
+          "option:writingPlayground.snapshotReplaceConfirmTitle",
+          "Replace existing writing data?"
+        ),
+        body: t(
+          "option:writingPlayground.snapshotReplaceConfirmBody",
+          "This will replace current sessions, templates, and themes with the imported snapshot."
+        ),
+        action: t(
+          "option:writingPlayground.snapshotReplaceConfirmAction",
+          "Choose file"
+        ),
+        cancel: t("common:cancel", "Cancel")
+      })
+
+      if (action.type === "confirm-replace") {
+        Modal.confirm({
+          title: action.title,
+          content: action.content,
+          okText: action.okText,
+          cancelText: action.cancelText,
+          okButtonProps: { danger: action.danger },
+          onOk: () => {
+            setSnapshotImportMode(action.mode)
+            snapshotFileInputRef.current?.click()
+          }
+        })
+        return
+      }
+      setSnapshotImportMode(action.mode)
+      snapshotFileInputRef.current?.click()
+    },
+    [t]
+  )
+
+  const handleSnapshotImport = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+      setSnapshotImporting(true)
+      try {
+        const importMode = snapshotImportMode
+        const raw = await file.text()
+        const parsed = JSON.parse(raw)
+        const source =
+          isRecord(parsed) && isRecord(parsed.snapshot) ? parsed.snapshot : parsed
+        if (!isRecord(source)) {
+          message.error(
+            t(
+              "option:writingPlayground.snapshotImportInvalid",
+              "No snapshot payload found in file."
+            )
+          )
+          return
+        }
+
+        const importedSessions = extractImportedSessionItems(source)
+        const importedTemplates = extractImportedTemplateItems(source)
+        const importedThemes = extractImportedThemeItems(source)
+
+        if (
+          importedSessions.length === 0 &&
+          importedTemplates.length === 0 &&
+          importedThemes.length === 0
+        ) {
+          message.error(
+            t(
+              "option:writingPlayground.snapshotImportInvalid",
+              "No snapshot payload found in file."
+            )
+          )
+          return
+        }
+
+        let importedModelHint: string | null = null
+        let importedProviderHint: string | null = null
+        const normalizedSessions = importedSessions
+          .filter(isRecord)
+          .map((item) => {
+            const payload = parseImportedSessionPayload(item)
+            if (!importedModelHint) {
+              importedModelHint = getImportedSessionModelHint(payload)
+            }
+            if (!importedProviderHint) {
+              importedProviderHint = getImportedSessionProviderHint(payload)
+            }
+            const id =
+              typeof item.id === "string" && item.id.trim().length > 0
+                ? item.id.trim()
+                : undefined
+            const nameCandidate =
+              typeof item.name === "string"
+                ? item.name
+                : typeof item.title === "string"
+                  ? item.title
+                  : ""
+            const name = nameCandidate.trim() || `Imported session ${Date.now()}`
+            const schemaVersion =
+              typeof item.schema_version === "number"
+                ? item.schema_version
+                : typeof item.schemaVersion === "number"
+                  ? item.schemaVersion
+                  : 1
+            const versionParentId =
+              typeof item.version_parent_id === "string"
+                ? item.version_parent_id
+                : typeof item.versionParentId === "string"
+                  ? item.versionParentId
+                  : null
+            return {
+              id,
+              name,
+              payload,
+              schema_version: schemaVersion,
+              version_parent_id: versionParentId
+            }
+          })
+
+        const normalizedTemplates = importedTemplates.map((item) => ({
+          name: item.name,
+          payload: item.payload,
+          schema_version: item.schemaVersion,
+          is_default: item.isDefault
+        }))
+        const normalizedThemes = importedThemes.map((item) => ({
+          name: item.name,
+          class_name: item.className,
+          css: item.css,
+          schema_version: item.schemaVersion,
+          is_default: item.isDefault,
+          order: item.order
+        }))
+
+        const importResult = await importWritingSnapshot({
+          mode: importMode,
+          snapshot: {
+            sessions: normalizedSessions,
+            templates: normalizedTemplates,
+            themes: normalizedThemes
+          }
+        })
+
+        if (importMode === "replace") {
+          setActiveSessionId(null)
+          setActiveSessionName(null)
+        }
+
+        if (!selectedModel && importedModelHint) {
+          void setSelectedModel(importedModelHint)
+        }
+        if (!apiProviderOverride && importedProviderHint) {
+          setApiProvider(importedProviderHint)
+        }
+
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["writing-sessions"] }),
+          queryClient.invalidateQueries({ queryKey: ["writing-templates"] }),
+          queryClient.invalidateQueries({ queryKey: ["writing-themes"] })
+        ])
+        message.success(
+          t(
+            "option:writingPlayground.snapshotImportSuccess",
+            "Snapshot {{mode}} (sessions: {{sessions}}, templates: {{templates}}, themes: {{themes}}).",
+            {
+              mode:
+                importMode === "replace"
+                  ? t(
+                      "option:writingPlayground.snapshotImportModeReplaced",
+                      "replaced"
+                    )
+                  : t(
+                      "option:writingPlayground.snapshotImportModeMerged",
+                      "imported"
+                    ),
+              sessions: importResult.imported.sessions,
+              templates: importResult.imported.templates,
+              themes: importResult.imported.themes
+            }
+          )
+        )
+      } catch (err) {
+        const detail =
+          err instanceof Error ? err.message : t("option:error", "Error")
+        message.error(
+          t(
+            "option:writingPlayground.snapshotImportError",
+            "Failed to import snapshot: {{detail}}",
+            { detail }
+          )
+        )
+      } finally {
+        setSnapshotImporting(false)
+        setSnapshotImportMode("merge")
+        event.target.value = ""
+      }
+    },
+    [
+      apiProviderOverride,
+      queryClient,
+      selectedModel,
+      snapshotImportMode,
+      setApiProvider,
+      setActiveSessionId,
+      setActiveSessionName,
+      setSelectedModel,
+      t
+    ]
   )
 
   const handleSessionImport = React.useCallback(
@@ -2798,6 +3110,7 @@ export const WritingPlayground = () => {
   const addWorldInfoEntry = React.useCallback(() => {
     const entry: WritingWorldInfoEntry = {
       id: createWorldInfoId(),
+      display_name: "",
       enabled: true,
       keys: [],
       content: "",
@@ -2830,6 +3143,15 @@ export const WritingPlayground = () => {
     (entryId: string) => {
       updateWorldInfo({
         entries: worldInfoEntries.filter((entry) => entry.id !== entryId)
+      })
+    },
+    [updateWorldInfo, worldInfoEntries]
+  )
+
+  const moveWorldInfoEntryById = React.useCallback(
+    (entryId: string, direction: "up" | "down") => {
+      updateWorldInfo({
+        entries: moveWorldInfoEntry(worldInfoEntries, entryId, direction)
       })
     },
     [updateWorldInfo, worldInfoEntries]
@@ -3297,7 +3619,7 @@ export const WritingPlayground = () => {
     if (templateRestoringDefaults) return
     setTemplateRestoringDefaults(true)
     try {
-      for (const item of DEFAULT_TEMPLATE_CATALOG) {
+      for (const item of templateDefaultCatalog) {
         const existing = templates.find((template) => template.name === item.name)
         if (existing) {
           await updateWritingTemplate(
@@ -3315,7 +3637,7 @@ export const WritingPlayground = () => {
         }
       }
       await queryClient.invalidateQueries({ queryKey: ["writing-templates"] })
-      handleTemplateChange(DEFAULT_TEMPLATE_CATALOG[0]?.name ?? null)
+      handleTemplateChange(templateDefaultCatalog[0]?.name ?? null)
       message.success(
         t(
           "option:writingPlayground.templateRestoreDefaultsSuccess",
@@ -3339,6 +3661,7 @@ export const WritingPlayground = () => {
     handleTemplateChange,
     queryClient,
     t,
+    templateDefaultCatalog,
     templateRestoringDefaults,
     templates
   ])
@@ -3385,7 +3708,7 @@ export const WritingPlayground = () => {
     if (themeRestoringDefaults) return
     setThemeRestoringDefaults(true)
     try {
-      for (const item of DEFAULT_THEME_CATALOG) {
+      for (const item of themeDefaultCatalog) {
         const existing = themes.find((theme) => theme.name === item.name)
         if (existing) {
           await updateWritingTheme(
@@ -3404,7 +3727,7 @@ export const WritingPlayground = () => {
         }
       }
       await queryClient.invalidateQueries({ queryKey: ["writing-themes"] })
-      handleThemeChange(DEFAULT_THEME_CATALOG[0]?.name ?? null)
+      handleThemeChange(themeDefaultCatalog[0]?.name ?? null)
       message.success(
         t(
           "option:writingPlayground.themeRestoreDefaultsSuccess",
@@ -3424,7 +3747,14 @@ export const WritingPlayground = () => {
     } finally {
       setThemeRestoringDefaults(false)
     }
-  }, [handleThemeChange, queryClient, t, themeRestoringDefaults, themes])
+  }, [
+    handleThemeChange,
+    queryClient,
+    t,
+    themeDefaultCatalog,
+    themeRestoringDefaults,
+    themes
+  ])
 
   const handleOpenThemesModal = React.useCallback(() => {
     const baseTheme = selectedTheme ?? defaultTheme ?? themes[0] ?? null
@@ -5002,6 +5332,10 @@ export const WritingPlayground = () => {
   const canCreateSession = newSessionName.trim().length > 0
   const sessionImportDisabled =
     !hasWriting || sessionsLoading || sessionImporting
+  const snapshotImportDisabled =
+    !hasSnapshots || snapshotImporting || snapshotExporting
+  const snapshotExportDisabled =
+    !hasSnapshots || snapshotExporting || snapshotImporting
   const canRenameSession =
     renameSessionName.trim().length > 0 &&
     renameTarget != null &&
@@ -5097,6 +5431,43 @@ export const WritingPlayground = () => {
                   disabled={sessionImportDisabled}>
                   {t("option:writingPlayground.importSession", "Import")}
                 </Button>
+                {hasSnapshots ? (
+                  <>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        void exportSnapshot()
+                      }}
+                      loading={snapshotExporting}
+                      disabled={snapshotExportDisabled}>
+                      {t(
+                        "option:writingPlayground.exportSnapshot",
+                        "Export all"
+                      )}
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={() => openSnapshotImportPicker("merge")}
+                      loading={snapshotImporting}
+                      disabled={snapshotImportDisabled}>
+                      {t(
+                        "option:writingPlayground.importSnapshot",
+                        "Import all"
+                      )}
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      onClick={() => openSnapshotImportPicker("replace")}
+                      loading={snapshotImporting}
+                      disabled={snapshotImportDisabled}>
+                      {t(
+                        "option:writingPlayground.replaceSnapshot",
+                        "Replace all"
+                      )}
+                    </Button>
+                  </>
+                ) : null}
               </div>
             }>
             {sessionsLoading ? (
@@ -7353,23 +7724,75 @@ export const WritingPlayground = () => {
                                           className="rounded-md border border-border bg-background p-3">
                                           <div className="flex items-center justify-between gap-2">
                                             <span className="text-xs font-medium text-text">
-                                              {t(
-                                                "option:writingPlayground.worldInfoEntryLabel",
-                                                "Entry {{index}}",
-                                                { index: index + 1 }
-                                              )}
+                                              {entry.display_name?.trim()
+                                                ? entry.display_name
+                                                : t(
+                                                    "option:writingPlayground.worldInfoEntryLabel",
+                                                    "Entry {{index}}",
+                                                    { index: index + 1 }
+                                                  )}
                                             </span>
-                                            <Button
-                                              size="small"
-                                              danger
-                                              disabled={settingsDisabled}
-                                              onClick={() =>
-                                                removeWorldInfoEntry(entry.id)
-                                              }>
-                                              {t("common:delete", "Delete")}
-                                            </Button>
+                                            <div className="flex items-center gap-2">
+                                              <Button
+                                                size="small"
+                                                disabled={
+                                                  settingsDisabled || index === 0
+                                                }
+                                                onClick={() =>
+                                                  moveWorldInfoEntryById(
+                                                    entry.id,
+                                                    "up"
+                                                  )
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.worldInfoMoveUp",
+                                                  "Move up"
+                                                )}
+                                              </Button>
+                                              <Button
+                                                size="small"
+                                                disabled={
+                                                  settingsDisabled ||
+                                                  index >=
+                                                    worldInfoEntries.length - 1
+                                                }
+                                                onClick={() =>
+                                                  moveWorldInfoEntryById(
+                                                    entry.id,
+                                                    "down"
+                                                  )
+                                                }>
+                                                {t(
+                                                  "option:writingPlayground.worldInfoMoveDown",
+                                                  "Move down"
+                                                )}
+                                              </Button>
+                                              <Button
+                                                size="small"
+                                                danger
+                                                disabled={settingsDisabled}
+                                                onClick={() =>
+                                                  removeWorldInfoEntry(entry.id)
+                                                }>
+                                                {t("common:delete", "Delete")}
+                                              </Button>
+                                            </div>
                                           </div>
                                           <div className="mt-3 flex flex-col gap-3">
+                                            <Input
+                                              value={entry.display_name || ""}
+                                              disabled={settingsDisabled}
+                                              placeholder={t(
+                                                "option:writingPlayground.worldInfoDisplayNamePlaceholder",
+                                                "Display name (optional)"
+                                              )}
+                                              onChange={(event) =>
+                                                updateWorldInfoEntry(entry.id, {
+                                                  display_name:
+                                                    event.target.value
+                                                })
+                                              }
+                                            />
                                             <div className="flex flex-wrap items-center gap-3">
                                               <Checkbox
                                                 checked={entry.enabled}
@@ -8585,6 +9008,14 @@ export const WritingPlayground = () => {
         accept=".json,application/json"
         onChange={handleSessionImport}
         data-testid="writing-session-import"
+        className="hidden"
+      />
+      <input
+        ref={snapshotFileInputRef}
+        type="file"
+        accept=".json,application/json"
+        onChange={handleSnapshotImport}
+        data-testid="writing-snapshot-import"
         className="hidden"
       />
     </div>

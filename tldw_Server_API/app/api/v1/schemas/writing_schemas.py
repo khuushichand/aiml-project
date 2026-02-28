@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -130,6 +130,84 @@ class WritingThemeListResponse(BaseModel):
     total: int
 
 
+class WritingDefaultTemplate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = Field(1, ge=1)
+    is_default: bool = True
+
+
+class WritingDefaultTheme(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    class_name: str | None = None
+    css: str | None = None
+    schema_version: int = Field(1, ge=1)
+    is_default: bool = True
+    order: int = 0
+
+
+class WritingDefaultsResponse(BaseModel):
+    version: int = 1
+    templates: list[WritingDefaultTemplate]
+    themes: list[WritingDefaultTheme]
+
+
+class WritingSnapshotCounts(BaseModel):
+    sessions: int = 0
+    templates: int = 0
+    themes: int = 0
+
+
+class WritingSnapshotSessionItem(BaseModel):
+    id: str | None = None
+    name: str = Field(..., min_length=1, max_length=255)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = Field(1, ge=1)
+    version_parent_id: str | None = None
+
+
+class WritingSnapshotTemplateItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = Field(1, ge=1)
+    version_parent_id: str | None = None
+    is_default: bool = False
+
+
+class WritingSnapshotThemeItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    class_name: str | None = None
+    css: str | None = None
+    schema_version: int = Field(1, ge=1)
+    version_parent_id: str | None = None
+    is_default: bool = False
+    order: int = 0
+
+
+class WritingSnapshotPayload(BaseModel):
+    sessions: list[WritingSnapshotSessionItem] = Field(default_factory=list)
+    templates: list[WritingSnapshotTemplateItem] = Field(default_factory=list)
+    themes: list[WritingSnapshotThemeItem] = Field(default_factory=list)
+
+
+class WritingSnapshotExportResponse(BaseModel):
+    version: int = 1
+    counts: WritingSnapshotCounts
+    sessions: list[WritingSnapshotSessionItem]
+    templates: list[WritingSnapshotTemplateItem]
+    themes: list[WritingSnapshotThemeItem]
+
+
+class WritingSnapshotImportRequest(BaseModel):
+    mode: Literal["merge", "replace"] = "merge"
+    snapshot: WritingSnapshotPayload
+
+
+class WritingSnapshotImportResponse(BaseModel):
+    mode: Literal["merge", "replace"]
+    imported: WritingSnapshotCounts
+
+
 class WritingTokenizeOptions(BaseModel):
     include_strings: bool = Field(True, description="Include decoded token strings")
 
@@ -254,6 +332,8 @@ class WritingServerCapabilities(BaseModel):
     sessions: bool
     templates: bool
     themes: bool
+    defaults_catalog: bool = False
+    snapshots: bool = False
     tokenize: bool
     detokenize: bool = False
     token_count: bool

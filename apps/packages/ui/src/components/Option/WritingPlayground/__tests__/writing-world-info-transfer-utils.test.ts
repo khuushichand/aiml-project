@@ -15,6 +15,7 @@ describe("writing world info transfer utils", () => {
       entries: [
         {
           id: "1",
+          display_name: "Hero Profile",
           enabled: true,
           keys: ["hero"],
           content: "Hero notes",
@@ -28,6 +29,7 @@ describe("writing world info transfer utils", () => {
     expect(payload.version).toBe(1)
     expect(payload.world_info.prefix).toBe("WI:\\n")
     expect(payload.world_info.entries).toHaveLength(1)
+    expect(payload.world_info.entries[0]?.display_name).toBe("Hero Profile")
   })
 
   it("parses native world info payloads", () => {
@@ -76,6 +78,7 @@ describe("writing world info transfer utils", () => {
     expect(parsed.error).toBeNull()
     expect(parsed.value?.entries).toHaveLength(2)
     expect(parsed.value?.entries?.[0]?.id).toBe("42")
+    expect(parsed.value?.entries?.[0]?.display_name).toBe("Entry A")
     expect(parsed.value?.entries?.[0]?.content).toBe("Lore A")
     expect(parsed.value?.entries?.[0]?.keys).toEqual(["alpha", "beta", "gamma"])
     expect(parsed.value?.entries?.[0]?.search_range).toBe(250)
