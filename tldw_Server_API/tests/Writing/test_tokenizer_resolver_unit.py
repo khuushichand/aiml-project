@@ -254,6 +254,9 @@ def test_resolve_tokenizer_bedrock_anthropic_count_only_exact_from_config(monkey
     monkeypatch.delenv("BEDROCK_API_BASE_URL", raising=False)
     monkeypatch.delenv("BEDROCK_OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("BEDROCK_REGION", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE123")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-example-key")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
 
     config = configparser.ConfigParser()
     config.add_section("API")
@@ -316,19 +319,26 @@ def test_bedrock_count_only_adapter_calls_runtime_count_tokens(monkeypatch):
         calls.append((url, dict(headers), dict(payload)))
         return _FakeResponse(200, {"inputTokens": 9})
 
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE123")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-example-key")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
     monkeypatch.setattr(resolver, "_http_post", _fake_post)
 
     adapter = resolver.BedrockCountOnlyHTTPAdapter(
         base_url="https://bedrock-runtime.us-west-2.amazonaws.com",
         model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-        api_key="bedrock-test-key",
+        api_key=None,
+        region="us-west-2",
+        aws_credentials=None,
     )
 
     count = adapter.count_tokens("hello")
     assert count == 9
     assert calls
     assert "/model/anthropic.claude-3-5-sonnet-20240620-v1%3A0/count-tokens" in calls[0][0]
-    assert calls[0][1].get("Authorization") == "Bearer bedrock-test-key"
+    assert str(calls[0][1].get("Authorization", "")).startswith("AWS4-HMAC-SHA256 ")
+    assert calls[0][1].get("X-Amz-Date")
+    assert calls[0][1].get("X-Amz-Content-Sha256")
 
 
 def test_resolve_tokenizer_ollama_native_exact_from_config():
