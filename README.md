@@ -79,7 +79,16 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-**New here?** Jump to [Quickstart](#quickstart) or try `make quickstart-install` after cloning.
+**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details.
+
+## Start Here (Self-Hosting Profiles)
+
+Choose one onboarding path:
+
+1. [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md)
+2. [Docker single-user](Docs/Getting_Started/Profile_Docker_Single_User.md)
+3. [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
+4. [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md)
 
 
 ## Current Status
