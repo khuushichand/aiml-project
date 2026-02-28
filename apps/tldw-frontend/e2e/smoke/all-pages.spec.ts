@@ -26,7 +26,6 @@ import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from 
 const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT;
 const ELEMENT_TIMEOUT = 15_000; // 15s max for element visibility
 const NETWORK_IDLE_TIMEOUT = Math.min(LOAD_TIMEOUT, 10_000);
-const WARMUP_TIMEOUT = Math.max(LOAD_TIMEOUT, 90_000);
 const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === '1';
 const ALLOWLIST_LOG_LIMIT = Number(process.env.TLDW_SMOKE_ALLOWLIST_LOG_LIMIT || 10);
 const SMOKE_HARD_GATE = process.env.TLDW_SMOKE_HARD_GATE !== '0';
@@ -37,6 +36,10 @@ const TRANSIENT_RUNTIME_RETRY_ATTEMPTS = Math.max(
 const TRANSIENT_RUNTIME_RETRY_DELAY_MS = Math.max(
   0,
   Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRY_DELAY_MS || 500)
+);
+const ROUTE_TEST_TIMEOUT = Math.max(
+  60_000,
+  LOAD_TIMEOUT * (TRANSIENT_RUNTIME_RETRY_ATTEMPTS + 1) + 30_000
 );
 const KEY_NAV_TARGETS = ['/chat', '/media', '/knowledge', '/notes', '/prompts', '/settings/tldw'];
 const WAYFINDING_404_PATH = '/__wayfinding-missing-route__';
@@ -320,19 +323,6 @@ async function visitRouteWithTransientRetry(
   };
 }
 
-async function warmUpRoute(page: Page, routePath: string): Promise<void> {
-  try {
-    await page.goto(routePath, {
-      waitUntil: 'domcontentloaded',
-      timeout: WARMUP_TIMEOUT,
-    });
-  } catch (error) {
-    console.warn(
-      `[smoke-warmup] ${routePath} warm-up skipped after timeout: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-}
-
 async function assertNoRuntimeOverlay(
   page: Page,
   issues: ReturnType<typeof getCriticalIssues>,
@@ -370,21 +360,17 @@ test.describe('Smoke Tests - All Pages', () => {
   });
 
   // Log test suite info
-  test.beforeAll(async ({ browser }) => {
+  test.beforeAll(() => {
     console.log(
       `\nSmoke test suite: ${ACTIVE_PAGE_COUNT} pages (${PAGE_COUNT - ACTIVE_PAGE_COUNT} skipped)\n`
     );
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    await seedAuth(page);
-    await warmUpRoute(page, '/chat');
-    await warmUpRoute(page, '/settings/chat');
-    await context.close();
   });
 
   // Generate a test for each active page
   for (const entry of getActivePages()) {
     test(`${entry.name} (${entry.path})`, async ({ page, diagnostics }) => {
+      test.setTimeout(ROUTE_TEST_TIMEOUT);
+
       // Navigate to the page and retry once for transient dev-runtime syntax overlay flake.
       const { response, issues, classifiedIssues, retriesUsed } = await visitRouteWithTransientRetry(
         page,
