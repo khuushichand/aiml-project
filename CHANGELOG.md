@@ -10,6 +10,16 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
+- Strict LimaVM sandbox provider parity across REST, MCP, and ACP:
+  - Added Lima runtime capability/preflight contracts and host enforcement probing (`runtime_capabilities.py`, `runners/lima_enforcer.py`, `runners/lima_runner.py`).
+  - Added strict fail-closed Lima admission and execution-time revalidation in sandbox service flows.
+  - Added structured Lima error contracts for `runtime_unavailable` and `policy_unsupported` responses.
+  - Added Lima runtime support in MCP `sandbox.run` tool contract and ACP sandbox runner validation.
+  - Added Lima strict capability fields in runtime discovery schemas and API docs updates for strict mode semantics/platform constraints.
+  - Added regression coverage for Lima strict admission/preflight/runtime discovery/no-fallback/error-contract behavior across Sandbox, MCP, and ACP test suites.
+- PostgreSQL AuthNZ bootstrap schema file for CI/runtime startup safety:
+  - Added `tldw_Server_API/Databases/Postgres/Schema/postgresql_users.sql` with core bootstrap tables (`users`, `organizations`, `teams`) and supporting indexes.
+  - Added CI guard test `tldw_Server_API/tests/CI/test_postgres_schema_file_presence.py` to enforce bootstrap schema file presence/content.
 - Strict token counting phase-1 foundation for writing and provider metadata:
   - Added shared tokenizer resolver service at `tldw_Server_API/app/core/LLM_Calls/tokenizer_resolver.py` to centralize provider/model tokenizer classification.
   - Added additive tokenizer metadata fields `count_accuracy` (`exact`/`unavailable`) and `strict_mode_effective` in writing tokenize/count/detokenize responses, writing capabilities payloads, and `/api/v1/llm/providers`.
@@ -73,6 +83,8 @@ and this project adheres to Some kind of Versioning
   - Added API/DB regressions for scheduler-managed PATCH field rejection, dismissed-notification list filtering, reminders scheduler failure logging, and snooze reconciliation behavior.
 
 ### Changed
+- CI gate classification now computes `coverage_required` via dedicated coverage globs instead of mirroring `backend_changed`, preserving backend gate behavior while allowing workflow-only exclusions.
+- Writing Playground settings parsing now validates `basic_stopping_mode_type` via a typed supported-mode allowlist in payload normalization.
 - Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
 - Workspace bundle schema now includes `workspaceBanner` and preserves banner state on zip/json import/export.
 - Cross-tab conflict detection now tracks `workspaceBanner` as an explicit conflict field.
@@ -117,6 +129,14 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 
+- Fixed Lima strict-policy contract gaps:
+  - Rejected unsupported `allowlist` strict mode until enforcement support exists, removing false-positive strict capability advertisement.
+  - Added foreground execution-time preflight failure handling so Lima policy/preflight failures mark runs failed consistently (matching background behavior).
+  - Removed unconditional Docker fallback suggestion behavior for Firecracker runtime-unavailable paths.
+  - Prevented WSL/Windows readiness override bypass in Lima enforcer preflight checks.
+- Fixed CI gate/classifier runtime issues by repairing `Helper_Scripts/ci/path_classifier.py` syntax and output wiring.
+- Fixed frontend gate parsing failure in `apps/packages/ui/src/components/Option/WritingPlayground/index.tsx` caused by malformed basic stopping mode expression.
+- Fixed Full Suite multi-user startup regressions (`relation "organizations" does not exist`) by extending PostgreSQL bootstrap schema coverage to include organization/team dependencies.
 - Fixed tokenizer resolution error precedence so non-native providers no longer surface misleading provider-native configuration errors when tokenizer lookup is unavailable.
 - Fixed `modelstudio_image_mode=auto` to actually do sync-first fallback to async.
 - Fixed validation so `payload.extra_params.mode` is accepted for Model Studio control flow without requiring passthrough allowlisting.
