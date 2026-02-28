@@ -36,6 +36,14 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     save_uploaded_files,
 )
 from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.api.v1.endpoints.media.input_contracts import (
+    normalize_urls_field,
+    validate_media_inputs,
+)
+from tldw_Server_API.app.api.v1.endpoints.media.deprecation_signals import (
+    apply_media_legacy_headers,
+    build_media_legacy_signal,
+)
 
 router = APIRouter()
 
@@ -77,16 +85,30 @@ async def process_audios_endpoint(
         logger.debug("Audio process endpoint usage logging failed", exc_info=usage_log_error)
 
     # Normalize the "urls=['']" sentinel used by some clients.
-    if form_data.urls and form_data.urls == [""]:
+    legacy_urls_empty_sentinel_used = bool(form_data.urls and form_data.urls == [""])
+    if legacy_urls_empty_sentinel_used:
         logger.info(
             "Received urls=[''], treating as no URLs provided for audio processing."
         )
-        form_data.urls = None
+    form_data.urls = normalize_urls_field(form_data.urls)
+    legacy_signal = (
+        build_media_legacy_signal(
+            successor="/api/v1/media/process-audios",
+            warning_code="legacy_urls_empty_sentinel",
+        )
+        if legacy_urls_empty_sentinel_used
+        else None
+    )
 
     # Reuse shared validation so that error messages and 400 semantics match
     # the legacy implementation (including "No valid media sources supplied").
     try:
-        media_mod._validate_inputs("audio", form_data.urls, files)  # type: ignore[arg-type]
+        validate_media_inputs(
+            media_mod._validate_inputs,
+            "audio",
+            form_data.urls,
+            files,
+        )
     except HTTPException as exc:
         logger.warning("Input validation failed for /process-audios: {}", exc.detail)
         raise
@@ -175,15 +197,21 @@ async def process_audios_endpoint(
                 )
 
                 if security_block:
-                    return JSONResponse(
+                    response = JSONResponse(
                         status_code=status.HTTP_207_MULTI_STATUS,
                         content=batch_result,
                     )
+                    if legacy_signal is not None:
+                        apply_media_legacy_headers(response, legacy_signal)
+                    return response
 
-                return JSONResponse(
+                response = JSONResponse(
                     status_code=status.HTTP_207_MULTI_STATUS,
                     content=empty_batch,
                 )
+                if legacy_signal is not None:
+                    apply_media_legacy_headers(response, legacy_signal)
+                return response
 
             # Otherwise, no inputs at all -> 400.
             raise HTTPException(
@@ -325,7 +353,10 @@ async def process_audios_endpoint(
             exc,
         )
 
-    return JSONResponse(status_code=final_status_code, content=batch_result)
+    response = JSONResponse(status_code=final_status_code, content=batch_result)
+    if legacy_signal is not None:
+        apply_media_legacy_headers(response, legacy_signal)
+    return response
 
 
 __all__ = ["router"]

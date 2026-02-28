@@ -79,6 +79,13 @@ Base prefix: `/api/v1/media`
   - `POST /ingest-web-content` - Multi-mode scraping (individual, sitemap, url_level, recursive) with optional analysis/chunking and persistence.
   - `POST /process-web-scraping` - Process scraping jobs without persistence.
 
+### Deprecation Window (Media Processing)
+
+- One-release compatibility window:
+  - Release N: legacy compatibility input forms are still accepted where applicable, with additive deprecation signaling (`Deprecation`, `Sunset`, `Link` headers).
+  - Release N+1: compatibility shims/aliases are eligible for removal after parity and usage gates pass.
+- Current deprecation signaling is non-fatal and does not change response status/body contracts.
+
 ### Media Item Details
 
 - `GET  /api/v1/media/{id}` - Retrieve rich media details

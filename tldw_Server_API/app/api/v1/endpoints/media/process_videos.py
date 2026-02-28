@@ -43,6 +43,14 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
 )
+from tldw_Server_API.app.api.v1.endpoints.media.input_contracts import (
+    normalize_urls_field,
+    validate_media_inputs,
+)
+from tldw_Server_API.app.api.v1.endpoints.media.deprecation_signals import (
+    apply_media_legacy_headers,
+    build_media_legacy_signal,
+)
 
 router = APIRouter()
 
@@ -94,15 +102,29 @@ async def process_videos_endpoint(
         # Usage logging is best-effort; do not fail the request.
         logger.debug("Video process endpoint usage logging failed", exc_info=usage_log_error)
 
-    if form_data.urls and form_data.urls == [""]:
+    legacy_urls_empty_sentinel_used = bool(form_data.urls and form_data.urls == [""])
+    if legacy_urls_empty_sentinel_used:
         logger.info(
             "Received urls=[''], treating as no URLs provided for video processing."
         )
-        form_data.urls = None
+    form_data.urls = normalize_urls_field(form_data.urls)
+    legacy_signal = (
+        build_media_legacy_signal(
+            successor="/api/v1/media/process-videos",
+            warning_code="legacy_urls_empty_sentinel",
+        )
+        if legacy_urls_empty_sentinel_used
+        else None
+    )
 
     # Reuse shared validation so that error messages and 400 semantics match
     # the legacy implementation (including "No valid media sources supplied").
-    media_mod._validate_inputs("video", form_data.urls, files)  # type: ignore[arg-type]
+    validate_media_inputs(
+        media_mod._validate_inputs,
+        "video",
+        form_data.urls,
+        files,
+    )
 
     batch_result: dict[str, Any] = {
         "processed_count": 0,
@@ -197,10 +219,13 @@ async def process_videos_endpoint(
                     "No valid video sources to process after file saving errors."
                 )
                 # Return 207 with the structured file errors.
-                return JSONResponse(
+                response = JSONResponse(
                     status_code=status.HTTP_207_MULTI_STATUS,
                     content=batch_result,
                 )
+                if legacy_signal is not None:
+                    apply_media_legacy_headers(response, legacy_signal)
+                return response
 
             logger.warning("No video sources provided.")
             raise HTTPException(
@@ -349,7 +374,10 @@ async def process_videos_endpoint(
     except Exception as rechunk_error:
         logger.debug("Video process endpoint rechunking failed; returning original result", exc_info=rechunk_error)
 
-    return JSONResponse(status_code=final_status_code, content=batch_result)
+    response = JSONResponse(status_code=final_status_code, content=batch_result)
+    if legacy_signal is not None:
+        apply_media_legacy_headers(response, legacy_signal)
+    return response
 
 
 __all__ = ["router"]

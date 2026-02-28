@@ -15,8 +15,8 @@ from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import WebScrapingRequest
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.services.web_scraping_service import (
-    process_web_scraping_task,
+from tldw_Server_API.app.api.v1.endpoints.media.compat_patchpoints import (
+    get_process_web_scraping_task,
 )
 
 router = APIRouter()
@@ -57,11 +57,7 @@ async def process_web_scraping_endpoint(
 
         # Resolve the scraping task via the media shim so tests that
         # monkeypatch `media.process_web_scraping_task` continue to work.
-        task = getattr(
-            media_mod,
-            "process_web_scraping_task",
-            process_web_scraping_task,
-        )
+        task = get_process_web_scraping_task(media_mod)
 
         result = await task(
             scrape_method=payload.scrape_method,

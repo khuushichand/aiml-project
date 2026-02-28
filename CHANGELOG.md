@@ -84,6 +84,11 @@ and this project adheres to Some kind of Versioning
 
 ### Changed
 - CI gate classification now computes `coverage_required` via dedicated coverage globs instead of mirroring `backend_changed`, preserving backend gate behavior while allowing workflow-only exclusions.
+- Media ingestion compatibility reduction (phase 1):
+  - Added shared endpoint helpers for compatibility patchpoints and input contracts (`compat_patchpoints.py`, `input_contracts.py`).
+  - Added explicit media deprecation signaling helper (`deprecation_signals.py`) and wired additive deprecation headers for legacy `urls=[""]` sentinel compatibility flows on process endpoints.
+  - Marked media legacy shim surface as adapter-only (`LEGACY_MEDIA_SHIM_MODE = "adapter_only"`).
+  - Added regression tests for deprecation signals, compatibility patchpoints, input contract matrix, and shim adapter-only contract.
 - Writing Playground settings parsing now validates `basic_stopping_mode_type` via a typed supported-mode allowlist in payload normalization.
 - Workspace snapshot lifecycle now fully persists banner state across create/switch/duplicate/archive/restore/import/export pathways.
 - Workspace bundle schema now includes `workspaceBanner` and preserves banner state on zip/json import/export.
