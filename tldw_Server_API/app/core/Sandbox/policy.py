@@ -72,7 +72,10 @@ class SandboxPolicyConfig:
             rt_raw = str(getattr(app_settings, "SANDBOX_DEFAULT_RUNTIME", "docker")).strip().lower()
         except _POLICY_NONCRITICAL_EXCEPTIONS:
             rt_raw = "docker"
-        runtime = RuntimeType.firecracker if rt_raw == "firecracker" else RuntimeType.docker
+        try:
+            runtime = RuntimeType(rt_raw)
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
+            runtime = RuntimeType.docker
         try:
             network_default = str(getattr(app_settings, "SANDBOX_NETWORK_DEFAULT", "deny_all")).strip().lower()
         except _POLICY_NONCRITICAL_EXCEPTIONS:
@@ -133,9 +136,17 @@ class SandboxPolicy:
         self.cfg = cfg or SandboxPolicyConfig.from_settings()
 
     class RuntimeUnavailable(Exception):
-        def __init__(self, runtime: RuntimeType) -> None:
+        def __init__(self, runtime: RuntimeType, reasons: list[str] | None = None) -> None:
             super().__init__(f"Requested runtime '{runtime.value}' is unavailable")
             self.runtime = runtime
+            self.reasons = list(reasons or [])
+
+    class PolicyUnsupported(Exception):
+        def __init__(self, runtime: RuntimeType, requirement: str, reasons: list[str] | None = None) -> None:
+            super().__init__(f"Runtime '{runtime.value}' does not satisfy requirement '{requirement}'")
+            self.runtime = runtime
+            self.requirement = str(requirement)
+            self.reasons = list(reasons or [])
 
     def select_runtime(
         self,
