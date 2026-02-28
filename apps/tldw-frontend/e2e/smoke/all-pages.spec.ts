@@ -25,6 +25,8 @@ import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from 
 // Test configuration
 const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT;
 const ELEMENT_TIMEOUT = 15_000; // 15s max for element visibility
+const NETWORK_IDLE_TIMEOUT = Math.min(LOAD_TIMEOUT, 10_000);
+const WARMUP_TIMEOUT = Math.max(LOAD_TIMEOUT, 90_000);
 const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === '1';
 const ALLOWLIST_LOG_LIMIT = Number(process.env.TLDW_SMOKE_ALLOWLIST_LOG_LIMIT || 10);
 const SMOKE_HARD_GATE = process.env.TLDW_SMOKE_HARD_GATE !== '0';
@@ -281,7 +283,7 @@ async function visitRouteWithTransientRetry(
       continue;
     }
 
-    await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
 
     issues = getCriticalIssues(diagnostics);
     classifiedIssues = classifySmokeIssues(routePath, issues);
@@ -318,6 +320,19 @@ async function visitRouteWithTransientRetry(
   };
 }
 
+async function warmUpRoute(page: Page, routePath: string): Promise<void> {
+  try {
+    await page.goto(routePath, {
+      waitUntil: 'domcontentloaded',
+      timeout: WARMUP_TIMEOUT,
+    });
+  } catch (error) {
+    console.warn(
+      `[smoke-warmup] ${routePath} warm-up skipped after timeout: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
 async function assertNoRuntimeOverlay(
   page: Page,
   issues: ReturnType<typeof getCriticalIssues>,
@@ -350,17 +365,21 @@ async function assertNoRuntimeOverlay(
 }
 
 test.describe('Smoke Tests - All Pages', () => {
-  test.describe.configure({ mode: 'parallel' });
-
   test.beforeEach(async ({ page }) => {
     await seedAuth(page);
   });
 
   // Log test suite info
-  test.beforeAll(() => {
+  test.beforeAll(async ({ browser }) => {
     console.log(
       `\nSmoke test suite: ${ACTIVE_PAGE_COUNT} pages (${PAGE_COUNT - ACTIVE_PAGE_COUNT} skipped)\n`
     );
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await seedAuth(page);
+    await warmUpRoute(page, '/chat');
+    await warmUpRoute(page, '/settings/chat');
+    await context.close();
   });
 
   // Generate a test for each active page
