@@ -10,6 +10,8 @@ def _fake_config() -> configparser.ConfigParser:
     cfg.set("API", "anthropic_model", "claude-opus-4-20250514")
     cfg.set("API", "google_api_key", "google-test-key")
     cfg.set("API", "google_model", "gemini-2.5-flash")
+    cfg.set("API", "groq_api_key", "groq-test-key")
+    cfg.set("API", "groq_model", "openai/gpt-4o-mini")
     cfg.set("API", "cohere_api_key", "cohere-test-key")
     cfg.set("API", "cohere_model", "command-a-03-2025")
     cfg.set("API", "bedrock_api_key", "bedrock-test-key")
@@ -122,8 +124,9 @@ def test_llm_providers_tokenizer_metadata_reflects_strict_runtime_env(monkeypatc
         assert model_info["strict_mode_effective"] is True
 
 
-def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock(monkeypatch):
+def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock_groq(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+    import tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver as resolver_module
     from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
         resolve_tokenizer_metadata as resolve_tokenizer_metadata_shared,
     )
@@ -135,6 +138,17 @@ def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock(m
     monkeypatch.setattr(llm_endpoints, "get_api_keys", lambda: {})
     monkeypatch.setattr(llm_endpoints, "list_image_models_for_catalog", lambda: [])
     monkeypatch.setattr(llm_endpoints, "_llm_registry_capability_envelopes", lambda: {})
+
+    class _FakeTokenizer:
+        name = "o200k_base"
+
+        def encode(self, text: str, disallowed_special=()):  # noqa: ARG002
+            return [ord(ch) for ch in text]
+
+        def decode(self, token_ids):
+            return "".join(chr(int(token_id)) for token_id in token_ids)
+
+    monkeypatch.setattr(resolver_module, "resolve_tiktoken_encoding", lambda _model: _FakeTokenizer())
 
     # Avoid local env crashes from MLX artifact fallback importing transformers/torch in this test process.
     def _safe_resolve_metadata(provider, model, **kwargs):
@@ -179,3 +193,9 @@ def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock(m
     assert bedrock_tok["count_accuracy"] == "exact"
     assert bedrock_tok["kind"] == "provider-native-count"
     assert bedrock_tok["detokenize"] is False
+
+    groq_model = providers["groq"]["models"][0]
+    groq_tok = providers["groq"]["tokenizers"][groq_model]
+    assert groq_tok["count_accuracy"] == "exact"
+    assert groq_tok["kind"] == "tiktoken"
+    assert groq_tok["detokenize"] is True

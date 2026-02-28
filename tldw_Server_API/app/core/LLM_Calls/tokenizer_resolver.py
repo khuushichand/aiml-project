@@ -972,6 +972,19 @@ def _openrouter_canonical_model(model: str) -> str | None:
     return canonical or None
 
 
+def _groq_canonical_model(model: str) -> str | None:
+    normalized = str(model or "").strip()
+    if not normalized:
+        return None
+    if "/" not in normalized:
+        return None
+    provider_hint, _, model_id = normalized.partition("/")
+    if provider_hint.strip().lower() != "openai":
+        return None
+    canonical = model_id.strip()
+    return canonical or None
+
+
 def _exact_tiktoken_model_for_provider(provider_key: str, model: str) -> str | None:
     normalized_model = str(model or "").strip()
     if not normalized_model:
@@ -980,6 +993,8 @@ def _exact_tiktoken_model_for_provider(provider_key: str, model: str) -> str | N
         return normalized_model
     if provider_key == "openrouter":
         return _openrouter_canonical_model(normalized_model)
+    if provider_key == "groq":
+        return _groq_canonical_model(normalized_model)
     return None
 
 

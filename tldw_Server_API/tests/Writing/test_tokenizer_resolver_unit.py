@@ -32,6 +32,24 @@ def test_resolve_tokenizer_openrouter_openai_canonical_exact(monkeypatch):
     assert resolution.strict_mode_effective is True
 
 
+def test_resolve_tokenizer_groq_openai_canonical_exact(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.setattr(resolver, "resolve_tiktoken_encoding", lambda model: _FakeTokenizer("o200k_base"))
+
+    resolution = resolver.resolve_tokenizer(
+        "groq",
+        "openai/gpt-4o-mini",
+        strict_mode_effective=True,
+    )
+
+    assert resolution.available is True
+    assert resolution.count_accuracy == "exact"
+    assert resolution.tokenizer == "tiktoken:o200k_base"
+    assert resolution.kind == "tiktoken"
+    assert resolution.strict_mode_effective is True
+
+
 def test_resolve_tokenizer_non_exact_best_effort_classified_unavailable(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
 
