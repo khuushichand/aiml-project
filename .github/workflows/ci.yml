@@ -371,6 +371,7 @@ jobs:
         env:
           SERVER_LABEL: smoke
           AUTH_MODE: single_user
+          DATABASE_URL: sqlite:///./Databases/users.db
           SINGLE_USER_API_KEY: "smoke-ci-key-12345"
           E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
           # CI smoke boot runs outside pytest; mark explicit test runtime for startup guard.
@@ -1664,6 +1665,7 @@ jobs:
         env:
           SERVER_LABEL: smoke
           AUTH_MODE: single_user
+          DATABASE_URL: sqlite:///./Databases/users.db
           SINGLE_USER_API_KEY: "smoke-ci-key-12345"
           E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
           # CI smoke boot runs outside pytest; mark explicit test runtime for startup guard.
