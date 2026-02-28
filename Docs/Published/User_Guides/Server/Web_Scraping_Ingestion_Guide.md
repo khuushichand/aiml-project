@@ -4,6 +4,9 @@ This guide explains how web scraping works in tldw_server, which endpoints to us
 
 Auth note: examples use `X-API-KEY`. For multi-user JWTs, use `Authorization: Bearer <token>`.
 
+Compatibility note:
+- During the media ingestion deprecation window, process-style endpoints may include additive deprecation headers (`Deprecation`, `Sunset`, `Link`) when legacy compatibility input forms are used.
+
 ## Pipeline overview
 
 1. Request intake: URL(s) + scrape strategy + optional crawl overrides.

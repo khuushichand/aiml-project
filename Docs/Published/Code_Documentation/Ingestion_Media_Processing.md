@@ -10,6 +10,13 @@ This document describes the Ingestion_Media_Processing module: responsibilities,
   - MIME detection in the validator uses `puremagic.from_file(..., mime=True)`; the API layer can optionally
     configure `python-magic` via `MAGIC_FILE_PATH`, but the upload validator itself does not depend on it.
 
+## Deprecation Window (Media Processing)
+
+Media ingestion endpoint adapters are currently in a one-release compatibility window while legacy shim paths are reduced.
+
+- Release N: compatibility shims stay active and legacy input forms may trigger additive `Deprecation`, `Sunset`, and `Link` headers.
+- Release N+1: compatibility shims are removed after parity and stability gates remain green.
+
 ## Directory Structure
 
 ```
