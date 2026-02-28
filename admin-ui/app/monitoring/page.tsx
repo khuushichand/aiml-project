@@ -11,13 +11,11 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import {
-  buildAlertHistoryEntry,
   buildAlertRuleFromDraft,
   DEFAULT_ALERT_RULE_DRAFT,
   isAlertSnoozed,
   readStoredAlertHistory,
   readStoredAlertRules,
-  resolveSnoozedUntil,
   validateAlertRuleDraft,
   writeStoredAlertHistory,
   writeStoredAlertRules,
@@ -47,18 +45,12 @@ import NotificationsPanel from './components/NotificationsPanel';
 import SystemStatusPanel from './components/SystemStatusPanel';
 import WatchlistsPanel from './components/WatchlistsPanel';
 import {
-  escalateAlertSeverity,
-  markAlertAcknowledged,
-  removeAlertById,
-  setAlertAssignment,
-  setAlertSnoozeUntil,
-} from './alert-state-utils';
-import {
   buildNotificationSettingsUpdate,
   normalizeNotificationSettings,
   normalizeRecentNotifications,
 } from './notification-utils';
 import { useMonitoringMetricsHistory } from './use-monitoring-metrics-history';
+import { useAlertActions } from './use-alert-actions';
 import { useWatchlistActions } from './use-watchlist-actions';
 import type {
   AlertAssignableUser,
@@ -69,7 +61,6 @@ import type {
   Metric,
   NotificationSettings,
   RecentNotification,
-  SnoozeDurationOption,
   SystemAlert,
   SystemHealthStatus,
   SystemStatusItem,
@@ -230,6 +221,23 @@ export default function MonitoringPage() {
     onReloadRequested: loadData,
   });
 
+  const {
+    handleAcknowledgeAlert,
+    handleDismissAlert,
+    handleAssignAlert,
+    handleSnoozeAlert,
+    handleEscalateAlert,
+  } = useAlertActions({
+    apiClient: api,
+    confirm,
+    setAlerts,
+    setAlertHistory,
+    setError,
+    setSuccess,
+    onReloadRequested: loadData,
+    assignableUsers,
+  });
+
   useEffect(() => {
     setAlertRules(readStoredAlertRules());
     setAlertHistory(readStoredAlertHistory());
@@ -283,18 +291,6 @@ export default function MonitoringPage() {
     };
   }, [success]);
 
-  const appendAlertHistory = (
-    alertId: string,
-    action: AlertHistoryEntry['action'],
-    details: string,
-    actor?: string
-  ) => {
-    setAlertHistory((prev) => [
-      buildAlertHistoryEntry(alertId, action, details, { actor }),
-      ...prev,
-    ]);
-  };
-
   const handleCreateAlertRule = () => {
     const validation = validateAlertRuleDraft(alertRuleDraft);
     if (!validation.valid) {
@@ -317,68 +313,6 @@ export default function MonitoringPage() {
   const handleDeleteAlertRule = (rule: AlertRule) => {
     setAlertRules((prev) => prev.filter((item) => item.id !== rule.id));
     setSuccess('Alert rule deleted');
-  };
-
-  const handleAcknowledgeAlert = async (alert: SystemAlert) => {
-    try {
-      setError('');
-      await api.acknowledgeAlert(alert.id);
-      setAlerts((prev) => markAlertAcknowledged(prev, alert.id, new Date().toISOString()));
-      appendAlertHistory(alert.id, 'acknowledged', 'Alert acknowledged');
-      setSuccess('Alert acknowledged');
-      loadData();
-    } catch (err: unknown) {
-      console.error('Failed to acknowledge alert:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to acknowledge alert');
-    }
-  };
-
-  const handleDismissAlert = async (alert: SystemAlert) => {
-    const confirmed = await confirm({
-      title: 'Dismiss Alert',
-      message: 'Dismiss this alert?',
-      confirmText: 'Dismiss',
-      variant: 'warning',
-      icon: 'warning',
-    });
-    if (!confirmed) return;
-
-    try {
-      setError('');
-      await api.dismissAlert(alert.id);
-      appendAlertHistory(alert.id, 'dismissed', 'Alert dismissed');
-      setAlerts((prev) => removeAlertById(prev, alert.id));
-      setSuccess('Alert dismissed');
-      loadData();
-    } catch (err: unknown) {
-      console.error('Failed to dismiss alert:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to dismiss alert');
-    }
-  };
-
-  const handleAssignAlert = (alert: SystemAlert, userId: string) => {
-    setAlerts((prev) => setAlertAssignment(prev, alert.id, userId || undefined));
-    const assignedLabel = userId
-      ? (assignableUsers.find((user) => user.id === userId)?.label ?? userId)
-      : 'Unassigned';
-    appendAlertHistory(alert.id, 'assigned', `Assigned to ${assignedLabel}`);
-    setSuccess(userId ? 'Alert assigned' : 'Alert unassigned');
-  };
-
-  const handleSnoozeAlert = (alert: SystemAlert, duration: SnoozeDurationOption) => {
-    const snoozedUntil = resolveSnoozedUntil(duration);
-    setAlerts((prev) => setAlertSnoozeUntil(prev, alert.id, snoozedUntil));
-    appendAlertHistory(alert.id, 'snoozed', `Snoozed for ${duration}`);
-    setSuccess(`Alert snoozed for ${duration}`);
-  };
-
-  const handleEscalateAlert = (alert: SystemAlert) => {
-    if (alert.severity === 'critical') {
-      return;
-    }
-    setAlerts((prev) => escalateAlertSeverity(prev, alert.id));
-    appendAlertHistory(alert.id, 'escalated', 'Severity escalated to critical');
-    setSuccess('Alert escalated to critical');
   };
 
   const handleSaveNotificationSettings = async (settings: NotificationSettings) => {
