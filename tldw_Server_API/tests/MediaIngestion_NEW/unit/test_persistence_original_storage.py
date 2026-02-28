@@ -211,7 +211,6 @@ async def test_original_storage_uses_processing_source(monkeypatch, fake_db, fak
         }
 
     monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(Storage, "get_storage_backend", lambda: storage)
@@ -275,7 +274,6 @@ async def test_add_media_orchestrate_handles_document_exceptions(monkeypatch, tm
         }
 
     monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
 
@@ -354,7 +352,6 @@ async def test_add_media_orchestrate_partial_upload_errors_returns_multi_status(
         }
 
     monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
 
@@ -428,7 +425,6 @@ async def test_add_media_orchestrate_document_concurrency_limit(monkeypatch, fak
         }
 
     monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
 
@@ -542,7 +538,6 @@ async def test_add_media_orchestrate_enforces_rg_ingestion_bytes_limit_and_relea
         }
 
     monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(storage_quota_service, "get_storage_quota_service", lambda: _FakeUploadQuotaService())
@@ -651,7 +646,6 @@ async def test_add_media_orchestrate_records_ingestion_bytes_in_shared_ledger(mo
         }
 
     monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(storage_quota_service, "get_storage_quota_service", lambda: _FakeUploadQuotaService())

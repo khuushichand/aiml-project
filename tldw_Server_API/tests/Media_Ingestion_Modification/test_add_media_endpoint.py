@@ -1162,7 +1162,10 @@ def test_add_media_multiple_failures_and_success_pdf(
 
     # --- Apply Patch Manually using Context Manager, passing the mock as 'new' ---
     # The variable 'mock_target_within_context' will now also refer to 'mock_processor'
-    with patch("tldw_Server_API.app.api.v1.endpoints.media._process_document_like_item", new=mock_processor) as mock_target_within_context:
+    with patch(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.persistence.process_document_like_item",
+        new=mock_processor,
+    ) as mock_target_within_context:
 
         # --- Form and File Data ---
         form_data = create_add_media_form_data(media_type="pdf", urls=[VALID_PDF_URL, URL_404])

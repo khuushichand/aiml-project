@@ -140,7 +140,6 @@ async def test_add_media_orchestrate_emits_request_and_duration_metrics(
 
     monkeypatch.setattr(persistence, "get_metrics_registry", lambda: metrics)
     monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
-    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
     monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
     monkeypatch.setattr(persistence, "process_document_like_item", fake_process_doc_item_fn)
 
