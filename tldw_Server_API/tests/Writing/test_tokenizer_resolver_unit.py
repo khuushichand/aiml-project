@@ -84,6 +84,34 @@ def test_resolve_tokenizer_mistral_best_effort_classified_unavailable(monkeypatc
     assert resolution.kind == "tiktoken"
 
 
+def test_resolve_tokenizer_runtime_probe_downgrades_failed_provider_native(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.setattr(resolver, "resolve_tiktoken_encoding", lambda _model: _FakeTokenizer("cl100k_base"))
+
+    config = configparser.ConfigParser()
+    config.add_section("Local-API")
+    config.set("Local-API", "ollama_api_IP", "http://127.0.0.1:11434/v1")
+
+    def _raise_unavailable(*, url: str, payload, headers, timeout):  # noqa: ANN001, ARG001
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(resolver, "_http_post", _raise_unavailable)
+
+    resolution = resolver.resolve_tokenizer(
+        "ollama",
+        "llama3.2",
+        strict_mode_effective=True,
+        config_parser=config,
+        runtime_probe_exact=True,
+    )
+
+    assert resolution.available is True
+    assert resolution.count_accuracy == "unavailable"
+    assert resolution.kind == "tiktoken"
+    assert resolution.tokenizer == "tiktoken:cl100k_base"
+
+
 def test_resolve_tokenizer_openai_unavailable_error_not_masked_by_native_config(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
 
@@ -101,6 +129,29 @@ def test_resolve_tokenizer_openai_unavailable_error_not_masked_by_native_config(
     assert resolution.available is False
     assert "not available" in str(resolution.error or "").lower()
     assert "provider-native tokenizer is not configured for provider" not in str(resolution.error or "").lower()
+
+
+def test_resolve_tokenizer_custom_openai_api_openai_host_guard(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.setattr(resolver, "resolve_tiktoken_encoding", lambda _model: _FakeTokenizer("cl100k_base"))
+
+    config = configparser.ConfigParser()
+    config.add_section("API")
+    config.set("API", "custom_openai_api_ip", "https://api.openai.com/v1")
+    config.set("API", "custom_openai_api_model", "gpt-4.1-2025-04-14")
+
+    resolution = resolver.resolve_tokenizer(
+        "custom_openai_api",
+        "gpt-4.1-2025-04-14",
+        strict_mode_effective=True,
+        config_parser=config,
+    )
+
+    assert resolution.available is True
+    assert resolution.count_accuracy == "unavailable"
+    assert resolution.kind == "tiktoken"
+    assert resolution.tokenizer == "tiktoken:cl100k_base"
 
 
 def test_resolve_tokenizer_anthropic_count_only_exact_from_config():
@@ -124,6 +175,29 @@ def test_resolve_tokenizer_anthropic_count_only_exact_from_config():
     assert resolution.tokenizer == "anthropic:remote-count"
     assert resolution.detokenize_available is False
     assert callable(getattr(resolution.encoding, "count_tokens", None))
+
+
+def test_resolve_tokenizer_bedrock_openai_host_runtime_guard(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.setattr(resolver, "resolve_tiktoken_encoding", lambda _model: _FakeTokenizer("cl100k_base"))
+
+    config = configparser.ConfigParser()
+    config.add_section("API")
+    config.set("API", "bedrock_api_key", "bedrock-test-key")
+    config.set("API", "bedrock_api_base_url", "https://api.openai.com/v1")
+
+    resolution = resolver.resolve_tokenizer(
+        "bedrock",
+        "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        strict_mode_effective=True,
+        config_parser=config,
+    )
+
+    assert resolution.available is True
+    assert resolution.count_accuracy == "unavailable"
+    assert resolution.kind == "tiktoken"
+    assert resolution.tokenizer == "tiktoken:cl100k_base"
 
 
 def test_resolve_tokenizer_google_count_only_exact_from_config():
@@ -173,12 +247,18 @@ def test_resolve_tokenizer_cohere_tokenizer_exact_from_config():
     assert callable(getattr(resolution.encoding, "decode", None))
 
 
-def test_resolve_tokenizer_bedrock_anthropic_count_only_exact_from_config():
+def test_resolve_tokenizer_bedrock_anthropic_count_only_exact_from_config(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls import tokenizer_resolver as resolver
+
+    monkeypatch.delenv("BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    monkeypatch.delenv("BEDROCK_API_BASE_URL", raising=False)
+    monkeypatch.delenv("BEDROCK_OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("BEDROCK_REGION", raising=False)
 
     config = configparser.ConfigParser()
     config.add_section("API")
     config.set("API", "bedrock_api_key", "bedrock-test-key")
+    config.set("API", "bedrock_region", "us-west-2")
     config.set("API", "bedrock_model", "anthropic.claude-3-5-sonnet-20240620-v1:0")
 
     resolution = resolver.resolve_tokenizer(

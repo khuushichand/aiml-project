@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import math
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, urlparse
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
@@ -586,6 +587,116 @@ def normalize_native_tokenizer_base_url(base_url: str) -> str:
     return normalized
 
 
+def _url_hostname(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or "").strip())
+        return str(parsed.hostname or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _is_openai_host_url(url: str) -> bool:
+    host = _url_hostname(url)
+    if not host:
+        return False
+    return host == "api.openai.com" or host.endswith(".openai.com") or host.endswith(".openai.azure.com")
+
+
+def _is_local_or_private_host(host: str) -> bool:
+    lowered = str(host or "").strip().lower()
+    if not lowered:
+        return False
+    if lowered in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    if lowered.endswith(".local"):
+        return True
+    try:
+        addr = ipaddress.ip_address(lowered)
+    except Exception:
+        return False
+    return bool(addr.is_loopback or addr.is_private)
+
+
+def _is_bedrock_runtime_base_url(url: str) -> bool:
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    path = str(parsed.path or "").strip()
+    if path and path != "/":
+        return False
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if _is_local_or_private_host(host):
+        return True
+    if "bedrock-runtime" not in host:
+        return False
+    return host.endswith(".amazonaws.com") or host.endswith(".amazonaws.com.cn")
+
+
+def _runtime_probe_exact_resolution(
+    resolution: TokenizerResolution,
+    *,
+    timeout_seconds: float = 2.0,
+    probe_text: str = "",
+) -> TokenizerResolution:
+    if not resolution.available or resolution.encoding is None:
+        return resolution
+    if str(resolution.count_accuracy or "").strip().lower() != "exact":
+        return resolution
+    if str(resolution.kind or "").strip() not in {"provider-native", "provider-native-count"}:
+        return resolution
+
+    encoding = resolution.encoding
+    original_timeout: float | None = None
+    try:
+        current_timeout = getattr(encoding, "timeout_seconds", None)
+        if isinstance(current_timeout, (int, float)) and math.isfinite(float(current_timeout)):
+            original_timeout = float(current_timeout)
+            bounded_timeout = max(0.5, float(timeout_seconds))
+            if original_timeout > bounded_timeout:
+                setattr(encoding, "timeout_seconds", bounded_timeout)
+    except Exception:
+        original_timeout = None
+
+    try:
+        count_fn = getattr(encoding, "count_tokens", None)
+        if callable(count_fn):
+            counted = count_fn(str(probe_text or ""))
+            parsed = _coerce_int(counted)
+            if parsed is None or parsed < 0:
+                raise TokenizerUnavailable("Provider tokenizer runtime probe returned invalid count payload")
+        else:
+            encode_fn = getattr(encoding, "encode", None)
+            if not callable(encode_fn):
+                raise TokenizerUnavailable("Provider tokenizer runtime probe missing encode/count method")
+            try:
+                encoded = encode_fn(str(probe_text or ""), disallowed_special=())
+            except TypeError:
+                encoded = encode_fn(str(probe_text or ""))
+            if not isinstance(encoded, list):
+                encoded = list(encoded)
+            for token_id in encoded[:16]:
+                if _coerce_int(token_id) is None:
+                    raise TokenizerUnavailable("Provider tokenizer runtime probe returned invalid token ids")
+    except Exception as exc:
+        return _unavailable_resolution(
+            strict_mode_effective=bool(resolution.strict_mode_effective),
+            error=f"Provider tokenizer runtime probe failed: {exc}",
+        )
+    finally:
+        if original_timeout is not None:
+            try:
+                setattr(encoding, "timeout_seconds", original_timeout)
+            except Exception:
+                pass
+
+    return resolution
+
+
 @lru_cache(maxsize=128)
 def _resolve_tiktoken_encoding_cached(model: str) -> Any:
     try:
@@ -740,6 +851,9 @@ def resolve_provider_native_tokenizer(
     config_parser: Any | None = None,
     config_loader: Callable[[], Any] | None = None,
     adapter_cls: type[ProviderNativeTokenizerHTTPAdapter] = ProviderNativeTokenizerHTTPAdapter,
+    runtime_probe_exact: bool = False,
+    runtime_probe_timeout_seconds: float = 2.0,
+    runtime_probe_text: str = "",
 ) -> TokenizerResolution:
     strict_flag = strict_token_counting_enabled() if strict_mode_effective is None else bool(strict_mode_effective)
 
@@ -790,13 +904,19 @@ def resolve_provider_native_tokenizer(
             error="Provider-native tokenizer endpoint is invalid",
         )
 
+    if provider_key == "custom_openai_api" and _is_openai_host_url(base_url):
+        return _unavailable_resolution(
+            strict_mode_effective=strict_flag,
+            error="custom_openai_api endpoint points to OpenAI-hosted API; provider-native tokenizer endpoint is unavailable",
+        )
+
     adapter = adapter_cls(
         base_url=base_url,
         model=str(model or "").strip() or None,
         api_key=api_key,
     )
 
-    return TokenizerResolution(
+    resolution = TokenizerResolution(
         available=True,
         tokenizer=f"{label}:remote",
         kind="provider-native",
@@ -807,6 +927,13 @@ def resolve_provider_native_tokenizer(
         encoding=adapter,
         error=None,
     )
+    if runtime_probe_exact:
+        return _runtime_probe_exact_resolution(
+            resolution,
+            timeout_seconds=runtime_probe_timeout_seconds,
+            probe_text=runtime_probe_text,
+        )
+    return resolution
 
 
 def resolve_commercial_exact_tokenizer(
@@ -816,6 +943,9 @@ def resolve_commercial_exact_tokenizer(
     strict_mode_effective: bool | None = None,
     config_parser: Any | None = None,
     config_loader: Callable[[], Any] | None = None,
+    runtime_probe_exact: bool = False,
+    runtime_probe_timeout_seconds: float = 2.0,
+    runtime_probe_text: str = "",
 ) -> TokenizerResolution:
     strict_flag = strict_token_counting_enabled() if strict_mode_effective is None else bool(strict_mode_effective)
 
@@ -863,12 +993,22 @@ def resolve_commercial_exact_tokenizer(
                 strict_mode_effective=strict_flag,
                 error="Provider tokenizer endpoint is not configured",
             )
+        if _is_openai_host_url(base_url):
+            return _unavailable_resolution(
+                strict_mode_effective=strict_flag,
+                error="Bedrock runtime endpoint points to OpenAI-hosted API",
+            )
+        if not _is_bedrock_runtime_base_url(base_url):
+            return _unavailable_resolution(
+                strict_mode_effective=strict_flag,
+                error="Bedrock runtime endpoint must target a bedrock-runtime host and must not include a path",
+            )
         adapter = BedrockCountOnlyHTTPAdapter(
             base_url=base_url,
             model=normalized_model,
             api_key=api_key,
         )
-        return TokenizerResolution(
+        resolution = TokenizerResolution(
             available=True,
             tokenizer=f"{label}:remote-count",
             kind="provider-native-count",
@@ -879,6 +1019,13 @@ def resolve_commercial_exact_tokenizer(
             encoding=adapter,
             error=None,
         )
+        if runtime_probe_exact:
+            return _runtime_probe_exact_resolution(
+                resolution,
+                timeout_seconds=runtime_probe_timeout_seconds,
+                probe_text=runtime_probe_text,
+            )
+        return resolution
 
     api_key = _resolve_commercial_api_key(
         parser,
@@ -923,7 +1070,7 @@ def resolve_commercial_exact_tokenizer(
                 strict_mode_effective=strict_flag,
                 error="Commercial tokenizer mode is not supported",
             )
-        return TokenizerResolution(
+        resolution = TokenizerResolution(
             available=True,
             tokenizer=f"{label}:remote-count",
             kind="provider-native-count",
@@ -934,6 +1081,13 @@ def resolve_commercial_exact_tokenizer(
             encoding=adapter,
             error=None,
         )
+        if runtime_probe_exact:
+            return _runtime_probe_exact_resolution(
+                resolution,
+                timeout_seconds=runtime_probe_timeout_seconds,
+                probe_text=runtime_probe_text,
+            )
+        return resolution
 
     if mode == "tokenize" and provider_key == "cohere":
         adapter = CohereTokenizerHTTPAdapter(
@@ -941,7 +1095,7 @@ def resolve_commercial_exact_tokenizer(
             model=normalized_model,
             api_key=api_key,
         )
-        return TokenizerResolution(
+        resolution = TokenizerResolution(
             available=True,
             tokenizer=f"{label}:remote",
             kind="provider-native",
@@ -952,6 +1106,13 @@ def resolve_commercial_exact_tokenizer(
             encoding=adapter,
             error=None,
         )
+        if runtime_probe_exact:
+            return _runtime_probe_exact_resolution(
+                resolution,
+                timeout_seconds=runtime_probe_timeout_seconds,
+                probe_text=runtime_probe_text,
+            )
+        return resolution
 
     return _unavailable_resolution(
         strict_mode_effective=strict_flag,
@@ -1130,6 +1291,9 @@ def resolve_tokenizer(
     config_parser: Any | None = None,
     config_loader: Callable[[], Any] | None = None,
     adapter_cls: type[ProviderNativeTokenizerHTTPAdapter] = ProviderNativeTokenizerHTTPAdapter,
+    runtime_probe_exact: bool = False,
+    runtime_probe_timeout_seconds: float = 2.0,
+    runtime_probe_text: str = "",
 ) -> TokenizerResolution:
     strict_flag = strict_token_counting_enabled() if strict_mode_effective is None else bool(strict_mode_effective)
 
@@ -1150,6 +1314,9 @@ def resolve_tokenizer(
             config_parser=config_parser,
             config_loader=config_loader,
             adapter_cls=adapter_cls,
+            runtime_probe_exact=runtime_probe_exact,
+            runtime_probe_timeout_seconds=runtime_probe_timeout_seconds,
+            runtime_probe_text=runtime_probe_text,
         )
         if native_resolution.available:
             return native_resolution
@@ -1167,6 +1334,9 @@ def resolve_tokenizer(
             strict_mode_effective=strict_flag,
             config_parser=config_parser,
             config_loader=config_loader,
+            runtime_probe_exact=runtime_probe_exact,
+            runtime_probe_timeout_seconds=runtime_probe_timeout_seconds,
+            runtime_probe_text=runtime_probe_text,
         )
         if commercial_resolution.available:
             return commercial_resolution
@@ -1215,6 +1385,9 @@ def resolve_tokenizer_metadata(
     config_parser: Any | None = None,
     config_loader: Callable[[], Any] | None = None,
     adapter_cls: type[ProviderNativeTokenizerHTTPAdapter] = ProviderNativeTokenizerHTTPAdapter,
+    runtime_probe_exact: bool = False,
+    runtime_probe_timeout_seconds: float = 2.0,
+    runtime_probe_text: str = "",
 ) -> dict[str, Any]:
     resolution = resolve_tokenizer(
         provider,
@@ -1223,5 +1396,8 @@ def resolve_tokenizer_metadata(
         config_parser=config_parser,
         config_loader=config_loader,
         adapter_cls=adapter_cls,
+        runtime_probe_exact=runtime_probe_exact,
+        runtime_probe_timeout_seconds=runtime_probe_timeout_seconds,
+        runtime_probe_text=runtime_probe_text,
     )
     return resolution.as_support_dict()

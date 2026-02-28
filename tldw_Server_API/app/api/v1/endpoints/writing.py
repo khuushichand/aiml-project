@@ -195,6 +195,9 @@ def _resolve_provider_native_tokenizer(
         strict_mode_effective=_strict_token_counting_enabled(),
         config_loader=load_comprehensive_config,
         adapter_cls=_ProviderNativeTokenizerHTTPAdapter,
+        runtime_probe_exact=True,
+        runtime_probe_timeout_seconds=2.0,
+        runtime_probe_text="",
     )
     if not resolution.available or resolution.encoding is None:
         raise TokenizerUnavailable(resolution.error or "Provider-native tokenizer is not configured for provider")
@@ -224,6 +227,10 @@ def _resolve_tokenizer(provider: str, model: str) -> tuple[Any, str, str, str, b
             encoding, tokenizer_name, tokenizer_kind, tokenizer_source, detok_available = (
                 _resolve_provider_native_tokenizer(normalized_provider, normalized_model)
             )
+            # Defensive runtime probe so local monkeypatch paths cannot claim exactness when
+            # the underlying provider-native endpoint is unavailable.
+            if tokenizer_kind in {"provider-native", "provider-native-count"}:
+                _tokenizer_count(encoding, "")
             return (
                 encoding,
                 tokenizer_name,
@@ -242,6 +249,9 @@ def _resolve_tokenizer(provider: str, model: str) -> tuple[Any, str, str, str, b
         strict_mode_effective=strict_mode_effective,
         config_loader=load_comprehensive_config,
         adapter_cls=_ProviderNativeTokenizerHTTPAdapter,
+        runtime_probe_exact=True,
+        runtime_probe_timeout_seconds=2.0,
+        runtime_probe_text="",
     )
     if not resolution.available or resolution.encoding is None:
         raise TokenizerUnavailable(resolution.error or "Tokenizer not available for provider/model")
@@ -310,7 +320,10 @@ def _tokenizer_encode(tokenizer: Any, text: str) -> list[int]:
     try:
         encoded = encode_fn(text, disallowed_special=())
     except TypeError:
-        encoded = encode_fn(text)
+        try:
+            encoded = encode_fn(text)
+        except Exception as exc:
+            raise TokenizerUnavailable(f"Unable to tokenize text: {exc}") from exc
     except Exception as exc:
         raise TokenizerUnavailable(f"Unable to tokenize text: {exc}") from exc
     if not isinstance(encoded, list):

@@ -922,13 +922,15 @@ def test_writing_capabilities_requested_native_tokenizer_metadata(
 
     monkeypatch.setattr(
         writing_endpoints,
-        "_resolve_provider_native_tokenizer",
+        "_resolve_tokenizer_details",
         lambda _provider, _model: (
             object(),
             "native:fake",
             "provider-native",
             "llama.http.tokenize",
             True,
+            "exact",
+            False,
         ),
     )
 
@@ -951,6 +953,62 @@ def test_writing_capabilities_requested_native_tokenizer_metadata(
     assert requested["detokenize_available"] is True
     assert requested["count_accuracy"] == "exact"
     assert requested["strict_mode_effective"] is False
+
+
+def test_writing_capabilities_requested_downgrades_failed_native_exact(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    class _FailingNativeTokenizer:
+        def encode(self, text: str):  # noqa: ARG002
+            raise RuntimeError("endpoint down")
+
+        def decode(self, token_ids):  # noqa: ARG002
+            return ""
+
+    class _FakeFallbackTokenizer:
+        name = "cl100k_base"
+
+        def encode(self, text: str, disallowed_special=()):  # noqa: ARG002
+            return [1, 2, 3]
+
+        def decode(self, token_ids):  # noqa: ARG002
+            return "fallback"
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_provider_native_tokenizer",
+        lambda _provider, _model: (
+            _FailingNativeTokenizer(),
+            "native:fake",
+            "provider-native",
+            "ollama.http.tokenize",
+            True,
+        ),
+    )
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_tiktoken_encoding",
+        lambda _model: _FakeFallbackTokenizer(),
+    )
+
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "ollama",
+            "model": "local-model",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    requested = payload.get("requested")
+    assert requested is not None
+    assert requested["tokenizer_available"] is False
+    assert requested["count_accuracy"] == "unavailable"
 
 
 @pytest.mark.parametrize(
@@ -1047,6 +1105,12 @@ def test_resolve_provider_native_tokenizer_configured_local_provider_matrix(
             captured["model"] = model
             captured["api_key"] = api_key
             captured["timeout_seconds"] = timeout_seconds
+
+        def encode(self, text: str, disallowed_special=()):  # noqa: ARG002
+            return [1] if text is not None else []
+
+        def count_tokens(self, text: str) -> int:
+            return len(self.encode(text))
 
     monkeypatch.setattr(writing_endpoints, "_ProviderNativeTokenizerHTTPAdapter", _FakeAdapter)
 

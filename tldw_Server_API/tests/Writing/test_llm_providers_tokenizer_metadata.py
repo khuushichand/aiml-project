@@ -136,6 +136,10 @@ def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock_g
     )
 
     monkeypatch.delenv("STRICT_TOKEN_COUNTING", raising=False)
+    monkeypatch.delenv("BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    monkeypatch.delenv("BEDROCK_API_BASE_URL", raising=False)
+    monkeypatch.delenv("BEDROCK_OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("BEDROCK_REGION", raising=False)
     monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config)
     monkeypatch.setattr(llm_endpoints, "list_provider_models", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(llm_endpoints, "apply_llm_provider_overrides_to_listing", lambda result: result)
@@ -153,6 +157,30 @@ def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock_g
             return "".join(chr(int(token_id)) for token_id in token_ids)
 
     monkeypatch.setattr(resolver_module, "resolve_tiktoken_encoding", lambda _model: _FakeTokenizer())
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    def _fake_post(*, url: str, payload, headers, timeout):  # noqa: ANN001, ARG001
+        lowered = str(url).lower()
+        if "api.anthropic.com" in lowered and "count_tokens" in lowered:
+            return _FakeResponse(200, {"input_tokens": 11})
+        if "generativelanguage.googleapis.com" in lowered and "counttokens" in lowered:
+            return _FakeResponse(200, {"totalTokens": 9})
+        if "api.cohere.ai" in lowered and "tokenize" in lowered:
+            return _FakeResponse(200, {"tokens": [1, 2, 3]})
+        if "api.cohere.ai" in lowered and "detokenize" in lowered:
+            return _FakeResponse(200, {"text": "ok"})
+        if "bedrock-runtime.us-west-2.amazonaws.com" in lowered and "count-tokens" in lowered:
+            return _FakeResponse(200, {"inputTokens": 8})
+        return _FakeResponse(404, {})
+
+    monkeypatch.setattr(resolver_module, "_http_post", _fake_post)
 
     # Avoid local env crashes from MLX artifact fallback importing transformers/torch in this test process.
     def _safe_resolve_metadata(provider, model, **kwargs):
