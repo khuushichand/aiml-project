@@ -230,7 +230,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       })
 
       const initialConnectState = await openOnboardingSuccessScreen(authedPage)
-      const initialSetupState = await ensureOnboardingSuccessScreen(authedPage)
+      await ensureOnboardingSuccessScreen(authedPage)
       await captureStep(
         authedPage,
         evidenceRows,
@@ -241,10 +241,6 @@ test.describe("Onboarding Ingestion-First Journey", () => {
           : "Onboarding success already visible from prior connected state."
       )
 
-        initialSetupState === "connected_now"
-          ? "Connect control visible."
-          : "Setup resumed from an already connected state."
-      )
       await expect(authedPage.getByTestId("onboarding-success-screen")).toHaveAttribute(
         "data-ingest-status",
         "idle"
