@@ -49,8 +49,7 @@ async def add_media(
     identical to the legacy implementation while routing through the
     modular `media` package. Processing and persistence logic is
     implemented in the core `persistence.add_media_orchestrate`
-    helper, with `_legacy_media.add_media` retained only as a
-    compatibility shim for any historical imports.
+    helper.
     """
 
     return await add_media_persist(

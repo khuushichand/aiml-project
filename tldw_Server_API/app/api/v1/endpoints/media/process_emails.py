@@ -74,7 +74,7 @@ async def process_emails_endpoint(
     if form_data.perform_chunking:
         chunk_options_dict = prepare_chunking_options_dict(form_data)
 
-    # Resolve validator via the media shim so tests that monkeypatch
+    # Resolve validator via media exports so tests that monkeypatch
     # media.file_validator_instance continue to work.
     validator: FileValidator = getattr(
         media_mod,
