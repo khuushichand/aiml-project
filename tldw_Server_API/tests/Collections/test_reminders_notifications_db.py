@@ -73,6 +73,12 @@ def test_notification_unread_mark_read_and_dismiss(collections_db: CollectionsDa
     assert dismissed is True
     assert collections_db.count_unread_user_notifications() == 0
 
+    listed = collections_db.list_user_notifications()
+    assert all(row.id != n2.id for row in listed)
+
+    listed_after = collections_db.list_user_notifications_after_id(after_id=0)
+    assert all(row.id != n2.id for row in listed_after)
+
 
 def test_notification_preferences_defaults_and_update(collections_db: CollectionsDatabase) -> None:
     prefs = collections_db.get_notification_preferences()

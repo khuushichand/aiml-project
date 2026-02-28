@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Pydantic request/response models for reminders tasks and notifications APIs."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -8,6 +10,8 @@ ReminderScheduleKind = Literal["one_time", "recurring"]
 
 
 class ReminderTaskCreateRequest(BaseModel):
+    """Payload for creating a reminder task."""
+
     model_config = ConfigDict(extra="forbid")
 
     title: str = Field(..., min_length=1, max_length=200)
@@ -36,6 +40,8 @@ class ReminderTaskCreateRequest(BaseModel):
 
 
 class ReminderTaskUpdateRequest(BaseModel):
+    """Patch payload for mutable reminder task fields."""
+
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
@@ -48,12 +54,11 @@ class ReminderTaskUpdateRequest(BaseModel):
     link_id: str | None = None
     link_url: str | None = None
     enabled: bool | None = None
-    last_run_at: str | None = None
-    next_run_at: str | None = None
-    last_status: str | None = None
 
 
 class ReminderTaskResponse(BaseModel):
+    """Reminder task representation returned by API endpoints."""
+
     id: str
     user_id: str
     tenant_id: str
@@ -75,11 +80,15 @@ class ReminderTaskResponse(BaseModel):
 
 
 class ReminderTaskListResponse(BaseModel):
+    """Paginated-style response for reminder task listing."""
+
     items: list[ReminderTaskResponse]
     total: int
 
 
 class ReminderTaskDeleteResponse(BaseModel):
+    """Delete outcome for a reminder task."""
+
     deleted: bool
 
 
@@ -87,6 +96,8 @@ NotificationKind = Literal["reminder_due", "reminder_failed", "job_completed", "
 
 
 class NotificationResponse(BaseModel):
+    """Notification item returned in list and stream payloads."""
+
     id: int
     user_id: str
     kind: NotificationKind
@@ -110,27 +121,39 @@ class NotificationResponse(BaseModel):
 
 
 class NotificationsListResponse(BaseModel):
+    """List response for user notifications."""
+
     items: list[NotificationResponse]
     total: int
 
 
 class NotificationsUnreadCountResponse(BaseModel):
+    """Unread notification counter response."""
+
     unread_count: int
 
 
 class NotificationsMarkReadRequest(BaseModel):
+    """Request payload for marking notifications as read."""
+
     ids: list[int] = Field(default_factory=list, min_length=1)
 
 
 class NotificationsMarkReadResponse(BaseModel):
+    """Result payload for mark-read operations."""
+
     updated: int
 
 
 class NotificationDismissResponse(BaseModel):
+    """Result payload for dismiss operations."""
+
     dismissed: bool
 
 
 class NotificationPreferencesResponse(BaseModel):
+    """Current notification preference settings for a user."""
+
     user_id: str
     reminder_enabled: bool
     job_completed_enabled: bool
@@ -139,6 +162,8 @@ class NotificationPreferencesResponse(BaseModel):
 
 
 class NotificationPreferencesUpdateRequest(BaseModel):
+    """Patch payload for notification preference flags."""
+
     model_config = ConfigDict(extra="forbid")
 
     reminder_enabled: bool | None = None
@@ -147,9 +172,13 @@ class NotificationPreferencesUpdateRequest(BaseModel):
 
 
 class NotificationSnoozeRequest(BaseModel):
+    """Request payload for creating a snoozed one-time reminder."""
+
     minutes: int = Field(default=30, ge=1, le=10080)
 
 
 class NotificationSnoozeResponse(BaseModel):
+    """Response payload for snooze task creation."""
+
     task_id: str
     run_at: str

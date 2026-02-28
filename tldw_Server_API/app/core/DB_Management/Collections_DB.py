@@ -4216,7 +4216,7 @@ class CollectionsDatabase:
         params: list[Any] = [self.user_id]
         where = "user_id = ?"
         if not include_archived:
-            where += " AND archived_at IS NULL"
+            where += " AND archived_at IS NULL AND dismissed_at IS NULL"
         q = f"SELECT * FROM user_notifications WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"  # nosec B608
         params.extend([limit, offset])
         rows = self.backend.execute(q, tuple(params)).rows
@@ -4240,7 +4240,7 @@ class CollectionsDatabase:
         else:
             q = (
                 "SELECT * FROM user_notifications "
-                "WHERE user_id = ? AND archived_at IS NULL AND id > ? "
+                "WHERE user_id = ? AND archived_at IS NULL AND dismissed_at IS NULL AND id > ? "
                 "ORDER BY id ASC LIMIT ?"
             )
             params = (self.user_id, int(after_id), bounded_limit)
@@ -4252,7 +4252,10 @@ class CollectionsDatabase:
             q = "SELECT MAX(id) AS max_id FROM user_notifications WHERE user_id = ?"
             row = self.backend.execute(q, (self.user_id,)).first
         else:
-            q = "SELECT MAX(id) AS max_id FROM user_notifications WHERE user_id = ? AND archived_at IS NULL"
+            q = (
+                "SELECT MAX(id) AS max_id FROM user_notifications "
+                "WHERE user_id = ? AND archived_at IS NULL AND dismissed_at IS NULL"
+            )
             row = self.backend.execute(q, (self.user_id,)).first
         if not row:
             return 0
@@ -4277,7 +4280,7 @@ class CollectionsDatabase:
         else:
             q = (
                 "SELECT id FROM user_notifications "
-                "WHERE user_id = ? AND archived_at IS NULL "
+                "WHERE user_id = ? AND archived_at IS NULL AND dismissed_at IS NULL "
                 "ORDER BY id DESC LIMIT 1 OFFSET ?"
             )
             row = self.backend.execute(q, (self.user_id, offset)).first

@@ -2057,6 +2057,74 @@ class JobManager:
         finally:
             conn.close()
 
+    def list_job_events_after(
+        self,
+        *,
+        after_id: int = 0,
+        limit: int = 100,
+        event_types: tuple[str, ...] | list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """List job events after a cursor id, optionally filtered by event type."""
+
+        bounded_limit = max(1, min(1000, int(limit)))
+        normalized_after = max(0, int(after_id))
+        normalized_types = tuple(str(v) for v in (event_types or ()) if str(v).strip())
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                query = (
+                    "SELECT id, event_type, attrs_json, job_id, domain, queue, job_type, owner_user_id, "
+                    "request_id, trace_id, created_at FROM job_events WHERE id > %s"
+                )
+                params: list[Any] = [normalized_after]
+                if normalized_types:
+                    placeholders = ", ".join(["%s"] * len(normalized_types))
+                    query += f" AND event_type IN ({placeholders})"
+                    params.extend(normalized_types)
+                query += " ORDER BY id ASC LIMIT %s"
+                params.append(bounded_limit)
+                with self._pg_cursor(conn) as cur:
+                    cur.execute(query, params)
+                    rows = cur.fetchall() or []
+                return [dict(r) for r in rows]
+
+            query = (
+                "SELECT id, event_type, attrs_json, job_id, domain, queue, job_type, owner_user_id, "
+                "request_id, trace_id, created_at FROM job_events WHERE id > ?"
+            )
+            params = [normalized_after]
+            if normalized_types:
+                placeholders = ",".join(["?"] * len(normalized_types))
+                query += f" AND event_type IN ({placeholders})"
+                params.extend(normalized_types)
+            query += " ORDER BY id ASC LIMIT ?"
+            params.append(bounded_limit)
+            rows = conn.execute(query, tuple(params)).fetchall() or []
+
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    out.append(dict(row))
+                    continue
+                out.append(
+                    {
+                        "id": row[0],
+                        "event_type": row[1],
+                        "attrs_json": row[2],
+                        "job_id": row[3],
+                        "domain": row[4],
+                        "queue": row[5],
+                        "job_type": row[6],
+                        "owner_user_id": row[7],
+                        "request_id": row[8],
+                        "trace_id": row[9],
+                        "created_at": row[10],
+                    }
+                )
+            return out
+        finally:
+            conn.close()
+
     def summarize_by_status(
         self,
         *,

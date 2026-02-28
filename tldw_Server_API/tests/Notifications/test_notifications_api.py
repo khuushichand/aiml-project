@@ -92,6 +92,12 @@ def test_notifications_unread_mark_read_dismiss_and_preferences(notifications_ap
         assert r.status_code == 200, r.text
         assert r.json()["dismissed"] is True
 
+        r = client.get("/api/v1/notifications")
+        assert r.status_code == 200, r.text
+        listed_ids = {item["id"] for item in r.json()["items"]}
+        assert n2.id not in listed_ids
+        assert n1.id in listed_ids
+
         r = client.get("/api/v1/notifications/unread-count")
         assert r.status_code == 200, r.text
         assert r.json()["unread_count"] == 0
@@ -124,3 +130,35 @@ def test_notifications_unread_requires_read_scope(notifications_app):
     with TestClient(notifications_app) as client:
         r = client.get("/api/v1/notifications/unread-count")
         assert r.status_code == 403
+
+
+def test_notification_snooze_reconciles_scheduler(notifications_app, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import notifications as notifications_endpoint
+
+    cdb = CollectionsDatabase.for_user(user_id=881)
+    source = cdb.create_user_notification(
+        kind="reminder_due",
+        title="Snooze me",
+        message="Re-check this later",
+        severity="info",
+    )
+
+    reconcile_calls: list[tuple[str, int]] = []
+
+    class _FakeScheduler:
+        async def reconcile_task(self, *, task_id: str, user_id: int) -> None:
+            reconcile_calls.append((task_id, user_id))
+
+    monkeypatch.setattr(notifications_endpoint, "get_reminders_scheduler", lambda: _FakeScheduler(), raising=False)
+
+    with TestClient(notifications_app) as client:
+        response = client.post(f"/api/v1/notifications/{source.id}/snooze", json={"minutes": 15})
+        assert response.status_code == 200, response.text
+        payload = response.json()
+
+    task_id = payload["task_id"]
+    task = cdb.get_reminder_task(task_id)
+    assert task.schedule_kind == "one_time"
+    assert task.link_id == source.link_id
+    assert task.run_at is not None
+    assert reconcile_calls == [(task_id, 881)]

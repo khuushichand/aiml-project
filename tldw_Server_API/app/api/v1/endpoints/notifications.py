@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+"""Notifications REST and SSE endpoints for the in-app inbox."""
+
 import asyncio
 import contextlib
 import os
-from datetime import datetime, timedelta, timezone
+from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from fastapi.responses import StreamingResponse
@@ -25,7 +27,9 @@ from tldw_Server_API.app.api.v1.schemas.reminders_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import NOTIFICATIONS_CONTROL, NOTIFICATIONS_READ
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, UserNotificationRow
+from tldw_Server_API.app.core.Reminders.reminders_service import RemindersService
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.services.reminders_scheduler import get_reminders_scheduler
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -42,6 +46,18 @@ _NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
 )
+
+
+async def _reconcile_snooze_task_best_effort(*, task_id: str, user_id: int) -> None:
+    try:
+        await get_reminders_scheduler().reconcile_task(task_id=task_id, user_id=user_id)
+    except _NOTIFICATIONS_STREAM_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "notifications snooze reconcile_task failed task_id={} user_id={} error={}",
+            task_id,
+            user_id,
+            exc,
+        )
 
 
 def _notification_to_response(row: UserNotificationRow) -> NotificationResponse:
@@ -128,6 +144,8 @@ async def list_notifications(
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(NOTIFICATIONS_READ)),  # noqa: B008
 ) -> NotificationsListResponse:
+    """List notifications for the authenticated user."""
+
     rows = db.list_user_notifications(include_archived=include_archived, limit=limit, offset=offset)
     return NotificationsListResponse(items=[_notification_to_response(row) for row in rows], total=len(rows))
 
@@ -141,6 +159,8 @@ async def unread_count(
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(NOTIFICATIONS_READ)),  # noqa: B008
 ) -> NotificationsUnreadCountResponse:
+    """Return unread notification count for the authenticated user."""
+
     return NotificationsUnreadCountResponse(unread_count=db.count_unread_user_notifications())
 
 
@@ -154,6 +174,8 @@ async def mark_read(
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(NOTIFICATIONS_CONTROL)),  # noqa: B008
 ) -> NotificationsMarkReadResponse:
+    """Mark one or more notifications as read."""
+
     updated = db.mark_user_notifications_read(payload.ids)
     return NotificationsMarkReadResponse(updated=updated)
 
@@ -168,6 +190,8 @@ async def dismiss_notification(
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(NOTIFICATIONS_CONTROL)),  # noqa: B008
 ) -> NotificationDismissResponse:
+    """Dismiss a notification from the active inbox view."""
+
     return NotificationDismissResponse(dismissed=db.dismiss_user_notification(notification_id))
 
 
@@ -182,25 +206,20 @@ async def snooze_notification(
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(NOTIFICATIONS_CONTROL)),  # noqa: B008
 ) -> NotificationSnoozeResponse:
+    """Create a one-time reminder derived from an existing notification."""
+
+    service = RemindersService(user_id=db.user_id, collections_db=db)
     try:
-        source = db.get_user_notification(notification_id)
+        task = service.snooze_notification(notification_id=notification_id, minutes=payload.minutes)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="notification_not_found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    run_at = (datetime.now(timezone.utc) + timedelta(minutes=payload.minutes)).isoformat()
-    task_id = db.create_reminder_task(
-        title=f"Snoozed: {source.title}",
-        body=source.message,
-        schedule_kind="one_time",
-        run_at=run_at,
-        cron=None,
-        timezone="UTC",
-        enabled=True,
-        link_type=source.link_type,
-        link_id=source.link_id,
-        link_url=source.link_url,
-    )
-    return NotificationSnoozeResponse(task_id=task_id, run_at=run_at)
+    await _reconcile_snooze_task_best_effort(task_id=task.id, user_id=int(db.user_id))
+    if not task.run_at:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="snooze_task_invalid")
+    return NotificationSnoozeResponse(task_id=task.id, run_at=task.run_at)
 
 
 @router.get(
@@ -212,6 +231,8 @@ async def get_preferences(
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(NOTIFICATIONS_READ)),  # noqa: B008
 ) -> NotificationPreferencesResponse:
+    """Fetch notification preference flags for the current user."""
+
     row = db.get_notification_preferences()
     return NotificationPreferencesResponse(
         user_id=row.user_id,
@@ -232,6 +253,8 @@ async def patch_preferences(
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(NOTIFICATIONS_CONTROL)),  # noqa: B008
 ) -> NotificationPreferencesResponse:
+    """Update notification preference flags for the current user."""
+
     updated = db.update_notification_preferences(
         reminder_enabled=payload.reminder_enabled,
         job_completed_enabled=payload.job_completed_enabled,
@@ -256,6 +279,8 @@ async def stream_notifications(
     db: CollectionsDatabase = Depends(get_collections_db_for_user),
     _principal=Depends(require_permissions(NOTIFICATIONS_READ)),  # noqa: B008
 ) -> StreamingResponse:
+    """Stream live notification events via Server-Sent Events."""
+
     cursor = _resolve_stream_cursor(after=after, last_event_id=last_event_id)
     user_id = int(db.user_id)
     replay_window = _stream_int_env("NOTIFICATIONS_STREAM_REPLAY_WINDOW", 500, min_value=1, max_value=5000)
@@ -354,7 +379,7 @@ async def stream_notifications(
                 logger.warning("notifications stream loop error: {}", exc)
                 await asyncio.sleep(poll_interval_s)
 
-    async def _gen():
+    async def _gen() -> AsyncGenerator[str, None]:
         producer_task = asyncio.create_task(_producer(), name="notifications_stream_producer")
         try:
             async for line in stream.iter_sse():

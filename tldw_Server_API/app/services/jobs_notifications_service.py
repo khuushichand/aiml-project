@@ -155,54 +155,11 @@ class JobsNotificationsService:
             )
 
     def _fetch_events_after(self, *, after_id: int, limit: int) -> list[dict[str, Any]]:
-        conn = self._jobs._connect()
-        try:
-            if self._jobs.backend == "postgres":
-                with self._jobs._pg_cursor(conn) as cur:
-                    cur.execute(
-                        (
-                            "SELECT id, event_type, attrs_json, job_id, domain, queue, job_type, owner_user_id, "
-                            "request_id, trace_id, created_at FROM job_events "
-                            "WHERE id > %s AND event_type IN ('job.completed', 'job.failed') "
-                            "ORDER BY id ASC LIMIT %s"
-                        ),
-                        (int(after_id), int(limit)),
-                    )
-                    rows = cur.fetchall() or []
-                    return [dict(r) for r in rows]
-
-            rows = conn.execute(
-                (
-                    "SELECT id, event_type, attrs_json, job_id, domain, queue, job_type, owner_user_id, "
-                    "request_id, trace_id, created_at FROM job_events "
-                    "WHERE id > ? AND event_type IN ('job.completed', 'job.failed') "
-                    "ORDER BY id ASC LIMIT ?"
-                ),
-                (int(after_id), int(limit)),
-            ).fetchall() or []
-            out: list[dict[str, Any]] = []
-            for row in rows:
-                if isinstance(row, dict):
-                    out.append(dict(row))
-                    continue
-                out.append(
-                    {
-                        "id": row[0],
-                        "event_type": row[1],
-                        "attrs_json": row[2],
-                        "job_id": row[3],
-                        "domain": row[4],
-                        "queue": row[5],
-                        "job_type": row[6],
-                        "owner_user_id": row[7],
-                        "request_id": row[8],
-                        "trace_id": row[9],
-                        "created_at": row[10],
-                    }
-                )
-            return out
-        finally:
-            conn.close()
+        return self._jobs.list_job_events_after(
+            after_id=after_id,
+            limit=limit,
+            event_types=("job.completed", "job.failed"),
+        )
 
     async def run_once(self) -> dict[str, int | bool]:
         now_dt = _utcnow()
@@ -324,4 +281,3 @@ async def start_jobs_notifications_service() -> asyncio.Task | None:
 
 
 __all__ = ["JobsNotificationsService", "start_jobs_notifications_service"]
-

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import contextlib
-
 from fastapi import APIRouter, Depends, HTTPException, Path, status
+from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
@@ -28,6 +27,29 @@ _REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
 )
+
+
+async def _reconcile_task_best_effort(*, task_id: str, user_id: int) -> None:
+    try:
+        await get_reminders_scheduler().reconcile_task(task_id=task_id, user_id=user_id)
+    except _REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "reminders endpoint reconcile_task failed task_id={} user_id={} error={}",
+            task_id,
+            user_id,
+            exc,
+        )
+
+
+async def _unschedule_task_best_effort(*, task_id: str) -> None:
+    try:
+        await get_reminders_scheduler().unschedule_task(task_id=task_id)
+    except _REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "reminders endpoint unschedule_task failed task_id={} error={}",
+            task_id,
+            exc,
+        )
 
 
 def _row_to_response(row: ReminderTaskRow) -> ReminderTaskResponse:
@@ -76,8 +98,7 @@ async def create_task(
         link_id=payload.link_id,
         link_url=payload.link_url,
     )
-    with contextlib.suppress(_REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS):
-        await get_reminders_scheduler().reconcile_task(task_id=task_id, user_id=int(db.user_id))
+    await _reconcile_task_best_effort(task_id=task_id, user_id=int(db.user_id))
     return _row_to_response(db.get_reminder_task(task_id))
 
 
@@ -124,8 +145,7 @@ async def update_task(
     patch = payload.model_dump(exclude_unset=True)
     try:
         updated = db.update_reminder_task(task_id, patch)
-        with contextlib.suppress(_REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS):
-            await get_reminders_scheduler().reconcile_task(task_id=task_id, user_id=int(db.user_id))
+        await _reconcile_task_best_effort(task_id=task_id, user_id=int(db.user_id))
         return _row_to_response(updated)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task_not_found") from exc
@@ -143,6 +163,5 @@ async def delete_task(
 ) -> ReminderTaskDeleteResponse:
     deleted = db.delete_reminder_task(task_id)
     if deleted:
-        with contextlib.suppress(_REMINDERS_ENDPOINT_NONCRITICAL_EXCEPTIONS):
-            await get_reminders_scheduler().unschedule_task(task_id=task_id)
+        await _unschedule_task_best_effort(task_id=task_id)
     return ReminderTaskDeleteResponse(deleted=deleted)

@@ -125,3 +125,63 @@ def test_task_mutations_notify_scheduler(reminders_app, monkeypatch):
 
     assert reconcile_calls == [(task_id, 880), (task_id, 880)]
     assert unschedule_calls == [task_id]
+
+
+def test_patch_task_rejects_scheduler_managed_fields(reminders_app):
+    with TestClient(reminders_app) as client:
+        create_payload = {
+            "title": "Invalid patch target",
+            "schedule_kind": "one_time",
+            "run_at": "2026-03-01T10:00:00+00:00",
+            "enabled": True,
+        }
+        create_response = client.post("/api/v1/tasks", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        task_id = create_response.json()["id"]
+
+        patch_response = client.patch(
+            f"/api/v1/tasks/{task_id}",
+            json={"last_status": "queued", "next_run_at": "2026-03-01T11:00:00+00:00"},
+        )
+        assert patch_response.status_code == 422, patch_response.text
+
+
+def test_task_mutations_log_scheduler_sync_failures(reminders_app, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import reminders as reminders_endpoint
+
+    warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    class _FakeLogger:
+        def warning(self, message: str, *args: object, **_kwargs: object) -> None:
+            warning_calls.append((message, args))
+
+    class _FailingScheduler:
+        async def reconcile_task(self, *, task_id: str, user_id: int) -> None:
+            raise RuntimeError(f"reconcile failed for {task_id}:{user_id}")
+
+        async def unschedule_task(self, *, task_id: str) -> None:
+            raise RuntimeError(f"unschedule failed for {task_id}")
+
+    monkeypatch.setattr(reminders_endpoint, "logger", _FakeLogger(), raising=False)
+    monkeypatch.setattr(reminders_endpoint, "get_reminders_scheduler", lambda: _FailingScheduler(), raising=False)
+
+    with TestClient(reminders_app) as client:
+        create_payload = {
+            "title": "Scheduler failures are non-fatal",
+            "schedule_kind": "one_time",
+            "run_at": "2026-03-01T10:00:00+00:00",
+            "enabled": True,
+        }
+        create_response = client.post("/api/v1/tasks", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        task_id = create_response.json()["id"]
+
+        patch_response = client.patch(f"/api/v1/tasks/{task_id}", json={"enabled": False})
+        assert patch_response.status_code == 200, patch_response.text
+
+        delete_response = client.delete(f"/api/v1/tasks/{task_id}")
+        assert delete_response.status_code == 200, delete_response.text
+
+    assert len(warning_calls) >= 3
+    assert any("reconcile_task failed" in msg for msg, _ in warning_calls)
+    assert any("unschedule_task failed" in msg for msg, _ in warning_calls)
