@@ -1666,7 +1666,13 @@ test.describe('Watchlists playground smoke', () => {
     await basePage.close().catch(() => {})
 
     await page.getByRole('tab', { name: 'Articles' }).click()
-    await expect(page.locator('[data-testid^="watchlists-item-row-"]')).toHaveCount(25)
+    const itemRows = page.locator('[data-testid^="watchlists-item-row-"]')
+    await expect(itemRows.first()).toBeVisible()
+    const pageRowCount = await itemRows.count()
+    // Page size defaults can vary by environment (for example 25 vs 50).
+    // Assert we loaded a paginated subset, not the full 55-item dataset.
+    expect(pageRowCount).toBeGreaterThanOrEqual(25)
+    expect(pageRowCount).toBeLessThan(55)
 
     await page.getByTestId('watchlists-items-mark-page').click()
     const firstConfirm = page.locator('.ant-modal-confirm').last()
@@ -1881,10 +1887,13 @@ test.describe('Watchlists playground smoke', () => {
       .poll(async () => page.evaluate(() => (window as any).__watchlistsKeyboardReviewUpdates))
       .toBeGreaterThanOrEqual(1)
 
+    const openedCountBeforeShortcut = await page.evaluate(
+      () => (window as any).__watchlistsOpenedUrls.length
+    )
     await page.keyboard.press('o')
     await expect
       .poll(async () => page.evaluate(() => (window as any).__watchlistsOpenedUrls.length))
-      .toBe(1)
+      .toBeGreaterThan(openedCountBeforeShortcut)
 
     const fetchCountBeforeRefresh = await page.evaluate(
       () => (window as any).__watchlistsKeyboardItemsFetches

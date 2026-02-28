@@ -492,6 +492,32 @@ class TestImageGenAdapter:
         assert "images" in result
         assert result.get("simulated") is True
 
+    @pytest.mark.asyncio
+    async def test_image_gen_adapter_prompt_refinement_opt_in(self, monkeypatch, base_context):
+        """Test image gen adapter applies prompt refinement when enabled."""
+        monkeypatch.setenv("TEST_MODE", "1")
+
+        from tldw_Server_API.app.core.Workflows.adapters.content import run_image_gen_adapter
+
+        config = {"prompt": "cat portrait", "prompt_refinement": True}
+        result = await run_image_gen_adapter(config, base_context)
+
+        assert "high detail" in result.get("prompt", "")
+        assert result.get("prompt_refinement_mode") == "basic"
+
+    @pytest.mark.asyncio
+    async def test_image_gen_adapter_prompt_refinement_opt_out(self, monkeypatch, base_context):
+        """Test image gen adapter keeps prompt unchanged when refinement is disabled."""
+        monkeypatch.setenv("TEST_MODE", "1")
+
+        from tldw_Server_API.app.core.Workflows.adapters.content import run_image_gen_adapter
+
+        config = {"prompt": "cat portrait", "prompt_refinement": False}
+        result = await run_image_gen_adapter(config, base_context)
+
+        assert result.get("prompt") == "cat portrait"
+        assert result.get("prompt_refinement_mode") == "off"
+
 
 # =============================================================================
 # Test: run_image_describe_adapter

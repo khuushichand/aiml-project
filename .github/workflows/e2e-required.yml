@@ -52,6 +52,7 @@ jobs:
       E2E_INPROCESS: "1"
       AUTH_MODE: single_user
       TEST_MODE: "1"
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       SINGLE_USER_API_KEY: test-api-key-for-e2e-testing-12345
       SINGLE_USER_TEST_API_KEY: test-api-key-for-e2e-testing-12345
       REDIS_URL: redis://127.0.0.1:6379/0

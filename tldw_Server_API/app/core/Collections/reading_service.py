@@ -20,9 +20,6 @@ from tldw_Server_API.app.core.exceptions import (
     RetryExhaustedError,
 )
 from tldw_Server_API.app.core.http_client import afetch
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
-    resolve_default_transcription_model,
-)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
     _enforce_max_bytes_from_headers,
     _resolve_max_bytes,
@@ -238,6 +235,9 @@ class ReadingService:
         try:
             from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
             from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+                resolve_default_transcription_model,
+            )
             from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
                 prepare_chunking_options_dict,
             )
@@ -698,31 +698,42 @@ class ReadingService:
             if not url:
                 skipped += 1
                 continue
+            normalized_url = self._normalize_url(url, "reading_import")
+            parsed = urlparse(normalized_url)
+            domain = parsed.netloc.lower() if parsed.netloc else None
+            status = (item.status or "saved").strip().lower()
+            if status not in {"saved", "reading", "read", "archived"}:
+                status = "saved"
+            read_at = item.read_at
+            if status == "read" and not read_at:
+                read_at = _utcnow_iso()
             tags = item.tags or []
             metadata_payload = {"source": "reading_import"}
             metadata_payload.update(item.metadata or {})
+            if normalized_url != url:
+                metadata_payload.setdefault("import_original_url", url)
             try:
                 row = self.collections.upsert_content_item(
                     origin="reading",
                     origin_type=origin_type,
                     origin_id=None,
-                    url=url,
-                    canonical_url=url,
-                    domain=None,
-                    title=item.title or None,
+                    url=normalized_url,
+                    canonical_url=normalized_url,
+                    domain=domain,
+                    title=item.title or normalized_url,
                     summary=None,
                     notes=item.notes,
                     content_hash=None,
                     word_count=None,
                     published_at=None,
-                    status=item.status or "saved",
+                    status=status,
                     favorite=item.favorite,
                     metadata=metadata_payload,
                     media_id=None,
                     job_id=None,
                     run_id=None,
                     source_id=None,
-                    read_at=item.read_at,
+                    read_at=read_at,
                     tags=tags,
                     merge_tags=merge_tags,
                     preserve_existing_on_null=True,

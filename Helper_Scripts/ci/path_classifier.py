@@ -12,6 +12,13 @@ BACKEND_GLOBS = [
     ".github/workflows/**",
 ]
 
+COVERAGE_GLOBS = [
+    "tldw_Server_API/**",
+    "pyproject.toml",
+    "uv.lock",
+]
+
+FRONTEND_GLOBS = [
 TLDW_FRONTEND_GLOBS = [
     "apps/tldw-frontend/**",
     "apps/packages/ui/**",
@@ -58,5 +65,5 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         "admin_ui_changed": admin_ui_changed,
         "e2e_changed": e2e_changed,
         "security_relevant_changed": security_relevant_changed,
-        "coverage_required": backend_changed,
+        "coverage_required": coverage_required,
     }

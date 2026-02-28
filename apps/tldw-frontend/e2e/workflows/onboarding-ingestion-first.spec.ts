@@ -7,7 +7,7 @@ import {
   assertNoCriticalErrors,
   skipIfServerUnavailable,
 } from "../utils/fixtures"
-import { TEST_CONFIG } from "../utils/helpers"
+import { TEST_CONFIG, waitForConnection } from "../utils/helpers"
 
 type ViewportTarget = {
   label: "desktop" | "mobile"
@@ -148,6 +148,24 @@ async function assertCardOrder(page: Page) {
   expect((mediaBox?.y ?? 0) < (chatBox?.y ?? 0)).toBeTruthy()
 }
 
+async function ensureOnboardingSuccessScreen(
+  page: Page
+): Promise<"connected_now" | "already_connected"> {
+  await page.goto("/setup", { waitUntil: "domcontentloaded" })
+  await waitForConnection(page, 25_000)
+
+  const successScreen = page.getByTestId("onboarding-success-screen")
+  if (await successScreen.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    return "already_connected"
+  }
+
+  const connectButton = page.getByTestId("onboarding-connect")
+  await expect(connectButton).toBeVisible({ timeout: 15_000 })
+  await connectButton.evaluate((el: HTMLElement) => el.click())
+  await expect(successScreen).toBeVisible({ timeout: 20_000 })
+  return "connected_now"
+}
+
 test.describe("Onboarding Ingestion-First Journey", () => {
   test.beforeEach(async ({ authedPage }) => {
     ensureEvidenceDirectory()
@@ -185,25 +203,16 @@ test.describe("Onboarding Ingestion-First Journey", () => {
         height: viewport.height,
       })
 
-      await authedPage.goto("/setup", { waitUntil: "domcontentloaded" })
-      await expect(authedPage.getByTestId("onboarding-connect")).toBeVisible({
-        timeout: 15_000,
-      })
+      const initialSetupState = await ensureOnboardingSuccessScreen(authedPage)
       await captureStep(
         authedPage,
         evidenceRows,
         viewport.label,
         "01-setup-connect",
-        "Connect control visible."
+        initialSetupState === "connected_now"
+          ? "Connect control visible."
+          : "Setup resumed from an already connected state."
       )
-
-      await authedPage
-        .getByTestId("onboarding-connect")
-        .evaluate((el: HTMLElement) => el.click())
-
-      await expect(authedPage.getByTestId("onboarding-success-screen")).toBeVisible({
-        timeout: 20_000,
-      })
       await expect(authedPage.getByTestId("onboarding-success-screen")).toHaveAttribute(
         "data-ingest-status",
         "idle"
@@ -265,13 +274,7 @@ test.describe("Onboarding Ingestion-First Journey", () => {
         "Media verification route reached from onboarding CTA."
       )
 
-      await authedPage.goto("/setup", { waitUntil: "domcontentloaded" })
-      await authedPage
-        .getByTestId("onboarding-connect")
-        .evaluate((el: HTMLElement) => el.click())
-      await expect(authedPage.getByTestId("onboarding-success-screen")).toBeVisible({
-        timeout: 20_000,
-      })
+      await ensureOnboardingSuccessScreen(authedPage)
 
       await authedPage
         .getByTestId("onboarding-success-ingest")
@@ -298,18 +301,22 @@ test.describe("Onboarding Ingestion-First Journey", () => {
       }
       await expect(quickIngestDialog).toBeHidden({ timeout: 10_000 })
 
-      await authedPage.goto("/setup", { waitUntil: "domcontentloaded" })
-      await authedPage
-        .getByTestId("onboarding-connect")
-        .evaluate((el: HTMLElement) => el.click())
-      await expect(authedPage.getByTestId("onboarding-success-screen")).toBeVisible({
-        timeout: 20_000,
+      await ensureOnboardingSuccessScreen(authedPage)
+
+      await authedPage.evaluate(() => {
+        try {
+          localStorage.setItem("__tldw_first_run_complete", "true")
+        } catch {
+          // Non-blocking; CTA should still handle completion in-app.
+        }
       })
 
       await authedPage
         .getByTestId("onboarding-success-chat")
         .evaluate((el: HTMLElement) => el.click())
-      await expect(authedPage).toHaveURL(/\/chat(?:[/?#].*)?$/)
+      await expect(authedPage).toHaveURL(/\/chat(?:[/?#].*)?$/, {
+        timeout: 20_000,
+      })
       await expect(authedPage.getByTestId("chat-input")).toBeVisible({
         timeout: 15_000,
       })

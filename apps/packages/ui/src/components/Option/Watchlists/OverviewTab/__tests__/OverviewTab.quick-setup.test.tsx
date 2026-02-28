@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from "react"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { OverviewTab } from "../OverviewTab"
 import { QUICK_SETUP_DEFAULT_VALUES } from "../quick-setup"
@@ -158,6 +158,24 @@ const createOverviewPayload = (overrides?: Partial<Record<string, unknown>>) => 
   systemHealth: "healthy" as const,
   ...overrides
 })
+
+const getPipelineDialog = () => screen.getByRole("dialog", { name: "Briefing pipeline builder" })
+
+const pipelineQueries = () => within(getPipelineDialog())
+
+const clickPipelineNext = () => {
+  fireEvent.click(pipelineQueries().getByRole("button", { name: "Next" }))
+}
+
+const selectPipelineFeed = async (label: string) => {
+  await waitFor(() => {
+    const checkbox = pipelineQueries().getByRole("checkbox", { name: label }) as HTMLInputElement
+    if (!checkbox.checked) {
+      fireEvent.click(checkbox)
+    }
+    expect(checkbox).toBeChecked()
+  })
+}
 
 describe("OverviewTab quick setup flow", () => {
   beforeEach(() => {
@@ -603,22 +621,22 @@ describe("OverviewTab quick setup flow", () => {
 
     fireEvent.click(screen.getByTestId("watchlists-overview-cta-pipeline-builder"))
     await waitFor(() => {
-      expect(screen.getByLabelText("AI Feed")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByLabelText("AI Feed"))
-    fireEvent.click(screen.getByLabelText("Security Feed"))
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await selectPipelineFeed("AI Feed")
+    await selectPipelineFeed("Security Feed")
+    clickPipelineNext()
     await waitFor(() => {
-      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("Monitor name")).toBeInTheDocument()
     })
-    fireEvent.change(screen.getByLabelText("Monitor name"), {
+    fireEvent.change(pipelineQueries().getByLabelText("Monitor name"), {
       target: { value: "Morning Brief" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    clickPipelineNext()
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Create pipeline" })).toBeInTheDocument()
+      expect(pipelineQueries().getByRole("button", { name: "Create pipeline" })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole("button", { name: "Create pipeline" }))
+    fireEvent.click(pipelineQueries().getByRole("button", { name: "Create pipeline" }))
 
     await waitFor(() => {
       expect(mockState.createWatchlistJobMock).toHaveBeenCalledWith(
@@ -684,21 +702,21 @@ describe("OverviewTab quick setup flow", () => {
 
     fireEvent.click(screen.getByTestId("watchlists-overview-cta-pipeline-builder"))
     await waitFor(() => {
-      expect(screen.getByLabelText("AI Feed")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByLabelText("AI Feed"))
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await selectPipelineFeed("AI Feed")
+    clickPipelineNext()
     await waitFor(() => {
-      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("Monitor name")).toBeInTheDocument()
     })
-    fireEvent.change(screen.getByLabelText("Monitor name"), {
+    fireEvent.change(pipelineQueries().getByLabelText("Monitor name"), {
       target: { value: "Morning Brief" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    clickPipelineNext()
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Create pipeline" })).toBeInTheDocument()
+      expect(pipelineQueries().getByRole("button", { name: "Create pipeline" })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole("button", { name: "Create pipeline" }))
+    fireEvent.click(pipelineQueries().getByRole("button", { name: "Create pipeline" }))
 
     await waitFor(() => {
       expect(mockState.deleteWatchlistJobMock).toHaveBeenCalledWith(303)
@@ -751,17 +769,17 @@ describe("OverviewTab quick setup flow", () => {
 
     fireEvent.click(screen.getByTestId("watchlists-overview-cta-pipeline-builder"))
     await waitFor(() => {
-      expect(screen.getByLabelText("AI Feed")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByLabelText("AI Feed"))
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await selectPipelineFeed("AI Feed")
+    clickPipelineNext()
     await waitFor(() => {
-      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("Monitor name")).toBeInTheDocument()
     })
-    fireEvent.change(screen.getByLabelText("Monitor name"), {
+    fireEvent.change(pipelineQueries().getByLabelText("Monitor name"), {
       target: { value: "Morning Brief" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    clickPipelineNext()
 
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-pipeline-preview-generate")).toBeInTheDocument()
@@ -808,17 +826,17 @@ describe("OverviewTab quick setup flow", () => {
 
     fireEvent.click(screen.getByTestId("watchlists-overview-cta-pipeline-builder"))
     await waitFor(() => {
-      expect(screen.getByLabelText("AI Feed")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByLabelText("AI Feed"))
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await selectPipelineFeed("AI Feed")
+    clickPipelineNext()
     await waitFor(() => {
-      expect(screen.getByLabelText("Include audio briefing")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("Monitor name")).toBeInTheDocument()
     })
-    fireEvent.change(screen.getByLabelText("Monitor name"), {
+    fireEvent.change(pipelineQueries().getByLabelText("Monitor name"), {
       target: { value: "Morning Brief" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    clickPipelineNext()
 
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-pipeline-preview-generate")).toBeInTheDocument()
@@ -855,18 +873,18 @@ describe("OverviewTab quick setup flow", () => {
 
     fireEvent.click(screen.getByTestId("watchlists-overview-cta-pipeline-builder"))
     await waitFor(() => {
-      expect(screen.getByLabelText("AI Feed")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("AI Feed")).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByLabelText("AI Feed"))
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    await selectPipelineFeed("AI Feed")
+    clickPipelineNext()
     await waitFor(() => {
-      expect(screen.getByLabelText("Run immediately")).toBeInTheDocument()
+      expect(pipelineQueries().getByLabelText("Run immediately")).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByLabelText("Run immediately"))
-    fireEvent.change(screen.getByLabelText("Monitor name"), {
+    fireEvent.click(pipelineQueries().getByLabelText("Run immediately"))
+    fireEvent.change(pipelineQueries().getByLabelText("Monitor name"), {
       target: { value: "Morning Brief" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    clickPipelineNext()
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-pipeline-test-generation")).toBeInTheDocument()
     })
@@ -933,9 +951,9 @@ describe("OverviewTab quick setup flow", () => {
 
     fireEvent.click(trigger)
     await waitFor(() => {
-      expect(screen.getByRole("dialog")).toBeInTheDocument()
+      expect(getPipelineDialog()).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    fireEvent.click(pipelineQueries().getByRole("button", { name: "Cancel" }))
 
     await waitFor(() => {
       expect(trigger).toHaveFocus()

@@ -24,6 +24,8 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       TEST_MODE: "true"
       DISABLE_HEAVY_STARTUP: "1"
+      # Work around protobuf/opentelemetry runtime incompatibilities in CI runners.
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       MINIMAL_TEST_APP: "1"
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: "0"
       AUTH_MODE: single_user

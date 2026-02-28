@@ -97,6 +97,8 @@ const CRITICAL_ROUTES: CriticalRoute[] = [
 ]
 
 test.describe("Stage 5 release gate", () => {
+  test.describe.configure({ mode: "parallel" })
+
   for (const route of CRITICAL_ROUTES) {
     test(`enforces UX console/error budget on ${route.name} (${route.path})`, async ({
       page,

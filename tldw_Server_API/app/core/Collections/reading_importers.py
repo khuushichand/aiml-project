@@ -7,6 +7,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import unquote, urlparse
+
+try:
+    from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
+except Exception:  # pragma: no cover - import fallback for isolated tests
+    normalize_for_crawl = None
 
 
 @dataclass
@@ -19,6 +25,14 @@ class ReadingImportItem:
     notes: str | None
     read_at: str | None
     metadata: dict[str, Any]
+
+
+_READING_STATUS_PRIORITY: dict[str, int] = {
+    "saved": 0,
+    "reading": 1,
+    "archived": 2,
+    "read": 3,
+}
 
 
 def detect_import_source(filename: str | None, raw_bytes: bytes) -> str:
@@ -197,5 +211,105 @@ def _truthy(value: Any) -> bool:
     return text in {"1", "true", "yes"}
 
 
+def _normalize_status(value: str | None) -> str:
+    text = str(value or "").strip().lower()
+    if text in _READING_STATUS_PRIORITY:
+        return text
+    return "saved"
+
+
+def _merge_status(left: str | None, right: str | None) -> str:
+    left_norm = _normalize_status(left)
+    right_norm = _normalize_status(right)
+    if _READING_STATUS_PRIORITY[right_norm] >= _READING_STATUS_PRIORITY[left_norm]:
+        return right_norm
+    return left_norm
+
+
+def _normalize_import_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    if normalize_for_crawl is None:
+        return raw
+    try:
+        normalized = normalize_for_crawl(raw, raw)
+    except Exception:
+        normalized = raw
+    return normalized or raw
+
+
+def _title_from_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    path = parsed.path.strip("/")
+    if path:
+        slug = path.split("/")[-1]
+        if slug:
+            text = unquote(slug).replace("-", " ").replace("_", " ").strip()
+            if text:
+                return text[:200]
+    if parsed.netloc:
+        return parsed.netloc
+    return None
+
+
+def _merge_title(existing_title: str | None, new_title: str | None, normalized_url: str) -> str | None:
+    if existing_title and not new_title:
+        return existing_title
+    if new_title and not existing_title:
+        return new_title
+    if not existing_title and not new_title:
+        return None
+
+    fallback = _title_from_url(normalized_url)
+    if fallback and str(existing_title).strip().lower() == fallback.strip().lower():
+        if str(new_title).strip().lower() != fallback.strip().lower():
+            return new_title
+    return existing_title
+
+
 def normalize_import_items(items: Iterable[ReadingImportItem]) -> list[ReadingImportItem]:
-    return [item for item in items if item.url]
+    merged: dict[str, ReadingImportItem] = {}
+    for item in items:
+        normalized_url = _normalize_import_url(item.url)
+        if not normalized_url:
+            continue
+
+        normalized_tags = sorted({str(tag).strip().lower() for tag in (item.tags or []) if str(tag).strip()})
+        normalized_status = _normalize_status(item.status)
+        normalized_title = str(item.title).strip() if item.title else None
+        if not normalized_title:
+            normalized_title = _title_from_url(normalized_url)
+
+        normalized_item = ReadingImportItem(
+            url=normalized_url,
+            title=normalized_title,
+            tags=normalized_tags,
+            status=normalized_status,
+            favorite=bool(item.favorite),
+            notes=str(item.notes).strip() if item.notes else None,
+            read_at=item.read_at,
+            metadata={
+                **(item.metadata or {}),
+                "import_normalized_url": normalized_url,
+            },
+        )
+
+        key = normalized_url.lower()
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = normalized_item
+            continue
+
+        merged[key] = ReadingImportItem(
+            url=normalized_url,
+            title=_merge_title(existing.title, normalized_item.title, normalized_url),
+            tags=sorted({*existing.tags, *normalized_item.tags}),
+            status=_merge_status(existing.status, normalized_item.status),
+            favorite=existing.favorite or normalized_item.favorite,
+            notes=existing.notes or normalized_item.notes,
+            read_at=existing.read_at or normalized_item.read_at,
+            metadata={**existing.metadata, **normalized_item.metadata},
+        )
+
+    return list(merged.values())

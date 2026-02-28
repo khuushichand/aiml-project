@@ -12,6 +12,10 @@ from tldw_Server_API.app.core.Image_Generation.adapter_registry import get_regis
 from tldw_Server_API.app.core.Image_Generation.adapters.base import ImageGenRequest
 from tldw_Server_API.app.core.Image_Generation.config import get_image_generation_config
 from tldw_Server_API.app.core.Image_Generation.exceptions import ImageBackendUnavailableError, ImageGenerationError
+from tldw_Server_API.app.core.Image_Generation.prompt_refinement import (
+    normalize_prompt_refinement_mode,
+    refine_image_prompt,
+)
 
 
 class ImageAdapter:
@@ -32,10 +36,17 @@ class ImageAdapter:
         resolved_backend = registry.resolve_backend(backend_name)
         if not resolved_backend:
             raise FileArtifactsError("image_backend_unavailable")
+        image_config = get_image_generation_config()
+        prompt_mode = normalize_prompt_refinement_mode(payload.get("prompt_refinement"))
+        normalized_prompt = refine_image_prompt(
+            prompt.strip(),
+            mode=prompt_mode,
+            max_length=image_config.max_prompt_length,
+        )
 
         structured = {
             "backend": resolved_backend,
-            "prompt": prompt.strip(),
+            "prompt": normalized_prompt,
             "negative_prompt": self._string_or_none(payload.get("negative_prompt")),
             "width": self._int_or_none(payload.get("width")),
             "height": self._int_or_none(payload.get("height")),
@@ -44,6 +55,7 @@ class ImageAdapter:
             "seed": self._int_or_none(payload.get("seed")),
             "sampler": self._string_or_none(payload.get("sampler")),
             "model": self._string_or_none(payload.get("model")),
+            "prompt_refinement": prompt_mode,
             "extra_params": payload.get("extra_params") or {},
         }
 
