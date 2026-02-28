@@ -467,12 +467,15 @@ def test_writing_capabilities_provider_tokenizers(client_with_writing_db: TestCl
     assert "gpt-3.5-turbo" in tokenizers
     assert "definitely-not-a-real-model" in tokenizers
     assert tokenizers["definitely-not-a-real-model"]["available"] is False
+    assert tokenizers["definitely-not-a-real-model"]["count_accuracy"] == "unavailable"
     if _has_tiktoken():
         assert tokenizers["gpt-3.5-turbo"]["available"] is True
         assert tokenizers["gpt-3.5-turbo"]["tokenizer"].startswith("tiktoken:")
         assert tokenizers["gpt-3.5-turbo"]["kind"] == "tiktoken"
-        assert tokenizers["gpt-3.5-turbo"]["source"] == "tiktoken.encoding_for_model"
+        assert tokenizers["gpt-3.5-turbo"]["source"].startswith("tiktoken.encoding_for_model")
         assert tokenizers["gpt-3.5-turbo"]["detokenize"] is True
+        assert tokenizers["gpt-3.5-turbo"]["count_accuracy"] == "exact"
+        assert tokenizers["gpt-3.5-turbo"]["strict_mode_effective"] is False
     else:
         assert tokenizers["gpt-3.5-turbo"]["available"] is False
         assert "unavailable" in tokenizers["gpt-3.5-turbo"]["error"].lower()
@@ -561,6 +564,76 @@ def test_writing_capabilities_requested_extra_body_compat_reflects_strict_runtim
     assert "strict_openai_compat" in str(requested["extra_body_compat"]["effective_reason"])
 
 
+def test_writing_capabilities_requested_reports_non_exact_count_accuracy(
+    client_with_writing_db: TestClient,
+):
+    client = client_with_writing_db
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "deepseek",
+            "model": "gpt-3.5-turbo",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    requested = resp.json()["requested"]
+    assert requested is not None
+    assert requested["count_accuracy"] == "unavailable"
+    assert requested["strict_mode_effective"] is False
+
+
+def test_writing_capabilities_requested_reflects_strict_token_counting_runtime(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+    resp = client.get(
+        "/api/v1/writing/capabilities",
+        params={
+            "include_providers": "false",
+            "provider": "deepseek",
+            "model": "gpt-3.5-turbo",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    requested = resp.json()["requested"]
+    assert requested is not None
+    assert requested["count_accuracy"] == "unavailable"
+    assert requested["strict_mode_effective"] is True
+
+
+def test_writing_capabilities_provider_tokenizers_reflect_strict_runtime(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+
+    async def fake_get_configured_providers_async(include_deprecated: bool = False):
+        return {
+            "default_provider": "openai",
+            "providers": [
+                {
+                    "name": "openai",
+                    "models": ["gpt-3.5-turbo", "definitely-not-a-real-model"],
+                    "capabilities": {},
+                }
+            ],
+        }
+
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    monkeypatch.setattr(writing_endpoints, "get_configured_providers_async", fake_get_configured_providers_async)
+
+    resp = client.get("/api/v1/writing/capabilities")
+    assert resp.status_code == 200, resp.text
+    tokenizers = resp.json()["providers"][0]["tokenizers"]
+    assert tokenizers["gpt-3.5-turbo"]["strict_mode_effective"] is True
+    assert tokenizers["definitely-not-a-real-model"]["strict_mode_effective"] is True
+
+
 def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     if not _has_tiktoken():
         pytest.skip("tiktoken not available")
@@ -574,8 +647,10 @@ def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     count_payload = count_resp.json()
     assert count_payload["count"] >= 1
     assert count_payload["meta"]["tokenizer_kind"] == "tiktoken"
-    assert count_payload["meta"]["tokenizer_source"] == "tiktoken.encoding_for_model"
+    assert count_payload["meta"]["tokenizer_source"].startswith("tiktoken.encoding_for_model")
     assert count_payload["meta"]["detokenize_available"] is True
+    assert count_payload["meta"]["count_accuracy"] == "exact"
+    assert count_payload["meta"]["strict_mode_effective"] is False
 
     tokenize_resp = client.post(
         "/api/v1/writing/tokenize",
@@ -590,8 +665,10 @@ def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     tokens = tokenize_resp.json()
     assert tokens["strings"] is None
     assert tokens["meta"]["tokenizer_kind"] == "tiktoken"
-    assert tokens["meta"]["tokenizer_source"] == "tiktoken.encoding_for_model"
+    assert tokens["meta"]["tokenizer_source"].startswith("tiktoken.encoding_for_model")
     assert tokens["meta"]["detokenize_available"] is True
+    assert tokens["meta"]["count_accuracy"] == "exact"
+    assert tokens["meta"]["strict_mode_effective"] is False
 
 
 def test_writing_detokenize_roundtrip(client_with_writing_db: TestClient):
@@ -626,8 +703,10 @@ def test_writing_detokenize_roundtrip(client_with_writing_db: TestClient):
     assert payload["text"] == source_text
     assert isinstance(payload["strings"], list)
     assert payload["meta"]["tokenizer_kind"] == "tiktoken"
-    assert payload["meta"]["tokenizer_source"] == "tiktoken.encoding_for_model"
+    assert payload["meta"]["tokenizer_source"].startswith("tiktoken.encoding_for_model")
     assert payload["meta"]["detokenize_available"] is True
+    assert payload["meta"]["count_accuracy"] == "exact"
+    assert payload["meta"]["strict_mode_effective"] is False
 
 
 def test_writing_detokenize_unavailable(client_with_writing_db: TestClient):
@@ -646,10 +725,101 @@ def test_writing_tokenize_provider_model_mismatch(client_with_writing_db: TestCl
     client = client_with_writing_db
     resp = client.post(
         "/api/v1/writing/token-count",
-        json={"provider": "anthropic", "model": "gpt-3.5-turbo", "text": "Mismatch OK"},
+        json={"provider": "deepseek", "model": "gpt-3.5-turbo", "text": "Mismatch OK"},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["count"] >= 1
+
+
+def test_writing_tokenize_provider_model_mismatch_strict_rejected(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    if not _has_tiktoken():
+        pytest.skip("tiktoken not available")
+
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+    resp = client.post(
+        "/api/v1/writing/token-count",
+        json={"provider": "deepseek", "model": "gpt-3.5-turbo", "text": "Mismatch strict"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "exact tokenizer unavailable" in str(resp.json().get("detail", "")).lower()
+
+
+def test_writing_token_count_allows_exact_count_only_tokenizer(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    class _FakeCountOnlyTokenizer:
+        def count_tokens(self, text: str) -> int:
+            if text == "Hello strict":
+                return 3
+            return 1
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_tokenizer",
+        lambda _provider, _model: (
+            _FakeCountOnlyTokenizer(),
+            "anthropic:remote-count",
+            "provider-native-count",
+            "anthropic.http.count_tokens",
+            False,
+            "exact",
+            True,
+        ),
+    )
+
+    count_resp = client.post(
+        "/api/v1/writing/token-count",
+        json={"provider": "anthropic", "model": "claude-opus-4-20250514", "text": "Hello strict"},
+    )
+    assert count_resp.status_code == 200, count_resp.text
+    payload = count_resp.json()
+    assert payload["count"] == 3
+    assert payload["meta"]["count_accuracy"] == "exact"
+    assert payload["meta"]["strict_mode_effective"] is True
+    assert payload["meta"]["tokenizer_kind"] == "provider-native-count"
+
+
+def test_writing_tokenize_rejects_count_only_tokenizer(
+    client_with_writing_db: TestClient,
+    monkeypatch,
+):
+    client = client_with_writing_db
+    monkeypatch.setenv("STRICT_TOKEN_COUNTING", "true")
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    class _FakeCountOnlyTokenizer:
+        def count_tokens(self, text: str) -> int:  # noqa: ARG002
+            return 2
+
+    monkeypatch.setattr(
+        writing_endpoints,
+        "_resolve_tokenizer",
+        lambda _provider, _model: (
+            _FakeCountOnlyTokenizer(),
+            "google:remote-count",
+            "provider-native-count",
+            "google.http.count_tokens",
+            False,
+            "exact",
+            True,
+        ),
+    )
+
+    tokenize_resp = client.post(
+        "/api/v1/writing/tokenize",
+        json={"provider": "google", "model": "gemini-2.5-flash", "text": "Hello"},
+    )
+    assert tokenize_resp.status_code == 422, tokenize_resp.text
+    assert "tokenize not available" in str(tokenize_resp.json().get("detail", "")).lower()
 
 
 def test_writing_tokenize_unavailable(client_with_writing_db: TestClient):
@@ -718,6 +888,8 @@ def test_writing_tokenize_prefers_provider_native_tokenizer(
     assert count_payload["meta"]["tokenizer_kind"] == "provider-native"
     assert count_payload["meta"]["tokenizer_source"] == "llama.http.tokenize"
     assert count_payload["meta"]["detokenize_available"] is True
+    assert count_payload["meta"]["count_accuracy"] == "exact"
+    assert count_payload["meta"]["strict_mode_effective"] is False
 
     tokenize_resp = client.post(
         "/api/v1/writing/tokenize",
@@ -728,6 +900,7 @@ def test_writing_tokenize_prefers_provider_native_tokenizer(
     assert tokenize_payload["ids"] == [10, 20]
     assert tokenize_payload["strings"] == ["He", "llo native"]
     assert tokenize_payload["meta"]["tokenizer_kind"] == "provider-native"
+    assert tokenize_payload["meta"]["count_accuracy"] == "exact"
 
     detok_resp = client.post(
         "/api/v1/writing/detokenize",
@@ -737,6 +910,7 @@ def test_writing_tokenize_prefers_provider_native_tokenizer(
     detok_payload = detok_resp.json()
     assert detok_payload["text"] == "Hello native"
     assert detok_payload["meta"]["tokenizer_kind"] == "provider-native"
+    assert detok_payload["meta"]["count_accuracy"] == "exact"
 
 
 def test_writing_capabilities_requested_native_tokenizer_metadata(
@@ -775,6 +949,8 @@ def test_writing_capabilities_requested_native_tokenizer_metadata(
     assert requested["tokenizer_kind"] == "provider-native"
     assert requested["tokenizer_source"] == "llama.http.tokenize"
     assert requested["detokenize_available"] is True
+    assert requested["count_accuracy"] == "exact"
+    assert requested["strict_mode_effective"] is False
 
 
 @pytest.mark.parametrize(

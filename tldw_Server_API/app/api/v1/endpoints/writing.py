@@ -79,6 +79,14 @@ from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
     get_model_extra_body_compat,
     get_provider_extra_body_compat,
 )
+from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
+    ProviderNativeTokenizerHTTPAdapter as _SharedProviderNativeTokenizerHTTPAdapter,
+    normalize_provider_for_tokenizer as _shared_normalize_provider_for_tokenizer,
+    resolve_provider_native_tokenizer as _resolve_provider_native_tokenizer_shared,
+    resolve_tiktoken_encoding as _resolve_tiktoken_encoding_shared,
+    resolve_tokenizer as _resolve_tokenizer_shared,
+    strict_token_counting_enabled as _strict_token_counting_enabled_shared,
+)
 from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter()
@@ -107,74 +115,6 @@ _WRITING_NONCRITICAL_EXCEPTIONS = (
 )
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
-
-_TOKENIZER_PROVIDER_ALIASES: dict[str, str] = {
-    "llama.cpp": "llama",
-    "llama_cpp": "llama",
-    "custom-openai-api": "custom_openai_api",
-    "custom_openai": "custom_openai_api",
-    "custom-openai": "custom_openai_api",
-}
-
-_PROVIDER_NATIVE_TOKENIZER_CONFIG: dict[str, dict[str, str]] = {
-    "llama": {
-        "section": "Local-API",
-        "endpoint_field": "llama_api_IP",
-        "api_key_field": "llama_api_key",
-        "label": "llama.cpp",
-    },
-    "kobold": {
-        "section": "Local-API",
-        "endpoint_field": "kobold_api_IP",
-        "api_key_field": "kobold_api_key",
-        "label": "kobold.cpp",
-    },
-    "ooba": {
-        "section": "Local-API",
-        "endpoint_field": "ooba_api_IP",
-        "api_key_field": "ooba_api_key",
-        "label": "oobabooga",
-    },
-    "tabby": {
-        "section": "Local-API",
-        "endpoint_field": "tabby_api_IP",
-        "api_key_field": "tabby_api_key",
-        "label": "tabbyapi",
-    },
-    "vllm": {
-        "section": "Local-API",
-        "endpoint_field": "vllm_api_IP",
-        "api_key_field": "vllm_api_key",
-        "label": "vllm",
-    },
-    "aphrodite": {
-        "section": "Local-API",
-        "endpoint_field": "aphrodite_api_IP",
-        "api_key_field": "aphrodite_api_key",
-        "label": "aphrodite",
-    },
-    "custom_openai_api": {
-        "section": "API",
-        "endpoint_field": "custom_openai_api_ip",
-        "api_key_field": "custom_openai_api_key",
-        "label": "custom-openai-api",
-    },
-}
-
-_NATIVE_TOKENIZER_STRIP_SUFFIXES = (
-    "/api/v1/generate",
-    "/v1/generate",
-    "/api/generate",
-    "/v1/messages/count_tokens",
-    "/v1/messages",
-    "/messages/count_tokens",
-    "/messages",
-    "/v1/chat/completions",
-    "/v1/completions",
-    "/chat/completions",
-    "/completions",
-    "/completion",
-)
 
 
 async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
@@ -229,200 +169,97 @@ def _handle_db_errors(exc: Exception, entity_label: str) -> NoReturn:
     ) from exc
 
 
-@functools.lru_cache(maxsize=128)
 def _resolve_tiktoken_encoding(model: str) -> Any:
     """Resolve a tiktoken encoding for the given model name."""
-    try:
-        import tiktoken  # type: ignore
-    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - dependency missing
-        raise TokenizerUnavailable("Tokenizer library unavailable") from exc
-    try:
-        return tiktoken.encoding_for_model(model)
-    except KeyError as exc:
-        raise TokenizerUnavailable("Tokenizer not available for provider/model") from exc
+    return _resolve_tiktoken_encoding_shared(model)
 
 
 def _normalize_provider_for_tokenizer(provider: str) -> str:
-    raw = str(provider or "").strip().lower()
-    if not raw:
-        return ""
-    return _TOKENIZER_PROVIDER_ALIASES.get(raw, raw)
+    return _shared_normalize_provider_for_tokenizer(provider)
 
 
-def _normalize_native_tokenizer_base_url(base_url: str) -> str:
-    normalized = str(base_url or "").strip().rstrip("/")
-    lowered = normalized.lower()
-    for suffix in _NATIVE_TOKENIZER_STRIP_SUFFIXES:
-        if lowered.endswith(suffix):
-            normalized = normalized[: -len(suffix)]
-            break
-    return normalized
+_ProviderNativeTokenizerHTTPAdapter = _SharedProviderNativeTokenizerHTTPAdapter
 
 
-class _ProviderNativeTokenizerHTTPAdapter:
-    def __init__(
-        self,
-        *,
-        base_url: str,
-        model: str | None,
-        api_key: str | None,
-        timeout_seconds: float = 10.0,
-    ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.api_key = api_key
-        self.timeout_seconds = max(1.0, float(timeout_seconds))
-
-    def _request_json(self, paths: tuple[str, ...], payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            import requests  # type: ignore
-        except Exception as exc:
-            raise TokenizerUnavailable("Provider-native tokenizer HTTP client unavailable") from exc
-
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
-        last_error: Exception | None = None
-        for path in paths:
-            url = f"{self.base_url}{path}"
-            try:
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=self.timeout_seconds,
-                )
-            except Exception as exc:
-                last_error = exc
-                continue
-
-            if response.status_code == status.HTTP_404_NOT_FOUND:
-                continue
-            if response.status_code >= 400:
-                raise TokenizerUnavailable(
-                    f"Provider-native tokenizer endpoint error ({response.status_code})"
-                )
-            try:
-                data = response.json()
-            except Exception as exc:
-                raise TokenizerUnavailable("Provider-native tokenizer returned invalid JSON") from exc
-            if not isinstance(data, dict):
-                raise TokenizerUnavailable("Provider-native tokenizer returned invalid payload")
-            return data
-
-        if last_error is not None:
-            raise TokenizerUnavailable("Provider-native tokenizer endpoint unavailable") from last_error
-        raise TokenizerUnavailable("Provider-native tokenizer endpoint not found")
-
-    def encode(self, text: str) -> list[int]:
-        payload: dict[str, Any] = {
-            "content": text,
-            "add_special": False,
-            "with_pieces": False,
-        }
-        if self.model:
-            payload["model"] = self.model
-        data = self._request_json(("/tokenize", "/v1/tokenize"), payload)
-        raw_tokens = data.get("tokens")
-        if not isinstance(raw_tokens, list):
-            raw_tokens = data.get("token_ids")
-        if not isinstance(raw_tokens, list):
-            raise TokenizerUnavailable("Provider-native tokenizer response missing token ids")
-        try:
-            return [int(token_id) for token_id in raw_tokens]
-        except Exception as exc:
-            raise TokenizerUnavailable("Provider-native tokenizer returned invalid token ids") from exc
-
-    def decode(self, token_ids: list[int]) -> str:
-        payload: dict[str, Any] = {"tokens": [int(token_id) for token_id in token_ids]}
-        if self.model:
-            payload["model"] = self.model
-        data = self._request_json(("/detokenize", "/v1/detokenize"), payload)
-        for key in ("content", "text", "decoded", "value"):
-            value = data.get(key)
-            if isinstance(value, str):
-                return value
-        raise TokenizerUnavailable("Provider-native detokenize response missing text payload")
+def _strict_token_counting_enabled() -> bool:
+    return _strict_token_counting_enabled_shared(default=False)
 
 
 def _resolve_provider_native_tokenizer(
     provider: str,
     model: str,
 ) -> tuple[Any, str, str, str, bool]:
-    provider_key = _normalize_provider_for_tokenizer(provider)
-    mapping = _PROVIDER_NATIVE_TOKENIZER_CONFIG.get(provider_key)
-    if not mapping:
-        raise TokenizerUnavailable("Provider-native tokenizer is not configured for provider")
-    section = mapping.get("section") or ""
-    endpoint_field = mapping.get("endpoint_field") or ""
-    api_key_field = mapping.get("api_key_field") or ""
-    label = mapping.get("label") or provider_key
-
-    try:
-        config_parser = load_comprehensive_config()
-    except Exception as exc:
-        raise TokenizerUnavailable("Provider-native tokenizer config unavailable") from exc
-
-    if not config_parser.has_section(section) or not config_parser.has_option(section, endpoint_field):
-        raise TokenizerUnavailable("Provider-native tokenizer endpoint is not configured")
-    endpoint = config_parser.get(section, endpoint_field, fallback="").strip()
-    if not endpoint or endpoint.startswith("<"):
-        raise TokenizerUnavailable("Provider-native tokenizer endpoint is not configured")
-
-    api_key = None
-    if api_key_field and config_parser.has_option(section, api_key_field):
-        raw_api_key = config_parser.get(section, api_key_field, fallback="").strip()
-        if raw_api_key and not raw_api_key.startswith("<"):
-            api_key = raw_api_key
-
-    base_url = _normalize_native_tokenizer_base_url(endpoint)
-    if not base_url:
-        raise TokenizerUnavailable("Provider-native tokenizer endpoint is invalid")
-
-    adapter = _ProviderNativeTokenizerHTTPAdapter(
-        base_url=base_url,
-        model=model.strip() or None,
-        api_key=api_key,
+    resolution = _resolve_provider_native_tokenizer_shared(
+        provider,
+        model,
+        strict_mode_effective=_strict_token_counting_enabled(),
+        config_loader=load_comprehensive_config,
+        adapter_cls=_ProviderNativeTokenizerHTTPAdapter,
     )
+    if not resolution.available or resolution.encoding is None:
+        raise TokenizerUnavailable(resolution.error or "Provider-native tokenizer is not configured for provider")
     return (
-        adapter,
-        f"{label}:remote",
-        "provider-native",
-        f"{label}.http.tokenize",
-        True,
+        resolution.encoding,
+        resolution.tokenizer or "unknown",
+        resolution.kind or "provider-native",
+        resolution.source or "provider-native.tokenize",
+        bool(resolution.detokenize_available),
     )
 
 
-def _resolve_tokenizer(provider: str, model: str) -> tuple[Any, str, str, str, bool]:
-    """Resolve tokenizer with provider-native preference and tiktoken fallback."""
+def _resolve_tokenizer(provider: str, model: str) -> tuple[Any, str, str, str, bool, str, bool]:
+    """Resolve tokenizer metadata via shared resolver with compatibility overrides."""
     if not provider or not provider.strip():
         raise TokenizerUnavailable("Provider is required")
     if not model or not model.strip():
         raise TokenizerUnavailable("Model is required")
+
+    strict_mode_effective = _strict_token_counting_enabled()
     normalized_provider = _normalize_provider_for_tokenizer(provider)
     normalized_model = model.strip()
 
-    try:
-        return _resolve_provider_native_tokenizer(normalized_provider, normalized_model)
-    except TokenizerUnavailable:
-        pass
+    # Keep local wrapper path first for test monkeypatch compatibility.
+    if normalized_provider != "mlx":
+        try:
+            encoding, tokenizer_name, tokenizer_kind, tokenizer_source, detok_available = (
+                _resolve_provider_native_tokenizer(normalized_provider, normalized_model)
+            )
+            return (
+                encoding,
+                tokenizer_name,
+                tokenizer_kind,
+                tokenizer_source,
+                detok_available,
+                "exact",
+                strict_mode_effective,
+            )
+        except TokenizerUnavailable:
+            pass
 
-    encoding = _resolve_tiktoken_encoding(normalized_model)
-    tokenizer_name = getattr(encoding, "name", "unknown")
+    resolution = _resolve_tokenizer_shared(
+        provider,
+        model,
+        strict_mode_effective=strict_mode_effective,
+        config_loader=load_comprehensive_config,
+        adapter_cls=_ProviderNativeTokenizerHTTPAdapter,
+    )
+    if not resolution.available or resolution.encoding is None:
+        raise TokenizerUnavailable(resolution.error or "Tokenizer not available for provider/model")
     return (
-        encoding,
-        f"tiktoken:{tokenizer_name}",
-        "tiktoken",
-        "tiktoken.encoding_for_model",
-        True,
+        resolution.encoding,
+        resolution.tokenizer or "unknown",
+        resolution.kind or "tiktoken",
+        resolution.source or "tiktoken.encoding_for_model",
+        bool(resolution.detokenize_available),
+        resolution.count_accuracy or "unavailable",
+        bool(resolution.strict_mode_effective),
     )
 
 
 def _resolve_tokenizer_details(
     provider: str,
     model: str,
-) -> tuple[Any, str, str, str, bool]:
+) -> tuple[Any, str, str, str, bool, str, bool]:
     """Resolve tokenizer plus compatibility metadata.
 
     Keeps backward compatibility with tests that monkeypatch `_resolve_tokenizer`
@@ -437,6 +274,8 @@ def _resolve_tokenizer_details(
     tokenizer_kind = "tiktoken"
     tokenizer_source = "tiktoken.encoding_for_model"
     detokenize_available = True
+    count_accuracy = "unavailable"
+    strict_mode_effective = _strict_token_counting_enabled()
 
     if len(resolved) >= 3 and isinstance(resolved[2], str) and resolved[2].strip():
         tokenizer_kind = resolved[2].strip()
@@ -444,15 +283,34 @@ def _resolve_tokenizer_details(
         tokenizer_source = resolved[3].strip()
     if len(resolved) >= 5:
         detokenize_available = bool(resolved[4])
+    if len(resolved) >= 6 and isinstance(resolved[5], str) and resolved[5].strip():
+        count_accuracy = resolved[5].strip()
+    elif tokenizer_kind in {"provider-native", "provider-native-count"}:
+        count_accuracy = "exact"
+    if len(resolved) >= 7:
+        strict_mode_effective = bool(resolved[6])
+    if count_accuracy not in {"exact", "unavailable"}:
+        count_accuracy = "unavailable"
 
-    return encoding, tokenizer_name, tokenizer_kind, tokenizer_source, detokenize_available
+    return (
+        encoding,
+        tokenizer_name,
+        tokenizer_kind,
+        tokenizer_source,
+        detokenize_available,
+        count_accuracy,
+        strict_mode_effective,
+    )
 
 
 def _tokenizer_encode(tokenizer: Any, text: str) -> list[int]:
+    encode_fn = getattr(tokenizer, "encode", None)
+    if not callable(encode_fn):
+        raise TokenizerUnavailable("Tokenize not available for provider/model")
     try:
-        encoded = tokenizer.encode(text, disallowed_special=())
+        encoded = encode_fn(text, disallowed_special=())
     except TypeError:
-        encoded = tokenizer.encode(text)
+        encoded = encode_fn(text)
     except Exception as exc:
         raise TokenizerUnavailable(f"Unable to tokenize text: {exc}") from exc
     if not isinstance(encoded, list):
@@ -467,8 +325,11 @@ def _tokenizer_encode(tokenizer: Any, text: str) -> list[int]:
 
 
 def _tokenizer_decode(tokenizer: Any, token_ids: list[int]) -> str:
+    decode_fn = getattr(tokenizer, "decode", None)
+    if not callable(decode_fn):
+        raise TokenizerUnavailable("Detokenize not available for provider/model")
     try:
-        decoded = tokenizer.decode(token_ids)
+        decoded = decode_fn(token_ids)
     except Exception as exc:
         raise TokenizerUnavailable(f"Unable to detokenize ids: {exc}") from exc
     if not isinstance(decoded, str):
@@ -478,6 +339,25 @@ def _tokenizer_decode(tokenizer: Any, token_ids: list[int]) -> str:
 
 def _tokenizer_decode_single(tokenizer: Any, token_id: int) -> str:
     return _tokenizer_decode(tokenizer, [int(token_id)])
+
+
+def _tokenizer_count(tokenizer: Any, text: str) -> int:
+    count_fn = getattr(tokenizer, "count_tokens", None)
+    if callable(count_fn):
+        try:
+            counted = count_fn(text)
+        except Exception as exc:
+            raise TokenizerUnavailable(f"Unable to count tokens: {exc}") from exc
+        if isinstance(counted, bool):
+            raise TokenizerUnavailable("Tokenizer count returned invalid payload")
+        if isinstance(counted, (int, float)):
+            token_count = int(counted)
+            if token_count < 0:
+                raise TokenizerUnavailable("Tokenizer count returned invalid payload")
+            return token_count
+        raise TokenizerUnavailable("Tokenizer count returned invalid payload")
+
+    return len(_tokenizer_encode(tokenizer, text))
 
 
 def _provider_features(provider: str) -> dict[str, bool]:
@@ -667,6 +547,8 @@ def _tokenizer_support(provider: str, model: str) -> WritingTokenizerSupport:
             tokenizer_kind,
             tokenizer_source,
             detokenize_available,
+            count_accuracy,
+            strict_mode_effective,
         ) = _resolve_tokenizer_details(provider, model)
         return WritingTokenizerSupport(
             available=True,
@@ -674,9 +556,16 @@ def _tokenizer_support(provider: str, model: str) -> WritingTokenizerSupport:
             kind=tokenizer_kind,
             source=tokenizer_source,
             detokenize=detokenize_available,
+            count_accuracy=count_accuracy,
+            strict_mode_effective=strict_mode_effective,
         )
     except TokenizerUnavailable as exc:
-        return WritingTokenizerSupport(available=False, error=str(exc))
+        return WritingTokenizerSupport(
+            available=False,
+            count_accuracy="unavailable",
+            strict_mode_effective=_strict_token_counting_enabled(),
+            error=str(exc),
+        )
 
 
 WORDCLOUD_ALGO_VERSION = 1
@@ -1050,6 +939,8 @@ async def get_writing_capabilities(
         tokenizer_kind = None
         tokenizer_source = None
         detokenize_available = False
+        count_accuracy = "unavailable"
+        strict_mode_effective = _strict_token_counting_enabled()
         tokenization_error = None
         extra_body_compat = None
         if provider_name and model_name:
@@ -1060,6 +951,8 @@ async def get_writing_capabilities(
                     tokenizer_kind,
                     tokenizer_source,
                     detokenize_available,
+                    count_accuracy,
+                    strict_mode_effective,
                 ) = _resolve_tokenizer_details(provider_name, model_name)
                 tokenizer_available = True
             except TokenizerUnavailable as exc:
@@ -1077,6 +970,8 @@ async def get_writing_capabilities(
             tokenizer_kind=tokenizer_kind,
             tokenizer_source=tokenizer_source,
             detokenize_available=detokenize_available,
+            count_accuracy=count_accuracy,
+            strict_mode_effective=strict_mode_effective,
             tokenization_error=tokenization_error,
             extra_body_compat=extra_body_compat,
         )
@@ -1857,9 +1752,16 @@ async def tokenize_writing_text(
             tokenizer_kind,
             tokenizer_source,
             detokenize_available,
+            count_accuracy,
+            strict_mode_effective,
         ) = _resolve_tokenizer_details(payload.provider, payload.model)
     except TokenizerUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if strict_mode_effective and count_accuracy != "exact":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Exact tokenizer unavailable for provider/model",
+        )
     try:
         token_ids = _tokenizer_encode(encoding, payload.text)
     except TokenizerUnavailable as exc:
@@ -1879,6 +1781,8 @@ async def tokenize_writing_text(
         tokenizer_kind=tokenizer_kind,
         tokenizer_source=tokenizer_source,
         detokenize_available=detokenize_available,
+        count_accuracy=count_accuracy,
+        strict_mode_effective=strict_mode_effective,
         input_chars=len(payload.text),
         token_count=len(token_ids),
         warnings=[],
@@ -1908,9 +1812,16 @@ async def detokenize_writing_tokens(
             tokenizer_kind,
             tokenizer_source,
             detokenize_available,
+            count_accuracy,
+            strict_mode_effective,
         ) = _resolve_tokenizer_details(payload.provider, payload.model)
     except TokenizerUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if strict_mode_effective and count_accuracy != "exact":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Exact tokenizer unavailable for provider/model",
+        )
 
     if not detokenize_available:
         raise HTTPException(
@@ -1940,6 +1851,8 @@ async def detokenize_writing_tokens(
         tokenizer_kind=tokenizer_kind,
         tokenizer_source=tokenizer_source,
         detokenize_available=detokenize_available,
+        count_accuracy=count_accuracy,
+        strict_mode_effective=strict_mode_effective,
         input_chars=len(text),
         token_count=len(normalized_ids),
         warnings=[],
@@ -1969,11 +1882,18 @@ async def count_writing_tokens(
             tokenizer_kind,
             tokenizer_source,
             detokenize_available,
+            count_accuracy,
+            strict_mode_effective,
         ) = _resolve_tokenizer_details(payload.provider, payload.model)
     except TokenizerUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if strict_mode_effective and count_accuracy != "exact":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Exact tokenizer unavailable for provider/model",
+        )
     try:
-        token_ids = _tokenizer_encode(encoding, payload.text)
+        token_count = _tokenizer_count(encoding, payload.text)
     except TokenizerUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     meta = WritingTokenizeMeta(
@@ -1983,11 +1903,13 @@ async def count_writing_tokens(
         tokenizer_kind=tokenizer_kind,
         tokenizer_source=tokenizer_source,
         detokenize_available=detokenize_available,
+        count_accuracy=count_accuracy,
+        strict_mode_effective=strict_mode_effective,
         input_chars=len(payload.text),
-        token_count=len(token_ids),
+        token_count=token_count,
         warnings=[],
     )
-    return WritingTokenCountResponse(count=len(token_ids), meta=meta)
+    return WritingTokenCountResponse(count=token_count, meta=meta)
 
 
 @router.post(

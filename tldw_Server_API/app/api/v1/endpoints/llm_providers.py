@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 import time
-from functools import lru_cache, partial
+from functools import partial
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -35,6 +35,10 @@ from tldw_Server_API.app.core.LLM_Calls.openrouter_model_inventory import (
 from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
     get_model_extra_body_compat,
     get_provider_extra_body_compat,
+)
+from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
+    resolve_tokenizer_metadata,
+    strict_token_counting_enabled as _strict_token_counting_enabled_shared,
 )
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 
@@ -1081,67 +1085,6 @@ _LOCAL_MODEL_CACHE: dict[str, tuple[float, list[str]]] = {}
 OPENROUTER_MODEL_DISCOVERY_TIMEOUT = 5.0  # seconds
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
-_TOKENIZER_PROVIDER_ALIASES: dict[str, str] = {
-    "llama.cpp": "llama",
-    "llama_cpp": "llama",
-    "custom-openai-api": "custom_openai_api",
-    "custom_openai": "custom_openai_api",
-    "custom-openai": "custom_openai_api",
-}
-
-_PROVIDER_NATIVE_TOKENIZER_CONFIG: dict[str, dict[str, str]] = {
-    "llama": {
-        "section": "Local-API",
-        "endpoint_field": "llama_api_IP",
-        "label": "llama.cpp",
-    },
-    "kobold": {
-        "section": "Local-API",
-        "endpoint_field": "kobold_api_IP",
-        "label": "kobold.cpp",
-    },
-    "ooba": {
-        "section": "Local-API",
-        "endpoint_field": "ooba_api_IP",
-        "label": "oobabooga",
-    },
-    "tabby": {
-        "section": "Local-API",
-        "endpoint_field": "tabby_api_IP",
-        "label": "tabbyapi",
-    },
-    "vllm": {
-        "section": "Local-API",
-        "endpoint_field": "vllm_api_IP",
-        "label": "vllm",
-    },
-    "aphrodite": {
-        "section": "Local-API",
-        "endpoint_field": "aphrodite_api_IP",
-        "label": "aphrodite",
-    },
-    "custom_openai_api": {
-        "section": "API",
-        "endpoint_field": "custom_openai_api_ip",
-        "label": "custom-openai-api",
-    },
-}
-
-_NATIVE_TOKENIZER_STRIP_SUFFIXES = (
-    "/api/v1/generate",
-    "/v1/generate",
-    "/api/generate",
-    "/v1/messages/count_tokens",
-    "/v1/messages",
-    "/messages/count_tokens",
-    "/messages",
-    "/v1/chat/completions",
-    "/v1/completions",
-    "/chat/completions",
-    "/completions",
-    "/completion",
-)
-
 
 def _dedupe_preserve_order(values: list[str]) -> list[str]:
     seen = set()
@@ -1317,84 +1260,28 @@ def _truthy(value: Any) -> bool:
     return False
 
 
-def _normalize_provider_for_tokenizer(provider: str) -> str:
-    raw = str(provider or "").strip().lower()
-    if not raw:
-        return ""
-    return _TOKENIZER_PROVIDER_ALIASES.get(raw, raw)
-
-
-def _normalize_native_tokenizer_base_url(base_url: str) -> str:
-    normalized = str(base_url or "").strip().rstrip("/")
-    lowered = normalized.lower()
-    for suffix in _NATIVE_TOKENIZER_STRIP_SUFFIXES:
-        if lowered.endswith(suffix):
-            normalized = normalized[: -len(suffix)]
-            break
-    return normalized
-
-
-@lru_cache(maxsize=512)
-def _resolve_tiktoken_tokenizer_name(model: str) -> str | None:
-    if not model or not model.strip():
-        return None
-    try:
-        import tiktoken  # type: ignore
-    except Exception:
-        return None
-    try:
-        encoding = tiktoken.encoding_for_model(model.strip())
-    except Exception:
-        return None
-    name = getattr(encoding, "name", "unknown")
-    return str(name) if name else "unknown"
-
-
 def _resolve_model_tokenizer_support(
     provider_name: str,
     model_name: str,
     config_parser: Any,
 ) -> dict[str, Any]:
-    provider_key = _normalize_provider_for_tokenizer(provider_name)
-    native_mapping = _PROVIDER_NATIVE_TOKENIZER_CONFIG.get(provider_key)
-    if native_mapping:
-        section = native_mapping.get("section") or ""
-        endpoint_field = native_mapping.get("endpoint_field") or ""
-        label = native_mapping.get("label") or provider_key
-        if (
-            section
-            and endpoint_field
-            and config_parser.has_section(section)
-            and config_parser.has_option(section, endpoint_field)
-        ):
-            endpoint = config_parser.get(section, endpoint_field, fallback="").strip()
-            base_url = _normalize_native_tokenizer_base_url(endpoint)
-            if endpoint and not endpoint.startswith("<") and base_url:
-                return {
-                    "available": True,
-                    "tokenizer": f"{label}:remote",
-                    "kind": "provider-native",
-                    "source": f"{label}.http.tokenize",
-                    "detokenize": True,
-                }
-
-    tokenizer_name = _resolve_tiktoken_tokenizer_name(model_name)
-    if tokenizer_name:
+    try:
+        return resolve_tokenizer_metadata(
+            provider_name,
+            model_name,
+            strict_mode_effective=_strict_token_counting_enabled_shared(default=False),
+            config_parser=config_parser,
+        )
+    except Exception:  # noqa: BLE001 - metadata path should fail open
         return {
-            "available": True,
-            "tokenizer": f"tiktoken:{tokenizer_name}",
-            "kind": "tiktoken",
-            "source": "tiktoken.encoding_for_model",
-            "detokenize": True,
+            "available": False,
+            "tokenizer": None,
+            "kind": None,
+            "source": None,
+            "detokenize": False,
+            "count_accuracy": "unavailable",
+            "strict_mode_effective": _strict_token_counting_enabled_shared(default=False),
         }
-
-    return {
-        "available": False,
-        "tokenizer": None,
-        "kind": None,
-        "source": None,
-        "detokenize": False,
-    }
 
 
 def _build_runtime_context(config_parser: Any) -> dict[str, Any]:
@@ -1802,6 +1689,10 @@ def get_configured_providers(
                 model_info["tokenizer_kind"] = tokenizer_support.get("kind")
                 model_info["tokenizer_source"] = tokenizer_support.get("source")
                 model_info["detokenize_available"] = bool(tokenizer_support.get("detokenize"))
+                model_info["count_accuracy"] = tokenizer_support.get("count_accuracy", "unavailable")
+                model_info["strict_mode_effective"] = bool(tokenizer_support.get("strict_mode_effective", False))
+                if tokenizer_support.get("error"):
+                    model_info["tokenization_error"] = tokenizer_support.get("error")
 
             tokenizers_by_model = {
                 str(model_info.get("name") or model_info.get("id") or "").strip(): {
@@ -1810,6 +1701,9 @@ def get_configured_providers(
                     "kind": model_info.get("tokenizer_kind"),
                     "source": model_info.get("tokenizer_source"),
                     "detokenize": bool(model_info.get("detokenize_available")),
+                    "count_accuracy": model_info.get("count_accuracy", "unavailable"),
+                    "strict_mode_effective": bool(model_info.get("strict_mode_effective", False)),
+                    "error": model_info.get("tokenization_error"),
                 }
                 for model_info in models_info
                 if str(model_info.get("name") or model_info.get("id") or "").strip()

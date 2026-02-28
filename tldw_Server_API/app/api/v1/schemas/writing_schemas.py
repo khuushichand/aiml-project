@@ -226,6 +226,8 @@ class WritingTokenizeMeta(BaseModel):
     tokenizer_kind: str | None = None
     tokenizer_source: str | None = None
     detokenize_available: bool = False
+    count_accuracy: Literal["exact", "unavailable"] = "unavailable"
+    strict_mode_effective: bool = False
     input_chars: int
     token_count: int
     warnings: list[str] = Field(default_factory=list)
@@ -305,6 +307,8 @@ class WritingTokenizerSupport(BaseModel):
     kind: str | None = None
     source: str | None = None
     detokenize: bool = False
+    count_accuracy: Literal["exact", "unavailable"] = "unavailable"
+    strict_mode_effective: bool = False
     error: str | None = None
 
 
@@ -363,6 +367,8 @@ class WritingRequestedCapabilities(BaseModel):
     tokenizer_kind: str | None = None
     tokenizer_source: str | None = None
     detokenize_available: bool = False
+    count_accuracy: Literal["exact", "unavailable"] = "unavailable"
+    strict_mode_effective: bool = False
     tokenization_error: str | None = None
     extra_body_compat: WritingExtraBodyCompat | None = None
 
